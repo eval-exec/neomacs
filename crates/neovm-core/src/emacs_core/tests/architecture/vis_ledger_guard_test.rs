@@ -3231,18 +3231,52 @@ fn auth_alias_method_is_fenced(
     let fence_ast = syn::parse_file(&fence_text)
         .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", fence.display()))?;
     let mut targets = BTreeSet::new();
+    let mut routes = 0usize;
+    // The owner may be declared by a fence type alias OR re-exported by a
+    // fence `pub use` whose target module is private (the REGWAIT helpers).
+    // Exactly one fence route may expose it; a second route breaks the signed
+    // "exactly this path" property.
     for item in &fence_ast.items {
-        let syn::Item::Type(alias) = item else {
-            continue;
-        };
-        if alias.ident == owner && matches!(alias.vis, syn::Visibility::Public(_)) {
-            targets.extend(auth_alias_chain_names(
-                workspace,
-                map,
-                fence_module,
-                &alias.ty,
-            )?);
+        match item {
+            syn::Item::Type(alias)
+                if alias.ident == owner && matches!(alias.vis, syn::Visibility::Public(_)) =>
+            {
+                routes += 1;
+                targets.extend(auth_alias_chain_names(
+                    workspace,
+                    map,
+                    fence_module,
+                    &alias.ty,
+                )?);
+            }
+            syn::Item::Use(use_item) if matches!(use_item.vis, syn::Visibility::Public(_)) => {
+                let mut leaves = Vec::new();
+                auth_use_leaves(&use_item.tree, &mut Vec::new(), &mut leaves);
+                for (path, alias, glob) in leaves {
+                    if glob {
+                        continue;
+                    }
+                    let exposed = alias.as_deref() == Some(owner)
+                        || (alias.is_none() && path.last().is_some_and(|leaf| leaf == owner));
+                    if !exposed {
+                        continue;
+                    }
+                    routes += 1;
+                    if let Some(target) = path.last() {
+                        targets.insert(target.clone());
+                    }
+                }
+            }
+            _ => {}
         }
+    }
+    if routes == 0 {
+        return Ok(false);
+    }
+    if routes > 1 {
+        return Err(format!(
+            "AUTHORITY_PATHS {owner}::{method}: {routes} fence routes expose the owner; the signed fence path must be unique"
+        ));
     }
     if targets.is_empty() {
         return Ok(false);
@@ -3879,4 +3913,70 @@ fn authority_alias_method_rows_are_method_aware() {
     )
     .expect("fence route");
     assert!(authority_public_paths_violation(dir.path(), &original_rows).is_err());
+}
+
+#[test]
+fn authority_pub_use_method_rows_are_method_aware() {
+    // A fence `pub use` of a type from a private module exposes the type at
+    // the fence; a signed method row on that type resolves through the
+    // re-export to the pub inherent method in the row's defining file
+    // (REGWAIT Deadline::contention).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let value_src = dir.path().join("crates/neovm-value/src");
+    let core_src = dir.path().join("crates/neovm-core/src");
+    std::fs::create_dir_all(value_src.join("test_support")).expect("value src");
+    std::fs::create_dir_all(&core_src).expect("core src");
+    std::fs::write(
+        value_src.join("lib.rs"),
+        "pub mod test_support;\npub(crate) mod original;\n",
+    )
+    .expect("lib");
+    std::fs::write(value_src.join("test_support.rs"), "pub mod authority;\n").expect("support");
+    std::fs::write(
+        value_src.join("test_support/authority.rs"),
+        "pub use crate::original::Owner;\n",
+    )
+    .expect("fence");
+    std::fs::write(
+        value_src.join("original.rs"),
+        "pub struct Owner;\nimpl Owner {\n    pub fn method(&self) {}\n}\n",
+    )
+    .expect("original");
+    std::fs::write(core_src.join("lib.rs"), "").expect("core lib");
+    let rows = vec![AuthRow {
+        crate_name: "neovm-value".to_owned(),
+        item: "Owner::method".to_owned(),
+        defining_file: "crates/neovm-value/src/original.rs".to_owned(),
+        fence_path: "neovm_value::test_support::authority::Owner::method".to_owned(),
+    }];
+    assert!(authority_public_paths_violation(dir.path(), &rows).is_ok());
+    // A non-public method is not a public path.
+    std::fs::write(
+        value_src.join("original.rs"),
+        "pub struct Owner;\nimpl Owner {\n    fn method(&self) {}\n}\n",
+    )
+    .expect("private method");
+    assert!(authority_public_paths_violation(dir.path(), &rows).is_err());
+    // The fence must re-export the owner publicly.
+    std::fs::write(
+        value_src.join("test_support/authority.rs"),
+        "pub(crate) use crate::original::Owner;\n",
+    )
+    .expect("private use");
+    assert!(authority_public_paths_violation(dir.path(), &rows).is_err());
+    std::fs::write(value_src.join("test_support/authority.rs"), "").expect("fence");
+    assert!(authority_public_paths_violation(dir.path(), &rows).is_err());
+    // A second fence route to the same owner breaks the unique signed path.
+    std::fs::write(
+        value_src.join("original.rs"),
+        "pub struct Owner;\nimpl Owner {\n    pub fn method(&self) {}\n}\n",
+    )
+    .expect("original");
+    std::fs::write(
+        value_src.join("test_support/authority.rs"),
+        "pub use crate::original::Owner;\npub type Owner = crate::original::Owner;\n",
+    )
+    .expect("second route");
+    let error = authority_public_paths_violation(dir.path(), &rows).expect_err("second route");
+    assert!(error.contains("fence routes"), "{error}");
 }
