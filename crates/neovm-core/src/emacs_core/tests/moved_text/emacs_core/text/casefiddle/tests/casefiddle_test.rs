@@ -1,3 +1,10 @@
+use neovm_edit::emacs_core::case_encoding::CaseEncoding;
+use neovm_value::error::LispCondition;
+use neovm_value::error::expect_args;
+use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::heap_types::LispString;
+use neovm_value::value::ValueKind;
+
 use neovm_value::value::Value;
 use neovm_eval::emacs_core::eval::Context;
 use crate::emacs_core::casefiddle_entries::builtin_upcase_region;

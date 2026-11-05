@@ -378,6 +378,7 @@ impl DecodeEolResolution {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The end-of-line type a conversion actually runs with.
 ///
 /// GNU's `eol_type` slot may hold a VECTOR of the three subsidiaries, which is

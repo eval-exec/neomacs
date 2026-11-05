@@ -1,3 +1,19 @@
+use neovm_edit::emacs_core::edit_host::{EditHost, EditVariableRead};
+use neovm_value::error::LispCondition;
+use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::error::{expect_max_args, expect_min_args};
+use neovm_value::intern::{NIL_SYM_ID, T_SYM_ID};
+use neovm_value::symbol::CanonicalAccess;
+use neovm_value::symbol::Obarray;
+use neovm_edit::emacs_core::display_metrics::WindowId;
+use neovm_value::intern::SymId;
+use neovm_value::intern::WellKnown;
+use neovm_value::tagged::value::SymbolMode;
+use std::collections::{HashMap, HashSet};
+use strum::IntoStaticStr;
+        use std::sync::OnceLock;
+        use std::sync::OnceLock;
+
 use neovm_value::value::list_to_vec;
 use neovm_value::value::Value;
 use neovm_value::heap_types::byte_positions::EmacsByteRange;

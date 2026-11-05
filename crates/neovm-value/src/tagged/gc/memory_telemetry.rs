@@ -222,6 +222,7 @@ pub(super) fn note_promotion(heap: &TaggedHeap, bytes: usize) {
     observation.promoted_bytes = observation.promoted_bytes.saturating_add(bytes);
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Serialize)]
 struct Record<'a> {
     schema: u32,

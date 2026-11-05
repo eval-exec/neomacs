@@ -6,7 +6,7 @@
 
 use super::*;
 
-use neovm_value::tls_scope::tests::Rng;
+use neovm_value::prefix::tests::Rng;
 
 use neovm_edit::buffer::text_index::{
     TextLineIndexConfig, TextLineIndexMode, with_text_line_index_config,

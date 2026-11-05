@@ -1,5 +1,26 @@
 //! Collection-coverage stamps across the runtime's deferred minor path.
 
+use neovm_value::tagged::SymbolMode;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use neovm_text::emacs_core::casefiddle::apply_replace_match_case;
+use neovm_text::emacs_core::regex_emacs::{
+    self, BufferSyntaxLookup, CaseTranslation, CompiledPattern, DefaultSyntaxLookup,
+    MatchRegisters, SyntaxCacheKey, SyntaxLookup,
+};
+use neovm_edit::buffer::{
+    Buffer, BufferId, CharPos0, CharRange, EmacsBytePos, EmacsByteRange, LispCharPos1,
+};
+use neovm_value::heap_types::{GnuStringCharPos, LispString};
+    use neovm_value::emacs_char::char_to_byte_pos;
+    use neovm_value::emacs_char::char_to_byte_pos;
+    use neovm_text::emacs_core::casefiddle::{
+        apply_replace_match_case_lisp, apply_replace_match_case_lisp_with,
+    };
+    use neovm_text::emacs_core::syntax::SyntaxClass;
+    use neovm_value::heap_types::LispString;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
 use super::gc_collection_epoch_tests::UncoveredRegexCaches;
 
 use super::gc_collection_epoch_tests::WarmRegexCaches;

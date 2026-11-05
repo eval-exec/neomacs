@@ -1,3 +1,24 @@
+use neovm_edit::buffer::{
+    Buffer, BufferManager, CharLen, CharPos0, DisplayColumn, EmacsByteLen, EmacsBytePos,
+    EmacsByteRange, TextExtent,
+};
+use neovm_edit::buffer::{BufferId, LispCharPos1};
+use neovm_edit::emacs_core::display_metrics::{
+    InvisibleRunContext, LineWrap, MotionEngine, WindowGeometry, line_number_digit_width,
+};
+use neovm_edit::emacs_core::edit_host::{EditHost, EditVariableRead};
+use neovm_edit::emacs_core::word_wrap::{WordWrapDirection, WordWrapOpportunity, WordWrapPolicy};
+use neovm_value::error::LispCondition;
+use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::error::{
+    expect_args, expect_args_range, expect_fixnum, expect_max_args, expect_min_args,
+};
+use neovm_value::heap_types::LispString;
+use neovm_value::value::ValueKind;
+use std::cell::Cell;
+use std::collections::VecDeque;
+use std::sync::OnceLock;
+
 use neovm_value::value::list_to_vec;
 use neovm_value::value::Value;
 use neovm_eval::emacs_core::print::error_format::format_eval_result;

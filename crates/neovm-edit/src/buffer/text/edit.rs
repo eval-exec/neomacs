@@ -10,6 +10,7 @@ pub struct TextExtent {
     emacs_bytes: EmacsByteLen,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Signed logical size change produced by a structural text edit.
 ///
 /// GNU edit code updates char and byte coordinates together (`PT` with

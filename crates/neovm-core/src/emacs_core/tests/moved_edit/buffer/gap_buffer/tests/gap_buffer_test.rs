@@ -1,3 +1,7 @@
+use std::cell::Cell;
+use std::fmt;
+use neovm_edit::buffer::text::{GapCompatState, emacs_char_count_bytes, emacs_char_to_byte_in_slice};
+
 use neovm_edit::buffer::gap_buffer::GapBuffer;
 use super::*;
 

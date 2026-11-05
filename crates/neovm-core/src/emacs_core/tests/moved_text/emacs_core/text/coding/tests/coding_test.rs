@@ -1,3 +1,17 @@
+use neovm_edit::buffer::{BufferManager, EmacsByteRange, LispCharPos1};
+use neovm_edit::emacs_core::edit_host::EditVariableRead;
+use neovm_value::emacs_char::EmacsChar;
+use neovm_value::error::LispCondition;
+use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
+use neovm_value::heap_types::LispString;
+use neovm_value::intern::WellKnown;
+use neovm_value::tagged::value::SymbolMode;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
+use std::collections::{HashMap, HashSet};
+use strum::{EnumString, IntoStaticStr};
+    use std::ptr;
+
 use neovm_value::value::list_to_vec;
 use neovm_value::value::Value;
 use neovm_value::intern::SymId;

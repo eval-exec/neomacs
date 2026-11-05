@@ -50,6 +50,7 @@ pub(super) struct LoopState {
     pub(super) comment_resume: Option<CommentResumeSyntax>,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Where a scan starts.
 pub(super) enum Entry {
     /// GNU `scan_sexps_forward` from `from_char` (absolute, 0-based) in
@@ -84,6 +85,7 @@ pub(super) enum ScanEnd {
     Paused(LoopState),
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// A finished scan: the finalized state and where the scan stopped.
 pub(super) struct ScanFinish {
     pub(super) state: PartialParseState,

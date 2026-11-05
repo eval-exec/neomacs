@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+use neovm_value::gc_trace::GcTrace;
+use neovm_value::intern::SymId;
+
 use neovm_value::value::Value;
 use neovm_value::heap_types::LispString;
 use neovm_edit::emacs_core::mode::*;

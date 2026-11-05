@@ -1707,6 +1707,7 @@ impl InsertTextPlan {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(in crate::buffer) const fn edit(&self) -> MeasuredInsertEdit {
         self.edit
     }

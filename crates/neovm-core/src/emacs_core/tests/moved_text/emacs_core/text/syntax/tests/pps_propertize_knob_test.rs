@@ -1,6 +1,9 @@
 //! `NEOVM_PPS_PROPERTIZE`: on by default (GNU's behaviour); `0` restores the
 //! scan that never propertizes, for attribution only.
 
+use neovm_edit::buffer::BufferId;
+use std::sync::atomic::{AtomicU8, Ordering};
+
 use crate::test_utils::runtime_startup_eval_one;
 
 use neovm_text::emacs_core::syntax::*;

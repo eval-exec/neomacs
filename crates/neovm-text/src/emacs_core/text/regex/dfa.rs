@@ -1262,6 +1262,7 @@ pub(crate) enum Exists {
     Unknown,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Transition-table entries below the stride are sentinels; real entries are
 /// row offsets, `(state index + 1) * stride`.
 const UNKNOWN: u32 = 0;

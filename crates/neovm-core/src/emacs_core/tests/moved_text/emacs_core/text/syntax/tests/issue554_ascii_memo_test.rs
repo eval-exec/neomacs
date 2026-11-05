@@ -1,3 +1,22 @@
+use neovm_value::emacs_char::EmacsChar;
+use neovm_value::error::LispCondition;
+use neovm_value::symbol::CanonicalAccess;
+use std::cell::{Cell, RefCell};
+use std::ops::Deref;
+use strum::{EnumString, IntoStaticStr};
+use neovm_edit::emacs_core::edit_host::EditVariableRead;
+use neovm_edit::emacs_core::textprop::CharPropertyResolver;
+use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::heap_types::{GnuStringCharPos, LispString, StringCharacterCountKind};
+use neovm_text::emacs_core::syntax::parse_loop::{Entry, Plain, SafePositionRecorder, ScanEnd, ScanFinish, run_parse_loop};
+    use std::sync::OnceLock;
+        use std::sync::OnceLock;
+        use neovm_edit::buffer::buffer::BUFFER_SLOT_SYNTAX_TABLE;
+        use LispSyntaxObjectReuse::{CanonicalBare, Fresh};
+    use neovm_edit::buffer::buffer::BUFFER_SLOT_SYNTAX_TABLE;
+        use neovm_text::emacs_core::regex_emacs::BoundarySyntaxMode;
+    use neovm_text::emacs_core::regex_emacs::SyntaxAssertion;
+
 use neovm_value::value::Value;
 use neovm_value::heap_types::byte_positions::EmacsBytePos;
 use neovm_eval::emacs_core::eval::Context;

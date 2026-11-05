@@ -22,6 +22,7 @@ pub(in crate::buffer) fn storage_string_to_emacs_buffer_bytes(s: &str) -> Storag
     StorageStringBufferBytes { bytes, multibyte }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[inline]
 pub(in crate::buffer) fn emacs_char_to_byte_in_slice(
     bytes: &[u8],

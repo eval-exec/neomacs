@@ -4,6 +4,14 @@
 //! would have skipped it.  These tests pin down the facts that make the fast
 //! scans exact, and compare them with the exhaustive scan.
 
+use neovm_value::tagged::SymbolMode;
+use rustc_hash::FxHashMap;
+use std::collections::HashSet;
+use neovm_text::emacs_core::syntax::SyntaxClass;
+use regex_automata::{MatchKind, Span};
+use smallvec::SmallVec;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
 use neovm_value::value::Value;
 use neovm_value::emacs_char;
 use crate::fuzz_support::{

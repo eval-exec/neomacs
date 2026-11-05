@@ -1,3 +1,9 @@
+use neovm_text::emacs_core::coding::{TextQuotingStyle, effective_text_quoting_style};
+use neovm_value::tagged::SymbolMode;
+use neovm_edit::emacs_core::edit_host::EditVariableRead;
+use neovm_value::error::LispCondition;
+use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
+
 use neovm_value::value::Value;
 use neovm_value::error::EvalResult;
 use neovm_value::chartab::ct_resolved_entries;

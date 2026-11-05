@@ -935,6 +935,7 @@ pub fn changed_char_span(old: &LispString, new: &CasedRegion) -> Option<CasingCh
     })
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Character codes of S in order, decoding the internal multibyte form.
 fn lisp_string_char_codes(s: &LispString) -> impl Iterator<Item = u32> + '_ {
     let bytes = s.as_bytes();
@@ -1170,6 +1171,7 @@ where
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn apply_replace_match_case(replacement: &str, matched: &str) -> String {
     apply_replace_match_case_with(replacement, matched, default_is_word_char)
@@ -1207,6 +1209,7 @@ pub fn apply_replace_match_case_lisp(replacement: &LispString, matched: &LispStr
     apply_replace_match_case_lisp_with(replacement, matched, default_is_word_char)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Like [`apply_replace_match_case_lisp`], but lets the caller supply the
 /// predicate used for the "previous character is a word constituent" check.
 /// Use this from paths that have a buffer syntax table in scope so per-mode

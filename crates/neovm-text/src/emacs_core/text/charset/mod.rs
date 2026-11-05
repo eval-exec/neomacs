@@ -1532,6 +1532,7 @@ pub(crate) fn charset_sym_by_id(id: i64) -> Option<SymId> {
     })
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Decode a raw code point in `charset` to an Emacs character code, or `None`.
 pub(crate) fn charset_decode_char(charset: SymId, code: i64) -> Option<i64> {
     CHARSET_REGISTRY.with(|slot| slot.borrow().decode_char(charset, code))
@@ -1818,6 +1819,7 @@ pub(crate) fn iso2022_full_charset_candidates() -> Vec<SymId> {
     })
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// ISO-2022 designation properties of a charset: `(iso-final-char, dimension,
 /// chars_96)`. `chars_96` is true for a 96-character set (its code space starts
 /// at 0x20), false for a 94-character set. Returns `None` if the charset has no
@@ -1831,6 +1833,7 @@ pub(crate) fn charset_iso2022_designation(charset: SymId) -> Option<(i64, i64, b
     })
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The charset (and its dimension) matching an ISO-2022 designation — final
 /// char, dimension and set size — or `None`. Used when decoding an ESC
 /// designation sequence. Prefers the lowest charset id, so the modern

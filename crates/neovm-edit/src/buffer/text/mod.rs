@@ -1,5 +1,8 @@
 pub(in crate::buffer) mod backend;
+#[cfg(not(any(test, feature = "test-support")))]
 mod edit;
+#[cfg(any(test, feature = "test-support"))]
+pub mod edit;
 mod emacs_bytes;
 mod kind;
 mod layout;
@@ -24,6 +27,7 @@ pub use metrics::TextMetrics;
 #[doc(hidden)]
 pub use snapshot::BufferTextBytesSnapshot;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[inline]
 pub(crate) fn emacs_char_count_bytes(bytes: &[u8], multibyte: bool) -> crate::buffer::CharLen {
     crate::buffer::CharLen::new(if multibyte {

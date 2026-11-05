@@ -96,8 +96,12 @@ use super::parse_loop::{
 use super::*;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[path = "parse_canon.rs"]
 mod canon;
+#[cfg(any(test, feature = "test-support"))]
+#[path = "parse_canon.rs"]
+pub mod canon;
 pub(crate) use canon::{CanonMode, canon_mode};
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -967,6 +971,7 @@ impl SyntaxParseCache {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The scan mode of a query the cache records: loop-top states on the chunk
 /// grid past what the run has, the last loop top before TO, and the property
 /// values read.

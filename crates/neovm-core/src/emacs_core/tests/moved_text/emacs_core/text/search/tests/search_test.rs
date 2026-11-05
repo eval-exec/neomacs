@@ -1,3 +1,7 @@
+use neovm_edit::buffer::{CharLen, CharPos0, EmacsBytePos};
+use neovm_value::error::expect_args_range;
+use neovm_value::error::{expect_args, expect_fixnum};
+
 use crate::emacs_core::builtins::search::{
     builtin_looking_at, builtin_match_data, builtin_match_data_translate, builtin_match_string,
     builtin_re_search_forward, builtin_replace_match, builtin_set_match_data, builtin_string_match,

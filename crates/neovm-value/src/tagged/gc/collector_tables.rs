@@ -41,6 +41,7 @@ impl CollectorTables {
             .inspect(f)
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// # Safety
     /// Same scope/liveness contract as inspect, plus exclusive collector access
     /// to this table for the callback. No callbacks into Lisp or safepoints.

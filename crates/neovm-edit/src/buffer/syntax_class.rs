@@ -149,6 +149,7 @@ pub(crate) fn seams() -> &'static SyntaxSeams {
         .expect("syntax substrate seams are installed at evaluator construction")
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// A buffer's syntax table as the edit layer sees it.
 ///
 /// The table is an opaque char-table handle owned by the value layer;
