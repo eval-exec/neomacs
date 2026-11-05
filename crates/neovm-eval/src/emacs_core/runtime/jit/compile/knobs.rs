@@ -175,7 +175,7 @@ pub(crate) fn force_inline2_for_test(mode: Option<Inline2Mode>) {
 /// callback loop; every other body compiles exactly as without it. Read
 /// once per process; tests override it per thread.
 pub(crate) fn jit_hof_inline() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(on) = HOF_INLINE_TEST_OVERRIDE.with(std::cell::Cell::get) {
         return on;
     }
@@ -183,14 +183,14 @@ pub(crate) fn jit_hof_inline() -> bool {
     *ON.get_or_init(|| !matches!(std::env::var("NEOVM_JIT_HOF_INLINE").as_deref(), Ok("off")))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Scalar compiler configuration only; never Lisp or mutator state.
     static HOF_INLINE_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
         const { std::cell::Cell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_hof_inline_for_test(on: Option<bool>) {
     HOF_INLINE_TEST_OVERRIDE.with(|value| value.set(on));
 }

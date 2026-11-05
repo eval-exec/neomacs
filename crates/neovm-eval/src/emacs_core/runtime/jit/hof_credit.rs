@@ -74,7 +74,3 @@ fn credit_caller(eval: &Context, callbacks: usize) {
         .min(cap);
     runtime.note_callback_work(credit);
 }
-
-#[cfg(test)]
-#[path = "tests/hof_credit_test.rs"]
-mod tests;

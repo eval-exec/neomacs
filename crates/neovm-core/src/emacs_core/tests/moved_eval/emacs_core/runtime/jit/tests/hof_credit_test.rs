@@ -2,11 +2,8 @@
 //! heat for the callbacks it drives; a caller without one, a short mapping,
 //! an already compiled caller and the off knob gain nothing.
 
-use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
-use crate::emacs_core::jit::RuntimeStateTieringExt;
-use crate::emacs_core::jit::compile;
 
 fn byte_compiled(ctx: &mut Context, name: &str, body: &str) -> neovm_value::value::Value {
     ctx.eval_str(&format!("(defun {name} (l) {body})"))
@@ -25,14 +22,14 @@ struct InlineOn;
 impl InlineOn {
     #[doc(hidden)]
     pub fn enter() -> Self {
-        crate::emacs_core::jit::inline::force_inline_for_test(Some(true));
+        neovm_eval::test_support::authority::force_inline_for_test(Some(true));
         Self
     }
 }
 
 impl Drop for InlineOn {
     fn drop(&mut self) {
-        crate::emacs_core::jit::inline::force_inline_for_test(None);
+        neovm_eval::test_support::authority::force_inline_for_test(None);
     }
 }
 
@@ -42,11 +39,8 @@ fn heat_after(ctx: &mut Context, name: &str, list_len: usize) -> u32 {
     let function = ctx
         .eval_str(&format!("(symbol-function '{name})"))
         .expect("function");
-    function
-        .get_bytecode_data()
-        .expect("bytecode")
-        .jit_runtime()
-        .heat()
+    let source = function.get_bytecode_data().expect("bytecode");
+    neovm_eval::test_support::jit_heat_for_test(source)
 }
 
 #[test]
@@ -104,11 +98,8 @@ fn a_caller_through_a_compile_gains_no_heat() {
         "hof-credit-seen",
         "(mapcar (lambda (x) (1+ x)) l)",
     );
-    function
-        .get_bytecode_data()
-        .expect("bytecode")
-        .jit_runtime()
-        .compiled_id_or_assign();
+    let source = function.get_bytecode_data().expect("bytecode");
+    neovm_eval::test_support::authority::jit_compiled_id_or_assign_for_test(source);
     assert_eq!(heat_after(&mut ctx, "hof-credit-seen", 3200), 1);
 }
 
@@ -117,9 +108,9 @@ fn hof_inline_off_gives_no_credit() {
     let _inline = InlineOn::enter();
     let mut ctx = crate::test_utils::runtime_startup_context();
     byte_compiled(&mut ctx, "hof-credit-off", "(mapcar (lambda (x) (1+ x)) l)");
-    compile::force_hof_inline_for_test(Some(false));
+    neovm_eval::test_support::authority::force_hof_inline_for_test(Some(false));
     let heat = heat_after(&mut ctx, "hof-credit-off", 3200);
-    compile::force_hof_inline_for_test(None);
+    neovm_eval::test_support::authority::force_hof_inline_for_test(None);
     assert_eq!(heat, 1);
 }
 
@@ -137,22 +128,18 @@ fn a_mapping_in_an_interpreted_calls_argument_credits_no_caller() {
     // verdict cached for the caller.
     ctx.eval_str("(hof-credit-arg (mapcar #'list (number-sequence 1 3200)))")
         .expect("call");
-    let heat = ctx
+    let heat_value = ctx
         .eval_str("(symbol-function 'hof-credit-arg)")
-        .expect("function")
-        .get_bytecode_data()
-        .expect("bytecode")
-        .jit_runtime()
-        .heat();
+        .expect("function");
+    let heat_source = heat_value.get_bytecode_data().expect("bytecode");
+    let heat = neovm_eval::test_support::jit_heat_for_test(heat_source);
     assert_eq!(heat, 1 + 100, "only the body's own mapping credits");
     ctx.eval_str("(hof-credit-arg (mapcar #'list (number-sequence 1 3200)))")
         .expect("call");
-    let heat = ctx
+    let heat_value = ctx
         .eval_str("(symbol-function 'hof-credit-arg)")
-        .expect("function")
-        .get_bytecode_data()
-        .expect("bytecode")
-        .jit_runtime()
-        .heat();
+        .expect("function");
+    let heat_source = heat_value.get_bytecode_data().expect("bytecode");
+    let heat = neovm_eval::test_support::jit_heat_for_test(heat_source);
     assert_eq!(heat, 2 + 200);
 }

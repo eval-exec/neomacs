@@ -848,6 +848,19 @@ pub mod authority {
         // SAFETY: the caller upholds the split-accessor contract above.
         unsafe { context.obarray_and_tagged_heap_mut() }
     }
+    /// Re-homed jit/tests BOOT-FULL batch: thread-local HOF-inline override
+    /// write (`NEOVM_JIT_HOF_INLINE` is a process knob).
+    #[cfg(feature = "jit")]
+    pub fn force_hof_inline_for_test(on: Option<bool>) {
+        crate::emacs_core::jit::compile::force_hof_inline_for_test(on);
+    }
+}
+
+/// Re-homed jit/tests BOOT-FULL batch: copied invocation-heat read.
+#[cfg(feature = "jit")]
+pub fn jit_heat_for_test(function: &crate::emacs_core::bytecode::ByteCodeFunction) -> u32 {
+    use crate::emacs_core::jit::RuntimeStateTieringExt as _;
+    crate::emacs_core::bytecode::ByteCodeFunctionExt::jit_runtime(function).heat()
 }
 
 /// Test-support `aset` over a caller-owned Bare argument slice (K1 fence-ask
