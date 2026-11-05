@@ -74,9 +74,8 @@ fn aset_on_strings_is_observably_unchanged() {
 /// cannot see the difference -- both routes return the same byte offset.
 #[test]
 fn aset_on_a_multibyte_string_does_not_scan_from_the_start() {
-    use neovm_value::emacs_char::{
-        position_conversion_scan_steps_for_test, reset_position_conversion_scan_steps_for_test,
-    };
+    use neovm_value::emacs_char::position_conversion_scan_steps_for_test;
+    use neovm_value::test_support::authority::reset_position_conversion_scan_steps_for_test;
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
 
@@ -128,9 +127,8 @@ fn aset_on_a_multibyte_string_does_not_scan_from_the_start() {
 /// distinguishes the two shapes, which is what the clone counter is for.
 #[test]
 fn putting_a_property_on_a_string_does_not_copy_its_interval_tree() {
-    use neovm_edit::buffer::text_props::{
-        reset_text_property_table_clones_for_test, text_property_table_clones_for_test,
-    };
+    use neovm_edit::buffer::text_props::text_property_table_clones_for_test;
+    use neovm_value::test_support::authority::reset_text_property_table_clones_for_test;
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
 

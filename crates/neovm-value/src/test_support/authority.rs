@@ -366,3 +366,36 @@ pub fn owner_root_slot_with_index_for_test<'era>(
 ) -> crate::tagged::gc::mutator_registration::OwnerRootSlot<'era> {
     root.with_index_for_test(index)
 }
+
+/// Value-FENCE row (N2 counter reset): zero the position-conversion scan-step
+/// counter for the moved eval/corpus fixtures. The counter itself stays a
+/// thread-local in `emacs_char`; this typed reset is the only cross-crate
+/// route, and every increment call site is under the same
+/// `cfg(any(test, feature = "test-support"))` gate.
+pub fn reset_position_conversion_scan_steps_for_test() {
+    crate::emacs_char::reset_position_conversion_scan_steps_for_test()
+}
+
+/// Value-FENCE row (N2 counter reset): zero the interval-balance call counter.
+pub fn reset_interval_balance_calls_for_test() {
+    crate::value::text_props::reset_interval_balance_calls_for_test()
+}
+
+/// Value-FENCE row (N2 counter reset): zero the text-property table clone
+/// counter.
+pub fn reset_text_property_table_clones_for_test() {
+    crate::value::text_props::reset_text_property_table_clones_for_test()
+}
+
+/// Value-FENCE row (N2 counter reset): zero the bytecode-function clone
+/// counter. Both increment sites (`Clone` and the in-place instance writer)
+/// sit under the same instrumentation gate.
+pub fn reset_bytecode_function_clone_count_for_test() {
+    crate::tagged::bytecode::chunk::reset_bytecode_function_clone_count_for_test()
+}
+
+/// Value-FENCE row (N2 counter reset): zero the plain-value slot-visit counter.
+/// All five increment sites are under the same instrumentation gate.
+pub fn reset_plain_value_slot_visits() {
+    crate::symbol::reset_plain_value_slot_visits()
+}

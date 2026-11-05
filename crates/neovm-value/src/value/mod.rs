@@ -340,7 +340,7 @@ thread_local! {
     static THREAD_LOCAL_ALLOCATION_COUNTS: Cell<[u64; MEMORY_USE_COUNT_LEN]> =
         const { Cell::new([0; MEMORY_USE_COUNT_LEN]) };
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     static BYTECODE_DATA_ACCESS_COUNT: Cell<usize> = const { Cell::new(0) };
 }
 
@@ -367,7 +367,7 @@ pub fn bytecode_data_access_count() -> usize {
 /// Count one byte-code data projection in test builds. The projections
 /// themselves live in `bytecode::value_api`; the counter stays with the
 /// module's test accessors so tests that reset/read it keep one home.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub fn note_bytecode_data_access() {
     BYTECODE_DATA_ACCESS_COUNT.with(|count| count.set(count.get() + 1));

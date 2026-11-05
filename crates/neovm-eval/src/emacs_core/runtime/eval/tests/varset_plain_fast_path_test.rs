@@ -82,7 +82,8 @@ fn run_setq(ev: &mut Context, engine: Engine, sym: Value, value: Value) -> Resul
 /// `set_symbol_value_id` and never counts, so 1 means the fast path ran — at
 /// the call site the engine uses, since `assign_var_id` does not offer it.
 fn fast_path_visits(ev: &mut Context, engine: Engine, sym: Value, value: Value) -> usize {
-    use neovm_value::symbol::{plain_value_slot_visits, reset_plain_value_slot_visits};
+    use neovm_value::symbol::plain_value_slot_visits;
+    use neovm_value::test_support::authority::reset_plain_value_slot_visits;
     reset_plain_value_slot_visits();
     run_setq(ev, engine, sym, value).expect("setq succeeds");
     plain_value_slot_visits()

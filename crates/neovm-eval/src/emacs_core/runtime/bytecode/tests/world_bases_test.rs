@@ -512,7 +512,7 @@ fn world_bases_varref_reads_nil_undo_and_all_object_forwarders_after_gc() {
         vec![Op::VarRef(1), Op::VarRef(2), Op::List(2), Op::Return],
         constants.clone(),
     );
-    neovm_edit::buffer::buffer::reset_buffer_local_value_lookup_probes();
+    neovm_edit::test_support::authority::reset_buffer_local_value_lookup_probes();
     assert_eq!(
         print_value(&execute(&mut context, &nil_and_undo)),
         "(nil (\"undo-only\"))"

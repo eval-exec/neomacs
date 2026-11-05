@@ -35,7 +35,7 @@ fn compare_position_cache_reuses_far_start_for_ascii_token() {
     let needle = Value::string("xy");
     assert_eq!(compare_token(needle, source, 1000, 2), Value::T);
 
-    emacs_char::reset_position_conversion_scan_steps_for_test();
+    neovm_value::test_support::authority::reset_position_conversion_scan_steps_for_test();
     for _ in 0..20 {
         assert_eq!(compare_token(needle, source, 1000, 2), Value::T);
     }
@@ -60,7 +60,7 @@ fn compare_position_cache_keeps_same_string_operand_identity() {
     ];
     assert_eq!(builtin_compare_strings(args.clone()).unwrap(), Value::T);
 
-    emacs_char::reset_position_conversion_scan_steps_for_test();
+    neovm_value::test_support::authority::reset_position_conversion_scan_steps_for_test();
     for _ in 0..20 {
         assert_eq!(builtin_compare_strings(args.clone()).unwrap(), Value::T);
     }
@@ -84,7 +84,7 @@ fn compare_position_cache_zero_starts_preserve_warmed_far_offset() {
     // leave the useful far-offset entry in place rather than replace it
     // with the beginnings of two unrelated short multibyte strings.
     assert_eq!(compare_token(prefix1, prefix2, 0, 2), Value::T);
-    emacs_char::reset_position_conversion_scan_steps_for_test();
+    neovm_value::test_support::authority::reset_position_conversion_scan_steps_for_test();
     assert_eq!(compare_token(needle, source, 1000, 2), Value::T);
     assert_eq!(
         emacs_char::position_conversion_scan_steps_for_test(),

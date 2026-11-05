@@ -33,7 +33,7 @@ thread_local! {
     static INTERVAL_BALANCE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn reset_interval_balance_calls_for_test() {
     INTERVAL_BALANCE_CALLS.with(|calls| calls.set(0));
 }
@@ -1181,7 +1181,7 @@ impl IntervalTree {
     }
 
     fn balance_an_interval(&mut self, mut id: IntervalId) -> IntervalId {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         INTERVAL_BALANCE_CALLS.with(|calls| calls.set(calls.get() + 1));
         loop {
             let node = self.linked(id);
@@ -2760,7 +2760,7 @@ thread_local! {
     static TABLE_CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn reset_text_property_table_clones_for_test() {
     TABLE_CLONES.with(|c| c.set(0));
 }
@@ -2774,7 +2774,7 @@ pub(crate) fn text_property_table_clones_for_test() -> usize {
 impl Clone for TextPropertyTable {
     fn clone(&self) -> Self {
         use std::sync::atomic::Ordering;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         TABLE_CLONES.with(|c| c.set(c.get() + 1));
         Self {
             intervals: self.intervals.clone(),

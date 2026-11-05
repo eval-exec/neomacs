@@ -172,9 +172,9 @@ pub fn reset_function_cell_lookup_count() {
     FUNCTION_CELL_LOOKUP_COUNT.with(|count| count.set(0));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
-pub fn reset_plain_value_slot_visits() {
+pub(crate) fn reset_plain_value_slot_visits() {
     PLAIN_VALUE_SLOT_VISITS.with(|count| count.set(0));
 }
 
@@ -184,7 +184,7 @@ pub fn plain_value_slot_visits() -> usize {
     PLAIN_VALUE_SLOT_VISITS.with(Cell::get)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn note_plain_value_slot_visit() {
     PLAIN_VALUE_SLOT_VISITS.with(|count| count.set(count.get() + 1));
 }
@@ -2598,7 +2598,7 @@ impl Obarray {
             return None;
         }
         let plain = write.plain_untrapped_unprojected()?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         note_plain_value_slot_visit();
         Some(plain.store(value))
     }
@@ -2619,7 +2619,7 @@ impl Obarray {
             return None;
         }
         let plain = write.plain_untrapped_unprojected()?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         note_plain_value_slot_visit();
         Some(plain.store(value))
     }
@@ -2647,7 +2647,7 @@ impl Obarray {
         let Some(plain) = write.plain_untrapped_unprojected() else {
             return false;
         };
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         note_plain_value_slot_visit();
         plain.set(value);
         true
@@ -2694,7 +2694,7 @@ impl Obarray {
         let Some(mut write) = self.symbols.cell_write(idx, gate) else {
             return Err(NotPlain);
         };
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         note_plain_value_slot_visit();
         write.plain().map(|plain| plain.set(value)).ok_or(NotPlain)
     }
@@ -2705,7 +2705,7 @@ impl Obarray {
         if Self::is_canonical_symbol_id(id) {
             self.mark_global_member(id);
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         note_plain_value_slot_visit();
         self.cell_write_ensure(id)
             .plain()

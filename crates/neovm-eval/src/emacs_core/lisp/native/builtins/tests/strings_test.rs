@@ -206,7 +206,7 @@ fn split_ascii_multibyte_string_uses_gnu_identity_position_conversion() {
     let input_len = input.len();
     let input = Value::heap_string(LispString::from_utf8(&input));
 
-    neovm_value::emacs_char::reset_position_conversion_scan_steps_for_test();
+    neovm_value::test_support::authority::reset_position_conversion_scan_steps_for_test();
     let result = eval
         .funcall_general(
             Value::symbol("split-string"),
@@ -295,7 +295,7 @@ fn concat_builds_many_disjoint_property_runs_without_incremental_tree_balancing(
         })
         .collect::<Vec<_>>();
 
-    neovm_edit::buffer::text_props::reset_interval_balance_calls_for_test();
+    neovm_value::test_support::authority::reset_interval_balance_calls_for_test();
     let result = builtin_concat(sources).expect("concat should preserve all property runs");
     let balance_calls = neovm_edit::buffer::text_props::interval_balance_calls_for_test();
 

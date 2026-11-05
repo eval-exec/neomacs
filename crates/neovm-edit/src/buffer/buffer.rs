@@ -59,7 +59,7 @@ thread_local! {
     };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn reset_buffer_local_value_lookup_probes() {
     BUFFER_LOCAL_VALUE_LOOKUP_PROBES.set(0);
 }
@@ -5337,7 +5337,7 @@ impl Buffer {
         sym_id: SymId,
         localized: bool,
     ) -> Option<Value> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         BUFFER_LOCAL_VALUE_LOOKUP_PROBES
             .set(BUFFER_LOCAL_VALUE_LOOKUP_PROBES.get().saturating_add(1));
         // Slot-backed names resolve to the live slot value, mirroring

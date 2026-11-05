@@ -24,3 +24,11 @@ pub unsafe fn chain_splice_at_head_for_test(
 ) {
     text.chain_splice_at_head(marker);
 }
+
+/// P1-CLASSES-ALL-CRATES FENCE (N2 counter reset): zero the buffer-local
+/// value-lookup probe counter for the moved eval fixtures. The counter stays
+/// a thread-local in `buffer::buffer`; the increment site and this reset are
+/// both under the `cfg(any(test, feature = "test-support"))` gate.
+pub fn reset_buffer_local_value_lookup_probes() {
+    crate::buffer::buffer::reset_buffer_local_value_lookup_probes();
+}

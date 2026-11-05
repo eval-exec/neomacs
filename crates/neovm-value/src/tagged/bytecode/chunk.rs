@@ -273,14 +273,14 @@ pub struct ByteCodeFunction {
 #[cfg(any(test, feature = "test-support"))]
 static BYTECODE_FUNCTION_CLONE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn reset_bytecode_function_clone_count_for_test() {
     BYTECODE_FUNCTION_CLONE_COUNT.store(0, Ordering::Relaxed);
 }
 
 /// Test-only: count a whole-function copy made without `Clone` (the
 /// in-place `make-closure` instance writer).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn note_bytecode_function_clone_for_test() {
     BYTECODE_FUNCTION_CLONE_COUNT.fetch_add(1, Ordering::Relaxed);
 }
@@ -391,7 +391,7 @@ fn arglist_value_from_params(params: &LambdaParams) -> Value {
 impl Clone for ByteCodeFunction {
     #[inline(never)]
     fn clone(&self) -> Self {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         note_bytecode_function_clone_for_test();
 
         // A stub must be materialized before anything clones it (print and

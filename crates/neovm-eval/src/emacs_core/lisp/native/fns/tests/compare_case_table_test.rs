@@ -148,7 +148,7 @@ fn compare_case_table_preserves_start_position_cache() {
         compare_strings_in_state_with_parity(&mut ctx, ranged.clone(), true).unwrap(),
         Value::T
     );
-    emacs_char::reset_position_conversion_scan_steps_for_test();
+    neovm_value::test_support::authority::reset_position_conversion_scan_steps_for_test();
     assert_eq!(
         compare_strings_in_state_with_parity(&mut ctx, ranged, true).unwrap(),
         Value::T

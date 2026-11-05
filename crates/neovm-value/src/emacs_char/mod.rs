@@ -1403,12 +1403,12 @@ thread_local! {
         const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn record_position_conversion_scan_step() {
     POSITION_CONVERSION_SCAN_STEPS.with(|steps| steps.set(steps.get() + 1));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn reset_position_conversion_scan_steps_for_test() {
     POSITION_CONVERSION_SCAN_STEPS.with(|steps| steps.set(0));
 }
@@ -1431,7 +1431,7 @@ pub fn char_to_byte_pos(bytes: &[u8], char_idx: usize) -> usize {
     if char_idx == 0 {
         return 0;
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     record_position_conversion_scan_step();
     let mut remaining = char_idx;
     let mut base = 0usize;
@@ -1472,7 +1472,7 @@ pub fn char_to_byte_pos_from_end(bytes: &[u8], chars_before_end: usize) -> usize
     if chars_before_end == 0 {
         return bytes.len();
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     record_position_conversion_scan_step();
     let mut remaining = chars_before_end;
     let mut end = bytes.len();
@@ -1504,7 +1504,7 @@ pub fn byte_to_char_pos(bytes: &[u8], byte_pos: usize) -> usize {
     // Characters before byte_pos = lead bytes before it (a char started
     // before byte_pos iff its lead byte is before byte_pos), identical to
     // the previous per-char scan even for a byte_pos inside a character.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if byte_pos > 0 {
         record_position_conversion_scan_step();
     }

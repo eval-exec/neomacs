@@ -705,7 +705,7 @@ impl TaggedHeap {
             !proto.is_pdump_stub(),
             "instantiating an unmaterialized pdump stub"
         );
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         crate::tagged::bytecode::chunk::note_bytecode_function_clone_for_test();
         let crate::tagged::bytecode::chunk::ByteCodeFunction {
             source_id,
