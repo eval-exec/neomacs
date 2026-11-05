@@ -3093,10 +3093,6 @@ fn a_moved_double_click_release_keeps_gnu_modifier_order() {
 }
 
 #[cfg(test)]
-#[path = "help_echo_substitution.rs"]
-mod help_echo_substitution;
-
-#[cfg(test)]
 #[path = "gnu_help_echo_direct_oracle.rs"]
 mod gnu_help_echo_direct_oracle;
 

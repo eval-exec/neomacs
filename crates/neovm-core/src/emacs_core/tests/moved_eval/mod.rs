@@ -78,3 +78,7 @@ mod emacs_core_runtime_eval_tests_gc_tls_migration_proofs_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/native/builtins/tests/builtins_test.rs"]
 mod emacs_core_lisp_native_builtins_tests_builtins_test_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/keyboard/tests/help_echo_substitution.rs"]
+mod emacs_core_runtime_eval_keyboard_tests_help_echo_substitution_rs;
