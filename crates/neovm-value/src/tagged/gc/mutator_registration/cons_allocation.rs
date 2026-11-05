@@ -113,7 +113,8 @@ impl RunAccess<'_, '_> {
 
     /// The front carving tail's `(cursor, limit)` cell indexes, if the owner
     /// currently holds an unexhausted tail.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn cons_tail_bounds_for_test(&self) -> Option<(u16, u16)> {
         self.owner
             .local
@@ -125,7 +126,8 @@ impl RunAccess<'_, '_> {
     }
 
     /// Bases of the blocks recorded in this owner's canonical young log.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn cons_young_blocks_for_test(&self) -> Vec<usize> {
         self.owner
             .local
@@ -164,7 +166,8 @@ impl RunAccess<'_, '_> {
     }
 
     /// Per-owner refill accounting for the A8 contention rows.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn cons_stats_for_test(&self) -> super::super::alloc_region::RegionStats {
         self.owner
             .local

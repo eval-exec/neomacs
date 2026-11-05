@@ -1941,6 +1941,42 @@ impl TaggedHeap {
         }
     }
 
+    /// VIS row: copied heap address (`.addr()` scalar) of a heap-tagged value
+    /// for the relocated GC tests. Identity only; never rebuild a pointer.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn value_heap_addr_for_test(value: TaggedValue) -> Option<usize> {
+        value.gc_heap_ptr().map(|ptr| ptr.addr())
+    }
+
+    /// VIS row: copied mark parity of this heap (plain Copy enum).
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn mark_parity_for_test(&self) -> crate::tagged::header::MarkParity {
+        self.mark_parity
+    }
+
+    /// VIS row: copied byte offsets of the compiled-exclusion heap fields for
+    /// the MAIN390 layout regression test. Offsets only; the fields stay
+    /// private and no reference is exposed.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) const COMPILED_EXCLUSION_FIELD_OFFSETS_FOR_TEST: [usize; 13] = [
+        core::mem::offset_of!(Self, gc_threshold_overridden),
+        core::mem::offset_of!(Self, forced_termination_pending),
+        core::mem::offset_of!(Self, write_tracking_mode),
+        core::mem::offset_of!(Self, first_cycle_concurrent),
+        core::mem::offset_of!(Self, image_premarked),
+        core::mem::offset_of!(Self, partition_dump),
+        core::mem::offset_of!(Self, dump_blackened),
+        core::mem::offset_of!(Self, bootstrap_collected),
+        core::mem::offset_of!(Self, mark_parity),
+        core::mem::offset_of!(Self, mark_in_progress),
+        core::mem::offset_of!(Self, concurrent_mark_running),
+        core::mem::offset_of!(Self, sweep_in_progress),
+        core::mem::offset_of!(Self, vec_scan),
+    ];
+
     /// Extend the mapped-object address span to cover `[start, start+len)`.
     ///
     /// The first registered mapped object activates the dump partition (and its

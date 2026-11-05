@@ -6,21 +6,9 @@ use super::*;
 #[test]
 fn compiled_exclusion_bytes_preserve_main390_heap_tail_layout() {
     crate::test_utils::init_test_tracing();
-    let old_offsets = [
-        std::mem::offset_of!(TaggedHeap, gc_threshold_overridden),
-        std::mem::offset_of!(TaggedHeap, forced_termination_pending),
-        std::mem::offset_of!(TaggedHeap, write_tracking_mode),
-        std::mem::offset_of!(TaggedHeap, first_cycle_concurrent),
-        std::mem::offset_of!(TaggedHeap, image_premarked),
-        std::mem::offset_of!(TaggedHeap, partition_dump),
-        std::mem::offset_of!(TaggedHeap, dump_blackened),
-        std::mem::offset_of!(TaggedHeap, bootstrap_collected),
-        std::mem::offset_of!(TaggedHeap, mark_parity),
-        std::mem::offset_of!(TaggedHeap, mark_in_progress),
-        std::mem::offset_of!(TaggedHeap, concurrent_mark_running),
-        std::mem::offset_of!(TaggedHeap, sweep_in_progress),
-        std::mem::offset_of!(TaggedHeap, vec_scan),
-    ];
+    // Copied offsets of the same private fields (VIS row
+    // COMPILED_EXCLUSION_FIELD_OFFSETS_FOR_TEST); no field is widened.
+    let old_offsets = TaggedHeap::COMPILED_EXCLUSION_FIELD_OFFSETS_FOR_TEST;
     let test_only_bytes = size_of::<usize>();
     let expected_main_offsets = [
         4512, 4513, 4514, 4515, 4516, 4517, 4518, 4519, 4520, 4521, 4522, 4523, 4524,

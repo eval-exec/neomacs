@@ -78,7 +78,7 @@ fn weak_symbol_key_survives_full_collections(mapped: bool, with_position: bool) 
         );
         assert!(heap.marked_symbols.contains(id));
         assert_eq!(owner.as_vector_data().unwrap().as_slice()[0], strong_value);
-        assert!(heap.current_mutator_gc().remset.is_empty());
+        assert!(heap.current_mutator_remset_empty_for_test());
     }
 }
 

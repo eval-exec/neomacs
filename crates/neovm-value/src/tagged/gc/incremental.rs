@@ -2203,6 +2203,14 @@ impl TaggedHeap {
         }
     }
 
+    /// VIS row: copied tag-less ownership predicate for the relocated GC
+    /// tests; the union oracle itself stays pub(super).
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn owns_non_cons_object_for_test(&self, ptr: *const u8) -> bool {
+        self.owns_non_cons_object(ptr)
+    }
+
     /// Tag-less union oracle used by debug checks and GC tests that have not
     /// decoded the value's heap tag yet.
     #[cfg(any(debug_assertions, test))]

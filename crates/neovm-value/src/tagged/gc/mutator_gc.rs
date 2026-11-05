@@ -108,6 +108,13 @@ impl TaggedHeap {
         &self.mutator_gc
     }
 
+    /// VIS row: copied emptiness predicate for the owner's remembered set.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn current_mutator_remset_empty_for_test(&self) -> bool {
+        self.current_mutator_gc().remset.is_empty()
+    }
+
     #[inline]
     pub(super) fn current_mutator_gc_mut(&mut self) -> &mut MutatorGcState {
         &mut self.mutator_gc
