@@ -18,6 +18,8 @@ mod heap_mut_closure_guard;
 #[path = "../../core_tests/emacs_core/runtime/value/tests/metadata_capture_test.rs"]
 mod metadata_capture_tests;
 
+#[path = "value/switch_plan.rs"]
+pub mod switch_plan;
 #[path = "value/text_props.rs"]
 pub mod text_props;
 

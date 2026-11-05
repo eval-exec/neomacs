@@ -757,5 +757,3 @@ fn list_iter_terminates_on_a_circular_list() {
 
 #[path = "hash_probe_test.rs"]
 mod hash_probe;
-#[path = "jump_table_lookup_test.rs"]
-pub(super) mod jump_table_lookup;

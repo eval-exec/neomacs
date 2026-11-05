@@ -5,8 +5,8 @@ use super::super::tests::jump_table_lookup::{
 };
 use super::*;
 use crate::emacs_core::eval::Context;
-use crate::intern::intern;
-use crate::value::{HashTableWeakness, VecLikeType};
+use crate::emacs_core::intern::intern;
+use crate::emacs_core::value::{HashTableWeakness, VecLikeType};
 use malachite::integer::Integer;
 
 fn sym(name: &str) -> Value {
@@ -34,7 +34,7 @@ fn table_of(test: HashTableTest, keys: &[Value]) -> LispHashTable {
 fn planned(table: &LispHashTable) -> Option<PlanShape> {
     table.switch_target(Value::NIL, false);
     table.switch_target(Value::NIL, false);
-    table.data.switch_plan.shape()
+    table.shape()
 }
 
 fn assert_answers_like_lookup(table: &LispHashTable, probes: &[Value], what: &str) -> usize {
@@ -46,7 +46,7 @@ fn assert_answers_like_lookup(table: &LispHashTable, probes: &[Value], what: &st
                 bits(table.data.lookup(probe, table.test, swp).copied()),
                 "{what}: {probe:?} under {:?} (swp {swp}), plan {:?}",
                 table.test,
-                table.data.switch_plan.shape()
+                table.shape()
             );
             checked += 1;
         }
@@ -67,14 +67,14 @@ fn assert_answers_like_lookup(table: &LispHashTable, probes: &[Value], what: &st
 /// compare floats by value instead of bits.
 #[test]
 fn plan_answers_exactly_what_the_hashed_lookup_answers() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let keys = key_pool();
     let probes = probe_pool(&mut ctx, &keys);
     let mut rng = Rng(0x2545_f491_4f6c_dd1d);
     let mut checked = 0usize;
     let mut planned_shapes = std::collections::HashSet::new();
     let mut record = |table: &LispHashTable| {
-        let shape = table.data.switch_plan.shape();
+        let shape = table.shape();
         assert!(shape.is_some(), "a dispatched table is planned");
         planned_shapes.insert(shape);
     };
@@ -129,7 +129,7 @@ fn plan_answers_exactly_what_the_hashed_lookup_answers() {
     // identity scan and the hash disagree. The plan must answer like
     // `lookup` anyway (it declines such tables).
     let (a, b) = (sym("a"), sym("b"));
-    let pa = ctx.tagged_heap.alloc_symbol_with_pos(a, Value::fixnum(1));
+    let pa = unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(a, Value::fixnum(1));
     for test in TESTS {
         for filler in [0usize, 40] {
             let mut table = LispHashTable::new(test);
@@ -187,12 +187,8 @@ fn plan_answers_exactly_what_the_hashed_lookup_answers() {
     }
     checked += assert_answers_like_lookup(&weak, &probes, "weak table");
     checked += assert_answers_like_lookup(&user, &probes, "user-test table");
-    assert_eq!(
-        weak.data.switch_plan.shape(),
-        None,
-        "a weak table is never planned"
-    );
-    assert_eq!(user.data.switch_plan.shape(), Some(PlanShape::Generic));
+    assert_eq!(weak.shape(), None, "a weak table is never planned");
+    assert_eq!(user.shape(), Some(PlanShape::Generic));
 
     assert!(checked >= 20_000, "checked {checked}");
 }
@@ -214,15 +210,15 @@ fn plan_shapes_follow_the_key_set() {
 
     let symbols = table_of(HashTableTest::Eq, &[a, b, c]);
     assert_eq!(planned(&symbols), Some(PlanShape::Bits));
-    let Some(PlanSlot::Plan { body, .. }) = symbols.data.switch_plan.slot.get() else {
+    let Some(ranges) = symbols.planned_ranges_for_test() else {
         panic!("a symbol table has a plan body");
     };
     assert_eq!(
-        body.ranges[a.bits() & TAG_MASK],
+        ranges[a.bits() & TAG_MASK],
         (0, 3),
         "a symbol scans the symbol keys"
     );
-    for (tag, range) in body.ranges.iter().enumerate() {
+    for (tag, range) in ranges.iter().enumerate() {
         if tag != a.bits() & TAG_MASK {
             assert_eq!(range.0, range.1, "tag {tag} holds no key");
         }
@@ -332,7 +328,7 @@ fn plan_shapes_follow_the_key_set() {
         );
     }
     assert_eq!(
-        weak.data.switch_plan.shape(),
+        weak.shape(),
         None,
         "a weak table's cache is never populated"
     );
@@ -399,7 +395,7 @@ fn every_plan_shape_hits_and_misses() {
     for (table, probes) in &cases {
         planned(table);
         assert!(matches!(
-            table.data.switch_plan.shape(),
+            table.shape(),
             Some(PlanShape::DenseFixnum | PlanShape::Bits | PlanShape::Nodes)
         ));
         assert_answers_like_lookup(table, probes, "shape case");
@@ -433,18 +429,14 @@ fn every_table_mutation_drops_the_plan() {
     let replan = || {
         target(Value::NIL);
         target(Value::NIL);
-        assert!(ht().data.switch_plan.shape().is_some(), "planned again");
+        assert!(ht().shape().is_some(), "planned again");
     };
 
     replan();
     assert_eq!(target(c), None);
     // puthash of a new key.
     let _ = table.with_hash_table_mut(|ht| ht.insert(c.to_hash_key(&eq), c, Value::fixnum(8)));
-    assert_eq!(
-        ht().data.switch_plan.shape(),
-        None,
-        "puthash drops the plan"
-    );
+    assert_eq!(ht().shape(), None, "puthash drops the plan");
     assert_eq!(target(c), Some(8));
     replan();
     // puthash of an existing key with a new target.
@@ -463,12 +455,12 @@ fn every_table_mutation_drops_the_plan() {
     let mut other = LispHashTable::new(eq);
     other.insert(b.to_hash_key(&eq), b, Value::fixnum(40));
     assert!(table.replace_hash_table(other));
-    assert_eq!(ht().data.switch_plan.shape(), None);
+    assert_eq!(ht().shape(), None);
     assert_eq!(target(b), Some(40));
     replan();
     // A test change.
     let _ = table.with_hash_table_mut(|ht| ht.test = HashTableTest::Eql);
-    assert_eq!(ht().data.switch_plan.shape(), None);
+    assert_eq!(ht().shape(), None);
     assert_eq!(target(b), Some(40));
     replan();
     // The weak sweep's removal path.
@@ -487,14 +479,14 @@ fn every_table_mutation_drops_the_plan() {
         let mut owned = table_of(eq, &[a, b]);
         assert!(planned(&owned).is_some());
         mutate(&mut owned);
-        assert_eq!(owned.data.switch_plan.shape(), None, "{name}");
+        assert_eq!(owned.shape(), None, "{name}");
         assert_eq!(owned.switch_target(a, false), None, "{name}");
     }
 
     // `copy-hash-table` starts cold.
     let original = table_of(eq, &[a]);
     assert!(planned(&original).is_some());
-    assert_eq!(original.clone().data.switch_plan.shape(), None);
+    assert_eq!(original.clone().shape(), None);
 }
 
 /// A jump table mutated between dispatches (not what the byte compiler
@@ -510,7 +502,7 @@ fn a_table_mutated_between_dispatches_stops_replanning() {
     for round in 0..(MAX_REBUILDS as i64 + 3) {
         ht().switch_target(a, false);
         ht().switch_target(b, false);
-        let shape = ht().data.switch_plan.shape();
+        let shape = ht().shape();
         if round < MAX_REBUILDS as i64 {
             assert_eq!(shape, Some(PlanShape::Bits), "round {round}");
         } else {
@@ -564,7 +556,7 @@ fn first_dispatch_does_not_build() {
         before,
         "one dispatch builds nothing"
     );
-    assert_eq!(table.data.switch_plan.shape(), None);
+    assert_eq!(table.shape(), None);
     assert_eq!(
         bits(table.switch_target(b, false)),
         Some(Value::fixnum(16).bits())
@@ -580,13 +572,11 @@ fn first_dispatch_does_not_build() {
 /// level under every test, and at every leaf under `equal`.
 #[test]
 fn positioned_symbols_match_their_bare_symbols_only_under_swp() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let (a, b) = (sym("a"), sym("b"));
-    let pa = ctx.tagged_heap.alloc_symbol_with_pos(a, Value::fixnum(1));
-    let pb = ctx.tagged_heap.alloc_symbol_with_pos(b, Value::fixnum(2));
-    let pnil = ctx
-        .tagged_heap
-        .alloc_symbol_with_pos(Value::NIL, Value::fixnum(3));
+    let pa = unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(a, Value::fixnum(1));
+    let pb = unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(b, Value::fixnum(2));
+    let pnil = unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(Value::NIL, Value::fixnum(3));
     let immediate = table_of(HashTableTest::Eq, &[a, Value::NIL]);
     let structural = table_of(HashTableTest::Equal, &[list(&[a, b]), a]);
     let probes = [
@@ -674,7 +664,7 @@ fn every_table_mutation_raises_the_epoch() {
         ht.switch_target(c, false);
         ht.switch_target(a, true);
     }
-    assert!(ht.data.switch_plan.shape().is_some(), "planned");
+    assert!(ht.shape().is_some(), "planned");
     assert!(ht.data.get(&c.to_hash_key(&eq)).is_some());
     assert_eq!(epoch(), last.get(), "reads do not move the epoch");
 }

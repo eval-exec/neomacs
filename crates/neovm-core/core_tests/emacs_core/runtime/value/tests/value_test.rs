@@ -585,3 +585,5 @@ fn sxhash_equal_obeys_the_contract_for_constants_and_captured_environments() {
 
 #[path = "hash_probe_test.rs"]
 mod hash_probe;
+#[path = "jump_table_lookup_test.rs"]
+pub(super) mod jump_table_lookup;

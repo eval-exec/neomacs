@@ -60,7 +60,8 @@ const DENSE_MAX_SPAN: u64 = 256;
 /// Built plans a table's mutations may drop before it stops being planned: a
 /// jump table mutated between dispatches is not what the byte compiler
 /// emits, and rebuilding for it forever would cost more than it saves.
-const MAX_REBUILDS: u8 = 4;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const MAX_REBUILDS: u8 = 4;
 /// A dense fixnum slot no key occupies.
 const NO_ENTRY: u16 = u16::MAX;
 
@@ -190,6 +191,7 @@ fn inline_immediate(bits: usize) -> Option<InlineKeyNode> {
 
 /// How a planned table answers; for tracing and tests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum PlanShape {
     /// The hashed lookup, unfiltered.
     Generic,
@@ -276,18 +278,41 @@ struct StringKey {
     bytes: Box<[u8]>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static PLAN_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Test-only: how many plans this thread has built.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn plan_builds_for_test() -> usize {
     PLAN_BUILDS.with(std::cell::Cell::get)
 }
 
 impl LispHashTable {
+    /// Test-only: the built plan's shape, or `None` before it is planned.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn shape(&self) -> Option<PlanShape> {
+        self.data.switch_plan.shape()
+    }
+
+    /// Test-only: the built plan's tag ranges, copied in tag order.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn planned_ranges_for_test(&self) -> Option<Vec<(usize, usize)>> {
+        let PlanSlot::Plan { body, .. } = self.data.switch_plan.slot.get()? else {
+            return None;
+        };
+        Some(
+            body.ranges
+                .iter()
+                .map(|&(lo, hi)| (lo as usize, hi as usize))
+                .collect(),
+        )
+    }
+
     /// The target GNU `Bswitch` (src/bytecode.c) jumps to for `value`,
     /// answered through the table's switch plan. Always exactly
     /// `self.data.lookup(value, self.test, swp).copied()`.
@@ -474,7 +499,7 @@ impl PlanSlot {
     #[cold]
     #[inline(never)]
     fn build(table: &LispHashTable, rebuilds: u8) -> PlanSlot {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         PLAN_BUILDS.with(|builds| builds.set(builds.get() + 1));
         let slot = Self::compile(table, rebuilds);
         tracing::debug!(
@@ -850,10 +875,6 @@ fn match_key<const SWP: bool>(prog: &[KeyNode], strings: &[StringKey], mut v: Va
         v = pending[depth];
     }
 }
-
-#[cfg(test)]
-#[path = "switch_plan/tests/switch_plan_test.rs"]
-mod tests;
 
 impl InlineSwitchPlan {
     #[inline]

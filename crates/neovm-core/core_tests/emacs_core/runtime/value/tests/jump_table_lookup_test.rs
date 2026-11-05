@@ -9,18 +9,18 @@
 //! with the switch-plan tests, which hold the plan to the same answer.
 use super::super::*;
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::intern::intern;
 use crate::heap_types::LispString;
-use crate::intern::intern;
 use malachite::integer::Integer;
 
-pub(in crate::value) const TESTS: [HashTableTest; 3] =
+pub(in crate::emacs_core::value) const TESTS: [HashTableTest; 3] =
     [HashTableTest::Eq, HashTableTest::Eql, HashTableTest::Equal];
 
 /// xorshift64: deterministic, so a failure names a reproducible table.
-pub(in crate::value) struct Rng(pub(in crate::value) u64);
+pub(in crate::emacs_core::value) struct Rng(pub(in crate::emacs_core::value) u64);
 
 impl Rng {
-    pub(in crate::value) fn below(&mut self, n: usize) -> usize {
+    pub(in crate::emacs_core::value) fn below(&mut self, n: usize) -> usize {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
@@ -28,7 +28,7 @@ impl Rng {
     }
 }
 
-pub(in crate::value) fn list(items: &[Value]) -> Value {
+pub(in crate::emacs_core::value) fn list(items: &[Value]) -> Value {
     items
         .iter()
         .rev()
@@ -45,7 +45,7 @@ fn sym(name: &str) -> Value {
 /// (unibyte, multibyte, the same bytes read two ways, raw bytes, propertized,
 /// empty), conses (proper, dotted, nested, eight deep, holding strings and
 /// floats), and the shapes a plan cannot reproduce (vector, bignum).
-pub(in crate::value) fn key_pool() -> Vec<Value> {
+pub(in crate::emacs_core::value) fn key_pool() -> Vec<Value> {
     let (a, b) = (sym("a"), sym("b"));
     let mut deep = a;
     for _ in 0..8 {
@@ -106,7 +106,7 @@ pub(in crate::value) fn key_pool() -> Vec<Value> {
 /// A structurally equal copy of `v` built from fresh objects: new conses,
 /// strings, floats and bignums (the dispatch value is never `eq` to the key
 /// in `pcase` over computed data).
-pub(in crate::value) fn fresh_copy(v: Value) -> Value {
+pub(in crate::emacs_core::value) fn fresh_copy(v: Value) -> Value {
     match v.kind() {
         ValueKind::Cons => Value::cons(fresh_copy(v.cons_car()), fresh_copy(v.cons_cdr())),
         ValueKind::String => Value::heap_string(v.as_lisp_string().expect("a string").clone()),
@@ -129,7 +129,7 @@ pub(in crate::value) fn fresh_copy(v: Value) -> Value {
 /// misses, and the shapes a lookup must survive -- a circular list, a
 /// 100,000-deep car chain, shared (DAG) structure, and positioned symbols at
 /// the top level and nested inside conses.
-pub(in crate::value) fn probe_pool(ctx: &mut Context, keys: &[Value]) -> Vec<Value> {
+pub(in crate::emacs_core::value) fn probe_pool(ctx: &mut Context, keys: &[Value]) -> Vec<Value> {
     let (a, b) = (sym("a"), sym("b"));
     let mut probes: Vec<Value> = keys.to_vec();
     probes.extend(keys.iter().map(|k| fresh_copy(*k)));
@@ -141,14 +141,11 @@ pub(in crate::value) fn probe_pool(ctx: &mut Context, keys: &[Value]) -> Vec<Val
         chain = Value::cons(chain, Value::NIL);
     }
     let shared = list(&[a]);
-    let pa = ctx.tagged_heap.alloc_symbol_with_pos(a, Value::fixnum(3));
-    let pb = ctx.tagged_heap.alloc_symbol_with_pos(b, Value::fixnum(5));
-    let pnil = ctx
-        .tagged_heap
-        .alloc_symbol_with_pos(Value::NIL, Value::fixnum(7));
-    let pkey = ctx
-        .tagged_heap
-        .alloc_symbol_with_pos(sym("jump-sym-3"), Value::fixnum(9));
+    let pa = unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(a, Value::fixnum(3));
+    let pb = unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(b, Value::fixnum(5));
+    let pnil = unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(Value::NIL, Value::fixnum(7));
+    let pkey =
+        unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(sym("jump-sym-3"), Value::fixnum(9));
     probes.extend([
         circular,
         chain,
@@ -195,7 +192,7 @@ fn odd_target(rng: &mut Rng) -> Value {
 /// `puthash` keys them with `symbols-with-pos-enabled` nil. Targets are byte
 /// offsets (non-negative fixnums) unless `odd_targets` mixes in others, and a
 /// sixth of the insertions are followed by a removal, which leaves holes.
-pub(in crate::value) fn random_table(
+pub(in crate::emacs_core::value) fn random_table(
     rng: &mut Rng,
     keys: &[Value],
     test: HashTableTest,
@@ -225,7 +222,7 @@ fn bits(v: Option<&Value>) -> Option<usize> {
 
 #[test]
 fn jump_table_lookup_matches_the_materialized_key() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let keys = key_pool();
     let probes = probe_pool(&mut ctx, &keys);
     let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
