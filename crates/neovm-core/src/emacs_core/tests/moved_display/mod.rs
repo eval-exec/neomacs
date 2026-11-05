@@ -45,3 +45,7 @@ mod selection_test;
 #[cfg(test)]
 #[path = "xwidget_runtime_test.rs"]
 mod xwidget_runtime_test;
+
+#[cfg(test)]
+#[path = "core_hook_restore_test.rs"]
+mod core_hook_restore_test;

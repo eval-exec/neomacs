@@ -75,7 +75,7 @@ pub(super) enum ConstructionSurface {
     MinimalVm,
     /// Full context without GNU's initial DEFSYM obarray membership: the
     /// shape of an image dumped before the port seeded the table.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     LegacyImageWithoutDefsyms,
 }
 
@@ -86,7 +86,7 @@ impl ConstructionSurface {
     pub fn finishes_runtime_activation(self) -> bool {
         match self {
             Self::Full => true,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             Self::LegacyImageWithoutDefsyms => true,
             #[cfg(any(test, feature = "test-support"))]
             Self::MinimalVm => false,
@@ -97,7 +97,7 @@ impl ConstructionSurface {
     pub fn seeds_well_known_members(self) -> bool {
         match self {
             Self::Full => true,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             Self::LegacyImageWithoutDefsyms => false,
             #[cfg(any(test, feature = "test-support"))]
             Self::MinimalVm => false,
@@ -209,7 +209,7 @@ impl Context {
     /// A full bootstrap that deliberately predates GNU's initial DEFSYM
     /// obarray membership. Used by the legacy dump fixture: the image must
     /// lack the C-owned hook declaration rather than carry an empty member.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn new_legacy_image_without_defsym_membership(_hooks: EvalHooksInstalled) -> Self {
         let mut ctx = Self::new_inner(ConstructionSurface::LegacyImageWithoutDefsyms, _hooks);
@@ -2671,7 +2671,7 @@ impl Context {
         // finished view's manager/header/lease are then constructed together.
         let obarray = match surface {
             ConstructionSurface::Full => obarray,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             ConstructionSurface::LegacyImageWithoutDefsyms => obarray,
             #[cfg(any(test, feature = "test-support"))]
             ConstructionSurface::MinimalVm => Obarray::new(),

@@ -22,10 +22,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[path = "core_hook_defaults_test.rs"]
 mod core_hook_defaults;
 
-#[cfg(test)]
-#[path = "core_hook_restore_test.rs"]
-mod core_hook_restore;
-
 #[path = "body_geometry_test.rs"]
 mod body_geometry_test;
 #[path = "frame_position_test.rs"]

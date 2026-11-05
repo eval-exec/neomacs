@@ -2,10 +2,12 @@
 //! when the GNU policy is selected in a later process. These tests use the
 //! file-backed dump pipeline, and keep dumped Lisp contents authoritative.
 
+use crate::emacs_core::load_boot::load_from_dump;
+use crate::window::DisplayFrameManagerExt;
 use neovm_eval::emacs_core::data;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::emacs_core::eval::RedisplayHookPolicyGuard;
-use neovm_eval::emacs_core::pdump::{dump_to_file, load_from_dump};
+use neovm_eval::emacs_core::pdump::dump_to_file;
 use neovm_eval::emacs_core::print::format_eval_result;
 use neovm_value::forward::LispFwdType;
 use neovm_value::intern::intern;
@@ -19,7 +21,8 @@ fn dump_legacy(path: &Path, setup: impl FnOnce(&mut Context)) {
     let _policy = RedisplayHookPolicyGuard::legacy();
     // An image dumped before Neo seeded GNU's initial DEFSYM membership: the
     // symbol slot is genuinely absent, not an empty member.
-    let mut eval = Context::new_legacy_image_without_defsym_membership();
+    let hooks = crate::emacs_core::eval_hook_installers::install_eval_hooks();
+    let mut eval = Context::new_legacy_image_without_defsym_membership(hooks);
     setup(&mut eval);
     dump_to_file(&eval, path).expect("write legacy-policy portable image");
     // Drop the original Context before load installs the restored active heap.
