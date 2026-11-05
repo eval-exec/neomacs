@@ -1696,38 +1696,44 @@ fn item_ident(item: &syn::Item) -> Option<&syn::Ident> {
     }
 }
 
-fn normalize_cfg_attrs(attrs: &mut Vec<syn::Attribute>) {
-    attrs.retain(|attr| !attr.path().is_ident("cfg"));
+/// CS-1 identity drops the arm-selecting cfg attrs and every doc attribute.
+/// Docs carry no semantics and legitimately differ between arms: R-a puts
+/// `#[doc(hidden)]` on the test-support arm only, and the plain-pub/B3 scans
+/// judge each arm's doc(hidden) separately. Requiring identical docs would
+/// only force MORE duplication, which CS-1 exists to discourage (peer
+/// amendment 07:28Z).
+fn normalize_arm_attrs(attrs: &mut Vec<syn::Attribute>) {
+    attrs.retain(|attr| !attr.path().is_ident("cfg") && !attr.path().is_ident("doc"));
 }
 
-/// CS-1 arm identity: drop the arm-selecting cfg attrs and every visibility
-/// token, keeping derives, repr, docs, field order/names/types and all other
-/// attrs intact for an exact AST comparison.
+/// CS-1 arm identity: drop the arm-selecting cfg attrs, every doc attribute
+/// and every visibility token, keeping derives, repr, field order/names/types
+/// and all other attrs intact for an exact AST comparison.
 fn normalize_cfg_split_arm(item: &mut syn::Item) {
     match item {
         syn::Item::Struct(item) => {
-            normalize_cfg_attrs(&mut item.attrs);
+            normalize_arm_attrs(&mut item.attrs);
             item.vis = syn::Visibility::Inherited;
             for field in &mut item.fields {
-                normalize_cfg_attrs(&mut field.attrs);
+                normalize_arm_attrs(&mut field.attrs);
                 field.vis = syn::Visibility::Inherited;
             }
         }
         syn::Item::Union(item) => {
-            normalize_cfg_attrs(&mut item.attrs);
+            normalize_arm_attrs(&mut item.attrs);
             item.vis = syn::Visibility::Inherited;
             for field in &mut item.fields.named {
-                normalize_cfg_attrs(&mut field.attrs);
+                normalize_arm_attrs(&mut field.attrs);
                 field.vis = syn::Visibility::Inherited;
             }
         }
         syn::Item::Enum(item) => {
-            normalize_cfg_attrs(&mut item.attrs);
+            normalize_arm_attrs(&mut item.attrs);
             item.vis = syn::Visibility::Inherited;
             for variant in &mut item.variants {
-                normalize_cfg_attrs(&mut variant.attrs);
+                normalize_arm_attrs(&mut variant.attrs);
                 for field in &mut variant.fields {
-                    normalize_cfg_attrs(&mut field.attrs);
+                    normalize_arm_attrs(&mut field.attrs);
                     field.vis = syn::Visibility::Inherited;
                 }
             }
@@ -1760,7 +1766,11 @@ fn widened_fields(production: &syn::Item, test: &syn::Item) -> Result<Vec<String
             continue;
         }
         let Some(name) = &test.ident else {
-            return Err("cfg-split arm widens an unnamed field".to_owned());
+            // A tuple field has no name a TEST-SUPPORT-VIS field row could
+            // spell; the struct's item row covers the widening and the arm
+            // identity keeps the tuple shape fixed (BaseTableView and
+            // SearchRegisters are the signed tuple pairs).
+            continue;
         };
         widened.push(name.to_string());
     }
@@ -2619,6 +2629,67 @@ pub struct Split {
         let error = check_cfg_split_arm_identity(dir.path(), &[]).expect_err("unledgered");
         assert!(error.contains("no TEST-SUPPORT-VIS row"), "{error}");
         eprintln!("MUTATION RED: {error}");
+    }
+
+    #[test]
+    fn cfg_split_arm_identity_ignores_doc_only_differences() {
+        // Peer amendment 07:28Z: docs are not identity. `#[doc(hidden)]` is
+        // legitimately test-arm-only, and doc comments may differ per arm.
+        let mutated = CS1_BASELINE
+            .replace(
+                "#[cfg(not(feature = \"test-support\"))]\npub(crate) struct Split {",
+                "/// production-only docs\n#[cfg(not(feature = \"test-support\"))]\npub(crate) struct Split {",
+            )
+            .replace(
+                "#[cfg(feature = \"test-support\")]\npub struct Split {",
+                "#[doc(hidden)]\n#[cfg(feature = \"test-support\")]\npub struct Split {",
+            )
+            .replace(
+                "pub(crate) visible: u8,\n    pub(crate) widened: u8,",
+                "/// production field docs\n    pub(crate) visible: u8,\n    pub(crate) widened: u8,",
+            );
+        assert_ne!(mutated, CS1_BASELINE, "mutation applied");
+        let dir = cs1_workspace(&mutated);
+        let file = "crates/neovm-value/src/split.rs".to_owned();
+        let rows = vec![field_row("neovm-value", "Split::widened", &file)];
+        assert!(check_cfg_split_arm_identity(dir.path(), &rows).is_ok());
+    }
+
+    #[test]
+    fn cfg_split_arm_identity_still_rejects_a_doc_and_derive_difference() {
+        let mutated = CS1_BASELINE.replace(
+            "#[cfg(feature = \"test-support\")]\npub struct Split {",
+            "/// test-only docs\n#[cfg(feature = \"test-support\")]\n#[derive(Clone)]\npub struct Split {",
+        );
+        assert_ne!(mutated, CS1_BASELINE, "mutation applied");
+        let dir = cs1_workspace(&mutated);
+        let file = "crates/neovm-value/src/split.rs".to_owned();
+        let rows = vec![field_row("neovm-value", "Split::widened", &file)];
+        let error = check_cfg_split_arm_identity(dir.path(), &rows).expect_err("doc+derive");
+        assert!(error.contains("not token-identical"), "{error}");
+        eprintln!("MUTATION RED: {error}");
+    }
+
+    #[test]
+    fn cfg_split_arm_identity_accepts_a_widened_tuple_field_without_a_field_row() {
+        // A tuple field has no name to ledger (BaseTableView/SearchRegisters);
+        // the struct item row covers the widening and identity fixes the shape.
+        const TUPLE: &str = r#"
+#[cfg(not(feature = "test-support"))]
+pub(crate) struct Tuple(pub(crate) u8);
+#[cfg(feature = "test-support")]
+pub struct Tuple(pub u8);
+"#;
+        let dir = cs1_workspace(TUPLE);
+        let file = "crates/neovm-value/src/split.rs".to_owned();
+        let row = VisRow {
+            crate_dir: "neovm-value".to_owned(),
+            item: "Tuple".to_owned(),
+            kind: "struct".to_owned(),
+            file,
+            tests: Vec::new(),
+        };
+        assert!(check_cfg_split_arm_identity(dir.path(), &[row]).is_ok());
     }
 }
 
