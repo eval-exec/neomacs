@@ -649,10 +649,24 @@ impl EnvKey {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 /// Everything a scan from FROM reads besides the text and properties.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RunKey {
     from_char: usize,
+    /// The internalized OLDSTATE: two OLDSTATEs GNU treats alike share a run.
+    start: PartialParseState,
+    from_oldstate: bool,
+    target_depth: Option<i64>,
+    stop_before: bool,
+    commentstop: CommentStopMode,
+    env: EnvKey,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// Everything a scan from FROM reads besides the text and properties.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunKey {
+    pub from_char: usize,
     /// The internalized OLDSTATE: two OLDSTATEs GNU treats alike share a run.
     start: PartialParseState,
     from_oldstate: bool,

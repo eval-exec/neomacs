@@ -156,6 +156,7 @@ pub(crate) fn parse_canon_knob(value: Option<&str>) -> CanonMode {
 /// chunk, plus one per extending query.
 const MAX_CANON_SNAPSHOTS: usize = 16 * 1024;
 
+#[cfg(not(any(test, feature = "test-support")))]
 /// A loop-top state of the canonical scan.
 /// Owned by the buffer's canonical run and cloned under its exclusive cache
 /// access; it contains positions and Rust parse data, with no rooted Lisp state.
@@ -167,6 +168,19 @@ pub(super) struct CanonSnap {
     /// The lowest depth a close paren left the scan at between the previous
     /// state (BEGV for the first) and this one; `i64::MAX` when none closed.
     pub(super) closes_min: i64,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// A loop-top state of the canonical scan.
+/// Owned by the buffer's canonical run and cloned under its exclusive cache
+/// access; it contains positions and Rust parse data, with no rooted Lisp state.
+#[derive(Clone, Debug)]
+pub struct CanonSnap {
+    /// The canonical scan's state here; its minimum depth is the scan's since
+    /// BEGV.
+    pub state: LoopState,
+    /// The lowest depth a close paren left the scan at between the previous
+    /// state (BEGV for the first) and this one; `i64::MAX` when none closed.
+    pub closes_min: i64,
 }
 
 impl CanonSnap {
