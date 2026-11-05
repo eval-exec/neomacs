@@ -554,6 +554,7 @@ impl<'a> TaggedLoadState<'a> {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct LoadDecoder<'a> {
     state: TaggedLoadState<'a>,
 }
@@ -6234,6 +6235,7 @@ pub(crate) fn load_buffer_manager(
 // Restores exact Lisp-string keys from the dump into the runtime's non-moving
 // GC representation.
 #[allow(clippy::mutable_key_type)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn load_autoload_manager(
     decoder: &mut LoadDecoder,
     dam: &DumpAutoloadManager,

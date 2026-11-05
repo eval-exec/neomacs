@@ -5275,6 +5275,45 @@ impl Context {
         &mut self.tagged_heap
     }
 
+    /// Test-support: copied autoload query (the manager is a WorldView that
+    /// holds heap Values, so N3 forbids handing out `&`/`&mut`; a copied
+    /// query is the VIS route).
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn autoload_is_autoloaded_for_test(&self, name: &str) -> bool {
+        self.autoloads.is_autoloaded(name)
+    }
+
+    /// Test-support: copied autoload entry query by symbol id.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn autoload_entry_symbol_for_test(
+        &self,
+        name: neovm_value::intern::SymId,
+    ) -> Option<crate::emacs_core::autoload::AutoloadEntry> {
+        self.autoloads.get_entry_symbol(name).cloned()
+    }
+
+    /// Test-support: copied autoload entry query by name.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn autoload_entry_for_test(
+        &self,
+        name: &str,
+    ) -> Option<crate::emacs_core::autoload::AutoloadEntry> {
+        self.autoloads.get_entry(name).cloned()
+    }
+
+    /// Test-support: typed replacement of the autoload manager; the only
+    /// cross-crate write route (the authority fence delegates here).
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn replace_autoloads_raw(
+        &mut self,
+        manager: crate::emacs_core::autoload::AutoloadManager,
+    ) {
+        *self.autoloads = manager;
+    }
+
     /// R-b (PC11-F f1): the edit runtime (buffers, overlays, markers). The
     /// `edit` field predates the split; this is the named read route the
     /// re-homed value test tree uses.

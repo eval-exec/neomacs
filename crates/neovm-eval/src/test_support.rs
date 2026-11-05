@@ -339,6 +339,17 @@ pub mod authority {
     ) {
         crate::emacs_core::bytecode::ByteCodeFunctionExt::seal_hand_assembled_ops(function)
     }
+
+    /// P1-CLASSES-ALL-CRATES FENCE (peer 17:50Z autoload pilot): replace a
+    /// Context's autoload manager with an owned manager.  The manager lives in a
+    /// WorldView and holds heap Values, so N3 forbids exposing `&mut`/`&`; this
+    /// typed replacement is the only cross-crate write route.
+    pub fn replace_autoloads_for_test(
+        context: &mut crate::emacs_core::Context,
+        manager: crate::emacs_core::autoload::AutoloadManager,
+    ) {
+        context.replace_autoloads_raw(manager);
+    }
 }
 
 /// Test-support `aset` over a caller-owned Bare argument slice (K1 fence-ask

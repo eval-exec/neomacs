@@ -1,11 +1,15 @@
-use super::*;
+use crate::emacs_core::autoload::*;
 use crate::emacs_core::eval::VariableView;
 use neovm_value::symbol::CanonicalAccess;
+use neovm_value::tagged::value::SymbolMode;
+use neovm_value::value::{Value, list_to_vec};
+use std::collections::HashMap;
 fn test_ob() -> neovm_value::symbol::Obarray {
     neovm_value::symbol::Obarray::new()
 }
-use crate::emacs_core::{Context, format_eval_result};
+use crate::emacs_core::Context;
 use crate::test_utils::load_minimal_gnu_backquote_runtime;
+use neovm_eval::emacs_core::format_eval_result;
 use neovm_value::heap_types::LispString;
 use neovm_value::intern::intern;
 use std::fs;
@@ -30,10 +34,10 @@ fn autoload_copied_properties_have_only_manager_roots() {
     }
 
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.gc_stress = false;
     eval.gc_collect_exact();
-    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    unsafe { eval.tagged_heap_mut() }.set_gc_threshold(usize::MAX);
     let key = Value::symbol("autoload-owned-property");
     let name = intern("autoload-owned-entry");
     let probes = eval.with_gc_inhibited(|eval| {
@@ -72,19 +76,21 @@ fn autoload_copied_properties_have_only_manager_roots() {
         );
         // No obarray function cell, Lisp variable, buffer or explicit root
         // aliases these copies. The real World manager is their sole owner.
-        *eval.autoloads = manager;
+        neovm_eval::test_support::authority::replace_autoloads_for_test(eval, manager);
         probes
     });
     let check_live = |eval: &Context| {
         for bits in &probes {
             assert!(
-                eval.tagged_heap.retains_veclike(Value::from_bits(*bits)),
+                // SAFETY: bits were produced by live tagged values in this fixture.
+                eval.tagged_heap()
+                    .retains_veclike(unsafe { Value::from_bits(*bits) }),
                 "autoload-only property vector was reclaimed"
             );
         }
         for (index, bits) in probes.iter().enumerate() {
             assert_eq!(
-                Value::from_bits(*bits)
+                unsafe { Value::from_bits(*bits) }
                     .as_vector_data()
                     .expect("live autoload property vector")
                     .as_slice(),
@@ -92,8 +98,7 @@ fn autoload_copied_properties_have_only_manager_roots() {
             );
         }
         let entry = eval
-            .autoloads
-            .get_entry_symbol(name)
+            .autoload_entry_symbol_for_test(name)
             .expect("retained entry");
         assert_eq!(
             entry
@@ -107,20 +112,23 @@ fn autoload_copied_properties_have_only_manager_roots() {
     };
 
     let completed = eval.gc_count;
-    if eval.tagged_heap.generational_enabled() {
-        assert!(eval.tagged_heap.should_run_minor(false, false));
+    if eval.tagged_heap().generational_enabled() {
+        assert!(eval.tagged_heap().should_run_minor(false, false));
         eval.gc_pending = true;
         eval.gc_safe_point_exact();
-        assert!(eval.tagged_heap.sweep_in_progress(), "expected minor sweep");
-        assert!(!eval.tagged_heap.concurrent_mark_running());
+        assert!(
+            eval.tagged_heap().sweep_in_progress(),
+            "expected minor sweep"
+        );
+        assert!(!eval.tagged_heap().concurrent_mark_running());
         for _ in 0..10_000 {
-            if !eval.tagged_heap.sweep_in_progress() {
+            if !eval.tagged_heap().sweep_in_progress() {
                 break;
             }
             eval.gc_safe_point_exact();
         }
-        assert!(!eval.tagged_heap.sweep_in_progress());
-        assert!(!eval.tagged_heap.mark_in_progress());
+        assert!(!eval.tagged_heap().sweep_in_progress());
+        assert!(!eval.tagged_heap().mark_in_progress());
     } else {
         eval.gc_collect_exact();
     }
@@ -131,24 +139,30 @@ fn autoload_copied_properties_have_only_manager_roots() {
     assert_eq!(eval.gc_count, completed + 1);
     check_live(&eval);
 
-    *eval.autoloads = AutoloadManager::new();
+    neovm_eval::test_support::authority::replace_autoloads_for_test(
+        &mut eval,
+        AutoloadManager::new(),
+    );
     eval.gc_collect_exact();
     for bits in probes {
         assert!(
-            !eval.tagged_heap.retains_veclike(Value::from_bits(bits)),
+            // SAFETY: bits were produced by live tagged values in this fixture.
+            !eval
+                .tagged_heap()
+                .retains_veclike(unsafe { Value::from_bits(bits) }),
             "retired autoload graph remained permanently rooted"
         );
     }
 }
 
 fn eval_one(src: &str) -> String {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = ev.eval_str(src);
     format_eval_result(&result)
 }
 
 fn eval_all(src: &str) -> Vec<String> {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let forms = crate::emacs_core::value_reader::read_all(
         src,
         VariableView::canonical(CanonicalAccess::TEST, &test_ob()),
@@ -248,7 +262,7 @@ fn load_minimal_autoload_runtime(ev: &mut Context) {
 }
 
 fn minimal_autoload_eval_all(src: &str) -> Vec<String> {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     load_minimal_autoload_runtime(&mut ev);
     eval_all_with(&mut ev, src)
 }
@@ -261,7 +275,7 @@ fn minimal_autoload_eval_one(src: &str) -> String {
 }
 
 fn minimal_backquote_runtime_eval_all(src: &str) -> Vec<String> {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     load_minimal_gnu_backquote_runtime(&mut ev);
     eval_all_with(&mut ev, src)
 }
@@ -313,7 +327,7 @@ fn autoload_manager_keeps_live_symbol_identity() {
         },
     );
 
-    assert!(mgr.entries.contains_key(&name));
+    assert!(mgr.is_autoloaded_symbol(name));
     assert_eq!(
         mgr.get_entry_symbol(name)
             .map(|entry| entry.file.as_utf8_str()),
@@ -647,7 +661,7 @@ fn autoload_do_load_passes_nomessage_to_load_source_file_function() {
     )
     .expect("write autoload source file");
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_variable(
         "load-path",
         Value::list(vec![Value::string(dir.to_string_lossy().as_ref())]),
@@ -688,7 +702,7 @@ fn named_call_follows_chained_autoloads() {
     )
     .expect("write chained autoload target fixture");
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable(
         "load-path",
         Value::list(vec![Value::string(dir.path().to_string_lossy())]),
@@ -713,7 +727,7 @@ fn named_call_retries_to_void_after_autoload_removes_definition() {
     )
     .expect("write autoload removal fixture");
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable(
         "load-path",
         Value::list(vec![Value::string(dir.path().to_string_lossy())]),
@@ -752,7 +766,7 @@ fn require_passes_nomessage_to_load_source_file_function() {
     )
     .expect("write require source file");
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_variable(
         "load-path",
         Value::list(vec![Value::string(dir.to_string_lossy().as_ref())]),
@@ -979,14 +993,14 @@ fn autoload_does_not_override_real_definition() {
 #[test]
 fn autoload_registers_in_autoload_manager() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let results = eval_all_with(
         &mut ev,
         r#"(autoload 'test-auto-fn "test-auto-file" "Test doc" t 'macro)"#,
     );
     assert_eq!(results[0], "OK test-auto-fn");
-    assert!(ev.autoloads.is_autoloaded("test-auto-fn"));
-    let entry = ev.autoloads.get_entry("test-auto-fn").unwrap();
+    assert!(ev.autoload_is_autoloaded_for_test("test-auto-fn"));
+    let entry = ev.autoload_entry_for_test("test-auto-fn").unwrap();
     assert_eq!(entry.file.as_utf8_str(), Some("test-auto-file"));
     assert_eq!(
         entry.docstring.as_ref().and_then(LispString::as_utf8_str),
@@ -999,7 +1013,7 @@ fn autoload_registers_in_autoload_manager() {
 #[test]
 fn autoload_uses_defalias_hook_and_indexes_the_resulting_function_cell() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let results = eval_all_with(
         &mut ev,
         r#"(setq vm-autoload-hook-log nil)
@@ -1016,7 +1030,7 @@ fn autoload_uses_defalias_hook_and_indexes_the_resulting_function_cell() {
         results[3],
         "OK (vm-hooked-autoload (autoload \"vm-hooked-file\" nil t nil))"
     );
-    assert!(ev.autoloads.is_autoloaded("vm-hooked-autoload"));
+    assert!(ev.autoload_is_autoloaded_for_test("vm-hooked-autoload"));
 }
 
 #[test]
@@ -1043,7 +1057,7 @@ fn autoload_load_history_distinguishes_runtime_from_dump_definitions() {
 #[test]
 fn autoload_sets_uninterned_symbol_function_cell_by_identity() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let sym = ev
         .eval_str(r#"(make-symbol "neo-auto")"#)
         .expect("make uninterned symbol");
@@ -1061,7 +1075,7 @@ fn autoload_sets_uninterned_symbol_function_cell_by_identity() {
     .expect("autoload uninterned symbol");
 
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function_of_value(&sym)
         .expect("uninterned symbol function cell");
     assert!(is_autoload_value(&function, SymbolMode::Bare));
@@ -1072,9 +1086,9 @@ fn autoload_sets_uninterned_symbol_function_cell_by_identity() {
 #[test]
 fn autoload_accepts_symbol_with_pos_only_when_enabled() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let positioned = ev
-        .tagged_heap
+    let mut ev = crate::test_utils::new_context();
+    // SAFETY: single-threaded fixture; the view is used for an in-place allocation.
+    let positioned = unsafe { ev.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::symbol("test-auto-pos-fn"), Value::fixnum(17));
 
     let disabled = builtin_autoload(
@@ -1093,13 +1107,13 @@ fn autoload_accepts_symbol_with_pos_only_when_enabled() {
     )
     .expect("autoload should accept symbol-with-pos when GNU transparency is enabled");
     assert_eq!(enabled, Value::symbol("test-auto-pos-fn"));
-    assert!(ev.autoloads.is_autoloaded("test-auto-pos-fn"));
+    assert!(ev.autoload_is_autoloaded_for_test("test-auto-pos-fn"));
 }
 
 #[test]
 fn autoload_preserves_a_raw_unibyte_file_in_the_function_cell() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let raw_file = Value::heap_string(LispString::from_unibyte(vec![0xFF]));
 
     builtin_autoload(
@@ -1115,7 +1129,7 @@ fn autoload_preserves_a_raw_unibyte_file_in_the_function_cell() {
     .expect("register raw autoload");
 
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function("raw-autoload")
         .expect("raw-autoload function cell");
     let cell = list_to_vec(&function).expect("autoload cell should be a list");
@@ -1180,12 +1194,11 @@ fn with_eval_after_load_fires_when_already_provided() {
 #[test]
 fn positioned_autoload_heads_and_type_fields_follow_symbol_policy() {
     // GNU eval.c:2502 and 2506-2507 use EQ for these fields.
-    let mut ctx = Context::new();
-    let head = ctx
-        .tagged_heap
+    let mut ctx = crate::test_utils::new_context();
+    // SAFETY: single-threaded fixture; the view is used for in-place allocations.
+    let head = unsafe { ctx.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::symbol("autoload"), Value::fixnum(4));
-    let macro_type = ctx
-        .tagged_heap
+    let macro_type = unsafe { ctx.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::symbol("macro"), Value::fixnum(5));
     let form = Value::list(vec![head, Value::string("issue554-autoload")]);
     assert!(!is_autoload_value(&form, SymbolMode::Bare));

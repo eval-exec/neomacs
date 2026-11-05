@@ -40,6 +40,7 @@ fn autoload_symbol_id() -> SymId {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct AfterLoadKey(LispString);
 
 impl AfterLoadKey {
@@ -379,6 +380,7 @@ pub(crate) fn autoload_symbol_value_bits() -> i64 {
 /// `(autoload-do-load FUNDEF &optional FUNNAME MACRO-ONLY)` — trigger autoload.
 /// If FUNDEF is an autoload form, load the file and return the new definition.
 /// Otherwise return FUNDEF unchanged.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum AutoloadDoLoadPlan {
     Return(Value),
     Load {
@@ -387,6 +389,7 @@ pub(crate) enum AutoloadDoLoadPlan {
     },
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn plan_autoload_do_load_in_state(
     vars: crate::emacs_core::eval::VariableView<'_>,
     args: &[Value],
@@ -793,6 +796,3 @@ impl GcTrace for AutoloadManager {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-#[cfg(test)]
-#[path = "tests/autoload_test.rs"]
-mod tests;

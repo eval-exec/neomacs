@@ -46,3 +46,5 @@ mod emacs_core_lisp_load_tests_load_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/reader/tests/reader_test.rs"]
 mod emacs_core_lisp_reader_tests_reader_test_rs;
+#[path = "emacs_core/lisp/autoload/tests/autoload_test.rs"]
+mod emacs_core_lisp_autoload_tests_autoload_test_rs;
