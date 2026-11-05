@@ -596,9 +596,13 @@ impl<'a> CharPropertyResolver<'a> {
 /// Text and overlay callers share direct/category/alias precedence, but only
 /// text consults `default-text-properties` (GNU intervals.c:1741-1742).
 /// This carries no mutator state and may be shared across threads.
+// The A' visibility widening must expand before the EnumIter derive:
+// strum copies the enum visibility into the generated `...Iter` type, so a
+// derive-first order pairs a private iterator with the widened enum and
+// fails E0446 under workspace all-targets feature unification.
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(test, derive(strum::EnumIter))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg_attr(test, derive(strum::EnumIter))]
 enum CharPropertyCarrier {
     Text,
     Overlay,
