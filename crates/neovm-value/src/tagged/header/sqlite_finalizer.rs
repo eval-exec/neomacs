@@ -37,7 +37,7 @@ pub fn install_sqlite_obj_finalizer(
 }
 
 /// Whether the finalizer hook has been installed (test-only observation).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub fn sqlite_obj_finalizer_installed() -> bool {
     SQLITE_OBJ_FINALIZER.get().is_some()

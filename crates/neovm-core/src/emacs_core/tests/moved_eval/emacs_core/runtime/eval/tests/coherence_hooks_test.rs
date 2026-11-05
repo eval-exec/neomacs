@@ -5,7 +5,7 @@
 //! tests pin both install paths and the output contract of the installed
 //! algorithms.
 
-use super::Context;
+use crate::emacs_core::Context;
 use crate::emacs_core::print::print_value;
 use neovm_value::error::EvalError;
 use neovm_value::error::format_hook::eval_error_formatter_installed;
@@ -16,14 +16,14 @@ use neovm_value::value::flow_vocab::ShutdownRequest;
 
 #[test]
 fn context_new_installs_the_eval_error_formatter() {
-    let _context = Context::new();
+    let _context = crate::test_utils::new_context();
     assert!(
         eval_error_formatter_installed(),
         "Context::new_inner must install the EvalError formatter"
     );
     #[cfg(feature = "sqlite")]
     assert!(
-        neovm_value::tagged::header::sqlite_finalizer::sqlite_obj_finalizer_installed(),
+        neovm_value::tagged::header::sqlite_obj_finalizer_installed(),
         "Context::new_inner must install the SqliteObj finalizer"
     );
 }
@@ -37,14 +37,14 @@ fn pdump_reconstruction_installs_the_eval_error_formatter() {
     );
     #[cfg(feature = "sqlite")]
     assert!(
-        neovm_value::tagged::header::sqlite_finalizer::sqlite_obj_finalizer_installed(),
+        neovm_value::tagged::header::sqlite_obj_finalizer_installed(),
         "pdump reconstruction must install the SqliteObj finalizer"
     );
 }
 
 #[test]
 fn installed_formatter_renders_the_historical_strings() {
-    let _context = Context::new();
+    let _context = crate::test_utils::new_context();
     assert_eq!(
         EvalError::signal(intern("error"), Vec::new(), None).to_string(),
         "signal error nil"
@@ -74,7 +74,7 @@ fn installed_formatter_renders_the_historical_strings() {
 
 #[test]
 fn context_new_installs_the_value_display_formatter() {
-    let _context = Context::new();
+    let _context = crate::test_utils::new_context();
     assert!(
         value_display_formatter_installed(),
         "Context::new_inner must install the TaggedValue Display formatter"
@@ -95,7 +95,7 @@ fn pdump_reconstruction_installs_the_value_display_formatter() {
 /// each representation the printer branches on by kind.
 #[test]
 fn installed_display_is_byte_identical_to_print_value() {
-    let _context = Context::new();
+    let _context = crate::test_utils::new_context();
     let corpus = [
         Value::NIL,
         Value::T,

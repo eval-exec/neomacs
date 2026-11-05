@@ -48,3 +48,29 @@ mod emacs_core_lisp_autoload_tests_autoload_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/reader/tests/reader_test.rs"]
 mod emacs_core_lisp_reader_tests_reader_test_rs;
+#[path = "emacs_core/runtime/eval/tests/redisplay_mini_preparer_context_test.rs"]
+mod emacs_core_runtime_eval_tests_redisplay_mini_preparer_context_test_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/redisplay_mini_only_test.rs"]
+mod emacs_core_runtime_eval_tests_redisplay_mini_only_test_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/redisplay_hooks/tests/mode_line_flow_test.rs"]
+mod emacs_core_runtime_eval_redisplay_hooks_tests_mode_line_flow_test_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/builtin_vars_test.rs"]
+mod emacs_core_runtime_eval_tests_builtin_vars_test_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/attention_test.rs"]
+mod emacs_core_runtime_eval_tests_attention_test_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/coherence_hooks_test.rs"]
+mod emacs_core_runtime_eval_tests_coherence_hooks_test_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/gc_tls_migration_proofs_test.rs"]
+mod emacs_core_runtime_eval_tests_gc_tls_migration_proofs_test_rs;

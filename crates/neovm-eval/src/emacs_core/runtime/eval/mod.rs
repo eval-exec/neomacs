@@ -5702,6 +5702,101 @@ impl Context {
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     #[inline]
+    pub fn quit_flag_copied(&self) -> Value {
+        self.quit_flag
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
+    pub fn throw_on_input_copied(&self) -> Value {
+        self.throw_on_input
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
+    pub fn specpdl_len_for_test(&self) -> usize {
+        self.specpdl.len()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
+    pub fn last_redisplay_signature_is_none_for_test(&self) -> bool {
+        self.last_redisplay_signature.is_none()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
+    pub fn last_redisplay_signature_is_some_for_test(&self) -> bool {
+        self.last_redisplay_signature.is_some()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
+    pub fn standard_syntax_table_copied(&self) -> Value {
+        self.standard_syntax_table
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
+    pub fn syntax_code_objects_copied(&self) -> Value {
+        self.syntax_code_objects
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
+    pub fn standard_category_table_copied(&self) -> Value {
+        self.standard_category_table
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn collect_font_registry_gc_roots_for_test(&self, roots: &mut Vec<Value>) {
+        self::data::face_registry::collect_font_registry_gc_roots(&self.font_registry, roots);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn collect_hash_table_test_registry_gc_roots_for_test(&self, roots: &mut Vec<Value>) {
+        crate::emacs_core::builtins::collect_hash_table_test_registry_gc_roots(
+            &self.hash_table_test_registry,
+            roots,
+        );
+    }
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn collect_ccl_registry_gc_roots_for_test(&self, roots: &mut Vec<Value>) {
+        neovm_text::emacs_core::ccl::collect_ccl_registry_gc_roots(&self.ccl_registry, roots);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn collect_charset_registry_gc_roots_for_test(&self, roots: &mut Vec<Value>) {
+        neovm_text::emacs_core::charset::collect_charset_registry_gc_roots(
+            &self.charset_registry,
+            roots,
+        );
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn collect_in_flight_registry_gc_roots_for_test(&self, roots: &mut Vec<Value>) {
+        neovm_value::error::collect_in_flight_registry_gc_roots(
+            roots,
+            &self.in_flight_registry,
+            self.tagged_heap().identity(),
+        );
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
     pub fn features(&self) -> &[SymId] {
         &self.features
     }
@@ -8729,6 +8824,9 @@ mod hash_test_gc_inhibit;
 mod attention;
 mod minibuffer_window;
 pub(crate) mod profiler;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use attention::AttentionBit;
 pub(crate) use attention::AttentionMask;
 pub use neovm_value::quit::QuitRequest;
 #[doc(hidden)]
@@ -8923,10 +9021,6 @@ mod var_fast_tests;
 mod watcher_redispatch_tests;
 
 #[cfg(test)]
-#[path = "tests/builtin_vars_test.rs"]
-mod builtin_vars_tests;
-
-#[cfg(test)]
 #[path = "tests/gc_sweep_cap_test.rs"]
 mod gc_sweep_cap_tests;
 
@@ -8946,15 +9040,7 @@ mod gc_atomic_slot_tests;
 #[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
 
-#[cfg(test)]
-#[path = "tests/gc_tls_migration_proofs_test.rs"]
-mod gc_tls_migration_proof_tests;
-
 // The attention word: every writer of its inputs keeps it derived.
-#[cfg(test)]
-#[path = "tests/attention_test.rs"]
-mod attention_word_tests;
-
 #[cfg(test)]
 #[path = "tests/idle_redisplay_test.rs"]
 mod idle_redisplay_tests;
@@ -9059,9 +9145,6 @@ impl CommandLoopDiagnostic {
 #[path = "tests/positioned_control_test.rs"]
 mod positioned_control_tests;
 
-#[cfg(test)]
-#[path = "tests/coherence_hooks_test.rs"]
-mod coherence_hooks_tests;
 #[cfg(test)]
 #[path = "tests/issue554_function_policy.rs"]
 mod issue554_function_policy;

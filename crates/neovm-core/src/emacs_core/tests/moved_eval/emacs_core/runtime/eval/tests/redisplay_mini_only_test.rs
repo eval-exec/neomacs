@@ -1,10 +1,24 @@
-use super::*;
+use crate::emacs_core::Context;
+use crate::emacs_core::eval::redisplay_hooks::*;
+use crate::emacs_core::eval::*;
+use crate::window::DisplayFrameManagerExt;
+use neovm_value::display_vocab::FrameId;
+use neovm_value::value::Value;
 
 fn mini_only_context() -> (Context, FrameId) {
-    let mut eval = Context::new();
-    let buffer = eval.buffers.current_buffer_id().expect("current buffer");
-    let frame = eval.frames.create_frame("mini-only", 80, 25, buffer);
-    let state = eval.frames.get_mut(frame).expect("created frame");
+    let mut eval = crate::test_utils::new_context();
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("mini-only", 80, 25, buffer);
+    let state = eval
+        .frame_manager_mut()
+        .get_mut(frame)
+        .expect("created frame");
     state.minibuffer_window = Some(state.root_window().id());
     state.minibuffer_leaf = None;
     state.visibility = crate::window::FrameVisibility::Visible;
@@ -14,7 +28,7 @@ fn mini_only_context() -> (Context, FrameId) {
 fn hook_events(eval: &Context) -> Vec<Value> {
     let mut events = Vec::new();
     let mut tail = eval
-        .obarray
+        .obarray()
         .symbol_value_copied("mini-core-log")
         .expect("event log");
     while tail.is_cons() {
@@ -32,11 +46,9 @@ fn selected_mini_only_fallback_observes_dynamic_policy_and_precedes_hooks() {
     // A normal inactive mini has no selected-mini request, even with sizing
     // enabled. Its preparation producer must not be entered at all.
     {
-        let mut ordinary = Context::new();
-        crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
-            &mut ordinary.frames,
-            &mut ordinary.buffers,
-        );
+        let mut ordinary = crate::test_utils::new_context();
+        let (frames, buffers) = ordinary.frame_manager_and_buffers_mut();
+        crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(frames, buffers);
         ordinary
             .eval_str("(setq resize-mini-frames t)")
             .expect("ordinary policy");
@@ -71,28 +83,28 @@ fn selected_mini_only_fallback_observes_dynamic_policy_and_precedes_hooks() {
     ).expect("mini-only callbacks");
     eval.redisplay_fn = Some(Box::new(|eval| {
         let tail = eval
-            .obarray
+            .obarray()
             .symbol_value_copied("mini-core-log")
             .expect("event log");
-        eval.obarray
+        eval.obarray_mut()
             .set_symbol_value("mini-core-log", Value::cons(Value::symbol("paint"), tail));
     }));
     eval.eval_str("(let ((resize-mini-frames t)) (redisplay t))")
         .expect("mini-only redisplay");
     assert_eq!(
-        eval.obarray.symbol_value_copied("mini-core-resize-count"),
+        eval.obarray().symbol_value_copied("mini-core-resize-count"),
         Some(Value::fixnum(1))
     );
     assert_eq!(
-        eval.obarray.symbol_value_copied("mini-core-resize-arg"),
+        eval.obarray().symbol_value_copied("mini-core-resize-arg"),
         Some(Value::make_frame(frame.0))
     );
     assert_eq!(
-        eval.obarray.symbol_value_copied("mini-core-dynamic"),
+        eval.obarray().symbol_value_copied("mini-core-dynamic"),
         Some(Value::T)
     );
     assert_eq!(
-        eval.obarray.symbol_value_copied("resize-mini-frames"),
+        eval.obarray().symbol_value_copied("resize-mini-frames"),
         Some(Value::NIL)
     );
     let events = hook_events(&eval);
@@ -131,7 +143,7 @@ fn mini_only_fallback_throw_restores_transaction_without_paint() {
     .expect("one form");
     let roots = eval.save_specpdl_roots();
     eval.push_specpdl_root(form);
-    let bindings = eval.specpdl.len();
+    let bindings = eval.specpdl_len_for_test();
     // Install the same handler as sf_catch_value before entering a safe
     // callback. Without it GNU throw signals no-catch, which safe_funcall
     // correctly demotes; the unit must observe a valid nonlocal transfer.
@@ -148,21 +160,21 @@ fn mini_only_fallback_throw_restores_transaction_without_paint() {
     assert_eq!(thrown.tag, Value::symbol("mini-core-transfer"));
     assert_eq!(thrown.value, Value::symbol("mini-core-payload"));
     assert_eq!(paints.get(), 0);
-    assert!(!eval.gnu_redisplay_hooks.active.is_active());
+    assert!(!eval.gnu_redisplay_hooks_active());
     assert!(
-        eval.gnu_redisplay_hooks.dimensions.is_empty(),
+        eval.gnu_redisplay_hooks_dimensions_empty(),
         "change hooks must not record a pass after earlier sizing throws"
     );
-    assert_eq!(eval.gnu_redisplay_hooks.windows, PendingScope::All);
+    assert_eq!(eval.gnu_redisplay_hooks_windows_are_all(), true);
     assert!(eval.redisplay_fn.is_some());
     assert!(eval.redisplay_prepare_fn.is_none());
-    assert_eq!(eval.specpdl.len(), bindings);
+    assert_eq!(eval.specpdl_len_for_test(), bindings);
     assert_eq!(
-        eval.obarray.symbol_value_copied("resize-mini-frames"),
+        eval.obarray().symbol_value_copied("resize-mini-frames"),
         Some(Value::NIL)
     );
     assert_eq!(
-        eval.obarray.symbol_value_copied("inhibit-redisplay"),
+        eval.obarray().symbol_value_copied("inhibit-redisplay"),
         Some(Value::NIL)
     );
     eval.restore_specpdl_roots(roots);

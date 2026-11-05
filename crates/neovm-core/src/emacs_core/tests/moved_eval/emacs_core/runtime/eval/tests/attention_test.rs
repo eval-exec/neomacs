@@ -10,12 +10,14 @@
 //! re-derives the word at every read in debug builds, so every test in the
 //! crate also checks it at every poll; these pin the classes explicitly.
 
-use super::*;
+use crate::emacs_core::Context;
 use crate::emacs_core::bytecode::ByteCodeFunction;
-use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+use crate::emacs_core::eval::*;
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
+use neovm_value::value::Value;
 
 /// The stored word equals the derived one, and the poll's fast test agrees
 /// with the canonical fields (`quit-flag` nil, `throw-on-input` nil, nothing
@@ -23,9 +25,9 @@ use neovm_value::value::LambdaParams;
 fn assert_derived(ev: &Context, where_: &str) {
     let (stored, derived) = ev.attention_words_for_test();
     assert_eq!(stored, derived, "{where_}: stale attention word");
-    let canonical_clear = ev.quit_flag.is_nil()
-        && ev.throw_on_input.is_nil()
-        && super::attention::ASYNC_ATTENTION.load() == 0;
+    let canonical_clear = ev.quit_flag_copied().is_nil()
+        && ev.throw_on_input_copied().is_nil()
+        && neovm_value::quit::ASYNC_ATTENTION.load() == 0;
     assert_eq!(
         ev.maybe_quit_hot_ok(),
         canonical_clear,
@@ -34,11 +36,12 @@ fn assert_derived(ev: &Context, where_: &str) {
 }
 
 fn quit_bit(ev: &Context) -> bool {
-    ev.attention_words_for_test().0 & super::attention::AttentionBit::QuitFlag as u32 != 0
+    ev.attention_words_for_test().0 & crate::emacs_core::eval::AttentionBit::QuitFlag as u32 != 0
 }
 
 fn throw_bit(ev: &Context) -> bool {
-    ev.attention_words_for_test().0 & super::attention::AttentionBit::ThrowOnInput as u32 != 0
+    ev.attention_words_for_test().0 & crate::emacs_core::eval::AttentionBit::ThrowOnInput as u32
+        != 0
 }
 
 /// `(lambda () (setq VAR VALUE))` as hand-assembled lexical bytecode: the
@@ -54,14 +57,14 @@ fn bytecode_varset(var: &str, value: Value) -> Value {
     f.ops = vec![Op::Constant(0), Op::VarSet(1), Op::Constant(0), Op::Return];
     f.constants = vec![value, Value::symbol(var)].into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
-    f.seal_hand_assembled_ops();
+    crate::emacs_core::bytecode::seal_hand_assembled_ops_for_test(&mut f);
     Value::make_bytecode(f)
 }
 
 #[test]
 fn a_fresh_context_starts_derived_and_clear() {
     crate::test_utils::init_test_tracing();
-    let ev = Context::new();
+    let ev = crate::test_utils::new_context();
     assert_derived(&ev, "Context::new");
     assert_eq!(ev.attention_words_for_test().0, 0);
 }
@@ -69,7 +72,7 @@ fn a_fresh_context_starts_derived_and_clear() {
 #[test]
 fn attention_tracks_every_quit_flag_write_path() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // Keep a set `quit-flag` from signalling while the tests look at it:
     // `inhibit-quit` gates only the slow path (GNU lisp.h:3899), not the word.
     ev.eval_str("(setq inhibit-quit t)").expect("inhibit-quit");
@@ -97,7 +100,7 @@ fn attention_tracks_every_quit_flag_write_path() {
     assert_derived(&ev, "after varset nil");
 
     // A dynamic `let` and its unwind, seen from inside the binding.
-    let count = ev.specpdl.len();
+    let count = ev.specpdl_len_for_test();
     ev.try_specbind_or_unwind_to(count, intern("quit-flag"), Value::T)
         .expect("specbind");
     assert!(quit_bit(&ev), "binding quit-flag raises the bit");
@@ -124,7 +127,7 @@ fn attention_tracks_every_quit_flag_write_path() {
     assert_derived(&ev, "after setq nil");
     // A binding of nil over a pending quit: inside, the flag reads nil.
     ev.set_quit_flag_value(Value::T);
-    let count = ev.specpdl.len();
+    let count = ev.specpdl_len_for_test();
     ev.try_specbind_or_unwind_to(count, intern("quit-flag"), Value::NIL)
         .expect("specbind nil");
     assert!(!quit_bit(&ev), "binding quit-flag to nil lowers the bit");
@@ -162,7 +165,7 @@ fn attention_tracks_every_quit_flag_write_path() {
 #[test]
 fn attention_tracks_throw_on_input_writes() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     assert_derived(&ev, "start");
     ev.eval_str("(setq throw-on-input 'from-setq)")
         .expect("setq");
@@ -173,7 +176,7 @@ fn attention_tracks_throw_on_input_writes() {
     assert!(!throw_bit(&ev));
     assert_derived(&ev, "after setq nil");
 
-    let count = ev.specpdl.len();
+    let count = ev.specpdl_len_for_test();
     ev.try_specbind_or_unwind_to(count, intern("throw-on-input"), Value::symbol("tag"))
         .expect("specbind");
     assert!(throw_bit(&ev), "binding throw-on-input raises the bit");
@@ -199,7 +202,7 @@ fn attention_tracks_throw_on_input_writes() {
 #[test]
 fn batch_throw_on_input_still_polls_correctly() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     assert!(
         !ev.has_throw_on_input_poll_source(),
         "premise: a batch Context has no input channel"
@@ -224,7 +227,7 @@ fn batch_throw_on_input_still_polls_correctly() {
 #[test]
 fn a_quit_inside_a_throw_on_input_binding_still_signals() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = ev.eval_str(
         "(let ((throw-on-input 'neo-attention-tag))
            (catch 'neo-attention-tag

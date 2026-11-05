@@ -1,10 +1,13 @@
-use super::*;
-use crate::emacs_core::{builtins, casetab, category, ccl, charset, syntax, xfaces};
+use crate::emacs_core::Context;
+use crate::emacs_core::eval::*;
+use crate::emacs_core::{builtins, category, ccl, charset, syntax, xfaces};
+use neovm_value::intern::intern;
+use neovm_value::value::Value;
 
 fn collect_on_owner_and_reactivate(mut ctx: Context) -> Context {
     // Local Context switches exercise the same registry reinstallation and
     // canonical root retention without transferring thread-confined storage.
-    let mut other = Context::new();
+    let mut other = crate::test_utils::new_context();
     other.gc_collect_exact();
     ctx.setup_thread_locals();
     ctx.gc_collect_exact();
@@ -16,32 +19,34 @@ fn collect_on_owner_and_reactivate(mut ctx: Context) -> Context {
 
 #[test]
 fn gc_tls_ownership_canonical_tables_survive_owner_collection_and_reactivation() {
-    let mut ctx = Context::new();
-    let case = casetab::builtin_standard_case_table(&mut ctx, vec![]).unwrap();
-    casetab::builtin_set_standard_case_table(&mut ctx, vec![case]).unwrap();
+    let mut ctx = crate::test_utils::new_context();
+    let case =
+        crate::emacs_core::casetab_entries::builtin_standard_case_table(&mut ctx, vec![]).unwrap();
+    crate::emacs_core::casetab_entries::builtin_set_standard_case_table(&mut ctx, vec![case])
+        .unwrap();
     let expected = [
-        ctx.standard_syntax_table.bits(),
-        ctx.syntax_code_objects.bits(),
-        ctx.standard_category_table.bits(),
+        ctx.standard_syntax_table_copied().bits(),
+        ctx.syntax_code_objects_copied().bits(),
+        ctx.standard_category_table_copied().bits(),
         case.bits(),
     ];
-    let descriptor_bits = ctx.syntax_code_objects.as_vector_data().unwrap()[0].bits();
+    let descriptor_bits = ctx.syntax_code_objects_copied().as_vector_data().unwrap()[0].bits();
 
     let mut ctx = collect_on_owner_and_reactivate(ctx);
     let restored = [
         syntax::builtin_standard_syntax_table(vec![]).unwrap(),
         syntax::ensure_syntax_code_objects(),
         category::ensure_standard_category_table_object().unwrap(),
-        casetab::builtin_standard_case_table(&mut ctx, vec![]).unwrap(),
+        crate::emacs_core::casetab_entries::builtin_standard_case_table(&mut ctx, vec![]).unwrap(),
     ];
     for (value, bits) in restored.into_iter().zip(expected) {
         assert_eq!(value.bits(), bits, "activation replaced a canonical object");
         assert!(
-            ctx.tagged_heap.owns_heap_value_for_test(value),
+            ctx.tagged_heap().owns_heap_value_for_test(value),
             "owner collection swept a Context-owned canonical object"
         );
     }
-    let descriptor = ctx.syntax_code_objects.as_vector_data().unwrap()[0];
+    let descriptor = ctx.syntax_code_objects_copied().as_vector_data().unwrap()[0];
     assert_eq!(descriptor.bits(), descriptor_bits);
     // The heap ownership probe only accepts non-cons objects. The stable
     // descriptor and its contents prove that the rooted vector traced it.
@@ -51,21 +56,17 @@ fn gc_tls_ownership_canonical_tables_survive_owner_collection_and_reactivation()
 
 fn registry_roots(ctx: &Context) -> Vec<Value> {
     let mut roots = Vec::new();
-    ccl::collect_ccl_registry_gc_roots(&ctx.ccl_registry, &mut roots);
-    charset::collect_charset_registry_gc_roots(&ctx.charset_registry, &mut roots);
-    xfaces::collect_font_registry_gc_roots(&ctx.font_registry, &mut roots);
-    builtins::collect_hash_table_test_registry_gc_roots(&ctx.hash_table_test_registry, &mut roots);
-    neovm_value::error::collect_in_flight_registry_gc_roots(
-        &mut roots,
-        &ctx.in_flight_registry,
-        ctx.tagged_heap.identity(),
-    );
+    ctx.collect_ccl_registry_gc_roots_for_test(&mut roots);
+    ctx.collect_charset_registry_gc_roots_for_test(&mut roots);
+    ctx.collect_font_registry_gc_roots_for_test(&mut roots);
+    ctx.collect_hash_table_test_registry_gc_roots_for_test(&mut roots);
+    ctx.collect_in_flight_registry_gc_roots_for_test(&mut roots);
     roots
 }
 
 #[test]
 fn gc_tls_ownership_context_registries_survive_owner_collection_and_reactivation() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let program_name = Value::symbol("gc-tls-roundtrip-program");
     let program = Value::vector(vec![Value::fixnum(0); 3]);
     ccl::builtin_register_ccl_program_impl(vec![program_name, program]).unwrap();
@@ -92,13 +93,13 @@ fn gc_tls_ownership_context_registries_survive_owner_collection_and_reactivation
     )
     .unwrap();
     let hash_alias = builtins::lookup_hash_table_test_alias("gc-tls-roundtrip-custom").unwrap();
-    let comparator = hash_alias.user_cmp_function.unwrap();
-    let hasher = hash_alias.user_hash_function.unwrap();
+    let comparator = hash_alias.user_cmp_function_copied().unwrap();
+    let hasher = hash_alias.user_hash_function_copied().unwrap();
     let error = ctx
         .eval_str("(signal 'error (list (vector 73)))")
         .expect_err("retain a public error on the source thread during migration");
     let error_payload = match &error {
-        EvalError::Signal { data, .. } => data[0],
+        neovm_value::error::EvalError::Signal { data, .. } => data[0],
         other => panic!("expected a signal, received {other:?}"),
     };
     let expected = [
@@ -126,7 +127,7 @@ fn gc_tls_ownership_context_registries_survive_owner_collection_and_reactivation
             .copied()
             .expect("return activation lost a Context-owned registry value");
         assert!(
-            ctx.tagged_heap.owns_heap_value_for_test(value),
+            ctx.tagged_heap().owns_heap_value_for_test(value),
             "owner collection swept a Context-owned registry value"
         );
     }

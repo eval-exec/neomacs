@@ -24,6 +24,9 @@ mod atomic_value;
 pub use atomic_value::AtomicTaggedValue;
 #[cfg(feature = "sqlite")]
 pub(crate) mod sqlite_finalizer;
+#[cfg(all(any(test, feature = "test-support"), feature = "sqlite"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use sqlite_finalizer::sqlite_obj_finalizer_installed;
 mod value_vec;
 pub use value_vec::OwnedValueVec;
 

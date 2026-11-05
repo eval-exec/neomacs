@@ -31,6 +31,7 @@ use neovm_value::quit::QuitRequest;
 /// re-derives the exact answer from the canonical fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum AttentionBit {
     /// `quit-flag` is non-nil: GNU's `!NILP (Vquit_flag)` (src/lisp.h:3899).
     QuitFlag = 1 << 0,
@@ -191,7 +192,7 @@ impl Context {
     }
 
     /// The attention word as stored, and as its inputs imply it.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn attention_words_for_test(&self) -> (u32, u32) {
         (

@@ -168,6 +168,30 @@ pub enum RedisplayMiniPreparationFailure {
 }
 
 impl Context {
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn gnu_redisplay_hooks_active(&self) -> bool {
+        self.gnu_redisplay_hooks.active.is_active()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn gnu_redisplay_hooks_dimensions_empty(&self) -> bool {
+        self.gnu_redisplay_hooks.dimensions.is_empty()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn gnu_redisplay_hooks_windows_are_all(&self) -> bool {
+        self.gnu_redisplay_hooks.windows == PendingScope::All
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn gnu_redisplay_hooks_accepted_serial(&self) -> u64 {
+        self.gnu_redisplay_hooks.accepted_serial
+    }
+
     /// Build a rooted failure for the full minibuffer display-motion producer.
     /// The caller exclusively owns this Context; the Flow owns its Lisp payload
     /// through the existing in-flight root contract and adds no shared cache.
@@ -1108,10 +1132,6 @@ impl Drop for RedisplayTransaction<'_> {
 #[path = "tests/redisplay_hook_ownership_test.rs"]
 mod tests;
 
-#[cfg(test)]
-#[path = "redisplay_hooks/tests/mode_line_flow_test.rs"]
-mod mode_line_flow_tests;
-
 /// Temporary echo source, matching with_echo_area_buffer's owned unwind.
 /// The old marker Values are explicitly rooted before temporarily replacing
 /// the window's marker owner. Only buffer/point/start are restored; geometry
@@ -1337,14 +1357,6 @@ impl Drop for CommittedScrollGuard<'_> {
         self.eval.gnu_redisplay_hooks.active = self.previous;
     }
 }
-
-#[cfg(test)]
-#[path = "tests/redisplay_mini_only_test.rs"]
-mod mini_only_tests;
-
-#[cfg(test)]
-#[path = "tests/redisplay_mini_preparer_context_test.rs"]
-mod mini_preparer_context_tests;
 
 #[cfg(test)]
 #[path = "tests/redisplay_mini_source_eligibility_test.rs"]

@@ -654,6 +654,18 @@ pub(crate) struct HashTableTestAlias {
     pub(crate) user_hash_function: Option<Value>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+impl HashTableTestAlias {
+    pub fn user_cmp_function_copied(&self) -> Option<Value> {
+        self.user_cmp_function
+    }
+
+    pub fn user_hash_function_copied(&self) -> Option<Value> {
+        self.user_hash_function
+    }
+}
+
 pub(super) fn reset_collections_thread_locals() {
     HASH_TABLE_TEST_ALIASES.with(|slot| slot.reset(HashTableTestRegistry::default()));
 }
@@ -668,6 +680,7 @@ pub(super) fn park_collections_thread_locals() {
 /// `define-hash-table-test`. They live in the Context-owned registry selected by this thread, so
 /// without rooting them the GC sweeps a still-referenced closure and the next
 /// custom-test `gethash`/`puthash` calls a freed function (use-after-free).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn collect_hash_table_test_registry_gc_roots(
     registry: &HashTableTestRegistryHandle,
     group: &mut Vec<Value>,
@@ -732,6 +745,7 @@ fn register_hash_table_test_alias(name: &str, alias: HashTableTestAlias) {
     HASH_TABLE_TEST_ALIASES.with(|slot| slot.borrow_mut().aliases.insert(name.to_string(), alias));
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn lookup_hash_table_test_alias(name: &str) -> Option<HashTableTestAlias> {
     HASH_TABLE_TEST_ALIASES.with(|slot| slot.borrow().aliases.get(name).cloned())
 }

@@ -2,16 +2,25 @@
 //! Fixtures own one exclusive Context; their scalar policy guard is private
 //! to the test thread and introduces no production Lisp-state cache.
 
-use super::*;
+use crate::emacs_core::Context;
+use crate::emacs_core::eval::redisplay_hooks::*;
+use crate::emacs_core::eval::*;
+use crate::window::DisplayFrameManagerExt;
 use neovm_edit::buffer::EmacsByteRange;
+use neovm_value::error::Flow;
+use neovm_value::value::Value;
 use std::cell::Cell;
 use std::rc::Rc;
 
 fn context() -> Context {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
-    let buffer = eval.buffers.current_buffer_id().expect("current buffer");
-    eval.frames
+    let mut eval = crate::test_utils::new_context();
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.frame_manager_mut()
         .create_frame("hook-mode-line-flow", 640, 384, buffer);
     eval
 }
@@ -20,21 +29,28 @@ fn context() -> Context {
 fn gnu_mode_line_exit_restores_callback_restrictions_and_reentry() {
     let _policy = RedisplayHookPolicyGuard::gnu();
     let mut eval = context();
-    let buffer_id = eval.buffers.current_buffer_id().expect("buffer");
-    eval.buffers
+    let buffer_id = eval.edit.buffers.current_buffer_id().expect("buffer");
+    eval.edit
+        .buffers
         .get_mut(buffer_id)
         .expect("buffer")
         .insert("abcdef");
-    let _ = eval.buffers.internal_labeled_narrow_to_emacs_byte_range(
-        buffer_id,
-        EmacsByteRange::from_usize(1, 5),
-        Value::symbol("outer"),
-    );
-    let _ = eval.buffers.internal_labeled_narrow_to_emacs_byte_range(
-        buffer_id,
-        EmacsByteRange::from_usize(2, 4),
-        Value::symbol("inner"),
-    );
+    let _ = eval
+        .edit
+        .buffers
+        .internal_labeled_narrow_to_emacs_byte_range(
+            buffer_id,
+            EmacsByteRange::from_usize(1, 5),
+            Value::symbol("outer"),
+        );
+    let _ = eval
+        .edit
+        .buffers
+        .internal_labeled_narrow_to_emacs_byte_range(
+            buffer_id,
+            EmacsByteRange::from_usize(2, 4),
+            Value::symbol("inner"),
+        );
     let roots = eval.save_specpdl_roots();
     let expected = Value::string("first GNU mode-line exit");
     eval.push_specpdl_root(expected);
@@ -43,7 +59,7 @@ fn gnu_mode_line_exit_restores_callback_restrictions_and_reentry() {
     eval.redisplay_fn = Some(Box::new(move |eval| {
         observed.set(observed.get() + 1);
         assert!(eval.gnu_redisplay_transaction_active());
-        let buffer = eval.buffers.get(buffer_id).expect("redisplay buffer");
+        let buffer = eval.edit.buffers.get(buffer_id).expect("redisplay buffer");
         assert_eq!(buffer.point_min_emacs_byte_pos().get(), 0);
         assert_eq!(buffer.point_max_emacs_byte_pos().get(), 6);
         if observed.get() == 1 {
@@ -68,15 +84,15 @@ fn gnu_mode_line_exit_restores_callback_restrictions_and_reentry() {
     assert!(!eval.has_mode_line_display_flow());
     assert!(eval.redisplay_fn.is_some());
     assert!(!eval.gnu_redisplay_transaction_active());
-    assert!(eval.last_redisplay_signature.is_none());
-    let buffer = eval.buffers.get(buffer_id).expect("restored buffer");
+    assert!(eval.last_redisplay_signature_is_none_for_test());
+    let buffer = eval.edit.buffers.get(buffer_id).expect("restored buffer");
     assert_eq!(buffer.point_min_emacs_byte_pos().get(), 2);
     assert_eq!(buffer.point_max_emacs_byte_pos().get(), 4);
 
     eval.redisplay_with_force(true)
         .expect("the restored callback can display again");
     assert_eq!(calls.get(), 2);
-    assert!(eval.last_redisplay_signature.is_some());
+    assert!(eval.last_redisplay_signature_is_some_for_test());
     assert!(!eval.gnu_redisplay_transaction_active());
     eval.restore_specpdl_roots(roots);
 }
@@ -99,8 +115,8 @@ fn gnu_mode_line_exit_prevents_signature_commit_after_callback_acceptance() {
     let thrown = flow.as_throw().expect("throw preserved");
     assert_eq!(thrown.tag, Value::symbol("accepted-mode-line-exit"));
     assert_eq!(thrown.value, Value::fixnum(17));
-    assert!(eval.gnu_redisplay_hooks.accepted_serial > 0);
-    assert!(eval.last_redisplay_signature.is_none());
+    assert!(eval.gnu_redisplay_hooks_accepted_serial() > 0);
+    assert!(eval.last_redisplay_signature_is_none_for_test());
     assert!(!eval.has_mode_line_display_flow());
     assert!(eval.redisplay_fn.is_some());
     assert!(!eval.gnu_redisplay_transaction_active());
@@ -149,5 +165,5 @@ fn legacy_hook_policy_preserves_fallible_mode_line_callback_exit() {
     assert_eq!(flow.as_throw().expect("throw").value, Value::fixnum(31));
     assert!(!eval.has_mode_line_display_flow());
     assert!(eval.redisplay_fn.is_some());
-    assert!(eval.last_redisplay_signature.is_none());
+    assert!(eval.last_redisplay_signature_is_none_for_test());
 }

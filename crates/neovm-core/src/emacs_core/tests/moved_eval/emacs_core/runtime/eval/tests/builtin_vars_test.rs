@@ -2,8 +2,8 @@
 //! reader answers, for every variable shape a builtin's control variable can
 //! take, with the front-end knob on and off; and the knob parses as
 //! documented.
-use crate::emacs_core::eval::{parse_builtin_frontend_knob, set_builtin_frontend_for_test};
 use crate::emacs_core::print::print_value;
+use neovm_value::builtin_frontend::{parse_builtin_frontend_knob, set_builtin_frontend_for_test};
 use neovm_value::intern::intern;
 
 const SHAPES: &[&str] = &[
@@ -75,9 +75,9 @@ fn typed_reads_answer_like_the_general_reader() {
                 // reading that cell must not resolve the same identity again.
                 let id = intern("case-fold-search");
                 let expected = eval.special_variable_value_by_id(id);
-                eval.obarray.reset_symbol_slot_read_count();
+                eval.obarray().reset_symbol_slot_read_count();
                 let actual = eval.builtin_var_value(id);
-                let symbol_reads = eval.obarray.symbol_slot_read_count();
+                let symbol_reads = eval.obarray().symbol_slot_read_count();
                 assert_eq!(actual, expected, "cached control variable in {buffer}");
                 assert_eq!(
                     symbol_reads, 1,
