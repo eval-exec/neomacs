@@ -1,11 +1,11 @@
 //! Minor termination detects missed barriers before promotion or reclamation.
 
 use super::*;
-use crate::emacs_core::eval::{
-    push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
-};
 use crate::heap_types::LispString;
 use crate::intern::intern_uninterned;
+use crate::value::scratch_bridge::{
+    push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
+};
 use crate::value::{HashTableTest, LispHashTable};
 use std::ffi::OsString;
 use std::panic::{AssertUnwindSafe, catch_unwind};

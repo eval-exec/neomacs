@@ -1,13 +1,13 @@
 //! Worker-local P-all and symbol handoff, including bounded early-stop exits.
 
 use super::*;
-use crate::emacs_core::eval::{
-    push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
-};
 use crate::heap_types::LispString;
 use crate::intern::intern_uninterned;
 use crate::tagged::bytecode::chunk::ByteCodeFunction;
 use crate::tagged::header::ImageResident;
+use crate::value::scratch_bridge::{
+    push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
+};
 use crate::value::{HashTableTest, LambdaParams, LispHashTable};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Condvar, Mutex};

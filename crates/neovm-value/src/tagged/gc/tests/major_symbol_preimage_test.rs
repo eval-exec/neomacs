@@ -1,12 +1,12 @@
 //! Major-only symbol preimages through the production producers and heap TLS.
 
 use super::*;
-use crate::emacs_core::eval::{
-    push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
-};
 use crate::heap_types::LispString;
 use crate::intern::{intern, intern_uninterned};
 use crate::symbol::Obarray;
+use crate::value::scratch_bridge::{
+    push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
+};
 use crate::value::text_props::{PropertyInterval, TextPropertyTable};
 
 struct ScratchRoots(usize);

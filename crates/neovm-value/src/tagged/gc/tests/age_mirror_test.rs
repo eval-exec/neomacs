@@ -4,10 +4,10 @@
 
 use super::mirror_fault::{self, MirrorFault};
 use super::*;
-use crate::emacs_core::eval::{
+use crate::heap_types::LispString;
+use crate::value::scratch_bridge::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
-use crate::heap_types::LispString;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 struct ScratchRoots(usize);

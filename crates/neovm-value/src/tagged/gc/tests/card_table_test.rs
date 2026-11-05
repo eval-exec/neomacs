@@ -4,10 +4,10 @@
 
 use super::card_table::{CARD_INDEX_MASK, CARD_SHIFT, CardTable, ChunkSlot, card_index};
 use super::*;
-use crate::emacs_core::eval::{
+use crate::heap_types::LispString;
+use crate::value::scratch_bridge::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
-use crate::heap_types::LispString;
 use crate::value::{HashTableTest, LispHashTable};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
