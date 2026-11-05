@@ -16,6 +16,9 @@ jit = ["neovm-value/jit", "neovm-edit/jit", "neovm-text/jit"]
 perf-probes = []
 redisplay-test-policy = ["neovm-edit/redisplay-test-policy"]
 sqlite = []
+# Test-only support surface: enabled only by a dev-dependency of a crate
+# ABOVE neovm-eval (core), never by a product profile.
+test-support = ["neovm-value/test-support"]
 vm-profile = []
 
 [dependencies]
@@ -74,3 +77,7 @@ rustls.workspace = true
 socket2.workspace = true
 neomacs-video-model.workspace = true
 windows-sys.workspace = true
+
+[dev-dependencies]
+# Downward-only: shared value test helpers for this crate's own unit tests.
+neovm-value = { path = "../neovm-value", features = ["test-support"] }

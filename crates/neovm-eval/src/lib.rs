@@ -6,6 +6,12 @@
 pub mod emacs_core;
 pub mod host_effect;
 
+/// Test support shared by this crate's own unit tests and, behind
+/// `test-support`, by core's test build (a dependency crate never has
+/// `cfg(test)` on). See TEST-SUPPORT-DESIGN.md rev 2.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_utils;
+
 // GNU seeds emacs-version from configure.ac's PACKAGE_VERSION; version.el
 // derives its numeric components from that same value. The evaluator seeds
 // the bare variable, so the constants live here (stage-4 W5/E13); the core
