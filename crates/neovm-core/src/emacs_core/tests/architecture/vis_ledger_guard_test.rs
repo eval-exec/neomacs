@@ -4292,11 +4292,11 @@ fn auth_test_support_widened(attrs: &[syn::Attribute]) -> bool {
 
 /// True when the file (at any inline depth) declares or re-exports `leaf`
 /// publicly. The fence file is the one place where the item must be public.
-fn auth_declares_public(file: &Path, leaf: &str) -> Result<bool, String> {
+fn auth_declares_public(file: &Path, leaf: &str, impl_methods: bool) -> Result<bool, String> {
     let text = read(file)?;
     let ast = syn::parse_file(&text)
         .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", file.display()))?;
-    fn items_declare(items: &[syn::Item], leaf: &str) -> bool {
+    fn items_declare(items: &[syn::Item], leaf: &str, impl_methods: bool) -> bool {
         items.iter().any(|item| {
             let public = match item {
                 syn::Item::Fn(item) => {
@@ -4340,14 +4340,24 @@ fn auth_declares_public(file: &Path, leaf: &str) -> Result<bool, String> {
                         && module
                             .content
                             .as_ref()
-                            .is_some_and(|(_, inner)| items_declare(inner, leaf))
+                            .is_some_and(|(_, inner)| items_declare(inner, leaf, impl_methods))
                 }
+                // Inherent-impl methods on a fence type are a public path when
+                // the method itself is `pub` (the vm_test exact-tier witness
+                // shape: `pub fn selected` inside `#[cfg(feature = "jit")]
+                // impl ExactTierWitness`). The row check independently pins
+                // the fence path to the named type.
+                syn::Item::Impl(item) => impl_methods && item.items.iter().any(|member| {
+                    matches!(member, syn::ImplItem::Fn(function)
+                        if function.sig.ident == leaf
+                            && matches!(function.vis, syn::Visibility::Public(_)))
+                }),
                 _ => false,
             };
             public
         })
     }
-    Ok(items_declare(&ast.items, leaf))
+    Ok(items_declare(&ast.items, leaf, impl_methods))
 }
 
 /// Resolve a Rust path written in `from_module` to (module segments, item
@@ -4995,7 +5005,7 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
                         "AUTHORITY_PATHS {expected}: the fence module is not publicly reachable"
                     ));
                 }
-                if !auth_declares_public(&fence, leaf)?
+                if !auth_declares_public(&fence, leaf, true)?
                     && !auth_alias_method_is_fenced(
                         &workspace,
                         &fence,
@@ -5047,7 +5057,7 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
                         "AUTHORITY_PATHS {expected}: the module chain is not publicly reachable"
                     ));
                 }
-                if !auth_declares_public(module_file, owner)? {
+                if !auth_declares_public(module_file, owner, false)? {
                     return Err(format!(
                         "AUTHORITY_PATHS {expected}: {} does not publicly expose {owner:?}",
                         module_file.display()
@@ -5064,8 +5074,8 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
                         "AUTHORITY_PATHS {expected}: the defining file does not expose {owner}::{leaf} as a pub inherent method"
                     ));
                 }
-                if auth_declares_public(&fence, leaf)?
-                    || (method_row && auth_declares_public(&fence, owner)?)
+                if auth_declares_public(&fence, leaf, false)?
+                    || (method_row && auth_declares_public(&fence, owner, false)?)
                 {
                     return Err(format!(
                         "AUTHORITY_PATHS {expected}: the authority fence also exposes the item, so the signed path is not exclusive"
@@ -5078,7 +5088,7 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
                 .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", row.defining_file))?;
             if defining != fence {
                 if let Some((segments, true)) = map.get(&defining) {
-                    if auth_declares_public(&defining, leaf)? {
+                    if auth_declares_public(&defining, leaf, false)? {
                         let mut original = crate_name.replace('-', "_");
                         for segment in segments {
                             original.push_str("::");
