@@ -99,7 +99,7 @@ fn safe_position_restarts_answer_exactly_as_the_parse_from_begv() {
                             // A `syntax-table` property, honoured.
                             let at = rng.below(len) + 1;
                             let class = [1, 7, 11, 12, 14][rng.below(5)];
-                            eval.obarray
+                            eval.obarray_mut()
                                 .set_symbol_value("parse-sexp-lookup-properties", Value::T);
                             eval.eval_str(&format!(
                                 "(put-text-property {at} {} 'syntax-table '({class}))",
@@ -112,7 +112,7 @@ fn safe_position_restarts_answer_exactly_as_the_parse_from_begv() {
                     // The text may have changed length.
                     let _ = step;
                 }
-                eval.obarray
+                eval.obarray_mut()
                     .set_symbol_value("parse-sexp-lookup-properties", Value::NIL);
             }
         }
@@ -337,7 +337,7 @@ fn answers_around_a_change(
     let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 0);
     if honor {
-        eval.obarray
+        eval.obarray_mut()
             .set_symbol_value("parse-sexp-lookup-properties", Value::T);
     }
     set_text(&mut eval, text);

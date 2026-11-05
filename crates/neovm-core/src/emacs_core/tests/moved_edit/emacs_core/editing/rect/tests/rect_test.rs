@@ -142,7 +142,7 @@ fn extract_rectangle_startup_is_autoloaded() {
     crate::test_utils::init_test_tracing();
     let eval = eval_with_ldefs_boot_autoloads(&["extract-rectangle"]);
     let function = eval
-        .obarray
+        .obarray()
         .symbol_function("extract-rectangle")
         .expect("missing extract-rectangle startup function cell");
     assert!(is_autoload_value(
@@ -256,7 +256,7 @@ fn delete_rectangle_startup_is_autoloaded() {
     crate::test_utils::init_test_tracing();
     let eval = eval_with_ldefs_boot_autoloads(&["delete-rectangle"]);
     let function = eval
-        .obarray
+        .obarray()
         .symbol_function("delete-rectangle")
         .expect("missing delete-rectangle startup function cell");
     assert!(is_autoload_value(
@@ -284,7 +284,7 @@ fn kill_rectangle_startup_is_autoloaded() {
     crate::test_utils::init_test_tracing();
     let eval = eval_with_ldefs_boot_autoloads(&["kill-rectangle"]);
     let function = eval
-        .obarray
+        .obarray()
         .symbol_function("kill-rectangle")
         .expect("missing kill-rectangle startup function cell");
     assert!(is_autoload_value(
@@ -316,7 +316,7 @@ fn yank_rectangle_startup_is_autoloaded() {
     crate::test_utils::init_test_tracing();
     let eval = eval_with_ldefs_boot_autoloads(&["yank-rectangle"]);
     let function = eval
-        .obarray
+        .obarray()
         .symbol_function("yank-rectangle")
         .expect("missing yank-rectangle startup function cell");
     assert!(is_autoload_value(
@@ -367,7 +367,7 @@ fn yank_rectangle_loaded_function_is_simple_bytecode_call() {
     );
 
     let function = eval
-        .obarray
+        .obarray()
         .symbol_function("yank-rectangle")
         .expect("loaded yank-rectangle function cell");
     // When loading .el source (not .elc), the function is interpreted,
@@ -396,7 +396,7 @@ fn insert_rectangle_startup_is_autoloaded() {
     crate::test_utils::init_test_tracing();
     let eval = eval_with_ldefs_boot_autoloads(&["insert-rectangle"]);
     let function = eval
-        .obarray
+        .obarray()
         .symbol_function("insert-rectangle")
         .expect("missing insert-rectangle startup function cell");
     assert!(is_autoload_value(
@@ -447,7 +447,7 @@ fn open_rectangle_startup_is_autoloaded() {
     crate::test_utils::init_test_tracing();
     let eval = eval_with_ldefs_boot_autoloads(&["open-rectangle"]);
     let function = eval
-        .obarray
+        .obarray()
         .symbol_function("open-rectangle")
         .expect("missing open-rectangle startup function cell");
     assert!(is_autoload_value(
@@ -475,7 +475,7 @@ fn clear_rectangle_startup_is_autoloaded() {
     crate::test_utils::init_test_tracing();
     let eval = eval_with_ldefs_boot_autoloads(&["clear-rectangle"]);
     let function = eval
-        .obarray
+        .obarray()
         .symbol_function("clear-rectangle")
         .expect("missing clear-rectangle startup function cell");
     assert!(is_autoload_value(
@@ -503,7 +503,7 @@ fn string_rectangle_startup_is_autoloaded() {
     crate::test_utils::init_test_tracing();
     let eval = eval_with_ldefs_boot_autoloads(&["string-rectangle"]);
     let function = eval
-        .obarray
+        .obarray()
         .symbol_function("string-rectangle")
         .expect("missing string-rectangle startup function cell");
     assert!(is_autoload_value(
@@ -542,7 +542,7 @@ fn delete_extract_rectangle_startup_is_autoloaded() {
     crate::test_utils::init_test_tracing();
     let eval = eval_with_ldefs_boot_autoloads(&["delete-extract-rectangle"]);
     let function = eval
-        .obarray
+        .obarray()
         .symbol_function("delete-extract-rectangle")
         .expect("missing delete-extract-rectangle startup function cell");
     assert!(is_autoload_value(
@@ -645,7 +645,9 @@ fn raw_context_does_not_prebind_replace_rectangle_alias() {
     crate::test_utils::init_test_tracing();
     let eval = crate::test_utils::new_context();
     assert!(
-        eval.obarray.symbol_function("replace-rectangle").is_none(),
+        eval.obarray()
+            .symbol_function("replace-rectangle")
+            .is_none(),
         "replace-rectangle should come from GNU rect.el/loaddefs, not Context::new"
     );
 }

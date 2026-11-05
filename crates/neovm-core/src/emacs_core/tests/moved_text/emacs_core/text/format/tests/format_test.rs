@@ -332,7 +332,7 @@ fn string_pixel_width_startup_is_autoloaded() {
     crate::test_utils::init_test_tracing();
     let eval = eval_with_ldefs_boot_autoloads(&["string-pixel-width"]);
     let function = eval
-        .obarray
+        .obarray()
         .symbol_function("string-pixel-width")
         .expect("missing string-pixel-width startup function cell");
     assert!(is_autoload_value(

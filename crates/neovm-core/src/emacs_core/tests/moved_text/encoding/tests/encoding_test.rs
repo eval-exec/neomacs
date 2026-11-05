@@ -850,7 +850,7 @@ fn undecided_decode_uses_the_shared_iso_2022_detector() {
     register_test_jis();
     let mut eval = crate::test_utils::new_context();
     neovm_text::emacs_core::coding::builtin_define_coding_system_internal(
-        &mut eval.coding_systems,
+        eval.coding_systems_mut(),
         vec![
             Value::symbol("iso-2022-7bit"),
             Value::char('J'),
@@ -885,7 +885,7 @@ fn undecided_decode_uses_the_shared_iso_2022_detector() {
 
     assert_eq!(
         detect_undecided_coding(
-            &eval.coding_systems,
+            eval.coding_systems(),
             b"\x1b$B$3$s\x1b(B",
             false,
             neovm_text::emacs_core::coding::SourceBlock::Last,
@@ -915,7 +915,7 @@ fn ccl_coding_system_executes_registered_identity_program() {
     .expect("register compiled identity CCL program");
 
     neovm_text::emacs_core::coding::builtin_define_coding_system_internal(
-        &mut eval.coding_systems,
+        eval.coding_systems_mut(),
         vec![
             Value::symbol("test-ccl-identity-coding"),
             Value::char('C'),

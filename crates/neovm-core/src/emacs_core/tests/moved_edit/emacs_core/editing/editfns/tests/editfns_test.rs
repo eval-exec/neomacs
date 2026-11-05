@@ -181,7 +181,7 @@ fn combine_after_change_still_updates_treesit_linecol_cache() {
             bytepos: 5,
         },
     );
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("combine-after-change-calls", Value::T);
 
     signal_after_change(&mut eval, EmacsByteRange::from_usize(1, 2), CharLen::ZERO)
@@ -207,9 +207,9 @@ fn combine_after_change_special_case_uses_gnu_symbol_identity() {
         .current_buffer_id()
         .expect("current buffer");
     let before_sym = neovm_value::intern::intern("before-change-functions");
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("combine-after-change-calls", Value::T);
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("before-change-functions", Value::NIL);
     eval.set_buffer_local_binding_by_id(
         current,

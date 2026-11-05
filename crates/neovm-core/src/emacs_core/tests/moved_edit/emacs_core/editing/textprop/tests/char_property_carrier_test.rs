@@ -85,11 +85,11 @@ fn gde_char_property_carrier_category_and_alias_precede_defaults() {
     let category_value = Value::fixnum(22);
     let alias_value = Value::fixnum(33);
     let mut eval = context_with_default_property(property, Value::fixnum(11));
-    eval.obarray.set_symbol_value(
+    eval.obarray_mut().set_symbol_value(
         TextPropertyControlVariable::CharPropertyAliasAlist.name(),
         Value::list(vec![Value::cons(property, Value::list(vec![alias]))]),
     );
-    eval.obarray
+    eval.obarray_mut()
         .put_property("gde-carrier-category", "gde-carrier-probe", category_value)
         .expect("the new category has a valid plist");
     let plist = [(Value::symbol("category"), category), (alias, alias_value)];
@@ -106,7 +106,7 @@ fn gde_char_property_carrier_category_and_alias_precede_defaults() {
         assert_eq!(actual, category_value, "{carrier:?}");
     }
 
-    eval.obarray
+    eval.obarray_mut()
         .put_property("gde-carrier-category", "gde-carrier-probe", Value::NIL)
         .expect("updating the valid category plist preserves its shape");
     for carrier in CharPropertyCarrier::iter() {
@@ -123,11 +123,11 @@ fn gde_char_property_carrier_category_and_alias_precede_defaults() {
 
 fn context_with_default_property(property: Value, default: Value) -> Context {
     let mut eval = crate::test_utils::new_context();
-    eval.obarray.set_symbol_value(
+    eval.obarray_mut().set_symbol_value(
         TextPropertyControlVariable::DefaultTextProperties.name(),
         Value::list(vec![property, default]),
     );
-    eval.obarray.set_symbol_value(
+    eval.obarray_mut().set_symbol_value(
         TextPropertyControlVariable::CharPropertyAliasAlist.name(),
         Value::NIL,
     );

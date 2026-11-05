@@ -179,7 +179,7 @@ fn find_composition_internal_finds_automatic_combining_sequence_in_string() {
         .buffers
         .current_buffer_id()
         .expect("current buffer for automatic composition");
-    eval.frames
+    eval.frame_manager_mut()
         .create_frame("automatic-composition", 80, 24, current_buffer);
     let table = eval.visible_variable_value_or_nil("composition-function-table");
     let combining_rule = Value::vector(vec![
@@ -213,7 +213,7 @@ fn find_composition_internal_finds_automatic_combining_sequence_in_string() {
         "automatic composition returns a gstring"
     );
 
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("auto-composition-mode", Value::NIL);
     let inhibited = find_composition_internal(
         &mut eval,

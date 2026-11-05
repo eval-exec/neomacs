@@ -198,7 +198,7 @@ fn sexp_motion_respects_parse_sexp_ignore_comments_for_line_comments() {
     replace_current_buffer_text(&mut eval, "(a ; comment with )\n b)");
     install_line_comment_syntax(&mut eval);
 
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("parse-sexp-ignore-comments", Value::NIL);
     assert_eq!(
         builtin_scan_sexps(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]).unwrap(),
@@ -225,7 +225,7 @@ fn sexp_motion_respects_parse_sexp_ignore_comments_for_line_comments() {
     builtin_forward_sexp(&mut eval, vec![Value::fixnum(1)]).unwrap();
     assert_eq!(current_point_lisp_pos(&eval), 20);
 
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("parse-sexp-ignore-comments", Value::T);
     assert_eq!(
         builtin_scan_sexps(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]).unwrap(),
@@ -260,14 +260,14 @@ fn sexp_motion_ignores_unmatched_open_paren_inside_line_comment() {
     replace_current_buffer_text(&mut eval, "(a ; unmatched (\n b)");
     install_line_comment_syntax(&mut eval);
 
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("parse-sexp-ignore-comments", Value::T);
     assert_eq!(
         builtin_scan_sexps(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]).unwrap(),
         Value::fixnum(21)
     );
 
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("parse-sexp-ignore-comments", Value::NIL);
     match builtin_scan_sexps(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]).kinded() {
         Err(neovm_value::error::FlowKind::Signal(sig)) => {
@@ -284,7 +284,7 @@ fn sexp_scanners_treat_eof_comments_as_one_forward_sexp() {
     let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, ";foo");
     install_line_comment_syntax(&mut eval);
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("parse-sexp-ignore-comments", Value::T);
 
     assert_eq!(
@@ -327,7 +327,7 @@ fn backward_sexp_motion_respects_parse_sexp_ignore_comments() {
     replace_current_buffer_text(&mut eval, "(a ; comment with )\n b)");
     install_line_comment_syntax(&mut eval);
 
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("parse-sexp-ignore-comments", Value::T);
     assert_eq!(
         builtin_scan_sexps(&mut eval, vec![Value::fixnum(24), Value::fixnum(-1)]).unwrap(),
@@ -354,7 +354,7 @@ fn backward_sexp_motion_respects_parse_sexp_ignore_comments() {
     builtin_backward_sexp(&mut eval, vec![Value::fixnum(1)]).unwrap();
     assert_eq!(current_point_lisp_pos(&eval), 1);
 
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("parse-sexp-ignore-comments", Value::NIL);
     match builtin_scan_sexps(&mut eval, vec![Value::fixnum(24), Value::fixnum(-1)]).kinded() {
         Err(neovm_value::error::FlowKind::Signal(sig)) => {
@@ -378,7 +378,7 @@ fn backward_sexp_motion_respects_parse_sexp_ignore_comments() {
 
     replace_current_buffer_text(&mut eval, "(a /* comment with ( */ b)");
     install_c_block_comment_syntax(&mut eval);
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("parse-sexp-ignore-comments", Value::T);
     assert_eq!(
         builtin_scan_sexps(&mut eval, vec![Value::fixnum(27), Value::fixnum(-1)]).unwrap(),
@@ -392,7 +392,7 @@ fn backward_sexp_motion_respects_parse_sexp_ignore_comments() {
         .unwrap(),
         Value::fixnum(1)
     );
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("parse-sexp-ignore-comments", Value::NIL);
     assert_eq!(
         builtin_scan_sexps(&mut eval, vec![Value::fixnum(27), Value::fixnum(-1)]).unwrap(),
@@ -416,7 +416,7 @@ fn backward_sexp_motion_skips_nested_block_comments() {
     let end = text.len() as i64 + 1;
     replace_current_buffer_text(&mut eval, text);
     install_nestable_c_block_comment_syntax(&mut eval);
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("parse-sexp-ignore-comments", Value::T);
 
     assert_eq!(
@@ -487,7 +487,7 @@ fn sexp_motion_respects_parse_sexp_ignore_comments_for_block_comments() {
     replace_current_buffer_text(&mut eval, "(a /* comment with ) */ b)");
     install_c_block_comment_syntax(&mut eval);
 
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("parse-sexp-ignore-comments", Value::NIL);
     assert_eq!(
         builtin_scan_sexps(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]).unwrap(),
@@ -502,7 +502,7 @@ fn sexp_motion_respects_parse_sexp_ignore_comments_for_block_comments() {
         Value::fixnum(21)
     );
 
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("parse-sexp-ignore-comments", Value::T);
     assert_eq!(
         builtin_scan_sexps(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]).unwrap(),
@@ -534,7 +534,7 @@ fn doom_cli_style_struct_comment_does_not_break_forward_sexp() {
     let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, text);
     install_line_comment_syntax(&mut eval);
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("parse-sexp-ignore-comments", Value::T);
 
     builtin_forward_sexp(&mut eval, vec![Value::fixnum(1)]).unwrap();
@@ -1240,7 +1240,7 @@ fn backward_sexp_comment_entry_ignores_forward_comment_escape_policy() {
     let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "a # (\\\n");
     install_hash_line_comment_syntax(&mut eval);
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("parse-sexp-ignore-comments", Value::T);
     set_comment_end_can_be_escaped(&mut eval, Value::T);
 
@@ -1271,7 +1271,7 @@ fn backward_sexp_recognizes_two_char_ender_with_quoted_first_character() {
         )
         .expect("install two-character ender syntax");
     }
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("parse-sexp-ignore-comments", Value::T);
     set_comment_end_can_be_escaped(&mut eval, Value::T);
 
@@ -1334,7 +1334,7 @@ fn scan_lists_backward_ignores_comment_char_inside_string() {
     //           x = { \n   a = "#"; \n }  \n
     replace_current_buffer_text(&mut eval, "x = {\n  a = \"#\";\n}\n");
     install_hash_line_comment_syntax(&mut eval);
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("parse-sexp-ignore-comments", Value::T);
 
     assert_eq!(scan_lists_backward_from(&mut eval, 19), Value::fixnum(5));
@@ -1348,7 +1348,7 @@ fn scan_lists_backward_ignores_escaped_string_quote_before_comment_char() {
     let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "x = {\n  a = \"y\\\"#\\\"z\";\n}\n");
     install_hash_line_comment_syntax(&mut eval);
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("parse-sexp-ignore-comments", Value::T);
 
     assert_eq!(scan_lists_backward_from(&mut eval, 25), Value::fixnum(5));
@@ -1362,7 +1362,7 @@ fn scan_lists_backward_still_crosses_a_genuine_comment() {
     let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "x = {\n  # hi\n  a = 1;\n}\n");
     install_hash_line_comment_syntax(&mut eval);
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("parse-sexp-ignore-comments", Value::T);
 
     assert_eq!(scan_lists_backward_from(&mut eval, 24), Value::fixnum(5));
@@ -1378,7 +1378,7 @@ fn scan_lists_backward_reparses_forward_when_the_comment_body_holds_a_string_quo
     let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "x = {\n  # a \" b\n}\n");
     install_hash_line_comment_syntax(&mut eval);
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("parse-sexp-ignore-comments", Value::T);
 
     assert_eq!(scan_lists_backward_from(&mut eval, 18), Value::fixnum(5));
@@ -1394,7 +1394,7 @@ fn scan_lists_backward_accepts_a_comment_whose_body_holds_balanced_string_quotes
     let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "x = {\n  # a \" b \" c\n}\n");
     install_hash_line_comment_syntax(&mut eval);
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("parse-sexp-ignore-comments", Value::T);
 
     assert_eq!(scan_lists_backward_from(&mut eval, 22), Value::fixnum(5));

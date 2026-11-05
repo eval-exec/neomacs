@@ -3405,7 +3405,7 @@ fn eval_with_frame_window() -> Context {
     let mut eval = crate::test_utils::new_context();
     let buf = eval.edit.buffers.create_buffer("*scratch*");
     eval.edit.buffers.set_current(buf);
-    eval.frames.create_frame("F1", 800, 600, buf);
+    eval.frame_manager_mut().create_frame("F1", 800, 600, buf);
     crate::emacs_core::terminal::pure::mark_selected_terminal_usable_for_test(&eval);
     eval
 }

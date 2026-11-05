@@ -29,23 +29,23 @@ fn positioned_coding_predicate_and_check_preserve_policy_and_operand() {
     let coding = positioned(&mut ctx, "utf-8-unix");
     for mode in [SymbolMode::Bare, SymbolMode::Positioned] {
         assert_eq!(
-            builtin_coding_system_p(&ctx.coding_systems, vec![coding], mode).unwrap(),
+            builtin_coding_system_p(ctx.coding_systems(), vec![coding], mode).unwrap(),
             Value::bool_val(mode == SymbolMode::Positioned)
         );
     }
     assert_eq!(
-        builtin_check_coding_system(&ctx.coding_systems, vec![coding], SymbolMode::Positioned)
+        builtin_check_coding_system(ctx.coding_systems(), vec![coding], SymbolMode::Positioned)
             .unwrap(),
         coding,
         "GNU coding.c:8668 returns the original argument"
     );
     wrong_symbol_operand(
-        builtin_check_coding_system(&ctx.coding_systems, vec![coding], SymbolMode::Bare),
+        builtin_check_coding_system(ctx.coding_systems(), vec![coding], SymbolMode::Bare),
         coding,
     );
     let invalid = positioned(&mut ctx, "issue-554-no-coding-system");
     let error =
-        builtin_check_coding_system(&ctx.coding_systems, vec![invalid], SymbolMode::Positioned)
+        builtin_check_coding_system(ctx.coding_systems(), vec![invalid], SymbolMode::Positioned)
             .unwrap_err();
     match error.into_kind() {
         FlowKind::Signal(signal) => {
@@ -68,32 +68,32 @@ fn positioned_coding_metadata_cache_never_bypasses_disabled_symbol_checks() {
     ] {
         // Populate with a bare key, then take the positioned lookup and error
         // paths. Cache hits must implement the same SYMBOLP policy as misses.
-        let expected = operation(&ctx.coding_systems, vec![bare], SymbolMode::Bare).unwrap();
+        let expected = operation(ctx.coding_systems(), vec![bare], SymbolMode::Bare).unwrap();
         let observed =
-            operation(&ctx.coding_systems, vec![coding], SymbolMode::Positioned).unwrap();
+            operation(ctx.coding_systems(), vec![coding], SymbolMode::Positioned).unwrap();
         assert!(neovm_value::value::equal_value(&expected, &observed, 0));
         wrong_symbol_operand(
-            operation(&ctx.coding_systems, vec![coding], SymbolMode::Bare),
+            operation(ctx.coding_systems(), vec![coding], SymbolMode::Bare),
             coding,
         );
     }
     assert_eq!(
-        builtin_coding_system_eol_type(&ctx.coding_systems, &vec![coding], SymbolMode::Positioned)
+        builtin_coding_system_eol_type(ctx.coding_systems(), &vec![coding], SymbolMode::Positioned)
             .unwrap(),
         Value::fixnum(0)
     );
     assert_eq!(
-        builtin_coding_system_eol_type(&ctx.coding_systems, &vec![coding], SymbolMode::Bare)
+        builtin_coding_system_eol_type(ctx.coding_systems(), &vec![coding], SymbolMode::Bare)
             .unwrap(),
         Value::NIL
     );
     assert!(
-        builtin_coding_system_aliases(&ctx.coding_systems, vec![coding], SymbolMode::Positioned)
+        builtin_coding_system_aliases(ctx.coding_systems(), vec![coding], SymbolMode::Positioned)
             .unwrap()
             .is_cons()
     );
     wrong_symbol_operand(
-        builtin_coding_system_aliases(&ctx.coding_systems, vec![coding], SymbolMode::Bare),
+        builtin_coding_system_aliases(ctx.coding_systems(), vec![coding], SymbolMode::Bare),
         coding,
     );
 }
@@ -106,7 +106,7 @@ fn positioned_coding_property_keys_and_hook_values_honor_mode() {
     let hook = positioned(&mut ctx, "issue-554-hook");
     assert_eq!(
         builtin_coding_system_put(
-            &mut ctx.coding_systems,
+            ctx.coding_systems_mut(),
             vec![coding, property, hook],
             SymbolMode::Positioned,
         )
@@ -115,7 +115,7 @@ fn positioned_coding_property_keys_and_hook_values_honor_mode() {
     );
     assert_eq!(
         builtin_coding_system_get(
-            &ctx.coding_systems,
+            ctx.coding_systems(),
             vec![coding, property],
             SymbolMode::Positioned,
         )
@@ -124,7 +124,7 @@ fn positioned_coding_property_keys_and_hook_values_honor_mode() {
     );
     wrong_symbol_operand(
         builtin_coding_system_put(
-            &mut ctx.coding_systems,
+            ctx.coding_systems_mut(),
             vec![
                 Value::symbol("utf-8-unix"),
                 Value::symbol(":post-read-conversion"),
@@ -138,7 +138,7 @@ fn positioned_coding_property_keys_and_hook_values_honor_mode() {
         let property = positioned(&mut ctx, name);
         assert_eq!(
             builtin_coding_system_put(
-                &mut ctx.coding_systems,
+                ctx.coding_systems_mut(),
                 vec![coding, property, hook],
                 SymbolMode::Positioned,
             )
@@ -147,7 +147,7 @@ fn positioned_coding_property_keys_and_hook_values_honor_mode() {
         );
         wrong_symbol_operand(
             builtin_coding_system_put(
-                &mut ctx.coding_systems,
+                ctx.coding_systems_mut(),
                 vec![Value::symbol("utf-8-unix"), Value::symbol(name), hook],
                 SymbolMode::Bare,
             ),
@@ -169,14 +169,14 @@ fn positioned_coding_definition_resolves_nested_symbol_inputs() {
     args[11] = Value::list(vec![key, Value::fixnum(7)]);
     assert_eq!(
         builtin_define_coding_system_internal(
-            &mut ctx.coding_systems,
+            ctx.coding_systems_mut(),
             args.clone(),
             SymbolMode::Positioned
         )
         .unwrap(),
         Value::NIL
     );
-    let info = ctx.coding_systems.get("issue-554-defined").unwrap();
+    let info = ctx.coding_systems().get("issue-554-defined").unwrap();
     assert_eq!(info.coding_type, intern("utf-8"));
     assert_eq!(info.charset_list, vec![intern("ascii")]);
     assert_eq!(info.post_read_conversion, Some(intern("issue-554-hook")));
@@ -189,13 +189,13 @@ fn positioned_coding_definition_resolves_nested_symbol_inputs() {
     // SAFETY: registration is complete; this noncalling recorder only writes
     // coding metadata values/properties, preserving canonical dispatch state.
     unsafe {
-        ctx.obarray.with_legacy_value_write(|obarray| {
+        ctx.obarray_view_mut().with_legacy_value_write(|obarray| {
             let mut vars = crate::emacs_core::eval::VariableStore::new(obarray, None);
             record_lisp_define_coding_system_internal(&mut vars, &args, SymbolMode::Positioned);
         });
     }
     let names = ctx
-        .obarray
+        .obarray()
         .symbol_value_copied("coding-system-list")
         .unwrap();
     assert!(
@@ -205,7 +205,7 @@ fn positioned_coding_definition_resolves_nested_symbol_inputs() {
     );
     wrong_symbol_operand(
         builtin_define_coding_system_internal(
-            &mut ctx.coding_systems,
+            ctx.coding_systems_mut(),
             args.clone(),
             SymbolMode::Bare,
         ),
@@ -213,7 +213,7 @@ fn positioned_coding_definition_resolves_nested_symbol_inputs() {
     );
     args[0] = Value::symbol("issue-554-bare-name");
     wrong_symbol_operand(
-        builtin_define_coding_system_internal(&mut ctx.coding_systems, args, SymbolMode::Bare),
+        builtin_define_coding_system_internal(ctx.coding_systems_mut(), args, SymbolMode::Bare),
         coding_type,
     );
 }
@@ -224,59 +224,71 @@ fn positioned_coding_alias_priority_and_terminal_setters_honor_mode() {
     let alias = positioned(&mut ctx, "issue-554-alias");
     let coding = positioned(&mut ctx, "utf-8-unix");
     builtin_define_coding_system_alias(
-        &mut ctx.coding_systems,
+        ctx.coding_systems_mut(),
         vec![alias, coding],
         SymbolMode::Positioned,
     )
     .unwrap();
     assert_eq!(
-        ctx.coding_systems.resolve("issue-554-alias"),
-        ctx.coding_systems.resolve("utf-8-unix")
+        ctx.coding_systems().resolve("issue-554-alias"),
+        ctx.coding_systems().resolve("utf-8-unix")
     );
     wrong_symbol_operand(
         builtin_define_coding_system_alias(
-            &mut ctx.coding_systems,
+            ctx.coding_systems_mut(),
             vec![alias, coding],
             SymbolMode::Bare,
         ),
         alias,
     );
     builtin_set_coding_system_priority(
-        &mut ctx.coding_systems,
+        ctx.coding_systems_mut(),
         vec![coding],
         SymbolMode::Positioned,
     )
     .unwrap();
     wrong_symbol_operand(
-        builtin_set_coding_system_priority(&mut ctx.coding_systems, vec![coding], SymbolMode::Bare),
+        builtin_set_coding_system_priority(
+            ctx.coding_systems_mut(),
+            vec![coding],
+            SymbolMode::Bare,
+        ),
         coding,
     );
     builtin_set_keyboard_coding_system(
-        &mut ctx.coding_systems,
+        ctx.coding_systems_mut(),
         vec![coding],
         SymbolMode::Positioned,
     )
     .unwrap();
     builtin_set_terminal_coding_system(
-        &mut ctx.coding_systems,
+        ctx.coding_systems_mut(),
         vec![coding],
         SymbolMode::Positioned,
     )
     .unwrap();
     assert_eq!(
-        ctx.coding_systems.keyboard_coding_sym(),
+        ctx.coding_systems().keyboard_coding_sym(),
         intern("utf-8-unix")
     );
     assert_eq!(
-        ctx.coding_systems.terminal_coding_sym(),
+        ctx.coding_systems().terminal_coding_sym(),
         intern("utf-8-unix")
     );
     wrong_symbol_operand(
-        builtin_set_keyboard_coding_system(&mut ctx.coding_systems, vec![coding], SymbolMode::Bare),
+        builtin_set_keyboard_coding_system(
+            ctx.coding_systems_mut(),
+            vec![coding],
+            SymbolMode::Bare,
+        ),
         coding,
     );
     wrong_symbol_operand(
-        builtin_set_terminal_coding_system(&mut ctx.coding_systems, vec![coding], SymbolMode::Bare),
+        builtin_set_terminal_coding_system(
+            ctx.coding_systems_mut(),
+            vec![coding],
+            SymbolMode::Bare,
+        ),
         coding,
     );
 }
@@ -296,11 +308,11 @@ fn positioned_coding_region_list_and_eol_helper_honor_mode() {
     assert!(builtin_check_coding_systems_region(&mut ctx, args).is_err());
     let undecided = positioned(&mut ctx, "utf-8");
     assert_eq!(
-        coding_inherit_eol_type_unix(&ctx.coding_systems, undecided, SymbolMode::Positioned),
+        coding_inherit_eol_type_unix(ctx.coding_systems(), undecided, SymbolMode::Positioned),
         Value::symbol("utf-8-unix")
     );
     assert_eq!(
-        coding_inherit_eol_type_unix(&ctx.coding_systems, undecided, SymbolMode::Bare),
+        coding_inherit_eol_type_unix(ctx.coding_systems(), undecided, SymbolMode::Bare),
         undecided
     );
 }

@@ -5595,6 +5595,14 @@ impl Context {
         &self.coding_systems
     }
 
+    /// Mutable access for the callers that pass the manager to a coding-system
+    /// builtin (the re-homed coding tests drive the real builtins).
+    #[doc(hidden)]
+    #[inline]
+    pub fn coding_systems_mut(&mut self) -> &mut CodingSystemManager {
+        &mut self.coding_systems
+    }
+
     /// Split borrow: the frame manager and the buffer manager, mutably.
     ///
     /// One method borrows the whole Context; callers that need both managers

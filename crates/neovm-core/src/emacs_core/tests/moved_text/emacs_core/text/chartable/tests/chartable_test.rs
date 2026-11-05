@@ -104,7 +104,7 @@ fn builtin_make_char_table_checks_symbol_and_extra_slot_property_like_gnu() {
     );
 
     let purpose = Value::symbol(intern_uninterned("neo-extra"));
-    eval.obarray
+    eval.obarray_mut()
         .put_property_id(
             purpose.as_bare_symbol_id().unwrap(),
             intern("char-table-extra-slots"),
@@ -117,7 +117,7 @@ fn builtin_make_char_table_checks_symbol_and_extra_slot_property_like_gnu() {
         "wholenump",
     );
 
-    eval.obarray
+    eval.obarray_mut()
         .put_property_id(
             purpose.as_bare_symbol_id().unwrap(),
             intern("char-table-extra-slots"),
@@ -1780,7 +1780,7 @@ fn unicode_property_table_internal_returns_alist_char_table() {
     ])
     .unwrap();
     builtin_set_char_table_range(vec![table, Value::fixnum(65), Value::fixnum(1)], None).unwrap();
-    eval.obarray.set_symbol_value(
+    eval.obarray_mut().set_symbol_value(
         "char-code-property-alist",
         Value::list(vec![Value::cons(prop, table)]),
     );

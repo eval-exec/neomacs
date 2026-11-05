@@ -461,9 +461,11 @@ fn kill_buffer_refuses_the_buffer_shown_in_the_minibuffer_window() {
     let victim = eval.edit.buffers.create_buffer("victim");
     eval.edit.buffers.set_current(scratch);
 
-    let fid = eval.frames.create_frame("F1", 800, 600, scratch);
-    assert!(eval.frames.select_frame(fid));
-    eval.frames
+    let fid = eval
+        .frame_manager_mut()
+        .create_frame("F1", 800, 600, scratch);
+    assert!(eval.frame_manager_mut().select_frame(fid));
+    eval.frame_manager_mut()
         .get_mut(fid)
         .expect("frame")
         .minibuffer_leaf
@@ -483,7 +485,7 @@ fn kill_buffer_refuses_the_buffer_shown_in_the_minibuffer_window() {
         "victim must stay live"
     );
     let shown = eval
-        .frames
+        .frame_manager()
         .get(fid)
         .expect("frame")
         .minibuffer_leaf
@@ -512,8 +514,10 @@ fn kill_buffer_minibuffer_guard_runs_after_the_kill_buffer_hook() {
     let victim = eval.edit.buffers.create_buffer("victim-hooked");
     eval.edit.buffers.set_current(scratch);
 
-    let fid = eval.frames.create_frame("F1", 800, 600, scratch);
-    assert!(eval.frames.select_frame(fid));
+    let fid = eval
+        .frame_manager_mut()
+        .create_frame("F1", 800, 600, scratch);
+    assert!(eval.frame_manager_mut().select_frame(fid));
 
     // The victim is not displayed in the minibuffer before the call; only the
     // hook puts it there.
@@ -537,7 +541,7 @@ fn kill_buffer_minibuffer_guard_runs_after_the_kill_buffer_hook() {
         "victim must stay live"
     );
     let shown = eval
-        .frames
+        .frame_manager()
         .get(fid)
         .expect("frame")
         .minibuffer_leaf

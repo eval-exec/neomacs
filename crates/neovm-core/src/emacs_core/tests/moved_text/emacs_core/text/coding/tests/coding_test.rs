@@ -136,7 +136,7 @@ fn detect_coding_region_highest() {
         .unwrap()
         .insert("abc");
     let result = builtin_detect_coding_region(
-        &eval.coding_systems,
+        eval.coding_systems(),
         &eval.edit.buffers,
         vec![Value::fixnum(1), Value::fixnum(4), Value::T],
         neovm_value::tagged::value::SymbolMode::Bare,
@@ -155,7 +155,7 @@ fn detect_coding_region_list() {
         .unwrap()
         .insert("abc");
     let result = builtin_detect_coding_region(
-        &eval.coding_systems,
+        eval.coding_systems(),
         &eval.edit.buffers,
         vec![Value::fixnum(1), Value::fixnum(4)],
         neovm_value::tagged::value::SymbolMode::Bare,
@@ -171,7 +171,7 @@ fn detect_coding_region_rejects_too_many_args() {
     crate::test_utils::init_test_tracing();
     let eval = crate::test_utils::new_context();
     let result = builtin_detect_coding_region(
-        &eval.coding_systems,
+        eval.coding_systems(),
         &eval.edit.buffers,
         vec![Value::fixnum(1), Value::fixnum(100), Value::NIL, Value::NIL],
         neovm_value::tagged::value::SymbolMode::Bare,
@@ -185,7 +185,7 @@ fn detect_coding_region_rejects_non_integer_or_marker_bounds() {
     let eval = crate::test_utils::new_context();
     assert!(
         builtin_detect_coding_region(
-            &eval.coding_systems,
+            eval.coding_systems(),
             &eval.edit.buffers,
             vec![Value::string("a"), Value::fixnum(1)],
             neovm_value::tagged::value::SymbolMode::Bare
@@ -194,7 +194,7 @@ fn detect_coding_region_rejects_non_integer_or_marker_bounds() {
     );
     assert!(
         builtin_detect_coding_region(
-            &eval.coding_systems,
+            eval.coding_systems(),
             &eval.edit.buffers,
             vec![Value::fixnum(1), Value::string("b")],
             neovm_value::tagged::value::SymbolMode::Bare
@@ -203,7 +203,7 @@ fn detect_coding_region_rejects_non_integer_or_marker_bounds() {
     );
     assert!(
         builtin_detect_coding_region(
-            &eval.coding_systems,
+            eval.coding_systems(),
             &eval.edit.buffers,
             vec![Value::NIL, Value::fixnum(1)],
             neovm_value::tagged::value::SymbolMode::Bare
@@ -212,7 +212,7 @@ fn detect_coding_region_rejects_non_integer_or_marker_bounds() {
     );
     assert!(
         builtin_detect_coding_region(
-            &eval.coding_systems,
+            eval.coding_systems(),
             &eval.edit.buffers,
             vec![Value::fixnum(1), Value::NIL],
             neovm_value::tagged::value::SymbolMode::Bare
@@ -232,7 +232,7 @@ fn detect_coding_region_validates_accessible_region_like_gnu() {
         .insert("abc");
 
     let err = builtin_detect_coding_region(
-        &eval.coding_systems,
+        eval.coding_systems(),
         &eval.edit.buffers,
         vec![Value::fixnum(0), Value::fixnum(2)],
         neovm_value::tagged::value::SymbolMode::Bare,
@@ -408,7 +408,7 @@ fn text_quoting_and_conversion_style_basics() {
         Value::symbol("curve")
     );
     for style in ["grave", "straight", "curve"] {
-        eval.obarray
+        eval.obarray_mut()
             .set_symbol_value("text-quoting-style", Value::symbol(style));
         assert_eq!(
             builtin_text_quoting_style(&eval, vec![]).expect("text-quoting-style explicit style"),
@@ -416,7 +416,7 @@ fn text_quoting_and_conversion_style_basics() {
         );
     }
     for style in ["nil", "foo", "Curve"] {
-        eval.obarray
+        eval.obarray_mut()
             .set_symbol_value("text-quoting-style", Value::symbol(style));
         assert_eq!(
             builtin_text_quoting_style(&eval, vec![]).expect("text-quoting-style fallback"),
@@ -455,15 +455,15 @@ fn text_quoting_style_nil_reads_flag_and_standard_display_table() {
 
     // `if (!text_quoting_flag) return true;` (src/doc.c:642-643): grave, and
     // the display table is never consulted, whatever it holds.
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("internal--text-quoting-flag", Value::NIL);
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("standard-display-table", Value::T);
     assert_eq!(style(&eval), Value::symbol("grave"));
 
     // Flag set again: a display table whose U+2018 entry is exactly [?`]
     // resolves to grave (src/doc.c:646-649).
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("internal--text-quoting-flag", Value::T);
     let display_table = |entry: Value| {
         let table =
@@ -471,7 +471,7 @@ fn text_quoting_style_nil_reads_flag_and_standard_display_table() {
         ct_set_single(&table, 0x2018, entry);
         table
     };
-    eval.obarray.set_symbol_value(
+    eval.obarray_mut().set_symbol_value(
         "standard-display-table",
         display_table(Value::vector(vec![Value::fixnum(b'`' as i64)])),
     );
@@ -486,7 +486,7 @@ fn text_quoting_style_nil_reads_flag_and_standard_display_table() {
         Value::vector(vec![Value::fixnum(i64::from(b'`') | (22_i64 << 22))]),
         Value::string("`"),
     ] {
-        eval.obarray
+        eval.obarray_mut()
             .set_symbol_value("standard-display-table", display_table(entry));
         assert_eq!(style(&eval), Value::symbol("curve"), "entry {entry:?}");
     }
@@ -501,7 +501,7 @@ fn text_quoting_style_nil_reads_flag_and_standard_display_table() {
         0x2018,
         Value::vector(vec![Value::fixnum(b'`' as i64)]),
     );
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("standard-display-table", wrong_purpose);
     assert_eq!(style(&eval), Value::symbol("curve"));
 
@@ -512,7 +512,7 @@ fn text_quoting_style_nil_reads_flag_and_standard_display_table() {
         0x2018,
         Value::vector(vec![Value::fixnum(b'`' as i64)]),
     );
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("standard-display-table", wrong_extras);
     assert_eq!(style(&eval), Value::symbol("curve"));
 
@@ -521,13 +521,13 @@ fn text_quoting_style_nil_reads_flag_and_standard_display_table() {
     let parent = display_table(Value::vector(vec![Value::fixnum(b'`' as i64)]));
     let child = make_char_table_with_extra_slots(Value::symbol("display-table"), Value::NIL, 18);
     let _ = child.with_char_table_mut(|obj| obj.set_parent(parent));
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("standard-display-table", child);
     assert_eq!(style(&eval), Value::symbol("grave"));
 
     // The nil case of the variable is what consults these inputs; explicit
     // values never do (src/doc.c:666-671).
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("text-quoting-style", Value::symbol("straight"));
     assert_eq!(style(&eval), Value::symbol("straight"));
 }
@@ -537,7 +537,7 @@ fn text_quoting_style_variable_defaults_to_nil() {
     crate::test_utils::init_test_tracing();
     let eval = crate::test_utils::new_context();
     assert_eq!(
-        eval.obarray.symbol_value_copied("text-quoting-style"),
+        eval.obarray().symbol_value_copied("text-quoting-style"),
         Some(Value::NIL)
     );
 }

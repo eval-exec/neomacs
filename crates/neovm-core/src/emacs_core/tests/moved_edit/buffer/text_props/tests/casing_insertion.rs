@@ -50,7 +50,7 @@ fn category_front_stickiness_respects_positioned_symbol_equality() {
             vec![(0, 1), (1, 4)],
         ),
     ] {
-        ctx.obarray
+        ctx.obarray_mut()
             .put_property(
                 "gdm-casing-positioned-front-category",
                 "front-sticky",
@@ -58,7 +58,7 @@ fn category_front_stickiness_respects_positioned_symbol_equality() {
             )
             .unwrap();
         let context = CasingPropertyContext {
-            obarray: &ctx.obarray,
+            obarray: ctx.obarray(),
             controls: CasingPropertyControls {
                 equality,
                 ..controls(Value::NIL)

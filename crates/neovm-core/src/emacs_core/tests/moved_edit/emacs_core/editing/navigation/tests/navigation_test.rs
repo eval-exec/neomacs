@@ -415,7 +415,7 @@ fn bootstrap_beginning_and_end_of_buffer_match_simple_el() {
     crate::test_utils::init_test_tracing();
     let mut ev = gnu_simple_line_eval();
     let buf = ev.edit.buffers.current_buffer_id().expect("current buffer");
-    ev.frames.create_frame("F1", 800, 600, buf);
+    ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
 
     let ownership = eval_str(
         &mut ev,
@@ -734,7 +734,7 @@ fn test_use_region_p_is_available_after_bootstrap() {
     // use-region-p is a defun in simple.el, not autoloaded in GNU Emacs.
     let ev = runtime_startup_context();
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function("use-region-p")
         .expect("missing use-region-p startup function cell");
     assert!(

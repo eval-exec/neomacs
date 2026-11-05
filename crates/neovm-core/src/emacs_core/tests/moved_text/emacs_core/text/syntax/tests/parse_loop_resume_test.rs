@@ -47,7 +47,7 @@ fn a_scan_resumed_at_any_loop_top_answers_as_the_uninterrupted_scan() {
                     Value::bool_val(escapable),
                 )
                 .expect("comment-end-can-be-escaped");
-                eval.obarray
+                eval.obarray_mut()
                     .set_symbol_value("parse-sexp-lookup-properties", Value::bool_val(honor));
                 for _round in 0..12 {
                     let text = random_text(&mut rng, 40);
