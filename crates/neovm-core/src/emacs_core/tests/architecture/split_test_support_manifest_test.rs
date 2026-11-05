@@ -1,4 +1,8 @@
-//! A2: the additive value test surface is enabled only by core's dev edge.
+//! A2: a provider's test surface is enabled only from above, by a package
+//! `[dev-dependencies]` edge or by the enabling crate's own `test-support`
+//! feature forwarding to a lower provider's `test-support`. Enabling through
+//! a normal or build dependency is refused for every crate; the normal
+//! workspace dependencies (including core's) carry no test-support feature.
 //! This is test-side tooling: all Cargo targets/features are inspected, not
 //! merely the dependencies selected by this test process's configuration.
 use std::collections::{BTreeMap, BTreeSet};
@@ -10,7 +14,6 @@ use toml::Value;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ErrorCode {
-    DevEdgeCount,
     FeatureForwardEscape,
     FeatureMissing,
     ForeignEnabler,
@@ -337,6 +340,68 @@ fn dependency_tables(manifest: &Manifest) -> GuardResult<Vec<DependencyTable<'_>
     Ok(result)
 }
 
+/// Every workspace crate that declares a `test-support` feature is a
+/// provider. The feature name is the class-wide identity: a crate may not
+/// dev-enable or forward a provider's surface unless it sits above that
+/// provider.
+fn provider_features(
+    manifests: &[Manifest],
+) -> GuardResult<BTreeMap<String, BTreeMap<String, Vec<String>>>> {
+    let mut providers = BTreeMap::new();
+    for manifest in manifests {
+        let definitions = features(manifest)?;
+        if definitions.contains_key("test-support") {
+            providers.insert(manifest.package.clone(), definitions);
+        }
+    }
+    Ok(providers)
+}
+
+/// Production (normal) dependency edges only. Dev and build edges are
+/// excluded: a test-only consumer is not "above" its provider.
+fn normal_dependency_graph(
+    manifests: &[Manifest],
+    inherited: &toml::map::Map<String, Value>,
+) -> GuardResult<BTreeMap<String, BTreeSet<String>>> {
+    let mut graph = BTreeMap::new();
+    for manifest in manifests {
+        let mut packages = BTreeSet::new();
+        for table in dependency_tables(manifest)? {
+            if table.kind != DependencyKind::Normal {
+                continue;
+            }
+            for (alias, raw) in table.entries {
+                packages.insert(dependency(alias, raw, inherited)?.package);
+            }
+        }
+        graph.insert(manifest.package.clone(), packages);
+    }
+    Ok(graph)
+}
+
+/// Whether `package` reaches `provider` through normal dependencies.
+fn is_above(graph: &BTreeMap<String, BTreeSet<String>>, package: &str, provider: &str) -> bool {
+    let mut pending = vec![package.to_owned()];
+    let mut visited = BTreeSet::new();
+    while let Some(current) = pending.pop() {
+        if !visited.insert(current.clone()) {
+            continue;
+        }
+        let Some(dependencies) = graph.get(&current) else {
+            continue;
+        };
+        for dependency in dependencies {
+            if dependency == provider {
+                return true;
+            }
+            if graph.contains_key(dependency) {
+                pending.push(dependency.clone());
+            }
+        }
+    }
+    false
+}
+
 fn check_manifests(
     manifests: &[Manifest],
     inherited: &toml::map::Map<String, Value>,
@@ -360,88 +425,126 @@ fn check_manifests(
             format!("A2_SURFACE_STATE: {state:?}, feature declared={declared}"),
         ));
     }
-    for name in value_features
-        .keys()
-        .filter(|name| name.as_str() != "test-support")
-    {
-        if reaches_surface(name, &value_features, &mut BTreeSet::new())? {
-            return Err(GuardError::new(
-                ErrorCode::FeatureForwardEscape,
-                format!("A2_FEATURE_FORWARD_ESCAPE neovm-value/{name} -> test-support"),
-            ));
-        }
-    }
-    // Preserve Prep E's original prohibition on enabling the feature from
-    // workspace.dependencies, including an unused spec. It is not an owner-
-    // scoped dev edge and must not become a latent enabling route.
-    for (alias, raw) in inherited {
-        let dep = dependency(alias, raw, &toml::map::Map::new())?;
-        if dep.package == "neovm-value" {
-            for feature in &dep.features {
-                if reaches_surface(feature, &value_features, &mut BTreeSet::new())? {
-                    return Err(GuardError::new(
-                        ErrorCode::NonDevEnabler,
-                        format!("A2_NON_DEV_ENABLER workspace.dependencies alias={alias}"),
-                    ));
-                }
+    let providers = provider_features(manifests)?;
+    // No provider feature other than `test-support` may reach that provider's
+    // own test surface. This covers `default` and every product feature.
+    for (provider, definitions) in &providers {
+        for name in definitions
+            .keys()
+            .filter(|name| name.as_str() != "test-support")
+        {
+            if reaches_surface(name, definitions, &mut BTreeSet::new())? {
+                return Err(GuardError::new(
+                    ErrorCode::FeatureForwardEscape,
+                    format!("A2_FEATURE_FORWARD_ESCAPE {provider}/{name} -> test-support"),
+                ));
             }
         }
     }
-    let mut permitted_edges = 0;
+    // Preserve Prep E's original prohibition on enabling a provider's surface
+    // from workspace.dependencies, including an unused spec. It is not an
+    // owner-scoped dev edge and must not become a latent enabling route.
+    for (alias, raw) in inherited {
+        let dep = dependency(alias, raw, &toml::map::Map::new())?;
+        let Some(definitions) = providers.get(&dep.package) else {
+            continue;
+        };
+        for feature in &dep.features {
+            if reaches_surface(feature, definitions, &mut BTreeSet::new())? {
+                return Err(GuardError::new(
+                    ErrorCode::NonDevEnabler,
+                    format!(
+                        "A2_NON_DEV_ENABLER workspace.dependencies alias={alias} -> {}",
+                        dep.package
+                    ),
+                ));
+            }
+        }
+    }
+    let graph = normal_dependency_graph(manifests, inherited)?;
     for manifest in manifests {
-        let mut value_aliases = BTreeSet::new();
+        let above_provider = |provider: &str| is_above(&graph, &manifest.package, provider);
+        let mut aliases: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut normal_aliases: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for table in dependency_tables(manifest)? {
             let kind = table.kind;
             for (alias, raw) in table.entries {
                 let dep = dependency(alias, raw, inherited)?;
-                if dep.package != "neovm-value" {
+                let Some(definitions) = providers.get(&dep.package) else {
                     continue;
+                };
+                aliases
+                    .entry(dep.package.clone())
+                    .or_default()
+                    .insert(alias.clone());
+                if kind == DependencyKind::Normal {
+                    normal_aliases
+                        .entry(dep.package.clone())
+                        .or_default()
+                        .insert(alias.clone());
                 }
-                value_aliases.insert(alias.clone());
                 let direct = dep.features.iter().any(|f| f == "test-support");
                 let indirect = dep
                     .features
                     .iter()
                     .filter(|f| f.as_str() != "test-support")
-                    .map(|f| reaches_surface(f, &value_features, &mut BTreeSet::new()))
+                    .map(|f| reaches_surface(f, definitions, &mut BTreeSet::new()))
                     .collect::<GuardResult<Vec<_>>>()?
                     .into_iter()
                     .any(|v| v);
                 let default = dep.defaults
-                    && value_features.contains_key("default")
-                    && reaches_surface("default", &value_features, &mut BTreeSet::new())?;
-                if direct || indirect || default {
-                    if manifest.package != "neovm-core" {
-                        return Err(GuardError::new(
-                            ErrorCode::ForeignEnabler,
-                            format!(
-                                "A2_FOREIGN_ENABLER {} {kind:?} alias={alias} at {}",
-                                manifest.package,
-                                manifest.path.display()
-                            ),
-                        ));
-                    }
-                    if kind != DependencyKind::Dev || table.scope != DependencyScope::Package {
-                        return Err(GuardError::new(
-                            ErrorCode::NonDevEnabler,
-                            format!(
-                                "A2_NON_DEV_ENABLER {} {:?} {kind:?} alias={alias} at {}",
-                                manifest.package,
-                                table.scope,
-                                manifest.path.display()
-                            ),
-                        ));
-                    }
-                    permitted_edges += 1;
+                    && definitions.contains_key("default")
+                    && reaches_surface("default", definitions, &mut BTreeSet::new())?;
+                if !(direct || indirect || default) {
+                    continue;
+                }
+                if kind != DependencyKind::Dev || table.scope != DependencyScope::Package {
+                    return Err(GuardError::new(
+                        ErrorCode::NonDevEnabler,
+                        format!(
+                            "A2_NON_DEV_ENABLER {} {:?} {kind:?} alias={alias} -> {} at {}",
+                            manifest.package,
+                            table.scope,
+                            dep.package,
+                            manifest.path.display()
+                        ),
+                    ));
+                }
+                if !above_provider(&dep.package) {
+                    return Err(GuardError::new(
+                        ErrorCode::ForeignEnabler,
+                        format!(
+                            "A2_FOREIGN_ENABLER {} is not above {} ({kind:?} alias={alias}) at {}",
+                            manifest.package,
+                            dep.package,
+                            manifest.path.display()
+                        ),
+                    ));
                 }
             }
         }
         for (feature, members) in features(manifest)? {
             for member in members {
-                if let Some((alias, requested)) = member.split_once('/') {
-                    if value_aliases.contains(alias.trim_end_matches('?'))
-                        && reaches_surface(requested, &value_features, &mut BTreeSet::new())?
+                let Some((alias, requested)) = member.split_once('/') else {
+                    continue;
+                };
+                let alias = alias.trim_end_matches('?');
+                for (provider, definitions) in &providers {
+                    if !aliases
+                        .get(provider)
+                        .is_some_and(|names| names.contains(alias))
                     {
+                        continue;
+                    }
+                    if !reaches_surface(requested, definitions, &mut BTreeSet::new())? {
+                        continue;
+                    }
+                    let downward = feature == "test-support"
+                        && normal_aliases
+                            .get(provider)
+                            .is_some_and(|names| names.contains(alias))
+                        && above_provider(provider);
+                    if !downward {
                         return Err(GuardError::new(
                             ErrorCode::FeatureForwardEscape,
                             format!(
@@ -454,13 +557,7 @@ fn check_manifests(
             }
         }
     }
-    match (state, permitted_edges) {
-        (SurfaceState::Absent, 0) | (SurfaceState::Present, 1) => Ok(()),
-        _ => Err(GuardError::new(
-            ErrorCode::DevEdgeCount,
-            format!("A2_DEV_EDGE_COUNT {state:?}: {permitted_edges}"),
-        )),
-    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -867,7 +964,7 @@ fn workspace_inputs() -> GuardResult<(Vec<Manifest>, toml::map::Map<String, Valu
 }
 
 #[test]
-fn architecture_test_support_is_enabled_only_by_core_dev_dependencies() {
+fn architecture_test_support_is_enabled_only_from_above_the_provider() {
     let state =
         SurfaceState::parse(include_str!("test_support_surface_state.tsv")).expect("A2 state data");
     let (manifests, inherited, source) = workspace_inputs().expect("complete workspace metadata");
@@ -893,21 +990,22 @@ fn fixture(core_edges: &str, extra: &str) -> Vec<Manifest> {
     .collect()
 }
 
+/// The normal edge that puts a crate above neovm-value. Every real provider
+/// crate has one; a dev-only consumer does not.
+const NORMAL: &str = "[dependencies]\nlower={package='neovm-value'}\n";
 const DEV: &str = "[dev-dependencies]\nlower={package='neovm-value',features=['test-support']}\n";
 const GATED: &str = "#[cfg(feature=\"test-support\")] pub mod test_support {}";
 
 #[test]
 fn architecture_a2_normal_dependency_mutation_red_then_restored_green() {
     let inherited = toml::map::Map::new();
-    let good = fixture(DEV, "");
+    let good = fixture(&format!("{NORMAL}{DEV}"), "");
     assert_eq!(
         check_manifests(&good, &inherited, SurfaceState::Present),
         Ok(())
     );
     let bad = fixture(
-        &format!(
-            "{DEV}[dependencies]\nlower={{package='neovm-value',features=['test-support']}}\n"
-        ),
+        "[dependencies]\nlower={package='neovm-value',features=['test-support']}\n",
         "",
     );
     let error = check_manifests(&bad, &inherited, SurfaceState::Present)
@@ -943,7 +1041,7 @@ fn architecture_a2_rejects_renamed_target_and_foreign_enablers() {
     let inherited = toml::map::Map::new();
     let target = fixture(
         &format!(
-            "{DEV}[target.'cfg(unix)'.dependencies]\nv={{package='neovm-value',features=['test-support']}}\n"
+            "{NORMAL}{DEV}[target.'cfg(unix)'.dependencies]\nv={{package='neovm-value',features=['test-support']}}\n"
         ),
         "",
     );
@@ -953,7 +1051,7 @@ fn architecture_a2_rejects_renamed_target_and_foreign_enablers() {
             .is(ErrorCode::NonDevEnabler)
     );
     let foreign = fixture(
-        DEV,
+        &format!("{NORMAL}{DEV}"),
         "[dev-dependencies]\nv={package='neovm-value',features=['test-support']}\n",
     );
     assert!(
@@ -975,7 +1073,7 @@ fn architecture_a2_rejects_forwarding_inheritance_and_state_regression() {
             .is(ErrorCode::NonDevEnabler)
     );
     let forward = fixture(
-        &format!("{DEV}[features]\nmy-tests=['lower?/test-support']\n"),
+        &format!("{NORMAL}{DEV}[features]\nmy-tests=['lower?/test-support']\n"),
         "",
     );
     assert!(
@@ -983,7 +1081,7 @@ fn architecture_a2_rejects_forwarding_inheritance_and_state_regression() {
             .expect_err("feature forward")
             .is(ErrorCode::FeatureForwardEscape)
     );
-    let good = fixture(DEV, "");
+    let good = fixture(&format!("{NORMAL}{DEV}"), "");
     assert!(
         check_manifests(&good, &toml::map::Map::new(), SurfaceState::Absent)
             .expect_err("surface phase cannot regress")
@@ -1052,7 +1150,7 @@ fn architecture_a2_preserves_workspace_and_default_feature_refusals() {
     let inherited: Value =
         toml::from_str("lower={package='neovm-value',features=['test-support']}").expect("fixture");
     let inherited = inherited.as_table().expect("table");
-    let normal = fixture(DEV, "");
+    let normal = fixture(&format!("{NORMAL}{DEV}"), "");
     assert!(
         check_manifests(&normal, inherited, SurfaceState::Present)
             .expect_err("even unused workspace enabler must be refused")
@@ -1076,9 +1174,11 @@ fn architecture_a2_preserves_workspace_and_default_feature_refusals() {
 }
 
 #[test]
-fn architecture_a2_target_dev_edge_cannot_replace_the_root_dev_edge() {
+fn architecture_a2_target_dev_edges_are_never_sanctioned() {
     let target_only = fixture(
-        "[target.'cfg(unix)'.dev-dependencies]\nv={package='neovm-value',features=['test-support']}\n",
+        &format!(
+            "{NORMAL}[target.'cfg(unix)'.dev-dependencies]\nv={{package='neovm-value',features=['test-support']}}\n"
+        ),
         "",
     );
     assert!(
@@ -1086,4 +1186,89 @@ fn architecture_a2_target_dev_edge_cannot_replace_the_root_dev_edge() {
             .expect_err("a target dev edge is not the signed package dev edge")
             .is(ErrorCode::NonDevEnabler)
     );
+}
+
+#[test]
+fn architecture_a2_accepts_dev_edges_and_forwards_from_above() {
+    let inherited = toml::map::Map::new();
+    let core = fixture(&format!("{NORMAL}{DEV}"), "");
+    assert_eq!(
+        check_manifests(&core, &inherited, SurfaceState::Present),
+        Ok(())
+    );
+    // A non-core crate that sits above the provider may dev-enable it.
+    let enabled = fixture(
+        NORMAL,
+        "[dependencies]\nlower={package='neovm-value'}\n\
+         [dev-dependencies]\nlower={package='neovm-value',features=['test-support']}\n",
+    );
+    assert_eq!(
+        check_manifests(&enabled, &inherited, SurfaceState::Present),
+        Ok(())
+    );
+    // ... and may forward the provider's surface from its own test-support.
+    let forwarded = fixture(
+        NORMAL,
+        "[dependencies]\nlower={package='neovm-value'}\n\
+         [features]\ntest-support=['lower/test-support']\n",
+    );
+    assert_eq!(
+        check_manifests(&forwarded, &inherited, SurfaceState::Present),
+        Ok(())
+    );
+}
+
+#[test]
+fn architecture_a2_rules_apply_to_every_provider() {
+    let provider = |consumer: &str| -> Vec<Manifest> {
+        [
+            ("neovm-value", "[features]\ntest-support=[]\n"),
+            (
+                "neovm-text",
+                "[features]\ntest-support=['neovm-value/test-support']\n\
+                 [dependencies]\nvalue={package='neovm-value'}\n",
+            ),
+            (
+                "neovm-core",
+                "[dependencies]\nvalue={package='neovm-value'}\ntext={package='neovm-text'}\n",
+            ),
+            ("consumer", consumer),
+        ]
+        .into_iter()
+        .map(|(name, tail)| {
+            Manifest::parse(
+                name,
+                PathBuf::from(format!("{name}/Cargo.toml")),
+                &format!("[package]\nname='{name}'\n{tail}"),
+            )
+            .expect("fixture TOML")
+        })
+        .collect()
+    };
+    let inherited = toml::map::Map::new();
+    // A normal/build dependency may not enable a higher provider's surface,
+    // even from a crate that is above it.
+    for enabling in [
+        "[dependencies]\ntext={package='neovm-text',features=['test-support']}\n",
+        "[build-dependencies]\ntext={package='neovm-text',features=['test-support']}\n",
+    ] {
+        let error = check_manifests(&provider(enabling), &inherited, SurfaceState::Present)
+            .expect_err("only a package dev edge may enable a provider surface");
+        assert!(error.is(ErrorCode::NonDevEnabler), "{error}");
+    }
+    // The same edge is allowed as a dev dependency from above...
+    let dev = provider(
+        "[dependencies]\ntext={package='neovm-text'}\n\
+         [dev-dependencies]\ntext={package='neovm-text',features=['test-support']}\n",
+    );
+    assert_eq!(
+        check_manifests(&dev, &inherited, SurfaceState::Present),
+        Ok(())
+    );
+    // ... but a dev-only consumer is still below the provider it enables.
+    let foreign =
+        provider("[dev-dependencies]\ntext={package='neovm-text',features=['test-support']}\n");
+    let error = check_manifests(&foreign, &inherited, SurfaceState::Present)
+        .expect_err("a dev-only consumer is not above the provider");
+    assert!(error.is(ErrorCode::ForeignEnabler), "{error}");
 }
