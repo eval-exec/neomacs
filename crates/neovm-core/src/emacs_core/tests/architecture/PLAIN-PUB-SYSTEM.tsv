@@ -685,3 +685,11 @@ crates/neovm-system/src/emacs_core/system/tls/mod.rs	fn	fn format_x509_certifica
 crates/neovm-system/src/emacs_core/system/tls/mod.rs	fn	fn gnutls_available_capabilities
 crates/neovm-system/src/emacs_core/system/tls/mod.rs	struct	struct CertificateFormatError
 crates/neovm-system/src/lib.rs	mod	mod emacs_core
+crates/neovm-system/src/emacs_core/system/errno/mod.rs	use	use neovm_value::system_vocab::errno::*
+crates/neovm-system/src/emacs_core/system/path_exec/mod.rs	use	use neovm_value::system_vocab::path_exec::*
+crates/neovm-system/src/emacs_core/system/platform/c_features/mod.rs	use	use neovm_value::system_vocab::c_features::*
+crates/neovm-system/src/emacs_core/system/platform/platform_facts.rs	use	use neovm_value::system_vocab::platform_facts::*
+crates/neovm-system/src/emacs_core/system/process/mod.rs	use	use bootstrap_vars::*
+crates/neovm-system/src/emacs_core/system/process/mod.rs	use	use builtins::*
+crates/neovm-system/src/emacs_core/system/process/mod.rs	use	use types::*
+crates/neovm-system/src/emacs_core/system/process/types.rs	use	use neovm_eval::emacs_core::eval::data::process_state::*
