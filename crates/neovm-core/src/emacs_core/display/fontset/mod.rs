@@ -1,4 +1,6 @@
-use super::charset::{charset_contains_char, charset_exists, charset_target_ranges};
+use super::charset::{
+    charset_canonical_name, charset_contains_char, charset_exists, charset_target_ranges,
+};
 use super::chartable::{for_each_non_nil_char_table_run, is_char_table};
 use super::error::{Flow, signal};
 use super::font::FontNameSpelling;
@@ -264,18 +266,35 @@ impl FontsetRegistry {
 }
 
 impl FontsetData {
+    /// The entries rendering tries for `code`, in GNU's charset-priority order.
+    fn specific_in_charset_order(&self, code: u32) -> SharedFontsetEntries {
+        self.find_range(code)
+            .map(|range| range.entries.in_charset_order())
+            .unwrap_or_default()
+    }
+
+    /// The fallback entries in GNU's charset-priority order.
+    fn fallback_in_charset_order(&self) -> SharedFontsetEntries {
+        self.fallback
+            .as_ref()
+            .map(SharedFontsetEntries::in_charset_order)
+            .unwrap_or_default()
+    }
+
     fn entries_for_char(&self, code: u32, purpose: FontsetLookupPurpose) -> Vec<FontSpecEntry> {
-        // Rendering tries entries in GNU's charset-priority order;
-        // `fontset-font` reports them in definition order, as GNU does.
-        let order = |entries: &SharedFontsetEntries| match purpose {
-            FontsetLookupPurpose::Rendering => entries.in_charset_order(),
-            FontsetLookupPurpose::Patterns => entries.clone(),
+        // `fontset-font` reports entries in definition order, as GNU does.
+        let (specific, fallback) = match purpose {
+            FontsetLookupPurpose::Rendering => (
+                self.specific_in_charset_order(code),
+                self.fallback_in_charset_order(),
+            ),
+            FontsetLookupPurpose::Patterns => (
+                self.find_range(code)
+                    .map(|range| range.entries.clone())
+                    .unwrap_or_default(),
+                self.fallback.clone().unwrap_or_default(),
+            ),
         };
-        let specific = self
-            .find_range(code)
-            .map(|range| order(&range.entries))
-            .unwrap_or_default();
-        let fallback = self.fallback.as_ref().map(order).unwrap_or_default();
         specific
             .iter()
             .chain(fallback.iter())
@@ -288,15 +307,8 @@ impl FontsetData {
         code: u32,
         max_entries: usize,
     ) -> Option<Vec<FontSpecEntry>> {
-        let specific = self
-            .find_range(code)
-            .map(|range| range.entries.in_charset_order())
-            .unwrap_or_default();
-        let fallback = self
-            .fallback
-            .as_ref()
-            .map(SharedFontsetEntries::in_charset_order)
-            .unwrap_or_default();
+        let specific = self.specific_in_charset_order(code);
+        let fallback = self.fallback_in_charset_order();
         let mut result = Vec::new();
         for (index, entry) in specific.iter().chain(fallback.iter()).enumerate() {
             if index >= max_entries {
@@ -1177,9 +1189,11 @@ fn lookup_font_encoding(
 
 fn font_encoding_definition(value: &Value) -> Option<FontDefinitionMetadata> {
     match value.kind() {
+        // GNU stores the encoding as a charset id (`CHARSET_SYMBOL_ID`), so an
+        // alias is resolved here, once, rather than at every lookup.
         ValueKind::Symbol(encoding) => {
-            charset_exists(resolve_sym(encoding)).then_some(FontDefinitionMetadata {
-                encoding,
+            charset_exists(resolve_sym(encoding)).then(|| FontDefinitionMetadata {
+                encoding: charset_canonical_name(encoding),
                 repertory: Some(FontRepertory::Charset(encoding)),
             })
         }
@@ -1188,6 +1202,7 @@ fn font_encoding_definition(value: &Value) -> Option<FontDefinitionMetadata> {
             if !charset_exists(resolve_sym(encoding)) {
                 return None;
             }
+            let encoding = charset_canonical_name(encoding);
             let repertory = value.cons_cdr();
             Some(FontDefinitionMetadata {
                 encoding,

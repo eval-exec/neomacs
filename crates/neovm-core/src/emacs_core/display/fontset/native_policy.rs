@@ -126,18 +126,18 @@ impl StoredFontsetEntry {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct SharedFontsetEntries(Arc<[StoredFontsetEntry]>);
 
-/// The preferred charsets: GNU's `Vcharset_ordered_list` up to
-/// `Vcharset_non_preferred_head`, published by the charset registry whenever
-/// its order changes (GNU bumps `charset_ordered_list_tick` there).  Each
-/// element holds one charset's canonical name and its aliases, since GNU
-/// compares charset ids.  Kept outside the fontset registry so a fontset
-/// restore cannot drop it, and process-wide like that registry so detached
-/// native workers read the same order.
-static CHARSET_PREFERENCE: RwLock<Vec<Vec<SymId>>> = RwLock::new(Vec::new());
+/// The preferred charsets by canonical name: GNU's `Vcharset_ordered_list`
+/// up to `Vcharset_non_preferred_head`, published by the charset registry
+/// whenever its order changes (GNU bumps `charset_ordered_list_tick` there).
+/// Fontset encodings are canonicalized when the entry is defined, as GNU
+/// stores a charset id, so names compare directly.  Kept outside the fontset
+/// registry so a fontset restore cannot drop it, and process-wide like that
+/// registry so detached native workers read the same order.
+static CHARSET_PREFERENCE: RwLock<Vec<SymId>> = RwLock::new(Vec::new());
 
 /// Record a new charset preference.  The font-selection revision changes with
 /// it, so every cached fontset lookup is re-resolved in the new order.
-pub(crate) fn publish_charset_preference(preferred: Vec<Vec<SymId>>) {
+pub(crate) fn publish_charset_preference(preferred: Vec<SymId>) {
     // The value is always a complete list, so a poisoned lock still holds a
     // usable one.
     if *CHARSET_PREFERENCE
@@ -184,7 +184,7 @@ impl SharedFontsetEntries {
                 FontSpecEntry::Font(spec) => spec.definition.as_ref().map_or(0, |definition| {
                     preferred
                         .iter()
-                        .position(|names| names.contains(&definition.encoding))
+                        .position(|charset| *charset == definition.encoding)
                         .unwrap_or(preferred.len())
                 }),
                 FontSpecEntry::ExplicitNone => 0,
@@ -239,15 +239,8 @@ impl CapturedFontsetChain {
     fn from_data(revision: FontSelectionRevision, data: &FontsetData, ch: char) -> Self {
         Self {
             revision,
-            specific: data
-                .find_range(ch as u32)
-                .map(|range| range.entries.in_charset_order())
-                .unwrap_or_default(),
-            fallback: data
-                .fallback
-                .as_ref()
-                .map(SharedFontsetEntries::in_charset_order)
-                .unwrap_or_default(),
+            specific: data.specific_in_charset_order(ch as u32),
+            fallback: data.fallback_in_charset_order(),
         }
     }
 

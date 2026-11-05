@@ -901,4 +901,53 @@ fn an_encoding_spelled_as_a_charset_alias_ranks_like_its_charset() {
         registry_names(&matching_entries_for_char('é')),
         ["iso10646-1", "iso8859-1"]
     );
+
+    // Re-pointing the alias later does not change the defined entry.
+    crate::emacs_core::charset::builtin_define_charset_alias(vec![
+        Value::symbol("neomacs-test-bmp"),
+        Value::symbol("iso-8859-1"),
+    ])
+    .expect("re-point the alias");
+    crate::emacs_core::charset::builtin_set_charset_priority(vec![Value::symbol("iso-8859-1")])
+        .expect("set-charset-priority");
+    assert_eq!(
+        registry_names(&matching_entries_for_char('é')),
+        ["iso8859-1", "iso10646-1"]
+    );
+}
+
+/// A context that is created (or a registry that is reset) does not replace
+/// the order published by `set-charset-priority`; only a priority change does.
+#[test]
+fn resetting_a_charset_registry_keeps_the_published_order() {
+    crate::test_utils::init_test_tracing();
+    reset_fontset_registry();
+    reset_charset_registry();
+    let encodings = Value::list(vec![
+        Value::cons(Value::string("iso8859-1"), Value::symbol("iso-8859-1")),
+        Value::cons(Value::string("iso10646-1"), Value::symbol("unicode-bmp")),
+    ]);
+    for registry in ["iso8859-1", "iso10646-1"] {
+        set_fontset_font(
+            &Value::T,
+            &Value::fixnum('é' as i64),
+            &Value::cons(Value::NIL, Value::string(registry)),
+            Some(&Value::symbol("append")),
+            None,
+            None,
+            Some(&encodings),
+        )
+        .expect("install a registry entry");
+    }
+    crate::emacs_core::charset::builtin_set_charset_priority(vec![Value::symbol("unicode-bmp")])
+        .expect("set-charset-priority");
+    let generation = fontset_generation();
+
+    reset_charset_registry();
+
+    assert_eq!(fontset_generation(), generation);
+    assert_eq!(
+        registry_names(&matching_entries_for_char('é')),
+        ["iso10646-1", "iso8859-1"]
+    );
 }
