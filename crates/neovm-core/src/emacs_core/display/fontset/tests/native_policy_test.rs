@@ -331,13 +331,16 @@ fn shared_capture_follows_the_preferred_charsets() {
             .collect()
     };
 
-    publish_charset_preference(&[intern("japanese-jisx0208"), intern("japanese-jisx0212")]);
+    publish_charset_preference(vec![
+        vec![intern("japanese-jisx0208")],
+        vec![intern("japanese-jisx0212")],
+    ]);
     assert_eq!(
         order(&data),
         names(&["jis", "gb", "big5", "STOP", "after-stop"])
     );
 
-    publish_charset_preference(&[intern("chinese-gb2312")]);
+    publish_charset_preference(vec![vec![intern("chinese-gb2312")]]);
     assert_eq!(
         order(&data),
         names(&["gb", "big5", "jis", "STOP", "after-stop"])

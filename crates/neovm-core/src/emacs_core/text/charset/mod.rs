@@ -732,12 +732,23 @@ impl CharsetRegistry {
     }
 
     /// The preferred charsets, GNU's `Vcharset_ordered_list` up to
-    /// `Vcharset_non_preferred_head`, by canonical name.
-    fn preferred_charsets(&self) -> Vec<SymId> {
+    /// `Vcharset_non_preferred_head`.  Each element is a charset's canonical
+    /// name followed by its aliases, so a fontset encoding spelled either way
+    /// gets the same rank.
+    fn preferred_charsets(&self) -> Vec<Vec<SymId>> {
         let end = self.non_preferred_head.unwrap_or(self.priority.len());
         self.priority[..end.min(self.priority.len())]
             .iter()
-            .map(|&name| self.resolve_name(name))
+            .map(|&name| {
+                let canonical = self.resolve_name(name);
+                let mut names = vec![canonical];
+                names.extend(
+                    self.aliases.keys().copied().filter(|&alias| {
+                        alias != canonical && self.resolve_name(alias) == canonical
+                    }),
+                );
+                names
+            })
             .collect()
     }
 
@@ -1231,7 +1242,7 @@ pub(crate) fn warm_carrier_charset_registry() {
 /// reorders fontset entries whenever `charset_ordered_list_tick` changes.
 fn publish_charset_preference() {
     let preferred = CHARSET_REGISTRY.with(|slot| slot.borrow().preferred_charsets());
-    crate::emacs_core::fontset::publish_charset_preference(&preferred);
+    crate::emacs_core::fontset::publish_charset_preference(preferred);
 }
 
 /// Reset charset registry to default state (called from Context::new).
@@ -2677,6 +2688,8 @@ fn builtin_define_charset_internal_with_symbols(args: Vec<Value>, mode: SymbolMo
         };
         reg.register(info);
     });
+    // GNU's `Fdefine_charset_internal` bumps `charset_ordered_list_tick`.
+    publish_charset_preference();
 
     Ok(Value::NIL)
 }
@@ -2830,6 +2843,7 @@ fn builtin_define_charset_alias_with_symbols(args: Vec<Value>, mode: SymbolMode)
     let target = require_known_charset(&args[1], mode)?;
     if let Some(id) = args[0].as_symbol_id(mode) {
         CHARSET_REGISTRY.with(|slot| slot.borrow_mut().define_alias(id, target));
+        publish_charset_preference();
     }
     Ok(Value::NIL)
 }

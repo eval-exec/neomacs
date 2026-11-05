@@ -9,7 +9,7 @@ use crate::face::{FontSlant, FontWeight, FontWidth};
 use std::borrow::Cow;
 use std::num::NonZeroU64;
 use std::ops::Deref;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, PoisonError, RwLock};
 
 /// Native spelling of a Lisp font name, without exposing storage sentinels.
 ///
@@ -128,23 +128,28 @@ pub(super) struct SharedFontsetEntries(Arc<[StoredFontsetEntry]>);
 
 /// The preferred charsets: GNU's `Vcharset_ordered_list` up to
 /// `Vcharset_non_preferred_head`, published by the charset registry whenever
-/// its priority changes (GNU bumps `charset_ordered_list_tick` there).  Kept
-/// outside the fontset registry so a fontset restore cannot drop it, and
-/// global so detached native workers read the same order.
-static CHARSET_PREFERENCE: RwLock<Vec<SymId>> = RwLock::new(Vec::new());
+/// its order changes (GNU bumps `charset_ordered_list_tick` there).  Each
+/// element holds one charset's canonical name and its aliases, since GNU
+/// compares charset ids.  Kept outside the fontset registry so a fontset
+/// restore cannot drop it, and process-wide like that registry so detached
+/// native workers read the same order.
+static CHARSET_PREFERENCE: RwLock<Vec<Vec<SymId>>> = RwLock::new(Vec::new());
 
 /// Record a new charset preference.  The font-selection revision changes with
 /// it, so every cached fontset lookup is re-resolved in the new order.
-pub(crate) fn publish_charset_preference(preferred: &[SymId]) {
+pub(crate) fn publish_charset_preference(preferred: Vec<Vec<SymId>>) {
+    // The value is always a complete list, so a poisoned lock still holds a
+    // usable one.
+    if *CHARSET_PREFERENCE
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        == preferred
     {
-        let Ok(mut slot) = CHARSET_PREFERENCE.write() else {
-            return;
-        };
-        if slot.as_slice() == preferred {
-            return;
-        }
-        *slot = preferred.to_vec();
+        return;
     }
+    *CHARSET_PREFERENCE
+        .write()
+        .unwrap_or_else(PoisonError::into_inner) = preferred;
     super::invalidate_font_selection_policy();
 }
 
@@ -165,29 +170,35 @@ impl SharedFontsetEntries {
     /// specs without an encoding, are not.  An `ExplicitNone` ends the chain,
     /// so only the entries before it are reordered.
     pub(super) fn in_charset_order(&self) -> Self {
-        let Ok(preferred) = CHARSET_PREFERENCE.read() else {
-            return self.clone();
-        };
-        let rank = |entry: &StoredFontsetEntry| match entry.original() {
-            FontSpecEntry::Font(spec) => spec.definition.as_ref().map_or(0, |definition| {
-                preferred
-                    .iter()
-                    .position(|charset| *charset == definition.encoding)
-                    .unwrap_or(preferred.len())
-            }),
-            FontSpecEntry::ExplicitNone => 0,
-        };
+        let preferred = CHARSET_PREFERENCE
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
         let end = self
             .0
             .iter()
             .position(|entry| matches!(entry.original(), FontSpecEntry::ExplicitNone))
             .unwrap_or(self.0.len());
-        let head = &self.0[..end];
-        if head.windows(2).all(|pair| rank(&pair[0]) <= rank(&pair[1])) {
+        let ranks: Vec<usize> = self.0[..end]
+            .iter()
+            .map(|entry| match entry.original() {
+                FontSpecEntry::Font(spec) => spec.definition.as_ref().map_or(0, |definition| {
+                    preferred
+                        .iter()
+                        .position(|names| names.contains(&definition.encoding))
+                        .unwrap_or(preferred.len())
+                }),
+                FontSpecEntry::ExplicitNone => 0,
+            })
+            .collect();
+        if ranks.is_sorted() {
             return self.clone();
         }
-        let mut ordered = head.to_vec();
-        ordered.sort_by_key(|entry| rank(entry));
+        let mut ordered: Vec<_> = ranks
+            .into_iter()
+            .zip(self.0[..end].iter().cloned())
+            .collect();
+        ordered.sort_by_key(|(rank, _)| *rank);
+        let mut ordered: Vec<_> = ordered.into_iter().map(|(_, entry)| entry).collect();
         ordered.extend_from_slice(&self.0[end..]);
         Self::from_stored_entries(ordered)
     }
