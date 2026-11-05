@@ -13,12 +13,12 @@ use std::time::{Duration, Instant};
 use neovm_eval::emacs_core::eval::keyboard::SpecialInputServiceOutcome;
 
 use super::error::Flow;
-use super::eval::GnuTimerTimestamp;
 use super::process::{
     ProcessId, ProcessOutputServiceOutcome, ProcessOutputServiceRequest, ProcessOutputWaitRequest,
     ProcessOutputWaitTiming, ProcessWaitBackendInterest, ProcessWaitEvents,
 };
 use crate::emacs_core::timer::TimerContextExt;
+use neovm_eval::emacs_core::eval::GnuTimerTimestamp;
 use neovm_eval::emacs_core::reader::KeyboardInputRuntime;
 
 /// Upper bound on the zero-time MINIMUM drain that follows a live read.
@@ -1161,7 +1161,7 @@ pub trait WaitContextExt {
     fn wait_block(&self, request: &WaitRequest, wait_time: Duration) -> WaitBlock;
 }
 
-impl WaitContextExt for super::eval::Context {
+impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
     fn service_wait_request_once(&mut self, request: &WaitRequest) -> Result<(), Flow> {
         let _ = self.service_wait_request_once_outcome(request)?;
         Ok(())

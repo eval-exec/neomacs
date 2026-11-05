@@ -7,10 +7,10 @@
 //! startup snapshot.
 
 use super::error::EvalResult;
-use super::eval::Context;
 use super::value::Value;
 use crate::heap_types::LispString;
 use neovm_edit::emacs_core::edit_host::EditHost;
+use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::emacs_core::eval::data::window_state::{Frame, FrameDisplayIdentity};
 use neovm_value::display_vocab::{FrameId, FrameQueryParam};
 use std::ffi::{OsStr, OsString};
@@ -76,8 +76,9 @@ pub(crate) fn install_host_environment_snapshot(eval: &mut Context) {
         obarray.make_special("initial-environment");
         obarray.make_special("process-environment");
     }
-    let initial_environment = super::builtins::builtin_copy_sequence(vec![process_environment])
-        .expect("copy the startup environment snapshot");
+    let initial_environment =
+        neovm_eval::emacs_core::builtins::builtin_copy_sequence(vec![process_environment])
+            .expect("copy the startup environment snapshot");
     eval.set_variable("initial-environment", initial_environment);
     eval.set_variable("process-environment", process_environment);
 }

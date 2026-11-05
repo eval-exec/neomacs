@@ -36,13 +36,13 @@ pub(crate) fn lisp_time_output_from_context(eval: &Context) -> Result<LispTimeOu
 }
 
 use super::error::{EvalResult, Flow, signal};
-use super::eval::Context;
 use super::intern::{intern, resolve_sym};
 use super::value::*;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_args;
 use crate::emacs_core::value::{ValueKind, VecLikeType};
 use malachite::integer::Integer;
+use neovm_eval::emacs_core::eval::Context;
 use std::cell::RefCell;
 use std::ffi::{CStr, OsString};
 use std::sync::{Mutex, OnceLock};

@@ -4,7 +4,6 @@
 //! this module so process management and Elisp builtins do not depend on
 //! rustls-specific types.
 
-use super::builtins::{EvalResult, signal};
 use super::error::Flow;
 use super::value::Value;
 use super::value::list_to_vec;
@@ -12,6 +11,7 @@ use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_args;
 use crate::tagged::value::SymbolMode;
 use base64::Engine;
+use neovm_eval::emacs_core::builtins::{EvalResult, signal};
 pub(crate) use neovm_eval::emacs_core::eval::data::process_tls::{RustlsTlsStream, TlsStream};
 use rustls_pki_types::{CertificateDer, pem::PemObject};
 use std::io::{Read, Write};

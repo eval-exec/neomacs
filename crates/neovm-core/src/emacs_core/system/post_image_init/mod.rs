@@ -43,9 +43,9 @@
 //!    emacs.c line ordering against the numbers screened from GNU's `main`.
 //!    An empty table fails that test rather than passing it vacuously.
 
-use super::eval::Context;
 use crate::Value;
 use neovm_edit::emacs_core::edit_host::EditHost;
+use neovm_eval::emacs_core::eval::Context;
 
 /// A compile-time constant GNU assigns to a Lisp variable in an `init_*`
 /// body.
@@ -1105,7 +1105,8 @@ fn as_directory(mut name: String) -> String {
 fn derive_exec_path_and_exec_directory(eval: &mut Context) {
     // GNU: decode_env_path ("EMACSPATH", PATH_EXEC, 0) -- the environment
     // variable wins, and the configured default stands in when it is unset.
-    let mut exec_tail = super::load::exec_path_dirs_from_os(std::env::var_os("EMACSPATH"));
+    let mut exec_tail =
+        neovm_eval::emacs_core::load::exec_path_dirs_from_os(std::env::var_os("EMACSPATH"));
     if exec_tail.is_empty()
         && let Some(path_exec) = super::path_exec::resolve()
     {
@@ -1125,7 +1126,7 @@ fn derive_exec_path_and_exec_directory(eval: &mut Context) {
     );
 
     // GNU: nconc2 (decode_env_path ("PATH", NULL, 0), Vexec_path).
-    let mut entries: Vec<Value> = super::load::exec_path_dirs_from_env()
+    let mut entries: Vec<Value> = neovm_eval::emacs_core::load::exec_path_dirs_from_env()
         .into_iter()
         .map(Value::unibyte_string)
         .collect();

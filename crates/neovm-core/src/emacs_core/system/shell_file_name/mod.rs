@@ -8,8 +8,8 @@
 use std::ffi::OsString;
 use std::path::Path;
 
-use super::eval::Context;
 use super::value::Value;
+use neovm_eval::emacs_core::eval::Context;
 
 const POSIX_SHELL: &str = "/bin/sh";
 const WINDOWS_SHELL_PROXY: &str = "cmdproxy.exe";

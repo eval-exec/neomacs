@@ -36,7 +36,7 @@ fn file_lock_error(context: &str, filename: &LispString, err: io::Error) -> Flow
 
 /// GNU `lock_file_1` takes the user from `Fuser_login_name (Qnil)` — the
 /// Lisp value, not the OS environment — substituting "" for a non-string.
-fn lock_user_name(eval: &super::eval::Context) -> String {
+fn lock_user_name(eval: &neovm_eval::emacs_core::eval::Context) -> String {
     eval.visible_variable_value_or_nil("user-login-name")
         .as_utf8_str()
         .unwrap_or("")
@@ -49,7 +49,7 @@ fn lock_user_name(eval: &super::eval::Context) -> String {
 /// for a non-string.  Reading the OS hostname here instead makes a
 /// same-(system-name) lock look like a foreign host whose staleness can
 /// never be verified.
-fn lock_host_name(eval: &super::eval::Context) -> String {
+fn lock_host_name(eval: &neovm_eval::emacs_core::eval::Context) -> String {
     eval.visible_variable_value_or_nil("system-name")
         .as_utf8_str()
         .unwrap_or("")
@@ -158,7 +158,7 @@ fn fallback_make_lock_file_name(path: &Path) -> Option<PathBuf> {
 /// because `buffer-file-truename` is stored abbreviated ("~/..."), so
 /// expanding before the truename lookup makes it miss its own buffer.
 fn make_lock_file_name(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     filename: &LispString,
 ) -> Result<Option<PathBuf>, Flow> {
     let filename = resolve_filename_lisp_for_eval(eval, filename);
@@ -444,7 +444,7 @@ enum LockFileTarget {
 }
 
 fn lock_file_target(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     filename: &LispString,
 ) -> Result<LockFileTarget, Flow> {
     if !eval
@@ -467,7 +467,7 @@ fn lock_file_target(
 /// signals (file-supersession, or the batch-mode "Cannot resolve conflict"
 /// error), which is what aborts the modification.  Never swallow it.
 fn check_supersession_threat(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     filename: &LispString,
     target: &LockFileTarget,
     host: &str,
@@ -505,7 +505,7 @@ fn check_supersession_threat(
 }
 
 fn lock_file_resolved(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     filename: &LispString,
 ) -> Result<Value, Flow> {
     let target = lock_file_target(eval, filename)?;
@@ -547,7 +547,7 @@ fn lock_file_resolved(
 }
 
 fn unlock_file_resolved(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     filename: &LispString,
 ) -> Result<Value, Flow> {
     let Some(lock_path) = make_lock_file_name(eval, filename)? else {
@@ -570,7 +570,7 @@ fn unlock_file_resolved(
 /// Keep this boundary separate from `lock_file_resolved`: internal native
 /// filesystem work must never receive a remote or otherwise magic filename.
 pub(crate) fn lock_file(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     filename: &LispString,
 ) -> Result<Value, Flow> {
     let operation = Value::symbol("lock-file");
@@ -594,7 +594,7 @@ pub(crate) fn lock_file(
 /// `unlock-file` itself never signals a file-error.  The handler path is
 /// deliberately outside that condition case, exactly as in GNU.
 pub(crate) fn unlock_file(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     filename: &LispString,
 ) -> Result<Value, Flow> {
     let operation = Value::symbol("unlock-file");
@@ -639,7 +639,10 @@ fn signal_payload_value(sig: &super::error::SignalData) -> Value {
 /// Handler-aware `file-locked-p` operation, corresponding to GNU
 /// `Ffile_locked_p`.  Preserve the handler's tri-state result: nil means
 /// unlocked, t means owned by this Emacs, and a string names another owner.
-fn file_locked_p(eval: &mut super::eval::Context, filename: &LispString) -> Result<Value, Flow> {
+fn file_locked_p(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    filename: &LispString,
+) -> Result<Value, Flow> {
     let operation = Value::symbol("file-locked-p");
     let handler = find_file_name_handler_lisp_for_eval(eval, filename, operation);
     if !handler.is_nil() {
@@ -663,14 +666,20 @@ fn file_locked_p(eval: &mut super::eval::Context, filename: &LispString) -> Resu
     }
 }
 
-pub(crate) fn builtin_lock_file(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_lock_file(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("lock-file", &args, 1)?;
     let filename = eval.expect_lisp_string(args[0])?;
     let filename = filename.clone();
     lock_file(eval, &filename)
 }
 
-pub(crate) fn builtin_unlock_file(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_unlock_file(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("unlock-file", &args, 1)?;
     let filename = eval.expect_lisp_string(args[0])?;
     let filename = filename.clone();
@@ -678,7 +687,7 @@ pub(crate) fn builtin_unlock_file(eval: &mut super::eval::Context, args: Vec<Val
 }
 
 pub(crate) fn builtin_file_locked_p(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("file-locked-p", &args, 1)?;
@@ -687,13 +696,16 @@ pub(crate) fn builtin_file_locked_p(
     file_locked_p(eval, &filename)
 }
 
-pub(crate) fn builtin_lock_buffer(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_lock_buffer(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args_range("lock-buffer", &args, 0, 1)?;
     let filename = if let Some(filename) = args.first() {
         if filename.is_nil() {
             None
         } else {
-            Some(super::builtins::expect_lisp_string(filename)?.clone())
+            Some(neovm_eval::emacs_core::builtins::expect_lisp_string(filename)?.clone())
         }
     } else {
         let current = eval
@@ -721,7 +733,7 @@ pub(crate) fn builtin_lock_buffer(eval: &mut super::eval::Context, args: Vec<Val
 }
 
 pub(crate) fn builtin_unlock_buffer(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("unlock-buffer", &args, 0)?;

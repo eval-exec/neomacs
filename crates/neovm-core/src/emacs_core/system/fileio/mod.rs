@@ -26,12 +26,12 @@ use crate::buffer::{
 use crate::heap_types::LispString;
 
 use super::error::{EvalResult, Flow, signal};
-use super::eval::Context;
 use super::intern::{intern, resolve_sym};
 use super::value::{
     OrderedRuntimeBindingMap, Value, ValueKind, VecLikeType, eq_value, list_to_vec,
 };
 use crate::emacs_core::intern::WellKnown;
+use neovm_eval::emacs_core::eval::Context;
 
 // The pure file-name expansion and file-coding helpers moved to eval data
 // (stage-4 K2 oracleb batch 4); the names the remaining system callers use
@@ -979,7 +979,7 @@ enum DirectoryFilesError {
         err: std::io::Error,
     },
     InvalidRegexp(String),
-    MatchSyntax(super::builtins::search::FastStringMatchError),
+    MatchSyntax(neovm_eval::emacs_core::builtins::search::FastStringMatchError),
 }
 
 #[cfg(test)]
@@ -991,7 +991,8 @@ fn directory_files(
     count: Option<usize>,
 ) -> Result<Vec<crate::heap_types::LispString>, DirectoryFilesError> {
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
-    let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(&eval);
+    let syntax =
+        neovm_eval::emacs_core::builtins::search::FastStringMatchSyntax::for_current_buffer(&eval);
     directory_files_with_decoder(
         &mut eval,
         dir,
@@ -1012,7 +1013,7 @@ fn directory_files_with_decoder(
     match_regex: Option<&crate::heap_types::LispString>,
     nosort: bool,
     count: Option<usize>,
-    syntax: super::builtins::search::FastStringMatchSyntax,
+    syntax: neovm_eval::emacs_core::builtins::search::FastStringMatchSyntax,
     decode_name: impl Fn(&Context, &[u8]) -> crate::heap_types::LispString,
 ) -> Result<Vec<crate::heap_types::LispString>, DirectoryFilesError> {
     let mut names = DirectoryNameSource::open(dir).map_err(DirectoryFilesError::Flow)?;
@@ -1039,7 +1040,7 @@ fn directory_files_with_decoder(
                     false,
                 )
                 .map_err(|error| match error {
-                    super::builtins::search::FastStringMatchError::Regexp(msg) => {
+                    neovm_eval::emacs_core::builtins::search::FastStringMatchError::Regexp(msg) => {
                         DirectoryFilesError::InvalidRegexp(format!(
                             "Invalid regexp \"{}\": {}",
                             crate::emacs_core::emacs_char::to_utf8_lossy(pattern.as_bytes()),
@@ -1773,7 +1774,7 @@ fn temporary_file_directory_for_eval(eval: &Context) -> Option<crate::heap_types
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn make_temp_file_impl(
-    eval: &super::eval::Context,
+    eval: &neovm_eval::emacs_core::eval::Context,
     temp_dir: &crate::heap_types::LispString,
     prefix: &crate::heap_types::LispString,
     dir_flag: bool,
@@ -1869,7 +1870,7 @@ fn create_private_temp_dir(path: &Path) -> std::io::Result<()> {
 }
 
 fn make_temp_file_internal_impl(
-    eval: &super::eval::Context,
+    eval: &neovm_eval::emacs_core::eval::Context,
     prefix: &crate::heap_types::LispString,
     kind: TempCreateKind,
     suffix: &crate::heap_types::LispString,
@@ -1968,7 +1969,7 @@ fn make_temp_file_internal_impl(
 }
 
 pub(crate) fn builtin_make_temp_file_internal(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("make-temp-file-internal", &args, 4)?;
@@ -2121,7 +2122,10 @@ pub(crate) fn builtin_expand_file_name(eval: &mut Context, args: Vec<Value>) -> 
 }
 
 /// (make-temp-name PREFIX) -> string
-pub(crate) fn builtin_make_temp_name(eval: &super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_make_temp_name(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("make-temp-name", &args, 1)?;
     let prefix = expect_lisp_string_strict(&args[0])?;
     let path = make_temp_file_internal_impl(
@@ -4546,7 +4550,7 @@ pub(crate) fn find_file_name_handler_lisp_for_eval(
     find_file_name_handler_lisp_with_values(
         eval.variables(),
         &eval.edit.buffers,
-        super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval),
+        neovm_eval::emacs_core::builtins::search::FastStringMatchSyntax::for_current_buffer(eval),
         filename,
         operation,
         eval.special_variable_value_by_id(file_name_handler_symbols().handler_alist),
@@ -4559,7 +4563,7 @@ pub(crate) fn find_file_name_handler_lisp_for_eval(
 fn find_file_name_handler_lisp_with_values(
     vars: VariableView<'_>,
     buffers: &crate::buffer::BufferManager,
-    syntax: super::builtins::search::FastStringMatchSyntax,
+    syntax: neovm_eval::emacs_core::builtins::search::FastStringMatchSyntax,
     filename: &crate::heap_types::LispString,
     operation: Value,
     handler_alist: Option<Value>,
@@ -4778,7 +4782,8 @@ pub(crate) fn builtin_directory_files(eval: &mut Context, args: Vec<Value>) -> E
         None
     };
 
-    let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
+    let syntax =
+        neovm_eval::emacs_core::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
     let files = directory_files_with_decoder(
         eval,
         &dir,
@@ -5686,7 +5691,10 @@ struct PreparedWriteRegion {
 }
 
 impl PreparedWriteRegion {
-    fn run_post_annotation_functions(&self, eval: &mut super::eval::Context) -> Result<(), Flow> {
+    fn run_post_annotation_functions(
+        &self,
+        eval: &mut neovm_eval::emacs_core::eval::Context,
+    ) -> Result<(), Flow> {
         let result = (|| {
             // GNU conses each newly selected annotation buffer onto the front,
             // so cleanup visits the most recent buffer first and the original
@@ -5698,7 +5706,7 @@ impl PreparedWriteRegion {
                 eval.switch_current_buffer(buffer)?;
                 let function =
                     eval.visible_variable_value_or_nil("write-region-post-annotation-function");
-                if super::builtins::value_is_function(eval, function) {
+                if neovm_eval::emacs_core::builtins::value_is_function(eval, function) {
                     let _ = eval.apply(function, vec![])?;
                 }
             }
@@ -5710,7 +5718,7 @@ impl PreparedWriteRegion {
 }
 
 fn prepare_write_region(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     original_buffer: BufferId,
     start: Value,
     end: Value,
@@ -5899,14 +5907,14 @@ impl ReadCodingDecision {
 /// `CALLN (Ffind_operation_coding_system, Qinsert_file_contents, ...)`
 /// (src/fileio.c:4415-4419, :5061-5065) including its `XCAR` of a cons answer.
 fn decide_file_name_coding_for_insert_file_contents(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     filename: crate::heap_types::LispString,
     visit: Value,
     beg: Value,
     end: Value,
     replace: Value,
 ) -> Result<Option<String>, Flow> {
-    let answer = super::builtins::builtin_find_operation_coding_system(
+    let answer = neovm_eval::emacs_core::builtins::builtin_find_operation_coding_system(
         eval,
         vec![
             Value::symbol("insert-file-contents"),
@@ -5926,7 +5934,7 @@ fn decide_file_name_coding_for_insert_file_contents(
 }
 
 fn decide_auto_coding_for_insert_file_contents(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     filename: crate::heap_types::LispString,
     bytes: &[u8],
 ) -> Result<Option<String>, Flow> {
@@ -5941,7 +5949,8 @@ fn decide_auto_coding_for_insert_file_contents(
         .buffers
         .find_buffer_by_name(" *code-converting-work*")
         .unwrap_or_else(|| eval.edit.buffers.create_buffer(" *code-converting-work*"));
-    let restore_and_finish = |eval: &mut super::eval::Context, result: EvalResult| {
+    let restore_and_finish = |eval: &mut neovm_eval::emacs_core::eval::Context,
+                              result: EvalResult| {
         if let Some(saved) = saved_current {
             eval.restore_current_buffer_if_live(saved);
         }
@@ -5987,7 +5996,7 @@ fn decide_auto_coding_for_insert_file_contents(
 }
 
 fn auto_coding_system_name(
-    eval: &super::eval::Context,
+    eval: &neovm_eval::emacs_core::eval::Context,
     value: Value,
 ) -> Result<Option<String>, Flow> {
     let symbol_mode = eval.symbol_mode();
@@ -6017,7 +6026,7 @@ fn auto_coding_system_name(
 }
 
 fn restore_empty_buffer_after_auto_coding_probe(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     buffer_id: crate::buffer::BufferId,
     saved_multibyte: bool,
     saved_undo_list: Value,
@@ -6072,7 +6081,7 @@ pub(crate) fn auto_coding_probe_bytes(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]
 }
 
 fn decide_auto_coding_for_empty_insert_file_contents(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     filename: crate::heap_types::LispString,
     bytes: &[u8],
     current_id: crate::buffer::BufferId,
@@ -6154,7 +6163,7 @@ fn decide_auto_coding_for_empty_insert_file_contents(
 /// at point. Returns a list of `(FILENAME LENGTH)`. Mirrors GNU's
 /// `Finsert_file_contents` (`src/fileio.c`).
 pub(crate) fn builtin_insert_file_contents(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("insert-file-contents", &args, 1)?;
@@ -6690,7 +6699,7 @@ fn inherit_buffer_default_eol(
 static BUFFER_FILE_CODING_SYSTEM: WellKnown = WellKnown::BufferFileCodingSystem;
 
 fn select_write_region_coding_system(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     buffer_id: crate::buffer::BufferId,
     from: Value,
     to: Value,
@@ -6712,7 +6721,7 @@ fn select_write_region_coding_system(
     // alias resolves to its coding system and an undecided end-of-line type
     // becomes the system's, which `last-coding-system-used' then reports
     // (`utf-8' -> `utf-8-unix', `latin-1' -> `iso-latin-1-unix').
-    let finish = |eval: &super::eval::Context, symbol: super::intern::SymId| {
+    let finish = |eval: &neovm_eval::emacs_core::eval::Context, symbol: super::intern::SymId| {
         let resolved = crate::emacs_core::coding::coding_inherit_eol_type_unix(
             &eval.coding_systems,
             Value::from_sym_id(symbol),
@@ -6849,7 +6858,7 @@ fn select_write_region_coding_system(
 /// nil, writes the entire buffer. Mirrors GNU `Fwrite_region`
 /// (`src/fileio.c`).
 pub(crate) fn builtin_write_region(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
@@ -6923,7 +6932,7 @@ pub(crate) fn builtin_write_region(
     // saved restriction, an annotation function's signal included; the
     // current buffer is deliberately NOT restored (GNU leaves a buffer an
     // annotation function selected current when it signals).
-    let mut restriction = super::eval::RestrictionScope::enter(eval);
+    let mut restriction = neovm_eval::emacs_core::eval::RestrictionScope::enter(eval);
     let result = write_region_without_handler(
         restriction.context(),
         &args,
@@ -6938,7 +6947,7 @@ pub(crate) fn builtin_write_region(
 /// The native half of `write-region`, run inside the caller's
 /// `RestrictionScope`.
 fn write_region_without_handler(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
     resolved: LispString,
     visit: WriteRegionVisit,
@@ -7153,7 +7162,7 @@ fn write_region_without_handler(
     if visit.reports_completion() && !eval.noninteractive() {
         let completion =
             WriteRegionCompletion::from_append_argument(args.get(3).copied().unwrap_or(Value::NIL));
-        crate::emacs_core::builtins::builtin_message(
+        neovm_eval::emacs_core::builtins::builtin_message(
             eval,
             &[
                 Value::string(completion.message_format()),
@@ -7171,7 +7180,7 @@ fn write_region_without_handler(
 /// Does not select the buffer.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_find_file_noselect(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("find-file-noselect", &args, 1)?;
@@ -7427,7 +7436,7 @@ fn auto_save_error(eval: &mut super::eval::Context, flow: &Flow) -> Result<(), F
 /// If NO-MESSAGE is non-nil, suppress the "Auto-saving..." message.
 /// If CURRENT is non-nil, only auto-save the current buffer.
 pub(crate) fn builtin_do_auto_save(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("do-auto-save", &args, 0)?;
