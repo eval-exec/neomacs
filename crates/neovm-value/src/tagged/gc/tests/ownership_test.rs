@@ -1825,63 +1825,6 @@ fn concurrent_claim_reaches_vector_slot_strings() {
 /// obarray symbol's value cell is discovered by the Stage 1b symbol-cell
 /// scan on the GC thread and must be claimed there.
 #[test]
-fn concurrent_claim_reaches_obarray_symbol_value_strings() {
-    crate::test_utils::init_test_tracing();
-    let mut ev = crate::emacs_core::eval::Context::new();
-    set_tagged_heap(&mut ev.tagged_heap);
-
-    // Interval-free string reachable ONLY via the symbol value cell.
-    let s = ev
-        .tagged_heap
-        .alloc_string(crate::heap_types::LispString::from_utf8("obarray-only"));
-    ev.obarray.set_symbol_value("neovm--str-claim-probe", s);
-
-    // Admit and begin before staging the obarray snapshot, as the actual
-    // handshake does. No direct root seed may replace this obarray-only sink.
-    // SAFETY: this Context is the heap/obarray's sole writer; there is no
-    // callback, safepoint or ownership handoff during start and publication.
-    let permit = unsafe { ev.tagged_heap.permit_concurrent_mark() }.unwrap();
-    let mut capture = permit.begin();
-    let snap = {
-        // SAFETY: the same admitted owner captures its matching obarray
-        // before worker publication; no other writer or callback can enter.
-        let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(capture.heap_mut()) };
-        ev.obarray.scan_snapshot(&world)
-    };
-    capture.heap_mut().set_pending_obarray_scan(snap);
-    capture.launch().unwrap();
-    while !ev.tagged_heap.concurrent_mark_done() {
-        std::thread::yield_now();
-    }
-    ev.tagged_heap.join_concurrent_mark();
-
-    let stats = ev.tagged_heap.sweep_stats();
-    assert!(
-        stats.last_concurrent_str_claimed >= 1,
-        "the obarray-value string must be claimed via the symbol-cell scan \
-         (claimed={})",
-        stats.last_concurrent_str_claimed,
-    );
-    // The claimed string is black — at THIS cycle's parity (the raw bit
-    // value alone is meaningless under parity marks).
-    assert!(unsafe {
-        (*(s.as_string_ptr().unwrap()))
-            .header
-            .is_marked_at(ev.tagged_heap.mark_parity)
-    });
-    // No sweep here: this bare-heap driver does not re-seed the Context
-    // roots at termination, so sweeping would free live Context objects.
-    // Claim + mark are the assertions under test (survival-under-sweep is
-    // covered by the vector-sink test); the heap frees everything at drop.
-}
-
-/// Gap 3: a dump-less heap enables the concurrent collector after its
-/// first completed STW collection (the bootstrap), and a full concurrent
-/// cycle on such a heap retains the rooted live set and reclaims garbage
-/// (mirrors `collect_exact_retains_rooted_and_frees_unrooted`). The dump
-/// span is empty (`dump_addr_lo/hi` = MAX/0), so the GC thread's dump
-/// check must never match and the remembered-set seeding must no-op.
-#[test]
 fn dumpless_heap_enables_concurrent_after_bootstrap_and_collects() {
     crate::test_utils::init_test_tracing();
     let mut heap = TaggedHeap::new();

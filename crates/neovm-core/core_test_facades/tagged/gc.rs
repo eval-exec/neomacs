@@ -45,3 +45,7 @@ mod marker_chain_unchain_tests;
 #[cfg(test)]
 #[path = "../../core_tests/tagged/gc/tests/symbol_barrier_test.rs"]
 mod symbol_barrier_tests;
+
+#[cfg(test)]
+#[path = "../../core_tests/tagged/gc/tests/ownership_obarray_claim_test.rs"]
+mod ownership_obarray_claim_tests;
