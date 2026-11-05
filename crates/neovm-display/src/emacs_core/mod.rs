@@ -58,11 +58,3 @@ mod shader_surface_test;
 #[cfg(test)]
 #[path = "display/video/tests/runtime_test.rs"]
 mod video_test;
-
-#[cfg(test)]
-#[path = "display/window_cmds/tests/window_system_preload_test.rs"]
-mod window_system_preload_test;
-
-#[cfg(test)]
-#[path = "display/xwidget/tests/runtime_test.rs"]
-mod xwidget_test;

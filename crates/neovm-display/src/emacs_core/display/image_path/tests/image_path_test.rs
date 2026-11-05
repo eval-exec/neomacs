@@ -6,7 +6,7 @@
 //! thread and the off-thread submission worker share.
 
 use super::*;
-use crate::emacs_core::fileio::expand_file_name;
+use neovm_eval::emacs_core::eval::data::file_name_expand::expand_file_name;
 use std::fs;
 use tempfile::tempdir;
 

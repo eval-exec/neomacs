@@ -1,5 +1,6 @@
 //! GNU frame.c candidate filtering and cyclic frame-list traversal.
 
+use crate::window::DisplayFrameManagerExt;
 use crate::window::{FrameId, FrameVisibility};
 use neovm_eval::emacs_core::eval::Context;
 use neovm_value::value::Value;
@@ -13,15 +14,21 @@ struct Frames {
 
 impl Frames {
     fn new() -> Self {
-        Self::with_context(Context::new())
+        Self::with_context(crate::test_utils::new_context())
     }
 
     fn with_context(mut eval: Context) -> Self {
-        let buffer = eval.buffers.create_buffer("*frame-cycle*");
-        eval.buffers.set_current(buffer);
-        let first = eval.frames.create_frame("first", 800, 600, buffer);
-        let second = eval.frames.create_frame("second", 800, 600, buffer);
-        let third = eval.frames.create_frame("third", 800, 600, buffer);
+        let buffer = eval.buffer_manager_mut().create_buffer("*frame-cycle*");
+        eval.buffer_manager_mut().set_current(buffer);
+        let first = eval
+            .frame_manager_mut()
+            .create_frame("first", 800, 600, buffer);
+        let second = eval
+            .frame_manager_mut()
+            .create_frame("second", 800, 600, buffer);
+        let third = eval
+            .frame_manager_mut()
+            .create_frame("third", 800, 600, buffer);
         for (name, id) in [
             ("cycle-first", first),
             ("cycle-second", second),
@@ -44,7 +51,7 @@ impl Frames {
 
     fn exclude(&mut self, id: FrameId) {
         self.eval
-            .frames
+            .frame_manager_mut()
             .get_mut(id)
             .unwrap()
             .set_parameter(Value::symbol("no-other-frame"), Value::T);
@@ -97,7 +104,11 @@ fn explicit_cycle_origin_does_not_change_current_selection() {
 #[test]
 fn ordinary_cycling_excludes_minibuffer_only_frames_but_other_filters_include_them() {
     let mut frames = Frames::new();
-    let frame = frames.eval.frames.get_mut(frames.third).unwrap();
+    let frame = frames
+        .eval
+        .frame_manager_mut()
+        .get_mut(frames.third)
+        .unwrap();
     frame.minibuffer_window = Some(frame.root_window().id());
     assert_eq!(
         frames.run(
@@ -130,10 +141,15 @@ fn no_other_frame_excludes_candidates_for_every_filter() {
 #[test]
 fn cycle_visibility_filter_distinguishes_icons_and_other_lisp_values() {
     let mut frames = Frames::new();
-    frames.eval.frames.get_mut(frames.third).unwrap().visibility = FrameVisibility::Invisible;
     frames
         .eval
-        .frames
+        .frame_manager_mut()
+        .get_mut(frames.third)
+        .unwrap()
+        .visibility = FrameVisibility::Invisible;
+    frames
+        .eval
+        .frame_manager_mut()
         .get_mut(frames.second)
         .unwrap()
         .visibility = FrameVisibility::Iconified;
@@ -154,7 +170,7 @@ fn cycle_visibility_filter_distinguishes_icons_and_other_lisp_values() {
 #[test]
 fn window_filter_includes_its_owner_shared_minibuffers_and_focus_redirections() {
     let mut frames = Frames::new();
-    let owner = frames.eval.frames.get(frames.third).unwrap();
+    let owner = frames.eval.frame_manager().get(frames.third).unwrap();
     let mini = owner.minibuffer_window.unwrap();
     let root = owner.root_window().id();
     frames
@@ -167,13 +183,13 @@ fn window_filter_includes_its_owner_shared_minibuffers_and_focus_redirections() 
         .set_symbol_value("cycle-root", Value::make_window(root.0));
     let own_mini = frames
         .eval
-        .frames
+        .frame_manager()
         .get(frames.second)
         .unwrap()
         .minibuffer_window;
     frames
         .eval
-        .frames
+        .frame_manager_mut()
         .get_mut(frames.second)
         .unwrap()
         .minibuffer_window = Some(mini);
@@ -189,7 +205,11 @@ fn window_filter_includes_its_owner_shared_minibuffers_and_focus_redirections() 
         frames.run("(eq (next-frame cycle-first cycle-mini) cycle-second)"),
         "t"
     );
-    let redirected = frames.eval.frames.get_mut(frames.second).unwrap();
+    let redirected = frames
+        .eval
+        .frame_manager_mut()
+        .get_mut(frames.second)
+        .unwrap();
     redirected.minibuffer_window = own_mini;
     redirected.focus_frame = Value::make_frame(frames.third.0);
     assert_eq!(
@@ -272,15 +292,16 @@ fn cycling_stays_with_its_terminal_keyboard_and_output_kind() {
     let mut frames = Frames::new();
     frames
         .eval
-        .frames
+        .frame_manager_mut()
         .get_mut(frames.third)
         .unwrap()
         .set_window_system(Some(Value::symbol("neomacs")));
-    let buffer = frames.eval.buffers.current_buffer_id().unwrap();
-    let extra = frames
-        .eval
-        .frames
-        .create_frame_on_terminal("other-tty", 17, 800, 600, buffer);
+    let buffer = frames.eval.buffer_manager().current_buffer_id().unwrap();
+    let extra =
+        frames
+            .eval
+            .frame_manager_mut()
+            .create_frame_on_terminal("other-tty", 17, 800, 600, buffer);
     assert_eq!(
         frames.run(
             "(list (eq (next-frame cycle-first t) cycle-second)
@@ -291,13 +312,13 @@ fn cycling_stays_with_its_terminal_keyboard_and_output_kind() {
     );
     frames
         .eval
-        .frames
+        .frame_manager_mut()
         .get_mut(frames.second)
         .unwrap()
         .set_window_system(Some(Value::symbol("neomacs")));
     frames
         .eval
-        .frames
+        .frame_manager_mut()
         .get_mut(extra)
         .unwrap()
         .set_window_system(Some(Value::symbol("neomacs")));
@@ -329,7 +350,7 @@ fn cycling_falls_back_to_its_origin_when_every_candidate_is_excluded() {
 #[test]
 fn cycling_rejects_dead_and_non_frame_origins() {
     let mut frames = Frames::new();
-    let _ = frames.eval.frames.delete_frame(frames.third);
+    let _ = frames.eval.frame_manager_mut().delete_frame(frames.third);
     assert_eq!(
         frames.run(
             "(list (condition-case err (next-frame cycle-third)

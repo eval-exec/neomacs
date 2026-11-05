@@ -1,4 +1,7 @@
-use super::pure::*;
+use crate::emacs_core::dispnew::pure::*;
+use crate::window::DisplayFrameManagerExt;
+use neovm_eval::emacs_core::eval::data::minibuffer_entry::MinibufferManagerExt;
+
 use neovm_value::error::{FlowKind, FlowResultExt as _};
 use neovm_value::value::Value;
 
@@ -9,7 +12,7 @@ mod idle_redraw;
 #[test]
 fn redraw_frame_nil_returns_nil() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = neovm_eval::emacs_core::eval::Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let result = builtin_redraw_frame(&mut ctx, vec![]).unwrap();
     assert!(result.is_nil());
 }
@@ -17,7 +20,7 @@ fn redraw_frame_nil_returns_nil() {
 #[test]
 fn redraw_frame_rejects_non_frame_designator() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = neovm_eval::emacs_core::eval::Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let result = builtin_redraw_frame(&mut ctx, vec![Value::string("not-a-frame")]);
     assert!(result.is_err());
 }
@@ -25,8 +28,10 @@ fn redraw_frame_rejects_non_frame_designator() {
 #[test]
 fn redraw_display_returns_nil() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = neovm_eval::emacs_core::eval::Context::new();
-    let result = builtin_redraw_display(&mut ctx, vec![]).unwrap();
+    let mut ctx = crate::test_utils::new_context();
+    let result =
+        crate::emacs_core::dispnew::pure::builtin_redraw_display_in_context(&mut ctx, vec![])
+            .unwrap();
     assert!(result.is_nil());
 }
 
@@ -63,7 +68,7 @@ fn open_termscript_signals_tty_error() {
 #[test]
 fn send_string_to_terminal_rejects_non_string() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_send_string_to_terminal(&mut eval, vec![Value::fixnum(42)]);
     assert!(result.is_err());
 }
@@ -71,7 +76,7 @@ fn send_string_to_terminal_rejects_non_string() {
 #[test]
 fn send_string_to_terminal_accepts_string() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_send_string_to_terminal(&mut eval, vec![Value::string("hello")]).unwrap();
     assert!(result.is_nil());
 }
@@ -140,7 +145,7 @@ fn send_string_to_terminal_delivers_bytes_to_the_termcap_host() {
     crate::emacs_core::terminal::pure::set_terminal_host(Box::new(ByteRecordingHost {
         writes: std::rc::Rc::clone(&writes),
     }));
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_send_string_to_terminal(&mut eval, vec![Value::string("PROBE-BYTES")]).unwrap();
     assert_eq!(
         writes.borrow().as_slice(),
@@ -155,7 +160,7 @@ fn send_string_to_terminal_writes_to_stdout_for_the_initial_terminal() {
     crate::test_utils::init_test_tracing();
     reset_terminal_to_bootstrap();
     // Initialize before redirecting stdout: startup tracing is not terminal output.
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     // GNU: `out = stdout' for `output_initial' -- what batch, daemon and
     // pre-tty sessions run on (src/dispnew.c:6823-6824).  nextest runs every
     // test in its own process, so borrowing fd 1 for this assertion cannot
@@ -195,7 +200,7 @@ fn send_string_to_terminal_rejects_a_window_system_terminal() {
         )
         .unwrap(),
     ));
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_send_string_to_terminal(&mut eval, vec![Value::string("x")]);
     assert_eq!(
         signal_message(result),
@@ -211,7 +216,7 @@ fn send_string_to_terminal_rejects_a_suspended_terminal() {
     crate::emacs_core::terminal::pure::set_terminal_host(Box::new(ByteRecordingHost {
         writes: std::rc::Rc::default(),
     }));
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     crate::emacs_core::terminal::pure::builtin_suspend_tty(&mut eval, vec![]).unwrap();
     let result = builtin_send_string_to_terminal(&mut eval, vec![Value::string("x")]);
     assert_eq!(
@@ -224,14 +229,17 @@ fn send_string_to_terminal_rejects_a_suspended_terminal() {
 #[test]
 fn internal_show_cursor_tracks_visibility() {
     crate::test_utils::init_test_tracing();
-    reset_dispnew_thread_locals();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let fid = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    let wid = eval.frames.get(fid).expect("frame").selected_window;
+    let wid = eval
+        .frame_manager()
+        .get(fid)
+        .expect("frame")
+        .selected_window;
     let default_visible = builtin_internal_show_cursor_p(&mut eval, vec![]).unwrap();
     assert_eq!(default_visible, Value::T);
     assert!(
-        eval.frames
+        eval.frame_manager()
             .get(fid)
             .and_then(|frame| frame.find_window(wid))
             .and_then(|window| window.display())
@@ -242,7 +250,7 @@ fn internal_show_cursor_tracks_visibility() {
     let hidden = builtin_internal_show_cursor_p(&mut eval, vec![]).unwrap();
     assert!(hidden.is_nil());
     assert!(
-        eval.frames
+        eval.frame_manager()
             .get(fid)
             .and_then(|frame| frame.find_window(wid))
             .and_then(|window| window.display())
@@ -253,7 +261,7 @@ fn internal_show_cursor_tracks_visibility() {
     let visible = builtin_internal_show_cursor_p(&mut eval, vec![]).unwrap();
     assert_eq!(visible, Value::T);
     assert!(
-        eval.frames
+        eval.frame_manager()
             .get(fid)
             .and_then(|frame| frame.find_window(wid))
             .and_then(|window| window.display())
@@ -264,7 +272,7 @@ fn internal_show_cursor_tracks_visibility() {
 #[test]
 fn internal_show_cursor_rejects_non_window() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_internal_show_cursor(&mut eval, vec![Value::fixnum(1), Value::NIL]);
     assert!(result.is_err());
 }
@@ -272,7 +280,7 @@ fn internal_show_cursor_rejects_non_window() {
 #[test]
 fn force_window_update_no_arg_returns_t() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result =
         crate::emacs_core::window_cmds::builtin_force_window_update(&mut eval, vec![]).unwrap();
     assert_eq!(result, Value::T);
@@ -284,7 +292,7 @@ fn force_window_update_non_window_arg_returns_nil() {
     // `Fforce_window_update' returns t only for nil / a live window / a
     // buffer shown in some window).
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result =
         crate::emacs_core::window_cmds::builtin_force_window_update(&mut eval, vec![Value::T])
             .unwrap();
@@ -294,7 +302,7 @@ fn force_window_update_non_window_arg_returns_nil() {
 #[test]
 fn force_window_update_nil_arg_returns_t() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result =
         crate::emacs_core::window_cmds::builtin_force_window_update(&mut eval, vec![Value::NIL])
             .unwrap();
@@ -306,7 +314,7 @@ fn force_window_update_live_window_returns_t() {
     // GNU returns t for a live window OBJECT (oracle test cx409); the prior
     // stub wrongly returned nil for any non-nil OBJECT.
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let selected =
         crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, &vec![]).unwrap();
     let result =
@@ -333,7 +341,7 @@ fn force_window_update_fixture(
     let window_a = crate::emacs_core::window_cmds::builtin_selected_window(eval, &vec![]).unwrap();
     let window_a_id = crate::window::WindowId(window_a.as_window_id().expect("window value"));
     let buffer_a = eval
-        .frames
+        .frame_manager()
         .window_buffer_id(window_a_id)
         .expect("selected window displays a buffer");
     let buffer_b = eval.buffer_manager_mut().create_buffer("neo-fwu-other");
@@ -358,7 +366,7 @@ fn force_window_update_fixture(
 #[test]
 fn force_window_update_all_marks_every_window_body() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let fx = force_window_update_fixture(&mut eval);
     let before_a = eval.body_redisplay_revision(fx.window_a_id, fx.buffer_a);
     let before_b = eval.body_redisplay_revision(fx.window_b_id, fx.buffer_b);
@@ -381,7 +389,7 @@ fn force_window_update_all_marks_every_window_body() {
 #[test]
 fn force_window_update_live_window_marks_only_that_window_and_buffer() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let fx = force_window_update_fixture(&mut eval);
     let before_a = eval.body_redisplay_revision(fx.window_a_id, fx.buffer_a);
     let before_unrelated = eval.body_redisplay_revision(fx.window_b_id, fx.buffer_b);
@@ -404,7 +412,7 @@ fn force_window_update_live_window_marks_only_that_window_and_buffer() {
 #[test]
 fn force_window_update_displayed_buffer_marks_all_its_windows() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let fx = force_window_update_fixture(&mut eval);
     // Show the SAME buffer in the second frame as well.
     let buffer_a_value =
@@ -438,7 +446,7 @@ fn force_window_update_displayed_buffer_marks_all_its_windows() {
 #[test]
 fn force_window_update_buffer_name_reports_shown_and_unknown_names_stay_nil() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let shown = neovm_edit::emacs_core::buffer::builtin_get_buffer_create(
         &mut eval,
         vec![Value::string("neo-fwu-shown")],
@@ -472,7 +480,7 @@ fn force_window_update_buffer_name_reports_shown_and_unknown_names_stay_nil() {
 #[test]
 fn force_window_update_undisplayed_buffer_or_dead_window_marks_nothing() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let fx = force_window_update_fixture(&mut eval);
     let hidden = neovm_edit::emacs_core::buffer::builtin_get_buffer_create(
         &mut eval,
@@ -505,7 +513,7 @@ fn presentation_only_invalidation_does_not_mark_body_redisplay() {
     // The parent contract: chrome/menu/mode-line invalidation moves
     // `redisplay_generation` but must NOT force body text to relayout.
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let fx = force_window_update_fixture(&mut eval);
     let before_a = eval.body_redisplay_revision(fx.window_a_id, fx.buffer_a);
     let before_b = eval.body_redisplay_revision(fx.window_b_id, fx.buffer_b);
@@ -533,10 +541,13 @@ fn force_window_update_buffer_on_hidden_frame_marks_nothing() {
         crate::window::FrameVisibility::Invisible,
         crate::window::FrameVisibility::Iconified,
     ] {
-        let mut eval = neovm_eval::emacs_core::eval::Context::new();
+        let mut eval = crate::test_utils::new_context();
         let fx = force_window_update_fixture(&mut eval);
-        let frame = eval.frames.find_window_frame_id(fx.window_b_id).unwrap();
-        eval.frames.get_mut(frame).unwrap().visibility = visibility;
+        let frame = eval
+            .frame_manager()
+            .find_window_frame_id(fx.window_b_id)
+            .unwrap();
+        eval.frame_manager_mut().get_mut(frame).unwrap().visibility = visibility;
         let before = eval.body_redisplay_revision(fx.window_b_id, fx.buffer_b);
         let result = crate::emacs_core::window_cmds::builtin_force_window_update(
             &mut eval,
@@ -556,12 +567,12 @@ fn force_window_update_buffer_on_hidden_frame_marks_nothing() {
 
 #[test]
 fn force_window_update_buffer_shown_only_in_active_minibuffer_marks_nothing() {
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    let frame = eval.frames.get(frame_id).unwrap();
+    let frame = eval.frame_manager().get(frame_id).unwrap();
     let window = frame.minibuffer_window.expect("minibuffer window");
     let buffer = frame.find_window(window).unwrap().buffer_id().unwrap();
-    eval.minibuffers
+    eval.minibuffers_mut()
         .read_from_minibuffer(buffer, "M-x ", None, None)
         .expect("activate the minibuffer");
     let before = eval.body_redisplay_revision(window, buffer);
@@ -588,7 +599,7 @@ fn force_window_update_buffer_shown_only_in_active_minibuffer_marks_nothing() {
 
 #[test]
 fn force_window_update_undisplayed_indirect_buffer_marks_nothing() {
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let fx = force_window_update_fixture(&mut eval);
     let indirect = eval
         .eval_str("(make-indirect-buffer (window-buffer (selected-window)) \"neo-fwu-indirect\")")
@@ -613,7 +624,7 @@ fn force_window_update_requests_mode_lines_for_each_successful_scope() {
     // REDISPLAY_BUFFER_WINDOWS match. A force must refresh chrome as well
     // as body rows, while keeping the body scope targeted.
     for scope in 0..3 {
-        let mut eval = neovm_eval::emacs_core::eval::Context::new();
+        let mut eval = crate::test_utils::new_context();
         let fx = force_window_update_fixture(&mut eval);
         eval.note_chrome_generated(fx.window_a_id);
         eval.note_chrome_generated(fx.window_b_id);
@@ -636,8 +647,7 @@ fn force_window_update_requests_mode_lines_for_each_successful_scope() {
 #[test]
 fn eval_internal_show_cursor_per_window_state() {
     crate::test_utils::init_test_tracing();
-    reset_dispnew_thread_locals();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let _ = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let selected =
         crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, &vec![]).unwrap();

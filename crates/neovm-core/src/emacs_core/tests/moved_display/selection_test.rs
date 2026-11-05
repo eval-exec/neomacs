@@ -1,12 +1,14 @@
+use crate::window::DisplayFrameManagerExt;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::emacs_core::print::format_eval_result;
 use neovm_value::value::Value;
 
 fn eval_with_frames(source: &str) -> String {
-    let mut eval = Context::new();
-    let buffer = eval.buffers.create_buffer("*scratch*");
-    eval.buffers.set_current(buffer);
-    eval.frames.create_frame("F1", 800, 600, buffer);
+    let mut eval = crate::test_utils::new_context();
+    let buffer = eval.buffer_manager_mut().create_buffer("*scratch*");
+    eval.buffer_manager_mut().set_current(buffer);
+    eval.frame_manager_mut()
+        .create_frame("F1", 800, 600, buffer);
     crate::emacs_core::terminal::pure::mark_selected_terminal_usable_for_test(&eval);
     format_eval_result(&eval.eval_str(source))
 }
@@ -137,14 +139,18 @@ fn select_frame_honors_norecord_and_publishes_consistent_selection_to_hooks() {
 fn cross_frame_select_window_does_not_steal_the_next_physical_key() {
     use neovm_eval::emacs_core::eval::keyboard::{InputEvent, KeyEvent};
 
-    let mut eval = Context::new();
-    let buffer = eval.buffers.create_buffer("*scratch*");
-    eval.buffers.set_current(buffer);
-    let first = eval.frames.create_frame("first", 800, 600, buffer);
-    let other_buffer = eval.buffers.create_buffer("target");
-    let second = eval.frames.create_frame("second", 800, 600, other_buffer);
+    let mut eval = crate::test_utils::new_context();
+    let buffer = eval.buffer_manager_mut().create_buffer("*scratch*");
+    eval.buffer_manager_mut().set_current(buffer);
+    let first = eval
+        .frame_manager_mut()
+        .create_frame("first", 800, 600, buffer);
+    let other_buffer = eval.buffer_manager_mut().create_buffer("target");
+    let second = eval
+        .frame_manager_mut()
+        .create_frame("second", 800, 600, other_buffer);
     for id in [first, second] {
-        eval.frames
+        eval.frame_manager_mut()
             .get_mut(id)
             .unwrap()
             .set_window_system(Some(Value::symbol("neo")));

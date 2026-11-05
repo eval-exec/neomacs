@@ -1,3 +1,4 @@
+use crate::emacs_core::xwidget::XwidgetContextExt;
 use neomacs_display_protocol::WebViewId;
 use neovm_eval::emacs_core::eval::keyboard::{
     FrontendLoadPhase, FrontendWebProcessFailure, FrontendWebValue, FrontendWebViewEvent,
@@ -116,7 +117,7 @@ fn eval(ctx: &mut Context, source: &str) -> Value {
 }
 
 fn xwidget_context() -> Context {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     ctx.provide_value(Value::symbol("xwidget"), None)
         .expect("provide xwidget in minimal test runtime");
     ctx
@@ -128,23 +129,20 @@ fn stale_ready_event_cannot_replace_the_current_webview_generation() {
     let mut ctx = xwidget_context();
 
     assert!(
-        !ctx.xwidgets
-            .apply_frontend_event(&FrontendWebViewEvent::Ready { id, generation: 2 })
-            .redisplay_needed()
+        !ctx.apply_xwidget_frontend_event(&FrontendWebViewEvent::Ready { id, generation: 2 })
+            .expect("stale ready event")
     );
     assert!(
-        !ctx.xwidgets
-            .apply_frontend_event(&FrontendWebViewEvent::Ready { id, generation: 1 })
-            .redisplay_needed()
+        !ctx.apply_xwidget_frontend_event(&FrontendWebViewEvent::Ready { id, generation: 1 })
+            .expect("stale ready event")
     );
     assert!(
-        ctx.xwidgets
-            .apply_frontend_event(&FrontendWebViewEvent::TitleChanged {
-                id,
-                generation: 2,
-                title: "current".to_owned(),
-            })
-            .redisplay_needed()
+        ctx.apply_xwidget_frontend_event(&FrontendWebViewEvent::TitleChanged {
+            id,
+            generation: 2,
+            title: "current".to_owned(),
+        })
+        .expect("title change")
     );
 }
 
@@ -281,7 +279,7 @@ fn xwidget_plist_query_flag_resize_and_kill_follow_gnu_slots() {
 #[test]
 fn make_xwidget_accepts_only_gnu_webkit_type() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
 
     let err = ctx
         .eval_str(r#"(make-xwidget 'video "Title" 10 20)"#)
@@ -296,7 +294,7 @@ fn make_xwidget_accepts_only_gnu_webkit_type() {
 #[test]
 fn make_xwidget_requires_interned_gnu_webkit_symbol() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
 
     let err = ctx
         .eval_str(r#"(make-xwidget (make-symbol "webkit") "Title" 10 20)"#)

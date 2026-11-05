@@ -8,21 +8,15 @@
 mod cycling;
 pub(crate) mod position;
 mod selection;
-#[doc(hidden)]
-pub use cycling::{builtin_next_frame, builtin_previous_frame};
-#[doc(hidden)]
-pub use selection::{builtin_handle_switch_frame, builtin_select_frame};
-#[cfg(test)]
-#[path = "tests/cycling_test.rs"]
-mod cycling_test;
-#[cfg(test)]
-#[path = "tests/selection_test.rs"]
-mod selection_test;
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
+#[doc(hidden)]
+pub use cycling::{builtin_next_frame, builtin_previous_frame};
 use position::{
     FrameCoordinateOrigin, FramePositionSpec, absolute_window_position, apply_frame_position,
 };
+#[doc(hidden)]
+pub use selection::{builtin_handle_switch_frame, builtin_select_frame};
 
 use super::window_cmds::{
     DeleteFrameMode, FRAME_TEXT_LINES_PARAM, FRAME_TOTAL_COLS_PARAM, FRAME_TOTAL_LINES_PARAM,

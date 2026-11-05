@@ -10508,10 +10508,6 @@ pub fn builtin_buffer_text_pixel_size(
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/text_measurement_invisible_test.rs"]
-mod text_measurement_invisible_tests;
-
-#[cfg(test)]
 #[path = "tests/mode_line_gc_roots_test.rs"]
 mod mode_line_gc_roots;
 

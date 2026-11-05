@@ -12829,9 +12829,6 @@ fn window_lines_pixel_dimensions_returns_nil_without_a_current_matrix() {
 }
 
 #[cfg(test)]
-#[path = "tsb_boundary_numbers.rs"]
-mod tsb_boundary_numbers;
-
 #[test]
 fn minibuffer_selected_window_returns_nil_after_the_invoking_window_is_deleted() {
     crate::test_utils::init_test_tracing();

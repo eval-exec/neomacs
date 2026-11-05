@@ -4,7 +4,6 @@ use neovm_value::error::{FlowKind, FlowRef, FlowResultExt as _};
 mod system_font_test;
 use crate::emacs_core::display_host::{AvailableFontFamilyName, FontResolveRequest, FrameFontSize};
 use crate::emacs_core::xfaces::*;
-use crate::test_utils::runtime_startup_eval_all;
 use crate::window::FrameId;
 use neovm_edit::buffer::{Buffer, CharPos0};
 use neovm_eval::emacs_core::eval::{
@@ -589,10 +588,6 @@ impl DisplayHost for NativeFontEntityDisplayHost {
         *self.request.borrow_mut() = Some(request);
         Ok(Some(self.result.clone()))
     }
-}
-
-fn bootstrap_eval_all(src: &str) -> Vec<String> {
-    runtime_startup_eval_all(src)
 }
 
 #[test]
@@ -2386,51 +2381,6 @@ fn font_shape_gstring_grows_the_glyph_vector_when_the_shaper_needs_room() {
 }
 
 #[test]
-fn set_face_attribute_accepts_only_gnu_underline_style_symbols() {
-    crate::test_utils::init_test_tracing();
-    let rendered = bootstrap_eval_all(
-        r#"(list
-             (condition-case nil
-                 (progn
-                   (set-face-attribute 'default nil :underline '(:style dots))
-                   'ok)
-               (error 'error))
-             (condition-case nil
-                 (progn
-                   (set-face-attribute 'default nil :underline '(:style dash))
-                   'ok)
-               (error 'error)))"#,
-    );
-
-    assert_eq!(rendered, vec!["OK (ok error)".to_string()]);
-}
-
-#[test]
-fn set_face_attribute_accepts_only_gnu_box_style_symbols() {
-    crate::test_utils::init_test_tracing();
-    let rendered = bootstrap_eval_all(
-        r#"(list
-             (condition-case nil
-                 (progn
-                   (set-face-attribute 'default nil :box '(:style flat-button))
-                   'ok)
-               (error 'error))
-             (condition-case nil
-                 (progn
-                   (set-face-attribute 'default nil :box '(:style flat))
-                   'ok)
-               (error 'error))
-             (condition-case nil
-                 (progn
-                   (set-face-attribute 'default nil :box 0)
-                   'ok)
-               (error 'error)))"#,
-    );
-
-    assert_eq!(rendered, vec!["OK (ok error error)".to_string()]);
-}
-
-#[test]
 fn face_font_returns_nil_for_known_faces() {
     crate::test_utils::init_test_tracing();
     let result = call_face_font(|| vec![Value::symbol("default")]).unwrap();
@@ -2457,74 +2407,6 @@ fn face_font_rejects_invalid_face() {
     let result = call_face_font(|| vec![Value::fixnum(1)]);
     assert!(result.is_err());
 }
-
-#[test]
-fn tty_default_face_color_realization_normalizes_font_attributes_like_gnu() {
-    crate::test_utils::init_test_tracing();
-    let rendered = bootstrap_eval_all(
-        r##"(progn
-             (face-spec-reset-face 'default (selected-frame))
-             (set-face-attribute 'default (selected-frame)
-                                 :foreground "#ffffff"
-                                 :background nil
-                                 :family "Terminus"
-                                 :foundry "xos4"
-                                 :slant 'normal
-                                 :weight 'normal
-                                 :height 130
-                                 :width 'normal)
-             (list (face-attribute 'default :family nil 'default)
-                   (face-attribute 'default :foundry nil 'default)
-                   (face-attribute 'default :height nil 'default)))"##,
-    );
-
-    // GNU xfaces.c routes a default-face color change through the frame
-    // parameter path.  `update_face_from_frame_parameter' then calls
-    // `realize_basic_faces', whose TTY branch canonicalizes the live frame's
-    // family/foundry/width/height before the remaining attributes are applied.
-    assert_eq!(
-        rendered,
-        vec![r#"OK ("default" "default" 130)"#.to_string()]
-    );
-}
-
-#[test]
-fn bootstrap_set_face_attribute_updates_live_mode_line_face() {
-    crate::test_utils::init_test_tracing();
-    let rendered = bootstrap_eval_all(
-        r#"(list
-             (assq :background face-x-resources)
-             (progn
-               (set-face-attribute 'mode-line (selected-frame)
-                                   :background "grey75"
-                                   :foreground "black")
-               (face-background 'mode-line nil t))
-             (let* ((table (frame--face-hash-table (selected-frame)))
-                    (face (gethash 'mode-line table)))
-               (list (aref face 9) (aref face 10))))"#,
-    );
-
-    assert_eq!(
-        rendered,
-        vec!["OK ((:background (\".attributeBackground\" . \"Face.AttributeBackground\")) \"grey75\" (\"black\" \"grey75\"))".to_string()]
-    );
-}
-
-#[test]
-fn bootstrap_frame_face_hash_table_is_frame_owned_object() {
-    crate::test_utils::init_test_tracing();
-    let rendered = bootstrap_eval_all(
-        r#"(let ((a (frame--face-hash-table (selected-frame)))
-                 (b (frame--face-hash-table (selected-frame))))
-             (eq a b))"#,
-    );
-
-    assert_eq!(rendered, vec!["OK t".to_string()]);
-}
-
-// -----------------------------------------------------------------------
-// Arity checks
-// -----------------------------------------------------------------------
 
 #[test]
 fn fontp_too_many_args() {

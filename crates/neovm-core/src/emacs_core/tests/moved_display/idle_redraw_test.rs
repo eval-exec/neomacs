@@ -1,6 +1,7 @@
 //! GNU `redraw_frame` (dispnew.c) invalidates all window display matrices,
 //! even when Lisp-visible display state is unchanged.
 
+use crate::window::DisplayFrameManagerExt;
 use neovm_eval::emacs_core::eval::Context;
 use std::cell::Cell;
 use std::rc::Rc;
@@ -11,26 +12,30 @@ struct IdleSkipOverride;
 
 impl IdleSkipOverride {
     fn enable() -> Self {
-        crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(Some(true));
+        neovm_display::test_support::authority::set_redisplay_idle_skip_for_test(Some(true));
         Self
     }
 }
 
 impl Drop for IdleSkipOverride {
     fn drop(&mut self) {
-        crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(None);
+        neovm_display::test_support::authority::set_redisplay_idle_skip_for_test(None);
     }
 }
 
 fn idle_context() -> (Context, Rc<Cell<usize>>) {
-    let mut eval = Context::new();
-    let buffer = eval.buffers.current_buffer_id().expect("current buffer");
-    eval.frames.create_frame("idle-redraw", 640, 384, buffer);
+    let mut eval = crate::test_utils::new_context();
+    let buffer = eval
+        .buffer_manager()
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.frame_manager_mut()
+        .create_frame("idle-redraw", 640, 384, buffer);
     let layouts = Rc::new(Cell::new(0));
     let observed = Rc::clone(&layouts);
     eval.redisplay_fn = Some(Box::new(move |eval| {
         observed.set(observed.get() + 1);
-        eval.buffers
+        eval.buffer_manager()
             .current_buffer()
             .unwrap()
             .reset_unchanged_region();
