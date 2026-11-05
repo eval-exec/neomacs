@@ -136,10 +136,23 @@ pub use neovm_eval::emacs_core::reader;
 // Native Lisp subroutines and their metadata.
 pub mod builtins {
     pub use neovm_eval::emacs_core::builtins::*;
+    // Split-era path restoration: the C14 compatibility manifest and the
+    // core-owned tests reach these builtins through the historical
+    // `emacs_core::builtins::<name>` path. Their implementations moved to
+    // the owning lower crate; re-export them crate-internally (no public
+    // surface change).
+    pub(crate) use neovm_display::emacs_core::frame::builtin_frame_bottom_divider_width;
+    pub(crate) use neovm_display::emacs_core::window_cmds::builtin_window_bottom_divider_width;
+    pub(crate) use neovm_display::emacs_core::xfaces::builtin_face_attributes_as_vector;
+    pub(crate) use neovm_system::emacs_core::filelock::{builtin_lock_file, builtin_unlock_file};
+    pub(crate) use neovm_value::strings_core::{
+        lisp_string_char_at, lisp_string_char_codes, plain_str_to_lisp_string,
+    };
     #[path = "subrs.rs"]
     mod subrs;
-    #[cfg(test)]
-    pub(crate) use subrs::SUBRS;
+    // The localized builtins batch no longer exists in this compatibility
+    // manifest (its declarations register through world_subr!); only the
+    // catalog remains for the startup-order test.
     #[cfg(test)]
     pub(crate) use subrs::localized_subr_catalog;
     pub(crate) use subrs::register_subrs as init_builtins;

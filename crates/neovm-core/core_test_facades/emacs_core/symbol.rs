@@ -6,6 +6,14 @@
 //! by the atomic move's facade cfg-split; never compiled in a
 //! product build.
 
+// Split-era test prelude: the historical parent modules imported these two
+// names privately (they are the value layer's aliases, not members of every
+// moved submodule), so the moved module's glob cannot carry them into the
+// relocated `use super::*` test files. Re-export both in the cfg(test)-only
+// wrapper; production paths are untouched.
+pub use neovm_value::tagged::value::TaggedValue;
+pub use neovm_value::value::Value;
+
 pub use neovm_value::symbol::*;
 
 #[cfg(test)]
