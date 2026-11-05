@@ -1429,7 +1429,13 @@ fn names_authority_item(item: &str, authority: &BTreeSet<String>) -> Option<Stri
                     return Some(format!("authority/SEAL/PC2 row `{candidate}`"));
                 }
             }
-        } else if candidate_leaf == item_leaf {
+        } else if segments.len() == 1 && candidate_leaf == item_leaf {
+            // A BARE promotion-ledger item name (the ledger carries its
+            // module in a separate column) only collides with a bare VIS
+            // item. A qualified VIS row names a specific module path, and
+            // same-leaf functions in other modules are unrelated items (the
+            // FIRST_ID alias lesson): the qualified suffix rules above are
+            // the actual overlap test.
             return Some(format!("authority/SEAL/PC2 row `{candidate}`"));
         }
     }
