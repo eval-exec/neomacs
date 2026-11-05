@@ -915,6 +915,7 @@ fn read_directory_names_lisp(
 
 /// A directory scan owns its stream and filename for this invocation only.
 /// Unix keeps native dot positions; other platforms preserve their host reader.
+#[doc(hidden)]
 pub struct DirectoryNameSource {
     directory: LispString,
     #[cfg(unix)]
@@ -1590,6 +1591,7 @@ fn lisp_directory_file_name(
     file_name_lisp_from_bytes(bytes[..trimmed_len].to_vec(), filename.is_multibyte())
 }
 
+#[doc(hidden)]
 pub fn expand_file_name_lisp(
     name: &neovm_value::heap_types::LispString,
     default_directory: Option<&neovm_value::heap_types::LispString>,
@@ -2024,6 +2026,7 @@ fn make_temp_file_internal_impl(
     ))
 }
 
+#[doc(hidden)]
 pub fn builtin_make_temp_file_internal(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -2098,6 +2101,7 @@ fn make_temp_name_suffix() -> String {
 /// `(expand-file-name NAME &optional DEFAULT-DIRECTORY)` — falls back
 /// to dynamic `default-directory` when DEFAULT-DIRECTORY is omitted
 /// or nil.
+#[doc(hidden)]
 pub fn builtin_expand_file_name(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_min_args("expand-file-name", &args, 1)?;
     if args.len() > 2 {
@@ -2181,6 +2185,7 @@ pub fn builtin_expand_file_name(eval: &mut Context, args: Vec<Value>) -> EvalRes
 }
 
 /// (make-temp-name PREFIX) -> string
+#[doc(hidden)]
 pub fn builtin_make_temp_name(
     eval: &neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -2198,6 +2203,7 @@ pub fn builtin_make_temp_name(
 }
 
 /// (next-read-file-uses-dialog-p) -> nil
+#[doc(hidden)]
 pub fn builtin_next_read_file_uses_dialog_p(args: Vec<Value>) -> EvalResult {
     expect_args("next-read-file-uses-dialog-p", &args, 0)?;
     Ok(Value::NIL)
@@ -2211,6 +2217,7 @@ pub(crate) fn builtin_unhandled_file_name_directory(args: Vec<Value>) -> EvalRes
 }
 
 /// (unhandled-file-name-directory FILENAME) -> directory string
+#[doc(hidden)]
 pub fn builtin_unhandled_file_name_directory_eval(
     eval: &mut Context,
     args: Vec<Value>,
@@ -2330,6 +2337,7 @@ pub(crate) fn builtin_file_truename(eval: &mut Context, args: Vec<Value>) -> Eva
 }
 
 /// (file-name-directory FILENAME) -> string or nil
+#[doc(hidden)]
 pub fn builtin_file_name_directory(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     if let Some(result) = dispatch_file_handler(eval, "file-name-directory", &args)? {
         return Ok(file_name_handler_string_or_nil(result));
@@ -2343,6 +2351,7 @@ pub fn builtin_file_name_directory(eval: &mut Context, args: Vec<Value>) -> Eval
 }
 
 /// (file-name-nondirectory FILENAME) -> string
+#[doc(hidden)]
 pub fn builtin_file_name_nondirectory(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     if let Some(result) = dispatch_file_handler(eval, "file-name-nondirectory", &args)? {
         return file_name_handler_string_or_error(result);
@@ -2353,6 +2362,7 @@ pub fn builtin_file_name_nondirectory(eval: &mut Context, args: Vec<Value>) -> E
 }
 
 /// (file-name-as-directory FILENAME) -> string
+#[doc(hidden)]
 pub fn builtin_file_name_as_directory(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     if let Some(result) = dispatch_file_handler(eval, "file-name-as-directory", &args)? {
         return file_name_handler_string_or_error(result);
@@ -2363,6 +2373,7 @@ pub fn builtin_file_name_as_directory(eval: &mut Context, args: Vec<Value>) -> E
 }
 
 /// (directory-file-name FILENAME) -> string
+#[doc(hidden)]
 pub fn builtin_directory_file_name(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     if let Some(result) = dispatch_file_handler(eval, "directory-file-name", &args)? {
         return file_name_handler_string_or_error(result);
@@ -2373,6 +2384,7 @@ pub fn builtin_directory_file_name(eval: &mut Context, args: Vec<Value>) -> Eval
 }
 
 /// (file-name-concat DIRECTORY &rest COMPONENTS) -> string
+#[doc(hidden)]
 pub fn builtin_file_name_concat(args: Vec<Value>) -> EvalResult {
     expect_min_args("file-name-concat", &args, 1)?;
 
@@ -2403,6 +2415,7 @@ pub fn builtin_file_name_concat(args: Vec<Value>) -> EvalResult {
 }
 
 /// (file-name-absolute-p FILENAME) -> t or nil
+#[doc(hidden)]
 pub fn builtin_file_name_absolute_p(args: Vec<Value>) -> EvalResult {
     expect_args("file-name-absolute-p", &args, 1)?;
     let filename = expect_lisp_string_strict(&args[0])?;
@@ -2412,6 +2425,7 @@ pub fn builtin_file_name_absolute_p(args: Vec<Value>) -> EvalResult {
 }
 
 /// (directory-name-p NAME) -> t or nil
+#[doc(hidden)]
 pub fn builtin_directory_name_p(args: Vec<Value>) -> EvalResult {
     expect_args("directory-name-p", &args, 1)?;
     let name = expect_lisp_string_strict(&args[0])?;
@@ -2421,6 +2435,7 @@ pub fn builtin_directory_name_p(args: Vec<Value>) -> EvalResult {
 }
 
 /// (substitute-in-file-name FILENAME) -> string
+#[doc(hidden)]
 pub fn builtin_substitute_in_file_name(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("substitute-in-file-name", &args, 1)?;
     let filename = expect_lisp_string_strict(&args[0])?;
@@ -2465,6 +2480,7 @@ pub fn builtin_substitute_in_file_name(eval: &mut Context, args: Vec<Value>) -> 
 /// back to. The obarray fallback this used to end with could never fire: the
 /// name is installed as a `LispFwdType::BufferObj` forwarder, whose buffer-less
 /// `load()` is `None` by construction. Ledger 196.
+#[doc(hidden)]
 pub fn default_directory_lisp_in_state(
     vars: VariableView<'_>,
     _dynamic: &[OrderedRuntimeBindingMap],
@@ -2515,6 +2531,7 @@ fn implicit_default_directory_value_for_expand_file_name(eval: &mut Context) -> 
     builtin_expand_file_name(eval, vec![value, absdir])
 }
 
+#[doc(hidden)]
 pub fn resolve_filename_lisp_in_state(
     vars: VariableView<'_>,
     dynamic: &[OrderedRuntimeBindingMap],
@@ -2529,6 +2546,7 @@ pub fn resolve_filename_lisp_in_state(
     expand_file_name_lisp(filename, Some(&default_dir))
 }
 
+#[doc(hidden)]
 pub fn resolve_filename_lisp_for_eval(
     eval: &Context,
     filename: &neovm_value::heap_types::LispString,
@@ -2628,6 +2646,7 @@ fn signal_directory_files_error(
     }
 }
 
+#[doc(hidden)]
 pub fn signal_file_action_error_value(err: std::io::Error, action: &str, path: Value) -> Flow {
     get_file_errno_data(&err, action, vec![path])
 }
@@ -3208,6 +3227,7 @@ fn delete_file_compat_path(path: &Path, path_value: Value) -> Result<(), Flow> {
 }
 
 /// `(access-file FILENAME STRING)`
+#[doc(hidden)]
 pub fn builtin_access_file(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("access-file", &args, 2)?;
     expect_lisp_string_strict(&args[0])?;
@@ -3234,6 +3254,7 @@ pub fn builtin_access_file(eval: &mut Context, args: Vec<Value>) -> EvalResult {
 
 /// Context-aware variant of `file-exists-p` that resolves relative paths
 /// against dynamic/default `default-directory`.
+#[doc(hidden)]
 pub fn builtin_file_exists_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("file-exists-p", &args, 1)?;
     let filename = expect_lisp_string_strict(&args[0])?;
@@ -3248,6 +3269,7 @@ pub fn builtin_file_exists_p(eval: &mut Context, args: Vec<Value>) -> EvalResult
 
 /// `(file-readable-p FILENAME)` — resolves FILENAME against
 /// dynamic/default `default-directory`.
+#[doc(hidden)]
 pub fn builtin_file_readable_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("file-readable-p", &args, 1)?;
     let filename = expect_lisp_string_strict(&args[0])?;
@@ -3261,6 +3283,7 @@ pub fn builtin_file_readable_p(eval: &mut Context, args: Vec<Value>) -> EvalResu
 }
 
 /// `(file-writable-p FILENAME)`
+#[doc(hidden)]
 pub fn builtin_file_writable_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("file-writable-p", &args, 1)?;
     let filename = expect_lisp_string_strict(&args[0])?;
@@ -3274,6 +3297,7 @@ pub fn builtin_file_writable_p(eval: &mut Context, args: Vec<Value>) -> EvalResu
 }
 
 /// `(file-accessible-directory-p FILENAME)`
+#[doc(hidden)]
 pub fn builtin_file_accessible_directory_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("file-accessible-directory-p", &args, 1)?;
     let filename = expect_lisp_string_strict(&args[0])?;
@@ -3289,6 +3313,7 @@ pub fn builtin_file_accessible_directory_p(eval: &mut Context, args: Vec<Value>)
 }
 
 /// `(file-executable-p FILENAME)`
+#[doc(hidden)]
 pub fn builtin_file_executable_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("file-executable-p", &args, 1)?;
     let filename = expect_lisp_string_strict(&args[0])?;
@@ -3329,6 +3354,7 @@ const ACL_SUPPORT: AclSupport = if cfg!(target_vendor = "apple") {
 /// handler runs.  A native-ACL build expands FILENAME first (so a non-string
 /// signals `wrong-type-argument`), dispatches the file-name handler, then asks
 /// the C library for the extended ACL and returns its textual form.
+#[doc(hidden)]
 pub fn builtin_file_acl(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("file-acl", &args, 1)?;
     if ACL_SUPPORT == AclSupport::Absent {
@@ -3347,6 +3373,7 @@ pub fn builtin_file_acl(eval: &mut Context, args: Vec<Value>) -> EvalResult {
 /// The no-ACL build returns nil after the arity check.  The native build
 /// expands FILENAME (type-checking it), dispatches the handler, then converts
 /// ACL-STRING to an ACL and applies it.
+#[doc(hidden)]
 pub fn builtin_set_file_acl(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("set-file-acl", &args, 2)?;
     if ACL_SUPPORT == AclSupport::Absent {
@@ -3526,6 +3553,7 @@ mod apple_acl {
 
 /// `(file-locked-p FILENAME)`
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[doc(hidden)]
 pub fn builtin_file_locked_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     if let Some(result) = dispatch_file_handler(eval, "file-locked-p", &args)? {
         return Ok(result);
@@ -3538,6 +3566,7 @@ pub fn builtin_file_locked_p(eval: &mut Context, args: Vec<Value>) -> EvalResult
 
 /// `(file-selinux-context FILENAME)` — stub returning a four-element
 /// nil list, matching GNU's "no SELinux on this system" shape.
+#[doc(hidden)]
 pub fn builtin_file_selinux_context(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     if let Some(result) = dispatch_file_handler(eval, "file-selinux-context", &args)? {
         return Ok(result);
@@ -3560,6 +3589,7 @@ pub fn builtin_file_selinux_context(eval: &mut Context, args: Vec<Value>) -> Eva
 /// file-name handlers before the `HAVE_LIBSELINUX` implementation block.  In a
 /// no-SELinux build, native local files fall through to nil, but handlers still
 /// observe the expanded filename and original context argument.
+#[doc(hidden)]
 pub fn builtin_set_file_selinux_context(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("set-file-selinux-context", &args, 2)?;
     let filename = expect_lisp_string_strict(&args[0])?;
@@ -3578,6 +3608,7 @@ pub fn builtin_set_file_selinux_context(eval: &mut Context, args: Vec<Value>) ->
 }
 
 /// `(file-system-info FILENAME)`
+#[doc(hidden)]
 pub fn builtin_file_system_info(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     if let Some(result) = dispatch_file_handler(eval, "file-system-info", &args)? {
         return Ok(result);
@@ -3601,6 +3632,7 @@ pub fn builtin_file_system_info(eval: &mut Context, args: Vec<Value>) -> EvalRes
 }
 
 /// `(file-directory-p FILENAME)`
+#[doc(hidden)]
 pub fn builtin_file_directory_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("file-directory-p", &args, 1)?;
     let filename = expand_and_dir_to_file_lisp_for_file_predicate(
@@ -3618,6 +3650,7 @@ pub fn builtin_file_directory_p(eval: &mut Context, args: Vec<Value>) -> EvalRes
 /// Context-aware variant of `file-regular-p` that resolves relative paths
 /// against dynamic/default `default-directory`.
 /// `(file-regular-p FILENAME)`
+#[doc(hidden)]
 pub fn builtin_file_regular_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("file-regular-p", &args, 1)?;
     let filename = expand_and_dir_to_file_lisp_for_file_predicate(
@@ -3639,6 +3672,7 @@ pub fn builtin_file_regular_p(eval: &mut Context, args: Vec<Value>) -> EvalResul
 /// otherwise. Previously this returned `Value::bool_val(...)` (audit
 /// §10.3) which was a data-type bug — code that uses the result as a
 /// path was always broken because it got `t` instead of a string.
+#[doc(hidden)]
 pub fn builtin_file_symlink_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("file-symlink-p", &args, 1)?;
     let filename = expect_lisp_string_strict(&args[0])?;
@@ -3653,6 +3687,7 @@ pub fn builtin_file_symlink_p(eval: &mut Context, args: Vec<Value>) -> EvalResul
 }
 
 /// `(file-name-case-insensitive-p FILENAME)`
+#[doc(hidden)]
 pub fn builtin_file_name_case_insensitive_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("file-name-case-insensitive-p", &args, 1)?;
     expect_lisp_string_strict(&args[0])?;
@@ -3669,6 +3704,7 @@ pub fn builtin_file_name_case_insensitive_p(eval: &mut Context, args: Vec<Value>
 }
 
 /// `(file-newer-than-file-p FILE1 FILE2)`
+#[doc(hidden)]
 pub fn builtin_file_newer_than_file_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("file-newer-than-file-p", &args, 2)?;
     let file1 = expand_and_dir_to_file_lisp_for_eval(eval, &expect_lisp_string_strict(&args[0])?);
@@ -3693,6 +3729,7 @@ pub fn builtin_file_newer_than_file_p(eval: &mut Context, args: Vec<Value>) -> E
 
 /// `(file-modes FILENAME &optional FLAG)` — returns the file's
 /// mode bits as an integer, or nil if FILENAME is missing.
+#[doc(hidden)]
 pub fn builtin_file_modes(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_min_args("file-modes", &args, 1)?;
     if args.len() > 2 {
@@ -3720,6 +3757,7 @@ pub fn builtin_file_modes(eval: &mut Context, args: Vec<Value>) -> EvalResult {
 }
 
 /// `(set-file-modes FILENAME MODE &optional FLAG)`
+#[doc(hidden)]
 pub fn builtin_set_file_modes(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_min_args("set-file-modes", &args, 2)?;
     if args.len() > 3 {
@@ -3751,6 +3789,7 @@ pub fn builtin_set_file_modes(eval: &mut Context, args: Vec<Value>) -> EvalResul
 }
 
 /// `(set-file-times FILENAME &optional TIME FLAG)`
+#[doc(hidden)]
 pub fn builtin_set_file_times(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_min_args("set-file-times", &args, 1)?;
     if args.len() > 3 {
@@ -3843,6 +3882,7 @@ fn validate_set_visited_file_modtime_arg(arg: &Value) -> Result<(), Flow> {
 }
 
 /// `(visited-file-modtime)` — return the buffer's recorded modtime.
+#[doc(hidden)]
 pub fn builtin_visited_file_modtime(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_max_args("visited-file-modtime", &args, 0)?;
     let buf = eval
@@ -3860,6 +3900,7 @@ pub fn builtin_visited_file_modtime(eval: &mut Context, args: Vec<Value>) -> Eva
 
 /// `(verify-visited-file-modtime &optional BUFFER)` — check if file
 /// on disk matches the buffer's recorded modtime.
+#[doc(hidden)]
 pub fn builtin_verify_visited_file_modtime(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_max_args("verify-visited-file-modtime", &args, 1)?;
     // GNU fileio.c:6129 `decode_buffer (buf)`: BUF, not the current buffer,
@@ -3933,6 +3974,7 @@ pub fn builtin_verify_visited_file_modtime(eval: &mut Context, args: Vec<Value>)
 
 /// `(set-visited-file-modtime &optional TIME-LIST)` — set buffer's
 /// modtime from the file on disk or from explicit timestamp.
+#[doc(hidden)]
 pub fn builtin_set_visited_file_modtime(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_max_args("set-visited-file-modtime", &args, 1)?;
 
@@ -4049,6 +4091,7 @@ pub fn builtin_set_visited_file_modtime(eval: &mut Context, args: Vec<Value>) ->
 }
 
 /// (set-default-file-modes MODE) -> nil
+#[doc(hidden)]
 pub fn builtin_set_default_file_modes(args: Vec<Value>) -> EvalResult {
     expect_args("set-default-file-modes", &args, 1)?;
     init_default_file_mode_mask();
@@ -4063,6 +4106,7 @@ pub fn builtin_set_default_file_modes(args: Vec<Value>) -> EvalResult {
 }
 
 /// (default-file-modes) -> integer
+#[doc(hidden)]
 pub fn builtin_default_file_modes(args: Vec<Value>) -> EvalResult {
     expect_args("default-file-modes", &args, 0)?;
     init_default_file_mode_mask();
@@ -4101,6 +4145,7 @@ pub(crate) fn builtin_delete_file(eval: &mut Context, args: Vec<Value>) -> EvalR
 
 /// `(delete-file-internal FILENAME)` — internal primitive used by
 /// the elisp `delete-file` wrapper.
+#[doc(hidden)]
 pub fn builtin_delete_file_internal(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     if let Some(result) = dispatch_file_handler(eval, "delete-file", &args)? {
         return Ok(result);
@@ -4116,6 +4161,7 @@ pub fn builtin_delete_file_internal(eval: &mut Context, args: Vec<Value>) -> Eva
 }
 
 /// `(delete-directory-internal DIRECTORY)`
+#[doc(hidden)]
 pub fn builtin_delete_directory_internal(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("delete-directory-internal", &args, 1)?;
     let directory = expect_lisp_string_strict(&args[0])?;
@@ -4159,6 +4205,7 @@ pub(crate) fn builtin_delete_directory(eval: &mut Context, args: Vec<Value>) -> 
 }
 
 /// `(make-symbolic-link TARGET LINKNAME &optional OK-IF-EXISTS)`
+#[doc(hidden)]
 pub fn builtin_make_symbolic_link(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_min_args("make-symbolic-link", &args, 2)?;
     if args.len() > 3 {
@@ -4244,6 +4291,7 @@ pub fn builtin_make_symbolic_link(eval: &mut Context, args: Vec<Value>) -> EvalR
 }
 
 /// `(rename-file FROM TO &optional OK-IF-EXISTS)`
+#[doc(hidden)]
 pub fn builtin_rename_file(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_min_args("rename-file", &args, 2)?;
     if args.len() > 3 {
@@ -4361,6 +4409,7 @@ impl CopyTimestampPolicy {
 }
 
 /// `(copy-file FROM TO &optional OK-IF-EXISTS KEEP-TIME PRESERVE-UID-GID PRESERVE-PERMISSIONS)`
+#[doc(hidden)]
 pub fn builtin_copy_file(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_min_args("copy-file", &args, 2)?;
     if args.len() > 6 {
@@ -4459,6 +4508,7 @@ pub fn builtin_copy_file(eval: &mut Context, args: Vec<Value>) -> EvalResult {
 }
 
 /// `(add-name-to-file OLDNAME NEWNAME &optional OK-IF-EXISTS)`
+#[doc(hidden)]
 pub fn builtin_add_name_to_file(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_min_args("add-name-to-file", &args, 2)?;
     if args.len() > 3 {
@@ -4521,6 +4571,7 @@ pub fn builtin_add_name_to_file(eval: &mut Context, args: Vec<Value>) -> EvalRes
 /// `make-directory` level via Qmake_directory; we mirror that so
 /// callers that go through the internal entry point still see the
 /// handler.
+#[doc(hidden)]
 pub fn builtin_make_directory_internal(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     if let Some(result) = dispatch_file_handler(eval, "make-directory", &args)? {
         return Ok(result);
@@ -4536,6 +4587,7 @@ pub fn builtin_make_directory_internal(eval: &mut Context, args: Vec<Value>) -> 
 
 /// `(find-file-name-handler FILENAME OPERATION)` — public elisp
 /// surface for the [`find_file_name_handler`] dispatch helper.
+#[doc(hidden)]
 pub fn builtin_find_file_name_handler(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("find-file-name-handler", &args, 2)?;
     let filename = match args[0].kind() {
@@ -4593,6 +4645,7 @@ fn file_name_handler_symbols() -> &'static FileNameHandlerSymbols {
 ///
 /// The three variables are read as GNU reads its C variables: the dynamic
 /// value, never a lexical binding of the same name.
+#[doc(hidden)]
 pub fn find_file_name_handler_lisp_for_eval(
     eval: &Context,
     filename: &neovm_value::heap_types::LispString,
@@ -4720,6 +4773,7 @@ fn find_file_name_handler_lisp_with_values(
 /// `operation_name` is the symbol the handler will receive as its
 /// first argument (e.g. `"file-exists-p"`). It must match the GNU
 /// operation symbol exactly.
+#[doc(hidden)]
 pub fn dispatch_file_handler(
     eval: &mut Context,
     operation_name: &str,
@@ -4752,6 +4806,7 @@ pub fn dispatch_file_handler(
 /// operation.  The local arm owns the expanded filename so a caller cannot
 /// accidentally resume with its original, unresolved argument after handler
 /// lookup says no.
+#[doc(hidden)]
 pub enum ExpandedFileOperation {
     Handled(Value),
     Local { expanded_filename: Value },
@@ -4760,6 +4815,7 @@ pub enum ExpandedFileOperation {
 /// Mirror GNU's per-operation preamble: run `Fexpand_file_name` first (which
 /// can dispatch the expand-file-name magic handler), then invoke the operation
 /// handler with the expanded name and its full DEFUN arglist padded to `arity`.
+#[doc(hidden)]
 pub fn expand_file_operation(
     eval: &mut Context,
     operation_name: &str,
@@ -4789,6 +4845,7 @@ pub fn expand_file_operation(
 }
 
 /// `(directory-files DIRECTORY &optional FULL MATCH NOSORT COUNT)`
+#[doc(hidden)]
 pub fn builtin_directory_files(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_min_args("directory-files", &args, 1)?;
     if args.len() > 5 {
@@ -6217,6 +6274,7 @@ fn decide_auto_coding_for_empty_insert_file_contents(
 /// Read file FILENAME and insert its contents into the current buffer
 /// at point. Returns a list of `(FILENAME LENGTH)`. Mirrors GNU's
 /// `Finsert_file_contents` (`src/fileio.c`).
+#[doc(hidden)]
 pub fn builtin_insert_file_contents(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -6918,6 +6976,7 @@ fn select_write_region_coding_system(
 /// Write the region between START and END to FILENAME. If START is
 /// nil, writes the entire buffer. Mirrors GNU `Fwrite_region`
 /// (`src/fileio.c`).
+#[doc(hidden)]
 pub fn builtin_write_region(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -7497,6 +7556,7 @@ fn auto_save_error(eval: &mut super::eval::Context, flow: &Flow) -> Result<(), F
 /// Auto-save all buffers that need it.
 /// If NO-MESSAGE is non-nil, suppress the "Auto-saving..." message.
 /// If CURRENT is non-nil, only auto-save the current buffer.
+#[doc(hidden)]
 pub fn builtin_do_auto_save(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,

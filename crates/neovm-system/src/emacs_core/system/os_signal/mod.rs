@@ -337,6 +337,7 @@ pub(crate) enum PreviousDisposition {
 
 /// What [`install`] did, so the install is inspectable rather than assumed.
 #[derive(Debug)]
+#[doc(hidden)]
 pub struct InstallReport {
     previous: [PreviousDisposition; HandledSignal::COUNT],
     installed: [bool; HandledSignal::COUNT],
@@ -556,6 +557,7 @@ static INSTALL: OnceLock<InstallReport> = OnceLock::new();
 /// after the image is in memory (`PostImageInit::Signals`, src/emacs.c:1951);
 /// idempotent, because `add_user_signal` opens by returning early for a signal
 /// it has already added (src/keyboard.c:8470-8473).
+#[doc(hidden)]
 pub fn install() -> &'static InstallReport {
     INSTALL.get_or_init(install_once)
 }
@@ -659,6 +661,7 @@ fn install_once() -> InstallReport {
 ///
 /// The set is GNU's: `maybe_fatal_sig` captures SIGHUP, SIGINT and SIGTERM
 /// (`src/sysdep.c:2044-2046`).
+#[doc(hidden)]
 pub fn install_termination(noninteractive: bool) {
     #[cfg(unix)]
     {
@@ -717,12 +720,14 @@ fn classify_previous(old: &libc::sigaction) -> PreviousDisposition {
 /// (src/lisp.h:3896-3900).  One relaxed `'static` load of the evaluator's
 /// asynchronous-attention word, whose `OsSignal` bit it is.
 #[inline(always)]
+#[doc(hidden)]
 pub fn pending() -> bool {
     neovm_eval::emacs_core::eval::ASYNC_ATTENTION
         .is_raised(neovm_eval::emacs_core::eval::AsyncSource::OsSignal)
 }
 
 /// Consume a captured fatal-signal request only on the evaluator thread.
+#[doc(hidden)]
 pub fn take_termination_signal() -> Option<i32> {
     #[cfg(unix)]
     {
@@ -743,6 +748,7 @@ pub fn take_termination_signal() -> Option<i32> {
 
 /// Wake bytes coalesce; pending atomics remain the delivery authority.
 #[cfg(unix)]
+#[doc(hidden)]
 pub fn drain_wake_pipe(fd: libc::c_int) {
     let mut bytes = [0u8; 128];
     // SAFETY: fd is the process-lifetime nonblocking pipe's read end.
@@ -828,6 +834,7 @@ impl UserSignalAction {
 /// and fired ZERO times, so a mechanism that can silently never run has to be
 /// able to say how often it ran.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[doc(hidden)]
 pub struct UserSignalDrain {
     /// Deliveries that took GNU's debugger arm (src/keyboard.c:8498-8508).
     pub(crate) armed_debugger: u32,
@@ -849,6 +856,7 @@ pub struct UserSignalDrain {
 /// `store_user_signal_events` (:8546-8570) takes it while reading input.  That
 /// half is ledger 184's declared residual, and leaving the count in place is
 /// what keeps it a residual rather than a lost event.
+#[doc(hidden)]
 pub fn drain_pending_os_signals(
     eval: &mut neovm_eval::emacs_core::eval::Context,
 ) -> Result<UserSignalDrain, neovm_value::error::Flow> {

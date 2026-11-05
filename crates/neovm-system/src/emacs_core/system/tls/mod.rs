@@ -20,10 +20,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use x509_parser::prelude::{FromDer, X509Certificate, parse_x509_pem};
 
+#[doc(hidden)]
 pub fn gnutls_available_capabilities() -> &'static [&'static str] {
     &["ciphers", "macs", "digests", "gnutls3", "gnutls"]
 }
 
+#[doc(hidden)]
 pub fn builtin_neomacs_tls_available_p(args: Vec<Value>) -> EvalResult {
     expect_args("neomacs-tls-available-p", &args, 0)?;
     Ok(Value::T)
@@ -262,6 +264,7 @@ pub(crate) fn gnutls_peer_status_to_value(status: &TlsPeerStatus) -> Value {
 }
 
 #[derive(Debug)]
+#[doc(hidden)]
 pub struct CertificateFormatError {
     message: String,
 }
@@ -280,6 +283,7 @@ impl std::fmt::Display for CertificateFormatError {
     }
 }
 
+#[doc(hidden)]
 pub fn format_x509_certificate_pem(pem_bytes: &[u8]) -> Result<String, CertificateFormatError> {
     with_x509_certificate_pem(pem_bytes, format_x509_certificate)
 }

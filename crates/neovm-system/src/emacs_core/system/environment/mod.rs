@@ -69,6 +69,7 @@ fn host_process_environment() -> Value {
 /// and subprocess creation. A cached evaluator needs the same
 /// operation when it is activated, because its dumped environment belongs to
 /// the process that created the cache rather than the current process.
+#[doc(hidden)]
 pub fn install_host_environment_snapshot(eval: &mut Context) {
     let process_environment = host_process_environment();
     {

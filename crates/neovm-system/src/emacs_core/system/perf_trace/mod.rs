@@ -178,12 +178,14 @@ fn log_snapshot(label: &str, snapshot: &HotpathStats) {
 }
 
 /// Carrier park: drop the hotpath tracing state.
+#[doc(hidden)]
 pub fn reset_carrier_tls() {
     HOTPATH_STATE.with(|state| *state.borrow_mut() = HotpathState::default());
 }
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]
+#[doc(hidden)]
 pub fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix(
         h,
@@ -234,11 +236,13 @@ static CANONICAL_PERF_HOOKS: neovm_eval::emacs_core::eval::perf::PerfHooks =
     );
 
 /// The one canonical hot-path perf pair.
+#[doc(hidden)]
 pub fn canonical_perf_hooks() -> &'static neovm_eval::emacs_core::eval::perf::PerfHooks {
     &CANONICAL_PERF_HOOKS
 }
 
 /// The process-level enable answer that accompanies the canonical pair.
+#[doc(hidden)]
 pub fn canonical_perf_enabled() -> bool {
     hotpath_timing_enabled()
 }

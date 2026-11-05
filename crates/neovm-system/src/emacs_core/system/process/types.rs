@@ -3943,6 +3943,7 @@ use super::child_status::{
     UnrecordedStatusRead, UpdateStatusSite, record_status_notify_visits,
 };
 use neovm_eval::emacs_core::eval::data::process_state::StatusChangeSite;
+#[doc(hidden)]
 pub trait SystemProcessExt {
     fn register_readable_source(
         poller: &polling::Poller,
@@ -7421,6 +7422,7 @@ impl AsyncCallbackKind {
 /// notification, sentinels, TLS handshake completion), so they cannot live
 /// as inherent `impl Context` in the upper crate after the split.  Declared
 /// and implemented here; orphan-legal because the trait is core-local.
+#[doc(hidden)]
 pub trait ProcessContextExt {
     fn wait_while_network_process_connecting(&mut self, id: ProcessId) -> Result<(), Flow>;
     fn send_process_input_reentrant(

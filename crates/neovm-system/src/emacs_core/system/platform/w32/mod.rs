@@ -20,6 +20,7 @@ pub mod shell;
 #[cfg(windows)]
 pub(crate) use shell::w32_shell_execute;
 #[cfg(windows)]
+#[doc(hidden)]
 pub mod subrs;
 #[cfg(all(test, windows))]
 pub(crate) use subrs::SUBRS;

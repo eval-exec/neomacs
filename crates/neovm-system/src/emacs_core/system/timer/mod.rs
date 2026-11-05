@@ -353,6 +353,7 @@ fn gnu_sleep_duration_from_secs(seconds: f64) -> Duration {
 /// `(sleep-for SECONDS &optional MILLISECONDS)` — GNU `Fsleep_for`
 /// (dispnew.c): pause, reading process output, without redisplay or servicing
 /// command input.
+#[doc(hidden)]
 pub fn builtin_sleep_for(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,

@@ -10,6 +10,7 @@ use neovm_eval::host_effect::wake::{
 };
 
 #[derive(Debug)]
+#[doc(hidden)]
 pub enum MainNativePreparation {
     Prepared(PreparedNativeWait),
     Ready,
@@ -18,6 +19,7 @@ pub enum MainNativePreparation {
 
 /// An observer of the backend lifetime, not its session-retirement authority.
 /// Dropping a temporary capture must not retire the backend's shared source.
+#[doc(hidden)]
 pub struct GreenSelectHandle {
     pub(crate) wake: Arc<ControlWake>,
     pub(crate) notification_pending: Arc<NotificationLatch>,

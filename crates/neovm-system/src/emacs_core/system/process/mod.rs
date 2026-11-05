@@ -57,6 +57,7 @@ pub(crate) mod sys;
 pub mod sys;
 use sys::ChildStatusSource;
 
+#[doc(hidden)]
 pub mod green_select;
 pub use green_select::{GreenSelectHandle, MainNativePreparation};
 
@@ -85,6 +86,7 @@ pub(crate) use child_status::{UnrecordedStatusRead, UpdateStatusSite};
 /// The single owner of `waitpid`, and GNU's `p->alive` as a type: a child that
 /// has been reaped has no pid to hand to `kill(2)` or to a second `waitpid`.
 /// See `process/reap.rs`.
+#[doc(hidden)]
 pub mod reap;
 pub(crate) use reap::ChildStatusChange;
 
@@ -468,6 +470,7 @@ use neovm_value::value::{Value, ValueKind, VecLikeType, equal_value, list_to_vec
 // Tests
 // ---------------------------------------------------------------------------
 
+#[doc(hidden)]
 pub mod builtins;
 pub use builtins::*;
 
@@ -481,6 +484,7 @@ pub(crate) use helpers::*;
 #[cfg(feature = "test-support")]
 pub use helpers::*;
 
+#[doc(hidden)]
 pub mod types;
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub use types::*;

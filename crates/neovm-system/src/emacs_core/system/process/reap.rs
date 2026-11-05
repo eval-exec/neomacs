@@ -631,6 +631,7 @@ pub(crate) enum ChildStatusChange {
     Gone,
 }
 
+#[doc(hidden)]
 pub trait ChildOwnershipIo {
     /// Take ownership of a freshly spawned `std::process::Child`.
     fn of_pipe_child(child: SpawnedChild) -> Self;

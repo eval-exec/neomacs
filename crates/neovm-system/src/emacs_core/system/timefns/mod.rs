@@ -24,6 +24,7 @@ pub use neovm_value::time_core::{
 /// `current-time-list` selects the timestamp representation (GNU
 /// `timefns.c`): the selector reads a dynamically bound variable through
 /// the evaluator, so it stays above the split as a free function.
+#[doc(hidden)]
 pub fn lisp_time_output_from_context(eval: &Context) -> Result<LispTimeOutput, Flow> {
     eval.eval_symbol_by_id(intern("current-time-list"))
         .map(|value| {
@@ -250,10 +251,12 @@ thread_local! {
 /// it is parked, so reads take no lock; the Green runtime moves it at each
 /// park and resume. Several Worlds in one process each keep their own rule.
 #[cold]
+#[doc(hidden)]
 pub fn world_state_placeholder() -> Box<dyn std::any::Any> {
     Box::new(ZoneRule::Local)
 }
 #[cold]
+#[doc(hidden)]
 pub fn swap_world_state(slot: &mut dyn std::any::Any) {
     let slot = slot
         .downcast_mut::<ZoneRule>()
@@ -261,6 +264,7 @@ pub fn swap_world_state(slot: &mut dyn std::any::Any) {
     TIME_ZONE_RULE.with(|rule| std::mem::swap(&mut *rule.borrow_mut(), slot));
 }
 /// Reset timezone rule to default (called from Context::new).
+#[doc(hidden)]
 pub fn reset_timefns_thread_locals() {
     TIME_ZONE_RULE.with(|slot| *slot.borrow_mut() = ZoneRule::Local);
 }
@@ -677,6 +681,7 @@ fn zone_rule_to_offset_name(rule: &ZoneRule, epoch_secs: i64) -> (i64, String) {
         }
     }
 }
+#[doc(hidden)]
 pub fn zone_offset_name_for_time(
     zone: Option<&Value>,
     epoch_secs: i64,
@@ -993,6 +998,7 @@ pub(crate) fn builtin_current_time(args: Vec<Value>) -> EvalResult {
     expect_args("current-time", &args, 0)?;
     Ok(current_time_value(LispTimeOutput::LegacyList))
 }
+#[doc(hidden)]
 pub fn builtin_current_time_in_context(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("current-time", &args, 0)?;
     Ok(current_time_value(lisp_time_output_from_context(eval)?))
@@ -1004,6 +1010,7 @@ pub fn builtin_current_time_in_context(eval: &mut Context, args: Vec<Value>) -> 
 /// (`src/timefns.c:1309`). Crucially the decoding is exact, so a bignum-TICKS
 /// timestamp (such as the one `encode-time` produces from a float SECOND)
 /// converts losslessly instead of overflowing an i64.
+#[doc(hidden)]
 pub fn builtin_float_time(args: Vec<Value>) -> EvalResult {
     expect_min_max_args("float-time", &args, 0, 1)?;
     let arg = if args.is_empty() { Value::NIL } else { args[0] };
@@ -1014,11 +1021,13 @@ pub fn builtin_float_time(args: Vec<Value>) -> EvalResult {
     Ok(Value::make_float(frac_to_double(&th.ticks, &th.hz)))
 }
 /// `(time-add A B)` -> integer seconds, `(HI LO US PS)`, or `(TICKS . HZ)`.
+#[doc(hidden)]
 pub fn builtin_time_add(args: Vec<Value>) -> EvalResult {
     expect_args("time-add", &args, 2)?;
     time_arith(&args[0], &args[1], false)
 }
 /// `(time-subtract A B)` -> integer seconds, `(HI LO US PS)`, or `(TICKS . HZ)`.
+#[doc(hidden)]
 pub fn builtin_time_subtract(args: Vec<Value>) -> EvalResult {
     expect_args("time-subtract", &args, 2)?;
     // GNU subtracts identical objects to a zero timestamp without validating,
@@ -1035,6 +1044,7 @@ pub fn builtin_time_subtract(args: Vec<Value>) -> EvalResult {
     time_arith(&args[0], &args[1], true)
 }
 /// `(time-less-p A B)` -> t or nil
+#[doc(hidden)]
 pub fn builtin_time_less_p(args: Vec<Value>) -> EvalResult {
     expect_args("time-less-p", &args, 2)?;
     // GNU time_cmp short-circuits identical objects (`BASE_EQ`) as equal, so
@@ -1047,6 +1057,7 @@ pub fn builtin_time_less_p(args: Vec<Value>) -> EvalResult {
     ))
 }
 /// `(time-equal-p A B)` -> t or nil
+#[doc(hidden)]
 pub fn builtin_time_equal_p(args: Vec<Value>) -> EvalResult {
     expect_args("time-equal-p", &args, 2)?;
     // GNU timefns.c:time_cmp first treats identical Lisp objects (`BASE_EQ`,
@@ -1067,6 +1078,7 @@ pub fn builtin_time_equal_p(args: Vec<Value>) -> EvalResult {
 /// `(current-time-string &optional TIME ZONE)` -> human-readable string.
 ///
 /// Returns a string like `"Mon Jan  2 15:04:05 2006"`.
+#[doc(hidden)]
 pub fn builtin_current_time_string(args: Vec<Value>) -> EvalResult {
     expect_min_max_args("current-time-string", &args, 0, 2)?;
     let tm = if args.is_empty() || args[0].is_nil() {
@@ -1092,6 +1104,7 @@ pub fn builtin_current_time_string(args: Vec<Value>) -> EvalResult {
     Ok(Value::string(s))
 }
 /// `(current-time-zone &optional TIME ZONE)` -> `(OFFSET NAME)`.
+#[doc(hidden)]
 pub fn builtin_current_time_zone(args: Vec<Value>) -> EvalResult {
     expect_min_max_args("current-time-zone", &args, 0, 2)?;
     let tm = if args.is_empty() || args[0].is_nil() {
@@ -1130,6 +1143,7 @@ fn check_cons(obj: &Value) -> Result<(Value, Value), Flow> {
     }
 }
 /// `(encode-time TIME &rest OBSOLESCENT-ARGUMENTS)` -> `(HIGH LOW)`
+#[doc(hidden)]
 pub fn builtin_encode_time(args: Vec<Value>) -> EvalResult {
     // The SECOND field accepts any Lisp time value (GNU decodes it via
     // `decode_lisp_time'); its sub-second resolution carries into the result.
@@ -1237,6 +1251,7 @@ pub fn builtin_encode_time(args: Vec<Value>) -> EvalResult {
 }
 /// `(decode-time &optional TIME ZONE FORM)`
 /// -> `(SECONDS MINUTES HOURS DAY MONTH YEAR DOW DST UTCOFF)`
+#[doc(hidden)]
 pub fn builtin_decode_time(args: Vec<Value>) -> EvalResult {
     expect_min_max_args("decode-time", &args, 0, 3)?;
     // GNU `Fdecode_time` (`src/timefns.c:1542`): with FORM=t it decodes the
@@ -1299,6 +1314,7 @@ pub fn builtin_decode_time(args: Vec<Value>) -> EvalResult {
 pub(crate) fn builtin_time_convert(args: Vec<Value>) -> EvalResult {
     builtin_time_convert_with_default_output(args, LispTimeOutput::LegacyList)
 }
+#[doc(hidden)]
 pub fn builtin_time_convert_in_context(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     let default_output = lisp_time_output_from_context(eval)?;
     builtin_time_convert_with_default_output(args, default_output)
@@ -1360,6 +1376,7 @@ fn builtin_time_convert_with_default_output(
     }
 }
 /// `(set-time-zone-rule ZONE)` -> nil.
+#[doc(hidden)]
 pub fn builtin_set_time_zone_rule(args: Vec<Value>) -> EvalResult {
     expect_args("set-time-zone-rule", &args, 1)?;
     let rule = parse_zone_rule(&args[0])?;

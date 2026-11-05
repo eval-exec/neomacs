@@ -56,6 +56,7 @@ use neovm_value::value::Value;
 /// with the citation for where this port derives it instead.  That is the
 /// point of the type: it refuses to let a derived fact masquerade as a reset.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[doc(hidden)]
 pub enum ResetValue {
     Nil,
     T,
@@ -77,6 +78,7 @@ impl ResetValue {
 /// One Lisp variable an `init_*` body assigns to a constant, with the GNU
 /// line that assigns it.
 #[derive(Clone, Copy, Debug)]
+#[doc(hidden)]
 pub struct ResetRow {
     pub name: &'static str,
     pub value: ResetValue,
@@ -248,6 +250,7 @@ pub(crate) struct PostImageInitSite {
 /// is absent for the other reason -- it runs BEFORE the image is mapped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
+#[doc(hidden)]
 pub enum PostImageInit {
     StandardFds = 0,
     Signals,
@@ -1231,6 +1234,7 @@ fn derive_font_log(eval: &mut Context) {
 ///
 /// Called from `finalize_cached_bootstrap_eval`, this port's single equivalent
 /// of the stretch of GNU's `main` below `load_pdump`.
+#[doc(hidden)]
 pub fn apply_post_image_init(eval: &mut Context) {
     for site in PostImageInit::ALL {
         // GNU's `init_signals` is a call in `main` like any other, so its

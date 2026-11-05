@@ -495,12 +495,14 @@ unsafe fn set_pending_signal(env: *mut emacs_env, symbol: &str, data: Value) {
 }
 
 /// Whether a module call is in progress on this thread.
+#[doc(hidden)]
 pub fn module_call_active() -> bool {
     ACTIVE_ENVS.with(|envs| !envs.borrow().is_empty())
 }
 
 /// Active environment frames are scoped to an in-progress native call.
 /// Global references are traced separately from the Context-owned registry.
+#[doc(hidden)]
 pub fn collect_dynamic_module_gc_roots(roots: &mut Vec<Value>, heap_identity: usize) {
     ACTIVE_ENVS.with(|envs| {
         for entry in envs.borrow().iter() {
@@ -637,6 +639,7 @@ fn module_signal_or_throw(
 
 /// Best-effort text from a caught panic payload. Shared with the JIT shim
 /// boundary (`jit_shim_contain!` in jit/compile.rs).
+#[doc(hidden)]
 pub fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = payload.downcast_ref::<&'static str>() {
         (*s).to_string()
@@ -2079,6 +2082,7 @@ struct ModuleContextGuard {
 static_assertions::assert_not_impl_any!(ModuleContextGuard: Send, Sync);
 
 impl ModuleContextGuard {
+    #[doc(hidden)]
     pub fn install(ctx: *mut Context) -> Self {
         Self {
             _scope: neovm_value::tls_scope::TlsScope::new(&MODULE_CTX, ctx),
@@ -2412,6 +2416,7 @@ pub fn apply_module_function(ctx: &mut Context, func: Value, args: Vec<Value>) -
 
 /// Carrier park: clear the module-environment stack and the raw Context
 /// pointer. `GLOBAL_REFS` is reset by `reset_dynamic_module_registry`.
+#[doc(hidden)]
 pub fn reset_carrier_tls() {
     ACTIVE_ENVS.with(|stack| stack.borrow_mut().clear());
     MODULE_CTX.with(|slot| slot.set(std::ptr::null_mut()));
@@ -2419,6 +2424,7 @@ pub fn reset_carrier_tls() {
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]
+#[doc(hidden)]
 pub fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix(h, ACTIVE_ENVS.with(|slot| slot.borrow().len() as u64));
     neovm_value::tls_fingerprint::mix(

@@ -13,6 +13,7 @@ use neovm_eval::emacs_core::eval::Context;
 use neovm_value::error::Flow;
 
 mod fd;
+#[doc(hidden)]
 pub mod subrs;
 
 std::cfg_select! {
@@ -63,6 +64,7 @@ pub mod test_support {
 /// D-Bus's carried World state (connections and registered fds; see
 /// `connection::swap_world_state`).
 #[cold]
+#[doc(hidden)]
 pub fn world_state_placeholder() -> Box<dyn std::any::Any> {
     std::cfg_select! {
         neomacs_have_dbus => {
@@ -75,6 +77,7 @@ pub fn world_state_placeholder() -> Box<dyn std::any::Any> {
 }
 
 #[cold]
+#[doc(hidden)]
 pub fn swap_world_state(slot: &mut dyn std::any::Any) {
     std::cfg_select! {
         neomacs_have_dbus => {
@@ -93,12 +96,14 @@ pub fn swap_world_state(slot: &mut dyn std::any::Any) {
     }
 }
 
+#[doc(hidden)]
 pub fn register_subrs(ctx: &mut Context) {
     subrs::register_subrs(ctx);
 }
 
 /// GNU `syms_of_dbusbind`'s variables (see `subrs::register_bootstrap_vars`);
 /// nothing in a build without libdbus.
+#[doc(hidden)]
 pub fn register_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
     std::cfg_select! {
         neomacs_have_dbus => subrs::register_bootstrap_vars(obarray),
@@ -108,6 +113,7 @@ pub fn register_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
     }
 }
 
+#[doc(hidden)]
 pub fn drain_events(ctx: &mut Context) -> Result<usize, Flow> {
     std::cfg_select! {
         neomacs_have_dbus => event::drain(ctx),
@@ -118,6 +124,7 @@ pub fn drain_events(ctx: &mut Context) -> Result<usize, Flow> {
     }
 }
 
+#[doc(hidden)]
 pub fn has_active_watches() -> bool {
     std::cfg_select! {
         neomacs_have_dbus => connection::has_buses(),
@@ -125,6 +132,7 @@ pub fn has_active_watches() -> bool {
     }
 }
 
+#[doc(hidden)]
 pub fn reset_thread_locals() {
     std::cfg_select! {
         neomacs_have_dbus => connection::reset(),

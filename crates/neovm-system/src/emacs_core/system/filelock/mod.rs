@@ -596,6 +596,7 @@ fn unlock_file_resolved(
 /// Handler-aware `lock-file` operation, corresponding to GNU `Flock_file`.
 /// Keep this boundary separate from `lock_file_resolved`: internal native
 /// filesystem work must never receive a remote or otherwise magic filename.
+#[doc(hidden)]
 pub fn lock_file(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     filename: &LispString,
@@ -620,6 +621,7 @@ pub fn lock_file(
 /// (filelock.c:717-720, userlock.el:217), which warns and returns nil — so
 /// `unlock-file` itself never signals a file-error.  The handler path is
 /// deliberately outside that condition case, exactly as in GNU.
+#[doc(hidden)]
 pub fn unlock_file(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     filename: &LispString,
@@ -693,6 +695,7 @@ fn file_locked_p(
     }
 }
 
+#[doc(hidden)]
 pub fn builtin_lock_file(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -703,6 +706,7 @@ pub fn builtin_lock_file(
     lock_file(eval, &filename)
 }
 
+#[doc(hidden)]
 pub fn builtin_unlock_file(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -713,6 +717,7 @@ pub fn builtin_unlock_file(
     unlock_file(eval, &filename)
 }
 
+#[doc(hidden)]
 pub fn builtin_file_locked_p(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -723,6 +728,7 @@ pub fn builtin_file_locked_p(
     file_locked_p(eval, &filename)
 }
 
+#[doc(hidden)]
 pub fn builtin_lock_buffer(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -759,6 +765,7 @@ pub fn builtin_lock_buffer(
     Ok(Value::NIL)
 }
 
+#[doc(hidden)]
 pub fn builtin_unlock_buffer(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,

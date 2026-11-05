@@ -5,6 +5,7 @@
 //! subrs.rs owns the Lisp declarations and startup registration.
 
 #[cfg(feature = "sqlite")]
+#[doc(hidden)]
 pub mod enabled {
     //! Feature-enabled SQLite backend, matching GNU Emacs's sqlite.c.
     //!
@@ -66,6 +67,7 @@ pub mod enabled {
     /// next resume, so every Lisp thread sees one value, as in GNU. (N-mutator
     /// mode needs shared storage instead: a recorded obligation.)
     #[cold]
+    #[doc(hidden)]
     pub fn world_state_placeholder() -> Box<dyn std::any::Any> {
         Box::new((
             HashMap::<i64, Rc<Connection>>::new(),
@@ -74,6 +76,7 @@ pub mod enabled {
     }
 
     #[cold]
+    #[doc(hidden)]
     pub fn swap_world_state(slot: &mut dyn std::any::Any) {
         let slot = slot
             .downcast_mut::<(HashMap<i64, Rc<Connection>>, HashMap<i64, ResultSet>)>()
@@ -138,11 +141,13 @@ pub mod enabled {
     /// boot entry propagates a conflicting table in release builds too (peer
     /// follow-up F1). The handle-construction path re-publishes this same
     /// canonical table, where a refusal is a violated process-wide invariant.
+    #[doc(hidden)]
     pub fn install_sqlite_finalizer_hook() -> Result<HookInstallStatus, HookInstallError> {
         neovm_value::install_sqlite_obj_finalizer(&CANONICAL_SQLITE_FINALIZER)
     }
 
     /// Reset all thread-local state (called between test runs).
+    #[doc(hidden)]
     pub fn reset_thread_locals() {
         NEXT_HANDLE.store(1, Ordering::SeqCst);
         DB_HANDLES.with(|h| h.borrow_mut().clear());
@@ -681,24 +686,28 @@ pub mod enabled {
     // ---------------------------------------------------------------------------
 
     /// Report the compiled-in SQLite backend.
+    #[doc(hidden)]
     pub fn available_p(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlite-available-p", &args, 0)?;
         Ok(Value::T)
     }
 
     /// (sqlite-version) → version string
+    #[doc(hidden)]
     pub fn version(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlite-version", &args, 0)?;
         Ok(Value::string(rusqlite::version()))
     }
 
     /// (sqlitep OBJECT) → t or nil
+    #[doc(hidden)]
     pub fn is_sqlite_object(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlitep", &args, 1)?;
         Ok(Value::bool_val(args[0].is_sqlite()))
     }
 
     /// (sqlite-open &optional FILE READONLY DISABLE-URI) → db-handle or nil
+    #[doc(hidden)]
     pub fn open(eval: &mut neovm_eval::emacs_core::eval::Context, args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args_range("sqlite-open", &args, 0, 3)?;
         let file = args
@@ -752,6 +761,7 @@ pub mod enabled {
     }
 
     /// (sqlite-close DB) → t
+    #[doc(hidden)]
     pub fn close(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlite-close", &args, 1)?;
         let id = expect_db_object(&args[0])?;
@@ -762,6 +772,7 @@ pub mod enabled {
     }
 
     /// (sqlite-execute DB QUERY &optional VALUES) → affected-rows or result rows
+    #[doc(hidden)]
     pub fn execute(
         eval: &mut neovm_eval::emacs_core::eval::Context,
         args: Vec<Value>,
@@ -792,6 +803,7 @@ pub mod enabled {
     }
 
     /// (sqlite-select DB QUERY &optional VALUES RETURN-TYPE) → results
+    #[doc(hidden)]
     pub fn select(
         eval: &mut neovm_eval::emacs_core::eval::Context,
         args: Vec<Value>,
@@ -840,6 +852,7 @@ pub mod enabled {
     }
 
     /// (sqlite-next SET) → row or nil
+    #[doc(hidden)]
     pub fn next(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlite-next", &args, 1)?;
         let id = expect_stmt(&args[0])?;
@@ -866,6 +879,7 @@ pub mod enabled {
     }
 
     /// (sqlite-more-p SET) → t or nil
+    #[doc(hidden)]
     pub fn more_p(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlite-more-p", &args, 1)?;
         let id = expect_stmt(&args[0])?;
@@ -878,6 +892,7 @@ pub mod enabled {
     }
 
     /// (sqlite-columns SET) → list of column name strings
+    #[doc(hidden)]
     pub fn columns(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlite-columns", &args, 1)?;
         let id = expect_stmt(&args[0])?;
@@ -891,6 +906,7 @@ pub mod enabled {
     }
 
     /// (sqlite-finalize SET) → t
+    #[doc(hidden)]
     pub fn finalize(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlite-finalize", &args, 1)?;
         let id = expect_stmt(&args[0])?;
@@ -901,6 +917,7 @@ pub mod enabled {
     }
 
     /// (sqlite-execute-batch DB STATEMENTS) → t or nil
+    #[doc(hidden)]
     pub fn execute_batch(
         _eval: &mut neovm_eval::emacs_core::eval::Context,
         args: Vec<Value>,
@@ -913,6 +930,7 @@ pub mod enabled {
     }
 
     /// (sqlite-transaction DB) → t or nil
+    #[doc(hidden)]
     pub fn transaction(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlite-transaction", &args, 1)?;
         let connection = connection_for_db(expect_db(&args[0])?)?;
@@ -920,6 +938,7 @@ pub mod enabled {
     }
 
     /// (sqlite-commit DB) → t or nil
+    #[doc(hidden)]
     pub fn commit(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlite-commit", &args, 1)?;
         let connection = connection_for_db(expect_db(&args[0])?)?;
@@ -927,6 +946,7 @@ pub mod enabled {
     }
 
     /// (sqlite-rollback DB) → t or nil
+    #[doc(hidden)]
     pub fn rollback(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlite-rollback", &args, 1)?;
         let connection = connection_for_db(expect_db(&args[0])?)?;
@@ -934,6 +954,7 @@ pub mod enabled {
     }
 
     /// (sqlite-pragma DB PRAGMA) → t or nil
+    #[doc(hidden)]
     pub fn pragma(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlite-pragma", &args, 2)?;
         let connection = connection_for_db(expect_db(&args[0])?)?;
@@ -947,6 +968,7 @@ pub mod enabled {
     /// (sqlite-load-extension DB MODULE) → t
     ///
     /// GNU semantics: load a SQLite extension, restricted to an allowlist.
+    #[doc(hidden)]
     pub fn load_extension(
         eval: &mut neovm_eval::emacs_core::eval::Context,
         args: Vec<Value>,
@@ -1051,31 +1073,37 @@ pub use enabled::{swap_world_state, world_state_placeholder};
 
 #[cfg(not(feature = "sqlite"))]
 #[cold]
+#[doc(hidden)]
 pub fn world_state_placeholder() -> Box<dyn std::any::Any> {
     Box::new(())
 }
 
 #[cfg(not(feature = "sqlite"))]
 #[cold]
+#[doc(hidden)]
 pub fn swap_world_state(_slot: &mut dyn std::any::Any) {}
 
 #[cfg(not(feature = "sqlite"))]
+#[doc(hidden)]
 pub fn is_sqlite_object(args: Vec<neovm_value::value::Value>) -> neovm_value::error::EvalResult {
     neovm_eval::emacs_core::builtins::expect_args("sqlitep", &args, 1)?;
     Ok(neovm_value::value::Value::NIL)
 }
 
 #[cfg(not(feature = "sqlite"))]
+#[doc(hidden)]
 pub fn available_p(args: Vec<neovm_value::value::Value>) -> neovm_value::error::EvalResult {
     neovm_eval::emacs_core::builtins::expect_args("sqlite-available-p", &args, 0)?;
     Ok(neovm_value::value::Value::NIL)
 }
 
+#[doc(hidden)]
 pub mod subrs;
 #[cfg(test)]
 pub(crate) use subrs::SUBRS;
 pub use subrs::register_subrs;
 
+#[doc(hidden)]
 pub fn reset_sqlite_thread_locals() {
     #[cfg(feature = "sqlite")]
     enabled::reset_thread_locals();
