@@ -1,10 +1,10 @@
 //! Generational heap invariants, built up with each stage of P3.1 G2.
 
 use super::*;
-use crate::emacs_core::eval::{
+use crate::heap_types::LispString;
+use crate::value::scratch_bridge::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
-use crate::heap_types::LispString;
 
 struct ScratchRoots(usize);
 impl ScratchRoots {
