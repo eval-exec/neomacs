@@ -89,6 +89,3 @@ neovm-value = { path = "../neovm-value", features = ["test-support"] }
 # value's test-support exposes CacheRootScan::Snapshot, so text must compile
 # its matching arm in the same test build (A1 consumer gate, downward only).
 neovm-text = { path = "../neovm-text", features = ["test-support"] }
-# The re-homed minimal-VM buffer-storage oracle reads edit's feature-gated
-# jit-layout probes and BufferBacking under eval's own cfg(test) build.
-neovm-edit = { path = "../neovm-edit", features = ["test-support"] }
