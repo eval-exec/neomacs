@@ -232,11 +232,11 @@ fn custom_case_table_overrides_upcase_downcase_char() {
     // (set-case-syntax-pair ?z ?A): ?z is the uppercase, ?A the lowercase.
     // GNU oracle: (upcase ?z) => 122, (downcase ?A) => 65.
     let mut ev = ctx_with_pair('z' as i64, 'A' as i64);
-    let up = neovm_eval::emacs_core::builtins::builtin_upcase_in_state(&mut ev, vec![Value::char('z')])
+    let up = neovm_eval::emacs_core::builtins::builtin_upcase_in_state_1(&mut ev, Value::char('z'))
         .unwrap();
     assert_eq!(up.as_int(), Some(122));
     let down =
-        neovm_eval::emacs_core::builtins::builtin_downcase_in_state(&mut ev, vec![Value::char('A')])
+        neovm_eval::emacs_core::builtins::builtin_downcase_in_state_1(&mut ev, Value::char('A'))
             .unwrap();
     assert_eq!(down.as_int(), Some(65));
 }
@@ -263,12 +263,12 @@ fn custom_case_table_overrides_upcase_downcase_string() {
     let mut ev = ctx_with_pair('z' as i64, 'A' as i64);
     // upcase "Az" => "zz" (A->z, z->z).
     let up =
-        neovm_eval::emacs_core::builtins::builtin_upcase_in_state(&mut ev, vec![Value::string("Az")])
+        neovm_eval::emacs_core::builtins::builtin_upcase_in_state_1(&mut ev, Value::string("Az"))
             .unwrap();
     assert_eq!(up.as_utf8_str(), Some("zz"));
     // downcase "Az" => "AA" (A->A, z->A).
     let down =
-        neovm_eval::emacs_core::builtins::builtin_downcase_in_state(&mut ev, vec![Value::string("Az")])
+        neovm_eval::emacs_core::builtins::builtin_downcase_in_state_1(&mut ev, Value::string("Az"))
             .unwrap();
     assert_eq!(down.as_utf8_str(), Some("AA"));
 }
@@ -280,19 +280,13 @@ fn custom_case_table_makes_char_equal_case_fold() {
     // case-fold-search t, (char-equal ?x ?Y) => t. GNU oracle: t.
     let mut ev = ctx_with_pair('x' as i64, 'Y' as i64);
     ev.set_variable("case-fold-search", Value::T);
-    let r = neovm_eval::emacs_core::builtins::builtin_char_equal(
-        &mut ev,
-        vec![Value::char('x'), Value::char('Y')],
-    )
+    let r = neovm_eval::emacs_core::builtins::builtin_char_equal_2(&mut ev, Value::char('x'), Value::char('Y'))
     .unwrap();
     assert!(r.is_t(), "expected t, got {r:?}");
 
     // case-fold-search nil: exact match only.
     ev.set_variable("case-fold-search", Value::NIL);
-    let r = neovm_eval::emacs_core::builtins::builtin_char_equal(
-        &mut ev,
-        vec![Value::char('x'), Value::char('Y')],
-    )
+    let r = neovm_eval::emacs_core::builtins::builtin_char_equal_2(&mut ev, Value::char('x'), Value::char('Y'))
     .unwrap();
     assert!(r.is_nil(), "expected nil, got {r:?}");
 }
@@ -302,30 +296,24 @@ fn standard_case_table_path_is_byte_identical() {
     crate::test_utils::init_test_tracing();
     // Without a custom table, the default Unicode path must be unchanged.
     let mut ev = crate::test_utils::new_context();
-    let up = neovm_eval::emacs_core::builtins::builtin_upcase_in_state(&mut ev, vec![Value::char('z')])
+    let up = neovm_eval::emacs_core::builtins::builtin_upcase_in_state_1(&mut ev, Value::char('z'))
         .unwrap();
     assert_eq!(up.as_int(), Some('Z' as i64));
     let down =
-        neovm_eval::emacs_core::builtins::builtin_downcase_in_state(&mut ev, vec![Value::char('A')])
+        neovm_eval::emacs_core::builtins::builtin_downcase_in_state_1(&mut ev, Value::char('A'))
             .unwrap();
     assert_eq!(down.as_int(), Some('a' as i64));
     // Non-ASCII Unicode casing still works (é <-> É).
     let up =
-        neovm_eval::emacs_core::builtins::builtin_upcase_in_state(&mut ev, vec![Value::string("héllo")])
+        neovm_eval::emacs_core::builtins::builtin_upcase_in_state_1(&mut ev, Value::string("héllo"))
             .unwrap();
     assert_eq!(up.as_utf8_str(), Some("HÉLLO"));
-    let down = neovm_eval::emacs_core::builtins::builtin_downcase_in_state(
-        &mut ev,
-        vec![Value::string("HÉLLO")],
-    )
+    let down = neovm_eval::emacs_core::builtins::builtin_downcase_in_state_1(&mut ev, Value::string("HÉLLO"))
     .unwrap();
     assert_eq!(down.as_utf8_str(), Some("héllo"));
     // char-equal still case-folds with the standard table.
     ev.set_variable("case-fold-search", Value::T);
-    let r = neovm_eval::emacs_core::builtins::builtin_char_equal(
-        &mut ev,
-        vec![Value::char('a'), Value::char('A')],
-    )
+    let r = neovm_eval::emacs_core::builtins::builtin_char_equal_2(&mut ev, Value::char('a'), Value::char('A'))
     .unwrap();
     assert!(r.is_t());
 }

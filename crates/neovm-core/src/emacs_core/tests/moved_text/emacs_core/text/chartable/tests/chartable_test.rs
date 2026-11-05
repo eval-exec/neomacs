@@ -1311,7 +1311,7 @@ fn format_percent_s_prints_unicode_property_table_as_gnu_char_table() {
     .unwrap();
 
     let formatted =
-        neovm_eval::emacs_core::builtins::builtin_format(&mut eval, vec![Value::string("%S"), table])
+        neovm_eval::emacs_core::builtins::builtin_format_slice(&mut eval, &[Value::string("%S"), table])
             .unwrap();
     let rendered = formatted.as_runtime_string_owned().unwrap();
     assert!(rendered.starts_with("#^[nil nil char-code-property-table"));
