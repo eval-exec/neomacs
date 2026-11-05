@@ -65,16 +65,17 @@ pub(crate) const MOVING_CRATE: &str = "neovm_value";
 /// (main c1933304ad's two-crate set).
 /// Stage-4 W5/E13 extends the B3 scope to every crate extracted so far:
 /// the evaluator is the fourth lower crate of the moving set, and the
-/// edit/text leaves are scanned with it. Stage 5 adds the display crate.
-/// A moving file that reaches any of them through a core-root re-export
-/// stays internal.
-pub(crate) const MOVING_CRATES: [&str; 6] = [
+/// edit/text leaves are scanned with it. Stage 5 adds the display crate and
+/// stage 6 the host-system crate. A moving file that reaches any of them
+/// through a core-root re-export stays internal.
+pub(crate) const MOVING_CRATES: [&str; 7] = [
     "neovm_value",
     "neovm_display_identity",
     "neovm_edit",
     "neovm_text",
     "neovm_eval",
     "neovm_display",
+    "neovm_system",
 ];
 
 pub(crate) fn is_g0_member(name: &str) -> bool {
