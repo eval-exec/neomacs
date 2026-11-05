@@ -199,6 +199,7 @@ fn record_preloaded_file(eval: &mut super::eval::Context, requested: &LispString
 /// stray-^M-in-a-DOS-file case included, which is why deleting it is a
 /// deduplication and not a behaviour change; the equivalence is pinned by
 /// `load_source_eol_detection_matches_the_shared_decoder`.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn decode_emacs_utf8_source_lisp(
     bytes: &[u8],
     eol_conversion: neovm_text::emacs_core::coding::EolConversion,

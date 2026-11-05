@@ -1389,7 +1389,8 @@ pub(crate) fn builtin_search_backward_with_state_with_symbols(
     buffer_byte_to_char_result_in_manager(buffers, current_id, end)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_re_search_forward(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -1951,7 +1952,8 @@ pub fn builtin_posix_search_backward(
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_looking_at(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args_range("looking-at", &args, 1, 2)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
@@ -2320,6 +2322,7 @@ fn commit_string_search_success(
 }
 
 #[allow(clippy::too_many_arguments)] // match-time Lisp state stays explicit at this seam
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_string_match_with_state(
     case_fold: bool,
     case_translation_table: Option<Value>,
@@ -2745,6 +2748,7 @@ pub fn builtin_posix_string_match(eval: &mut super::eval::Context, args: Vec<Val
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_match_string(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -3010,6 +3014,7 @@ impl MatchDataMaterializationSource {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_match_data_with_state(
     buffers: &mut neovm_edit::buffer::BufferManager,
     match_data: &Option<super::regex::MatchData>,
@@ -3281,6 +3286,7 @@ pub(crate) fn with_preserved_match_data<T>(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_set_match_data_with_state(
     buffers: &mut neovm_edit::buffer::BufferManager,
     match_data: &mut Option<super::regex::MatchData>,

@@ -1050,6 +1050,7 @@ pub fn builtin_garbage_collect_heapsize(args: Vec<Value>) -> EvalResult {
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_get_unicode_property_internal(args: Vec<Value>) -> EvalResult {
     expect_args("get-unicode-property-internal", &args, 2)?;
     Err(signal(

@@ -5934,6 +5934,7 @@ pub(crate) fn make_interpreted_closure_from_parts_unchecked(
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_make_char(args: Vec<Value>, symbol_mode: SymbolMode) -> EvalResult {
     expect_args_range("make-char", &args, 1, 5)?;
     let Some(charset) = args[0].as_symbol_name(symbol_mode) else {

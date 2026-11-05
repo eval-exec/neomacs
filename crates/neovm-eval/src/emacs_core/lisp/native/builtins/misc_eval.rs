@@ -9,6 +9,7 @@ pub use neovm_value::error::{
 use neovm_value::symbol::Obarray;
 use neovm_value::tagged::value::SymbolMode;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_get_pos_property(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -297,6 +298,7 @@ pub(crate) fn builtin_previous_char_property_change_in_buffers(
     builtin_previous_property_change_in_buffers(buffers, vec![args[0], Value::NIL, temp])
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_next_single_char_property_change(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
