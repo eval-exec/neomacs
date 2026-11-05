@@ -109,6 +109,7 @@ pub(crate) fn note_function_cell_unchanged() {
 
 /// A copy of this thread's epoch counters (the report's data).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct EpochCounters {
     /// Indexed by `FunctionEpochBump as usize`, thread admission excepted:
     /// it is a process-wide count ([`Self::bumps_for`]), so this copy -- kept

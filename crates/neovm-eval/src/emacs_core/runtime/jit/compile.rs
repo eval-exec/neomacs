@@ -4360,6 +4360,13 @@ mod osr_binding_tests;
 mod shared_module_tests;
 pub(crate) mod switch_dispatch;
 
+/// Test-support re-exports for the re-homed value switch tests
+/// (K1 fence-ask item 10).
+#[cfg(feature = "test-support")]
+pub use knobs::jit_inline_switch_on;
+#[cfg(feature = "test-support")]
+pub use switch_dispatch::inline_switch_sites_for_test;
+
 #[cfg(test)]
 #[path = "tests/direct_call_test.rs"]
 mod direct_call_tests;

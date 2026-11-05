@@ -225,13 +225,13 @@ const _: () = {
     }
 };
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn leaked_subr_metadata_for_test() -> (TaggedValue, *mut SubrMetadata) {
     use neovm_value::intern::NameId;
     use neovm_value::tagged::header::{SubrDispatchKind, SubrInteractivity};
     let metadata = SubrMetadata::new(
-        SymId(1),
-        NameId(1),
+        unsafe { SymId::from_raw(1) },
+        NameId::for_test(1),
         1,
         Some(2),
         SubrDispatchKind::Builtin,
@@ -246,11 +246,11 @@ pub(crate) fn leaked_subr_metadata_for_test() -> (TaggedValue, *mut SubrMetadata
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn builtin_hof_entry_for_test(
-    operation: neovm_value::tagged::gc::function_write_hooks::HofOperation,
+    operation: neovm_value::tagged::gc::HofOperation,
 ) -> super::SubrEntry {
-    use neovm_value::tagged::gc::function_write_hooks::HofOperation;
+    use neovm_value::tagged::gc::HofOperation;
     let body: SubrFn2 = match operation {
         HofOperation::Mapc => crate::emacs_core::builtins::builtin_mapc_2,
         HofOperation::Mapcar => crate::emacs_core::builtins::builtin_mapcar_2,
@@ -267,3 +267,22 @@ pub(crate) fn builtin_hof_entry_for_test(
 #[cfg(test)]
 #[path = "subr_abi/tests/subr_abi_test.rs"]
 mod tests;
+
+/// Authoritative builtin registration entry.  The Lisp-visible static
+/// [`SubrObj`] mirrors its directly observable GNU object metadata; the table
+/// retains Rust-only dispatch data and the complete interactive spec.
+///
+/// P1-SUBR (peer 15:2xZ; peer 16:xxZ mandatory change): the item is
+/// `pub(crate)` with a test-support `visibility::make(pub)` (the WorldSlot
+/// pattern), so the eval authority fence remains its only public path;
+/// every field stays `pub(crate)` and no field is widened.
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct SubrEntry {
+    pub(crate) function: Option<SubrFn>,
+    pub(crate) min_args: u16,
+    pub(crate) max_args: Option<u16>,
+    pub(crate) dispatch_kind: neovm_value::tagged::header::SubrDispatchKind,
+    pub(crate) interactive_spec:
+        Option<crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec>,
+}

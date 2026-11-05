@@ -59,10 +59,10 @@ impl TaggedValueBytecodeExt for TaggedValue {
         // the unchecked-fetch driver. Production sealing happens exclusively
         // in the decode installers — this branch must never widen to release
         // builds, or the `ops_sealed` marker would stop proving anything.
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let bc = {
             let mut bc = bc;
-            bc.seal_hand_assembled_ops_for_test();
+            bc.seal_hand_assembled_ops();
             bc
         };
         with_tagged_heap(|h| h.alloc_bytecode(bc))

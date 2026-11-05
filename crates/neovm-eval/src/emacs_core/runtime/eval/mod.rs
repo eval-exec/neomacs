@@ -609,17 +609,7 @@ struct RedisplayBufferSignature {
     last_selected_window: Option<u64>,
 }
 
-/// Authoritative builtin registration entry.  The Lisp-visible static
-/// [`SubrObj`] mirrors its directly observable GNU object metadata; the table
-/// retains Rust-only dispatch data and the complete interactive spec.
-#[derive(Clone, Copy)]
-pub(crate) struct SubrEntry {
-    pub(crate) function: Option<subr_abi::SubrFn>,
-    pub(crate) min_args: u16,
-    pub(crate) max_args: Option<u16>,
-    pub(crate) dispatch_kind: neovm_value::tagged::header::SubrDispatchKind,
-    pub(crate) interactive_spec: Option<self::interactive_registry::BuiltinInteractiveSpec>,
-}
+pub(crate) use subr_abi::SubrEntry;
 
 thread_local! {
     // Static subrs are encoded directly from `SymId`, so the registry should

@@ -43,13 +43,14 @@ use std::collections::HashMap;
 /// a branch per node); larger tables keep the shim.
 const INLINE_MAX_NODES: usize = 64;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static INLINE_SITES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Test-only: how many switch sites this thread has lowered inline.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn inline_switch_sites_for_test() -> usize {
     INLINE_SITES.with(std::cell::Cell::get)
 }

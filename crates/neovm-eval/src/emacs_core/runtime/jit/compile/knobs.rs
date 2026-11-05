@@ -494,6 +494,7 @@ pub(crate) fn force_inline_switch_for_test(on: Option<bool>) {
 /// Default on; `NEOVM_JIT_INLINE_SWITCH=off` calls `neovm_jit_switch` at
 /// every site -- the lowering before inline dispatch, CLIF-identical to it:
 /// the single-build A/B. Read at compile time only.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn jit_inline_switch_on() -> bool {
     #[cfg(test)]
     if let Some(on) = INLINE_SWITCH_TEST_OVERRIDE.with(|c| c.get()) {

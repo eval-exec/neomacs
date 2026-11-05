@@ -233,4 +233,91 @@ pub mod authority {
     pub fn control_wake_attach_host_session(wake: &Arc<ControlWake>) -> HostSessionControl {
         wake.attach_host_session()
     }
+
+    // ---- P1-SUBR (peer 15:2xZ; LEAD 15:1xZ items 5-7): global subr
+    // registration is authority-class, so it lives in this fence. The
+    // originals stay pub(crate); SubrEntry is pub(crate) with a test-support
+    // visibility::make(pub) in the crate-private subr_abi chain (the
+    // WorldSlot pattern), so this `pub use` is its only public path. Every
+    // field stays pub(crate).
+    use neovm_value::tagged::gc::HofOperation;
+    use neovm_value::tagged::header::SubrDispatchKind;
+    use neovm_value::tagged::header::SubrMetadata;
+    use neovm_value::tagged::value::TaggedValue;
+
+    /// Fence route for the authoritative subr entry type (item 5).
+    pub use crate::emacs_core::eval::subr_abi::SubrEntry;
+
+    /// Identical delegate for the registry read (item 5).
+    pub fn lookup_global_subr_entry(sym: SymId) -> Option<SubrEntry> {
+        crate::emacs_core::eval::lookup_global_subr_entry(sym)
+    }
+
+    /// Identical delegate for the registry write (item 6).
+    pub fn register_global_subr_entry(sym: SymId, entry: SubrEntry) {
+        crate::emacs_core::eval::register_global_subr_entry(sym, entry)
+    }
+
+    /// Copied read of the entry's dispatch class; the field stays pub(crate)
+    /// (item 6).
+    pub fn subr_entry_dispatch_kind(entry: &SubrEntry) -> SubrDispatchKind {
+        entry.dispatch_kind
+    }
+
+    /// One typed change for the forged-registration tests (item 6).
+    /// `BodyFrom` can only splice a REAL HOF builtin body, never an
+    /// arbitrary fn pointer.
+    pub enum SubrEntryChange {
+        BodyFrom(HofOperation),
+        MinArgs(u16),
+        DispatchKind(SubrDispatchKind),
+    }
+
+    /// Apply exactly one typed change to a copied entry (item 6).
+    pub fn with_subr_entry_change(entry: SubrEntry, change: SubrEntryChange) -> SubrEntry {
+        let mut entry = entry;
+        match change {
+            SubrEntryChange::BodyFrom(operation) => {
+                let source =
+                    crate::emacs_core::eval::subr_abi::builtin_hof_entry_for_test(operation);
+                entry.function = source.function;
+            }
+            SubrEntryChange::MinArgs(min_args) => entry.min_args = min_args,
+            SubrEntryChange::DispatchKind(kind) => entry.dispatch_kind = kind,
+        }
+        entry
+    }
+
+    /// Fence delegate for the HOF fixture (item 7).
+    pub fn builtin_hof_entry_for_test(operation: HofOperation) -> SubrEntry {
+        crate::emacs_core::eval::subr_abi::builtin_hof_entry_for_test(operation)
+    }
+
+    /// Fence delegate for the metadata fixture (item 7).
+    pub fn leaked_subr_metadata_for_test() -> (TaggedValue, *mut SubrMetadata) {
+        crate::emacs_core::eval::subr_abi::leaked_subr_metadata_for_test()
+    }
+
+    /// Fence route for sealing hand-assembled bytecode (peer 15:30Z item 8b;
+    /// consumer: core_tests issue554_throw_roundtrip). Runs the real `seal_ops`
+    /// normalizer plus `verify_stack_effects`, exactly like the crate-private
+    /// `ByteCodeFunctionExt::seal_hand_assembled_ops`; sealing gates the
+    /// unchecked-fetch driver, so it is SEAL-domain and fence-only, not VIS.
+    pub fn seal_hand_assembled_ops_for_test(
+        function: &mut crate::emacs_core::bytecode::ByteCodeFunction,
+    ) {
+        crate::emacs_core::bytecode::ByteCodeFunctionExt::seal_hand_assembled_ops(function)
+    }
+}
+
+/// Test-support `aset` over a caller-owned Bare argument slice (K1 fence-ask
+/// item 11). This never widens `builtin_aset`/`builtin_aset_args`: the Bare
+/// policy is exactly the one the cfg(test) Vec form uses.
+pub fn builtin_aset_args_bare(
+    args: &[neovm_value::value::Value],
+) -> neovm_value::error::EvalResult {
+    crate::emacs_core::builtins::collections::builtin_aset_args(
+        crate::emacs_core::builtins::collections::ArraySymbolSource::Bare,
+        args,
+    )
 }

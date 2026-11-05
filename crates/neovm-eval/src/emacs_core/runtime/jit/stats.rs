@@ -1157,6 +1157,11 @@ pub(crate) fn reset_compile_stats() {
 pub(crate) mod asm_dump;
 pub(crate) mod calls;
 pub(crate) mod epoch;
+
+/// Test-support re-export for the re-homed value/core counter tests
+/// (K1 fence-ask item 9).
+#[cfg(feature = "test-support")]
+pub use epoch::EpochCounters;
 pub(crate) mod exit_snapshot;
 pub(crate) mod front_diag;
 pub(crate) mod inline_census;
