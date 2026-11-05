@@ -1,7 +1,10 @@
 //! Explicit regeneration of the cold parallel-entry inventory.
 //!
-//! Include the source-only generator rather than depending on neovm-core: this
-//! command neither links the Lisp runtime nor adds scanning to its build script.
+//! Include the source-only generator rather than depending on a runtime crate:
+//! this command neither links the Lisp runtime nor adds scanning to a build
+//! script. After the evaluator split the inventory belongs to neovm-eval,
+//! which owns the subr machinery; the generator also scans the other crates
+//! that still declare subrs (core, display, system).
 
 use std::ffi::OsString;
 use std::fs;
@@ -24,7 +27,7 @@ pub(super) fn run(repo_root: &Path, args: impl IntoIterator<Item = OsString>) ->
     }
     let output = super::resolve_cli_path(repo_root, raw_output);
     fs::create_dir_all(&output).map_err(|error| format!("create {}: {error}", output.display()))?;
-    let manifest = repo_root.join("crates/neovm-core");
+    let manifest = repo_root.join("crates/neovm-eval");
     generator::generate(&manifest, repo_root, &output)
         .map_err(|error| format!("pentry-inventory: {error}"))?;
 

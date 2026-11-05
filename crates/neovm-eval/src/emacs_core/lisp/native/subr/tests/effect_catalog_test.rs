@@ -350,7 +350,7 @@ fn pentry_catalog_parallel_tables_are_dense_and_canonical() {
             ParallelClass::Scalar => scalar += 1,
         }
     }
-    assert_eq!((world, sealed, scalar), (1_664, 41, 34));
+    assert_eq!((world, sealed, scalar), (1_665, 41, 34));
     eprintln!(
         "parallel catalog: entries={} world={} sealed={} scalar={} typed_variants={} declarations={}",
         INVENTORY.len(),

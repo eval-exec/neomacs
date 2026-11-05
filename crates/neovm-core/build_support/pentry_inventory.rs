@@ -468,8 +468,9 @@ fn source_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), String
 /// The workspace crate that owns a registry source file.
 #[derive(Clone, Copy)]
 pub enum SourceCrate {
-    /// The crate whose sources this inventory scans (neovm-core). Its files
-    /// are named relative to its manifest and imported through `crate::`.
+    /// The crate whose sources this inventory scans (neovm-eval, which owns
+    /// the subr machinery and the generated inventory). Its files are named
+    /// relative to its manifest and imported through `crate::`.
     Scanned,
     /// Another workspace crate. Its files are named relative to the
     /// workspace root and imported through its library name.
@@ -579,9 +580,9 @@ pub struct RegistrySites {
     pub leaf: RegistrySite,
 }
 
-/// neovm-core's registry sites. A definition that moves into another
-/// workspace crate becomes a `SourceCrate::Workspace` source, and its
-/// registry site imports it through that crate's library name.
+/// The scanned crate's (neovm-eval) registry sites. A definition that moves
+/// into another workspace crate becomes a `SourceCrate::Workspace` source,
+/// and its registry site imports it through that crate's library name.
 pub const REGISTRY_SITES: RegistrySites = RegistrySites {
     opcode: RegistrySite::Lowered {
         definition: CrateSource {
@@ -596,6 +597,16 @@ pub const REGISTRY_SITES: RegistrySites = RegistrySites {
     tier_i: RegistrySite::Colocated("src/emacs_core/runtime/eval/tier_i/compile.rs"),
     leaf: RegistrySite::Colocated("src/emacs_core/lisp/native/subr/leaf.rs"),
 };
+
+/// Workspace crates outside the scanned crate that still declare subrs. They
+/// are scanned in the production inventory only (fixtures stay self-contained)
+/// and their inventory `source` names are workspace-relative, as for every
+/// `SourceCrate::Workspace` file.
+const WORKSPACE_SCAN_ROOTS: &[&str] = &[
+    "crates/neovm-core",
+    "crates/neovm-display",
+    "crates/neovm-system",
+];
 
 fn parse_source(path: &Path) -> Result<syn::File, String> {
     let source =
@@ -1061,20 +1072,47 @@ fn generate_inner(
     parallel_gate: ParallelGate,
     sites: RegistrySites,
 ) -> Result<(), String> {
-    let mut files = Vec::new();
-    source_files(&manifest.join("src"), &mut files)?;
-    files.sort();
-    let mut records = Vec::new();
-    for path in files {
-        let source =
-            fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?;
-        let file =
-            syn::parse_file(&source).map_err(|error| format!("{}: {error}", path.display()))?;
+    // `(sort key, inventory source name, path)`. The sort key is the file's
+    // path relative to its OWN crate root, so the generated order keeps the
+    // pre-split relative order across crates instead of grouping by crate.
+    let mut files: Vec<(String, String, PathBuf)> = Vec::new();
+    let mut primary = Vec::new();
+    source_files(&manifest.join("src"), &mut primary)?;
+    for path in primary {
         let relative = path
             .strip_prefix(manifest)
             .map_err(|error| error.to_string())?
             .to_string_lossy()
             .replace('\\', "/");
+        files.push((relative.clone(), relative, path));
+    }
+    if parallel_gate == ParallelGate::Canonical {
+        for root in WORKSPACE_SCAN_ROOTS {
+            let root = project_root.join(root);
+            let mut extra = Vec::new();
+            source_files(&root.join("src"), &mut extra)?;
+            for path in extra {
+                let name = path
+                    .strip_prefix(project_root)
+                    .map_err(|error| error.to_string())?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let key = path
+                    .strip_prefix(&root)
+                    .map_err(|error| error.to_string())?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                files.push((key, name, path));
+            }
+        }
+    }
+    files.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    let mut records = Vec::new();
+    for (_, relative, path) in files {
+        let source =
+            fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        let file =
+            syn::parse_file(&source).map_err(|error| format!("{}: {error}", path.display()))?;
         let mut scanner = Scanner {
             records: &mut records,
             source: relative,

@@ -13,7 +13,7 @@ use crate::emacs_core::subr::leaf::LeafId;
 #[test]
 fn generated_dispatch_is_dense_and_equals_the_catalog_projection() {
     let entries = inventory();
-    assert_eq!(entries.len(), 1_739);
+    assert_eq!(entries.len(), 1_740);
     for (index, entry) in entries.iter().enumerate() {
         let slot = primitive_slot(index).expect("dense row");
         assert_eq!(

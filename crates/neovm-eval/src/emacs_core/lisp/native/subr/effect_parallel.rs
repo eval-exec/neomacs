@@ -832,9 +832,15 @@ pub(crate) const ARITH_VARIANT_NAMES: &[&str] = &[
 /// Registrations added to E1 after the canonical P3 survey. They are not
 /// P3 names; the World default covers them, and the architecture gate
 /// excludes them from the canonical 1,650/41/34 name counts.
+/// `w32-shell-execute` is upstream e9a2bc2aae's `world_subr!` that never got
+/// an inventory row (RB-1): it is a World/World post-P3 registration exactly
+/// like the two neomacs chrome controls.
 #[allow(dead_code)] // Read by the architecture gate.
-pub(crate) const POST_P3_WORLD_REGISTRATIONS: &[&str] =
-    &["neomacs-set-extra-spacing", "neomacs-set-scroll-indicators"];
+pub(crate) const POST_P3_WORLD_REGISTRATIONS: &[&str] = &[
+    "neomacs-set-extra-spacing",
+    "neomacs-set-scroll-indicators",
+    "w32-shell-execute",
+];
 
 /// Canonical P3 totals over the 1,725 classified names.
 #[allow(dead_code)] // Read by the architecture gate and catalog tests.
@@ -846,9 +852,9 @@ pub(crate) const CANONICAL_SCALAR_NAMES: usize = 34;
 
 /// Exact generated-table expectations (all inventory entries and kinds).
 #[allow(dead_code)] // Read by the architecture gate.
-pub(crate) const EXPECTED_INVENTORY_ENTRIES: usize = 1_739;
+pub(crate) const EXPECTED_INVENTORY_ENTRIES: usize = 1_740;
 #[allow(dead_code)] // Read by the architecture gate.
-pub(crate) const EXPECTED_PRIMITIVE_ENTRIES: usize = 1_578;
+pub(crate) const EXPECTED_PRIMITIVE_ENTRIES: usize = 1_579;
 #[allow(dead_code)] // Read by the architecture gate.
 pub(crate) const EXPECTED_OPCODE_ENTRIES: usize = 107;
 #[allow(dead_code)] // Read by the architecture gate.
@@ -864,7 +870,7 @@ pub(crate) const EXPECTED_SEALED_ENTRIES: usize = 41;
 #[allow(dead_code)] // Read by the architecture gate.
 pub(crate) const EXPECTED_SCALAR_ENTRIES: usize = 34;
 #[allow(dead_code)] // Read by the architecture gate.
-pub(crate) const EXPECTED_WORLD_ENTRIES: usize = 1_664;
+pub(crate) const EXPECTED_WORLD_ENTRIES: usize = 1_665;
 
 /// Exact canonical dispatch-arm expectations over the 1,725 names. The
 /// canonical P3 class stays World for the typed splits; these counts name the
