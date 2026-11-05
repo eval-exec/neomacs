@@ -139,7 +139,8 @@ fn invalid_range_error_with_vars<'a, V: EditVariableRead<'a>>(
     });
     invalid_range_error(name, style)
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn copy_char_table(table: Value) -> Option<Value> {
     copy_char_table_with_symbols(table, SymbolMode::Bare)
 }
