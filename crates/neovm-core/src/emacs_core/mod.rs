@@ -456,6 +456,10 @@ mod architecture_moving_set;
 mod architecture_production_source_roots;
 
 #[cfg(test)]
+#[path = "tests/architecture/vis_ledger_guard_test.rs"]
+mod architecture_vis_ledger_guard_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/value_ref_guard_test.rs"]
 mod architecture_value_ref_guard_test;
 
