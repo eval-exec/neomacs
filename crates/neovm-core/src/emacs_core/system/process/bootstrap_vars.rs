@@ -68,7 +68,7 @@ pub fn register_bootstrap_vars(obarray: &mut super::super::symbol::Obarray) {
 /// GNU Emacs defaults this to `t`, meaning processes should use PTYs.
 /// When nil, pipe-based I/O is used instead.
 pub(super) fn process_connection_type_is_pty(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+    vars: neovm_eval::emacs_core::eval::VariableView<'_>,
 ) -> bool {
     match vars.value_by_name("process-connection-type") {
         Some(v) if v.is_nil() => false,

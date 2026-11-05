@@ -2,9 +2,9 @@
 //! Lisp value, or World borrow: only poll readiness and its control owner.
 
 use super::{Arc, Instant, Ordering};
-use crate::host_effect::contracts::ReadDeadline;
-use crate::host_effect::wake::native_wait::{NativeWaitPreparationError, PreparedNativeWait};
-use crate::host_effect::wake::{
+use neovm_eval::host_effect::contracts::ReadDeadline;
+use neovm_eval::host_effect::wake::native_wait::{NativeWaitPreparationError, PreparedNativeWait};
+use neovm_eval::host_effect::wake::{
     ControlDestination, ControlNudge, ControlNudgeOutcome, ControlWake, ControlWakeOutcome,
     HostClosure, NativePollOwner, NotificationLatch, WaitRegistration,
 };

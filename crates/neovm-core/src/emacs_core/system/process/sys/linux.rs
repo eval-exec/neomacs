@@ -6,7 +6,7 @@
 //! from the periodic `waitpid(WUNTRACED | WCONTINUED)` scan. `open` returns
 //! `None` on older kernels, where every transition uses that periodic scan.
 
-use crate::emacs_core::eval::data::process_state::Source;
+use neovm_eval::emacs_core::eval::data::process_state::Source;
 
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use crate::emacs_core::process::SystemProcessExt;

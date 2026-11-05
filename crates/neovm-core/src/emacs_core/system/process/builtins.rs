@@ -5,11 +5,11 @@
 
 use super::reap::ChildOwnershipIo;
 use super::*;
-use crate::emacs_core::eval::data::process_state::StatusChangeSite;
 use crate::emacs_core::process::SystemProcessExt;
 use crate::emacs_core::wait::WaitContextExt;
 use crate::tagged::value::SymbolMode;
 use neovm_edit::emacs_core::edit_host::EditHost;
+use neovm_eval::emacs_core::eval::data::process_state::StatusChangeSite;
 use neovm_text::emacs_core::text_host::TextHost;
 
 /// GNU's `CURRENT-GROUP` argument for `interrupt-process`, `quit-process`

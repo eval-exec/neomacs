@@ -3,13 +3,13 @@
 //! Moved out of `mod.rs` unchanged; a child module so it keeps the
 //! parent's view of its private items (`use super::*`).
 
-pub use crate::emacs_core::eval::data::process_state::*;
+pub use neovm_eval::emacs_core::eval::data::process_state::*;
 
 use super::*;
-use crate::host_effect::wake::{
+use crate::tagged::value::SymbolMode;
+use neovm_eval::host_effect::wake::{
     ControlDestination, ControlNudge, ControlNudgeOutcome, NotificationLatch,
 };
-use crate::tagged::value::SymbolMode;
 
 use super::NetworkSocketIo;
 use super::reap::{ChildOwnershipIo, ReapableChildIo};
@@ -994,7 +994,7 @@ impl ResolvedProcessDecoding {
     /// the coding system's `:post-read-conversion` at :8180-8194.
     pub(crate) fn decode_in_context(
         self,
-        ctx: &mut crate::emacs_core::eval::Context,
+        ctx: &mut neovm_eval::emacs_core::eval::Context,
         bytes: &[u8],
         state: &mut crate::encoding::CodingDecoderState,
         block: crate::emacs_core::coding::SourceBlock,
@@ -3932,7 +3932,7 @@ use super::child_status::{
     ObservedProcess, Recording, STATUS_NOTIFY_STAMPED, STATUS_NOTIFY_WALKS, SweepableChild,
     UnrecordedStatusRead, UpdateStatusSite, record_status_notify_visits,
 };
-use crate::emacs_core::eval::data::process_state::StatusChangeSite;
+use neovm_eval::emacs_core::eval::data::process_state::StatusChangeSite;
 pub(crate) trait SystemProcessExt {
     fn register_readable_source(
         poller: &polling::Poller,
@@ -7781,7 +7781,7 @@ impl ProcessContextExt for super::super::eval::Context {
         match result {
             Ok(_) => Ok(()),
             Err(err) if err.is_signal() => {
-                let rendered = crate::emacs_core::print::format_flow_with_eval(self, &err);
+                let rendered = neovm_eval::emacs_core::print::format_flow_with_eval(self, &err);
                 tracing::warn!("{} callback error: {}", kind.label(), rendered);
                 let Some(sig) = err.as_signal() else {
                     unreachable!("matched Flow::Signal above")

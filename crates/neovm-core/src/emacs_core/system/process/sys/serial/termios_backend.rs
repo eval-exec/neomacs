@@ -4,7 +4,7 @@
 //! it narrowed enums and gets back errnos; nothing above it knows that a serial
 //! port is a tty.
 
-use crate::emacs_core::eval::data::process_state::Device;
+use neovm_eval::emacs_core::eval::data::process_state::Device;
 
 use std::ffi::{CString, OsStr};
 use crate::emacs_core::process::SystemProcessExt;

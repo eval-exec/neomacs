@@ -17,7 +17,7 @@
 //! but see [`SerialPort::configure`], which keeps GNU's *ordering* even though
 //! it moved GNU's *code*.
 
-pub use crate::emacs_core::eval::data::process_state::SerialPort;
+pub use neovm_eval::emacs_core::eval::data::process_state::SerialPort;
 
 use backend::DeviceIo;
 use std::io;

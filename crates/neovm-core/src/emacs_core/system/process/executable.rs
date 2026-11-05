@@ -8,10 +8,10 @@
 
 use super::{lisp_string_to_os_string, os_str_to_lisp_string, signal_file_errno, sys};
 use crate::emacs_core::error::{Flow, LispCondition, signal};
-use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::{Value, ValueKind, list_to_vec};
 use crate::heap_types::LispString;
 use neovm_edit::emacs_core::edit_host::EditHost;
+use neovm_eval::emacs_core::eval::Context;
 #[cfg(unix)]
 use std::ffi::OsStr;
 #[cfg(unix)]

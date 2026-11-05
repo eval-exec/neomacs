@@ -37,7 +37,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Output};
 
-use crate::emacs_core::eval::data::process_spawn::{ChildBackend, ChildStdio, SpawnedChild};
+use neovm_eval::emacs_core::eval::data::process_spawn::{ChildBackend, ChildStdio, SpawnedChild};
 
 /// Environment edits with `std::process::Command` semantics: `env_clear`
 /// drops the inherited environment and every earlier edit; later edits win.

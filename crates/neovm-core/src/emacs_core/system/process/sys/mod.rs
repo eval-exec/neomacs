@@ -16,7 +16,7 @@
 //! `serial_configure` are declared once in GNU's `src/systty.h:90-91` and
 //! implemented twice, in `src/sysdep.c` and `src/w32.c`.
 
-pub use crate::emacs_core::eval::data::process_state::ChildStatusSource;
+pub use neovm_eval::emacs_core::eval::data::process_state::ChildStatusSource;
 
 use crate::emacs_core::process::{HostInterfaceEntry, ProcessId};
 

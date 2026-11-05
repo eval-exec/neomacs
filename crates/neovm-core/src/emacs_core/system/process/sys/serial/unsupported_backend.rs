@@ -8,7 +8,7 @@
 //! and adding a w32 backend means giving this type fields -- at which point the
 //! compiler asks for real bodies.
 
-use crate::emacs_core::eval::data::process_state::Device;
+use neovm_eval::emacs_core::eval::data::process_state::Device;
 
 use std::ffi::OsStr;
 use std::io;

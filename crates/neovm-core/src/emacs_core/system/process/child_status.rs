@@ -177,7 +177,7 @@ use super::{
     Process, ProcessId, ProcessManager, ProcessStatusSymbol, Value, process_effective_status,
     process_public_status_symbol,
 };
-use crate::emacs_core::eval::data::process_state::{StatusChangeSite, StatusChangeTicks};
+use neovm_eval::emacs_core::eval::data::process_state::{StatusChangeSite, StatusChangeTicks};
 
 /// A process that GNU's SIGCHLD sweep may harvest.
 ///
@@ -450,7 +450,7 @@ impl<'a> ObservedProcess<'a> {
     }
 }
 
-pub(crate) use crate::emacs_core::eval::data::process_state::UnrecordedStatusRead;
+pub(crate) use neovm_eval::emacs_core::eval::data::process_state::UnrecordedStatusRead;
 
 // ---------------------------------------------------------------------------
 // GNU's per-process tick pair

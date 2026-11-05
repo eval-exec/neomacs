@@ -7,7 +7,7 @@
 //! dedicated `macos` / `windows` backend selected from `sys::mod`'s
 //! `cfg_select!`, mirroring GNU's per-platform `w32proc.c` implementation.
 
-use crate::emacs_core::eval::data::process_state::Source;
+use neovm_eval::emacs_core::eval::data::process_state::Source;
 
 use crate::emacs_core::process::ProcessId;
 use crate::emacs_core::process::{

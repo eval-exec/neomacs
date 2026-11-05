@@ -5,7 +5,7 @@
 
 use super::*;
 
-use crate::emacs_core::eval::data::process_state::process_effective_status;
+use neovm_eval::emacs_core::eval::data::process_state::process_effective_status;
 
 pub(super) fn check_keyword_arg_pairs(args: &[Value]) -> Result<(), Flow> {
     if args.len().is_multiple_of(2) {

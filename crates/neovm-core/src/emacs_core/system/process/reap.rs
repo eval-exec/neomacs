@@ -134,8 +134,10 @@
 
 use super::{Value, process_status_exit_value};
 use crate::emacs_core::callproc::{SpawnedChild, SpawnedChildIo};
-use crate::emacs_core::eval::data::process_state::{ChildHandle, ChildOwnership, ReapableChild};
 use crate::emacs_core::process::SystemProcessExt;
+use neovm_eval::emacs_core::eval::data::process_state::{
+    ChildHandle, ChildOwnership, ReapableChild,
+};
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::{

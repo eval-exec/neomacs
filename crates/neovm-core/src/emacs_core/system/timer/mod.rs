@@ -373,7 +373,7 @@ pub(crate) fn builtin_sleep_for(eval: &mut super::eval::Context, args: Vec<Value
     if total_secs > 0.0 {
         if eval.threads.current_thread_id() != 0 && !eval.green_threads_running() {
             return Err(Flow::thread_blocked(
-                crate::emacs_core::threads::make_sleep_blocker(total_secs),
+                neovm_eval::emacs_core::threads::make_sleep_blocker(total_secs),
                 Value::NIL,
             ));
         }

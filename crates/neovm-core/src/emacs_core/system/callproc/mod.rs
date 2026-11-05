@@ -20,7 +20,7 @@ use crate::buffer::BufferManager;
 use crate::heap_types::LispString;
 
 mod spawn;
-pub(crate) use crate::emacs_core::eval::data::process_spawn::{ChildStdio, SpawnedChild};
+pub(crate) use neovm_eval::emacs_core::eval::data::process_spawn::{ChildStdio, SpawnedChild};
 pub(crate) use spawn::{ChildCommand, SpawnedChildIo};
 
 use neovm_edit::emacs_core::edit_host::EditHost;
@@ -950,7 +950,7 @@ fn parse_optional_infile(args: &[Value], index: usize) -> Result<Option<LispStri
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn obarray_lisp_string_variable(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+    vars: neovm_eval::emacs_core::eval::VariableView<'_>,
     name: &str,
     fallback: &str,
 ) -> Result<LispString, Flow> {

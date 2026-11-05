@@ -441,8 +441,8 @@ impl AsyncSignalScope {
     /// (`the_pending_counters_are_lock_free` pins the width), so it keeps this
     /// method on the async-signal-safe list.
     fn set_pending_signals(&self) {
-        crate::emacs_core::eval::ASYNC_ATTENTION
-            .raise(crate::emacs_core::eval::AsyncSource::OsSignal);
+        neovm_eval::emacs_core::eval::ASYNC_ATTENTION
+            .raise(neovm_eval::emacs_core::eval::AsyncSource::OsSignal);
     }
 
     /// GNU's `child_signal_notify`, whose entire surviving body is
@@ -706,8 +706,8 @@ fn classify_previous(old: &libc::sigaction) -> PreviousDisposition {
 /// asynchronous-attention word, whose `OsSignal` bit it is.
 #[inline(always)]
 pub(crate) fn pending() -> bool {
-    crate::emacs_core::eval::ASYNC_ATTENTION
-        .is_raised(crate::emacs_core::eval::AsyncSource::OsSignal)
+    neovm_eval::emacs_core::eval::ASYNC_ATTENTION
+        .is_raised(neovm_eval::emacs_core::eval::AsyncSource::OsSignal)
 }
 
 /// Consume a captured fatal-signal request only on the evaluator thread.
@@ -762,7 +762,8 @@ pub(crate) fn pending_count(signal: HandledSignal) -> u32 {
 /// residual.  When that lands, this becomes its drain and the attribute goes.
 #[cfg(test)]
 pub(crate) fn take_pending() -> [u32; HandledSignal::COUNT] {
-    crate::emacs_core::eval::ASYNC_ATTENTION.take(crate::emacs_core::eval::AsyncSource::OsSignal);
+    neovm_eval::emacs_core::eval::ASYNC_ATTENTION
+        .take(neovm_eval::emacs_core::eval::AsyncSource::OsSignal);
     let mut taken = [0u32; HandledSignal::COUNT];
     for &signal in supported_signals() {
         taken[signal as usize] = PENDING[signal as usize].swap(0, Ordering::AcqRel);
@@ -833,10 +834,11 @@ pub(crate) struct UserSignalDrain {
 /// half is ledger 184's declared residual, and leaving the count in place is
 /// what keeps it a residual rather than a lost event.
 pub(crate) fn drain_pending_os_signals(
-    eval: &mut crate::emacs_core::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
 ) -> Result<UserSignalDrain, crate::emacs_core::error::Flow> {
     // GNU's `process_pending_signals` opens with `pending_signals = false;`.
-    crate::emacs_core::eval::ASYNC_ATTENTION.take(crate::emacs_core::eval::AsyncSource::OsSignal);
+    neovm_eval::emacs_core::eval::ASYNC_ATTENTION
+        .take(neovm_eval::emacs_core::eval::AsyncSource::OsSignal);
     // Recheck after the acquiring attention drain: a fatal signal may have
     // arrived between maybe_quit's first check and clearing this attention bit.
     // Never clear its only wake without consuming the published request.
