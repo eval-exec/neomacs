@@ -57,6 +57,7 @@ pub const PLAN_TSV: &str = "crates/neovm-eval/src/canonical_subr_step_plan.tsv";
 const CORE_MANIFEST: &str = "crates/neovm-core/src/emacs_core/builtins/subrs.rs";
 const UPPER_SOURCE: &str = "crates/neovm-eval/src/upper_subrs.generated.rs";
 const EVAL_SUBRS: &str = "crates/neovm-eval/src/emacs_core/runtime/eval/subrs.rs";
+const DISPLAY_SUBRS: &str = "crates/neovm-display/src/emacs_core/display/display_subrs/mod.rs";
 
 /// One extracted batch registrar called from the core manifest.
 struct BatchDef {
@@ -234,6 +235,7 @@ pub struct PlanStep {
 }
 
 /// A parsed `SubrSpec`/`EvaluatorSubr` entry.
+#[derive(Clone)]
 struct ParsedSpec {
     name: String,
     min: u16,
@@ -257,6 +259,12 @@ enum Item {
         origin: Origin,
     },
     Marker(&'static str),
+    /// One production display-step registrar call: the rows that follow
+    /// belong to this step, and the step id is the registrar's descriptive
+    /// plan id (never positional).
+    DisplayStepStart {
+        id: String,
+    },
 }
 
 fn read(repo_root: &Path, relative: &str) -> Result<String, String> {
@@ -524,6 +532,143 @@ fn parse_u16_prefix(text: &str) -> Option<(u16, &str)> {
     Some((value, &text[len..]))
 }
 
+/// One registration piece inside a display-step registrar: a call to an
+/// existing batch registrar, or an inline `SubrSpec` constant.
+enum DisplayPiece {
+    Batch(&'static BatchDef),
+    Inline(ParsedSpec),
+}
+
+/// The byte that starts the attribute/doc block immediately above `item_at`.
+fn leading_attribute_start(text: &str, item_at: usize) -> usize {
+    let mut start = text[..item_at]
+        .rfind('\n')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    loop {
+        if start == 0 {
+            return 0;
+        }
+        let previous_end = start - 1;
+        let previous_start = text[..previous_end]
+            .rfind('\n')
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        let previous = text[previous_start..previous_end].trim();
+        if previous.starts_with("#[") || previous.starts_with("///") {
+            start = previous_start;
+        } else {
+            return start;
+        }
+    }
+}
+
+/// The inline `const SPEC_...: SubrSpec = ...` declarations of the display
+/// step module, by constant name.
+fn display_spec_consts(source: &str) -> Result<BTreeMap<String, ParsedSpec>, String> {
+    let mut consts = BTreeMap::new();
+    for (offset, _) in source.match_indices("const SPEC_") {
+        let after = &source[offset + "const ".len()..];
+        let name_len = after
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            .count();
+        let name = &after[..name_len];
+        let spec_at = source[offset..]
+            .find("SubrSpec::")
+            .map(|index| offset + index)
+            .ok_or_else(|| format!("display spec const {name} has no SubrSpec"))?;
+        let chunk_start = leading_attribute_start(source, offset);
+        let (spec, _) = parse_subr_spec_at(source, spec_at, chunk_start, "always")
+            .map_err(|error| format!("display spec const {name}: {error}"))?;
+        if consts.insert(name.to_owned(), spec).is_some() {
+            return Err(format!("duplicate display spec const {name}"));
+        }
+    }
+    Ok(consts)
+}
+
+/// Parse the display crate's typed step registrars in source order. Each step
+/// function registers either batch registrars or inline spec constants; the
+/// core manifest calls one such function at each production display position.
+fn parse_display_steps(
+    repo_root: &Path,
+) -> Result<(Vec<String>, BTreeMap<String, Vec<DisplayPiece>>), String> {
+    let source = read(repo_root, DISPLAY_SUBRS)?;
+    let consts = display_spec_consts(&source)?;
+    let mut steps = BTreeMap::new();
+    let mut order = Vec::new();
+    let mut searched = 0usize;
+    while let Some(relative) = source[searched..].find("pub fn register_") {
+        let fn_at = searched + relative;
+        let after = &source[fn_at + "pub fn register_".len()..];
+        let id_len = after
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            .count();
+        let id = &after[..id_len];
+        if id.is_empty() {
+            return Err("display registrar with an empty step id".to_owned());
+        }
+        let body = brace_block_after(&source, fn_at)?;
+        let mut marks: Vec<(usize, bool)> = Vec::new();
+        for (offset, _) in body.match_indices("::register_subrs(ctx);") {
+            marks.push((offset, false));
+        }
+        for (offset, _) in body.match_indices("ctx.register_subr(") {
+            marks.push((offset, true));
+        }
+        marks.sort_unstable();
+        let mut pieces = Vec::with_capacity(marks.len());
+        for (position, inline) in marks {
+            if inline {
+                let after_call = &body[position + "ctx.register_subr(".len()..];
+                let name_len = after_call
+                    .bytes()
+                    .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+                    .count();
+                let const_name = &after_call[..name_len];
+                let spec = consts.get(const_name).ok_or_else(|| {
+                    format!("display step `{id}` registers unknown const `{const_name}`")
+                })?;
+                pieces.push(DisplayPiece::Inline(spec.clone()));
+            } else {
+                let start = body[..position]
+                    .rfind(|character: char| {
+                        !(character.is_ascii_alphanumeric() || character == '_' || character == ':')
+                    })
+                    .map(|index| index + 1)
+                    .unwrap_or(0);
+                let module = &body[start..position];
+                let batch = BATCHES
+                    .iter()
+                    .find(|batch| batch.module == module)
+                    .ok_or_else(|| {
+                        format!("display step `{id}` calls unknown batch registrar `{module}`")
+                    })?;
+                pieces.push(DisplayPiece::Batch(batch));
+            }
+        }
+        if pieces.is_empty() {
+            return Err(format!("display step `{id}` registers nothing"));
+        }
+        if body.matches("register_subr").count() != pieces.len() {
+            return Err(format!(
+                "display step `{id}` has an unmodeled registration form"
+            ));
+        }
+        if steps.insert(id.to_owned(), pieces).is_some() {
+            return Err(format!("duplicate display step `{id}`"));
+        }
+        order.push(id.to_owned());
+        searched = fn_at + "pub fn register_".len() + id_len;
+    }
+    if steps.is_empty() {
+        return Err(format!("{DISPLAY_SUBRS}: no display step registrars found"));
+    }
+    Ok((order, steps))
+}
+
 /// Every spec in a `define_subrs!` block (or a whole file when it has none),
 /// in source order. Each spec's cfg comes only from the text between the
 /// previous spec and this one.
@@ -643,6 +788,7 @@ enum Event {
     Direct { at: usize, spec_at: usize },
     Batch { at: usize, module: String },
     Eval { at: usize, id: &'static str },
+    DisplayStep { at: usize, id: String },
 }
 
 /// Scan the core manifest's `register_subrs` body for every registration
@@ -691,6 +837,25 @@ fn manifest_events(repo_root: &Path) -> Result<(Vec<Event>, String), String> {
             module: source[start..end].to_owned(),
         });
     }
+    for (offset, _) in body.match_indices("display_subrs::register_") {
+        let at = body_start + offset;
+        let after = &body[offset + "display_subrs::register_".len()..];
+        let id_len = after
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            .count();
+        let id = &after[..id_len];
+        if id.is_empty() || !after[id_len..].trim_start().starts_with('(') {
+            return Err(format!(
+                "manifest line {}: malformed display_subrs registrar call",
+                line_of(&source, at)
+            ));
+        }
+        events.push(Event::DisplayStep {
+            at,
+            id: id.to_owned(),
+        });
+    }
     for method in [
         ".register_data(ctx)",
         ".register_ordinary_eval(ctx)",
@@ -706,7 +871,10 @@ fn manifest_events(repo_root: &Path) -> Result<(Vec<Event>, String), String> {
         }
     }
     events.sort_by_key(|event| match event {
-        Event::Direct { at, .. } | Event::Batch { at, .. } | Event::Eval { at, .. } => *at,
+        Event::Direct { at, .. }
+        | Event::Batch { at, .. }
+        | Event::Eval { at, .. }
+        | Event::DisplayStep { at, .. } => *at,
     });
     Ok((events, source))
 }
@@ -767,6 +935,13 @@ fn canonical_items(repo_root: &Path) -> Result<Vec<Item>, String> {
         "always",
     )?;
 
+    let display_steps = if repo_root.join(DISPLAY_SUBRS).is_file() {
+        Some(parse_display_steps(repo_root)?)
+    } else {
+        None
+    };
+    let mut declared_display_order: Vec<String> = Vec::new();
+
     let mut batches: BTreeMap<&'static str, Vec<ParsedSpec>> = BTreeMap::new();
     for batch in BATCHES {
         batches.insert(
@@ -802,41 +977,46 @@ fn canonical_items(repo_root: &Path) -> Result<Vec<Item>, String> {
                             line_of(&source, at)
                         )
                     })?;
-                let specs = batches
-                    .get(batch.module)
-                    .ok_or_else(|| format!("unparsed batch `{module}`"))?;
-                for spec in specs {
-                    let row = match upper.get(&spec.name) {
-                        Some(row) => {
-                            if row.min != spec.min || row.max != spec.max {
-                                return Err(format!(
-                                    "{}: batch arity {}({:?}) != generated upper arity {}({:?})",
-                                    spec.name, spec.min, spec.max, row.min, row.max
-                                ));
-                            }
-                            row.clone()
+                push_batch_rows(&mut items, &batches, &upper, batch).map_err(|error| {
+                    format!(
+                        "manifest line {}: batch `{module}`: {error}",
+                        line_of(&source, at)
+                    )
+                })?;
+            }
+            Event::DisplayStep { at, id } => {
+                let (_, steps) = display_steps.as_ref().ok_or_else(|| {
+                    format!(
+                        "manifest line {}: display registrar `{id}` but no {DISPLAY_SUBRS}",
+                        line_of(&source, at)
+                    )
+                })?;
+                declared_display_order.push(id.clone());
+                let pieces = steps.get(&id).ok_or_else(|| {
+                    format!(
+                        "manifest line {}: display registrar `{id}` not found in {DISPLAY_SUBRS}",
+                        line_of(&source, at)
+                    )
+                })?;
+                items.push(Item::DisplayStepStart { id: id.clone() });
+                for piece in pieces {
+                    match piece {
+                        DisplayPiece::Batch(batch) => {
+                            push_batch_rows(&mut items, &batches, &upper, batch).map_err(
+                                |error| {
+                                    format!(
+                                        "manifest line {}: display step `{id}`: {error}",
+                                        line_of(&source, at)
+                                    )
+                                },
+                            )?;
                         }
-                        None => {
-                            let layer = batch.unlisted_layer.ok_or_else(|| {
-                                format!(
-                                    "{module}: {:?} missing from the generated upper source",
-                                    spec.name
-                                )
-                            })?;
-                            NameRow {
-                                name: spec.name.clone(),
-                                min: spec.min,
-                                max: spec.max,
-                                layer: layer.to_owned(),
-                                cfg: spec.cfg.clone(),
-                            }
-                        }
-                    };
-                    items.push(Item::Row {
-                        row,
-                        event: batch.event_id,
-                        origin: Origin::Batch(batch.key),
-                    });
+                        DisplayPiece::Inline(spec) => items.push(Item::Row {
+                            row: upper_row(&upper, spec)?,
+                            event: None,
+                            origin: Origin::Inline,
+                        }),
+                    }
                 }
             }
             Event::Eval { at, id } => match id {
@@ -868,7 +1048,65 @@ fn canonical_items(repo_root: &Path) -> Result<Vec<Item>, String> {
             },
         }
     }
+    // The display module's registrar functions, the manifest's calls and the
+    // generated display segments are one order: a registrar the manifest
+    // does not follow, or an extra call with no registrar, is a hard error
+    // rather than silently missing rows.
+    if let Some((order, _)) = &display_steps
+        && declared_display_order != *order
+    {
+        return Err(format!(
+            "manifest display registrars {:?} do not match the display module's registrar order {:?}",
+            declared_display_order, order
+        ));
+    }
     Ok(items)
+}
+
+fn push_batch_rows(
+    items: &mut Vec<Item>,
+    batches: &BTreeMap<&'static str, Vec<ParsedSpec>>,
+    upper: &BTreeMap<String, NameRow>,
+    batch: &'static BatchDef,
+) -> Result<(), String> {
+    let module = batch.module;
+    let specs = batches
+        .get(module)
+        .ok_or_else(|| format!("unparsed batch `{module}`"))?;
+    for spec in specs {
+        let row = match upper.get(&spec.name) {
+            Some(row) => {
+                if row.min != spec.min || row.max != spec.max {
+                    return Err(format!(
+                        "{}: batch arity {}({:?}) != generated upper arity {}({:?})",
+                        spec.name, spec.min, spec.max, row.min, row.max
+                    ));
+                }
+                row.clone()
+            }
+            None => {
+                let layer = batch.unlisted_layer.ok_or_else(|| {
+                    format!(
+                        "{module}: {:?} missing from the generated upper source",
+                        spec.name
+                    )
+                })?;
+                NameRow {
+                    name: spec.name.clone(),
+                    min: spec.min,
+                    max: spec.max,
+                    layer: layer.to_owned(),
+                    cfg: spec.cfg.clone(),
+                }
+            }
+        };
+        items.push(Item::Row {
+            row,
+            event: batch.event_id,
+            origin: Origin::Batch(batch.key),
+        });
+    }
+    Ok(())
 }
 
 fn push_eval_rows(items: &mut Vec<Item>, specs: &[ParsedSpec], event: &'static str) {
@@ -964,6 +1202,7 @@ fn build_plan(items: &[Item]) -> Result<(Vec<NameRow>, Vec<PlanStep>), String> {
     let mut open: Option<PlanStep> = None;
     let mut run_counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut eval_seen: Vec<&'static str> = Vec::new();
+    let mut pending_display: Option<String> = None;
 
     let close = |steps: &mut Vec<PlanStep>, open: &mut Option<PlanStep>| {
         if let Some(step) = open.take() {
@@ -988,7 +1227,17 @@ fn build_plan(items: &[Item]) -> Result<(Vec<NameRow>, Vec<PlanStep>), String> {
                 });
                 eval_seen.push("eval.event_properties");
             }
+            Item::DisplayStepStart { id } => {
+                close(&mut steps, &mut open);
+                pending_display = Some(id.clone());
+            }
             Item::Row { row, event, origin } => {
+                let display_step = if row.layer == "display" {
+                    pending_display.take()
+                } else {
+                    pending_display = None;
+                    None
+                };
                 let mut extends = false;
                 if let Some(current) = open.as_ref() {
                     match (event, current.kind) {
@@ -1025,10 +1274,12 @@ fn build_plan(items: &[Item]) -> Result<(Vec<NameRow>, Vec<PlanStep>), String> {
                         }
                         None if row.layer == "display" => PlanStep {
                             kind: "display_segment",
-                            // Filled in after the run is closed, from its
-                            // origins; display ids are descriptive, not
-                            // positional (peer ruling 03:35:50Z (b)).
-                            id: String::new(),
+                            // A split display step registrar supplies its id;
+                            // otherwise it is filled in after the run is
+                            // closed, from its origins. Display ids are
+                            // descriptive, not positional (peer ruling
+                            // 03:35:50Z (b)).
+                            id: display_step.unwrap_or_default(),
                             layer: row.layer.clone(),
                             first: rows.len() + 1,
                             count: 0,
@@ -1056,14 +1307,42 @@ fn build_plan(items: &[Item]) -> Result<(Vec<NameRow>, Vec<PlanStep>), String> {
 
     // Display ids name the run by its origin batch(es) or its first subr,
     // never by position: inserting an unrelated plan row must not renumber
-    // every later display variant.
+    // every later display variant. A split display step registrar already
+    // carries its id; the run's origins must derive that same id, so the
+    // split's typed registrars and the plan cannot silently diverge.
+    let declared_display: Vec<String> = items
+        .iter()
+        .filter_map(|item| match item {
+            Item::DisplayStepStart { id } => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    let explicit_display: Vec<String> = steps
+        .iter()
+        .filter(|step| step.kind == "display_segment" && !step.id.is_empty())
+        .map(|step| step.id.clone())
+        .collect();
+    if declared_display != explicit_display {
+        return Err(format!(
+            "display step ids {:?} do not match the display segments {:?}",
+            declared_display, explicit_display
+        ));
+    }
     for step in steps
         .iter_mut()
         .filter(|step| step.kind == "display_segment")
     {
         let start = step.first - 1;
         let end = start + step.count;
-        step.id = display_run_id(&origins[start..end], &rows[start..end])?;
+        let id = display_run_id(&origins[start..end], &rows[start..end])?;
+        if step.id.is_empty() {
+            step.id = id;
+        } else if step.id != id {
+            return Err(format!(
+                "display step id {:?} does not match its registration origin {:?}",
+                step.id, id
+            ));
+        }
     }
     let mut seen_ids = std::collections::BTreeSet::new();
     for step in &steps {
