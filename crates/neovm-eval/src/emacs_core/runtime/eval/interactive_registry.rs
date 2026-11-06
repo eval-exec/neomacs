@@ -369,7 +369,7 @@ impl InteractiveRegistry {
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub fn note_where_is_reverse_index_build(&mut self) {
+    pub(crate) fn note_where_is_reverse_index_build(&mut self) {
         self.where_is_reverse_index_build_count += 1;
     }
 
