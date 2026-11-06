@@ -1637,6 +1637,17 @@ pub struct PresentationWindow {
     pub cursor: Option<PresentationCursor>,
 }
 
+impl PresentationWindow {
+    /// Test-support: this presentation window's window id (read).
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn id(&self) -> WindowId {
+        self.id
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WindowRegions {
     pub outer: PixelRect<FrameLogicalSpace>,

@@ -2492,7 +2492,7 @@ pub struct Buffer {
     /// only from the anchor instead of from BUF_BEGV. Validity is checked
     /// against both the restriction and the unchanged-region accumulator (the
     /// BEG_UNCHANGED analog) at each use.
-    pub(crate) line_number_anchor: std::cell::Cell<Option<ModeLineNumberAnchor>>,
+    pub line_number_anchor: std::cell::Cell<Option<ModeLineNumberAnchor>>,
     /// Unique identifier.
     pub id: BufferId,
     /// Buffer name (e.g. `"*scratch*"`). Mirrors GNU `struct buffer.name_`.

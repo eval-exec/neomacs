@@ -5605,6 +5605,17 @@ impl Context {
         &self.fringe_bitmaps
     }
 
+    /// Test-support: mutable registry view for the display fringe tests.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn fringe_bitmaps_mut(
+        &mut self,
+    ) -> &mut super::builtins::fringe_bitmap::FringeBitmapRegistry {
+        &mut self.fringe_bitmaps
+    }
+
     /// Resolve a fringe-bitmap symbol NAME (e.g. `"empty-line"`) to its registry
     /// index, the way the display pipeline needs when it produces a synthetic
     /// indicator row (empty-line `~` markers) rather than reacting to an explicit
