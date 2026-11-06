@@ -1072,6 +1072,56 @@ mod unit_runtime {
                 .expect("the display unit hook set publishes at first use")
         })
     }
+    /// T7 construction census (LEAD 06:4xZ (3)): plain
+    /// `Context::new(unit_runtime())` plus one trivial form must reach only
+    /// absent-by-construction UNLINKED slots. A construction-reached Refused
+    /// slot is a P2 bug - construction must never PANIC - and a new slot
+    /// reached by construction changes this pinned list in the same pick.
+    mod construction_census {
+        use super::absent_layer_slots::{AbsentLayerHit, take_absent_layer_hits_for_test};
+        use super::unit_runtime;
+
+        const EXPECTED_UNLINKED: &[&str] = &[
+            "ABSENT-LAYER system::sqlite.reset",
+            "ABSENT-LAYER system::dbusbind.reset_thread_locals",
+            "ABSENT-LAYER system::timefns.reset",
+            "ABSENT-LAYER system::input.signal_wake_pipe_read_fd",
+        ];
+
+        #[test]
+        fn construction_reaches_no_panicking_absent_layer_slot() {
+            let _ = take_absent_layer_hits_for_test();
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut context = crate::emacs_core::eval::Context::new(unit_runtime());
+                context
+                    .eval_str("(+ 1 2)")
+                    .map(|_| ())
+                    .map_err(|error| format!("{error:?}"))
+            }));
+            let hits = take_absent_layer_hits_for_test();
+            let refused: Vec<_> = hits
+                .iter()
+                .filter(|(kind, _)| *kind == AbsentLayerHit::Refused)
+                .collect();
+            match &outcome {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => panic!("the trivial form failed: {error}"),
+                Err(_) => panic!("construction panicked; refused hits: {refused:?}"),
+            }
+            assert!(
+                refused.is_empty(),
+                "construction reached PANIC slot(s): {refused:?}"
+            );
+            let unlinked: Vec<&str> = hits
+                .iter()
+                .filter_map(|(kind, marker)| (*kind == AbsentLayerHit::Unlinked).then_some(*marker))
+                .collect();
+            assert_eq!(
+                unlinked, EXPECTED_UNLINKED,
+                "the construction-reached UNLINKED slot list changed"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

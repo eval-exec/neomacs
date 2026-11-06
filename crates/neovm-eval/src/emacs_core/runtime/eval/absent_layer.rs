@@ -639,8 +639,12 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER system::input.drain_pending_os_signals");
             }
 
+            /// UNLINKED: plain unit-runtime construction reaches this through
+            /// `ProcessWaitBackend::new`; a layer-less runtime has no signal
+            /// self-pipe, so the honest absent value is `None`.
             pub(crate) fn input_signal_wake_pipe_read_fd() -> Option<i32> {
-                absent_layer_panic("ABSENT-LAYER system::input.signal_wake_pipe_read_fd");
+                absent_layer_unlinked("ABSENT-LAYER system::input.signal_wake_pipe_read_fd");
+                None
             }
 
             pub(crate) fn input_drain_signal_wake_pipe(fd: i32) {
