@@ -2756,6 +2756,20 @@ impl WindowTree {
         self.nodes.values_mut()
     }
 
+    /// Test-support capacity probe for the sparse node table.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn nodes_capacity_for_test(&self) -> usize {
+        self.nodes.capacity()
+    }
+
+    /// Test-support capacity reservation for the sparse node table.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn reserve_nodes_for_test(&mut self, additional: usize) {
+        self.nodes.reserve(additional);
+    }
+
     /// `id`'s children, in layout order.
     pub fn child_ids(&self, id: WindowId) -> &[WindowId] {
         self.find(id).map_or(&[], Window::children)
@@ -3676,6 +3690,13 @@ impl PresentedWindowChromeStrings {
     #[inline]
     pub fn as_slice(&self) -> &[PresentedWindowChromeString] {
         self.0.as_deref().unwrap_or(&[])
+    }
+
+    /// Test-support probe for whether a source vector is shared.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn is_allocated_for_test(&self) -> bool {
+        self.0.is_some()
     }
 }
 
@@ -5270,7 +5291,7 @@ impl PresentationPositions {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[inline]
     #[doc(hidden)]
     pub fn is_materialized(&self) -> bool {

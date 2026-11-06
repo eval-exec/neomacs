@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::window::{DisplayPointRole, DisplayPointSnapshot};
-use neovm_eval::emacs_core::eval::data::point_rows::{PointRowsIterOrder, WindowDisplayPointIter};
+use neovm_eval::emacs_core::eval::data::point_rows::WindowDisplayPointIter;
 use neovm_eval::emacs_core::eval::data::window_state::PointRowIterMode;
 use neovm_value::value::positions::LispCharPos1;
 use std::iter::FusedIterator;
@@ -110,10 +110,11 @@ fn boundary_ties_and_bidi_keep_the_entire_legacy_stream() {
         ],
     ];
     let rows = fixture(&input);
-    assert!(matches!(
-        rows.iter_points_with_mode(PointRowIterMode::On).order,
-        PointRowsIterOrder::Concat { .. }
-    ));
+    assert!(
+        !rows
+            .iter_points_with_mode(PointRowIterMode::On)
+            .uses_merge_order_for_test()
+    );
     assert_modes(&rows, &expected(&input));
 }
 
@@ -149,10 +150,10 @@ fn overlapping_or_reversed_ranges_use_the_legacy_heap() {
     ];
     for input in [vec![first.clone(), second.clone()], vec![second, first]] {
         let rows = fixture(&input);
-        assert!(matches!(
-            rows.iter_points_with_mode(PointRowIterMode::On).order,
-            PointRowsIterOrder::Merge { .. }
-        ));
+        assert!(
+            rows.iter_points_with_mode(PointRowIterMode::On)
+                .uses_merge_order_for_test()
+        );
         assert_modes(&rows, &expected(&input));
     }
 }

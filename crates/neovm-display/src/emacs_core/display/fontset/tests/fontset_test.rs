@@ -711,23 +711,25 @@ fn fontset_registry_pdump_uses_symbol_identity_for_charset_repertories() {
     assert!(matches!(
         spec.definition.as_ref().expect("dumped definition").repertory.as_ref().expect("dumped repertory"),
         neovm_eval::emacs_core::pdump::types::DumpFontRepertory::CharsetSym(sym)
-            if sym.0 == repertory_sym.0
+            if sym.0 == repertory_sym.to_raw()
     ));
     assert_eq!(
         spec.family_sym,
         Some(neovm_eval::emacs_core::pdump::types::DumpSymId(
-            family_sym.0
+            family_sym.to_raw()
         ))
     );
     assert_eq!(
         spec.registry_sym,
         Some(neovm_eval::emacs_core::pdump::types::DumpSymId(
-            registry_sym.0
+            registry_sym.to_raw()
         ))
     );
     assert_eq!(
         spec.lang_sym,
-        Some(neovm_eval::emacs_core::pdump::types::DumpSymId(lang_sym.0))
+        Some(neovm_eval::emacs_core::pdump::types::DumpSymId(
+            lang_sym.to_raw()
+        ))
     );
     assert!(spec.family.is_none());
     assert!(spec.registry.is_none());

@@ -4,9 +4,12 @@ mod attempt_freshness_span_test;
 
 use super::*;
 use crate::window::DisplayFrameTestExt;
+use crate::window::geometry::DisplayGeometryExt;
+use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
 use neomacs_display_protocol::TransitionDirection;
 use neovm_edit::buffer::{CharLen, EmacsByteLen};
 use neovm_value::display_vocab::SourcePreloadWindowRetirementRefusal;
+use neovm_value::gc_trace::GcTrace;
 use neovm_value::heap_types::byte_positions::EmacsBytePos;
 use std::sync::Arc;
 
@@ -1943,8 +1946,8 @@ fn frozen_chrome_clone_keeps_shared_root_alive_until_last_collection_drop() {
 fn frozen_chrome_empty_collection_has_no_shared_allocation() {
     let default = PresentedWindowChromeStrings::default();
     let from_empty: PresentedWindowChromeStrings = Vec::new().into();
-    assert!(default.0.is_none());
-    assert!(from_empty.0.is_none());
+    assert!(!default.is_allocated_for_test());
+    assert!(!from_empty.is_allocated_for_test());
     assert_eq!(default, from_empty);
     assert!(from_empty.as_slice().is_empty());
 }
@@ -4437,8 +4440,12 @@ fn selected_window_read_tracks_exact_ids_live_contents_and_sparse_tables() {
     frame.selected_window = minibuffer;
     assert_eq!(frames.selected_window().unwrap().id(), minibuffer);
     frames.get_mut(first).unwrap().selected_window = root;
-    frames.get_mut(first).unwrap().tree.nodes.reserve(64);
-    assert!(frames.get(first).unwrap().tree.nodes.capacity() > 7);
+    frames
+        .get_mut(first)
+        .unwrap()
+        .tree
+        .reserve_nodes_for_test(64);
+    assert!(frames.get(first).unwrap().tree.nodes_capacity_for_test() > 7);
     assert_eq!(frames.selected_window().unwrap().id(), root);
     frames.frames.reserve(64);
     assert!(frames.frames.capacity() > 7);

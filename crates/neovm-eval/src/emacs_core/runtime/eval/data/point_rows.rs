@@ -363,6 +363,13 @@ impl DisplayPointRow {
         self.iter_order(&self.data.x_order)
     }
 
+    /// Test-support view of the two frozen traversal orders.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn orders_for_test(&self) -> (&PointOrder, &PointOrder) {
+        (&self.data.source_order, &self.data.x_order)
+    }
+
     #[inline]
     #[doc(hidden)]
     pub fn iter_order<'a>(&'a self, order: &'a PointOrder) -> DisplayPointRowIter<'a> {
@@ -679,6 +686,15 @@ impl Iterator for DisplayPointRowsIter<'_> {
 }
 impl ExactSizeIterator for DisplayPointRowsIter<'_> {}
 impl std::iter::FusedIterator for DisplayPointRowsIter<'_> {}
+
+impl DisplayPointRowsIter<'_> {
+    /// Test-support probe for the merge path's presence.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn uses_merge_order_for_test(&self) -> bool {
+        matches!(self.order, PointRowsIterOrder::Merge { .. })
+    }
+}
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum WindowDisplayPointIter<'a> {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::window::DisplayFrameExt;
 use neovm_value::value::Value;
 #[test]
 fn gnu_frame_alpha_components() {

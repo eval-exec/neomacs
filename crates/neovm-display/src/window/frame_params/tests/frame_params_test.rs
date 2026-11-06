@@ -1,4 +1,6 @@
 use super::*;
+use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
+use strum::VariantArray;
 
 #[test]
 fn gnu_frame_params_preserve_gnu_order() {

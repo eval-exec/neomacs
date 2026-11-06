@@ -1562,6 +1562,29 @@ pub struct FaceStorage {
     pub(crate) roots: std::cell::OnceCell<std::rc::Rc<[Value]>>,
 }
 
+/// Copied census of an `Rc` control block (test-support only): strong/weak
+/// counts and the allocation address. It carries no handle to the pointee, so
+/// an oracle can assert identity/ownership without exporting heap `Value`s.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RcCensus {
+    pub strong: usize,
+    pub weak: usize,
+    pub addr: usize,
+}
+
+#[cfg(feature = "test-support")]
+impl RcCensus {
+    fn of<T>(rc: &std::rc::Rc<T>) -> Self {
+        Self {
+            strong: std::rc::Rc::strong_count(rc),
+            weak: std::rc::Rc::weak_count(rc),
+            addr: std::rc::Rc::as_ptr(rc).addr(),
+        }
+    }
+}
+
 impl FaceTable {
     pub fn new() -> Self {
         let mut table = Self {
@@ -1643,6 +1666,23 @@ impl FaceTable {
     /// Record the terminal palette this table was realized against.
     pub fn set_tty_palette(&mut self, palette: neomacs_display_protocol::TtyPalette) {
         self.tty_palette = std::rc::Rc::new(palette);
+    }
+
+    /// Test-support copied census of the lisp-face-reference map's control
+    /// block: strong/weak counts plus the allocation address. No handle to the
+    /// map or its heap `Value`s leaves the table.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn lisp_face_refs_census_for_test(&self) -> RcCensus {
+        RcCensus::of(&self.lisp_face_refs)
+    }
+
+    /// Test-support copied census of the realized terminal palette's control
+    /// block. Carries no handle to the pointee.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn tty_palette_census_for_test(&self) -> RcCensus {
+        RcCensus::of(&self.tty_palette)
     }
 
     /// Register the standard Emacs faces.

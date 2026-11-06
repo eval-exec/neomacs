@@ -45,8 +45,9 @@ fn point_row_identity_orders_reuse_compact_scratch_without_aliasing_frozen_cells
         assert_eq!(scratch.as_ptr(), allocation);
         assert_eq!(scratch.capacity(), capacity);
         assert!(row.is_compact());
-        assert!(matches!(row.data.source_order, PointOrder::Identity { len } if len == count));
-        assert!(matches!(row.data.x_order, PointOrder::Identity { len } if len == count));
+        let (source_order, x_order) = row.orders_for_test();
+        assert!(matches!(source_order, PointOrder::Identity { len } if *len == count));
+        assert!(matches!(x_order, PointOrder::Identity { len } if *len == count));
         assert_eq!(row.points().collect::<Vec<_>>(), expected);
         assert_eq!(row.points_x_order().collect::<Vec<_>>(), expected);
 

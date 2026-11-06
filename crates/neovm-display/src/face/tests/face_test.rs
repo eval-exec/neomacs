@@ -1,4 +1,5 @@
 use super::*;
+use neovm_value::gc_trace::GcTrace;
 
 #[test]
 fn color_from_hex() {
@@ -1098,15 +1099,15 @@ fn rows_palette_identity_does_not_add_definition_cow_weak_owners() {
 
     let mut table = FaceTable::new();
     assert_eq!(Rc::strong_count(&table.faces), 1);
-    assert_eq!(Rc::strong_count(&table.lisp_face_refs), 1);
+    assert_eq!(table.lisp_face_refs_census_for_test().strong, 1);
     assert_eq!(Rc::weak_count(&table.faces), 0);
-    assert_eq!(Rc::weak_count(&table.lisp_face_refs), 0);
+    assert_eq!(table.lisp_face_refs_census_for_test().weak, 0);
     let identity = table.rows_snapshot_identity();
     assert_eq!(Rc::weak_count(&table.faces), 0);
-    assert_eq!(Rc::weak_count(&table.lisp_face_refs), 0);
-    assert_eq!(Rc::weak_count(&table.tty_palette), 1);
+    assert_eq!(table.lisp_face_refs_census_for_test().weak, 0);
+    assert_eq!(table.tty_palette_census_for_test().weak, 1);
     let faces = Rc::as_ptr(&table.faces);
-    let references = Rc::as_ptr(&table.lisp_face_refs);
+    let references = table.lisp_face_refs_census_for_test().addr;
     table.ensure_face("rows-unique-native-face");
     table.define_lisp_face(
         LispFaceId::new(37001).unwrap(),
@@ -1114,9 +1115,9 @@ fn rows_palette_identity_does_not_add_definition_cow_weak_owners() {
         Face::new("rows-unique-native-face"),
     );
     assert_eq!(Rc::as_ptr(&table.faces), faces);
-    assert_eq!(Rc::as_ptr(&table.lisp_face_refs), references);
+    assert_eq!(table.lisp_face_refs_census_for_test().addr, references);
     assert_eq!(Rc::weak_count(&table.faces), 0);
-    assert_eq!(Rc::weak_count(&table.lisp_face_refs), 0);
+    assert_eq!(table.lisp_face_refs_census_for_test().weak, 0);
     assert!(identity.matches(&table));
     // These assertions cover Rc control-block identity and Weak ownership;
     // ordinary map growth/interning may still allocate. The identity is not

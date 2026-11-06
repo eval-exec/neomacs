@@ -2,6 +2,7 @@
 //! Each Frame/snapshot has one exclusive mutator; published snapshot readers
 //! retain immutable copies with no Lisp values or shared mutable selectors.
 use super::*;
+use crate::window::DisplayFrameManagerExt;
 use crate::window::WindowDisplaySnapshot;
 use crate::window::{FrameId, FrameManager};
 use neovm_edit::buffer::BufferId;
