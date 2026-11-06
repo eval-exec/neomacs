@@ -281,28 +281,30 @@ fn byte_code_probe(
     constants: Vec<Value>,
 ) -> Value {
     use crate::tagged::bytecode::chunk::ByteCodeFunction;
-    Value::make_bytecode(ByteCodeFunction {
-        source_id: crate::tagged::bytecode::chunk::fresh_bytecode_source_id(),
-        ops_sealed: true,
-        stack_verified: false,
-        ops,
-        constants: constants.into(),
-        max_stack: crate::tagged::bytecode::function_slots::StackDepth::try_from(1usize)
-            .expect("StackDepth::for_test depth is a valid GNU stack depth"),
-        params: LambdaParams::simple(vec![]).into(),
-        arglist: Value::fixnum(257),
-        lexical: true,
-        env,
-        gnu_byte_offset_map: None,
-        gnu_bytecode_bytes: gnu_bytes.map(crate::tagged::header::LispByteVec::owned),
-        docstring,
-        doc_form: None,
-        interactive: None,
-        closure_slot_count: 4,
-        extra_slots: Vec::new(),
-        #[cfg(feature = "jit")]
-        runtime: Some(crate::emacs_core::jit::Runtime::new()),
-        lazy_gnu_code: None,
+    // SAFETY: the probe deliberately builds states `make-byte-code` cannot
+    // reach (sealed flag without the normalizer, custom lexenv/docstring), so
+    // it uses the signed from_parts escape instead of widening private fields.
+    Value::make_bytecode(unsafe {
+        ByteCodeFunction::from_parts(
+            crate::tagged::bytecode::chunk::fresh_bytecode_source_id(),
+            ops,
+            true,
+            false,
+            constants.into(),
+            crate::tagged::bytecode::function_slots::StackDepth::try_from(1usize)
+                .expect("StackDepth::for_test depth is a valid GNU stack depth"),
+            LambdaParams::simple(vec![]).into(),
+            Value::fixnum(257),
+            true,
+            env,
+            None,
+            gnu_bytes.map(crate::tagged::header::LispByteVec::owned),
+            docstring,
+            None,
+            None,
+            4,
+            Vec::new(),
+        )
     })
 }
 

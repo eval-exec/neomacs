@@ -47,6 +47,9 @@ impl AbbrevTable {
 /// The tables HashMap is kept for pdump compatibility but no longer used by builtins.
 #[derive(Clone, Debug)]
 pub struct AbbrevManager {
+    #[cfg(feature = "test-support")]
+    pub tables: HashMap<SymId, AbbrevTable>,
+    #[cfg(not(feature = "test-support"))]
     tables: HashMap<SymId, AbbrevTable>,
     global_table_sym: SymId,
     abbrev_mode: bool,
@@ -273,10 +276,12 @@ impl GcTrace for AbbrevManager {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn runtime_string_to_abbrev_string(text: &str) -> LispString {
     crate::emacs_core::builtins::plain_str_to_lisp_string(text, true)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn abbrev_table_sym(text: &str) -> SymId {
     intern(text)
 }
@@ -289,6 +294,7 @@ fn abbrev_table_sym_from_lisp(text: &LispString) -> SymId {
     neovm_value::intern::intern_lisp_string(text)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn abbrev_string_to_runtime(text: &LispString) -> String {
     // Issue #131: remaining consumers are display/expansion/sort text reached
     // through `&str` APIs; a lossy UTF-8 rendering keeps real Unicode (incl.
@@ -296,6 +302,7 @@ fn abbrev_string_to_runtime(text: &LispString) -> String {
     neovm_value::emacs_char::to_utf8_lossy(text.as_bytes())
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn apply_case(expansion: &str, word: &str, case_fixed: bool) -> String {
     if case_fixed || word.is_empty() || expansion.is_empty() {
         return expansion.to_string();

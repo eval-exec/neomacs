@@ -58,6 +58,7 @@ pub(crate) use neovm_value::strings_core::lisp_string_char_at;
 /// through the one-entry position cache (GNU `string_char_to_byte`), so a
 /// walk over a multibyte string by index -- `aref', `mapcar', `seq-*' --
 /// steps from the previous character instead of rescanning.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn lisp_string_value_char_at(value: Value, idx: usize) -> Option<u32> {
     let string = value.as_lisp_string()?;
     // Unibyte or computed all-ASCII text: the byte is the character, and the
@@ -84,6 +85,7 @@ fn multibyte_string_value_char_at(
 }
 
 /// Iterate character codes via a closure (avoids allocation when possible).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn for_each_lisp_string_char(
     string: &neovm_value::heap_types::LispString,
     mut f: impl FnMut(u32),

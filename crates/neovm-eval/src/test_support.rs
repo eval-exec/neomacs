@@ -362,6 +362,33 @@ pub mod authority {
         entry.dispatch_kind
     }
 
+    /// Copied bool read of the registered entry's function shape (the
+    /// `ManySlice` arm), for core's commandp oracle. The `function` field
+    /// stays pub(crate) and no function pointer crosses the fence (item 5
+    /// family).
+    /// N2 counter reset (LEAD 10:1xZ): zero the per-thread subr-lookup
+    /// counter for the moved commandp oracle. The original fn stays
+    /// pub(crate) with no A-prime widening; this fence is its only
+    /// cross-crate route.
+    pub fn reset_global_subr_lookup_count() {
+        crate::emacs_core::eval::reset_global_subr_lookup_count();
+    }
+
+    /// N2 counter reset (LEAD 10:1xZ): zero the obarray materialization
+    /// counter for the moved completion oracle. The original fn stays
+    /// pub(crate) with no A-prime widening; this fence is its only
+    /// cross-crate route.
+    pub fn reset_global_obarray_symbol_value_materializations() {
+        crate::emacs_core::builtins::symbols::reset_global_obarray_symbol_value_materializations();
+    }
+
+    pub fn subr_entry_function_is_many_slice(entry: &SubrEntry) -> bool {
+        matches!(
+            entry.function,
+            Some(crate::emacs_core::eval::subr_abi::SubrFn::ManySlice(_))
+        )
+    }
+
     /// One typed change for the forged-registration tests (item 6).
     /// `BodyFrom` can only splice a REAL HOF builtin body, never an
     /// arbitrary fn pointer.

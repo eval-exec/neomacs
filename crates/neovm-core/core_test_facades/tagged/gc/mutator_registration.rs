@@ -8,6 +8,9 @@
 
 pub use neovm_value::tagged::gc::mutator_registration::*;
 
+// Public-path restoration for the relocated core_tests files.
+pub use neovm_value::tagged::gc::HeapIdentity;
+
 #[path = "mutator_registration/execution.rs"]
 pub mod execution;
 #[path = "mutator_registration/symbol_authority.rs"]

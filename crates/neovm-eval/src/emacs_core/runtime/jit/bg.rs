@@ -1656,6 +1656,7 @@ mod inline_size_tests;
 /// Native execution fixtures should await the real worker instead.
 #[cfg(any(test, feature = "test-support"))]
 #[must_use]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct TestModeScope {
     prior: Option<BgMode>,
     _thread: std::marker::PhantomData<std::rc::Rc<()>>,

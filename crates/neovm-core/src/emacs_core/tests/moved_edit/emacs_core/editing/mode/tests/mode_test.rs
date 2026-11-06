@@ -133,13 +133,14 @@ fn mode_copied_properties_have_only_manager_roots() {
     let check_live = |eval: &Context| {
         for Probe(bits) in &probes {
             assert!(
-                eval.tagged_heap().retains_veclike(Value::from_bits(*bits)),
+                eval.tagged_heap()
+                    .retains_veclike(unsafe { Value::from_bits(*bits) }),
                 "mode-only property vector was reclaimed"
             );
         }
         for (index, Probe(bits)) in probes.iter().enumerate() {
             assert_eq!(
-                Value::from_bits(*bits)
+                unsafe { Value::from_bits(*bits) }
                     .as_vector_data()
                     .expect("live mode property vector")
                     .as_slice(),
@@ -191,7 +192,9 @@ fn mode_copied_properties_have_only_manager_roots() {
     eval.gc_collect_exact();
     for Probe(bits) in probes {
         assert!(
-            !eval.tagged_heap().retains_veclike(Value::from_bits(bits)),
+            !eval
+                .tagged_heap()
+                .retains_veclike(unsafe { Value::from_bits(bits) }),
             "retired mode graph remained permanently rooted"
         );
     }

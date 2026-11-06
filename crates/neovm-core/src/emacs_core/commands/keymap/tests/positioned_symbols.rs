@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::eval::keymap_lookup::{assq_in_alist, minor_mode_map_entry};
 
 #[test]
 fn issue554_positioned_keymap_markers_follow_symbol_mode() {

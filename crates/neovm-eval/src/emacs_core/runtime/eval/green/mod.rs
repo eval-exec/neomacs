@@ -157,6 +157,7 @@ pub(crate) enum GreenThreadStartError {
 
 /// Why the Green runtime could not start, or a Green operation refused.
 #[derive(Debug, thiserror::Error)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum GreenStartError {
     #[error("the World does not run green Lisp threads")]
     NotGreen,

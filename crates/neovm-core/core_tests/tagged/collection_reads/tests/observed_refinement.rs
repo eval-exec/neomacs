@@ -6,7 +6,7 @@
 
 use super::super::{
     CompiledJournalMode, capture, compiled_observation_gate, force_compiled_journal_for_test,
-    with_state,
+    observed_already_published_for_test, observed_gate_for_test,
 };
 use crate::buffer::BufferId;
 use crate::heap_types::LispString;
@@ -56,32 +56,26 @@ fn observed_small_cons_exemption_survives_large_gap_and_closes_before_publicatio
     assert!(!collection_observed_metadata(cells[1].bits()));
     assert!(!collection_observed_metadata(cells[5].bits()));
 
-    assert!(with_state(|state| {
-        state
-            .borrow_mut()
-            .observed
-            .exclude_unobserved(cells[1].bits())
-    }));
+    assert!(
+        neovm_value::test_support::authority::observed_exclude_unobserved_for_test(cells[1].bits())
+    );
     let small = compiled_observation_gate(BarrierWindow::NONE);
     assert_eq!(
-        small.single_cons,
+        small.single_cons_for_test(),
         address(cells[1]),
         "a two-cell interval needs a retained exact cons exemption",
     );
-    assert!(with_state(|state| {
-        state
-            .borrow_mut()
-            .observed
-            .exclude_unobserved(cells[5].bits())
-    }));
+    assert!(
+        neovm_value::test_support::authority::observed_exclude_unobserved_for_test(cells[5].bits())
+    );
     let large = compiled_observation_gate(BarrierWindow::NONE);
     assert_eq!(
-        large.single_cons,
+        large.single_cons_for_test(),
         address(cells[1]),
         "learning a larger interval must preserve the independent exact cons exemption",
     );
     let gap = large
-        .excluded
+        .excluded_for_test()
         .expect("the larger locally empty interval is retained");
     assert!(gap.covers(address(cells[5])));
     assert!(gap.len() > 2 * size_of::<ConsCell>());
@@ -89,13 +83,14 @@ fn observed_small_cons_exemption_survives_large_gap_and_closes_before_publicatio
 
     let (_, singleton) = capture(|| {
         let value = cells[1].cons_car();
-        let published = with_state(|state| state.borrow().observed.gate());
+        let published = observed_gate_for_test();
         assert_eq!(
-            published.single_cons, 0,
+            published.single_cons_for_test(),
+            0,
             "the newly observed exact owner closes its exemption"
         );
         assert_eq!(
-            published.excluded,
+            published.excluded_for_test(),
             Some(gap),
             "an unrelated larger gap remains sound"
         );
@@ -136,21 +131,18 @@ fn observed_slot_geometry_only_includes_vector_and_record_owners() {
     let hi = address(vector).max(address(record)) + 1;
     let gate = compiled_observation_gate(BarrierWindow::NONE);
     assert_eq!(
-        gate.slots,
+        gate.slots_for_test(),
         [BarrierWindow::span(lo, hi), BarrierWindow::NONE],
         "slot geometry must be built only from live Vector and Record publication facts",
     );
     assert!(
-        gate.observed
+        gate.observed_for_test()
             .iter()
             .any(|range| range.covers(address(cons)))
     );
     for owner in [cons, string, reference, vector, record] {
         assert!(collection_observed_metadata(owner.bits()));
-        assert!(with_state(|state| state
-            .borrow()
-            .observed
-            .already_published(owner.bits())));
+        assert!(observed_already_published_for_test(owner.bits()));
     }
     assert!(reads.unchanged());
     assert!(crate::tagged::mutate::set_vector_slot(

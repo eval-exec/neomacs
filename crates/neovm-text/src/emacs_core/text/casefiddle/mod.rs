@@ -430,6 +430,7 @@ impl CaseNatnum {
 /// Measured output for exactly one source character. Character and byte units
 /// cannot be confused. Values live only during one mutator's casing call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct CaseExtent {
     source_pos: neovm_edit::buffer::CharPos0,
     source_extent: neovm_edit::buffer::TextExtent,

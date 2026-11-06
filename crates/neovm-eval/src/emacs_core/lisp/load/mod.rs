@@ -4209,6 +4209,7 @@ struct LoaddefsKeymapReplayForm {
 }
 
 #[derive(Default)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct SourceFileSurfaceState {
     function_names: std::collections::BTreeSet<String>,
     variable_names: std::collections::BTreeSet<String>,
@@ -5039,6 +5040,7 @@ pub(crate) fn restore_gnu_stale_preloaded_face_doc_refs(eval: &mut super::eval::
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn apply_ldefs_boot_autoloads_for_names(
     eval: &mut super::eval::Context,
     names: &[&str],

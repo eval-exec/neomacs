@@ -667,6 +667,7 @@ impl CompiledPattern {
 /// A sound multi-literal prefilter for a compiled pattern.  See
 /// [`CompiledPattern::prefilter`] and [`build_literal_prefilter`].
 #[derive(Clone)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct LiteralPrefilter {
     /// `regex-automata`'s SIMD literal scanner over the needle set.
     pf: RaPrefilter,
@@ -1591,6 +1592,7 @@ fn set_counter(counters: &mut CounterTable, pos: usize, val: u16) {
 
 /// Error from regex compilation.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct RegexCompileError {
     pub message: String,
 }
@@ -4452,7 +4454,13 @@ impl WordBoundaryLookup {
 /// decoded characters and numeric byte positions; no Lisp identity or borrow.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct BoundarySyntaxCharacter {
+    #[cfg(feature = "test-support")]
+    pub character: emacs_char::EmacsChar,
+    #[cfg(not(feature = "test-support"))]
     character: emacs_char::EmacsChar,
+    #[cfg(feature = "test-support")]
+    pub byte_position: neovm_edit::buffer::EmacsBytePos,
+    #[cfg(not(feature = "test-support"))]
     byte_position: neovm_edit::buffer::EmacsBytePos,
 }
 
@@ -4479,9 +4487,21 @@ impl BoundarySyntaxCharacter {
 /// immutable physical input metadata, valid for one opcode evaluation.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct BoundarySyntaxRequest {
+    #[cfg(feature = "test-support")]
+    pub kind: SyntaxAssertion,
+    #[cfg(not(feature = "test-support"))]
     kind: SyntaxAssertion,
+    #[cfg(feature = "test-support")]
+    pub current_byte: neovm_edit::buffer::EmacsBytePos,
+    #[cfg(not(feature = "test-support"))]
     current_byte: neovm_edit::buffer::EmacsBytePos,
+    #[cfg(feature = "test-support")]
+    pub previous: Option<BoundarySyntaxCharacter>,
+    #[cfg(not(feature = "test-support"))]
     previous: Option<BoundarySyntaxCharacter>,
+    #[cfg(feature = "test-support")]
+    pub current: Option<BoundarySyntaxCharacter>,
+    #[cfg(not(feature = "test-support"))]
     current: Option<BoundarySyntaxCharacter>,
 }
 

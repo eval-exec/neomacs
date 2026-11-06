@@ -16,6 +16,10 @@ pub use neovm_value::value::Value;
 
 pub use neovm_value::tagged::gc::*;
 
+// Public-path restoration for the relocated core_tests files.
+pub use neovm_value::tagged::gc::CONS_BLOCK_CELLS as CONS_BLOCK_SIZE;
+pub use neovm_value::tagged::header::{AtomicTaggedValue, CollectionScope};
+
 #[path = "gc/arena_pages.rs"]
 pub mod arena_pages;
 #[path = "gc/barrier_window.rs"]

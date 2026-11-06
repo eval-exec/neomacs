@@ -1,5 +1,8 @@
 use super::*;
-use crate::emacs_core::eval::data::abbrev::{Abbrev, AbbrevManager, AbbrevTable};
+use crate::emacs_core::eval::data::abbrev::{
+    Abbrev, AbbrevManager, AbbrevTable, abbrev_string_to_runtime, abbrev_table_sym, apply_case,
+    runtime_string_to_abbrev_string,
+};
 use crate::heap_types::LispString;
 
 // -----------------------------------------------------------------------
@@ -7,7 +10,7 @@ use crate::heap_types::LispString;
 // -----------------------------------------------------------------------
 
 fn abbrev_runtime(text: &LispString) -> String {
-    super::abbrev_string_to_runtime(text)
+    abbrev_string_to_runtime(text)
 }
 
 #[test]
@@ -75,13 +78,14 @@ fn abbrev_copied_properties_have_only_manager_roots() {
     let check_live = |eval: &Context| {
         for Probe(bits) in &probes {
             assert!(
-                eval.tagged_heap().retains_veclike(Value::from_bits(*bits)),
+                eval.tagged_heap()
+                    .retains_veclike(unsafe { Value::from_bits(*bits) }),
                 "abbrev-only property vector was reclaimed"
             );
         }
         for (index, Probe(bits)) in probes.iter().enumerate() {
             assert_eq!(
-                Value::from_bits(*bits)
+                unsafe { Value::from_bits(*bits) }
                     .as_vector_data()
                     .expect("live abbrev property vector")
                     .as_slice(),
@@ -138,7 +142,9 @@ fn abbrev_copied_properties_have_only_manager_roots() {
     eval.gc_collect_exact();
     for Probe(bits) in probes {
         assert!(
-            !eval.tagged_heap().retains_veclike(Value::from_bits(bits)),
+            !eval
+                .tagged_heap()
+                .retains_veclike(unsafe { Value::from_bits(bits) }),
             "retired abbrev graph remained permanently rooted"
         );
     }
@@ -155,7 +161,7 @@ fn define_and_expand() {
 
     // Check count incremented
     let tbl = mgr.get_table("global-abbrev-table").unwrap();
-    let key_btw = super::runtime_string_to_abbrev_string("btw");
+    let key_btw = runtime_string_to_abbrev_string("btw");
     assert_eq!(tbl.abbrevs.get(&key_btw).unwrap().count, 1);
 
     // Expand again
@@ -312,7 +318,7 @@ fn define_abbrev_full_with_hook_and_system() {
     );
 
     let tbl = mgr.get_table("global-abbrev-table").unwrap();
-    let key_hw = super::runtime_string_to_abbrev_string("hw");
+    let key_hw = runtime_string_to_abbrev_string("hw");
     let ab = tbl.abbrevs.get(&key_hw).unwrap();
     assert_eq!(abbrev_runtime(&ab.expansion), "hello world");
     assert_eq!(

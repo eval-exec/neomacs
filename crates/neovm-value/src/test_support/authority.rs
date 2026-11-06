@@ -24,6 +24,26 @@ pub fn mark_collection_observed(bits: usize) -> bool {
     crate::tagged::gc::mark_collection_observed(bits)
 }
 
+/// FENCE forge (LEAD 12:3xZ/14:0xZ): hand the caller the exact shared
+/// observation byte cell of a live owner header so a race fixture can
+/// `fetch_or` it from scoped workers. The field stays `pub(crate)`; this
+/// forge is the only cross-crate route, and the returned capability is the
+/// real production atomic (no copy, no stand-in). Reads and writes through
+/// the cell are N2 authority operations.
+pub fn collection_observed_byte_for_test(
+    header: &crate::tagged::header::GcHeader,
+) -> &std::sync::atomic::AtomicU8 {
+    &header.collection_observed
+}
+
+/// FENCE (N2 write): clear a live owner's shared observation byte and its
+/// collection metadata under the production exclusion contract. The original
+/// `GcHeader::clear_collection_observed` stays `pub(crate)` with no A-prime;
+/// this fence is its only cross-crate route.
+pub fn clear_collection_observed_for_test(header: &crate::tagged::header::GcHeader) {
+    header.clear_collection_observed();
+}
+
 /// FENCE (N2 counter reset): drop the thread-local function-cell lookup
 /// counter for the re-homed executor tests. The original stays `pub(crate)`
 /// with no A' widening; this fence is its only cross-crate route.
@@ -316,6 +336,14 @@ pub fn set_verify_marked_objects_for_test(on: bool) {
 /// `pub(crate)`; no state or guard escapes.
 pub fn with_card_tag_filter_for_test<R>(on: bool, f: impl FnOnce() -> R) -> R {
     crate::tagged::gc::with_card_tag_filter_for_test(on, f)
+}
+
+/// N2 ambient-state write (LEAD 10:1xZ): learn one exclusion in the
+/// mutator-local observed envelope. The journal State is not owned by the
+/// caller, so the original write stays pub(crate) with no A-prime widening;
+/// this fence is its only cross-crate route.
+pub fn observed_exclude_unobserved_for_test(bits: usize) -> bool {
+    crate::tagged::collection_reads::observed_exclude_unobserved_for_test(bits)
 }
 
 /// P1-HOOKS-2 FENCE (peer 16:4xZ): opaque copy of an obarray's function-cell

@@ -756,6 +756,9 @@ pub(crate) fn note_syntax_table_mutation() {
 /// > handling.
 #[derive(Clone, Copy, Debug)]
 pub struct SyntaxTable {
+    #[cfg(feature = "test-support")]
+    pub chartable: Value,
+    #[cfg(not(feature = "test-support"))]
     chartable: Value,
 }
 
@@ -7071,6 +7074,7 @@ impl CommentMarkerCapabilities {
 /// main loop from accidentally replacing the boundary syntax before it has
 /// been consumed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct CommentResumeSyntax {
     class: Option<SyntaxClass>,
     flags: SyntaxFlags,

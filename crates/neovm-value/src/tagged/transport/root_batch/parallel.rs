@@ -415,6 +415,7 @@ impl ParallelRootBatchLease {
 /// or dereference heap objects; the sealed admission borrows AllStopped.
 #[derive(Debug)]
 #[must_use = "explicitly finish the last read; Drop records an unfinished obligation"]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct ParallelRootBatchReader<'read> {
     payload: Arc<ParallelRootPayload>,
     control: Arc<BatchControl>,
@@ -464,6 +465,7 @@ impl Drop for ParallelRootBatchReader<'_> {
 
 #[derive(Debug)]
 #[must_use = "recover the prepared reservation or retain it on protocol failure"]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct ParallelRootBatchPublishFailure {
     prepared: PreparedParallelRootBatch,
     error: ParallelRootBatchError,
@@ -484,6 +486,7 @@ impl ParallelRootBatchPublishFailure {
 
 #[derive(Debug)]
 #[must_use = "recover the exact live lease after refused retirement"]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct ParallelRootBatchFinishFailure {
     lease: ParallelRootBatchLease,
     error: ParallelRootBatchError,

@@ -204,6 +204,7 @@ pub(crate) enum CallGuard {
 
 /// One `init_*` call site below `load_pdump` in GNU's `main`.
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct PostImageInitSite {
     /// The C function's name, exactly as `main` spells it.
     /// The C function's name, exactly as `main` spells it.

@@ -407,6 +407,9 @@ pub(crate) fn with_store<R>(f: impl FnOnce(&StoreState) -> R) -> R {
 
 /// Clone lifetime before borrowing cold data. No TLS-owner borrow is held
 /// across cold publication, and the callback cannot return a borrowed State.
+///
+/// Internal only: test-support callers use the read-only copy accessors in
+/// `collection_reads`, never this RefCell-bearing accessor (LEAD 10:5xZ).
 pub(super) fn with_state<R>(f: impl FnOnce(&RefCell<State>) -> R) -> R {
     ObservationWorld::current().with_state(f)
 }

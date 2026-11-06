@@ -399,6 +399,9 @@ pub(super) struct ObjectPage<T: PagedObject> {
     /// (it has no free slots and never gains any), freed at heap teardown —
     /// but it STAYS in the page-base registry so the ownership oracle keeps
     /// answering "owned" for its slots (see the C1 note in the module doc).
+    #[cfg(feature = "test-support")]
+    pub retired: bool,
+    #[cfg(not(feature = "test-support"))]
     pub(super) retired: bool,
     pub(super) _class: std::marker::PhantomData<*mut T>,
 }
@@ -697,10 +700,14 @@ pub(super) struct ArenaRun {
 /// class registry, and the collision analysis for `owns` depends on each
 /// registry holding only its own class's pages — never merge them, with each
 /// other or with the cons registry), and the class free list.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) struct ObjectArena<T: PagedObject> {
     /// Every retained page of this class, retired pages included. Completely
     /// empty young pages are removed after a full sweep; all remaining pages
     /// are freed by this vector's drop at heap teardown (`ObjectPage: Drop`).
+    #[cfg(feature = "test-support")]
+    pub pages: Vec<ObjectPage<T>>,
+    #[cfg(not(feature = "test-support"))]
     pub(super) pages: Vec<ObjectPage<T>>,
     /// Storage of removed empty pages, handed to the next new pages before
     /// the allocator is asked. A page-sized ALIGNED request cannot reuse a
@@ -728,6 +735,7 @@ pub(super) struct ObjectArena<T: PagedObject> {
 }
 
 impl<T: PagedObject> ObjectArena<T> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn new(chunk_map: Option<std::sync::Arc<ChunkMap>>) -> Self {
         Self {
             pages: Vec::new(),
@@ -754,6 +762,7 @@ impl<T: PagedObject> ObjectArena<T> {
     /// ownership test is the start-handshake page-base SNAPSHOT, never this
     /// live registry/bitmap.
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn owns(&self, ptr: *const u8) -> bool {
         let addr = ptr as usize;
         let base = addr & !(OBJECT_PAGE_ALIGN - 1);
@@ -801,6 +810,7 @@ impl<T: PagedObject> ObjectArena<T> {
     /// sweep may legally visit it as soon as the mutator next yields —
     /// allocated-bit ⇒ readable header is the sweep's contract).
     #[inline(always)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn alloc_slot(&mut self) -> *mut T {
         // 1. Class free list: pop from the first page with freed slots.
         //    Retired pages are never on this chain (they never gain free
@@ -1013,6 +1023,21 @@ impl<T: PagedObject> ObjectArena<T> {
     /// born-at-parity ⇒ reads as marked ⇒ survivor.
     ///
     /// Returns `(survivor bytes, slots freed)`.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// VIS row: copied page count for the re-homed page-sweep oracle.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn pages_len_for_test(&self) -> usize {
+        self.pages.len()
+    }
+
+    /// VIS row: copied retired flag of one page for the page-sweep oracle.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn page_retired_for_test(&self, index: usize) -> bool {
+        self.pages[index].retired
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn sweep_range<const GENERATIONAL: bool>(
         &mut self,
         start: usize,

@@ -1,11 +1,12 @@
 //! Observation belongs to the atomic owner header, never to payload capacity.
 use super::LispString;
-use crate::tagged::gc::{
-    TaggedHeap, collection_observed, mark_collection_observed, set_tagged_heap,
-};
+use crate::tagged::gc::{TaggedHeap, collection_observed, set_tagged_heap};
 use crate::tagged::header::StringObj;
 use crate::tagged::mutate::{set_string_byte_same_char_count, with_lisp_string_mut};
 use crate::tagged::value::TaggedValue;
+use neovm_value::test_support::authority::{
+    clear_collection_observed_for_test, collection_observed_byte_for_test, mark_collection_observed,
+};
 use std::sync::atomic::Ordering;
 
 fn string_owner(payload: LispString) -> (Box<TaggedHeap>, TaggedValue) {
@@ -22,7 +23,7 @@ fn assert_owned_string(owner: TaggedValue) {
     // SAFETY: the retained heap owns this object; no allocation or safepoint intervenes.
     let object = unsafe { &*owner.as_string_ptr().unwrap().cast::<StringObj>() };
     assert!(object.header.collection_observed());
-    assert!(object.data.has_owned_storage());
+    assert!(neovm_value::test_support::heap_types__LispString__has_owned_storage(&object.data));
     assert_eq!(object.data.storage_capacity, object.data.owned_capacity());
     assert!(object.data.owned_capacity() >= object.data.sbytes() + 1);
     assert!(object.data.has_trailing_nul());
@@ -143,17 +144,22 @@ fn string_shared_observers_publish_header_without_touching_capacity() {
     // Derive the published byte from the header's own state transition.
     // The real owner/metadata publisher is exercised by the mutator-local
     // tests above; scoped workers share only this header's atomic byte.
-    assert!(owner.header.mark_collection_observed());
-    let observed_mark = owner.header.collection_observed.load(Ordering::Acquire);
-    owner.header.clear_collection_observed();
-    let observation = &owner.header.collection_observed;
+    // LEAD 10:5xZ: the header method is not a VIS row; this write goes through
+    // the existing AUTHORITY fence (row 2) on the owner's tagged address.
+    let bits = owner.as_ref() as *const StringObj as usize | crate::tagged::value::TAG_STRING;
+    // LEAD 12:3xZ/14:0xZ: the raw byte is a WRITE route. The forge returns the
+    // production atomic cell; the field itself is pub(crate) and unrowed.
+    let cell = collection_observed_byte_for_test(&owner.header);
+    assert!(mark_collection_observed(bits));
+    let observed_mark = cell.load(Ordering::Acquire);
+    clear_collection_observed_for_test(&owner.header);
     std::thread::scope(|scope| {
         for _ in 0..4 {
             scope.spawn(move || {
                 // AtomicU8 is shared; neither Lisp values nor payload pointers
                 // cross threads, and the parent retains the header until join.
                 for _ in 0..1024 {
-                    observation.fetch_or(observed_mark, Ordering::Release);
+                    cell.fetch_or(observed_mark, Ordering::Release);
                 }
             });
         }
@@ -161,5 +167,5 @@ fn string_shared_observers_publish_header_without_touching_capacity() {
     assert!(owner.header.collection_observed());
     assert_eq!(owner.data.storage_capacity, capacity);
     assert_eq!(owner.data.as_bytes(), b"abc");
-    owner.header.clear_collection_observed();
+    clear_collection_observed_for_test(&owner.header);
 }

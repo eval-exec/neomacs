@@ -110,6 +110,7 @@ pub use rendezvous::{
     AllStopped, AllStoppedFailure, Mode, Phase, Rendezvous, RendezvousError, Request,
     ResumeGcImage, ResumeGcImageFailure, RootedRetireFailure, Snapshot,
 };
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use rendezvous::{OwnerRootAdmission, StoppedRootAdmission};
 
 pub use summaries::{RegistrationCensus, StoppedSummaries};
@@ -132,6 +133,20 @@ use rustc_hash::FxHashMap;
 
 use super::young_registry::{YoungRegistrationId, YoungRegistryError};
 use super::{HeapIdentity, QuiescentCollector};
+
+/// VIS row: copied entry-image presence for the re-homed native-extent oracle.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn entry_image_present_for_test(entry: &MutatorEntry) -> Result<bool, RendezvousError> {
+    rendezvous::entry_state(entry).map(|state| state.image.is_some())
+}
+
+/// VIS row: copied entry image epoch for the re-homed native-extent oracle.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn entry_image_epoch_for_test(entry: &MutatorEntry) -> Result<u64, RendezvousError> {
+    rendezvous::entry_state(entry).map(|state| state.rendezvous.image_epoch)
+}
 #[cfg(test)]
 use crate::emacs_core::eval::world::Baton;
 use image::{OwnerGcState, PublishedGcImage};
@@ -198,6 +213,12 @@ pub struct MutatorKey {
 }
 
 impl MutatorKey {
+    /// VIS row: copied fixture owner tag for the native-extent oracle.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn owner_for_test(self) -> u64 {
+        self.owner
+    }
+
     pub fn heap_identity(self) -> HeapIdentity {
         self.heap
     }

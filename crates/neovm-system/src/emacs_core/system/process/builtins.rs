@@ -4600,6 +4600,7 @@ pub(super) fn builtin_make_process_impl_with_environment(
 }
 
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) struct AcceptProcessOutputRequest {
     pub(super) wait: ProcessOutputWaitRequest,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up

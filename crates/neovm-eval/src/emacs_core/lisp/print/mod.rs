@@ -470,7 +470,6 @@ thread_local! {
     static PRINT_CALL_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Copied diagnostic-depth counter for the re-homed print oracle.  The
 /// thread-local itself stays private: the accessor reads the same cell on the
 /// calling mutator and returns a plain scalar.

@@ -35,6 +35,7 @@ use neovm_edit::emacs_core::edit_host::EditHost;
 pub(crate) use neovm_value::system_vocab::time::WaitTimeout;
 
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct PendingGnuTimer {
     #[cfg(not(feature = "test-support"))]
     when: GnuTimerTimestamp,

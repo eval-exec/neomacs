@@ -542,6 +542,7 @@ impl MinibufferManagerExt for MinibufferManager {
 // ---------------------------------------------------------------------------
 
 /// Case-insensitive prefix matching.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn prefix_match(input: &LispString, candidates: &[LispString]) -> Vec<LispString> {
     candidates
         .iter()
@@ -551,6 +552,7 @@ fn prefix_match(input: &LispString, candidates: &[LispString]) -> Vec<LispString
 }
 
 /// Substring matching (case-insensitive).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn substring_match(input: &LispString, candidates: &[LispString]) -> Vec<LispString> {
     candidates
         .iter()
@@ -560,6 +562,7 @@ fn substring_match(input: &LispString, candidates: &[LispString]) -> Vec<LispStr
 }
 
 /// Flex (fuzzy) matching: the input characters must appear in order within the candidate.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn flex_match(input: &LispString, candidates: &[LispString]) -> Vec<LispString> {
     candidates
         .iter()
@@ -589,6 +592,7 @@ fn is_flex_match(input: &LispString, candidate: &LispString) -> bool {
 }
 
 /// Exact (case-sensitive) prefix matching.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn basic_match(input: &LispString, candidates: &[LispString]) -> Vec<LispString> {
     candidates
         .iter()
@@ -648,6 +652,7 @@ fn lisp_string_matches_substring(
 
 /// Compute the longest common prefix of a set of strings.
 /// Returns `None` if the set is empty.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn compute_common_prefix(strings: &[LispString]) -> Option<LispString> {
     if strings.is_empty() {
         return None;
@@ -700,4 +705,23 @@ pub fn completion_fold_char(code: u32, ignore_case: bool) -> u32 {
         return code;
     }
     neovm_value::emacs_char::downcase_char_code_emacs_compat(code as i64) as u32
+}
+
+#[cfg(test)]
+mod depth_limit_tests {
+    use super::*;
+
+    #[test]
+    fn recursive_depth_limit() {
+        crate::test_utils::init_test_tracing();
+        let mut mgr = MinibufferManager::new();
+        mgr.max_depth = 2;
+
+        mgr.read_from_minibuffer(BufferId(1), "1: ", None, None)
+            .unwrap();
+        mgr.read_from_minibuffer(BufferId(2), "2: ", None, None)
+            .unwrap();
+        let result = mgr.read_from_minibuffer(BufferId(3), "3: ", None, None);
+        assert!(result.is_err());
+    }
 }

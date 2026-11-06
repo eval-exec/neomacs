@@ -29,14 +29,15 @@ fn minor_arena_sweep_resets_old_marks_preserves_permanents_and_frees_young_garba
     unsafe { (*old).header.tenured = true };
     let permanent = float_slot(&mut arena, 20.0, parity);
     unsafe {
-        (*permanent)
-            .header
-            .make_permanent(&ImageResident::for_test())
+        neovm_value::test_support::authority::make_permanent_for_test(
+            &mut (*permanent).header,
+            &ImageResident::for_test(),
+        )
     };
     let young = float_slot(&mut arena, 30.0, parity);
     let dead = float_slot(&mut arena, 40.0, parity.flip());
     let mut reclaimed = Vec::new();
-    let end = arena.pages.len();
+    let end = arena.pages_len_for_test();
     assert_eq!(
         arena.sweep_range::<true>(0, end, parity, CollectionScope::Young, |addr| reclaimed
             .push(addr)),
@@ -52,7 +53,7 @@ fn minor_arena_sweep_resets_old_marks_preserves_permanents_and_frees_young_garba
     assert_eq!(unsafe { (*young).header.raw_mark() }, parity.byte());
     assert!(!unsafe { (*young).header.tenured });
     assert!(
-        !arena.pages[0].retired,
+        !arena.page_retired_for_test(0),
         "session-old pages must remain sweepable"
     );
     // Opposite parity still skips the old and permanent slots, but can
@@ -79,7 +80,7 @@ fn a_reused_slot_born_in_the_sweep_window_stays_young_and_marked() {
     let garbage = float_slot(&mut arena, 10.0, parity.flip());
     let old = float_slot(&mut arena, 20.0, parity);
     unsafe { (*old).header.tenured = true };
-    let end = arena.pages.len();
+    let end = arena.pages_len_for_test();
     assert_eq!(
         arena.sweep_range::<true>(0, end, parity, CollectionScope::Young, |_| {}),
         (0, 1)

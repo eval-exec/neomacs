@@ -1665,18 +1665,19 @@ pub fn global_obarray_symbol_ids_in_bucket_order(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static GLOBAL_OBARRAY_SYMBOL_VALUE_MATERIALIZATIONS: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn reset_global_obarray_symbol_value_materializations() {
     GLOBAL_OBARRAY_SYMBOL_VALUE_MATERIALIZATIONS.set(0);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn global_obarray_symbol_value_materializations() -> usize {
     GLOBAL_OBARRAY_SYMBOL_VALUE_MATERIALIZATIONS.get()
 }
@@ -1685,7 +1686,7 @@ pub(crate) fn global_obarray_symbols_in_bucket_order(
     obarray: &Obarray,
     lisp_obarray: Value,
 ) -> Vec<Value> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     GLOBAL_OBARRAY_SYMBOL_VALUE_MATERIALIZATIONS
         .set(GLOBAL_OBARRAY_SYMBOL_VALUE_MATERIALIZATIONS.get() + 1);
     let ids = global_obarray_symbol_ids_in_bucket_order(obarray, lisp_obarray);

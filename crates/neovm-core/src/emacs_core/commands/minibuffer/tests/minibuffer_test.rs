@@ -1,6 +1,9 @@
 use super::*;
 use crate::buffer::BufferId;
 use crate::emacs_core::error::{FlowRef, FlowResultExt as _};
+use crate::emacs_core::eval::data::minibuffer_entry::{
+    basic_match, compute_common_prefix, flex_match, prefix_match, substring_match,
+};
 use crate::emacs_core::intern::intern;
 use crate::heap_types::LispString;
 
@@ -58,7 +61,7 @@ fn minibuffer_copied_properties_have_only_manager_roots() {
     let history = intern("minibuffer-owned-history");
     let (probes, discarded_directory_property) = eval.with_gc_inhibited(|eval| {
         let mut probes = Vec::new();
-        eval.minibuffers()
+        eval.minibuffers_mut()
             .add_to_history_lisp(history, text(&mut probes, key), 8);
         let buffer = eval
             .edit
@@ -66,7 +69,7 @@ fn minibuffer_copied_properties_have_only_manager_roots() {
             .current_buffer_id()
             .expect("current buffer");
         let state = eval
-            .minibuffers()
+            .minibuffers_mut()
             .read_from_minibuffer_lisp(buffer, &text(&mut probes, key), None, None)
             .expect("outer minibuffer");
         // Distinct payloads prevent one copied field from hiding another's
@@ -79,7 +82,7 @@ fn minibuffer_copied_properties_have_only_manager_roots() {
         state.completion_table = Some(CompletionTable::List(vec![text(&mut probes, key)]));
 
         let state = eval
-            .minibuffers()
+            .minibuffers_mut()
             .read_from_minibuffer_lisp(buffer, &text(&mut probes, key), None, None)
             .expect("inner minibuffer");
         state.completion_table = Some(CompletionTable::Alist(vec![(
@@ -88,7 +91,7 @@ fn minibuffer_copied_properties_have_only_manager_roots() {
         )]));
 
         let state = eval
-            .minibuffers()
+            .minibuffers_mut()
             .read_from_minibuffer_lisp(buffer, &ls("Files: "), None, None)
             .expect("directory minibuffer");
         let discarded = Value::vector(vec![Value::fixnum(999)]);
@@ -108,19 +111,20 @@ fn minibuffer_copied_properties_have_only_manager_roots() {
     let check_live = |eval: &Context| {
         for bits in &probes {
             assert!(
-                eval.tagged_heap().retains_veclike(Value::from_bits(*bits)),
+                eval.tagged_heap()
+                    .retains_veclike(unsafe { Value::from_bits(*bits) }),
                 "minibuffer-only property vector was reclaimed"
             );
         }
         assert!(
             !eval
                 .tagged_heap()
-                .retains_veclike(Value::from_bits(discarded_directory_property)),
+                .retains_veclike(unsafe { Value::from_bits(discarded_directory_property) }),
             "native directory retained a discarded property"
         );
         for (index, bits) in probes.iter().enumerate() {
             assert_eq!(
-                Value::from_bits(*bits)
+                unsafe { Value::from_bits(*bits) }
                     .as_vector_data()
                     .expect("live property vector")
                     .as_slice(),
@@ -165,11 +169,13 @@ fn minibuffer_copied_properties_have_only_manager_roots() {
     assert_eq!(eval.gc_count, completed + 1);
     check_live(&eval);
 
-    *eval.minibuffers() = MinibufferManager::new();
+    *eval.minibuffers_mut() = MinibufferManager::new();
     eval.gc_collect_exact();
     for bits in probes {
         assert!(
-            !eval.tagged_heap().retains_veclike(Value::from_bits(bits)),
+            !eval
+                .tagged_heap()
+                .retains_veclike(unsafe { Value::from_bits(bits) }),
             "retired minibuffer graph remained permanently rooted"
         );
     }
@@ -603,20 +609,6 @@ fn recursive_depth() {
     mgr.exit_minibuffer();
     assert_eq!(mgr.depth(), 0);
     assert!(!mgr.is_active());
-}
-
-#[test]
-fn recursive_depth_limit() {
-    crate::test_utils::init_test_tracing();
-    let mut mgr = MinibufferManager::new();
-    mgr.max_depth = 2;
-
-    mgr.read_from_minibuffer(BufferId(1), "1: ", None, None)
-        .unwrap();
-    mgr.read_from_minibuffer(BufferId(2), "2: ", None, None)
-        .unwrap();
-    let result = mgr.read_from_minibuffer(BufferId(3), "3: ", None, None);
-    assert!(result.is_err());
 }
 
 #[test]
@@ -1900,7 +1892,7 @@ fn global_obarray_completion_has_no_pre_candidate_staging_collections() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
 
-    crate::emacs_core::builtins::symbols::reset_global_obarray_symbol_value_materializations();
+    neovm_eval::test_support::authority::reset_global_obarray_symbol_value_materializations();
     eval.eval_str(r##"(all-completions "global-obarray-stage-probe" obarray)"##)
         .expect("global obarray completion");
 

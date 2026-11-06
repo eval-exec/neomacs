@@ -119,6 +119,9 @@ impl Default for MinibufferHistory {
 /// Owns all minibuffer state, including the recursive-edit stack.
 pub struct MinibufferManager {
     pub state_stack: Vec<MinibufferState>,
+    #[cfg(feature = "test-support")]
+    pub history: MinibufferHistory,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) history: MinibufferHistory,
     pub(crate) completion_style: CompletionStyle,
     #[cfg(test)]

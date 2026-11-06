@@ -3,10 +3,10 @@
 #![cfg(not(feature = "gc-memory-telemetry"))]
 use super::*;
 use crate::emacs_core::eval::Context;
-use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::gc::mutator_registration::era_fixtures::EraFixtureExt;
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue as Value;
+use neovm_eval::test_support::authority::WorldProofEra as ParallelHeapEra;
 use std::collections::HashSet;
 use std::sync::mpsc;
 use std::thread;

@@ -9,7 +9,7 @@ use crate::tagged::gc::{TaggedHeap, set_tagged_heap};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 fn assert_in_mutation() {
-    assert!(IN_HEAP_MUT_CLOSURE.with(|active| active.get()));
+    assert!(crate::tagged::mutate::in_heap_mut_closure_for_test());
 }
 
 #[test]

@@ -145,6 +145,27 @@ impl std::fmt::Debug for SymbolHandle {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
+impl SymbolHandle {
+    /// VIS row: copied era word for the stale-handle refusal oracle.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn era_for_test(&self) -> NonZeroU64 {
+        self.era
+    }
+
+    /// VIS row: fixture-only era rewrite that makes an admitted handle stale.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_era_for_test(&mut self, era: NonZeroU64) {
+        self.era = era;
+    }
+
+    /// VIS row: copied symbol id for the function-cell oracle.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn sym_id_for_test(&self) -> SymId {
+        self.symbol
+    }
+}
+
 // Keep the existing symbol-vocabulary boundary in this module. Nominal era
 // wrappers do not add their own dependency on the upper interner module.
 impl<K: EraKeeper> ParallelHeapEra<'_, K> {

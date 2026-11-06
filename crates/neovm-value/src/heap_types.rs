@@ -102,6 +102,9 @@ pub struct LispString {
     #[cfg(not(feature = "test-support"))]
     size: usize,
     /// Byte count for multibyte strings, or GNU's negative unibyte marker.
+    ///
+    /// The offset is public through [`LispString::JIT_SIZE_BYTE_OFFSET`]; the
+    /// field itself stays private (rubric 7 re-point, LEAD 14:0xZ).
     size_byte: i64,
     /// GNU Lisp_String-compatible interval pointer.  A null pointer in GNU
     /// means no interval tree; null is also what a raw mapped string object
@@ -117,6 +120,9 @@ pub struct LispString {
     /// the mutator can free at any moment. Managed via `Box::into_raw` /
     /// `Box::from_raw`; every store that publishes a table is `Release` of a
     /// fully-constructed table.
+    ///
+    /// The layout is public through the `JIT_*_OFFSET` constants; the field
+    /// itself stays private (rubric 7 re-point, LEAD 14:0xZ).
     intervals: AtomicPtr<TextPropertyTable>,
     /// Direct string byte pointer, like GNU's `Lisp_String.u.s.data`.
     ///
@@ -355,6 +361,7 @@ static_assertions::assert_impl_all!(GnuStringCharPos: Send, Sync, Copy);
 static_assertions::assert_impl_all!(GnuStringCharPosError: Send, Sync);
 const _: () = assert!(std::mem::size_of::<GnuStringCharPos>() == std::mem::size_of::<i64>());
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct OwnedStringDataGuard<'a> {
     string: &'a mut LispString,
     data: ManuallyDrop<Vec<u8>>,
@@ -566,6 +573,7 @@ impl LispString {
         self.replace_owned_payload(payload);
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn owned_data_guard(&mut self) -> OwnedStringDataGuard<'_> {
         self.ensure_owned();
         let len = self.sbytes() + 1;

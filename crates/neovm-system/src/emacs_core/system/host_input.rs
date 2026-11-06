@@ -94,6 +94,7 @@ pub fn channel_fallback_wake_for_test() -> InputWake {
 }
 
 /// Only a Context can pair a native wake capability with its input queue.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 enum InputWake {
     Native(WaitNotifier),
     ChannelFallback,

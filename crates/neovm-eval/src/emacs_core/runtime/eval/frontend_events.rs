@@ -151,6 +151,9 @@ pub(crate) enum InternalFrontendEvent {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[doc(hidden)]
 pub struct InternalEventEffects {
+    #[cfg(feature = "test-support")]
+    pub redisplay_needed: bool,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) redisplay_needed: bool,
 }
 

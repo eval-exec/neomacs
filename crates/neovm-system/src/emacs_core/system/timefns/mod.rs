@@ -119,6 +119,7 @@ fn is_leap_year(year: i64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 /// Decoded time in UTC: (sec min hour day month year dow dst utcoff).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct DecodedTime {
     #[cfg(not(feature = "test-support"))]
     sec: i64,

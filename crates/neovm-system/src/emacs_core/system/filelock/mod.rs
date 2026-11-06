@@ -68,6 +68,7 @@ fn current_lock_info_string(user: &str, host: &str) -> String {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct ParsedLockInfo {
     #[cfg(not(feature = "test-support"))]
     user: String,
@@ -117,6 +118,7 @@ fn parse_lock_info(contents: &str) -> Option<ParsedLockInfo> {
 /// parse offsets (`lock_info_type`); the two consumers need two different
 /// projections of it, so carry the parsed fields and derive each string.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct LockClasher {
     #[cfg(not(feature = "test-support"))]
     user: String,

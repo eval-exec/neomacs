@@ -1,10 +1,8 @@
 use super::LispString;
-use crate::buffer::text_props::{
-    EmptyTextProperties, reset_text_property_table_clones_for_test,
-    text_property_table_clones_for_test,
-};
+use crate::buffer::text_props::{EmptyTextProperties, text_property_table_clones_for_test};
 use crate::buffer::{CharLen, CharPos0};
 use crate::emacs_core::{Context, value::Value};
+use neovm_value::test_support::authority::reset_text_property_table_clones_for_test;
 
 #[test]
 fn empty_text_properties_can_cross_threads_without_a_table() {

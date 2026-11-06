@@ -94,6 +94,9 @@ impl InteractivePrefixFlag {
 
 #[derive(Clone, Debug, Default)]
 pub struct ParsedInteractiveStringCode {
+    // The parser oracle reads these through the public `prefix_flags()` and
+    // `entries()` accessors below; the fields stay private (rubric 7
+    // re-point, LEAD 14:0xZ).
     prefix_flags: Vec<InteractivePrefixFlag>,
     entries: Vec<(char, neovm_value::heap_types::LispString)>,
 }

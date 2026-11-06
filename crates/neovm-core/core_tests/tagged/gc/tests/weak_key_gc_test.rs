@@ -143,19 +143,18 @@ fn pdump_reconstructed_rows_become_permanent_at_the_first_partition_cycle() {
         let ev = runtime_startup_context();
         crate::emacs_core::pdump::dump_to_file(&ev, &path).expect("scratch dump");
     }
-    let mut ev = crate::emacs_core::pdump::load_from_dump(&path).expect("scratch reload");
+    let mut ev = crate::emacs_core::load_boot::load_from_dump(&path).expect("scratch reload");
     crate::emacs_core::builtins::init_builtins(&mut ev);
     let _ = std::fs::remove_file(&path);
     assert!(
-        ev.tagged_heap.dump_partition_active(),
+        ev.tagged_heap().dump_partition_active(),
         "a loaded image activates the partition",
     );
 
     let flagged: Vec<usize> = ev
-        .tagged_heap
-        .non_cons_object_addrs
-        .iter()
-        .copied()
+        .tagged_heap()
+        .non_cons_object_addrs_for_test()
+        .into_iter()
         .filter(|&addr| {
             // SAFETY: every address in the owned catalog names initialized
             // header storage until it is freed; nothing runs concurrently.
@@ -179,7 +178,8 @@ fn pdump_reconstructed_rows_become_permanent_at_the_first_partition_cycle() {
 
     for &addr in &flagged {
         assert!(
-            ev.tagged_heap.non_cons_object_addrs.contains(&addr),
+            ev.tagged_heap()
+                .non_cons_object_addrs_contains_for_test(addr),
             "image resident {addr:#x} was reclaimed by its own partition cycle",
         );
         let header = unsafe { &*(addr as *const crate::tagged::header::GcHeader) };
@@ -195,7 +195,10 @@ fn pdump_reconstructed_rows_become_permanent_at_the_first_partition_cycle() {
     // permanent equivalent, not ordinary old objects.
     ev.gc_collect_exact();
     for &addr in &flagged {
-        assert!(ev.tagged_heap.non_cons_object_addrs.contains(&addr));
+        assert!(
+            ev.tagged_heap()
+                .non_cons_object_addrs_contains_for_test(addr)
+        );
         let header = unsafe { &*(addr as *const crate::tagged::header::GcHeader) };
         assert!(header.generation.permanent());
     }

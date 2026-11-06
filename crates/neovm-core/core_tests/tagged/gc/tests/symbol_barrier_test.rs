@@ -42,8 +42,8 @@ fn weak_symbol_key_survives_full_collections(mapped: bool, with_position: bool) 
     };
     roots.keep(owner);
     heap.collect_exact(std::iter::once(owner));
-    assert!(heap.dump_blackened);
-    assert!(!heap.mapped_remembered.contains(&owner.bits()));
+    assert!(heap.dump_blackened_for_test());
+    assert!(!heap.mapped_remembered_contains_for_test(owner.bits()));
 
     let id = intern_uninterned("u34-review-weak-symbol-key");
     assert!(!is_canonical_id(id));
@@ -80,7 +80,7 @@ fn weak_symbol_key_survives_full_collections(mapped: bool, with_position: bool) 
             1,
             "the strong owner must keep its uninterned weak key alive"
         );
-        assert!(heap.marked_symbols.contains(id));
+        assert!(heap.marked_symbols_contains_for_test(id));
         assert_eq!(owner.as_vector_data().unwrap().as_slice()[0], strong_value);
         assert!(heap.current_mutator_remset_empty_for_test());
     }

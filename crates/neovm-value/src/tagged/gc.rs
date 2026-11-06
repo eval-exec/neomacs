@@ -1376,6 +1376,20 @@ impl TaggedHeap {
         self.gc_threshold
     }
 
+    /// VIS row: copied non-cons owner address catalog for the image-permanence oracle.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn non_cons_object_addrs_for_test(&self) -> Vec<usize> {
+        self.non_cons_object_addrs.iter().copied().collect()
+    }
+
+    /// VIS row: copied non-cons catalog membership for the image-permanence oracle.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn non_cons_object_addrs_contains_for_test(&self, addr: usize) -> bool {
+        self.non_cons_object_addrs.contains(&addr)
+    }
+
     /// Era follow-up row (peer 10:5xZ item 3): safe pacing knob for the
     /// re-homed fixtures. Assigns the threshold exactly and deliberately does
     /// not arm the runtime override flag, matching the former field write.
@@ -2829,9 +2843,13 @@ use card_table::{CardSlots, CardTable, ChunkCards};
 mod cons_block_trailer;
 use cons_block_trailer::*;
 mod collection_observed;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use collection_observed::collection_observed;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use collection_observed::collection_observed_metadata;
 pub(crate) use collection_observed::{
     advance_collection_observation_epoch, clear_noncons_collection_observed_metadata,
-    collection_observed, collection_observed_metadata, mark_collection_observed,
+    mark_collection_observed,
 };
 use collection_observed::{
     clear_cons_observed_block, clear_cons_observed_dead, has_noncons_collection_observations,

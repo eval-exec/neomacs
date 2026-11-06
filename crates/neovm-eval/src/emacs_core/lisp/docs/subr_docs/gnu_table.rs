@@ -17,6 +17,7 @@
 // so no GNU build ever shows one to a user.
 
 #[rustfmt::skip]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) static GNU_SUBR_DOCS: &[(&str, &str)] = &[
     (r#"%"#, r#"Return remainder of X divided by Y.
 Both must be integers or markers.

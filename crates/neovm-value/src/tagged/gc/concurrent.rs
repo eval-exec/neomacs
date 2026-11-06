@@ -111,7 +111,8 @@ impl TaggedHeap {
     }
 
     /// Legacy unit-test adapter; production enters through the exclusive loan.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn arm_first_cycle_concurrent(&mut self) {
         // SAFETY: these direct GC fixtures own the heap and admit their
         // serialized start before spawning any worker or publishing a job.

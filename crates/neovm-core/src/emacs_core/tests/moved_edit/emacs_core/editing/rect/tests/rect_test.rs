@@ -67,13 +67,14 @@ fn rectangle_copied_properties_have_only_manager_roots() {
         // line, proving that the remaining visit still retains its graph.
         for Probe(bits) in probes.iter().rev() {
             assert!(
-                eval.tagged_heap().retains_veclike(Value::from_bits(*bits)),
+                eval.tagged_heap()
+                    .retains_veclike(unsafe { Value::from_bits(*bits) }),
                 "rectangle-only property vector was reclaimed"
             );
         }
         for (index, Probe(bits)) in probes.iter().enumerate() {
             assert_eq!(
-                Value::from_bits(*bits)
+                unsafe { Value::from_bits(*bits) }
                     .as_vector_data()
                     .expect("live rectangle property vector")
                     .as_slice(),
@@ -121,7 +122,9 @@ fn rectangle_copied_properties_have_only_manager_roots() {
     eval.gc_collect_exact();
     for Probe(bits) in probes {
         assert!(
-            !eval.tagged_heap().retains_veclike(Value::from_bits(bits)),
+            !eval
+                .tagged_heap()
+                .retains_veclike(unsafe { Value::from_bits(bits) }),
             "retired rectangle graph remained permanently rooted"
         );
     }

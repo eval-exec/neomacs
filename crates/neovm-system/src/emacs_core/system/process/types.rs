@@ -999,6 +999,7 @@ impl ResolvedProcessDecoding {
 /// through [`neovm_text::encoding::decode_process_run_in_context`] and then runs the
 /// write-back.
 #[derive(Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct PendingProcessRun {
     pub(super) coding: ResolvedProcessDecoding,
     /// The previous read's carryover followed by this read's bytes, which is
@@ -1628,6 +1629,7 @@ pub(super) fn process_status_connect_value() -> Value {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) enum ProcessWriteFlush {
     Drained,
     Blocked,
@@ -1859,6 +1861,7 @@ pub(super) fn gnu_process_status_message_for_status(proc: &Process, status: Valu
 /// instead, so the 127/126 split is GNU's comparison rather than a substring
 /// match on a platform's phrasing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum ChildSpawnOutcome {
     /// The child exists and its fds are installed on the process record.
     Spawned,

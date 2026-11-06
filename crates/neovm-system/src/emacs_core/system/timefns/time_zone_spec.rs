@@ -5,7 +5,6 @@
 /// and can be shared between threads; environment guards serialize changes.
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) struct TimeZoneSpec<'a>(&'a str);
 
 impl<'a> From<&'a str> for TimeZoneSpec<'a> {

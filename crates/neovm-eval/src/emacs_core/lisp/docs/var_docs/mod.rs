@@ -91,6 +91,7 @@ pub mod gnu_table;
 /// `make-docfile` writes `^A` escapes for the three bytes that would be
 /// ambiguous in a text file, and [`gnu_table`] is Rust source carrying the
 /// unescaped text already.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct DocImage {
     bytes: &'static [u8],
     /// Byte offset of each `GNU_VAR_DOCS` row's text, parallel to the table.

@@ -4,7 +4,7 @@
 //! tagged runtime.
 
 use crate::heap_types::{LispMarker, LispString, OverlayData};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use crate::tagged::bytecode::chunk::ByteCodeFunction;
 use crate::value::LispHashTable;
 use crate::value::text_props::TextPropertyTable;
@@ -80,6 +80,13 @@ std::thread_local! {
     /// GEN-5: a bulk mutation may install new children after its pre-write
     /// barrier, so no collector safe point may occur until the closure ends.
     static IN_HEAP_MUT_CLOSURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Test hook: is a bulk heap mutation closure active on this thread?
+#[cfg(all(debug_assertions, any(test, feature = "test-support")))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn in_heap_mut_closure_for_test() -> bool {
+    IN_HEAP_MUT_CLOSURE.with(|active| active.get())
 }
 
 #[cfg(debug_assertions)]
@@ -718,9 +725,10 @@ pub fn install_bytecode_slot_object(
 ///
 /// The seam still fires the SATB pre-write barrier so tests that mutate
 /// mid-cycle (e.g. self-referential print tests) keep snapshot marking sound.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[inline]
-pub fn with_bytecode_data_mut_for_test<R>(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn with_bytecode_data_mut_for_test<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut ByteCodeFunction) -> R,
 ) -> Option<R> {

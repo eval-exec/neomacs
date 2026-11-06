@@ -4582,10 +4582,1116 @@ fn validate(workspace: &Path) -> Result<(), String> {
     }
     check_cfg_split_arm_identity(workspace, &all_rows)?;
     check_visibility_coverage(workspace, &all_rows)?;
-    test_support_reverse_coverage_violation(workspace, &all_rows, &auth_rows(workspace))?;
+    let auth = auth_rows(workspace);
+    let vis_entries: Vec<VisEntry> = all_rows
+        .iter()
+        .map(|row| VisEntry {
+            crate_name: row.crate_dir.clone(),
+            item: row.item.clone(),
+            file: row.file.clone(),
+        })
+        .collect();
+    vis_authority_disjoint_violation(workspace, &vis_entries, &auth)?;
+    let (cfg_pub_allowlist, cfg_pub_ceiling) = load_authority_cfg_pub_allowlist(workspace)?;
+    authority_cfg_pub_violation(workspace, &auth, &cfg_pub_allowlist, cfg_pub_ceiling)?;
+    duplicated_test_support_widening(workspace)?;
+    vis_free_fn_reset_violation(workspace, &all_rows)?;
+    test_support_reverse_coverage_violation(workspace, &all_rows, &auth)?;
     unit_runtime_absent_layer_violation(workspace)?;
     if all_rows.iter().any(|row| row.kind == "mod") {
         expanded_mod_rows_violation(workspace, &all_rows, &auth_rows(workspace))?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// LEAD 10:1xZ / 10:3xZ: VIS ∩ AUTHORITY disjointness and the cfg-gated
+// plain-pub AUTHORITY ratchet.
+//
+// Disjointness: an item that has an AUTHORITY row must have exactly ONE
+// cross-crate route. A TEST-SUPPORT-VIS row (or an A-prime widening) for the
+// same item is therefore red. Rows carry two conventions: the original path
+// (`tagged::x::dup`) or the fence spelling
+// (`test_support::authority::dup`). The original is resolved through the
+// fence body (the delegate's forwarded call / alias target), so both
+// conventions land on the same identity.
+//
+// Ratchet: every original-path AUTHORITY row is classified as
+//   (a) production-public (plain `pub` without a test-support cfg), which
+//       stays untouched; or
+//   (b) a cfg(any(test, feature = "test-support")) item spelled plain `pub`,
+//       which exists only as cross-crate test-support API.
+// The (b) set is frozen in AUTHORITY-CFG-PUB-ALLOWLIST.tsv with an exact
+// ceiling; it may only shrink. New (b) items are red.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct VisEntry {
+    crate_name: String,
+    item: String,
+    file: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct CfgPubRow {
+    crate_name: String,
+    item: String,
+    defining_file: String,
+}
+
+fn authority_is_fence_delegate(row: &AuthRow) -> bool {
+    row.fence_path.contains("::test_support::authority")
+}
+
+fn syn_path_text(path: &syn::Path) -> String {
+    path.segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
+/// The first call target / alias target in a delegate body, used to resolve
+/// the original item behind a fence spelling.
+fn syn_first_forward(expr: &syn::Expr) -> Option<String> {
+    match expr {
+        syn::Expr::Call(call) => match call.func.as_ref() {
+            syn::Expr::Path(path) => Some(syn_path_text(&path.path)),
+            _ => None,
+        },
+        syn::Expr::MethodCall(call) => syn_first_forward(&call.receiver),
+        syn::Expr::Paren(paren) => syn_first_forward(&paren.expr),
+        syn::Expr::Block(block) => block.block.stmts.iter().find_map(|stmt| match stmt {
+            syn::Stmt::Expr(expr, _) => syn_first_forward(expr),
+            syn::Stmt::Local(local) => local
+                .init
+                .as_ref()
+                .and_then(|init| syn_first_forward(&init.expr)),
+            _ => None,
+        }),
+        syn::Expr::Reference(reference) => syn_first_forward(&reference.expr),
+        _ => None,
+    }
+}
+
+fn syn_fn_forward(item: &syn::ItemFn) -> Option<String> {
+    item.block.stmts.iter().find_map(|stmt| match stmt {
+        syn::Stmt::Expr(expr, _) => syn_first_forward(expr),
+        _ => None,
+    })
+}
+
+fn syn_type_forward(item: &syn::ItemType) -> Option<String> {
+    match item.ty.as_ref() {
+        syn::Type::Path(path) => Some(syn_path_text(&path.path)),
+        _ => None,
+    }
+}
+
+/// Resolve an AUTHORITY row to its crate-relative original item path.
+/// `None` means the fence body could not be resolved; the disjointness arm is
+/// then fail-closed and matches by crate + leaf.
+fn resolve_authority_original(workspace: &Path, row: &AuthRow) -> Option<String> {
+    if !authority_is_fence_delegate(row) {
+        return Some(row.item.clone());
+    }
+    let AuthFence::Module { file, .. } = auth_fence_file(&row.crate_name)? else {
+        return Some(row.item.clone());
+    };
+    if row.defining_file != file {
+        // Original-path convention: the row names the defining file and may
+        // spell a type-relative method (`Type::method`) while fence_path
+        // spells the delegate. The item path is the original identity.
+        return Some(row.item.clone());
+    }
+    let source = std::fs::read_to_string(workspace.join(file)).ok()?;
+    let parsed = syn::parse_file(&source).ok()?;
+    let leaf = auth_leaf(&row.item);
+    fn walk_items(items: &[syn::Item], leaf: &str) -> Option<String> {
+        for item in items {
+            match item {
+                syn::Item::Fn(item_fn) if item_fn.sig.ident == leaf => {
+                    if let Some(path) = syn_fn_forward(item_fn) {
+                        return Some(path);
+                    }
+                }
+                syn::Item::Type(item_type) if item_type.ident == leaf => {
+                    if let Some(path) = syn_type_forward(item_type) {
+                        return Some(path);
+                    }
+                }
+                syn::Item::Mod(item_mod) => {
+                    if let Some((_, items)) = &item_mod.content {
+                        if let Some(path) = walk_items(items, leaf) {
+                            return Some(path);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+    walk_items(&parsed.items, leaf)
+}
+
+fn path_last_two(path: &str) -> String {
+    let segments: Vec<&str> = path
+        .split("::")
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let start = segments.len().saturating_sub(2);
+    segments[start..].join("::")
+}
+
+/// LEAD 11:2xZ disjointness key: (crate, OWNER TYPE for methods/fields, leaf).
+///
+/// A bare leaf is insufficient: two owners can define the same method or field
+/// name in one file (the historical `ProofEra::registry` vs
+/// `InFlightRootPin::registry` pair). `Named` owners must agree; a free
+/// function (owner `Free`) can never be the same item as a method or field.
+/// When the owner cannot be resolved (macro-generated or unparseable source)
+/// the arm keeps the previous file/path fallback, fail-closed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum OwnerKey {
+    Free,
+    Named(String),
+    Unknown,
+}
+
+fn item_owner_from_path(item: &str) -> Option<String> {
+    let segments: Vec<&str> = item.split("::").filter(|s| !s.is_empty()).collect();
+    if segments.len() < 2 {
+        return None;
+    }
+    let candidate = segments[segments.len() - 2];
+    let starts_upper = candidate
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_uppercase());
+    starts_upper.then(|| candidate.to_owned())
+}
+
+/// Resolve the owner type of `leaf` in `file`: a method/free-fn/field owner.
+fn item_owner_from_file(workspace: &Path, file: &str, leaf: &str) -> OwnerKey {
+    let Ok(source) = std::fs::read_to_string(workspace.join(file)) else {
+        return OwnerKey::Unknown;
+    };
+    let Ok(parsed) = syn::parse_file(&source) else {
+        return OwnerKey::Unknown;
+    };
+    let mut free = false;
+    let mut owners = BTreeSet::new();
+    fn walk(items: &[syn::Item], leaf: &str, free: &mut bool, owners: &mut BTreeSet<String>) {
+        for item in items {
+            match item {
+                syn::Item::Fn(item_fn) if item_fn.sig.ident == leaf => *free = true,
+                syn::Item::Impl(item_impl) => {
+                    let owner = match item_impl.self_ty.as_ref() {
+                        syn::Type::Path(path) => path
+                            .path
+                            .segments
+                            .last()
+                            .map(|segment| segment.ident.to_string()),
+                        _ => None,
+                    };
+                    for impl_item in &item_impl.items {
+                        if let syn::ImplItem::Fn(impl_fn) = impl_item {
+                            if impl_fn.sig.ident == leaf {
+                                if let Some(owner) = &owner {
+                                    owners.insert(owner.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                syn::Item::Struct(item_struct) => {
+                    for field in &item_struct.fields {
+                        if field.ident.as_ref().is_some_and(|ident| ident == leaf) {
+                            owners.insert(item_struct.ident.to_string());
+                        }
+                    }
+                }
+                syn::Item::Mod(item_mod) => {
+                    if let Some((_, inner)) = &item_mod.content {
+                        walk(inner, leaf, free, owners);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    walk(&parsed.items, leaf, &mut free, &mut owners);
+    if free {
+        return OwnerKey::Free;
+    }
+    if owners.len() == 1 {
+        return OwnerKey::Named(owners.into_iter().next().expect("one owner"));
+    }
+    OwnerKey::Unknown
+}
+
+fn item_owner(workspace: &Path, item: &str, file: &str, leaf: &str) -> OwnerKey {
+    if let Some(owner) = item_owner_from_path(item) {
+        return OwnerKey::Named(owner);
+    }
+    item_owner_from_file(workspace, file, leaf)
+}
+
+fn owners_are_distinct(auth: &OwnerKey, vis: &OwnerKey) -> bool {
+    match (auth, vis) {
+        (OwnerKey::Named(a), OwnerKey::Named(b)) => a != b,
+        (OwnerKey::Free, OwnerKey::Named(_)) | (OwnerKey::Named(_), OwnerKey::Free) => true,
+        _ => false,
+    }
+}
+
+fn authority_vis_pair(
+    workspace: &Path,
+    row: &AuthRow,
+    original: Option<&str>,
+    vis: &VisEntry,
+) -> bool {
+    if row.crate_name != vis.crate_name {
+        return false;
+    }
+    let auth_leaf = auth_leaf(&row.item);
+    let vis_leaf = vis.item.rsplit("::").next().unwrap_or(&vis.item);
+    if auth_leaf != vis_leaf {
+        return false;
+    }
+    let auth_item = original.unwrap_or(&row.item);
+    let auth_owner = item_owner(workspace, auth_item, &row.defining_file, auth_leaf);
+    let vis_owner = item_owner(workspace, &vis.item, &vis.file, vis_leaf);
+    if owners_are_distinct(&auth_owner, &vis_owner) {
+        return false;
+    }
+    if row.defining_file == vis.file {
+        return true;
+    }
+    match original {
+        Some(original) => {
+            let original = original.strip_prefix("crate::").unwrap_or(original);
+            let vis_item = vis.item.strip_prefix("crate::").unwrap_or(&vis.item);
+            original == vis_item || path_last_two(original) == path_last_two(vis_item)
+        }
+        // Unresolvable fence body: fail closed on crate + leaf (+owner key).
+        None => true,
+    }
+}
+
+fn vis_authority_disjoint_violation(
+    workspace: &Path,
+    vis_entries: &[VisEntry],
+    auth: &[AuthRow],
+) -> Result<(), String> {
+    let originals: Vec<Option<String>> = auth
+        .iter()
+        .map(|row| resolve_authority_original(workspace, row))
+        .collect();
+    for (row, original) in auth.iter().zip(originals.iter()) {
+        if let Some(vis) = vis_entries
+            .iter()
+            .find(|vis| authority_vis_pair(workspace, row, original.as_deref(), vis))
+        {
+            return Err(format!(
+                "{} `{}` has an AUTHORITY row ({}) and a TEST-SUPPORT-VIS row ({} {}): one item must have exactly one cross-crate route",
+                row.crate_name, row.item, row.fence_path, vis.file, vis.item
+            ));
+        }
+    }
+    // A lone A-prime on an AUTHORITY item is the signed WorldSlot pattern
+    // (AUTHORITY-ITEMS rows 64 SubrEntry and 224 set_tagged_heap): the item
+    // lives in a crate-private module, so the attribute creates no public
+    // reach; `authority_items_have_exactly_the_fence_public_path` proves the
+    // fence is the only public route. The disjointness failure is a SECOND
+    // route: a TEST-SUPPORT-VIS row (or widened field) naming the same item.
+    Ok(())
+}
+
+fn cfg_attribute_mentions_test_support(attrs: &[syn::Attribute]) -> bool {
+    fn tokens_contain_test_support(stream: proc_macro2::TokenStream) -> bool {
+        stream.into_iter().any(|token| match token {
+            proc_macro2::TokenTree::Ident(ident) => ident.to_string().contains("test-support"),
+            proc_macro2::TokenTree::Literal(literal) => {
+                literal.to_string().contains("test-support")
+            }
+            proc_macro2::TokenTree::Group(group) => tokens_contain_test_support(group.stream()),
+            proc_macro2::TokenTree::Punct(_) => false,
+        })
+    }
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("cfg")
+            && match &attr.meta {
+                syn::Meta::List(list) => tokens_contain_test_support(list.tokens.clone()),
+                _ => false,
+            }
+    })
+}
+
+fn plain_pub(vis: &syn::Visibility) -> bool {
+    matches!(vis, syn::Visibility::Public(_))
+}
+
+fn syn_item_is_cfg_pub(vis: &syn::Visibility, attrs: &[syn::Attribute]) -> bool {
+    plain_pub(vis) && cfg_attribute_mentions_test_support(attrs)
+}
+
+/// Locate an original-path AUTHORITY item and classify it as the cfg-gated
+/// plain-pub form (b) or not. `Err` means the item could not be located:
+/// fail-closed, because an unclassifiable row would let (b) items grow.
+fn classify_original_path_item(source: &str, item_path: &str) -> Result<bool, String> {
+    let segments: Vec<&str> = item_path.split("::").filter(|s| !s.is_empty()).collect();
+    let leaf = *segments
+        .last()
+        .ok_or_else(|| format!("empty AUTHORITY item path `{item_path}`"))?;
+    let owner = if segments.len() >= 2 {
+        Some(segments[segments.len() - 2])
+    } else {
+        None
+    };
+    fn walk_items(items: &[syn::Item], leaf: &str, owner: Option<&str>) -> Option<bool> {
+        for item in items {
+            match item {
+                syn::Item::Fn(item_fn) if item_fn.sig.ident == leaf => {
+                    return Some(syn_item_is_cfg_pub(&item_fn.vis, &item_fn.attrs));
+                }
+                syn::Item::Const(item_const) if item_const.ident == leaf => {
+                    return Some(syn_item_is_cfg_pub(&item_const.vis, &item_const.attrs));
+                }
+                syn::Item::Static(item_static) if item_static.ident == leaf => {
+                    return Some(syn_item_is_cfg_pub(&item_static.vis, &item_static.attrs));
+                }
+                syn::Item::Type(item_type) if item_type.ident == leaf => {
+                    return Some(syn_item_is_cfg_pub(&item_type.vis, &item_type.attrs));
+                }
+                syn::Item::Trait(item_trait) if item_trait.ident == leaf => {
+                    return Some(syn_item_is_cfg_pub(&item_trait.vis, &item_trait.attrs));
+                }
+                syn::Item::Struct(item_struct) if item_struct.ident == leaf => {
+                    return Some(syn_item_is_cfg_pub(&item_struct.vis, &item_struct.attrs));
+                }
+                syn::Item::Enum(item_enum) if item_enum.ident == leaf => {
+                    return Some(syn_item_is_cfg_pub(&item_enum.vis, &item_enum.attrs));
+                }
+                syn::Item::Union(item_union) if item_union.ident == leaf => {
+                    return Some(syn_item_is_cfg_pub(&item_union.vis, &item_union.attrs));
+                }
+                syn::Item::Struct(item_struct)
+                    if owner == Some(item_struct.ident.to_string().as_str()) =>
+                {
+                    for field in &item_struct.fields {
+                        if let Some(ident) = &field.ident {
+                            if ident == leaf {
+                                return Some(syn_item_is_cfg_pub(&field.vis, &field.attrs));
+                            }
+                        }
+                    }
+                }
+                syn::Item::Impl(item_impl) => {
+                    if let Some(owner) = owner {
+                        let self_leaf = match item_impl.self_ty.as_ref() {
+                            syn::Type::Path(path) => path
+                                .path
+                                .segments
+                                .last()
+                                .map(|segment| segment.ident.to_string()),
+                            _ => None,
+                        };
+                        if self_leaf.as_deref() == Some(owner) {
+                            for impl_item in &item_impl.items {
+                                if let syn::ImplItem::Fn(impl_fn) = impl_item {
+                                    if impl_fn.sig.ident == leaf {
+                                        return Some(syn_item_is_cfg_pub(
+                                            &impl_fn.vis,
+                                            &impl_fn.attrs,
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                syn::Item::Mod(item_mod) => {
+                    if let Some((_, items)) = &item_mod.content {
+                        if let Some(found) = walk_items(items, leaf, owner) {
+                            return Some(found);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+    walk_items(
+        &syn::parse_file(source)
+            .map_err(|error| format!("parse: {error}"))?
+            .items,
+        leaf,
+        owner,
+    )
+    .ok_or_else(|| format!("AUTHORITY item `{item_path}` not found in its defining file"))
+}
+
+fn authority_cfg_pub_sites(
+    workspace: &Path,
+    auth: &[AuthRow],
+) -> Result<BTreeSet<CfgPubRow>, String> {
+    let mut sites = BTreeSet::new();
+    for row in auth {
+        if authority_is_fence_delegate(row) {
+            continue;
+        }
+        let path = workspace.join(&row.defining_file);
+        let source = std::fs::read_to_string(&path)
+            .map_err(|error| format!("read {}: {error}", path.display()))?;
+        if classify_original_path_item(&source, &row.item)? {
+            sites.insert(CfgPubRow {
+                crate_name: row.crate_name.clone(),
+                item: row.item.clone(),
+                defining_file: row.defining_file.clone(),
+            });
+        }
+    }
+    Ok(sites)
+}
+
+fn load_authority_cfg_pub_allowlist(
+    workspace: &Path,
+) -> Result<(BTreeSet<CfgPubRow>, usize), String> {
+    let architecture = workspace.join(ARCHITECTURE_DIR);
+    let file = architecture.join("AUTHORITY-CFG-PUB-ALLOWLIST.tsv");
+    let ceiling_file = architecture.join("AUTHORITY-CFG-PUB-ALLOWLIST.ceiling");
+    let mut allowlist = BTreeSet::new();
+    if file.is_file() {
+        for (index, line) in read(&file)?.lines().enumerate().skip(1) {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let fields: Vec<&str> = line.split('\t').collect();
+            if fields.len() != 3 {
+                return Err(format!(
+                    "{}:{}: expected 3 columns (crate, item, defining_file)",
+                    file.display(),
+                    index + 1
+                ));
+            }
+            allowlist.insert(CfgPubRow {
+                crate_name: fields[0].to_owned(),
+                item: fields[1].to_owned(),
+                defining_file: fields[2].to_owned(),
+            });
+        }
+    }
+    let ceiling: usize = read(&ceiling_file)?.trim().parse().map_err(|_| {
+        format!(
+            "{}: expected one nonnegative integer",
+            ceiling_file.display()
+        )
+    })?;
+    if allowlist.len() > ceiling {
+        return Err(format!(
+            "{}: {} allowlist rows exceed the ceiling {ceiling}",
+            file.display(),
+            allowlist.len()
+        ));
+    }
+    Ok((allowlist, ceiling))
+}
+
+fn authority_cfg_pub_violation(
+    workspace: &Path,
+    auth: &[AuthRow],
+    allowlist: &BTreeSet<CfgPubRow>,
+    ceiling: usize,
+) -> Result<(), String> {
+    let computed = authority_cfg_pub_sites(workspace, auth)?;
+    for row in computed.difference(allowlist) {
+        return Err(format!(
+            "{} `{}` ({}) is a NEW cfg-gated plain-pub AUTHORITY item; the frozen allowlist may only shrink",
+            row.crate_name, row.item, row.defining_file
+        ));
+    }
+    for row in allowlist.difference(&computed) {
+        return Err(format!(
+            "{} `{}` ({}) no longer classifies as a cfg-gated plain-pub AUTHORITY item; shrink AUTHORITY-CFG-PUB-ALLOWLIST.tsv",
+            row.crate_name, row.item, row.defining_file
+        ));
+    }
+    if allowlist.len() > ceiling {
+        return Err(format!(
+            "AUTHORITY-CFG-PUB-ALLOWLIST.ceiling {ceiling}: allowlist has {} rows",
+            allowlist.len()
+        ));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Duplicated test-support widening attributes (LEAD 10:5xZ item 1).
+//
+// One item must carry at most one visibility::make(pub) cfg_attr. Two
+// attributes on the same item are a codemod artifact, not a stronger
+// widening, and the one-row-per-item VIS ledger cannot see the duplicate. The
+// arm counts per ITEM (attributes may be separated by doc/inline attributes),
+// not per source line.
+// ---------------------------------------------------------------------------
+
+fn attr_is_make_pub_widening(attr: &syn::Attribute) -> bool {
+    if !attr.path().is_ident("cfg_attr") {
+        return false;
+    }
+    fn flatten(stream: proc_macro2::TokenStream, idents: &mut Vec<String>) {
+        for token in stream {
+            match token {
+                proc_macro2::TokenTree::Ident(ident) => idents.push(ident.to_string()),
+                proc_macro2::TokenTree::Group(group) => flatten(group.stream(), idents),
+                _ => {}
+            }
+        }
+    }
+    let syn::Meta::List(list) = &attr.meta else {
+        return false;
+    };
+    let mut idents = Vec::new();
+    flatten(list.tokens.clone(), &mut idents);
+    idents
+        .windows(3)
+        .any(|window| window == ["visibility", "make", "pub"])
+}
+
+fn check_duplicate_widening_attrs(attrs: &[syn::Attribute], label: &str, out: &mut Vec<String>) {
+    let count = attrs
+        .iter()
+        .filter(|attr| attr_is_make_pub_widening(attr))
+        .count();
+    if count > 1 {
+        out.push(format!("{label}: {count} duplicated make(pub) attributes"));
+    }
+}
+
+fn scan_items_for_duplicate_widening(items: &[syn::Item], file: &Path, out: &mut Vec<String>) {
+    fn fields(fields: &syn::Fields, owner: &str, file: &Path, out: &mut Vec<String>) {
+        for (index, field) in fields.iter().enumerate() {
+            let name = field
+                .ident
+                .as_ref()
+                .map(|ident| ident.to_string())
+                .unwrap_or_else(|| format!("#{index}"));
+            check_duplicate_widening_attrs(
+                &field.attrs,
+                &format!("{}: {owner}::{name}", file.display()),
+                out,
+            );
+        }
+    }
+    fn visit(items: &[syn::Item], file: &Path, out: &mut Vec<String>) {
+        for item in items {
+            match item {
+                syn::Item::Mod(item_mod) => {
+                    check_duplicate_widening_attrs(
+                        &item_mod.attrs,
+                        &format!("{}: mod {}", file.display(), item_mod.ident),
+                        out,
+                    );
+                    if let Some((_, inner)) = &item_mod.content {
+                        visit(inner, file, out);
+                    }
+                }
+                syn::Item::Struct(item_struct) => {
+                    check_duplicate_widening_attrs(
+                        &item_struct.attrs,
+                        &format!("{}: struct {}", file.display(), item_struct.ident),
+                        out,
+                    );
+                    fields(
+                        &item_struct.fields,
+                        &item_struct.ident.to_string(),
+                        file,
+                        out,
+                    );
+                }
+                syn::Item::Enum(item_enum) => {
+                    check_duplicate_widening_attrs(
+                        &item_enum.attrs,
+                        &format!("{}: enum {}", file.display(), item_enum.ident),
+                        out,
+                    );
+                    for variant in &item_enum.variants {
+                        check_duplicate_widening_attrs(
+                            &variant.attrs,
+                            &format!("{}: {}::{}", file.display(), item_enum.ident, variant.ident),
+                            out,
+                        );
+                        fields(
+                            &variant.fields,
+                            &format!("{}::{}", item_enum.ident, variant.ident),
+                            file,
+                            out,
+                        );
+                    }
+                }
+                syn::Item::Union(item_union) => {
+                    check_duplicate_widening_attrs(
+                        &item_union.attrs,
+                        &format!("{}: union {}", file.display(), item_union.ident),
+                        out,
+                    );
+                    fields(
+                        &syn::Fields::Named(item_union.fields.clone()),
+                        &item_union.ident.to_string(),
+                        file,
+                        out,
+                    );
+                }
+                syn::Item::Impl(item_impl) => {
+                    let owner = match item_impl.self_ty.as_ref() {
+                        syn::Type::Path(path) => path
+                            .path
+                            .segments
+                            .last()
+                            .map(|segment| segment.ident.to_string())
+                            .unwrap_or_else(|| "_".to_owned()),
+                        _ => "_".to_owned(),
+                    };
+                    check_duplicate_widening_attrs(
+                        &item_impl.attrs,
+                        &format!("{}: impl {owner}", file.display()),
+                        out,
+                    );
+                    for impl_item in &item_impl.items {
+                        match impl_item {
+                            syn::ImplItem::Fn(impl_fn) => check_duplicate_widening_attrs(
+                                &impl_fn.attrs,
+                                &format!("{}: {owner}::{}", file.display(), impl_fn.sig.ident),
+                                out,
+                            ),
+                            syn::ImplItem::Const(item_const) => check_duplicate_widening_attrs(
+                                &item_const.attrs,
+                                &format!("{}: {owner}::{}", file.display(), item_const.ident),
+                                out,
+                            ),
+                            syn::ImplItem::Type(item_type) => check_duplicate_widening_attrs(
+                                &item_type.attrs,
+                                &format!("{}: {owner}::{}", file.display(), item_type.ident),
+                                out,
+                            ),
+                            _ => {}
+                        }
+                    }
+                }
+                syn::Item::Trait(item_trait) => {
+                    check_duplicate_widening_attrs(
+                        &item_trait.attrs,
+                        &format!("{}: trait {}", file.display(), item_trait.ident),
+                        out,
+                    );
+                    for trait_item in &item_trait.items {
+                        match trait_item {
+                            syn::TraitItem::Fn(trait_fn) => check_duplicate_widening_attrs(
+                                &trait_fn.attrs,
+                                &format!(
+                                    "{}: {}::{}",
+                                    file.display(),
+                                    item_trait.ident,
+                                    trait_fn.sig.ident
+                                ),
+                                out,
+                            ),
+                            syn::TraitItem::Const(item_const) => check_duplicate_widening_attrs(
+                                &item_const.attrs,
+                                &format!(
+                                    "{}: {}::{}",
+                                    file.display(),
+                                    item_trait.ident,
+                                    item_const.ident
+                                ),
+                                out,
+                            ),
+                            syn::TraitItem::Type(item_type) => check_duplicate_widening_attrs(
+                                &item_type.attrs,
+                                &format!(
+                                    "{}: {}::{}",
+                                    file.display(),
+                                    item_trait.ident,
+                                    item_type.ident
+                                ),
+                                out,
+                            ),
+                            _ => {}
+                        }
+                    }
+                }
+                syn::Item::Fn(item_fn) => check_duplicate_widening_attrs(
+                    &item_fn.attrs,
+                    &format!("{}: fn {}", file.display(), item_fn.sig.ident),
+                    out,
+                ),
+                syn::Item::Const(item_const) => check_duplicate_widening_attrs(
+                    &item_const.attrs,
+                    &format!("{}: const {}", file.display(), item_const.ident),
+                    out,
+                ),
+                syn::Item::Static(item_static) => check_duplicate_widening_attrs(
+                    &item_static.attrs,
+                    &format!("{}: static {}", file.display(), item_static.ident),
+                    out,
+                ),
+                syn::Item::Type(item_type) => check_duplicate_widening_attrs(
+                    &item_type.attrs,
+                    &format!("{}: type {}", file.display(), item_type.ident),
+                    out,
+                ),
+                syn::Item::Use(item_use) => check_duplicate_widening_attrs(
+                    &item_use.attrs,
+                    &format!("{}: use", file.display()),
+                    out,
+                ),
+                syn::Item::TraitAlias(item_trait_alias) => check_duplicate_widening_attrs(
+                    &item_trait_alias.attrs,
+                    &format!("{}: trait alias {}", file.display(), item_trait_alias.ident),
+                    out,
+                ),
+                syn::Item::ExternCrate(item_extern) => check_duplicate_widening_attrs(
+                    &item_extern.attrs,
+                    &format!("{}: extern crate {}", file.display(), item_extern.ident),
+                    out,
+                ),
+                syn::Item::ForeignMod(foreign) => {
+                    check_duplicate_widening_attrs(
+                        &foreign.attrs,
+                        &format!("{}: foreign mod", file.display()),
+                        out,
+                    );
+                    for foreign_item in &foreign.items {
+                        if let syn::ForeignItem::Fn(foreign_fn) = foreign_item {
+                            check_duplicate_widening_attrs(
+                                &foreign_fn.attrs,
+                                &format!("{}: extern fn {}", file.display(), foreign_fn.sig.ident),
+                                out,
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    visit(items, file, out);
+}
+
+fn duplicated_test_support_widening(workspace: &Path) -> Result<(), String> {
+    let mut directories = vec![workspace.join("crates")];
+    let mut violations = Vec::new();
+    while let Some(directory) = directories.pop() {
+        if !directory.is_dir() {
+            continue;
+        }
+        for path in read_dir_sorted(&directory)? {
+            if path.is_dir() {
+                directories.push(path);
+                continue;
+            }
+            if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+                continue;
+            }
+            let source = read(&path)?;
+            if !source.contains("visibility::make(pub)") {
+                continue;
+            }
+            // Compile-fail fixtures may be invalid Rust on purpose; they never
+            // carry the widening attribute, so skipping them is not a
+            // coverage hole for this arm.
+            if let Ok(parsed) = syn::parse_file(&source) {
+                scan_items_for_duplicate_widening(&parsed.items, &path, &mut violations);
+            }
+        }
+    }
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "TEST-SUPPORT-VIS: duplicated visibility::make(pub) attribute(s) on one item; each item needs exactly one (LEAD 10:5xZ): {}",
+            violations.join(" | ")
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Free-function TLS/static counter resets are AUTHORITY-class (LEAD 11:2xZ
+// set 2). Rows that predate the ruling are frozen in
+// VIS-FREE-FN-RESET-ALLOWLIST.tsv with an exact ceiling; the allowlist may
+// only shrink. Owned-instance resets (methods on a type the test owns, and
+// free functions that only touch an owned argument) remain VIS. A NEW VIS row
+// for a free-function reset/store of process or thread static state is red:
+// the write must route through the owning crate's test_support::authority
+// fence with an AUTHORITY row.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct FreeFnResetRow {
+    crate_name: String,
+    item: String,
+    defining_file: String,
+}
+
+fn static_like_ident(ident: &str) -> bool {
+    let mut chars = ident.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_uppercase()
+        && ident
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+fn static_write_method(method: &str) -> bool {
+    matches!(
+        method,
+        "set"
+            | "store"
+            | "swap"
+            | "replace"
+            | "take"
+            | "fetch_add"
+            | "fetch_sub"
+            | "fetch_and"
+            | "fetch_or"
+            | "fetch_xor"
+    )
+}
+
+fn expr_tail_ident(expr: &syn::Expr) -> Option<String> {
+    match expr {
+        syn::Expr::Path(path) => path
+            .path
+            .segments
+            .last()
+            .map(|segment| segment.ident.to_string()),
+        syn::Expr::Paren(paren) => expr_tail_ident(&paren.expr),
+        syn::Expr::Reference(reference) => expr_tail_ident(&reference.expr),
+        _ => None,
+    }
+}
+
+fn expr_contains_write(expr: &syn::Expr) -> bool {
+    struct Finder {
+        found: bool,
+    }
+    impl<'ast> syn::visit::Visit<'ast> for Finder {
+        fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+            let method = call.method.to_string();
+            if static_write_method(&method) || method == "borrow_mut" {
+                self.found = true;
+            }
+            syn::visit::visit_expr_method_call(self, call);
+        }
+    }
+    let mut finder = Finder { found: false };
+    syn::visit::Visit::visit_expr(&mut finder, expr);
+    finder.found
+}
+
+#[derive(Default)]
+struct StaticUse {
+    any_access: bool,
+    direct_write: bool,
+    closure_write: bool,
+}
+
+impl<'ast> syn::visit::Visit<'ast> for StaticUse {
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if expr_tail_ident(&call.receiver).is_some_and(|ident| static_like_ident(&ident)) {
+            self.any_access = true;
+            let method = call.method.to_string();
+            if static_write_method(&method) {
+                self.direct_write = true;
+            }
+            if method == "with" && call.args.iter().any(expr_contains_write) {
+                self.closure_write = true;
+            }
+        }
+        syn::visit::visit_expr_method_call(self, call);
+    }
+}
+
+enum FnSite {
+    Free(Box<syn::ItemFn>),
+    Method,
+}
+
+fn find_free_fn_site(source: &str, leaf: &str) -> Option<FnSite> {
+    let parsed = syn::parse_file(source).ok()?;
+    let mut free: Option<Box<syn::ItemFn>> = None;
+    let mut methods = 0usize;
+    fn walk(
+        items: &[syn::Item],
+        leaf: &str,
+        free: &mut Option<Box<syn::ItemFn>>,
+        methods: &mut usize,
+    ) {
+        for item in items {
+            match item {
+                syn::Item::Fn(item_fn) if item_fn.sig.ident == leaf => {
+                    if free.is_none() {
+                        *free = Some(Box::new(item_fn.clone()));
+                    }
+                }
+                syn::Item::Impl(item_impl) => {
+                    for impl_item in &item_impl.items {
+                        if let syn::ImplItem::Fn(impl_fn) = impl_item {
+                            if impl_fn.sig.ident == leaf {
+                                *methods += 1;
+                            }
+                        }
+                    }
+                }
+                syn::Item::Trait(item_trait) => {
+                    for trait_item in &item_trait.items {
+                        if let syn::TraitItem::Fn(trait_fn) = trait_item {
+                            if trait_fn.sig.ident == leaf {
+                                *methods += 1;
+                            }
+                        }
+                    }
+                }
+                syn::Item::Mod(item_mod) => {
+                    if let Some((_, inner)) = &item_mod.content {
+                        walk(inner, leaf, free, methods);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    walk(&parsed.items, leaf, &mut free, &mut methods);
+    if let Some(free) = free {
+        Some(FnSite::Free(free))
+    } else if methods > 0 {
+        Some(FnSite::Method)
+    } else {
+        None
+    }
+}
+
+fn free_fn_reset_candidates(
+    workspace: &Path,
+    rows: &[VisRow],
+) -> Result<BTreeSet<FreeFnResetRow>, String> {
+    let mut candidates = BTreeSet::new();
+    for row in rows {
+        if row.kind != "fn" {
+            continue;
+        }
+        let leaf = row.item.rsplit("::").next().unwrap_or(&row.item);
+        let reset_named = leaf.starts_with("reset_") || leaf.starts_with("clear_");
+        let reset_or_store_named =
+            reset_named || leaf.starts_with("store_") || leaf.starts_with("set_");
+        let path = workspace.join(&row.file);
+        let Ok(source) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(site) = find_free_fn_site(&source, leaf) else {
+            continue;
+        };
+        let FnSite::Free(item_fn) = site else {
+            // A method mutates an owned instance: the VIS class is correct.
+            continue;
+        };
+        let mut static_use = StaticUse::default();
+        syn::visit::Visit::visit_block(&mut static_use, &item_fn.block);
+        // The ratified class is a free function whose NAME denotes a reset or
+        // store of process/thread static state. Ordinary helpers that read or
+        // scope a TLS cache (with_*, record_*, compile_*, ...) are not rows of
+        // this class and stay outside the ratchet.
+        let candidate = reset_or_store_named
+            && (static_use.direct_write
+                || static_use.closure_write
+                || (reset_named && static_use.any_access));
+        if candidate {
+            candidates.insert(FreeFnResetRow {
+                crate_name: row.crate_dir.clone(),
+                item: row.item.clone(),
+                defining_file: row.file.clone(),
+            });
+        }
+    }
+    Ok(candidates)
+}
+
+fn load_vis_free_fn_reset_allowlist(
+    workspace: &Path,
+) -> Result<(BTreeSet<FreeFnResetRow>, usize), String> {
+    let architecture = workspace.join(ARCHITECTURE_DIR);
+    let file = architecture.join("VIS-FREE-FN-RESET-ALLOWLIST.tsv");
+    let ceiling_file = architecture.join("VIS-FREE-FN-RESET-ALLOWLIST.ceiling");
+    let mut allowlist = BTreeSet::new();
+    if file.is_file() {
+        for (index, line) in read(&file)?.lines().enumerate().skip(1) {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let fields: Vec<&str> = line.split('\t').collect();
+            if fields.len() != 3 {
+                return Err(format!(
+                    "{}:{}: expected 3 columns (crate, item, defining_file)",
+                    file.display(),
+                    index + 1
+                ));
+            }
+            allowlist.insert(FreeFnResetRow {
+                crate_name: fields[0].to_owned(),
+                item: fields[1].to_owned(),
+                defining_file: fields[2].to_owned(),
+            });
+        }
+    }
+    let ceiling: usize = read(&ceiling_file)?.trim().parse().map_err(|_| {
+        format!(
+            "{}: expected one nonnegative integer",
+            ceiling_file.display()
+        )
+    })?;
+    if allowlist.len() > ceiling {
+        return Err(format!(
+            "{}: {} allowlist rows exceed the ceiling {ceiling}",
+            file.display(),
+            allowlist.len()
+        ));
+    }
+    Ok((allowlist, ceiling))
+}
+
+fn vis_free_fn_reset_violation(workspace: &Path, rows: &[VisRow]) -> Result<(), String> {
+    let (allowlist, ceiling) = load_vis_free_fn_reset_allowlist(workspace)?;
+    let computed = free_fn_reset_candidates(workspace, rows)?;
+    let new: Vec<String> = computed
+        .difference(&allowlist)
+        .map(|row| format!("{} `{}` ({})", row.crate_name, row.item, row.defining_file))
+        .collect();
+    if !new.is_empty() {
+        return Err(format!(
+            "TEST-SUPPORT-VIS: NEW free-function TLS/static counter reset/store row(s); route the write through the owning crate's test_support::authority fence and add an AUTHORITY row (LEAD 11:2xZ; the frozen allowlist may only shrink): {}",
+            new.join(" | ")
+        ));
+    }
+    let stale: Vec<String> = allowlist
+        .difference(&computed)
+        .map(|row| format!("{} `{}` ({})", row.crate_name, row.item, row.defining_file))
+        .collect();
+    if !stale.is_empty() {
+        return Err(format!(
+            "TEST-SUPPORT-VIS: frozen free-function reset row(s) no longer classify as free-function TLS/static resets; shrink VIS-FREE-FN-RESET-ALLOWLIST.tsv (and its ceiling): {}",
+            stale.join(" | ")
+        ));
+    }
+    if allowlist.len() > ceiling {
+        return Err(format!(
+            "VIS-FREE-FN-RESET-ALLOWLIST.ceiling {ceiling}: allowlist has {} rows",
+            allowlist.len()
+        ));
     }
     Ok(())
 }
@@ -6417,6 +7523,7 @@ fn authority_items_have_rows_and_existing_defining_files() {
 /// aliases of it) plus `crate`/`self`/`super` inside the fence crate itself.
 // ---------------------------------------------------------------------------
 
+#[derive(Clone, Debug)]
 struct AuthRow {
     crate_name: String,
     item: String,
@@ -8131,4 +9238,350 @@ fn authority_pub_use_method_rows_are_method_aware() {
     .expect("second route");
     let error = authority_public_paths_violation(dir.path(), &rows).expect_err("second route");
     assert!(error.contains("fence routes"), "{error}");
+}
+
+#[cfg(test)]
+mod disjointness_ratchet_tests {
+    use super::*;
+
+    fn auth_row(crate_name: &str, item: &str, defining_file: &str, fence_path: &str) -> AuthRow {
+        AuthRow {
+            crate_name: crate_name.to_owned(),
+            item: item.to_owned(),
+            defining_file: defining_file.to_owned(),
+            fence_path: fence_path.to_owned(),
+        }
+    }
+
+    fn vis_entry(crate_name: &str, item: &str, file: &str) -> VisEntry {
+        VisEntry {
+            crate_name: crate_name.to_owned(),
+            item: item.to_owned(),
+            file: file.to_owned(),
+        }
+    }
+
+    #[test]
+    fn vis_authority_disjointness_catches_both_row_conventions() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let value_src = dir.path().join("crates/neovm-value/src");
+        std::fs::create_dir_all(value_src.join("test_support")).expect("src");
+        std::fs::write(value_src.join("lib.rs"), "pub mod test_support;\n").expect("lib");
+        std::fs::write(value_src.join("test_support.rs"), "pub mod authority;\n").expect("support");
+        std::fs::write(
+            value_src.join("test_support/authority.rs"),
+            "pub fn dup() { crate::tagged::x::dup(); }\n",
+        )
+        .expect("fence");
+        // Convention 1: original-path row; the VIS row names the same item.
+        let original = auth_row(
+            "neovm-value",
+            "tagged::x::dup",
+            "crates/neovm-value/src/tagged.rs",
+            "neovm_value::tagged::x::dup",
+        );
+        let same = vec![vis_entry(
+            "neovm-value",
+            "tagged::x::dup",
+            "crates/neovm-value/src/tagged.rs",
+        )];
+        vis_authority_disjoint_violation(dir.path(), &same, &[original.clone()])
+            .expect_err("original-path pair is red");
+        vis_authority_disjoint_violation(dir.path(), &[], &[original])
+            .expect("no VIS row is green");
+        // Convention 2: fence-spelling row resolved through the delegate body.
+        let fenced = auth_row(
+            "neovm-value",
+            "test_support::authority::dup",
+            "crates/neovm-value/src/test_support/authority.rs",
+            "neovm_value::test_support::authority::dup",
+        );
+        let resolved = vec![vis_entry(
+            "neovm-value",
+            "tagged::x::dup",
+            "crates/neovm-value/src/tagged.rs",
+        )];
+        let error = vis_authority_disjoint_violation(dir.path(), &resolved, &[fenced.clone()])
+            .expect_err("fence pair is red");
+        assert!(error.contains("exactly one cross-crate route"), "{error}");
+        let other = vec![vis_entry(
+            "neovm-value",
+            "tagged::y::dup",
+            "crates/neovm-value/src/tagged.rs",
+        )];
+        vis_authority_disjoint_violation(dir.path(), &other, &[fenced])
+            .expect("a different item is green");
+    }
+
+    #[test]
+    fn authority_cfg_pub_ratchet_mutations() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("crates/neovm-value/src");
+        std::fs::create_dir_all(&src).expect("src");
+        let file = src.join("lib.rs");
+        let row = auth_row(
+            "neovm-value",
+            "flag_for_test",
+            "crates/neovm-value/src/lib.rs",
+            "neovm_value::flag_for_test",
+        );
+        let allow = |items: &[(&str, &str, &str)]| -> BTreeSet<CfgPubRow> {
+            items
+                .iter()
+                .map(|(crate_name, item, defining_file)| CfgPubRow {
+                    crate_name: (*crate_name).to_owned(),
+                    item: (*item).to_owned(),
+                    defining_file: (*defining_file).to_owned(),
+                })
+                .collect()
+        };
+        // (a) production-public: green with an empty allowlist.
+        std::fs::write(&file, "pub fn flag_for_test() {}\n").expect("pub");
+        authority_cfg_pub_violation(dir.path(), &[row.clone()], &allow(&[]), 0)
+            .expect("production-public is exempt");
+        // (b) new cfg-gated plain pub: red; allowlisted: green.
+        std::fs::write(
+            &file,
+            "#[cfg(any(test, feature = \"test-support\"))]\npub fn flag_for_test() {}\n",
+        )
+        .expect("cfg pub");
+        let error = authority_cfg_pub_violation(dir.path(), &[row.clone()], &allow(&[]), 0)
+            .expect_err("new (b) item is red");
+        assert!(error.contains("NEW cfg-gated plain-pub"), "{error}");
+        let frozen = allow(&[(
+            "neovm-value",
+            "flag_for_test",
+            "crates/neovm-value/src/lib.rs",
+        )]);
+        authority_cfg_pub_violation(dir.path(), &[row.clone()], &frozen, 1)
+            .expect("allowlisted (b) is green");
+        // pub(crate) cfg-gated is not the plain-pub class.
+        std::fs::write(
+            &file,
+            "#[cfg(any(test, feature = \"test-support\"))]\npub(crate) fn flag_for_test() {}\n",
+        )
+        .expect("cfg crate pub");
+        authority_cfg_pub_violation(dir.path(), &[row.clone()], &allow(&[]), 0)
+            .expect("pub(crate) is exempt");
+        // Removing the item leaves a stale allowlist row: red.
+        std::fs::write(&file, "pub fn other() {}\n").expect("absent");
+        let error = authority_cfg_pub_violation(dir.path(), &[row.clone()], &frozen, 1)
+            .expect_err("missing item is red");
+        assert!(
+            error.contains("not found") || error.contains("no longer classifies"),
+            "{error}"
+        );
+        // The frozen ceiling may only shrink.
+        std::fs::write(
+            &file,
+            "#[cfg(any(test, feature = \"test-support\"))]\npub fn flag_for_test() {}\n",
+        )
+        .expect("cfg pub again");
+        let ceiling_error = authority_cfg_pub_violation(dir.path(), &[row], &frozen, 0)
+            .expect_err("ceiling shrink");
+        assert!(ceiling_error.contains("allowlist"), "{ceiling_error}");
+    }
+
+    #[test]
+    fn duplicated_make_pub_attribute_mutations() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("crates/neovm-value/src");
+        std::fs::create_dir_all(&src).expect("src");
+        let file = src.join("lib.rs");
+        let attr = "#[cfg_attr(feature = \"test-support\", visibility::make(pub))]";
+        std::fs::write(&file, format!("{attr}\npub(crate) fn single() {{}}\n")).expect("single");
+        duplicated_test_support_widening(dir.path()).expect("one attribute is green");
+        std::fs::write(
+            &file,
+            format!("{attr}\n#[inline]\n{attr}\npub(crate) fn duplicated() {{}}\n"),
+        )
+        .expect("duplicated");
+        let error = duplicated_test_support_widening(dir.path()).expect_err("duplicate is red");
+        assert!(error.contains("duplicated"), "{error}");
+        // The arm counts per item even when doc attributes sit between the two
+        // widenings, and it also covers fields.
+        std::fs::write(
+            &file,
+            format!("pub(crate) struct S {{\n    {attr}\n    {attr}\n    pub(crate) f: u8,\n}}\n"),
+        )
+        .expect("field duplicated");
+        assert!(duplicated_test_support_widening(dir.path()).is_err());
+        // The signed cfg-split twin shape has exactly one attribute per arm.
+        std::fs::write(
+            &file,
+            format!(
+                "pub(crate) struct S {{\n    #[cfg(feature = \"test-support\")]\n    {attr}\n    pub f: u8,\n    #[cfg(not(feature = \"test-support\"))]\n    pub(crate) f: u8,\n}}\n"
+            ),
+        )
+        .expect("cfg split");
+        duplicated_test_support_widening(dir.path()).expect("cfg-split twins are one each");
+    }
+
+    #[test]
+    fn vis_free_fn_reset_ratchet_mutations() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let value_src = dir.path().join("crates/neovm-value/src");
+        let arch = dir.path().join(ARCHITECTURE_DIR);
+        std::fs::create_dir_all(&value_src).expect("src");
+        std::fs::create_dir_all(&arch).expect("arch");
+        let file = value_src.join("lib.rs");
+        let allow_file = arch.join("VIS-FREE-FN-RESET-ALLOWLIST.tsv");
+        let ceiling_file = arch.join("VIS-FREE-FN-RESET-ALLOWLIST.ceiling");
+        let write_allow = |rows: &[&str], ceiling: usize| {
+            let mut text = String::from("crate\titem\tdefining_file\n");
+            for row in rows {
+                text.push_str(row);
+                text.push('\n');
+            }
+            std::fs::write(&allow_file, text).expect("allow");
+            std::fs::write(&ceiling_file, format!("{ceiling}\n")).expect("ceiling");
+        };
+        let row = |item: &str| VisRow {
+            crate_dir: "neovm-value".to_owned(),
+            item: item.to_owned(),
+            kind: "fn".to_owned(),
+            file: "crates/neovm-value/src/lib.rs".to_owned(),
+            tests: vec!["crates/neovm-core/tests/t.rs".to_owned()],
+        };
+        // A new free-fn TLS counter reset is red until frozen.
+        std::fs::write(
+            &file,
+            "thread_local! { static COUNTER: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }\npub(crate) fn reset_counter() { COUNTER.with(|count| count.set(0)); }\n",
+        )
+        .expect("reset");
+        write_allow(&[], 0);
+        let error = vis_free_fn_reset_violation(dir.path(), &[row("reset_counter")])
+            .expect_err("new reset is red");
+        assert!(error.contains("NEW free-function TLS/static"), "{error}");
+        // The frozen signed row is green.
+        write_allow(
+            &["neovm-value\treset_counter\tcrates/neovm-value/src/lib.rs"],
+            1,
+        );
+        vis_free_fn_reset_violation(dir.path(), &[row("reset_counter")])
+            .expect("frozen reset is green");
+        // A method reset mutates an owned instance: it stays VIS.
+        std::fs::write(
+            &file,
+            "pub(crate) struct Owned { count: std::cell::Cell<usize> }\nimpl Owned { pub(crate) fn reset_count(&self) { self.count.set(0); } }\n",
+        )
+        .expect("method");
+        write_allow(&[], 0);
+        vis_free_fn_reset_violation(dir.path(), &[row("reset_count")])
+            .expect("owned-instance reset stays VIS");
+        // A free function that only resets its owned argument stays VIS.
+        std::fs::write(
+            &file,
+            "pub(crate) fn reset_view(view: &mut Vec<usize>) { view.clear(); }\n",
+        )
+        .expect("argument reset");
+        vis_free_fn_reset_violation(dir.path(), &[row("reset_view")])
+            .expect("argument-owned reset stays VIS");
+        // A read-only TLS helper whose name does not denote a reset/store is
+        // outside the ratified class (it cannot zero a counter).
+        std::fs::write(
+            &file,
+            "thread_local! { static COUNTER: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }\npub(crate) fn read_counter() -> usize { COUNTER.with(|count| count.get()) }\n",
+        )
+        .expect("read helper");
+        vis_free_fn_reset_violation(dir.path(), &[row("read_counter")])
+            .expect("read-only TLS helper stays outside the ratchet");
+        // A free-fn static STORE without the reset naming convention is red.
+        std::fs::write(
+            &file,
+            "static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);\npub(crate) fn store_counter() { COUNTER.store(0, std::sync::atomic::Ordering::Relaxed); }\n",
+        )
+        .expect("store");
+        write_allow(&[], 0);
+        let error = vis_free_fn_reset_violation(dir.path(), &[row("store_counter")])
+            .expect_err("static store is red");
+        assert!(error.contains("NEW free-function TLS/static"), "{error}");
+        // A frozen row that no longer classifies is stale and must shrink.
+        std::fs::write(&file, "pub(crate) fn reset_counter() {}\n").expect("no static");
+        write_allow(
+            &["neovm-value\treset_counter\tcrates/neovm-value/src/lib.rs"],
+            1,
+        );
+        let error = vis_free_fn_reset_violation(dir.path(), &[row("reset_counter")])
+            .expect_err("stale row is red");
+        assert!(error.contains("no longer classify"), "{error}");
+        // The exact ceiling may only shrink.
+        std::fs::write(
+            &file,
+            "thread_local! { static COUNTER: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }\npub(crate) fn reset_counter() { COUNTER.with(|count| count.set(0)); }\n",
+        )
+        .expect("reset again");
+        write_allow(
+            &["neovm-value\treset_counter\tcrates/neovm-value/src/lib.rs"],
+            0,
+        );
+        let error = vis_free_fn_reset_violation(dir.path(), &[row("reset_counter")])
+            .expect_err("ceiling shrink");
+        assert!(error.contains("ceiling"), "{error}");
+    }
+
+    #[test]
+    fn vis_authority_owner_key_and_row_333_mutations() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let value_src = dir.path().join("crates/neovm-value/src");
+        std::fs::create_dir_all(&value_src).expect("src");
+        let file = value_src.join("original.rs");
+        std::fs::write(
+            &file,
+            "pub struct Alpha;\npub struct Beta;\nimpl Alpha { pub(crate) fn registry(&self) {} }\nimpl Beta { pub(crate) fn registry(&self) {} }\n",
+        )
+        .expect("owners");
+        let auth = auth_row(
+            "neovm-value",
+            "Alpha::registry",
+            "crates/neovm-value/src/original.rs",
+            "neovm_value::Alpha::registry",
+        );
+        // LEAD 11:2xZ key: the same leaf on a DIFFERENT owner is green even in
+        // the same defining file (the historical registry case).
+        vis_authority_disjoint_violation(
+            dir.path(),
+            &[vis_entry(
+                "neovm-value",
+                "Beta::registry",
+                "crates/neovm-value/src/original.rs",
+            )],
+            &[auth.clone()],
+        )
+        .expect("a different owner with the same leaf is green");
+        // The same owner and leaf is the second route: red.
+        let error = vis_authority_disjoint_violation(
+            dir.path(),
+            &[vis_entry(
+                "neovm-value",
+                "Alpha::registry",
+                "crates/neovm-value/src/original.rs",
+            )],
+            &[auth],
+        )
+        .expect_err("same owner is red");
+        assert!(error.contains("exactly one cross-crate route"), "{error}");
+        // (i) the historical row-333 pair: the free-function clone-counter
+        // reset that main e8fe979a7a routed through value's authority fence.
+        let chunk = value_src.join("chunk.rs");
+        std::fs::write(
+            &chunk,
+            "thread_local! { static CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }\npub(crate) fn reset_bytecode_function_clone_count_for_test() { CLONES.with(|count| count.set(0)); }\n",
+        )
+        .expect("chunk");
+        let clone_auth = auth_row(
+            "neovm-value",
+            "reset_bytecode_function_clone_count_for_test",
+            "crates/neovm-value/src/chunk.rs",
+            "neovm_value::test_support::authority::reset_bytecode_function_clone_count_for_test",
+        );
+        let clone_vis = vis_entry(
+            "neovm-value",
+            "tagged::bytecode::chunk::reset_bytecode_function_clone_count_for_test",
+            "crates/neovm-value/src/chunk.rs",
+        );
+        let error = vis_authority_disjoint_violation(dir.path(), &[clone_vis], &[clone_auth])
+            .expect_err("re-added row 333 is red");
+        assert!(error.contains("exactly one cross-crate route"), "{error}");
+    }
 }

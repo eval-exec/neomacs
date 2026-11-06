@@ -4,14 +4,14 @@
 //! implemented here — the blocked syscall stand-in is a plain channel.
 #![cfg(not(feature = "gc-memory-telemetry"))]
 
-use super::rendezvous::entry_state;
 use super::{
     AllStopped, HeapIdentity, Mode, Mutator, MutatorEntry, MutatorKey, MutatorPermit, NativeRoots,
-    ProofEra as ParallelHeapEra, RegistrationError, RendezvousError, Request,
+    RegistrationError, RendezvousError, Request,
 };
 use crate::emacs_core::eval::Context;
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue;
+use neovm_eval::test_support::authority::WorldProofEra as ParallelHeapEra;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::thread;
@@ -82,9 +82,10 @@ fn activate<'era>(mut permit: MutatorPermit<'era>, heap: HeapIdentity, id: u64) 
 }
 
 fn restore(owner: &mut Mutator<'_>) {
-    let mut image = owner
-        .begin_restore_retry(false)
-        .unwrap_or_else(|error| panic!("restore: {error:?}"));
+    let native = false;
+    let mut image =
+        neovm_value::test_support::authority::begin_restore_retry_for_test(owner, native)
+            .unwrap_or_else(|error| panic!("restore: {error:?}"));
     let deadline = Instant::now() + SPIN_WAIT;
     loop {
         match image.apply() {
@@ -394,8 +395,8 @@ fn root_reader_words(stopped: &AllStopped<'_>, armed: &NativeArmed) -> Vec<usize
 fn entry_image_present(armed: &NativeArmed) -> bool {
     let deadline = Instant::now() + SPIN_WAIT;
     loop {
-        match entry_state(&armed.entry) {
-            Ok(state) => return state.image.is_some(),
+        match super::entry_image_present_for_test(&armed.entry) {
+            Ok(present) => return present,
             Err(RendezvousError::Busy) if Instant::now() < deadline => thread::yield_now(),
             Err(error) => panic!("entry: {error:?}"),
         }
@@ -424,7 +425,7 @@ fn check_stopped(
     assert_eq!(words, armed.words, "immutable retained-root record");
     assert!(entry_image_present(armed), "keeper owns the stopped image");
     on_heap(era, stopped, |heap| {
-        let retained = TaggedValue::from_bits(armed.words[0]);
+        let retained = unsafe { TaggedValue::from_bits(armed.words[0]) };
         assert!(
             heap.owns_heap_value_for_test(retained),
             "retained cons survived the collection"
@@ -527,7 +528,7 @@ fn a7_extent_blocks_while_peer_allocates_and_keeper_collects_repeatedly() {
                 let peer_mode = snapshot
                     .owners
                     .iter()
-                    .find(|(key, _)| key.owner == 6701)
+                    .find(|(key, _)| key.owner_for_test() == 6701)
                     .map(|(_, mode)| *mode)
                     .expect("peer in membership");
                 assert_eq!(peer_mode, Mode::Stopped);
@@ -535,8 +536,8 @@ fn a7_extent_blocks_while_peer_allocates_and_keeper_collects_repeatedly() {
                 // The blocked owner's retained structure is intact on the
                 // stopped heap: spine = (1 cell), cell = (1 nil).
                 on_heap(era, &stopped, |heap| {
-                    let spine = TaggedValue::from_bits(entered.words[0]);
-                    let cell = TaggedValue::from_bits(entered.words[1]);
+                    let spine = unsafe { TaggedValue::from_bits(entered.words[0]) };
+                    let cell = unsafe { TaggedValue::from_bits(entered.words[1]) };
                     assert!(heap.owns_heap_value_for_test(spine));
                     assert!(heap.owns_heap_value_for_test(cell));
                     assert_eq!(spine.cons_cdr_unobserved().bits(), cell.bits());
@@ -548,8 +549,9 @@ fn a7_extent_blocks_while_peer_allocates_and_keeper_collects_repeatedly() {
                 });
                 finish_round(era, stopped);
                 // The keeper folded its latest image into the entry in place.
-                let state = entry_state(&entered.entry).unwrap_or_else(|e| panic!("entry: {e:?}"));
-                assert_eq!(state.rendezvous.image_epoch, epoch);
+                let image_epoch = super::entry_image_epoch_for_test(&entered.entry)
+                    .unwrap_or_else(|e| panic!("entry: {e:?}"));
+                assert_eq!(image_epoch, epoch);
             }
             wake_tx
                 .send(())
@@ -823,7 +825,7 @@ fn check_stopped_return_race(
     let words = root_reader_words(stopped, armed);
     assert_eq!(words, armed.words, "immutable retained-root record");
     on_heap(era, stopped, |heap| {
-        let retained = TaggedValue::from_bits(armed.words[0]);
+        let retained = unsafe { TaggedValue::from_bits(armed.words[0]) };
         assert!(heap.owns_heap_value_for_test(retained));
     });
 }

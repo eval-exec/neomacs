@@ -6530,6 +6530,7 @@ fn text_properties_set_undo_entries(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum BufferSwapTextError {
     DeadBuffer,
     IndirectBuffer,

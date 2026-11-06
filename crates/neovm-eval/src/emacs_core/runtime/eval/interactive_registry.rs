@@ -259,6 +259,9 @@ impl WhereIsReverseIndex {
 /// `M-x` or key bindings) and their argument specs.
 pub struct InteractiveRegistry {
     /// Map from function symbol to its interactive spec.
+    #[cfg(feature = "test-support")]
+    pub specs: HashMap<SymId, InteractiveSpec>,
+    #[cfg(not(feature = "test-support"))]
     specs: HashMap<SymId, InteractiveSpec>,
     /// The subset of `specs` whose spec is a heap object, i.e. the only
     /// entries that are GC roots.
@@ -270,6 +273,9 @@ pub struct InteractiveRegistry {
     /// to find single digits.  Maintaining the answer at the four points that
     /// can change it costs nothing measurable and makes seeding proportional
     /// to the root count rather than the command count.
+    #[cfg(feature = "test-support")]
+    pub heap_specs: HashMap<SymId, Value>,
+    #[cfg(not(feature = "test-support"))]
     heap_specs: HashMap<SymId, Value>,
     /// Stack tracking whether the current function was called interactively.
     interactive_call_stack: Vec<bool>,

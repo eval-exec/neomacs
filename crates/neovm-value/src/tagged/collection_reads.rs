@@ -218,6 +218,77 @@ struct State {
     certificate_pool: certificate_storage::CertificatePool,
 }
 
+/// Fence body partner (LEAD 10:1xZ): the ambient journal State is private to
+/// this module, so the authority delegate forwards here; the State method
+/// itself stays pub(crate) with no A-prime widening.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn observed_exclude_unobserved_for_test(bits: usize) -> bool {
+    with_state(|state| {
+        state
+            .borrow_mut()
+            .observed_exclude_unobserved_for_test(bits)
+    })
+}
+
+/// VIS row (LEAD 10:5xZ): read-only copy of the publication predicate.
+///
+/// The journal `State` and its `RefCell` never cross the crate boundary. The
+/// accessor borrows the mutator-local enclosure internally and copies the
+/// plain bool out; no caller can reach a mutable journal view.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn observed_already_published_for_test(bits: usize) -> bool {
+    with_state(|state| state.borrow().observed_already_published_for_test(bits))
+}
+
+/// VIS row (LEAD 10:5xZ): read-only copy of the conservative bounds pair.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn observed_full_bounds_for_test() -> (usize, usize) {
+    with_state(|state| state.borrow().observed_full_bounds_for_test())
+}
+
+/// VIS row (LEAD 10:5xZ): read-only copy of the compiled-gate geometry.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn observed_gate_for_test() -> super::gc::CompiledObservationGate {
+    with_state(|state| state.borrow().observed_gate_for_test())
+}
+
+/// VIS row (LEAD 10:5xZ): read-only copy of the last-capture epoch predicate.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn captures_last_epoch_present_for_test() -> bool {
+    with_state(|state| state.borrow().captures_last_epoch_present_for_test())
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl State {
+    fn observed_already_published_for_test(&self, bits: usize) -> bool {
+        self.observed.already_published(bits)
+    }
+
+    fn observed_full_bounds_for_test(&self) -> (usize, usize) {
+        self.observed.full_bounds()
+    }
+
+    fn observed_gate_for_test(&self) -> super::gc::CompiledObservationGate {
+        self.observed.gate()
+    }
+
+    /// The fence body partner keeps the original `pub(crate)` visibility with
+    /// no A-prime widening (LEAD 10:1xZ / 10:5xZ).
+    pub(crate) fn observed_exclude_unobserved_for_test(&mut self, bits: usize) -> bool {
+        self.observed.exclude_unobserved(bits)
+    }
+
+    fn captures_last_epoch_present_for_test(&self) -> bool {
+        self.captures
+            .last()
+            .is_some_and(|capture| capture.publication_epoch.is_some())
+    }
+}
+
 impl Default for State {
     fn default() -> Self {
         #[cfg(test)]
@@ -827,6 +898,8 @@ fn record_projected_write_observed(store: &StoreState, value: TaggedValue, proje
 mod capture_storage;
 mod certificate_storage;
 mod store_state;
+// Internal only: the test-support surface publishes the read-only accessor
+// functions above, never the RefCell-bearing accessor (LEAD 10:5xZ).
 use store_state::with_state;
 pub(crate) use store_state::{
     ObservationWorld, StoreState, clear_installed_store_heap, with_store,

@@ -450,6 +450,7 @@ impl EchoAreaMessageText {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct RedisplaySignature {
     fontset_generation: u64,
     compositor_scrolling_enabled: bool,
@@ -605,6 +606,7 @@ struct RedisplayWindowSignature {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct RedisplayBufferSignature {
     layout: crate::emacs_core::eval::data::layout_input::BufferLayoutInputState,
     save_modified_tick: i64,
@@ -656,7 +658,7 @@ thread_local! {
     /// Test-only visibility into hot-path registry reads.  Primitive objects
     /// should carry the GNU `Lisp_Subr` metadata needed by `commandp` instead
     /// of re-entering this table for every M-x candidate.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     static GLOBAL_SUBR_LOOKUP_COUNT: Cell<usize> = const { Cell::new(0) };
 
     /// Test-only observation of GNU bytecode backedge polling cadence.
@@ -878,7 +880,7 @@ pub(crate) fn inline_subr_function(sym_id: SymId) -> Option<SubrFn> {
 /// instead of copying the entry.
 #[inline]
 pub(crate) fn global_subr_is_builtin(sym_id: SymId) -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     GLOBAL_SUBR_LOOKUP_COUNT.with(|count| count.set(count.get() + 1));
     let idx = sym_id.to_raw() as usize;
     if idx < BUILTIN_SYM_BITS_WORDS * 64 {
@@ -899,7 +901,7 @@ pub(crate) fn global_subr_is_builtin(sym_id: SymId) -> bool {
 }
 
 pub(crate) fn lookup_global_subr_entry(sym_id: SymId) -> Option<SubrEntry> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     GLOBAL_SUBR_LOOKUP_COUNT.with(|count| count.set(count.get() + 1));
     GLOBAL_SUBR_TABLE.with(|table| {
         table
@@ -910,12 +912,13 @@ pub(crate) fn lookup_global_subr_entry(sym_id: SymId) -> Option<SubrEntry> {
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn reset_global_subr_lookup_count() {
     GLOBAL_SUBR_LOOKUP_COUNT.with(|count| count.set(0));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn global_subr_lookup_count() -> usize {
     GLOBAL_SUBR_LOOKUP_COUNT.with(Cell::get)
 }
@@ -1811,6 +1814,7 @@ struct ThreadDynamicBindingState {
 }
 
 #[derive(Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct ThreadDynamicBindingToken {
     suspended_depth: usize,
 }
@@ -3238,6 +3242,9 @@ pub struct Context {
     pub(crate) modes: WorldSlot<ModeRegistry>,
     /// Keyboard macro metadata — ring/counter state layered above the
     /// keyboard-owned live recording/playback runtime.
+    ///
+    /// The oracle uses the pre-existing public `Context::kmacro_mut()` path;
+    /// the field itself stays pub(crate) (rubric 7 re-point, LEAD 14:0xZ).
     pub(crate) kmacro: WorldSlot<KmacroManager>,
     /// Desired visual configuration.  Lisp updates this snapshot atomically;
     /// attaching or rebuilding a display replays it as authoritative state.
@@ -3321,6 +3328,9 @@ pub struct Context {
     /// Process manager — owns all tracked processes.
     pub(crate) processes: WorldSlot<ProcessManager>,
     /// Abbreviation manager — text abbreviation expansion.
+    #[cfg(feature = "test-support")]
+    pub abbrevs: WorldSlot<AbbrevManager>,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) abbrevs: WorldSlot<AbbrevManager>,
     /// GNU-compatible CPU and managed-allocation profiler state.
     pub(crate) profiler: profiler::ProfilerState,
@@ -3809,6 +3819,9 @@ pub struct Context {
     /// When true, collect detailed timing counters for macro/eager-load paths.
     macro_perf_enabled: bool,
     /// Custom variable manager — defcustom/defgroup system.
+    #[cfg(feature = "test-support")]
+    pub custom: CustomManager,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) custom: CustomManager,
     /// Native construction state, never serialized. Unlike an ordinary
     /// runtime redump, loadup must omit build-only environment derivatives.
@@ -4293,6 +4306,7 @@ pub(crate) struct ActiveLambdaCallState {
     specpdl_count: usize,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct ActiveMacroExpansionScopeState {
     saved_specpdl_len: usize,
 }
@@ -4421,6 +4435,7 @@ impl Drop for GcInhibitGuard<'_> {
 /// unwinds cannot leave the depth stuck nonzero — which would permanently
 /// disable `throw-on-input` once panics become catchable. Same shape as
 /// [`GcInhibitGuard`].
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct UnwindCleanupGuard<'a>(&'a mut Context);
 
 impl<'a> UnwindCleanupGuard<'a> {

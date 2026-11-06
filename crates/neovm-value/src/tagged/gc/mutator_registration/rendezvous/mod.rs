@@ -70,6 +70,7 @@ impl From<ParallelRootBatchError> for RendezvousError {
 
 /// Rooted input admission, created only by the original owner's Publishing seam.
 /// It grants no assertion about other mutators having stopped.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct OwnerRootAdmission<'a> {
     identity: ParallelRootIdentity,
     roots: &'a [SharedRoot],
@@ -94,6 +95,7 @@ impl<'a> OwnerRootAdmission<'a> {
     }
 }
 /// A scoped root-read admission. Only AllStopped's implementation creates it.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct StoppedRootAdmission<'a> {
     pub(super) identity: ParallelRootIdentity,
     pub(super) epoch: u64,

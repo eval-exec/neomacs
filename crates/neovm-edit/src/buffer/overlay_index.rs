@@ -464,6 +464,7 @@ fn materialize_overlay_position(overlay: Value, range: EmacsByteRange) {
 }
 
 #[derive(Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) struct OverlayIndex {
     intervals: Arc<RwLock<IntervalBPlusTree>>,
     /// Topology-only mirror for the one GNU red-black-tree detail observable

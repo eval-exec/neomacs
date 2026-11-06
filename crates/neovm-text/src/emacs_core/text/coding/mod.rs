@@ -4977,8 +4977,10 @@ struct CodingDetectionBindings {
 /// Reporting and decoding build the same runtime bindings before scanning.
 pub struct CodingDetectionBindings {
     pub priorities: Vec<usize>,
-    systems: [Option<SymId>; CODING_CAT_MAX],
-    charset: Option<CharsetDetectionPlan>,
+    // The whole struct exists only in test builds (struct-level cfg split);
+    // its production twin keeps these fields private.
+    pub systems: [Option<SymId>; CODING_CAT_MAX],
+    pub charset: Option<CharsetDetectionPlan>,
 }
 
 fn coding_category_bindings(

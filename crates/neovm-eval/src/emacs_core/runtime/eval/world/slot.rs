@@ -16,6 +16,7 @@ use std::ptr::NonNull;
 /// A Context field of GNU-global state; see the module documentation.
 #[repr(C)]
 #[doc(hidden)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) union WorldSlot<T> {
     cell: NonNull<T>,
     /// Keeps the slot the size and alignment of `T` (plan-3w.md section 3).

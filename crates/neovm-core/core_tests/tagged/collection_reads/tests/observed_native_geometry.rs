@@ -6,8 +6,9 @@
 //! The isolated nextest process owns its mutator-local forced journal mode.
 
 use super::super::{
-    CompiledJournalMode, capture, compiled_observation_gate, force_compiled_journal_for_test,
-    with_state,
+    CompiledJournalMode, capture, captures_last_epoch_present_for_test, compiled_observation_gate,
+    force_compiled_journal_for_test, observed_already_published_for_test,
+    observed_full_bounds_for_test,
 };
 use crate::buffer::BufferId;
 use crate::heap_types::LispString;
@@ -60,36 +61,23 @@ fn observed_reference_headers_retain_publication_without_native_geometry() {
     let reads = reads.expect("real immutable-header dependencies are coherent");
     for owner in owners {
         assert!(collection_observed_metadata(owner.bits()));
-        assert!(with_state(|state| state
-            .borrow()
-            .observed
-            .already_published(owner.bits())));
+        assert!(observed_already_published_for_test(owner.bits()));
     }
     assert_eq!(
-        with_state(|state| state.borrow().observed.full_bounds()),
+        observed_full_bounds_for_test(),
         (usize::MAX, 0),
         "reference-only pseudovectors must not widen native collection-store geometry",
     );
     assert!(
         compiled_observation_gate(BarrierWindow::NONE)
-            .observed
+            .observed_for_test()
             .iter()
             .all(|range| *range == BarrierWindow::NONE),
     );
     assert!(reads.unchanged());
     let (_, replay) = capture(|| {
         assert!(reads.unchanged_and_observe());
-        with_state(|state| {
-            assert!(
-                state
-                    .borrow()
-                    .captures
-                    .last()
-                    .unwrap()
-                    .publication_epoch
-                    .is_some()
-            );
-        });
+        assert!(captures_last_epoch_present_for_test());
     });
     assert!(
         replay
@@ -125,39 +113,26 @@ fn observed_gc_rebuild_keeps_non_native_ledger_and_only_native_geometry() {
     assert!(!collection_observed_metadata(discarded.bits()));
     let gate = compiled_observation_gate(BarrierWindow::NONE);
     assert_eq!(
-        with_state(|state| state.borrow().observed.full_bounds()),
+        observed_full_bounds_for_test(),
         (address(retained), address(retained) + 1),
         "rebuild must reuse cached geometry eligibility without reading old headers",
     );
     assert!(
-        gate.observed
+        gate.observed_for_test()
             .iter()
             .any(|range| range.covers(address(retained)))
     );
     assert!(
-        gate.observed
+        gate.observed_for_test()
             .iter()
             .all(|range| !range.covers(address(reference)))
     );
-    assert!(with_state(|state| state
-        .borrow()
-        .observed
-        .already_published(reference.bits())));
+    assert!(observed_already_published_for_test(reference.bits()));
     assert!(collection_observed_metadata(reference.bits()));
     assert!(reads.unchanged());
     let (_, replay) = capture(|| {
         assert!(reads.unchanged_and_observe());
-        with_state(|state| {
-            assert!(
-                state
-                    .borrow()
-                    .captures
-                    .last()
-                    .unwrap()
-                    .publication_epoch
-                    .is_some()
-            );
-        });
+        assert!(captures_last_epoch_present_for_test());
     });
     let replay = replay.expect("full publication facts survive GC and replay");
     retained.set_car(TaggedValue::make_int(23));
@@ -185,12 +160,9 @@ fn observed_window_geometry_includes_cons_vector_and_record_owners() {
     let gate = compiled_observation_gate(BarrierWindow::NONE);
     for owner in owners {
         assert!(collection_observed_metadata(owner.bits()));
-        assert!(with_state(|state| state
-            .borrow()
-            .observed
-            .already_published(owner.bits())));
+        assert!(observed_already_published_for_test(owner.bits()));
         assert!(
-            gate.observed
+            gate.observed_for_test()
                 .iter()
                 .any(|range| range.covers(address(owner))),
             "every existing-object inline window user must constrain the gate",
@@ -214,34 +186,21 @@ fn observed_string_keeps_exact_mark_and_compiled_invalidation_without_window_geo
     let (_, reads) = capture(|| assert_eq!(owner.as_str_owned().unwrap(), "abc"));
     let reads = reads.expect("the retained string supplies a real certificate");
     assert!(collection_observed_metadata(owner.bits()));
-    assert!(with_state(|state| state
-        .borrow()
-        .observed
-        .already_published(owner.bits())));
+    assert!(observed_already_published_for_test(owner.bits()));
     assert_eq!(
-        with_state(|state| state.borrow().observed.full_bounds()),
+        observed_full_bounds_for_test(),
         (usize::MAX, 0),
         "string native stores use the exact header mark and must not widen common geometry",
     );
     assert!(
         compiled_observation_gate(BarrierWindow::NONE)
-            .observed
+            .observed_for_test()
             .iter()
             .all(|range| *range == BarrierWindow::NONE),
     );
     let (_, replay) = capture(|| {
         assert!(reads.unchanged_and_observe());
-        with_state(|state| {
-            assert!(
-                state
-                    .borrow()
-                    .captures
-                    .last()
-                    .unwrap()
-                    .publication_epoch
-                    .is_some()
-            );
-        });
+        assert!(captures_last_epoch_present_for_test());
     });
     let replay = replay.expect("string publication remains replay-qualified");
     let value = TaggedValue::make_int(i64::from(b'z'));

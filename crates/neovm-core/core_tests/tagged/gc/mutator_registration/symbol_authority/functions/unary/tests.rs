@@ -229,7 +229,9 @@ fn nmjit_n4_unary_refuses_stale_homes_capabilities_and_managed_argument() {
             Err(FunctionError::UnsupportedDefinition)
         );
         let mut stale = callback;
-        stale.key.era = NonZeroU64::new(callback.key.era.get() + 1).unwrap();
+        stale
+            .key_mut_for_test()
+            .set_era_for_test(NonZeroU64::new(callback.symbol().era_for_test().get() + 1).unwrap());
         assert_eq!(
             run.sym_unary_call_begin(&stale, &expected, &argument, &mut activation),
             Err(FunctionError::Authority(

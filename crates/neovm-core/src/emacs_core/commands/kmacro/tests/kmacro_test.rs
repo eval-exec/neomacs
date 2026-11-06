@@ -54,25 +54,26 @@ fn kmacro_copied_properties_have_only_manager_roots() {
             );
             // Use the real World's retained metadata independently of Lisp
             // counter variables and the live keyboard recording/playback.
-            *eval.kmacro = KmacroManager {
+            *eval.kmacro_mut() = KmacroManager {
                 macro_ring: ring,
                 counter: 17,
                 counter_format: format,
             };
             probes
         });
-        let check_live = |eval: &Context| {
+        let check_live = |eval: &mut Context| {
             // Existing ring controls come first, so omitting the new format
             // visit cannot hide a regression in the pre-existing root walk.
             for Probe(bits) in &probes {
                 assert!(
-                    eval.tagged_heap().retains_veclike(Value::from_bits(*bits)),
+                    eval.tagged_heap()
+                        .retains_veclike(unsafe { Value::from_bits(*bits) }),
                     "kmacro-only property vector was reclaimed"
                 );
             }
             for (index, Probe(bits)) in probes.iter().enumerate() {
                 assert_eq!(
-                    Value::from_bits(*bits)
+                    unsafe { Value::from_bits(*bits) }
                         .as_vector_data()
                         .expect("live kmacro vector")
                         .as_slice(),
@@ -80,7 +81,7 @@ fn kmacro_copied_properties_have_only_manager_roots() {
                 );
             }
             assert_eq!(
-                eval.kmacro
+                eval.kmacro_mut()
                     .counter_format
                     .intervals()
                     .get_property_at_char_pos(CharPos0::ZERO, property)
@@ -111,17 +112,19 @@ fn kmacro_copied_properties_have_only_manager_roots() {
             eval.gc_collect_exact();
         }
         assert_eq!(eval.gc_count, completed + 1);
-        check_live(&eval);
+        check_live(&mut eval);
         let completed = eval.gc_count;
         eval.gc_collect_exact();
         assert_eq!(eval.gc_count, completed + 1);
-        check_live(&eval);
+        check_live(&mut eval);
 
-        *eval.kmacro = KmacroManager::new();
+        *eval.kmacro_mut() = KmacroManager::new();
         eval.gc_collect_exact();
         for Probe(bits) in probes {
             assert!(
-                !eval.tagged_heap().retains_veclike(Value::from_bits(bits)),
+                !eval
+                    .tagged_heap()
+                    .retains_veclike(unsafe { Value::from_bits(bits) }),
                 "retired kmacro graph remained permanently rooted"
             );
         }
@@ -205,20 +208,20 @@ fn macro_ring_pushes_previous_keyboard_runtime_macro() {
     builtin_store_kbd_macro_event(&mut eval, vec![Value::char('a')]).expect("store a");
     eval.finalize_kbd_macro_runtime_chars();
     builtin_end_kbd_macro(&mut eval, vec![]).expect("end first");
-    assert!(eval.kmacro.macro_ring.is_empty());
+    assert!(eval.kmacro_mut().macro_ring.is_empty());
 
     builtin_start_kbd_macro(&mut eval, vec![]).expect("start second");
     builtin_store_kbd_macro_event(&mut eval, vec![Value::char('b')]).expect("store b");
     eval.finalize_kbd_macro_runtime_chars();
     builtin_end_kbd_macro(&mut eval, vec![]).expect("end second");
-    assert_eq!(eval.kmacro.macro_ring, vec![vec![Value::char('a')]]);
+    assert_eq!(eval.kmacro_mut().macro_ring, vec![vec![Value::char('a')]]);
 
     builtin_start_kbd_macro(&mut eval, vec![]).expect("start third");
     builtin_store_kbd_macro_event(&mut eval, vec![Value::char('c')]).expect("store c");
     eval.finalize_kbd_macro_runtime_chars();
     builtin_end_kbd_macro(&mut eval, vec![]).expect("end third");
     assert_eq!(
-        eval.kmacro.macro_ring,
+        eval.kmacro_mut().macro_ring,
         vec![vec![Value::char('a')], vec![Value::char('b')]]
     );
 }

@@ -2,17 +2,22 @@ use super::LispString;
 
 #[test]
 fn lisp_string_layout_keeps_gnu_fields_before_storage_metadata() {
-    assert_eq!(std::mem::offset_of!(LispString, size), 0);
-    assert!(std::mem::offset_of!(LispString, size_byte) > std::mem::offset_of!(LispString, size));
-    assert!(
-        std::mem::offset_of!(LispString, intervals) > std::mem::offset_of!(LispString, size_byte)
-    );
-    assert!(std::mem::offset_of!(LispString, data) > std::mem::offset_of!(LispString, intervals));
-    assert!(
-        std::mem::offset_of!(LispString, storage_capacity) > std::mem::offset_of!(LispString, data)
-    );
+    // Rubric 7 (LEAD 14:0xZ): the layout oracle uses the production-public
+    // JIT offset constants instead of naming the private size_byte/intervals
+    // fields; the interval word is pinned by the exact gap arithmetic below.
+    assert_eq!(LispString::JIT_SIZE_OFFSET, 0);
+    assert!(LispString::JIT_SIZE_BYTE_OFFSET > LispString::JIT_SIZE_OFFSET);
+    assert!(LispString::JIT_DATA_OFFSET > LispString::JIT_SIZE_BYTE_OFFSET);
+    assert!(LispString::JIT_STORAGE_CAPACITY_OFFSET > LispString::JIT_DATA_OFFSET);
     #[cfg(target_pointer_width = "64")]
     assert_eq!(std::mem::size_of::<LispString>(), 40);
+    // The private interval pointer sits exactly one AtomicPtr word between
+    // size_byte and data (GNU Lisp_String layout).
+    assert_eq!(
+        LispString::JIT_DATA_OFFSET - LispString::JIT_SIZE_BYTE_OFFSET,
+        std::mem::size_of::<i64>()
+            + std::mem::size_of::<std::sync::atomic::AtomicPtr<crate::buffer::TextPropertyTable>>()
+    );
     // The interval field is an AtomicPtr (concurrent GC null-check reads):
     // same size + null niche as the GNU-compatible raw interval pointer,
     // and as the Option<Box<_>> it replaced.
@@ -97,7 +102,7 @@ fn replacing_string_contents_updates_cached_lengths() {
     rodata.set_from_str("longer");
     assert_eq!(rodata.as_bytes(), b"longer");
     assert_eq!(rodata.size_byte(), -1);
-    assert!(rodata.has_owned_storage());
+    assert!(neovm_value::test_support::heap_types__LispString__has_owned_storage(&rodata));
     assert!(rodata.has_trailing_nul());
 }
 

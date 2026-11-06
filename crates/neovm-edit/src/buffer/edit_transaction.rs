@@ -1857,6 +1857,7 @@ impl MeasuredDeleteEdit {
 /// before storage mutation. Only range and optional text belong to this plan:
 /// undo eligibility and marker-chain state remain live commit-time inputs.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(in crate::buffer) struct DeleteTextPlan {
     edit: MeasuredDeleteEdit,
     /// The deleted text with its properties, built only when a caller wants

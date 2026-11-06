@@ -257,7 +257,7 @@ impl ConsBlockTrailer {
 
     /// Test setup only: production age changes are the two promotions,
     /// so no other writer can bypass the mirror. Writes both copies.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn set_old(&self, index: usize) {
         let bit = Self::mark_bit(index);
         self.old_atomic(bit.word_index)

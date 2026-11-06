@@ -134,6 +134,18 @@ impl ConsBlock {
     /// and the bit mask a second time -- on 26.4M marked conses per
     /// rust-lsp-typing capture.
     #[inline]
+    /// VIS row: copied age-byte read for the re-homed cons minor-sweep oracle.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn is_old_for_test(&self, index: usize) -> bool {
+        self.trailer().is_old(index)
+    }
+
+    /// VIS row: age-byte promotion for the re-homed cons minor-sweep oracle.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn set_old_for_test(&self, index: usize) {
+        self.trailer().set_old(index)
+    }
+
     pub(super) fn mark_cell_offset(&mut self, offset: usize) -> bool {
         self.trailer().mark_cell(offset / size_of::<ConsCell>())
     }
@@ -308,5 +320,79 @@ impl Drop for ConsBlock {
     fn drop(&mut self) {
         clear_cons_observed_block(self.base_addr());
         unsafe { alloc::dealloc(self.storage, Self::layout()) };
+    }
+}
+
+/// Opaque test-support wrapper for the relocated cons minor-sweep oracle.
+///
+/// V1 (thread-safety UI fixture) owns the textual name `ConsBlock`, so the
+/// real block type cannot be A-prime widened. The wrapper keeps the block
+/// crate-private and exposes the copied reads and fixture drivers the moved
+/// oracle needs; every method is a one-line delegate.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+mod test_support {
+    use super::*;
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) struct SweepBlockHarness(ConsBlock);
+
+    impl SweepBlockHarness {
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn new() -> Self {
+            Self(ConsBlock::new())
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn base_addr(&self) -> usize {
+            self.0.base_addr()
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn cells_ptr(&self) -> *mut ConsCell {
+            self.0.cells_ptr()
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn block_base_for_ptr(ptr: *const ConsCell) -> usize {
+            ConsBlock::block_base_for_ptr(ptr)
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn index_of_ptr(ptr: *const ConsCell) -> usize {
+            ConsBlock::index_of_ptr(ptr)
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn mark_cell_offset(&mut self, offset: usize) -> bool {
+            self.0.mark_cell_offset(offset)
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn reserve_tail(&mut self, want: usize) -> (usize, usize) {
+            self.0.reserve_tail(want)
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn clear_marks(&mut self) {
+            self.0.clear_marks()
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn count_marked(&self) -> usize {
+            self.0.count_marked()
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn count_live_generational(&self) -> usize {
+            self.0.count_live_generational()
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn promote_marked_world_stopped(&self) -> usize {
+            self.0.promote_marked_world_stopped()
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn sweep_generational(&mut self, free_list: &mut *mut ConsCell) -> usize {
+            self.0.sweep_generational(free_list)
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn is_old_for_test(&self, index: usize) -> bool {
+            self.0.is_old_for_test(index)
+        }
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
+        pub(crate) fn set_old_for_test(&self, index: usize) {
+            self.0.set_old_for_test(index)
+        }
     }
 }

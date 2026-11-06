@@ -433,6 +433,10 @@ pub struct GcHeader {
     /// object lives; destruction/reinitialization clears it before reuse.
     /// Shared marks do not make the existing mutator-local certificates
     /// coherent with another mutator's concurrent collection mutations.
+    ///
+    /// The shared byte is a WRITE route: cross-crate test access goes through
+    /// `test_support::authority::collection_observed_byte_for_test` (AUTHORITY
+    /// row), never a widened field (LEAD 12:3xZ/14:0xZ).
     pub(crate) collection_observed: AtomicU8,
     /// Intrusive linked list of all GC-managed objects (for sweep).
     pub next: *mut GcHeader,
@@ -483,6 +487,7 @@ impl HeaderFlags {
     /// Was this heap object reconstructed from a dump-image row by the pdump
     /// loader? Set once, before the object is published.
     #[inline(always)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn image_resident(self) -> bool {
         self.0 & Self::IMAGE_RESIDENT != 0
     }
@@ -678,6 +683,10 @@ impl GcHeader {
     }
 
     /// Publish this object's sticky observation before recording its read.
+    ///
+    /// The only cross-crate route is the
+    /// `test_support::authority::mark_collection_observed` fence (AUTHORITY
+    /// row 2); production visibility stays `pub(crate)` with no A-prime.
     #[inline]
     pub(crate) fn mark_collection_observed(&self) -> bool {
         if self.collection_observed() {
@@ -697,8 +706,11 @@ impl GcHeader {
 
     /// Clear a dying object's mark under collector/mutator exclusion. No
     /// observation or collection write to this object may still be in flight.
+    ///
+    /// The clear is a WRITE: cross-crate test clears go through
+    /// `test_support::authority::clear_collection_observed_for_test`
+    /// (AUTHORITY row); the method itself stays pub(crate) with no A-prime.
     #[inline]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn clear_collection_observed(&self) {
         let cleared = self.collection_observed()
             && crate::tagged::gc::clear_noncons_collection_observed_metadata(

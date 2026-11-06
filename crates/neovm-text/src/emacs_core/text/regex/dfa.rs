@@ -62,6 +62,7 @@ use std::cell::{RefCell, RefMut};
 
 /// Why a pattern has no existence DFA.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum DfaIneligible {
     /// `\N`: not a regular language.
     Backreference,
@@ -586,11 +587,29 @@ enum Epsilon {
 /// A text position the closure evaluates assertions at: the matcher's view
 /// (`text`, `d`, `stop`, point, representation, syntax).
 pub(crate) struct Place<'a> {
+    #[cfg(feature = "test-support")]
+    pub text: &'a [u8],
+    #[cfg(not(feature = "test-support"))]
     pub(crate) text: &'a [u8],
+    #[cfg(feature = "test-support")]
+    pub d: usize,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) d: usize,
+    #[cfg(feature = "test-support")]
+    pub stop: usize,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) stop: usize,
+    #[cfg(feature = "test-support")]
+    pub point: usize,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) point: usize,
+    #[cfg(feature = "test-support")]
+    pub target_multibyte: bool,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) target_multibyte: bool,
+    #[cfg(feature = "test-support")]
+    pub syntax: MatchSyntax<'a>,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) syntax: MatchSyntax<'a>,
 }
 
@@ -1069,6 +1088,7 @@ impl ClassContext {
 
 /// Too many distinct classes for `u8` ids.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct TooManyClasses;
 
 /// Whether a character supplies the word/symbol fact. This immutable value

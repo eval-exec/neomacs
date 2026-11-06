@@ -40,11 +40,12 @@ fn custom_hash_test_names_preserve_raw_bytes_escaping_and_symbol_identity() {
                     .with_hash_table_mut(|table| table.test_name = Some(id))
                     .unwrap();
                 let options = PrintOptions::default();
-                let noescape = PrintOptions {
-                    print_noescape: true,
-                    print_escape_nonascii: true,
-                    ..options
-                };
+                // Rubric 7 re-point: mutate the public fields of a copy instead
+                // of struct-update syntax (which requires private fields to be
+                // visible, E0451). Same value, no widening.
+                let mut noescape = options;
+                noescape.print_noescape = true;
+                noescape.print_escape_nonascii = true;
                 let escaped = print_value_bytes_with_options(&table, options);
                 let escaped_stateful =
                     print_value_stateful_bytes_with_buffers(&table, None, options);

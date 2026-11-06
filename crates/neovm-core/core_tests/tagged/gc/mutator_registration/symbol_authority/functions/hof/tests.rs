@@ -352,7 +352,9 @@ fn nmjit_n4_hof_guard_refuses_stale_homes_and_mapper_receipts() {
             let argument = neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
             let mut activation = FunctionActivation::new(run).unwrap();
             let mut stale = mapper;
-            stale.key.era = NonZeroU64::new(mapper.key.era.get() + 1).unwrap();
+            stale.key_mut_for_test().set_era_for_test(
+                NonZeroU64::new(mapper.symbol().era_for_test().get() + 1).unwrap(),
+            );
             assert_eq!(
                 run.sym_hof_call_begin(&stale, &callback, &expected, &argument, &mut activation),
                 Err(FunctionError::Authority(
@@ -399,7 +401,10 @@ fn nmjit_n4_hof_guard_native_registration_invalidates_receipt() {
             activation.clear(run).unwrap();
             // Even a registration of the same body advances the existing native
             // publication clock. Never inspect entry metadata on this run path.
-            register_global_subr_entry(mapper.key.symbol, builtin(HofOperation::Mapcar));
+            register_global_subr_entry(
+                mapper.symbol().sym_id_for_test(),
+                builtin(HofOperation::Mapcar),
+            );
             assert_eq!(
                 run.sym_hof_call_begin(&mapper, &callback, &expected, &argument, &mut activation),
                 Ok(FunctionSelection::Changed)

@@ -142,10 +142,11 @@ fn recursive_closure_slots_keep_enclosing_string_and_byte_traversal_prefixes() {
         assert_eq!(print_value(&value).as_bytes(), expected.as_slice());
         assert_eq!(print_value_bytes(&value).as_slice(), expected.as_slice());
     }
-    let circle = PrintOptions {
-        print_circle: true,
-        ..PrintOptions::default()
-    };
+    // Rubric 7 re-point: set the public field on a default value instead of
+    // struct-update syntax, which would require the private fields to be
+    // visible (E0451). Same value, no widening.
+    let mut circle = PrintOptions::default();
+    circle.print_circle = true;
     assert_eq!(
         print_value_with_options(&closure, circle).as_bytes(),
         expected[3].as_slice()

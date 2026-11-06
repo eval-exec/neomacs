@@ -88,7 +88,10 @@
 use neovm_value::intern::resolve_sym;
 use neovm_value::value::{Value, ValueKind, VecLikeType};
 
+#[cfg(not(feature = "test-support"))]
 pub(crate) mod gnu_table;
+#[cfg(feature = "test-support")]
+pub mod gnu_table;
 
 /// The name of a function that is a **subr in this build**, which is the
 /// function half of `Fsnarf_documentation`'s gate.

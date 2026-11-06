@@ -38,6 +38,7 @@ pub(crate) enum GnutlsCredentialType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct GnutlsBootParameters {
     #[cfg(not(feature = "test-support"))]
     pub(crate) credential_type: GnutlsCredentialType,
@@ -173,12 +174,33 @@ pub(crate) fn parse_gnutls_boot_parameters(
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct TlsPeerStatus {
+    #[cfg(feature = "test-support")]
+    pub warnings: Vec<&'static str>,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) warnings: Vec<&'static str>,
+    #[cfg(feature = "test-support")]
+    pub certificates: Vec<Value>,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) certificates: Vec<Value>,
+    #[cfg(feature = "test-support")]
+    pub key_exchange: Option<String>,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) key_exchange: Option<String>,
+    #[cfg(feature = "test-support")]
+    pub protocol: Option<String>,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) protocol: Option<String>,
+    #[cfg(feature = "test-support")]
+    pub cipher: Option<String>,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) cipher: Option<String>,
+    #[cfg(feature = "test-support")]
+    pub mac: Option<String>,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) mac: Option<String>,
+    #[cfg(feature = "test-support")]
+    pub encrypt_then_mac: Option<bool>,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) encrypt_then_mac: Option<bool>,
 }
 

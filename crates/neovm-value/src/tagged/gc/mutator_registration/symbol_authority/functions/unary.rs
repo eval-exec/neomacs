@@ -20,6 +20,13 @@ impl PreparedUnaryFunction {
     pub(super) fn key(&self) -> &SymbolHandle {
         &self.key
     }
+
+    /// VIS row: fixture-only mutable key for the stale-handle refusal oracle.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn key_mut_for_test(&mut self) -> &mut SymbolHandle {
+        &mut self.key
+    }
     pub(super) fn shape(&self) -> CallShape {
         CallShape::UnaryScalar(self.parameter)
     }

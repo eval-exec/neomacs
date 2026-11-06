@@ -101,6 +101,7 @@ struct Facts {
 
 #[derive(Debug)]
 #[must_use = "published facts must be restored, merged, or conservatively retained"]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(in crate::tagged::gc) struct PublishedGcImage {
     facts: Facts,
     young: YoungBlockLog,

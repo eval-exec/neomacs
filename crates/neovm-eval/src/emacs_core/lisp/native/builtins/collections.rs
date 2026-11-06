@@ -651,6 +651,7 @@ pub(crate) struct HashTableTestRegistry {
 }
 
 #[derive(Clone)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct HashTableTestAlias {
     pub(crate) standard_test: Option<HashTableTest>,
     pub(crate) user_cmp_function: Option<Value>,
@@ -708,7 +709,8 @@ pub(crate) fn install_hash_table_test_registry_handle(handle: &HashTableTestRegi
     HASH_TABLE_TEST_ALIASES.with(|slot| slot.install(handle));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn collect_hash_table_test_alias_gc_roots(group: &mut Vec<Value>) {
     collect_hash_table_test_registry_gc_roots(&current_hash_table_test_registry_handle(), group);
 }

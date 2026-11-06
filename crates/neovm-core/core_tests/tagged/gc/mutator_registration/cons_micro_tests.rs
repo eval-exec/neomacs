@@ -1,7 +1,7 @@
 //! Same optimized libtest ELF, direct Rust allocation, collected loops only.
 #![cfg(not(feature = "gc-memory-telemetry"))]
 use crate::emacs_core::eval::Context;
-use crate::tagged::gc::alloc_region::RegionStats;
+use crate::tagged::gc::RegionStats;
 use crate::tagged::gc::mutator_registration::era_fixtures::EraFixtureExt;
 use crate::tagged::gc::{RunSlice, SliceRoot, TaggedHeap};
 use crate::tagged::header::ConsCell;
@@ -258,7 +258,7 @@ fn local(shape: &str, n: usize) {
             )
             .unwrap();
             era.with_stopped_heap_for_test(&stopped, |heap| {
-                verify_list(heap, Value::from_bits(head_word), warm + n);
+                verify_list(heap, unsafe { Value::from_bits(head_word) }, warm + n);
             })
             .unwrap();
             stopped.complete().unwrap();

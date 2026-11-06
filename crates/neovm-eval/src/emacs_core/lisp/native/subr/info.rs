@@ -44,6 +44,7 @@ pub(crate) fn is_evaluator_special_form_name(name: &str) -> bool {
 /// many evaluator-recognized constructs are macros/functions in user-visible
 /// introspection.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn is_special_form(name: &str) -> bool {
     super::eval::evaluator_dispatch_kind(name) == Some(SubrDispatchKind::SpecialForm)
 }

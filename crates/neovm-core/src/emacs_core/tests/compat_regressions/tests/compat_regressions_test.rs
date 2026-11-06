@@ -164,6 +164,8 @@ fn reverse_char_table_signals_sequencep() {
 #[test]
 fn nreverse_bool_vector_preserves_layout_and_reverses_bits_in_place() {
     crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::new_context();
+    ev.setup_thread_locals();
     let bv = crate::emacs_core::chartable::builtin_bool_vector(vec![
         Value::T,
         Value::NIL,
@@ -171,7 +173,7 @@ fn nreverse_bool_vector_preserves_layout_and_reverses_bits_in_place() {
         Value::NIL,
     ])
     .unwrap();
-    let out = crate::emacs_core::builtins::builtin_nreverse(vec![bv]).unwrap();
+    let out = ev.apply1(Value::symbol("nreverse"), bv).unwrap();
     assert_eq!(out.bits(), bv.bits(), "nreverse reverses in place");
     assert_eq!(bool_vector_bits(out), [false, true, false, true]);
 }
@@ -179,11 +181,13 @@ fn nreverse_bool_vector_preserves_layout_and_reverses_bits_in_place() {
 #[test]
 fn nreverse_char_table_signals_arrayp() {
     crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::new_context();
+    ev.setup_thread_locals();
     let table = crate::emacs_core::chartable::make_char_table_value(
         Value::symbol("syntax-table"),
         Value::fixnum(0),
     );
-    let err = crate::emacs_core::builtins::builtin_nreverse(vec![table]).unwrap_err();
+    let err = ev.apply1(Value::symbol("nreverse"), table).unwrap_err();
     match err.into_kind() {
         FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
@@ -197,10 +201,12 @@ fn nreverse_char_table_signals_arrayp() {
 #[test]
 fn nreverse_dotted_list_mutates_before_listp_signal_like_gnu() {
     crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::new_context();
+    ev.setup_thread_locals();
     let tail = Value::cons(Value::fixnum(2), Value::fixnum(3));
     let list = Value::cons(Value::fixnum(1), tail);
 
-    let err = crate::emacs_core::builtins::builtin_nreverse(vec![list]).unwrap_err();
+    let err = ev.apply1(Value::symbol("nreverse"), list).unwrap_err();
     match err.into_kind() {
         FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
@@ -216,11 +222,13 @@ fn nreverse_dotted_list_mutates_before_listp_signal_like_gnu() {
 #[test]
 fn nreverse_circular_list_signals_circular_list_like_gnu() {
     crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::new_context();
+    ev.setup_thread_locals();
     let list = Value::cons(Value::fixnum(1), Value::NIL);
     let tail = Value::cons(Value::fixnum(2), list);
     list.set_cdr(tail);
 
-    let err = crate::emacs_core::builtins::builtin_nreverse(vec![list]).unwrap_err();
+    let err = ev.apply1(Value::symbol("nreverse"), list).unwrap_err();
     match err.into_kind() {
         FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "circular-list");
@@ -274,6 +282,8 @@ fn length_predicate_circular_list_reports_gnu_for_each_tail_cycle_cell() {
 #[test]
 fn nthcdr_positive_bignum_reduces_over_circular_list_like_gnu() {
     crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::new_context();
+    ev.setup_thread_locals();
     let list = Value::cons(Value::symbol("a"), Value::NIL);
     let second = Value::cons(Value::symbol("b"), Value::NIL);
     let third = Value::cons(Value::symbol("c"), list);
@@ -283,7 +293,7 @@ fn nthcdr_positive_bignum_reduces_over_circular_list_like_gnu() {
     let count = Value::make_integer(
         Integer::from_str("100000000000000000000000000000000000001").expect("valid bignum"),
     );
-    let tail = crate::emacs_core::builtins::builtin_nthcdr(vec![count, list]).unwrap();
+    let tail = ev.apply2(Value::symbol("nthcdr"), count, list).unwrap();
 
     assert!(eq_value(&tail, &third));
     assert_eq!(tail.cons_car(), Value::symbol("c"));
@@ -292,11 +302,14 @@ fn nthcdr_positive_bignum_reduces_over_circular_list_like_gnu() {
 #[test]
 fn rassoc_improper_tail_reports_original_alist_like_gnu() {
     crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::new_context();
+    ev.setup_thread_locals();
     let entry = Value::cons(Value::symbol("a"), Value::string("one"));
     let list = Value::cons(entry, Value::symbol("tail"));
 
-    let err =
-        crate::emacs_core::misc::builtin_rassoc(vec![Value::string("missing"), list]).unwrap_err();
+    let err = ev
+        .apply2(Value::symbol("rassoc"), Value::string("missing"), list)
+        .unwrap_err();
     match err.into_kind() {
         FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");

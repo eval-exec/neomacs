@@ -9,6 +9,7 @@
 pub use neovm_value::tagged::gc::arena_pages::*;
 
 // Public-path restoration for the relocated core_tests files.
+pub use neovm_value::tagged::header::CollectionScope;
 pub use neovm_value::tagged::header::FloatObj;
 pub use neovm_value::tagged::header::GcHeader;
 pub use neovm_value::tagged::header::HeapObjectKind;

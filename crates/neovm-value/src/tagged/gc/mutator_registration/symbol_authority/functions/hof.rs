@@ -26,6 +26,13 @@ impl PreparedHofBuiltin {
     pub fn symbol(&self) -> &SymbolHandle {
         &self.key
     }
+
+    /// VIS row: fixture-only mutable key for the stale-handle refusal oracle.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn key_mut_for_test(&mut self) -> &mut SymbolHandle {
+        &mut self.key
+    }
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]

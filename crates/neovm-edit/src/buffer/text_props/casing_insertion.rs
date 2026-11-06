@@ -45,10 +45,25 @@ impl CasingPropertyEquality {
 #[derive(Clone, Copy, Debug)]
 #[doc(hidden)]
 pub struct CasingPropertyControls {
+    #[cfg(feature = "test-support")]
+    pub equality: CasingPropertyEquality,
+    #[cfg(not(feature = "test-support"))]
     equality: CasingPropertyEquality,
+    #[cfg(feature = "test-support")]
+    pub nonsticky: Value,
+    #[cfg(not(feature = "test-support"))]
     nonsticky: Value,
+    #[cfg(feature = "test-support")]
+    pub aliases: Value,
+    #[cfg(not(feature = "test-support"))]
     aliases: Value,
+    #[cfg(feature = "test-support")]
+    pub defaults: Value,
+    #[cfg(not(feature = "test-support"))]
     defaults: Value,
+    #[cfg(feature = "test-support")]
+    pub mutator: std::marker::PhantomData<*const ()>,
+    #[cfg(not(feature = "test-support"))]
     mutator: std::marker::PhantomData<*const ()>,
 }
 
@@ -98,7 +113,13 @@ impl<'a> CasingPropertyMode<'a> {
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Immutable, call-local category and dynamic-property resolution.
 pub(crate) struct CasingPropertyContext<'a> {
+    #[cfg(feature = "test-support")]
+    pub obarray: &'a Obarray,
+    #[cfg(not(feature = "test-support"))]
     obarray: &'a Obarray,
+    #[cfg(feature = "test-support")]
+    pub controls: CasingPropertyControls,
+    #[cfg(not(feature = "test-support"))]
     controls: CasingPropertyControls,
 }
 

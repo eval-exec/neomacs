@@ -678,6 +678,7 @@ pub struct RunKey {
 
 /// A finished answer for one TO.
 #[derive(Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct ExactResult {
     to_char: usize,
     /// The scan read no character at or after these positions.

@@ -2551,6 +2551,7 @@ pub fn collect_map_entries_from_alist_in_state(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn assq_in_alist(alist: &Value, key: &Value, symbol_mode: SymbolMode) -> bool {
     let Some(entries) = list_to_vec(alist) else {
         return false;
@@ -3359,6 +3360,7 @@ pub fn minor_mode_key_binding_in_context(ctx: &Context, events: &[Value]) -> Res
     Ok(Value::NIL)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn minor_mode_map_entry(
     entry: &Value,
     symbol_mode: SymbolMode,

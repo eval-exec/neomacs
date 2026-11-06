@@ -147,6 +147,7 @@ thread_local! {
 }
 
 /// The two-level page directory (see the module doc).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct ChunkMap {
     /// `L1_LEN` leaf pointers, null until a granule of that region is set.
     l1: Box<[AtomicPtr<ChunkLeaf>]>,

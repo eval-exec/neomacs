@@ -178,6 +178,7 @@ pub(crate) fn mark_collection_observed(bits: usize) -> bool {
 /// Query a live owner's sticky mark. The side bitmap makes no assumption
 /// about which Context owns a cons or whether it has an owned-block trailer.
 #[inline]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn collection_observed(bits: usize) -> bool {
     let address = bits & !TAG_MASK;
     if address == 0 {

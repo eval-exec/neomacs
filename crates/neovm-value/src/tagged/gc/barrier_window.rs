@@ -155,6 +155,27 @@ impl CompiledObservationGate {
     pub(crate) fn excluded_for_test(&self) -> Option<BarrierWindow> {
         self.excluded
     }
+
+    /// VIS row: copied observed-window pair (plain `Copy` data).
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn observed_for_test(&self) -> [BarrierWindow; 2] {
+        self.observed
+    }
+
+    /// VIS row: copied exact single-cons exemption address.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn single_cons_for_test(&self) -> usize {
+        self.single_cons
+    }
+
+    /// VIS row: copied slot-geometry pair (plain `Copy` data).
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn slots_for_test(&self) -> [BarrierWindow; 2] {
+        self.slots
+    }
 }
 
 impl BarrierWindow {
@@ -170,6 +191,7 @@ impl BarrierWindow {
     };
 
     /// The window over `[lo, hi)`; empty when `hi <= lo`.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn span(lo: usize, hi: usize) -> Self {
         if hi <= lo {
             Self::NONE
@@ -207,6 +229,7 @@ impl BarrierWindow {
 
     /// The window's length in bytes (what compiled code compares against).
     #[inline(always)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn len(self) -> usize {
         self.len
     }
@@ -696,6 +719,25 @@ impl TaggedHeap {
 
 #[cfg(any(test, feature = "test-support"))]
 impl TaggedHeap {
+    /// Test hook: has the dump image been blackened by the first partition cycle?
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn dump_blackened_for_test(&self) -> bool {
+        self.dump_blackened
+    }
+
+    /// Test hook: persistent dump remembered-set membership (the `mapped_remembered`
+    /// plane only, without the GEN1 mutator staging set).
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn mapped_remembered_contains_for_test(&self, bits: usize) -> bool {
+        self.mapped_remembered.contains(&bits)
+    }
+
+    /// Test hook: is the uninterned symbol id marked in this heap?
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn marked_symbols_contains_for_test(&self, id: crate::intern::SymId) -> bool {
+        self.marked_symbols.contains(id)
+    }
+
     /// Test hook: is this owner queued for remembered-child tracing?
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn is_remembered_for_test(&self, owner: TaggedValue) -> bool {
