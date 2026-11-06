@@ -5,7 +5,7 @@ use crate::emacs_core::print::print_value;
 use neovm_value::{intern::intern, value::Value};
 
 fn answer(source: &str) -> String {
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     print_value(&context.eval_str(source).expect("positioned lexical form"))
 }
 
@@ -50,7 +50,7 @@ fn positioned_lexenv_special_declaration_selects_dynamic_binding() {
 
 #[test]
 fn positioned_lexenv_cache_keeps_bare_mode_answers_across_flag_changes() {
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     context.lexenv = context
         .eval_str("(list (cons (position-symbol 'n 0) 7) (cons 'n 9))")
         .expect("lexical environment");
@@ -74,7 +74,7 @@ fn positioned_lexenv_cache_keeps_bare_mode_answers_across_flag_changes() {
 
 #[test]
 fn positioned_lexenv_cached_absence_and_special_declarations_follow_flag() {
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     context.lexenv = context
         .eval_str("(list (cons (position-symbol 'n 0) 7) (position-symbol 'n 1))")
         .expect("lexical environment");
@@ -94,7 +94,7 @@ fn positioned_lexenv_cached_absence_and_special_declarations_follow_flag() {
 
 #[test]
 fn positioned_lexenv_saved_specpdl_lookup_honours_flag() {
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let env = context
         .eval_str("(list (cons (position-symbol 'n 0) 7))")
         .expect("lexical environment");

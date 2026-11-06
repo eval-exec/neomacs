@@ -18,7 +18,7 @@ fn assert_gen5_panic(result: std::thread::Result<()>) {
 #[test]
 fn gc_safe_point_rejects_mutation_even_when_collection_is_inhibited() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let owner = eval.tagged_heap.alloc_vector(Vec::new());
     assert_gen5_panic(catch_unwind(AssertUnwindSafe(|| {
         eval.with_gc_inhibited(|eval| {
@@ -30,7 +30,7 @@ fn gc_safe_point_rejects_mutation_even_when_collection_is_inhibited() {
 #[test]
 fn automatic_and_explicit_collection_reject_heap_mutation_closures() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let owner = eval.tagged_heap.alloc_vector(Vec::new());
     assert_gen5_panic(catch_unwind(AssertUnwindSafe(|| {
         with_vector_data_mut(owner, |_| eval.gc_collect_from_current_roots_impl(false)).unwrap();
@@ -43,7 +43,7 @@ fn automatic_and_explicit_collection_reject_heap_mutation_closures() {
 #[test]
 fn bytecode_and_jit_backedge_safe_point_rejects_heap_mutation_closures() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let owner = eval.tagged_heap.alloc_vector(Vec::new());
     assert_gen5_panic(catch_unwind(AssertUnwindSafe(|| {
         with_vector_data_mut(owner, |_| {

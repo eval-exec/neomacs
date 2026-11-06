@@ -8991,6 +8991,8 @@ fn value_list_to_values(list: &Value) -> LispArgVec {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+#[cfg(any(test, feature = "test-support"))]
+mod absent_layer;
 pub(crate) mod boot_vars;
 #[cfg(feature = "test-support")]
 pub use boot_vars::xdisp::register_bootstrap_vars as register_xdisp_bootstrap_vars_for_test;

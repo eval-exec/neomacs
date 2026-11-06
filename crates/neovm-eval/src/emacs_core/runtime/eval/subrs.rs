@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 
 use super::*;
 use crate::emacs_core::builtins::*;
-use crate::emacs_core::subr::{FixedMin1, FixedMin2, FixedMin3, FixedMin4, FixedMin5, FixedMin6};
+use crate::emacs_core::subr::{FixedMin1, FixedMin2, FixedMin3, FixedMin4};
 #[doc(hidden)]
 pub use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
 

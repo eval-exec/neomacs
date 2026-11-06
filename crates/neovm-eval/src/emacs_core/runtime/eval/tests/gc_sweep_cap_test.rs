@@ -21,7 +21,7 @@ fn drive_until_sweeping(ev: &mut Context) {
 
 #[test]
 fn an_overdue_incremental_sweep_finishes_at_the_next_safe_point() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.set_gc_threshold(256 * 1024);
     // Unrooted non-cons garbage, swept object by object (cons blocks with
     // no survivors are released at termination and leave no sweep work).
