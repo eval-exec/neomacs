@@ -790,3 +790,33 @@ mod unit_runtime {
 #[cfg(test)]
 #[allow(unused_imports)]
 pub(crate) use unit_runtime::unit_runtime;
+
+/// Display-side T6 pin: a fresh display unit-runtime context registers exactly
+/// the shared expectation builder's sequence (the plan's host-active rows plus
+/// the event marker). This is display's half of the literal-equality gate;
+/// core's production trace and eval's unit runtime are the other halves.
+///
+/// Executed evidence (LEAD 06:4xZ): on the real plan and compiled table the
+/// trace equals the builder (GREEN). Planting one extra registration AFTER
+/// every walk assert - so only this equality can catch it - turns the
+/// assertion RED with `Subr { name: "oracleb-planted-extra", min: 0,
+/// max: None }` present in the divergent trace.
+#[cfg(test)]
+mod plan_walk_trace {
+    use neovm_eval::emacs_core::eval::Context;
+    use neovm_eval::emacs_core::subr::{
+        reset_registered_subr_trace_for_test, take_registered_subr_trace_for_test,
+    };
+
+    #[test]
+    fn the_unit_runtime_walks_the_canonical_plan_in_host_active_order() {
+        reset_registered_subr_trace_for_test();
+        let _context = Context::new(crate::test_utils::unit_runtime());
+        let trace = take_registered_subr_trace_for_test();
+        assert_eq!(
+            trace,
+            neovm_eval::test_utils::canonical_host_active_trace_for_test(),
+            "the display unit runtime's registration trace diverges from the canonical plan"
+        );
+    }
+}
