@@ -1741,6 +1741,233 @@ fn feature_only_gated(attrs: &[syn::Attribute]) -> bool {
     present_cross && absent_own_test
 }
 
+/// H1a/T5 guard for the EVAL-UNIT-RUNTIME AbsentLayer refusal blocks
+/// (peer 22:54:30Z H1a; peer 00:15:30Z T1-T5).
+///
+/// The refusal BUILDING BLOCKS (the shared unlinked helper, the marker, and
+/// the `eval_absent_layer_slots!` macro) may be shared from eval under
+/// test-support because they mint nothing. A canonical-set binary must never
+/// contain a unit set, so no source under `neovm-core`, `neovm-system` or the
+/// `neomacs` binary crate may reference any of them. In the provider crates
+/// the macro may be invoked only inside a crate's own `cfg(test)`
+/// `unit_runtime` module (never feature test-support, never any other
+/// module); there is at most ONE macro definition, gated for test-support.
+/// The macro_rules body itself is exempt from the reference scan (it is the
+/// building block's definition, not a use).
+fn unit_runtime_absent_layer_violation(workspace: &Path) -> Result<(), String> {
+    const CANONICAL_ROOTS: &[&str] = &["neovm-core", "neovm-system", "neomacs"];
+    let mut roots: BTreeMap<String, bool> = BTreeMap::new();
+    for crate_name in VIS_CRATES {
+        roots.insert(format!("crates/{crate_name}/src"), false);
+    }
+    for crate_name in CANONICAL_ROOTS {
+        roots.insert(format!("crates/{crate_name}/src"), true);
+    }
+    let mut definitions = 0usize;
+    let mut violations = Vec::new();
+    for (root, canonical) in roots {
+        let mut files = Vec::new();
+        walk_files(&workspace.join(&root), &mut files)?;
+        for path in files {
+            if path.extension().is_none_or(|extension| extension != "rs") {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(workspace)
+                .map_err(|_| format!("{} is outside the workspace", path.display()))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            // The architecture guards name the marker and the macro literally
+            // to enforce this rule; a guard's own token literals are not a
+            // compilation reference to the building block.
+            if relative.contains("/tests/architecture/") {
+                continue;
+            }
+            let source = read(&path)?;
+            let parsed =
+                syn::parse_file(&source).map_err(|error| format!("{relative}: {error}"))?;
+            let mut visitor = AbsentLayerVisitor {
+                file: &relative,
+                canonical,
+                unit_runtime_depth: 0,
+                definitions: &mut definitions,
+                violations: &mut violations,
+            };
+            visitor.visit_file(&parsed);
+        }
+    }
+    if definitions > 1 {
+        return Err(format!(
+            "UNIT-RUNTIME: {definitions} {ABSENT_LAYER_MACRO}! definitions; exactly one is allowed (T5 V1)"
+        ));
+    }
+    if let Some(violation) = violations.into_iter().next() {
+        return Err(violation);
+    }
+    Ok(())
+}
+
+const ABSENT_LAYER_MARKER: &str = "ABSENT-LAYER";
+const ABSENT_LAYER_HELPER: &str = "absent_layer_unlinked";
+const ABSENT_LAYER_MACRO: &str = "eval_absent_layer_slots";
+const UNIT_RUNTIME_MODULE: &str = "unit_runtime";
+
+struct AbsentLayerVisitor<'a> {
+    file: &'a str,
+    canonical: bool,
+    unit_runtime_depth: usize,
+    definitions: &'a mut usize,
+    violations: &'a mut Vec<String>,
+}
+
+impl AbsentLayerVisitor<'_> {
+    fn reference(&mut self, what: &str) {
+        if self.canonical {
+            self.violations.push(format!(
+                "{}: a canonical crate references {what}; an AbsentLayer building block must never reach a canonical-set binary (H1a)",
+                self.file
+            ));
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for AbsentLayerVisitor<'_> {
+    fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
+        let is_unit_runtime = node.ident == UNIT_RUNTIME_MODULE && cfg_test_only(&node.attrs);
+        if is_unit_runtime {
+            self.unit_runtime_depth += 1;
+        }
+        visit::visit_item_mod(self, node);
+        if is_unit_runtime {
+            self.unit_runtime_depth -= 1;
+        }
+    }
+
+    fn visit_item_macro(&mut self, node: &'ast syn::ItemMacro) {
+        if node.mac.path.is_ident("macro_rules") {
+            if node
+                .ident
+                .as_ref()
+                .is_some_and(|ident| ident == ABSENT_LAYER_MACRO)
+            {
+                *self.definitions += 1;
+                if self.canonical {
+                    self.violations.push(format!(
+                        "{}: the {ABSENT_LAYER_MACRO}! definition must live in a provider crate, never a canonical one (H1a)",
+                        self.file
+                    ));
+                } else if !gated_for_test_support(&node.attrs) {
+                    self.violations.push(format!(
+                        "{}: the {ABSENT_LAYER_MACRO}! definition must be gated cfg(any(test, feature = \"test-support\")) (T5)",
+                        self.file
+                    ));
+                }
+            }
+            // The macro_rules body is the building block itself, not a use.
+            return;
+        }
+        visit::visit_item_macro(self, node);
+    }
+
+    fn visit_macro(&mut self, node: &'ast syn::Macro) {
+        let is_slot_macro = node
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == ABSENT_LAYER_MACRO);
+        if is_slot_macro {
+            if self.canonical {
+                self.violations.push(format!(
+                    "{}: a canonical crate invokes {ABSENT_LAYER_MACRO}!; a canonical-set binary must never contain a unit set (H1a)",
+                    self.file
+                ));
+            } else if self.unit_runtime_depth == 0 {
+                self.violations.push(format!(
+                    "{}: {ABSENT_LAYER_MACRO}! is invoked outside a cfg(test) unit_runtime module (T5)",
+                    self.file
+                ));
+            }
+        }
+        visit::visit_macro(self, node);
+    }
+
+    fn visit_path(&mut self, node: &'ast syn::Path) {
+        if node
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == ABSENT_LAYER_HELPER)
+        {
+            self.reference("the shared absent_layer_unlinked helper");
+        }
+        visit::visit_path(self, node);
+    }
+
+    fn visit_item_use(&mut self, node: &'ast syn::ItemUse) {
+        let mut leaves = Vec::new();
+        auth_use_leaves(&node.tree, &mut Vec::new(), &mut leaves);
+        for (path, alias, glob) in leaves {
+            if glob {
+                continue;
+            }
+            let named = |name: &str| {
+                alias.as_deref() == Some(name) || path.last().is_some_and(|segment| segment == name)
+            };
+            if named(ABSENT_LAYER_HELPER) {
+                self.reference("the shared absent_layer_unlinked helper");
+            }
+            if named(ABSENT_LAYER_MACRO) {
+                self.reference("the eval_absent_layer_slots! macro");
+            }
+        }
+        visit::visit_item_use(self, node);
+    }
+
+    fn visit_lit_str(&mut self, node: &'ast syn::LitStr) {
+        if node.value().contains(ABSENT_LAYER_MARKER) {
+            self.reference("the ABSENT-LAYER marker");
+        }
+        visit::visit_lit_str(self, node);
+    }
+}
+
+/// True for a module that exists in the crate's own `cfg(test)` build but is
+/// absent from the cross-crate test-support build: the H1/T5 `cfg(test)`
+/// only shape (never `cfg(any(test, feature = "test-support"))`).
+fn cfg_test_only(attrs: &[syn::Attribute]) -> bool {
+    let cfgs: Vec<syn::Meta> = attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("cfg"))
+        .filter_map(|attr| attr.parse_args::<syn::Meta>().ok())
+        .collect();
+    if cfgs.is_empty() {
+        return false;
+    }
+    let present_own_test = cfgs
+        .iter()
+        .all(|meta| cfg_truth_with(meta, true, false) == CfgTruth::True);
+    let absent_cross = cfgs
+        .iter()
+        .any(|meta| cfg_truth_with(meta, false, true) == CfgTruth::False);
+    present_own_test && absent_cross
+}
+
+/// The T5 gate for the macro definition: absent in production, present in the
+/// cross-crate test-support build.
+fn gated_for_test_support(attrs: &[syn::Attribute]) -> bool {
+    let cfgs: Vec<syn::Meta> = attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("cfg"))
+        .filter_map(|attr| attr.parse_args::<syn::Meta>().ok())
+        .collect();
+    if cfgs.is_empty() {
+        return false;
+    }
+    let present_cross = cfgs
+        .iter()
+        .all(|meta| cfg_truth_with(meta, false, true) == CfgTruth::True);
+    present_cross && test_gated(attrs)
+}
+
 fn record_cfg_split(
     declarations: &mut BTreeMap<(String, String), Vec<(bool, bool)>>,
     kind: &str,
@@ -3368,6 +3595,7 @@ fn validate(workspace: &Path) -> Result<(), String> {
     check_cfg_split_arm_identity(workspace, &all_rows)?;
     check_visibility_coverage(workspace, &all_rows)?;
     test_support_reverse_coverage_violation(workspace, &all_rows, &auth_rows(workspace))?;
+    unit_runtime_absent_layer_violation(workspace)?;
     if all_rows.iter().any(|row| row.kind == "mod") {
         expanded_mod_rows_violation(workspace, &all_rows, &auth_rows(workspace))?;
     }
@@ -3573,6 +3801,86 @@ mod tests {
         let error = macro_row_violation(&row("eval_absent_layer_slots"), other_macro)
             .expect_err("file lacks the named macro");
         assert!(error.contains("macro_rules!"), "{error}");
+    }
+
+    #[test]
+    fn unit_runtime_absent_layer_reference_mutations() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let write = |relative: &str, text: &str| {
+            let path = dir.path().join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).expect("parent");
+            std::fs::write(path, text).expect("write");
+        };
+        let check = || unit_runtime_absent_layer_violation(dir.path());
+        // A canonical crate may not reference the helper, the marker or the
+        // macro, even from a cfg(test) unit_runtime module.
+        write(
+            "crates/neovm-core/src/lib.rs",
+            "pub fn f() { absent_layer_unlinked(\"x\"); }\n",
+        );
+        let error = check().expect_err("helper in core");
+        assert!(error.contains("absent_layer_unlinked"), "{error}");
+        write(
+            "crates/neovm-core/src/lib.rs",
+            "pub fn f() -> &'static str { \"ABSENT-LAYER gc::roots\" }\n",
+        );
+        let error = check().expect_err("marker in core");
+        assert!(error.contains("ABSENT-LAYER"), "{error}");
+        write(
+            "crates/neovm-core/src/lib.rs",
+            "// ABSENT-LAYER in a comment is not a reference\npub fn f() {}\n",
+        );
+        check().expect("comment is not a reference");
+        write(
+            "crates/neovm-core/src/lib.rs",
+            "#[cfg(test)]\nmod unit_runtime {\n    pub fn build() { eval_absent_layer_slots! {} }\n}\n",
+        );
+        let error = check().expect_err("macro in core");
+        assert!(error.contains("unit set"), "{error}");
+        write("crates/neovm-core/src/lib.rs", "");
+        // Provider crates: the macro is invoked only inside a cfg(test)
+        // unit_runtime module, never a feature-gated one.
+        write(
+            "crates/neovm-eval/src/lib.rs",
+            "#[cfg(test)]\nmod unit_runtime {\n    fn build() { eval_absent_layer_slots! {} }\n}\n",
+        );
+        check().expect("cfg(test) unit_runtime invocation");
+        write(
+            "crates/neovm-eval/src/lib.rs",
+            "fn build() { eval_absent_layer_slots! {} }\n",
+        );
+        let error = check().expect_err("outside unit_runtime");
+        assert!(
+            error.contains("outside a cfg(test) unit_runtime module"),
+            "{error}"
+        );
+        write(
+            "crates/neovm-eval/src/lib.rs",
+            "#[cfg(any(test, feature = \"test-support\"))]\nmod unit_runtime {\n    fn build() { eval_absent_layer_slots! {} }\n}\n",
+        );
+        let error = check().expect_err("feature-gated unit_runtime");
+        assert!(
+            error.contains("outside a cfg(test) unit_runtime module"),
+            "{error}"
+        );
+        // One definition, gated for test-support.
+        write(
+            "crates/neovm-eval/src/lib.rs",
+            "#[cfg(any(test, feature = \"test-support\"))]\nmacro_rules! eval_absent_layer_slots { () => {}; }\n#[cfg(test)]\nmod unit_runtime { fn build() { eval_absent_layer_slots! {} } }\n",
+        );
+        check().expect("definition and invocation");
+        write(
+            "crates/neovm-eval/src/lib.rs",
+            "#[cfg(any(test, feature = \"test-support\"))]\nmacro_rules! eval_absent_layer_slots { () => {}; }\n#[cfg(any(test, feature = \"test-support\"))]\nmacro_rules! eval_absent_layer_slots { () => {}; }\n",
+        );
+        let error = check().expect_err("two definitions");
+        assert!(error.contains("exactly one"), "{error}");
+        write(
+            "crates/neovm-eval/src/lib.rs",
+            "macro_rules! eval_absent_layer_slots { () => {}; }\n",
+        );
+        let error = check().expect_err("ungated definition");
+        assert!(error.contains("gated"), "{error}");
     }
 
     #[test]
