@@ -26,7 +26,7 @@ fn publish_then_snapshot_round_trips() {
 fn gc_collect_publishes_live_stats() {
     use crate::emacs_core::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.gc_collect();
 
     let snap = snapshot();
