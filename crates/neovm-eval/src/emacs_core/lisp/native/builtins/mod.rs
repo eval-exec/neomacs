@@ -1233,7 +1233,7 @@ pub fn transpose_regions_interactive_spec() -> Value {
 /// (OP-MIX + SUBR-MIX + the Op::Call/CallBuiltinSym entry split). Call before a
 /// measured batch editing session so loadup/startup traffic is excluded.
 #[cfg(feature = "vm-profile")]
-fn vm_profile_reset(_eval: &mut super::eval::Context, _args: Vec<Value>) -> EvalResult {
+pub(crate) fn vm_profile_reset(_eval: &mut super::eval::Context, _args: Vec<Value>) -> EvalResult {
     crate::emacs_core::bytecode::vm::vm_profile::reset();
     Ok(Value::NIL)
 }
@@ -1242,7 +1242,7 @@ fn vm_profile_reset(_eval: &mut super::eval::Context, _args: Vec<Value>) -> Eval
 /// stderr with an optional LABEL (string). Returns nil. Pairs with
 /// `neovm--vm-profile-reset` for a reset → workload → dump batch session.
 #[cfg(feature = "vm-profile")]
-fn vm_profile_dump(_eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn vm_profile_dump(_eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     let label = args
         .first()
         .map(|v| format!("{v}").trim_matches('"').to_string())

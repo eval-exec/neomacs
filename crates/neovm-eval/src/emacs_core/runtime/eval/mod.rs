@@ -115,7 +115,7 @@ mod subrs;
 pub(crate) use subrs::SUBRS;
 use subrs::{CallableHandler, EvaluatorHandler, SpecialFormHandler, evaluator_handler};
 #[doc(hidden)]
-pub use subrs::{evaluator_dispatch_kind, register_public_subrs, register_subrs};
+pub use subrs::{FBOUNDP_SUBR, evaluator_dispatch_kind, register_public_subrs, register_subrs};
 
 /// Stress-GC at every allocation-bearing safe point when `NEOVM_GC_STRESS=1`.
 /// Mirrors the per-evaluator `gc_stress` test flag, exposed as an env hook so a
