@@ -153,7 +153,7 @@ fn held(f: &ByteCodeFunction) -> bool {
 fn osr_wait_entry_waits_for_pending_opt_osr_then_selects_opt() {
     let _settings = Settings::enter();
     let _require = compile::opt_require_osr_scope_for_test(OptOsrRequirement::Required);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = list_loop();
     let id = pend_osr(&mut ctx, &source);
     assert_eq!(call(&mut ctx, &source), None);
@@ -173,7 +173,7 @@ fn osr_wait_entry_waits_for_pending_opt_osr_then_selects_opt() {
 fn osr_wait_publication_releases_the_entry_to_install_the_job_first() {
     let _settings = Settings::enter();
     let _require = compile::opt_require_osr_scope_for_test(OptOsrRequirement::Required);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = list_loop();
     let id = pend_osr(&mut ctx, &source);
     assert_eq!(call(&mut ctx, &source), None);
@@ -193,7 +193,7 @@ fn osr_wait_publication_releases_the_entry_to_install_the_job_first() {
 fn osr_wait_entry_stays_parked_however_hot_until_the_job_settles() {
     let _settings = Settings::enter();
     let _require = compile::opt_require_osr_scope_for_test(OptOsrRequirement::Required);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = list_loop();
     let id = pend_osr(&mut ctx, &source);
     assert_eq!(call(&mut ctx, &source), None);
@@ -210,7 +210,7 @@ fn osr_wait_entry_stays_parked_however_hot_until_the_job_settles() {
 fn osr_wait_dropped_job_releases_the_entry_to_its_settled_tier() {
     let _settings = Settings::enter();
     let _require = compile::opt_require_osr_scope_for_test(OptOsrRequirement::Required);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = list_loop();
     let id = pend_osr(&mut ctx, &source);
     assert_eq!(call(&mut ctx, &source), None);
@@ -228,7 +228,7 @@ fn osr_wait_dropped_job_releases_the_entry_to_its_settled_tier() {
 fn osr_wait_settlement_keeps_a_newer_foreign_hold() {
     let _settings = Settings::enter();
     let _require = compile::opt_require_osr_scope_for_test(OptOsrRequirement::Required);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = list_loop();
     pend_osr(&mut ctx, &source);
     assert_eq!(call(&mut ctx, &source), None);
@@ -243,7 +243,7 @@ fn osr_wait_settlement_keeps_a_newer_foreign_hold() {
 fn osr_wait_frontend_without_osr_requirement_compiles_at_once() {
     let _settings = Settings::enter();
     let _require = compile::opt_require_osr_scope_for_test(OptOsrRequirement::Optional);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = list_loop();
     let id = pend_osr(&mut ctx, &source);
     bg::force_deferred_install_for_test(false);

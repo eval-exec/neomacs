@@ -38,8 +38,8 @@ fn roots_for(ctx: &Context) -> Vec<Value> {
 #[test]
 fn gc_tls_ownership_jit_reloc_excludes_another_live_heap() {
     crate::emacs_core::jit::compile::force_deopt_for_test(false);
-    let mut first = Context::new();
-    let mut second = Context::new();
+    let mut first = Context::new(crate::test_utils::unit_runtime());
+    let mut second = Context::new(crate::test_utils::unit_runtime());
     let payload = cache_payload();
     assert!(
         roots_for(&second)
@@ -60,7 +60,7 @@ fn gc_tls_ownership_jit_reloc_excludes_another_live_heap() {
 fn gc_tls_ownership_jit_reloc_reset_excludes_a_dropped_heap() {
     crate::emacs_core::jit::compile::force_deopt_for_test(false);
     let payload_bits = {
-        let first = Context::new();
+        let first = Context::new(crate::test_utils::unit_runtime());
         let payload = cache_payload();
         assert!(
             roots_for(&first)
@@ -69,7 +69,7 @@ fn gc_tls_ownership_jit_reloc_reset_excludes_a_dropped_heap() {
         );
         payload.bits()
     };
-    let mut next = Context::new();
+    let mut next = Context::new(crate::test_utils::unit_runtime());
     assert!(
         roots_for(&next)
             .iter()

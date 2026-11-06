@@ -76,7 +76,7 @@ impl Fixture {
         assert_eq!(jit_regalloc_small_max(), 0);
         let at = crate::emacs_core::jit::retier_heat().expect("enable legacy heat re-tier");
         assert!(at > 3);
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         let proto = function(
             vec![Op::StackRef(0), Op::Constant(0), Op::Add, Op::Return],
             vec![Value::make_int(1)],

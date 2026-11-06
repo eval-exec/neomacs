@@ -126,7 +126,7 @@ fn install(ctx: &mut Context, f: &ByteCodeFunction, pair: Value) {
 #[test]
 fn opt_osr_evidence_missing_and_exact_source_header_checks_do_not_assign_or_heat() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = list_loop();
     let heat = source.jit_runtime().heat();
     assert_eq!(source.jit_runtime().compiled_id(), None);
@@ -147,7 +147,7 @@ fn opt_osr_evidence_missing_and_exact_source_header_checks_do_not_assign_or_heat
 #[test]
 fn opt_osr_evidence_actual_negative_and_baseline_entries_do_not_qualify() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let mut refused = list_loop();
     refused.lexical = false;
     let values = snapshot(pair());
@@ -185,7 +185,7 @@ fn opt_osr_evidence_pending_opt_requires_real_install_before_admission() {
     let _settings = Settings::enter();
     bg::force_deferred_install_for_test(true);
     bg::hold_publish_for_test(true);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = list_loop();
     let pair = pair();
     let values = snapshot(pair);
@@ -216,7 +216,7 @@ fn opt_osr_evidence_pending_opt_requires_real_install_before_admission() {
 #[test]
 fn opt_osr_evidence_cache_owner_and_reentrant_borrow_fail_closed() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = list_loop();
     install(&mut ctx, &source, pair());
     assert!(ready(&ctx, &source, 1));
@@ -247,7 +247,7 @@ fn opt_osr_evidence_cache_owner_and_reentrant_borrow_fail_closed() {
 #[test]
 fn opt_osr_evidence_reopt_and_grown_closure_prefix_revoke_existing_leaf() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = list_loop();
     let pair = pair();
     install(&mut ctx, &source, pair);
@@ -288,7 +288,7 @@ fn opt_osr_evidence_reopt_and_grown_closure_prefix_revoke_existing_leaf() {
 #[test]
 fn opt_osr_evidence_authenticates_actual_leaf_hold_with_old_marker_alive() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = list_loop();
     install(&mut ctx, &source, pair());
     let id = source.jit_runtime().compiled_id().unwrap();

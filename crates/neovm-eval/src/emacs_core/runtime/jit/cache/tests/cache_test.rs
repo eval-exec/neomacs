@@ -116,7 +116,8 @@ fn retier_unlinks_the_fast_leaf_from_callers_spec_slots() {
         return; // NEOVM_JIT_RETIER_FACTOR=0
     };
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut crate::emacs_core::eval::Context;
     // (defalias 'neovm--rt-callee (lambda () 7)): straight-line, so fast.
     let seven = Value::make_int(7);
@@ -192,7 +193,8 @@ fn unprofitable_body_is_deferred_then_compiled_once_hot_enough() {
     if !super::super::compile::jit_profit_gate_on() {
         return; // NEOVM_JIT_PROFIT=off: nothing is ever unprofitable
     }
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut crate::emacs_core::eval::Context;
     // (lambda () (length "abc")): one builtin call, no arithmetic → the gate refuses it.
     let body = || {
@@ -272,7 +274,8 @@ fn level_b_inlined_bit_op_leaf_is_evicted_on_redefinition_without_panicking() {
     if !super::super::compile::jit_inline_arith_on() {
         return; // NEOVM_JIT_INLINE_ARITH=off
     }
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut crate::emacs_core::eval::Context;
     let logand = neovm_value::intern::intern("logand");
     // (lambda () (logand 6 3)) → 2, with the bit-op inlined as a native op.
@@ -710,7 +713,7 @@ fn jit_obs_aot_prepopulated_leaf_has_id() {
 /// being compiled: the innermost frame's, or a speculated callee's.
 #[test]
 fn jit_obs_name_hint_rejects_mismatched_frame() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let sym = Value::symbol("jit-obs-hint-fn");
     let other = Value::symbol("jit-obs-hint-other");
     let sym_id = sym.as_bare_symbol_id().unwrap();
@@ -877,7 +880,7 @@ fn install_step(ev: &mut crate::emacs_core::eval::Context, name: &str) -> Value 
 #[test]
 fn unlink_spec_slots_to_clears_only_bytecode_slots_caching_the_dead_leaf() {
     use crate::emacs_core::jit::compile::SpecSlotKind;
-    let mut ev = crate::emacs_core::eval::Context::new();
+    let mut ev = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let step = install_step(&mut ev, "unlink-kind-step");
     // (lambda (x) (unlink-kind-step x))
     let f = lexical_fn(
@@ -935,7 +938,7 @@ fn unlink_spec_slots_to_clears_only_bytecode_slots_caching_the_dead_leaf() {
 fn unlink_spec_slots_clears_a_cached_callers_slot() {
     crate::emacs_core::jit::compile::force_deopt_for_test(false);
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = crate::emacs_core::eval::Context::new();
+    let mut ev = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let step = install_step(&mut ev, "unlink-walk-step");
     // (lambda (x) (unlink-walk-step x))
     let f = lexical_fn(

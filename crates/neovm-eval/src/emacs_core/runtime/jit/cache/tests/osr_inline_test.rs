@@ -72,7 +72,7 @@ fn caller_and_callee() -> (ByteCodeFunction, Value) {
 #[test]
 fn osr_inline_disabled_keeps_the_original_header_and_no_chain_metadata() {
     let _knobs = Knobs::enter(Inline2Mode::Off);
-    let ctx = Context::new();
+    let ctx = Context::new(crate::test_utils::unit_runtime());
     let (physical, _) = caller_and_callee();
     let id = physical.jit_runtime().compiled_id_or_assign();
     let entry = compile_osr_leaf(&ctx.obarray, &physical, 4, id, None).unwrap();
@@ -85,7 +85,7 @@ fn osr_inline_disabled_keeps_the_original_header_and_no_chain_metadata() {
 #[test]
 fn osr_inline_chain_maps_a_shifted_header_and_resumes_inside_the_callee() {
     let _knobs = Knobs::enter(Inline2Mode::Closure);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let (physical, inner) = caller_and_callee();
     let id = physical.jit_runtime().compiled_id_or_assign();
     let entry = compile_osr_leaf(&ctx.obarray, &physical, 4, id, None).unwrap();
@@ -115,7 +115,7 @@ fn osr_inline_chain_maps_a_shifted_header_and_resumes_inside_the_callee() {
 fn osr_inline_chain_feedback_retires_the_osr_leaf_and_widens_the_inner_source() {
     let _knobs = Knobs::enter(Inline2Mode::Off);
     reopt::force_reopt_for_test(Some(ReoptKnobs::stress()));
-    let ctx = Context::new();
+    let ctx = Context::new(crate::test_utils::unit_runtime());
     sync_cache_to_current_heap();
     let physical = function(vec![Op::StackRef(0), Op::Add1, Op::Return], vec![]);
     let inner = function(vec![Op::StackRef(0), Op::Add1, Op::Return], vec![]);
@@ -159,7 +159,7 @@ fn osr_inline_chain_feedback_retires_the_osr_leaf_and_widens_the_inner_source() 
 fn osr_inline_dependencies_evict_a_source_whose_entry_leaf_inlines_nothing() {
     let _knobs = Knobs::enter(Inline2Mode::All);
     compile::force_profit_gate_for_test(false);
-    let ctx = Context::new();
+    let ctx = Context::new(crate::test_utils::unit_runtime());
     sync_cache_to_current_heap();
     let physical = function(vec![Op::StackRef(0), Op::Return], vec![]);
     let id = compile_and_cache_jit_leaf(&physical, None).unwrap();
@@ -183,7 +183,7 @@ fn osr_inline_dependencies_evict_a_source_whose_entry_leaf_inlines_nothing() {
 #[test]
 fn osr_inline_dependency_union_survives_rebuilding_the_entry_leaf() {
     let _knobs = Knobs::enter(Inline2Mode::All);
-    let ctx = Context::new();
+    let ctx = Context::new(crate::test_utils::unit_runtime());
     sync_cache_to_current_heap();
     let physical = function(vec![Op::StackRef(0), Op::Return], vec![]);
     let id = physical.jit_runtime().compiled_id_or_assign();
@@ -235,7 +235,7 @@ fn baseline_with_dependencies(
 #[test]
 fn osr_inline_disabled_preserves_entry_only_dependency_eviction() {
     let _knobs = Knobs::enter(Inline2Mode::Off);
-    let ctx = Context::new();
+    let ctx = Context::new(crate::test_utils::unit_runtime());
     sync_cache_to_current_heap();
     let physical = function(vec![Op::StackRef(0), Op::Return], vec![]);
     let id = physical.jit_runtime().compiled_id_or_assign();
@@ -282,7 +282,7 @@ fn osr_inline_disabled_preserves_entry_only_dependency_eviction() {
 fn osr_inline_invalidation_preserves_dependencies_of_a_borrowed_entry() {
     let _knobs = Knobs::enter(Inline2Mode::All);
     reopt::force_reopt_for_test(Some(ReoptKnobs::stress()));
-    let ctx = Context::new();
+    let ctx = Context::new(crate::test_utils::unit_runtime());
     sync_cache_to_current_heap();
     let physical = function(vec![Op::StackRef(0), Op::Return], vec![]);
     let id = physical.jit_runtime().compiled_id_or_assign();

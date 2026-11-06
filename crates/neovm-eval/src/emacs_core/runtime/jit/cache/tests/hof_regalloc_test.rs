@@ -73,7 +73,7 @@ fn caller(extra_call: bool) -> ByteCodeFunction {
 #[test]
 fn osr_hof_regalloc_admitted_native_loop_uses_full() {
     let _knobs = Knobs::enter();
-    let ctx = Context::new();
+    let ctx = Context::new(crate::test_utils::unit_runtime());
     let f = caller(false);
     assert!(compile::body_is_call_heavy(
         f.executable_ops(),
@@ -95,7 +95,7 @@ fn osr_hof_regalloc_admitted_native_loop_uses_full() {
 #[test]
 fn osr_hof_regalloc_remaining_calls_keep_source_policy() {
     let _knobs = Knobs::enter();
-    let ctx = Context::new();
+    let ctx = Context::new(crate::test_utils::unit_runtime());
     let f = caller(true);
     let expected = compile::regalloc_for(RegallocPolicy::Full, f.executable_ops(), &f.constants);
     let id = f.jit_runtime().compiled_id_or_assign();
