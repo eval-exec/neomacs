@@ -8742,7 +8742,7 @@ fn resolve_one_smart_jump(buf: &mut CompiledPattern, p3: usize, prev_start: Opti
 // Peephole: fuse alternations of single positive syntax-class tests.
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Test-only switch to compile WITHOUT the syntax-class fusion peephole,
     /// so an A/B benchmark can time the exact same pattern fused vs unfused
@@ -8751,7 +8751,9 @@ thread_local! {
 }
 
 /// Run `f` with the syntax-class fusion peephole disabled (test only).
-#[cfg(test)]
+/// This is a scoped thread-local write; cross-crate callers use the
+/// `test_support::authority` fence, and the original stays `pub(crate)`.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn with_syntax_fusion_disabled<R>(f: impl FnOnce() -> R) -> R {
     SYNTAX_FUSION_DISABLED.with(|flag| flag.set(true));
     let r = f();
@@ -8965,7 +8967,7 @@ fn any_target_inside(bytecode: &[u8], p: usize, region_end: usize) -> bool {
 /// HashMap-keyed position, and the fastmap walk stay valid without
 /// relocation.  See `RegexOp::SyntaxSpecSet` for the correctness argument.
 fn fuse_syntaxspec_alternations(buf: &mut CompiledPattern) {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if SYNTAX_FUSION_DISABLED.with(std::cell::Cell::get) {
         return;
     }

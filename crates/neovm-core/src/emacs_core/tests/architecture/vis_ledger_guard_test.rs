@@ -7624,6 +7624,14 @@ fn auth_fence_file(crate_name: &str) -> Option<AuthFence> {
             file: "crates/neovm-display/src/test_support/authority.rs",
             segments: &["test_support", "authority"],
         }),
+        // The text fence serves the moved regex perf probes (LEAD 18:4xZ):
+        // the scoped syntax-fusion TLS switch and the debug match_stats
+        // counter reset route through delegates here; originals stay
+        // pub(crate).
+        "neovm-text" => Some(AuthFence::Module {
+            file: "crates/neovm-text/src/test_support/authority.rs",
+            segments: &["test_support", "authority"],
+        }),
         // NO signed test_support::authority module: TS-UNROWED original-path
         // rows only (LEAD 02:2xZ owns arm; peer signed the system families).
         "neovm-system" => Some(AuthFence::OriginalPathOnly),

@@ -1140,7 +1140,10 @@ fn regex_bench_syntax_fusion_ab() {
             continue;
         }
         let cp_f = regex_bench_compile(pat, false);
-        let cp_u = regex_emacs::with_syntax_fusion_disabled(|| regex_bench_compile(pat, false));
+        let cp_u =
+            neovm_text::test_support::authority::with_syntax_fusion_disabled_for_test(|| {
+                regex_bench_compile(pat, false)
+            });
         assert!(
             cp_f.bytecode().contains(&33u8) && !cp_u.bytecode().contains(&33u8),
             "A/B setup: fused must contain SyntaxSpecSet, unfused must not ({name})"
@@ -1191,10 +1194,13 @@ fn regex_bench_literal_100kb() {
     let iters = 15;
 
     let t_find = regex_bench_min(iters, || {
-        assert!(literal_find(&hay, needle, false).is_some());
+        assert!(neovm_text::emacs_core::regex::literal_find(&hay, needle, false).is_some());
     });
     let t_find_fold = regex_bench_min(iters, || {
-        assert!(literal_find(&hay, "UNREAD-COMMAND-EVENTS", true).is_some());
+        assert!(
+            neovm_text::emacs_core::regex::literal_find(&hay, "UNREAD-COMMAND-EVENTS", true)
+                .is_some()
+        );
     });
 
     let cp = regex_bench_compile(needle, false);
@@ -1221,7 +1227,10 @@ fn regex_bench_literal_100kb() {
         );
     });
     let t_find_miss = regex_bench_min(iters, || {
-        assert!(literal_find(&hay, "neverxyzzyneverxyzzy", false).is_none());
+        assert!(
+            neovm_text::emacs_core::regex::literal_find(&hay, "neverxyzzyneverxyzzy", false)
+                .is_none()
+        );
     });
 
     panic!(
@@ -1329,8 +1338,14 @@ fn regex_bench_pike_vs_backtracker() {
         let eligible = cp.pike_eligible;
 
         // Match counts MUST agree between all three routings.
-        let mc_pike = regex_emacs::with_pike_forced(|| regex_bench_engine_scan(&cp, bytes));
-        let mc_bt = regex_emacs::with_backtracker_forced(|| regex_bench_engine_scan(&cp, bytes));
+        let mc_pike = regex_emacs::with_regex_engine_override(
+            regex_emacs::RegexEngineOverride::PikeVm,
+            || regex_bench_engine_scan(&cp, bytes),
+        );
+        let mc_bt = regex_emacs::with_regex_engine_override(
+            regex_emacs::RegexEngineOverride::Backtracker,
+            || regex_bench_engine_scan(&cp, bytes),
+        );
         let mc_def = regex_bench_engine_scan(&cp, bytes); // production routing
         assert_eq!(
             mc_pike, mc_bt,
@@ -1343,13 +1358,19 @@ fn regex_bench_pike_vs_backtracker() {
 
         let t_pike = regex_bench_min(iters, || {
             assert_eq!(
-                regex_emacs::with_pike_forced(|| regex_bench_engine_scan(&cp, bytes)),
+                regex_emacs::with_regex_engine_override(
+                    regex_emacs::RegexEngineOverride::PikeVm,
+                    || regex_bench_engine_scan(&cp, bytes),
+                ),
                 mc_pike
             );
         });
         let t_bt = regex_bench_min(iters, || {
             assert_eq!(
-                regex_emacs::with_backtracker_forced(|| regex_bench_engine_scan(&cp, bytes)),
+                regex_emacs::with_regex_engine_override(
+                    regex_emacs::RegexEngineOverride::Backtracker,
+                    || regex_bench_engine_scan(&cp, bytes),
+                ),
                 mc_bt
             );
         });
@@ -1471,8 +1492,10 @@ fn regex_bench_compile_cost() {
         // Cached path: same key each call — a hit after the first.
         let t_hit = regex_bench_min(5, || {
             for _ in 0..compiles {
-                let cp = compile_lisp_pattern_with_posix(&lisp, false, false, true)
-                    .expect("pattern compiles");
+                let cp = neovm_text::emacs_core::regex::compile_lisp_pattern_with_posix(
+                    &lisp, false, false, true,
+                )
+                .expect("pattern compiles");
                 std::hint::black_box(&cp);
             }
         });
@@ -1873,7 +1896,7 @@ fn regex_search_across_mid_buffer_gap() {
 fn match_publish_read_stats_probe() {
     use std::sync::atomic::Ordering;
     let mut eval = crate::test_utils::runtime_startup_context();
-    super::match_stats::reset();
+    neovm_text::test_support::authority::reset_regex_match_stats_for_test();
     eval.eval_str(
         r#"(with-temp-buffer
              (insert-file-contents (locate-library "bytecomp.el" t))
@@ -1887,14 +1910,14 @@ fn match_publish_read_stats_probe() {
         "MATCH-STATS publishes={} published_g0={} published_sub={} \
          read_g0={} read_sub={} full_exports={} \
          distinct_some_g0={} distinct_some_sub={}",
-        s(&super::match_stats::PUBLISHES),
-        s(&super::match_stats::PUBLISHED_GROUP0),
-        s(&super::match_stats::PUBLISHED_SUB),
-        s(&super::match_stats::READ_GROUP0),
-        s(&super::match_stats::READ_SUB),
-        s(&super::match_stats::FULL_EXPORTS),
-        s(&super::match_stats::FIRST_SOME_G0),
-        s(&super::match_stats::FIRST_SOME_SUB),
+        s(&neovm_text::emacs_core::regex::match_stats::PUBLISHES),
+        s(&neovm_text::emacs_core::regex::match_stats::PUBLISHED_GROUP0),
+        s(&neovm_text::emacs_core::regex::match_stats::PUBLISHED_SUB),
+        s(&neovm_text::emacs_core::regex::match_stats::READ_GROUP0),
+        s(&neovm_text::emacs_core::regex::match_stats::READ_SUB),
+        s(&neovm_text::emacs_core::regex::match_stats::FULL_EXPORTS),
+        s(&neovm_text::emacs_core::regex::match_stats::FIRST_SOME_G0),
+        s(&neovm_text::emacs_core::regex::match_stats::FIRST_SOME_SUB),
     );
 }
 

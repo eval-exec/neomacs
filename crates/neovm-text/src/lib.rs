@@ -7,5 +7,9 @@ pub mod code_conversion_workspace;
 pub mod emacs_core;
 pub mod encoding;
 
+/// Test-only authority fence for core-owned tests of moved text fixtures.
+#[cfg(feature = "test-support")]
+pub mod test_support;
+
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_utils;

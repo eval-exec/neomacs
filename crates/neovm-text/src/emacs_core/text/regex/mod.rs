@@ -2587,7 +2587,8 @@ fn compile_search_pattern_with_posix(
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn compile_lisp_pattern_with_posix(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn compile_lisp_pattern_with_posix(
     pattern: &LispString,
     case_fold: bool,
     posix: bool,
@@ -2996,7 +2997,8 @@ fn unicode_case_fold_literal_rfind(text: &str, literal: &str) -> Option<MatchGro
 /// helper). Audit finding #18 in `drafts/regex-search-audit.md`
 /// flags this as a perf gap, not a correctness gap; the audit's
 /// Phase D Task 4.2 covers porting boyer_moore (~1 day).
-fn literal_find(text: &str, literal: &str, case_fold: bool) -> Option<MatchGroup> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn literal_find(text: &str, literal: &str, case_fold: bool) -> Option<MatchGroup> {
     crate::emacs_core::substrate_hooks::time_op(
         crate::emacs_core::substrate_hooks::TextPerfOp::RegexLiteralFind,
         || {
@@ -5473,11 +5475,17 @@ fn apply_match_case_with_syntax(
 pub mod match_stats {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static PUBLISHES: AtomicUsize = AtomicUsize::new(0);
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static PUBLISHED_GROUP0: AtomicUsize = AtomicUsize::new(0);
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static PUBLISHED_SUB: AtomicUsize = AtomicUsize::new(0);
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static READ_GROUP0: AtomicUsize = AtomicUsize::new(0);
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static READ_SUB: AtomicUsize = AtomicUsize::new(0);
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static FULL_EXPORTS: AtomicUsize = AtomicUsize::new(0);
 
     pub(crate) fn count_publish(groups: &[Option<super::EmacsByteRange>]) {
@@ -5507,7 +5515,9 @@ pub mod match_stats {
     /// Distinct converted-group demand: bump once per (match-data, group)
     /// pair whose Some value a reader actually saw. Under lazy conversion
     /// exactly these groups would still convert.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static FIRST_SOME_G0: AtomicUsize = AtomicUsize::new(0);
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static FIRST_SOME_SUB: AtomicUsize = AtomicUsize::new(0);
 
     pub(crate) fn count_first_some_read(mask: &std::cell::Cell<u64>, index: usize) {
@@ -5526,7 +5536,9 @@ pub mod match_stats {
         }
     }
 
-    #[cfg(test)]
+    /// Zero every debug-only match-data counter (a counter reset; cross-crate
+    /// callers use the `test_support::authority` fence).
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn reset() {
         for counter in [
             &PUBLISHES,
