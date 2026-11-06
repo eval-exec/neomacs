@@ -782,7 +782,7 @@ fn test_format_mode_line_respects_risky_local_variable_for_eval_forms() {
         "trusted-mode-line",
         Value::list(vec![Value::symbol(":eval"), Value::string("ok")]),
     );
-    eval.obarray_view()
+    eval.obarray_mut()
         .put_property("trusted-mode-line", "risky-local-variable", Value::T)
         .unwrap();
 
@@ -2104,10 +2104,9 @@ fn commit_line_pixel_height_snapshot(
     wid: crate::window::WindowId,
     buf: neovm_edit::buffer::BufferId,
 ) {
+    let (cl_frames, cl_buffers) = ev.frame_manager_and_buffers_mut();
     crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
-        &mut ev.frame_manager(),
-        &mut ev.edit.buffers,
-        fid,
+        cl_frames, cl_buffers, fid,
     );
     let freshness = ev.window_display_snapshot_freshness(fid, wid, buf).unwrap();
     let modiff = ev.edit.buffers.get(buf).unwrap().modified_tick();

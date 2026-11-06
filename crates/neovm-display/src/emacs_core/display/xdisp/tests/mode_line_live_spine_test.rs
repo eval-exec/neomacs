@@ -150,7 +150,8 @@ fn collecting_checkpoint_format(eval: &mut Context) -> (Value, usize, usize) {
 }
 
 fn assert_checkpoint_retained(eval: &Context, checkpoint_bits: usize, car_bits: usize) {
-    let checkpoint = Value::from_bits(checkpoint_bits);
+    // SAFETY: the bits were just captured from the live checkpoint value.
+    let checkpoint = unsafe { Value::from_bits(checkpoint_bits) };
     assert!(
         eval.tagged_heap().owns_heap_value_for_test(checkpoint),
         "the detached Brent checkpoint cons was collected during :eval"

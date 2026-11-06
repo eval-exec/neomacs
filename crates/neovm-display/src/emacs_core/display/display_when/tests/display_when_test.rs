@@ -110,7 +110,7 @@ fn with_display_buffer_current_selects_the_buffer_and_restores_the_callers() {
     let original = eval.edit.buffers.current_buffer_id().expect("buffer");
     let other = eval.edit.buffers.create_buffer("other");
     let seen = eval
-        .with_display_buffer_current(other, |ctx| ctx.buffers.current_buffer_id())
+        .with_display_buffer_current(other, |ctx| ctx.edit.buffers.current_buffer_id())
         .expect("live buffer");
     assert_eq!(seen, Some(other));
     assert_eq!(eval.edit.buffers.current_buffer_id(), Some(original));

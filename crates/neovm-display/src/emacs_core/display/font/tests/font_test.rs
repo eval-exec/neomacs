@@ -2269,12 +2269,12 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
         for snapshot in &snapshots {
             assert!(
                 eval.tagged_heap()
-                    .retains_veclike(Value::from_bits(snapshot.identity_bits)),
+                    .retains_veclike(unsafe { Value::from_bits(snapshot.identity_bits) }),
                 "cache-only gstring vector was reclaimed"
             );
         }
         for snapshot in &snapshots {
-            let vector = Value::from_bits(snapshot.identity_bits);
+            let vector = unsafe { Value::from_bits(snapshot.identity_bits) };
             let actual: Vec<_> = vector
                 .as_vector_data()
                 .expect("live cached vector")
@@ -2291,7 +2291,7 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
         assert!(
             !eval
                 .tagged_heap()
-                .value_is_old_for_test(Value::from_bits(cached_bits))
+                .value_is_old_for_test(unsafe { Value::from_bits(cached_bits) })
         );
         eval.gc_pending = true;
         eval.gc_safe_point_exact();
@@ -2320,7 +2320,7 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
     if eval.tagged_heap().generational_enabled() {
         assert!(
             eval.tagged_heap()
-                .value_is_old_for_test(Value::from_bits(cached_bits))
+                .value_is_old_for_test(unsafe { Value::from_bits(cached_bits) })
         );
     }
 

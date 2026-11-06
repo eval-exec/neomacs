@@ -20,7 +20,7 @@ fn gc_tls_ownership_terminal_values_survive_owner_collection_and_reactivation() 
     for bits in expected {
         assert!(
             ctx.tagged_heap()
-                .owns_heap_value_for_test(Value::from_bits(bits)),
+                .owns_heap_value_for_test(unsafe { Value::from_bits(bits) }),
             "owner GC lost terminal Lisp state"
         );
     }

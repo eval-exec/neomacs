@@ -327,7 +327,7 @@ fn active_minibuffer_window_tracks_live_minibuffer_state() {
             .and_then(|window| window.buffer_id())
             .expect("minibuffer buffer")
     };
-    ev.minibuffers()
+    ev.minibuffers_mut()
         .read_from_minibuffer(minibuffer_buffer_id, "M-x ", None, None)
         .expect("active minibuffer state");
 
@@ -2099,7 +2099,7 @@ fn get_buffer_window_list_includes_active_minibuffer_by_default() {
             .and_then(|window| window.buffer_id())
             .expect("minibuffer buffer")
     };
-    ev.minibuffers()
+    ev.minibuffers_mut()
         .read_from_minibuffer(minibuffer_buffer, "M-x ", None, None)
         .expect("active minibuffer state");
     ev.edit.buffers.set_current(minibuffer_buffer);
@@ -7600,7 +7600,7 @@ fn select_frame_switches_active_kboard_to_frame_terminal() {
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
     let primary = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
-    ev.command_loop()
+    ev.command_loop_mut()
         .keyboard
         .set_input_decode_map(Value::symbol("primary-map"));
 
@@ -7627,7 +7627,7 @@ fn select_frame_switches_active_kboard_to_frame_terminal() {
     assert_eq!(ev.command_loop().keyboard.active_terminal_id(), 7);
     assert_eq!(ev.command_loop().keyboard.input_decode_map(), Value::NIL);
 
-    ev.command_loop()
+    ev.command_loop_mut()
         .keyboard
         .set_input_decode_map(Value::symbol("secondary-map"));
 
@@ -10015,7 +10015,7 @@ fn graphical_recenter_context(
             WindowLayoutQueryScope::Pixels { start, height } => {
                 (start, height.get().div_ceil(row_height as usize))
             }
-            WindowLayoutQueryScope::Viewport => (viewport_start, viewport_count),
+            WindowLayoutQueryScope::Viewport => (*viewport_start, viewport_count),
             WindowLayoutQueryScope::Position { target } => {
                 let through_target =
                     ((target.as_i64() - viewport_start.as_i64()).max(0) / 5 + 1) as usize;

@@ -593,8 +593,9 @@ fn mode_line_dynamic_symbols_physical_atom_and_conditional_admission_matches_gnu
     let mut ctx = context();
     let name = "ttykey-k5-dynamic-positioned";
     ctx.set_variable(name, Value::string("positioned"));
-    let positioned = ctx
-        .tagged_heap()
+    // SAFETY: the test owns this Context's World on this thread; the call
+    // only allocates through the heap view.
+    let positioned = unsafe { ctx.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::from_sym_id(intern(name)), Value::fixnum(3));
     assert!(
         positioned
@@ -624,8 +625,8 @@ fn mode_line_dynamic_symbols_physical_atom_and_conditional_admission_matches_gnu
     ctx.obarray_mut().set_symbol_value_id(actual, Value::NIL);
     ctx.obarray_mut()
         .set_symbol_value_id(intern(name), Value::T);
-    let positioned_actual = ctx
-        .tagged_heap()
+    // SAFETY: same owning-thread argument as the heap allocation above.
+    let positioned_actual = unsafe { ctx.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::from_sym_id(actual), Value::fixnum(7));
     let conditional = Value::list(vec![
         positioned_actual,
