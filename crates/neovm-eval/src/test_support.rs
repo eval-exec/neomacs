@@ -825,6 +825,29 @@ pub mod authority {
             leaf,
         }
     }
+
+    /// P1-CLASSES-ALL-CRATES C3 FENCE (value wave-2 V1 r2): disjoint borrows
+    /// of the Context's obarray and its mutable tagged-heap view, for the
+    /// re-homed obarray-claim test. Same contract as `Context::tagged_heap_mut`;
+    /// the accessor itself stays pub(crate) and this fence is its only public
+    /// path.
+    ///
+    /// # Safety
+    ///
+    /// The caller must be the owning thread of this Context's World. The heap
+    /// view must only be used for in-place heap operations through its
+    /// `DerefMut` target; it must never be replaced, swapped with another
+    /// Context's view, or moved across Worlds. The two returned borrows are
+    /// disjoint, so the obarray may be read while the heap view is live.
+    pub unsafe fn obarray_and_tagged_heap_mut(
+        context: &mut Context,
+    ) -> (
+        &neovm_value::symbol::Obarray,
+        &mut neovm_value::tagged::gc::TaggedHeap,
+    ) {
+        // SAFETY: the caller upholds the split-accessor contract above.
+        unsafe { context.obarray_and_tagged_heap_mut() }
+    }
 }
 
 /// Test-support `aset` over a caller-owned Bare argument slice (K1 fence-ask

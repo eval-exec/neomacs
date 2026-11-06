@@ -5373,6 +5373,30 @@ impl Context {
         &mut self.tagged_heap
     }
 
+    /// Split accessor for fixtures that must hold the obarray and the mutable
+    /// tagged-heap view at the same time (the obarray snapshot taken during a
+    /// concurrent-mark start). The two returned borrows are DISJOINT fields,
+    /// so the obarray may be read while the heap view is live; no raw pointer
+    /// or whole-Context aliasing is involved.
+    ///
+    /// # Safety
+    ///
+    /// The caller must be the owning thread of this Context's World. The heap
+    /// view must only be used for in-place heap operations through its
+    /// `DerefMut` target; it must never be replaced, swapped with another
+    /// Context's view, or moved across Worlds (the view carries its World's
+    /// retention lease, so swapping would leave the pointer paired with the
+    /// wrong lease).
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline(always)]
+    pub(crate) unsafe fn obarray_and_tagged_heap_mut(
+        &mut self,
+    ) -> (&Obarray, &mut neovm_value::tagged::gc::TaggedHeap) {
+        // Disjoint field borrows: shared obarray view, mutable heap view.
+        (&*self.obarray, &mut *self.tagged_heap)
+    }
+
     /// Test-support: copied macro-expansion counter.
     #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]

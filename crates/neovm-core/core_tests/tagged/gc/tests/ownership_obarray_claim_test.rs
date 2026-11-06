@@ -23,18 +23,20 @@ fn concurrent_claim_reaches_obarray_symbol_value_strings() {
     // handshake does. No direct root seed may replace this obarray-only sink.
     // SAFETY: this Context is the heap/obarray's sole writer; there is no
     // callback, safepoint or ownership handoff during start and publication.
-    // SAFETY: the pointer is taken before the heap's mutable loan and the
-    // Context is not moved; the obarray is only read through it below.
-    let obarray: *const _ = ev.obarray();
-    let permit = unsafe { ev.tagged_heap_mut().permit_concurrent_mark() }.unwrap();
+    // SAFETY: this Context is the heap/obarray's sole writer; there is no
+    // callback, safepoint or ownership handoff during start and publication.
+    // The fence returns DISJOINT borrows of the two fields, so the obarray may
+    // be read while the heap view is live (no raw pointer, no aliasing).
+    let (obarray, heap) =
+        unsafe { neovm_eval::test_support::authority::obarray_and_tagged_heap_mut(&mut ev) };
+    // SAFETY: the same admitted owner starts the handshake below.
+    let permit = unsafe { heap.permit_concurrent_mark() }.unwrap();
     let mut capture = permit.begin();
     let snap = {
         // SAFETY: the same admitted owner captures its matching obarray
         // before worker publication; no other writer or callback can enter.
         let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(capture.heap_mut()) };
-        // SAFETY: the pointer was taken from this live Context above and no
-        // other borrow of the obarray exists during the capture.
-        unsafe { &*obarray }.scan_snapshot(&world)
+        obarray.scan_snapshot(&world)
     };
     capture.heap_mut().set_pending_obarray_scan(snap);
     capture.launch().unwrap();
