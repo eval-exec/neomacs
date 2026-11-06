@@ -488,6 +488,10 @@ mod architecture_host_cfg_agreement_guard_test;
 mod architecture_canonical_registration_trace_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/host_cfg_elisp_regression_test.rs"]
+mod architecture_host_cfg_elisp_regression_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/value_ref_guard_test.rs"]
 mod architecture_value_ref_guard_test;
 
