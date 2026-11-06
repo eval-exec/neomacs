@@ -26,7 +26,7 @@ fn reader<'a>(
 #[test]
 fn error_unread_caches_original_identity_and_payload_then_remaps_byte() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let obarray = neovm_value::symbol::Obarray::new();
     for prefix in [b"#^".as_slice(), b"#s".as_slice()] {
         let identity = original(prefix, 3);
@@ -64,7 +64,7 @@ fn error_unread_caches_original_identity_and_payload_then_remaps_byte() {
 #[test]
 fn native_same_source_read_observes_error_cache_and_fresh_control() {
     crate::test_utils::init_test_tracing();
-    let mut context = crate::emacs_core::eval::Context::new();
+    let mut context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     for (prefix, name) in [(b"#^".as_slice(), "^"), (b"#s".as_slice(), "s")] {
         let identity = original(prefix, 3);
         neovm_value::string_pos_cache::reset_string_pos_cache();
@@ -92,7 +92,7 @@ fn native_same_source_read_observes_error_cache_and_fresh_control() {
 #[test]
 fn consumed_label_suffix_does_not_run_string_unget() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let obarray = neovm_value::symbol::Obarray::new();
     let identity = original(b"#1", 3);
     let payload = identity.as_lisp_string().expect("source");
@@ -119,7 +119,7 @@ fn consumed_label_suffix_does_not_run_string_unget() {
 #[test]
 fn radix_digit_span_is_preserved_before_cursor_unread_remaps() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let obarray = neovm_value::symbol::Obarray::new();
     for (prefix, number) in [(b"#x1".as_slice(), 1), (b"#o7".as_slice(), 7)] {
         let identity = original(prefix, 4);
@@ -146,7 +146,7 @@ fn radix_digit_span_is_preserved_before_cursor_unread_remaps() {
 #[test]
 fn logical_eof_does_not_update_cache_for_unread_minus_one() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let obarray = neovm_value::symbol::Obarray::new();
     let identity = original(b"ab", 1);
     let snapshot = identity.as_lisp_string().expect("source").clone();
@@ -181,7 +181,7 @@ fn logical_eof_does_not_update_cache_for_unread_minus_one() {
 #[test]
 fn dot_probe_defers_remapped_cursor_until_period_consumption() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let obarray = neovm_value::symbol::Obarray::new();
     let identity = original(b".", 2);
     let snapshot = identity.as_lisp_string().expect("source").clone();
@@ -206,7 +206,7 @@ fn dot_probe_defers_remapped_cursor_until_period_consumption() {
 #[test]
 fn byte_sources_do_not_bind_original_string_cache() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let obarray = neovm_value::symbol::Obarray::new();
     let input = LispString::from_utf8("name ");
     let mut parser = Reader::new_lisp_string(

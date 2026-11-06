@@ -6,7 +6,7 @@ use neovm_value::symbol::{CanonicalAccess, Obarray};
 #[test]
 fn oversized_file_character_reports_syntax_at_its_unconsumed_tail() {
     crate::test_utils::init_test_tracing();
-    let _context = Context::new();
+    let _context = Context::new(crate::test_utils::unit_runtime());
     let ob = Obarray::new();
     // Recovery consumes the oversized sequence's lead byte. Its remaining
     // bytes still reach the character-literal parser, which rejects them.
@@ -27,7 +27,7 @@ fn oversized_file_character_reports_syntax_at_its_unconsumed_tail() {
 #[test]
 fn oversized_file_string_preserves_the_recovered_lead_and_tail_characters() {
     crate::test_utils::init_test_tracing();
-    let _context = Context::new();
+    let _context = Context::new(crate::test_utils::unit_runtime());
     let ob = Obarray::new();
     let input = b"\"\xF8\xB8\x96\xB8\x96\" 23";
     let (value, next_byte) = read_one_from_encoded_file_bytes(
@@ -74,7 +74,7 @@ fn oversized_file_string_preserves_the_recovered_lead_and_tail_characters() {
 #[test]
 fn file_character_literals_preserve_in_domain_gnu_arithmetic() {
     crate::test_utils::init_test_tracing();
-    let _context = Context::new();
+    let _context = Context::new(crate::test_utils::unit_runtime());
     let ob = Obarray::new();
     // The file reader historically accepts noncanonical encodings. The
     // character-domain guard must not substitute canonical-form validation.

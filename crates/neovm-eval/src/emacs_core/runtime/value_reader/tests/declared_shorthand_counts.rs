@@ -9,7 +9,7 @@ fn shorthands(short: LispString, long: LispString) -> ReadSymbolShorthands {
 #[test]
 fn mb_reader_preserves_arithmetic_count_for_mixed_prefix_encodings() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let rewrite = shorthands(
         LispString::from_unibyte(vec![195, 169]),
         LispString::from_utf8("b"),
@@ -27,7 +27,7 @@ fn mb_reader_preserves_arithmetic_count_for_mixed_prefix_encodings() {
 #[test]
 fn mb_reader_negative_count_recounts_instead_of_rejecting() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let rewrite = shorthands(
         LispString::from_unibyte(vec![195, 169]),
         LispString::from_utf8(""),
@@ -44,7 +44,7 @@ fn mb_reader_negative_count_recounts_instead_of_rejecting() {
 #[test]
 fn mb_reader_invalid_negative_recount_is_typed_error() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let rewrite = shorthands(
         LispString::from_unibyte(vec![195, 169, 195]),
         LispString::from_utf8(""),
@@ -58,7 +58,7 @@ fn mb_reader_invalid_negative_recount_is_typed_error() {
 #[test]
 fn ordinary_unicode_reader_rewrite_preserves_bytes_and_source_flag() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let rewrite = shorthands(LispString::from_utf8("a"), LispString::from_utf8("λ"));
     let name = rewrite
         .rewrite(&LispString::from_utf8("aé"))

@@ -32,7 +32,7 @@ fn logical_reader<'a>(
 #[test]
 fn declared_count_caps_fast_ascii_token_and_whitespace() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ob = neovm_value::symbol::Obarray::new();
     let text = source(b"abc", 1);
     let mut reader = logical_reader(&text, 1, &ob);
@@ -54,7 +54,7 @@ fn declared_count_caps_fast_ascii_token_and_whitespace() {
 #[test]
 fn logical_index_does_not_reverse_map_consumed_unicode_bytes() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ob = neovm_value::symbol::Obarray::new();
     let text = source("éa".as_bytes(), 1);
     let result = LispReadSource::new(&text)
@@ -81,7 +81,7 @@ fn logical_index_does_not_reverse_map_consumed_unicode_bytes() {
 #[test]
 fn logical_end_stops_unicode_comment_and_string_ascii_copy() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ob = neovm_value::symbol::Obarray::new();
     let text = source(";é\nbX".as_bytes(), 4);
     let mut reader = logical_reader(&text, 4, &ob);
@@ -105,7 +105,7 @@ fn logical_end_stops_unicode_comment_and_string_ascii_copy() {
 #[test]
 fn error_unread_restores_both_coordinate_domains() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ob = neovm_value::symbol::Obarray::new();
     let text = source(b"#s[tail", 3);
     let mut reader = logical_reader(&text, 3, &ob);
@@ -119,7 +119,7 @@ fn error_unread_restores_both_coordinate_domains() {
 #[test]
 fn logical_read_all_does_not_leak_labels_across_forms() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ob = neovm_value::symbol::Obarray::new();
     let text = LispString::from_utf8("#1=(a) #1#");
     assert!(
@@ -137,7 +137,7 @@ fn logical_read_all_does_not_leak_labels_across_forms() {
 #[test]
 fn logical_partial_end_zero_and_end_at_schars_preserve_original_units() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ob = neovm_value::symbol::Obarray::new();
     let text = source("bé".as_bytes(), 1);
     let source = LispReadSource::new(&text);
@@ -186,7 +186,7 @@ fn logical_partial_end_zero_and_end_at_schars_preserve_original_units() {
 #[test]
 fn read_from_string_start_uses_original_source_cached_boundary() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let mut context = _context;
     let input = Value::heap_string(source("béaz".as_bytes(), 3));
     neovm_value::string_pos_cache::reset_string_pos_cache();
@@ -207,7 +207,7 @@ fn read_from_string_start_uses_original_source_cached_boundary() {
 #[test]
 fn logical_string_reads_one_initialized_terminal_nul() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ob = neovm_value::symbol::Obarray::new();
     let text = source(b"?", 2);
     let mut reader = logical_reader(&text, 2, &ob);
@@ -263,7 +263,7 @@ fn logical_string_reads_one_initialized_terminal_nul() {
 #[test]
 fn terminal_logical_cursor_keeps_string_comment_and_error_slices_bounded() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ob = neovm_value::symbol::Obarray::new();
     for bytes in [b";".as_slice(), b"\"".as_slice()] {
         let text = source(bytes, 2);
@@ -295,7 +295,7 @@ fn terminal_logical_cursor_keeps_string_comment_and_error_slices_bounded() {
 #[test]
 fn terminal_invalid_dispatch_spans_restore_both_cursor_units() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ob = neovm_value::symbol::Obarray::new();
     for prefix in [b"#^".as_slice(), b"#^^".as_slice(), b"#s".as_slice()] {
         let text = source(
