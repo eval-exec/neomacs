@@ -49,3 +49,12 @@ mod lifecycle_tests;
 #[cfg(test)]
 #[path = "../../../core_tests/tagged/gc/mutator_registration/a8_latency.rs"]
 mod a8_latency;
+
+/// MEMQ-TAIL-SHAPES (b)+(i)+(ii), peer 22:30Z approvals: the keeper-table
+/// scope test re-homed out of value. It uses the closure-scoped
+/// stopped-tables install, the scope's nested-install probe, the &self
+/// authority-word guard and the scope's own inspect; the value internals it
+/// used to reach directly stay private.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/keeper_table_scope_tests.rs"]
+mod keeper_table_scope_tests;

@@ -205,27 +205,40 @@ impl<'a, 'era> KeeperTableScope<'a, 'era> {
         unsafe { self.heap.collector_tables().inspect(ptr, f) }
     }
 
-    /// Typed scoped authority-word seam (peer 21:25Z (i)): CAS-installs from
-    /// the quiescent word and a restore-on-drop guard puts the prior word back.
+    /// Typed scoped authority-word seam (peer 21:25Z (i); &self receiver per
+    /// peer 22:30Z): CAS-installs from the quiescent word and a restore-on-drop
+    /// guard puts the prior word back. The guard borrows the scope immutably,
+    /// so the caller may make &self reads (notably [`Self::inspect`]) while the
+    /// probe word is installed; `enter` still needs &mut self and is excluded
+    /// by the borrow for the guard's lifetime.
     ///
     /// # Safety
     /// No collector or reader other than the one under test observes the table
     /// while the guard lives.
     pub unsafe fn hold_authority_word_for_test(
-        &mut self,
+        &self,
         state: AuthorityProbeState,
     ) -> AuthorityProbeGuard<'_> {
         let table = self.table.expect("enter a table before holding its word");
         let lease = super::KeeperTableMut::enter(self.stopped, table).expect("keeper lease");
         let word: *const AtomicU64 = lease.authority_word();
         // SAFETY: the rooted table of the stopped heap outlives the scope;
-        // the returned guard is tied to &mut self, so no other operation on
-        // this scope can run while the probe word is installed.
+        // the returned guard is tied to &self, so only further &self reads on
+        // this scope (not enter) can run while the probe word is installed.
         let word: &AtomicU64 = unsafe { &*word };
         let prior = word
             .compare_exchange(0, state.word(), Ordering::AcqRel, Ordering::Acquire)
             .expect("authority word must be quiescent");
         AuthorityProbeGuard { word, prior }
+    }
+
+    /// Typed nested-install probe (peer 22:30Z (ii)): while this scope's
+    /// stopped-tables installation is live, attempt a second installation over
+    /// the same heap. The refusal is returned as a copied result so the
+    /// caller's assertion stays `matches!(.., Err(RendezvousError::Busy))`.
+    /// No state changes on refusal.
+    pub fn try_nested_install_for_test(&mut self) -> Result<(), super::RendezvousError> {
+        super::super::collector_tables::with_stopped_tables(self.heap, self.stopped, |_| ())
     }
 }
 
