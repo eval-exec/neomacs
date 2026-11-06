@@ -9233,10 +9233,6 @@ mod watcher_redispatch_tests;
 mod gc_sweep_cap_tests;
 
 #[cfg(test)]
-#[path = "tests/gc_forced_first_cycle_test.rs"]
-mod gc_forced_first_cycle_tests;
-
-#[cfg(test)]
 #[path = "tests/gc_root_ownership_test.rs"]
 mod gc_root_ownership_tests;
 

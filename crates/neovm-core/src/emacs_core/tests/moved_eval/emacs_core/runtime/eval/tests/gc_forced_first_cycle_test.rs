@@ -7,13 +7,14 @@
 //! unreachable image object held, and blacken the image around the dangling
 //! pointer.
 
-use crate::emacs_core::pdump::{dump_to_file, load_from_dump};
+use crate::emacs_core::load_boot::load_from_dump;
+use crate::emacs_core::pdump::dump_to_file;
 use neovm_value::value::Value;
 
 #[test]
 fn garbage_collect_during_the_concurrent_first_cycle_keeps_what_only_the_image_holds() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str("(defvar forced-first-cycle-probe (vector 'a 'b))")
         .expect("defvar should evaluate");
     let dir = tempfile::tempdir().unwrap();
@@ -26,11 +27,11 @@ fn garbage_collect_during_the_concurrent_first_cycle_keeps_what_only_the_image_h
         return;
     }
     let vector = loaded
-        .obarray
+        .obarray()
         .symbol_value_copied("forced-first-cycle-probe")
         .expect("restored vector");
     assert!(
-        loaded.tagged_heap.mapped_image_owns_for_test(vector),
+        loaded.tagged_heap().mapped_image_owns_for_test(vector),
         "the vector must live in the mapped image for this test to mean anything"
     );
     let table = loaded
@@ -40,24 +41,24 @@ fn garbage_collect_during_the_concurrent_first_cycle_keeps_what_only_the_image_h
     // Only the image vector holds the table now, and nothing reaches the
     // vector.
     loaded
-        .obarray
+        .obarray_mut()
         .set_symbol_value("forced-first-cycle-probe", Value::NIL);
-    assert!(loaded.tagged_heap.is_partition_first_cycle());
+    assert!(loaded.tagged_heap().is_partition_first_cycle());
 
     // A safe point arms and starts the concurrent first cycle ...
     loaded.gc_collect_from_current_roots_impl(false);
     assert!(
-        loaded.tagged_heap.concurrent_mark_running(),
+        loaded.tagged_heap().concurrent_mark_running(),
         "the safe point must have started the concurrent first cycle"
     );
     // ... and `(garbage-collect)` arrives while it is open.
     loaded.gc_collect_exact();
-    assert!(!loaded.tagged_heap.is_partition_first_cycle());
+    assert!(!loaded.tagged_heap().is_partition_first_cycle());
     assert!(
-        loaded.tagged_heap.owns_heap_value_for_test(table),
+        loaded.tagged_heap().owns_heap_value_for_test(table),
         "the forced cycle must not free a table only an image object holds"
     );
     // The blackened image keeps it through a later cycle too.
     loaded.gc_collect_exact();
-    assert!(loaded.tagged_heap.owns_heap_value_for_test(table));
+    assert!(loaded.tagged_heap().owns_heap_value_for_test(table));
 }

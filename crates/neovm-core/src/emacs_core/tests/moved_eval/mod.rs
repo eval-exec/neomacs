@@ -189,6 +189,9 @@ mod emacs_core_runtime_jit_tests_switch_dispatch_test_rs;
 #[path = "emacs_core/runtime/eval/tests/cconv_memo_test.rs"]
 mod emacs_core_runtime_eval_tests_cconv_memo_test_rs;
 #[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/gc_forced_first_cycle_test.rs"]
+mod emacs_core_runtime_eval_tests_gc_forced_first_cycle_test_rs;
+#[cfg(test)]
 #[path = "emacs_core/runtime/jit/tests/spec_frames_test.rs"]
 mod emacs_core_runtime_jit_tests_spec_frames_test_rs;
 #[cfg(test)]
