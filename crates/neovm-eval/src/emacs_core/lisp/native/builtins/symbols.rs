@@ -4730,6 +4730,12 @@ pub(crate) fn cache_event_symbol_properties_in_obarray(
 
 #[doc(hidden)]
 pub fn init_event_symbol_properties(obarray: &mut Obarray) {
+    // The canonical registration plan places this step between the upper
+    // compatibility declarations and the public evaluator batch. Record it
+    // here, at entry, so the trace witnesses the initialization actually
+    // running; core's caller does not record a separate witness.
+    #[cfg(any(test, feature = "test-support"))]
+    crate::emacs_core::subr::record_event_symbol_properties_step();
     // GNU `syms_of_keyboard' initializes fixed event heads with
     // `(EVENT)' elements.  During loadup, `modify_event_symbol' also
     // fills properties for the preloaded keymap mouse/wheel/function-key

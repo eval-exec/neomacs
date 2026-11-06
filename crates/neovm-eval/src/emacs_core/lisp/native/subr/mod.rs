@@ -93,12 +93,31 @@ thread_local! {
     };
 }
 
+/// One entry in the armed registration trace.
+///
+/// The trace is the canonical production registration sequence: every subr
+/// registration at the choke point records a [`SubrRegistration::Subr`], and
+/// the one production `initialize_event_properties` step — which registers no
+/// subr but sits between the upper declarations and the public evaluator
+/// batch — records [`SubrRegistration::EventSymbolProperties`].
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[doc(hidden)]
+pub enum SubrRegistration {
+    Subr {
+        name: &'static str,
+        min: u16,
+        max: Option<u16>,
+    },
+    EventSymbolProperties,
+}
+
 #[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// `None` = disarmed: registrations are not recorded. The test arms it
     /// with an empty vector and drains-and-disarms; there is no unbounded
     /// side channel in an ordinary test run.
-    static REGISTERED_SUBR_TRACE: std::cell::RefCell<Option<Vec<(&'static str, u16, Option<u16>)>>> =
+    static REGISTERED_SUBR_TRACE: std::cell::RefCell<Option<Vec<SubrRegistration>>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -573,7 +592,26 @@ pub fn take_installed_subr_batches() -> Vec<&'static str> {
 pub(crate) fn record_registered_subr(name: &'static str, arity: SubrArity) {
     REGISTERED_SUBR_TRACE.with(|trace| {
         if let Some(trace) = trace.borrow_mut().as_mut() {
-            trace.push((name, arity.min(), arity.max()));
+            trace.push(SubrRegistration::Subr {
+                name,
+                min: arity.min(),
+                max: arity.max(),
+            });
+        }
+    });
+}
+
+/// Record the production `initialize_event_properties` step.
+///
+/// The step registers no subr; it initializes event symbol properties between
+/// the upper compatibility declarations and the public evaluator batch. The
+/// plan and the T6 order gate need that position in the trace, so the
+/// production path records the marker while the trace is armed.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn record_event_symbol_properties_step() {
+    REGISTERED_SUBR_TRACE.with(|trace| {
+        if let Some(trace) = trace.borrow_mut().as_mut() {
+            trace.push(SubrRegistration::EventSymbolProperties);
         }
     });
 }
@@ -589,7 +627,7 @@ pub fn reset_registered_subr_trace_for_test() {
 /// last reset. An unarmed trace yields an empty vector.
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
-pub fn take_registered_subr_trace_for_test() -> Vec<(&'static str, u16, Option<u16>)> {
+pub fn take_registered_subr_trace_for_test() -> Vec<SubrRegistration> {
     REGISTERED_SUBR_TRACE.with(|trace| trace.borrow_mut().take().unwrap_or_default())
 }
 
