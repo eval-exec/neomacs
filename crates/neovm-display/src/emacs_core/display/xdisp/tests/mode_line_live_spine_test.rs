@@ -12,7 +12,7 @@ fn replacing_tail(generational: bool, display: bool) {
         );
     }
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.gc_stress = false;
     eval.tagged_heap.set_gc_threshold(usize::MAX);
     eval.set_variable("noninteractive", Value::NIL);
@@ -69,7 +69,7 @@ fn gc_mode_line_display_replaced_tail_is_rendered_gen1() {
 #[test]
 fn mode_line_split_callback_follows_replaced_live_tail() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.gc_stress = false;
     let format = eval
         .eval_str("'(\"A\" (:eval nil) \"B\")")
@@ -100,7 +100,7 @@ fn mode_line_split_callback_follows_replaced_live_tail() {
 #[test]
 fn mode_line_live_spine_stops_at_improper_tail() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("noninteractive", Value::NIL);
     let rendered = eval
         .eval_str("(format-mode-line '(\"A\" . \"B\") 0)")
@@ -111,7 +111,7 @@ fn mode_line_live_spine_stops_at_improper_tail() {
 #[test]
 fn mode_line_live_spine_stops_on_cycles_like_gnu_safe_iterator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("noninteractive", Value::NIL);
     // GNU FOR_EACH_TAIL_SAFE compares at doubling Brent checkpoints.
     // It renders four elements for a two-cell cycle and five for a three-cell cycle.
@@ -170,7 +170,7 @@ fn checkpoint_survives_detaching_eval(generational: bool, display: bool) {
         );
     }
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.gc_stress = false;
     eval.tagged_heap.set_gc_threshold(usize::MAX);
     eval.set_variable("noninteractive", Value::NIL);
@@ -219,7 +219,7 @@ fn split_checkpoint_survives_collection(generational: bool) {
         );
     }
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.gc_stress = false;
     eval.tagged_heap.set_gc_threshold(usize::MAX);
     eval.gc_collect_exact();

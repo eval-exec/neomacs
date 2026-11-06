@@ -7,7 +7,7 @@ use neovm_value::error::{FlowKind, FlowResultExt};
 #[test]
 fn gc_mode_line_rehomed_predecessor_plist_survives_eval() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.gc_stress = false;
     eval.tagged_heap.set_gc_threshold(usize::MAX);
     eval.set_variable("noninteractive", Value::NIL);
@@ -44,7 +44,7 @@ fn gc_mode_line_rehomed_predecessor_plist_survives_eval() {
 #[test]
 fn gc_mode_line_split_accumulator_roots_restore_on_throw() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.gc_stress = false;
     let format = eval
         .eval_str(

@@ -3,7 +3,7 @@ use neovm_eval::emacs_core::eval::Context;
 
 fn scene(setup: &str) -> (Context, BufferId) {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str("(insert \"abcdefghij\") (setq ttykey-demand-calls nil ttykey-demand-source-name (buffer-name))").unwrap();
     eval.eval_str(setup).unwrap();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();

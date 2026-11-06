@@ -311,7 +311,7 @@ fn integer_motion_expands_a_query_that_covers_source_eob_but_not_its_overlay_tai
         atomic::{AtomicUsize, Ordering},
     };
 
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
     eval.buffer_manager_mut()
         .get_mut(buffer)

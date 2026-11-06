@@ -77,7 +77,7 @@ fn fontification_boundary_dense_unrelated_splits_preserve_all_representations() 
         ("t", "\"aé中λbcdé中λ\""),
     ] {
         for with_props in [false, true] {
-            let mut ctx = Context::new();
+            let mut ctx = Context::new(crate::test_utils::unit_runtime());
             ctx.eval_str(&format!(
                 "(progn (set-buffer-multibyte {mode}) (insert {text}))"
             ))
@@ -111,7 +111,7 @@ fn fontification_boundary_dense_unrelated_splits_preserve_all_representations() 
 
 #[test]
 fn fontification_boundary_nil_holes_limits_narrowing_and_trailing_nil_match_generic() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str(
         "(progn (insert \"abcdefghij\")
            (put-text-property 1 4 'fontified t)
@@ -155,7 +155,7 @@ fn fontification_boundary_fallbacks_and_conservative_category_presence_refuse() 
         "(set (make-local-variable 'default-text-properties) '(fontified t))",
         "(set (make-local-variable 'default-text-properties) '(fontified nil))",
     ] {
-        let mut ctx = Context::new();
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
         ctx.eval_str("(insert \"abcdefgh\")").expect("source");
         ctx.eval_str(setup).expect("fallback source");
         let expected = generic(&ctx, 1, 9).expect("generic fallback");
@@ -175,7 +175,7 @@ fn fontification_boundary_fallbacks_and_conservative_category_presence_refuse() 
 }
 
 fn observe_ensure(mode: FontificationBoundaryMode, setup: &str) -> (String, String, String) {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str("(progn (insert \"abcdefghij\") (setq fb-calls nil))")
         .expect("initial source");
     ctx.eval_str(setup).expect("fontification hooks");
@@ -215,7 +215,7 @@ fn observe_ensure(mode: FontificationBoundaryMode, setup: &str) -> (String, Stri
 
 #[test]
 fn fontification_overlay_boundary_ignores_endpoints_outside_live_restriction() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str(
         "(progn (insert \"abcdefghij\")
            (put-text-property 1 11 'fontified t)
@@ -319,7 +319,7 @@ fn fontification_scan_stops_at_effective_overlay_nil_islands() {
         FontificationBoundaryMode::On,
         FontificationBoundaryMode::Off,
     ] {
-        let mut ctx = Context::new();
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
         ctx.eval_str(
             "(progn (insert \"aé中λbcdefg\")
                (let ((a (make-overlay 1 5)) (b (make-overlay 7 9))
@@ -397,7 +397,7 @@ fn fontification_overlay_first_stop_matches_independent_text_and_overlay_queries
         "(make-string 96 ?a)",
         "(apply #'concat (make-list 32 \"aé中\"))",
     ] {
-        let mut ctx = Context::new();
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
         ctx.eval_str(&format!(
             "(progn (insert {text})
                (put-text-property 1 (point-max) 'fontified t)
