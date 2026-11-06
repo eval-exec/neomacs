@@ -9453,11 +9453,11 @@ fn graphical_recenter_context(
             WindowLayoutQueryScope::Pixels { start, height } => {
                 (start, height.get().div_ceil(row_height as usize))
             }
-            WindowLayoutQueryScope::Viewport => (*viewport_start, viewport_count),
+            WindowLayoutQueryScope::Viewport => (viewport_start, viewport_count),
             WindowLayoutQueryScope::Position { target } => {
                 let through_target =
                     ((target.as_i64() - viewport_start.as_i64()).max(0) / 5 + 1) as usize;
-                (*viewport_start, through_target.min(viewport_count))
+                (viewport_start, through_target.min(viewport_count))
             }
             WindowLayoutQueryScope::TextExtent { .. } => {
                 return WindowLayoutQueryOutcome::Unavailable;
