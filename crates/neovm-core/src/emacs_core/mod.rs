@@ -484,6 +484,10 @@ mod architecture_workspace_dependency_features_guard_test;
 mod architecture_host_cfg_agreement_guard_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/canonical_registration_trace_test.rs"]
+mod architecture_canonical_registration_trace_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/value_ref_guard_test.rs"]
 mod architecture_value_ref_guard_test;
 
