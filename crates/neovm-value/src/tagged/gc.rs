@@ -255,6 +255,15 @@ pub fn current_write_tracking_enabled() -> bool {
 
 const BARRIER_CACHE_SLOTS: usize = 64;
 
+/// Crate-private read of the raw allocation-slot root. This is the support the
+/// canonical test heap route (`test_support::authority::TestHeapScope`) needs
+/// to restore the PREVIOUS installation; it is not a public route and it is
+/// deliberately not re-exported (the scope is the only cross-crate path).
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn installed_tagged_heap_root_for_test_scope() -> Option<std::ptr::NonNull<TaggedHeap>> {
+    TAGGED_HEAP.with(|slot| std::ptr::NonNull::new(slot.get()))
+}
+
 #[cfg(test)]
 thread_local! {
     /// Writes the barrier's thread-local rejects passed on to the heap.

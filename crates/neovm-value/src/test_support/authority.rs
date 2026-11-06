@@ -11,6 +11,135 @@
 //! route site has its own `use` row (peer 23:01Z condition (a)).
 //!
 //! Row 1: `mark_collection_observed` (existing GC observation driver).
+//!
+//! THE TEST HEAP ROUTE (LEAD 15:1xZ, amended 15:2xZ): a re-homed test that
+//! allocates Lisp Values WITHOUT a Context must open a [`TestHeapScope`]. The
+//! scope installs a fresh `TaggedHeap` on this thread through the production
+//! root-install path and restores the PREVIOUS slot value on drop (panic-safe;
+//! nested scopes restore LIFO). The scope heap is NOT freed on drop: Values
+//! are Copy tagged words with no borrow of their heap, so a Value that escapes
+//! the scope (returned from a helper, parked in a fixture, or read by a later
+//! assertion) would otherwise dangle into freed memory. Drop retires the heap
+//! into a thread-local graveyard freed only at thread exit, preserving the
+//! pre-split thread-lifetime fallback semantics. Tests that own a Context use
+//! the Context route instead. Direct `TAGGED_HEAP`/`set_tagged_heap`
+//! installation in test code is the pattern this route replaces (a guard arm
+//! flags it once landed).
+
+thread_local! {
+    /// Heaps retired by [`TestHeapScope`], freed only at thread exit
+    /// (LEAD 15:2xZ). Values are Copy tagged words and may outlive the scope
+    /// that allocated them, so no scope may free its heap while the thread
+    /// still runs; this is the pre-split thread-lifetime fallback semantics.
+    /// Each `TaggedHeap::drop` at thread teardown detaches the store protocol
+    /// and pointer-check-clears the slot if it still names that heap.
+    static TEST_HEAP_GRAVEYARD: std::cell::RefCell<
+        Vec<crate::tagged::gc::AliasableBox<crate::tagged::gc::TaggedHeap>>,
+    > = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// THE canonical no-Context test heap (LEAD 15:1xZ, amended 15:2xZ):
+/// RAII, `!Send`.
+///
+/// `install` boxes a fresh `TaggedHeap` and installs its root into the
+/// thread's allocation slot via `set_tagged_heap_root` (the production
+/// root-owning installer). `Drop` restores the previous slot value in LIFO
+/// order (a panic inside the scope therefore restores it during unwinding)
+/// and RETIRES the scope heap into this thread's graveyard; the graveyard
+/// frees retired heaps only when the thread exits. Freeing at scope end would
+/// leave every Value allocated in the scope dangling, because a Value is a
+/// Copy tagged word that does not borrow its heap. Out-of-order drops are
+/// outside the contract (the LIFO chain is the documented use).
+///
+/// GC isolation rule: a collection runs against exactly ONE heap. A collect
+/// issued inside a nested scope (the inner heap installed) must not trace,
+/// mark, sweep or move the OUTER heap's objects: every mark/probe path
+/// classifies an address by this heap's block/arena ownership, so a foreign
+/// address is ignored. An outer Value therefore survives any inner collect.
+///
+/// Cross-heap store rule: storing an outer-heap Value inside an inner-heap
+/// object is NOT allowed. Allocation does not reject it (a store is just
+/// words), and the runtime enforces the rule at the collector boundary: the
+/// inner heap never traces, marks or moves the foreign object, so that
+/// object's lifetime remains governed by its own heap. The registered
+/// mutator and owned-slot boundaries additionally reject cross-heap
+/// identities with `RegistrationError::WrongHeap`. A foreign word is safe to
+/// carry, but it never roots the foreign object in this heap.
+///
+/// The TLS store is the fence's authority: AUTHORITY-ITEMS row
+/// `TestHeapScope::install`. `set_tagged_heap` itself gains no new row.
+pub struct TestHeapScope {
+    /// The slot value before this scope installed; `None` means the thread had
+    /// no heap (the common case in a re-homed test).
+    previous: Option<std::ptr::NonNull<crate::tagged::gc::TaggedHeap>>,
+    /// The owned heap. `AliasableBox` gives the stable provenance root the
+    /// TLS slot names. `ManuallyDrop` is load-bearing: `Drop` never frees the
+    /// heap, it retires it into [`TEST_HEAP_GRAVEYARD`].
+    heap: std::mem::ManuallyDrop<crate::tagged::gc::AliasableBox<crate::tagged::gc::TaggedHeap>>,
+    /// The TLS slot is thread-bound: moving the scope to another thread would
+    /// restore the wrong thread's slot in `Drop`.
+    _not_send: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl TestHeapScope {
+    /// Install a fresh heap on this thread and return its scope.
+    #[doc(hidden)]
+    pub fn install() -> Self {
+        let heap = crate::tagged::gc::AliasableBox::new(crate::tagged::gc::TaggedHeap::new());
+        let root = heap.root();
+        let previous = crate::tagged::gc::installed_tagged_heap_root_for_test_scope();
+        crate::tagged::gc::set_tagged_heap_root(root);
+        Self {
+            previous,
+            heap: std::mem::ManuallyDrop::new(heap),
+            _not_send: std::marker::PhantomData,
+        }
+    }
+
+    /// The installed scope heap's identity, for the allocation-placement
+    /// assertion (`current_tagged_heap_identity()` must equal this inside the
+    /// scope). No heap reference escapes.
+    #[doc(hidden)]
+    pub fn identity(&self) -> usize {
+        self.heap.identity()
+    }
+}
+
+impl Drop for TestHeapScope {
+    fn drop(&mut self) {
+        match self.previous {
+            // LIFO: the slot goes back to the outer/default installation,
+            // re-deriving the TLS mirrors from that live root.
+            Some(previous) => crate::tagged::gc::set_tagged_heap_root(previous),
+            // No previous heap: uninstall this scope's heap through the
+            // detach-then-pointer-checked-clear path, so the slot and every
+            // hot-path mirror stop naming it. The heap stays allocated.
+            None => crate::tagged::gc::clear_tagged_heap_if_installed(&self.heap),
+        }
+        // SAFETY: `install` initialized the field and this is its only move.
+        let heap = unsafe { std::mem::ManuallyDrop::take(&mut self.heap) };
+        retire_to_graveyard(heap);
+    }
+}
+
+/// Park a retired scope heap until thread exit; never free it here
+/// (LEAD 15:2xZ).
+fn retire_to_graveyard(heap: crate::tagged::gc::AliasableBox<crate::tagged::gc::TaggedHeap>) {
+    // `ManuallyDrop` guards the access-failure path: if the thread-local is
+    // already destroyed (a scope dropped from another TLS destructor during
+    // thread exit) the closure is never called, and the heap is deliberately
+    // leaked rather than freed under a Value another destructor may still
+    // read. A re-entrant graveyard borrow leaks the same way.
+    let mut pending = std::mem::ManuallyDrop::new(heap);
+    let _ = TEST_HEAP_GRAVEYARD.try_with(|graveyard| {
+        if let Ok(mut graveyard) = graveyard.try_borrow_mut() {
+            // SAFETY: `pending` is initialized and moved exactly once.
+            graveyard.push(unsafe { std::mem::ManuallyDrop::take(&mut pending) });
+        }
+    });
+}
+
+static_assertions::assert_not_impl_any!(TestHeapScope: Send, Sync);
 
 /// Publish an exact sticky collection-observation mark for a live heap owner,
 /// without observing a pointer projection or consulting the active heap. The
