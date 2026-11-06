@@ -115,21 +115,21 @@ fn vm_eval_lexical_str(src: &str) -> String {
 }
 
 fn vm_eval_with_init_str(src: &str, init: impl FnOnce(&mut Context)) -> String {
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     init(&mut eval);
     let result = eval.eval_str(src);
     crate::emacs_core::format_eval_result(&result)
 }
 
 fn vm_eval_interactive_str(src: &str) -> String {
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.set_variable("noninteractive", Value::NIL);
     let result = eval.eval_str(src);
     crate::emacs_core::format_eval_result(&result)
 }
 
 fn vm_eval_interactive_with_init_str(src: &str, init: impl FnOnce(&mut Context)) -> String {
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.set_variable("noninteractive", Value::NIL);
     init(&mut eval);
     let result = eval.eval_str(src);
@@ -229,7 +229,7 @@ fn vm_integer_arg_descriptor_does_not_dynamic_bind_dummy_args_like_gnu() {
 #[test]
 fn vm_dynamic_bytecode_args_do_not_occupy_bytecode_stack_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     let mut func = ByteCodeFunction::new(LambdaParams {
         required: vec![intern("ignored")],
         optional: vec![],
@@ -1080,7 +1080,7 @@ fn vm_primitive_bytecode_ops_ignore_later_function_cell_overrides() {
 #[test]
 fn vm_arithmetic_bcall_fast_path_observes_live_function_cell() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
 
     let mut replacement = ByteCodeFunction::new(LambdaParams {
         required: vec![intern("vm-fast-plus-x"), intern("vm-fast-plus-y")],
@@ -1133,7 +1133,7 @@ fn vm_arithmetic_bcall_fast_path_observes_live_function_cell() {
 fn vm_records_call_targets_of_non_constant_call_sites() {
     use crate::emacs_core::jit::feedback::CallTarget;
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
 
     // Recording is off by default (`NEOVM_JIT_FEEDBACK`); this test
     // exercises the mechanism itself, so opt in.
@@ -1213,7 +1213,7 @@ fn vm_records_call_targets_of_non_constant_call_sites() {
 fn vm_records_one_source_for_instances_of_a_closure() {
     use crate::emacs_core::jit::feedback::CallTarget;
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     crate::emacs_core::jit::force_call_feedback_for_test(true);
     let mut proto = ByteCodeFunction::new(LambdaParams {
         required: vec![],
@@ -1269,7 +1269,7 @@ fn vm_records_one_source_for_instances_of_a_closure() {
 fn vm_interpreter_only_policy_skips_jit_call_feedback() {
     use crate::emacs_core::jit::CallFeedback;
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
 
     let callee_sym = intern("vm-interpreter-only-feedback-callee");
     let mut callee = ByteCodeFunction::new(LambdaParams {
@@ -1342,11 +1342,11 @@ fn vm_compiled_maphash_closure_mutates_captured_accumulator_like_face_list() {
 fn execute_manual_vm_built<T>(
     build: impl FnOnce(&mut neovm_edit::buffer::BufferManager) -> (ByteCodeFunction, T),
 ) -> (Value, neovm_edit::buffer::BufferManager, T) {
-    // Use the full Context::new() builder so the manual bytecode can
+    // Use the full Context::new(crate::test_utils::unit_runtime()) builder so the manual bytecode can
     // call regular builtins (set-buffer, narrow-to-region, etc.). The
     // minimal harness only registers std errors and lacks the full
     // subr surface.
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let (func, init_state) = build(&mut eval.buffers);
 
     let result = {
@@ -1363,7 +1363,7 @@ fn execute_manual_vm_built<T>(
 fn vm_runtime_harness_exposes_public_builtin_surface() {
     crate::test_utils::init_test_tracing();
     with_vm_eval_in_context(
-        Context::new_vm_runtime_harness(),
+        Context::new_vm_runtime_harness(crate::test_utils::unit_runtime()),
         r#"(progn
              (setq vm-runtime-harness-base nil)
              (fset 'vm-runtime-harness-fn 'car)
@@ -1430,7 +1430,7 @@ fn vm_variable_watcher_management_builtins_use_shared_runtime_state() {
 #[test]
 fn vm_kmacro_builtins_use_shared_runtime_state() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let _ = eval.eval_str_each(
         r#"(progn
              (setq vm-kmacro-shared-count 0)
@@ -1823,7 +1823,7 @@ fn vm_unbind_counts_unwind_protect_entries_like_gnu() {
 #[test]
 fn vm_bytecode_varref_and_varset_ignore_interpreter_lexenv_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let sym = neovm_value::intern::intern("vm-bytecode-dynamic-x");
     let lexical_value = Value::symbol("lexical-value");
     let dynamic_value = Value::symbol("dynamic-value");
@@ -1873,7 +1873,7 @@ fn vm_bytecode_varref_and_varset_ignore_interpreter_lexenv_like_gnu() {
 #[test]
 fn vm_bytecoded_call_executes_heap_bytecode_without_cloning_function() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
 
     let mut inner = ByteCodeFunction::new(LambdaParams {
         required: vec![],
@@ -1915,7 +1915,7 @@ fn vm_bytecoded_call_executes_heap_bytecode_without_cloning_function() {
 #[test]
 fn vm_symbol_bytecode_call_resolves_live_function_cell_once() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let callee_symbol = intern("vm-single-function-cell-read");
 
     let mut callee = ByteCodeFunction::new(LambdaParams {
@@ -1962,7 +1962,7 @@ fn vm_symbol_bytecode_call_resolves_live_function_cell_once() {
 #[test]
 fn vm_adjacent_stack_transfer_pairs_each_use_one_dispatch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let callee_symbol = intern("vm-fused-constant-stackref-callee");
 
     let mut callee = ByteCodeFunction::new(LambdaParams {
@@ -2009,7 +2009,7 @@ fn vm_adjacent_stack_transfer_pairs_each_use_one_dispatch() {
 #[test]
 fn vm_stackref_return_pair_uses_one_dispatch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
 
     let mut function = ByteCodeFunction::new(LambdaParams {
         required: vec![intern("argument")],
@@ -2036,7 +2036,7 @@ fn vm_stackref_return_pair_uses_one_dispatch() {
 #[test]
 fn vm_stackref_return_fusion_preserves_frame_limit_validation() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
 
     let mut function = ByteCodeFunction::new(LambdaParams {
         required: vec![intern("argument")],
@@ -2058,7 +2058,7 @@ fn vm_stackref_return_fusion_preserves_frame_limit_validation() {
 #[test]
 fn vm_bytecode_callee_preserves_string_argument_identity() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let callee_symbol = intern("vm-bytecode-string-identity");
 
     let mut callee = ByteCodeFunction::new(LambdaParams {
@@ -2279,7 +2279,7 @@ fn vm_redefined_fillarray_call_preserving_argument(
 #[test]
 fn vm_redefined_fillarray_preserves_keys_values_and_cyclic_roots() {
     for test in [HashTableTest::Eq, HashTableTest::Eql, HashTableTest::Equal] {
-        let mut eval = Context::new_vm_runtime_harness();
+        let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
         let fixture = vm_string_alias_fixture(&mut eval, test);
         assert!(!neovm_value::tagged::gc::concurrent_hash_mutation_active());
         let epoch = fixture.table.as_hash_table().unwrap().data.switch_epoch;
@@ -2296,7 +2296,7 @@ fn vm_redefined_fillarray_preserves_keys_values_and_cyclic_roots() {
 
 #[test]
 fn vm_fillarray_alias_call_preserves_original_roots() {
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     let fixture = vm_string_alias_fixture(&mut eval, HashTableTest::Eq);
     let alias = intern("vm-string-alias-callee");
     eval.obarray
@@ -2312,7 +2312,7 @@ fn vm_fillarray_alias_call_preserves_original_roots() {
 
 #[test]
 fn vm_redefined_fillarray_preserves_pending_structural_key_table() {
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.setup_thread_locals();
     let original = Value::string("abc");
     let replacement = Value::string("xyz");
@@ -2376,7 +2376,7 @@ fn vm_redefined_fillarray_preserves_pending_structural_key_table() {
 
 #[test]
 fn vm_redefined_fillarray_concurrent_context_cycle_keeps_graph_live() {
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     let fixture = vm_string_alias_fixture(&mut eval, HashTableTest::Eq);
     // This fixture exercises the actual automatic concurrent handshake even
     // when the surrounding suite requests synchronous GC stress elsewhere.
@@ -2421,7 +2421,7 @@ fn vm_redefined_fillarray_concurrent_context_cycle_keeps_graph_live() {
 #[test]
 fn vm_named_fillarray_keeps_argument_after_builtin_redefinition() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     let concat = eval.eval_str("(symbol-function 'concat)").unwrap();
     eval.obarray
         .set_symbol_function_id(intern("fillarray"), concat);
@@ -2439,7 +2439,7 @@ fn vm_named_fillarray_keeps_argument_after_builtin_redefinition() {
 #[test]
 fn vm_string_builtin_call_resolves_again_after_debugger_redefinition() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.eval_str(
         r#"(progn
              (fset 'vm-wb-debug-target (symbol-function 'concat))
@@ -2464,7 +2464,7 @@ fn vm_string_builtin_call_resolves_again_after_debugger_redefinition() {
 #[test]
 fn vm_repeated_symbol_bytecode_calls_reuse_epoch_validated_resolution() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let callee_symbol = intern("vm-cached-function-cell-read");
 
     let mut callee = ByteCodeFunction::new(LambdaParams {
@@ -2525,7 +2525,7 @@ fn vm_repeated_symbol_bytecode_calls_reuse_epoch_validated_resolution() {
 #[test]
 fn vm_symbol_bytecode_call_cache_invalidates_after_fset() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let callee_symbol = intern("vm-invalidated-function-cell-read");
 
     let make_callee = |answer| {
@@ -2569,7 +2569,7 @@ fn vm_symbol_bytecode_call_cache_invalidates_after_fset() {
 #[test]
 fn vm_repeated_symbol_call_observes_fset_before_the_next_call() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let callee_symbol = intern("vm-live-redefined-bytecode-call");
 
     let make_callee = |answer| {
@@ -2610,7 +2610,7 @@ fn vm_repeated_symbol_call_observes_fset_before_the_next_call() {
 #[test]
 fn vm_bytecode_call_chain_stays_in_one_interpreter_driver() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let leaf_symbol = intern("vm-iterative-frame-leaf");
     let middle_symbol = intern("vm-iterative-frame-middle");
 
@@ -2675,7 +2675,7 @@ fn vm_bytecode_call_chain_stays_in_one_interpreter_driver() {
 #[test]
 fn vm_iterative_call_roots_exact_callee_after_self_redefinition_and_gc() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     let child_symbol = intern("vm-iterative-self-redefining-child");
 
     let mut child = ByteCodeFunction::new(LambdaParams::simple(vec![]));
@@ -2738,7 +2738,7 @@ fn interpreter_resume_point_packs_pc_and_osr_state_in_one_word() {
 #[test]
 fn vm_backward_branch_quit_counter_spans_bytecode_calls_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let child_symbol = intern("vm-backedge-counter-child");
 
     let mut child = ByteCodeFunction::new(LambdaParams::simple(vec![]));
@@ -2834,7 +2834,7 @@ fn interpreter_driver_frame_layout_stays_compact() {
 /// caller-return word keeps the value slot and the bit apart.
 #[test]
 fn interpreter_caller_return_parks_the_backtrace_token_exactly() {
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let base = eval.specpdl.len();
     let token = eval.push_backtrace_frame_from_bc_stack(Value::NIL, 0, 0);
     let pushed_word = token.word_for_test();
@@ -2963,7 +2963,7 @@ fn interpreter_aux_stack_empty_restore_preserves_reusable_storage() {
 #[test]
 fn vm_bcall_max_eval_depth_reports_error_like_gnu_bytecode() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     eval.set_max_depth(100);
     eval.set_variable("max-lisp-eval-depth", Value::fixnum(100));
 
@@ -2999,7 +2999,7 @@ fn vm_bcall_max_eval_depth_reports_error_like_gnu_bytecode() {
 #[test]
 fn vm_bcall_funcall_recursion_reports_bytecode_error_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.set_max_depth(100);
     eval.set_variable("max-lisp-eval-depth", Value::fixnum(100));
 
@@ -3093,7 +3093,7 @@ fn vm_unbind_restores_saved_excursion_point() {
 #[test]
 fn vm_save_window_excursion_restores_selected_window() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer_id = eval.buffers.create_buffer("*vm-save-window*");
     eval.buffers.set_current(buffer_id);
     let frame_id = eval.frames.create_frame("F1", 960, 640, buffer_id);
@@ -3190,7 +3190,7 @@ fn vm_unbind_restores_saved_restriction() {
 #[test]
 fn vm_eval_shared_runtime_path_preserves_active_shared_catches() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.push_condition_frame(ConditionFrame::Catch {
         tag: Value::symbol("vm-bridge-catch"),
         resume: ResumeTarget::InterpreterCatch,
@@ -3385,7 +3385,7 @@ fn vm_switch_branches_using_hash_table_jump_table() {
     crate::test_utils::init_test_tracing();
     // Build all Values AFTER the evaluator is initialized to avoid stale
     // symbol/value handles from thread-local runtime replacement.
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
 
     let table = Value::hash_table(HashTableTest::Eq);
     if !table.is_hash_table() {
@@ -3497,7 +3497,7 @@ fn run_switch(eval: &mut Context, func: &ByteCodeFunction, arg: Value) -> i64 {
 #[test]
 fn vm_switch_equal_table_with_cons_keys() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let (a, b) = (Value::symbol("vm-sw-a"), Value::symbol("vm-sw-b"));
     let list = |items: &[Value]| Value::list(items.to_vec());
     let table = switch_table(
@@ -3530,7 +3530,7 @@ fn vm_switch_equal_table_with_cons_keys() {
 #[test]
 fn vm_switch_dense_fixnum_table() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let entries: Vec<(Value, i64)> = (0..10)
         .map(|n| (Value::fixnum(n), if n % 2 == 0 { 8 } else { 12 }))
         .collect();
@@ -3558,7 +3558,7 @@ fn vm_switch_dense_fixnum_table() {
 #[test]
 fn vm_switch_follows_a_jump_table_mutated_after_dispatch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let (a, b, c) = (
         Value::symbol("vm-sw-mut-a"),
         Value::symbol("vm-sw-mut-b"),
@@ -3883,7 +3883,7 @@ fn vm_throw_restores_saved_stack_before_resuming_catch() {
         lazy_gnu_code: None,
     };
 
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     let mut vm = new_vm(&mut eval);
 
     let result = vm.execute(&func, vec![]).expect("vm catch should execute");
@@ -3896,7 +3896,7 @@ fn vm_throw_restores_saved_stack_before_resuming_catch() {
 #[test]
 fn vm_throw_uses_shared_condition_stack_for_outer_catch_without_catch_tag_mirror() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let tag = Value::symbol("vm-shared-outer");
     eval.push_condition_frame(ConditionFrame::Catch {
         tag,
@@ -3916,7 +3916,7 @@ fn vm_throw_uses_shared_condition_stack_for_outer_catch_without_catch_tag_mirror
 #[test]
 fn vm_throw_selection_uses_resume_identity_not_numeric_tuple() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
 
     let mut inner = ByteCodeFunction::new(LambdaParams {
         required: vec![],
@@ -3972,7 +3972,7 @@ fn vm_throw_selection_uses_resume_identity_not_numeric_tuple() {
 #[test]
 fn vm_signal_selection_uses_resume_identity_not_numeric_tuple() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
 
     let mut inner = ByteCodeFunction::new(LambdaParams {
         required: vec![],
@@ -4747,7 +4747,7 @@ fn vm_call_interactively_resolves_noninteractive_autoload_before_commandp() {
     )
     .expect("write call-interactively autoload fixture");
 
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.obarray.set_symbol_value(
         "load-path",
         Value::list(vec![Value::string(dir.path().to_string_lossy())]),
@@ -5270,7 +5270,7 @@ fn vm_runtime_control_tail_uses_localized_shared_paths() {
     crate::test_utils::init_test_tracing();
     assert_eq!(vm_eval_str("(listp (garbage-collect))"), "OK t");
 
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     let kill_result = eval.eval_str("(kill-emacs 7)");
     match kill_result {
         Err(EvalError::Shutdown(request)) => assert_eq!(request.exit_code, 7),
@@ -5289,7 +5289,7 @@ fn vm_runtime_control_tail_uses_localized_shared_paths() {
 #[test]
 fn vm_kill_emacs_runs_hooks_on_shared_runtime() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     let result = eval.eval_str(
         "(progn
            (setq vm-kill-hook-log nil)
@@ -5456,7 +5456,7 @@ fn vm_mapatoms_and_maphash_use_shared_runtime_callbacks() {
 #[test]
 fn vm_mapatoms_and_maphash_root_full_traversal_across_exact_gc() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.tagged_heap.set_gc_threshold(1);
     with_vm_eval_in_context(
         eval,
@@ -6913,7 +6913,7 @@ fn vm_case_table_builtins_use_shared_buffer_state() {
 #[test]
 fn vm_undo_boundary_uses_shared_buffer_state() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     {
         let buffer = eval.buffers.current_buffer_mut().expect("scratch buffer");
         buffer.insert("x");
@@ -7304,7 +7304,7 @@ fn vm_stale_process_status_builtins_use_shared_runtime_state() {
 #[test]
 fn vm_process_control_and_send_builtins_use_shared_runtime_state() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
 
     let buffer_id = eval.buffers.create_buffer("*vm-proc-control*");
     eval.buffers.set_current(buffer_id);
@@ -8158,7 +8158,7 @@ fn vm_insert_file_contents_and_write_region_use_shared_runtime_state() {
     let out = base.join("out.txt").to_string_lossy().to_string();
     let visit = base.join("visit.txt").to_string_lossy().to_string();
 
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.set_variable("default-directory", Value::string("/tmp/neovm-global/"));
     let current = eval.buffers.current_buffer_id().expect("current buffer");
     eval.buffers
@@ -9835,7 +9835,7 @@ fn vm_compiled_autoload_do_load_uses_shared_runtime_and_load_bridge() {
     )
     .expect("write autoload-do-load fixture");
 
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.obarray.set_symbol_value(
         "load-path",
         Value::list(vec![Value::string(dir.path().to_string_lossy())]),
@@ -9864,7 +9864,7 @@ fn vm_compiled_autoload_do_load_survives_exact_gc() {
     )
     .expect("write autoload-do-load exact fixture");
 
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.gc_stress = true;
     eval.obarray.set_symbol_value(
         "load-path",
@@ -9893,7 +9893,7 @@ fn vm_compiled_named_autoload_call_uses_shared_runtime_and_load_bridge() {
     )
     .expect("write autoload call fixture");
 
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.obarray.set_symbol_value(
         "load-path",
         Value::list(vec![Value::string(dir.path().to_string_lossy())]),
@@ -9924,7 +9924,7 @@ fn vm_direct_named_call_follows_chained_autoloads() {
     )
     .expect("write chained autoload target fixture");
 
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.obarray.set_symbol_value(
         "load-path",
         Value::list(vec![Value::string(dir.path().to_string_lossy())]),
@@ -10677,7 +10677,7 @@ fn vm_bytecode_wrong_arity_matches_gnu_entry_check() {
     func.ops = vec![Op::Constant(0), Op::Return];
     func.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
 
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let mut vm = new_vm(&mut eval);
 
     let err = vm
@@ -10708,7 +10708,7 @@ fn vm_bytecode_rest_wrong_arity_reports_nonrest_descriptor_like_gnu() {
     func.ops = vec![Op::Constant(0), Op::Return];
     func.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
 
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let mut vm = new_vm(&mut eval);
 
     let err = vm
@@ -11223,7 +11223,7 @@ fn vm_setq_buffer_undo_list_reads_shared_undo_state() {
 #[test]
 fn vm_plain_nil_varref_does_not_probe_buffer_local_storage() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     let ordinary_nil = intern("vm-ordinary-nil-global");
     eval.obarray.set_symbol_value_id(ordinary_nil, Value::NIL);
 
@@ -11916,7 +11916,7 @@ fn vm_gnu_arg_descriptor_preserves_optional_and_rest_slots() {
         lazy_gnu_code: None,
     };
 
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     let mut vm = new_vm(&mut eval);
 
     let result = vm
@@ -11994,7 +11994,7 @@ fn wide_bytecode_frames_retain_bulk_argument_copy() {
 #[test]
 fn vm_compiled_autoload_registration_updates_shared_autoload_manager() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     let result = eval
         .eval_str("(autoload 'vm-bytecode-auto \"vm-bytecode-auto-file\")")
         .expect("autoload should execute");
@@ -12010,7 +12010,7 @@ fn vm_compiled_autoload_registration_updates_shared_autoload_manager() {
 #[test]
 fn vm_compiled_this_single_command_keys_uses_live_eval_key_context() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.set_read_command_keys(vec![Value::fixnum(97)]);
 
     let result = eval
@@ -12031,7 +12031,7 @@ fn vm_compiled_require_does_not_treat_recursive_stack_as_provided() {
     )
     .expect("write require fixture");
 
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.obarray.set_symbol_value(
         "load-path",
         Value::list(vec![Value::string(dir.path().to_string_lossy())]),
@@ -12065,7 +12065,7 @@ fn vm_compiled_require_loads_feature_with_nil_filename_through_shared_runtime() 
     )
     .expect("write require fixture");
 
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.obarray.set_symbol_value(
         "load-path",
         Value::list(vec![Value::string(dir.path().to_string_lossy())]),
@@ -12104,7 +12104,7 @@ fn vm_compiled_load_uses_shared_runtime_and_restores_load_file_name() {
     std::fs::write(&fixture, "(setq vm-bytecode-load-seen load-file-name)\n")
         .expect("write load fixture");
 
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.obarray.set_symbol_value(
         "load-path",
         Value::list(vec![Value::string(dir.path().to_string_lossy())]),
@@ -12143,7 +12143,7 @@ fn vm_compiled_load_allows_gnu_normal_recursive_load_depth() {
     let fixture_lisp =
         neovm_value::heap_types::LispString::from_utf8(fixture.to_string_lossy().as_ref());
 
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.loads_in_progress = vec![fixture_lisp.clone()];
 
     let result = eval
@@ -12178,7 +12178,7 @@ fn vm_compiled_load_signals_after_gnu_recursive_load_limit() {
     let fixture_lisp =
         neovm_value::heap_types::LispString::from_utf8(fixture.to_string_lossy().as_ref());
 
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     // The Vec stores loads oldest-first; GNU's `Vloads_in_progress` cons
     // list holds them newest-first, so the signal payload must reverse it.
     // The two distinct outer entries make the order observable.
@@ -12240,7 +12240,7 @@ fn vm_compiled_load_tracks_recursive_state_by_found_filename_text() {
         .join("inner")
         .join("vm-bytecode-found.el");
 
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.loads_in_progress = vec![canonical_lisp.clone()];
 
     let result = eval
@@ -12293,7 +12293,7 @@ fn vm_interactive_form_uses_shared_autoload_load_bridge() {
     )
     .expect("write interactive-form autoload fixture");
 
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.obarray.set_symbol_value(
         "load-path",
         Value::list(vec![Value::string(dir.path().to_string_lossy())]),
@@ -12462,7 +12462,7 @@ fn vm_inline_opcode_builtins_dispatch_directly_like_gnu() {
     // backtrace frame, no arity check. The decoder lowers them to
     // `Op::CallBuiltinSym`; the VM must take the same direct path.
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.eval_str("(insert \"abc\")").expect("buffer setup");
     eval.eval_str("(goto-char 2)").expect("buffer setup");
 
@@ -12555,7 +12555,7 @@ fn vm_inline_opcode_builtins_dispatch_directly_like_gnu() {
 #[test]
 fn second_bytecode_call_to_a_builtin_resolves_from_the_context_cache() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     let mut func = ByteCodeFunction::new(LambdaParams {
         required: vec![],
         optional: vec![],
@@ -12591,7 +12591,7 @@ fn second_bytecode_call_to_a_builtin_resolves_from_the_context_cache() {
 #[test]
 fn compiler_function_overrides_change_bumps_the_function_epoch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     let mut func = ByteCodeFunction::new(LambdaParams {
         required: vec![],
         optional: vec![],
@@ -12666,7 +12666,7 @@ fn deferred_switch_on_arg(table: Value) -> ByteCodeFunction {
 #[test]
 fn vm_verified_switch_dispatches_through_its_proof() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let (a, b, c) = (
         Value::symbol("vm-vsw-a"),
         Value::symbol("vm-vsw-b"),
@@ -12693,7 +12693,7 @@ fn vm_verified_switch_dispatches_through_its_proof() {
 #[test]
 fn vm_verified_switch_follows_a_mutation_only_onto_a_proven_depth() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let (a, b, c) = (
         Value::symbol("vm-vsw-mut-a"),
         Value::symbol("vm-vsw-mut-b"),
@@ -12772,7 +12772,7 @@ fn run_array_opcode(eval: &mut Context, func: &ByteCodeFunction, args: Value) ->
 #[test]
 fn vm_aref_aset_answer_and_signal_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     let aref = array_opcode_function(
         vec![Op::StackRef(1), Op::StackRef(1), Op::Aref, Op::Return],
         2,

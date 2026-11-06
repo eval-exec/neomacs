@@ -557,7 +557,7 @@ fn make_byte_code_decodes_lazily_at_first_execution() {
     if crate::emacs_core::bytecode::chunk::eager_gnu_bytecode() {
         return;
     }
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let full = super::full_decode_count_for_test;
     let lazy = crate::emacs_core::bytecode::chunk::lazy_gnu_decode_count_for_test;
 
@@ -615,7 +615,7 @@ fn make_byte_code_full_decode_baseline_still_defers() {
         return;
     }
     crate::emacs_core::builtins::symbols::force_make_byte_code_validate_only_for_test(false);
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let full = super::full_decode_count_for_test;
     let lazy = crate::emacs_core::bytecode::chunk::lazy_gnu_decode_count_for_test;
     let (full0, lazy0) = (full(), lazy());

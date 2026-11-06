@@ -78,7 +78,7 @@ fn vm_leaf_knob_parses() {
 /// call in the leaf's arity ran the leaf.
 #[test]
 fn bcall_leaf_calls_match_the_builtin_protocol() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str(
         "(progn
            (define-hash-table-test 'vm-leaf-test
@@ -227,7 +227,7 @@ fn bcall_leaf_calls_match_the_builtin_protocol() {
 /// as under the builtin path, and the specpdl is balanced afterwards.
 #[test]
 fn a_leaf_signal_runs_under_the_builtins_frame() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str(
         "(setq vm-leaf-seen nil
                signal-hook-function
@@ -272,7 +272,7 @@ fn a_leaf_signal_runs_under_the_builtins_frame() {
 ///     (lambda (k h) (condition-case err (gethash k h) (error (list 'caught err))))
 #[test]
 fn a_leaf_signal_is_caught_in_the_calling_body() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let mut f = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
         required: vec![unsafe { SymId::from_raw(1) }, unsafe { SymId::from_raw(2) }],
@@ -310,7 +310,7 @@ fn a_leaf_signal_is_caught_in_the_calling_body() {
 /// builtin brings the leaf back. An alias of the builtin gets its leaf.
 #[test]
 fn redefinitions_and_aliases_are_resolved_at_each_call() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     set_knob(&mut ev, VmLeafKnob::ALL);
     let table = ev
         .eval_str("(let ((h (make-hash-table))) (puthash 1 'one h) h)")
@@ -345,7 +345,7 @@ fn redefinitions_and_aliases_are_resolved_at_each_call() {
 /// before: the leaf never runs.
 #[test]
 fn the_depth_limit_is_the_callers() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     set_knob(&mut ev, VmLeafKnob::ALL);
     let table = ev
         .eval_str("(let ((h (make-hash-table))) (puthash 1 'one h) h)")
