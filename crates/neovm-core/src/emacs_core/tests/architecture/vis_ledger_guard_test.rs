@@ -3098,6 +3098,57 @@ mod tests {
     }
 
     #[test]
+    fn authority_fence_inherent_method_owner_pin_mutations() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let value_src = dir.path().join("crates/neovm-value/src");
+        let core_src = dir.path().join("crates/neovm-core/src");
+        std::fs::create_dir_all(value_src.join("test_support")).expect("value src");
+        std::fs::create_dir_all(&core_src).expect("core src");
+        std::fs::write(value_src.join("lib.rs"), "pub mod test_support;\n").expect("lib");
+        std::fs::write(value_src.join("test_support.rs"), "pub mod authority;\n").expect("support");
+        std::fs::write(core_src.join("lib.rs"), "").expect("core lib");
+        let rows = vec![AuthRow {
+            crate_name: "neovm-value".to_owned(),
+            item: "Owner::method".to_owned(),
+            defining_file: "crates/neovm-value/src/test_support/authority.rs".to_owned(),
+            fence_path: "neovm_value::test_support::authority::Owner::method".to_owned(),
+        }];
+        // Case 1: a pub method on the named type is the signed public path.
+        std::fs::write(
+            value_src.join("test_support/authority.rs"),
+            "pub struct Owner;\nimpl Owner {\n    pub fn method(&self) {}\n}\n",
+        )
+        .expect("named type");
+        authority_public_paths_violation(dir.path(), &rows).expect("pub method on the named type");
+        // Case 2: the method absent is red.
+        std::fs::write(
+            value_src.join("test_support/authority.rs"),
+            "pub struct Owner;\n",
+        )
+        .expect("absent");
+        let error = authority_public_paths_violation(dir.path(), &rows).expect_err("absent method");
+        assert!(error.contains("does not declare"), "{error}");
+        // Case 3: a private method is red.
+        std::fs::write(
+            value_src.join("test_support/authority.rs"),
+            "pub struct Owner;\nimpl Owner {\n    fn method(&self) {}\n}\n",
+        )
+        .expect("private");
+        let error =
+            authority_public_paths_violation(dir.path(), &rows).expect_err("private method");
+        assert!(error.contains("does not declare"), "{error}");
+        // Case 4: the same-name pub method only on a DIFFERENT type is red.
+        std::fs::write(
+            value_src.join("test_support/authority.rs"),
+            "pub struct Owner;\npub struct Other;\nimpl Other {\n    pub fn method(&self) {}\n}\n",
+        )
+        .expect("different type");
+        let error =
+            authority_public_paths_violation(dir.path(), &rows).expect_err("different type");
+        assert!(error.contains("does not declare"), "{error}");
+    }
+
+    #[test]
     fn v1_rejects_type_names_and_qualified_chains() {
         let fixtures = scopes(&[
             "fn f(pin: &InFlightRootPin) { let _ = InFlightRootPin::registry; }",
@@ -4292,11 +4343,11 @@ fn auth_test_support_widened(attrs: &[syn::Attribute]) -> bool {
 
 /// True when the file (at any inline depth) declares or re-exports `leaf`
 /// publicly. The fence file is the one place where the item must be public.
-fn auth_declares_public(file: &Path, leaf: &str, impl_methods: bool) -> Result<bool, String> {
+fn auth_declares_public(file: &Path, leaf: &str, impl_owner: Option<&str>) -> Result<bool, String> {
     let text = read(file)?;
     let ast = syn::parse_file(&text)
         .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", file.display()))?;
-    fn items_declare(items: &[syn::Item], leaf: &str, impl_methods: bool) -> bool {
+    fn items_declare(items: &[syn::Item], leaf: &str, impl_owner: Option<&str>) -> bool {
         items.iter().any(|item| {
             let public = match item {
                 syn::Item::Fn(item) => {
@@ -4340,24 +4391,38 @@ fn auth_declares_public(file: &Path, leaf: &str, impl_methods: bool) -> Result<b
                         && module
                             .content
                             .as_ref()
-                            .is_some_and(|(_, inner)| items_declare(inner, leaf, impl_methods))
+                            .is_some_and(|(_, inner)| items_declare(inner, leaf, impl_owner))
                 }
-                // Inherent-impl methods on a fence type are a public path when
-                // the method itself is `pub` (the vm_test exact-tier witness
-                // shape: `pub fn selected` inside `#[cfg(feature = "jit")]
-                // impl ExactTierWitness`). The row check independently pins
-                // the fence path to the named type.
-                syn::Item::Impl(item) => impl_methods && item.items.iter().any(|member| {
-                    matches!(member, syn::ImplItem::Fn(function)
-                        if function.sig.ident == leaf
-                            && matches!(function.vis, syn::Visibility::Public(_)))
+                // Inherent-impl methods on the fence type are a public path
+                // only when the method is `pub` AND the impl's self type is
+                // exactly the row item's owner segment (peer 23:14:30Z pin;
+                // the vm_test exact-tier witness shape: `pub fn selected`
+                // inside `#[cfg(feature = "jit")] impl ExactTierWitness`). A
+                // same-name method on any other type is not this row's route,
+                // so a fence cannot accidentally publish an unrelated type's
+                // method under the signed path.
+                syn::Item::Impl(item) => impl_owner.is_some_and(|owner| {
+                    let self_ty_owner = match &*item.self_ty {
+                        syn::Type::Path(path) => path
+                            .path
+                            .segments
+                            .last()
+                            .map(|segment| segment.ident.to_string()),
+                        _ => None,
+                    };
+                    self_ty_owner.as_deref() == Some(owner)
+                        && item.items.iter().any(|member| {
+                            matches!(member, syn::ImplItem::Fn(function)
+                                if function.sig.ident == leaf
+                                    && matches!(function.vis, syn::Visibility::Public(_)))
+                        })
                 }),
                 _ => false,
             };
             public
         })
     }
-    Ok(items_declare(&ast.items, leaf, impl_methods))
+    Ok(items_declare(&ast.items, leaf, impl_owner))
 }
 
 /// Resolve a Rust path written in `from_module` to (module segments, item
@@ -5005,7 +5070,21 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
                         "AUTHORITY_PATHS {expected}: the fence module is not publicly reachable"
                     ));
                 }
-                if !auth_declares_public(&fence, leaf, true)?
+                let fence_owner = {
+                    let parts: Vec<&str> = row.item.split("::").collect();
+                    parts
+                        .len()
+                        .checked_sub(2)
+                        .and_then(|index| parts.get(index))
+                        .copied()
+                        .filter(|segment| {
+                            segment
+                                .chars()
+                                .next()
+                                .is_some_and(|first| first.is_ascii_uppercase())
+                        })
+                };
+                if !auth_declares_public(&fence, leaf, fence_owner)?
                     && !auth_alias_method_is_fenced(
                         &workspace,
                         &fence,
@@ -5057,7 +5136,7 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
                         "AUTHORITY_PATHS {expected}: the module chain is not publicly reachable"
                     ));
                 }
-                if !auth_declares_public(module_file, owner, false)? {
+                if !auth_declares_public(module_file, owner, None)? {
                     return Err(format!(
                         "AUTHORITY_PATHS {expected}: {} does not publicly expose {owner:?}",
                         module_file.display()
@@ -5074,8 +5153,8 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
                         "AUTHORITY_PATHS {expected}: the defining file does not expose {owner}::{leaf} as a pub inherent method"
                     ));
                 }
-                if auth_declares_public(&fence, leaf, false)?
-                    || (method_row && auth_declares_public(&fence, owner, false)?)
+                if auth_declares_public(&fence, leaf, None)?
+                    || (method_row && auth_declares_public(&fence, owner, None)?)
                 {
                     return Err(format!(
                         "AUTHORITY_PATHS {expected}: the authority fence also exposes the item, so the signed path is not exclusive"
@@ -5088,7 +5167,7 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
                 .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", row.defining_file))?;
             if defining != fence {
                 if let Some((segments, true)) = map.get(&defining) {
-                    if auth_declares_public(&defining, leaf, false)? {
+                    if auth_declares_public(&defining, leaf, None)? {
                         let mut original = crate_name.replace('-', "_");
                         for segment in segments {
                             original.push_str("::");
