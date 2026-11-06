@@ -9,5 +9,6 @@ mod menu_semantics_test;
 mod menu_submenu_test;
 mod menu_test_support;
 mod popup_idle_redisplay_test;
+mod window_cmds_bootstrap_test;
 mod window_cmds_host_test;
 mod xfaces_builtins_host_test;
