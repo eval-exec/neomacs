@@ -84,7 +84,7 @@ fn treesit_node_property_domain_matches_gnu_symbols() {
 #[test]
 fn treesit_query_compile_malformed_query_signals_query_error() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     let language_sym = Value::symbol("json")
         .as_bare_symbol_id()
         .expect("json symbol");
@@ -110,7 +110,7 @@ fn treesit_query_compile_malformed_query_signals_query_error() {
 #[test]
 fn treesit_query_compile_accepts_emacs_match_predicate_argument_order() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     let language_sym = Value::symbol("json")
         .as_bare_symbol_id()
         .expect("json symbol");
