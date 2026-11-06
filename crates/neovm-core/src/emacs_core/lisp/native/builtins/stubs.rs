@@ -156,23 +156,35 @@ fn monitor_mm_size_value(monitor: &NeomacsMonitorInfo) -> Value {
     ])
 }
 
-/// GNU adds `scale-factor` only on PGTK, whose geometry is in device pixels
-/// (frame.c, `#ifdef HAVE_PGTK`). NS and X builds omit it, and callers such as
-/// `org--get-display-dpi` divide the geometry by it when present.
-fn monitor_alist_value(monitor: &NeomacsMonitorInfo, frames: Value, scale_factor: bool) -> Value {
+/// Whether monitor alists carry `scale-factor`. GNU adds it only on PGTK,
+/// whose geometry is in device pixels (frame.c, `#ifdef HAVE_PGTK`); NS and
+/// X builds omit it. Callers such as `org--get-display-dpi` divide the
+/// geometry by it when present.
+#[derive(Clone, Copy)]
+enum MonitorScaleFactor {
+    Omit,
+    Report,
+}
+
+fn monitor_alist_value(
+    monitor: &NeomacsMonitorInfo,
+    frames: Value,
+    scale_factor: MonitorScaleFactor,
+) -> Value {
     let mut attributes = vec![
         Value::cons(Value::symbol("geometry"), monitor_geometry_value(monitor)),
         Value::cons(Value::symbol("workarea"), monitor_geometry_value(monitor)),
         Value::cons(Value::symbol("mm-size"), monitor_mm_size_value(monitor)),
-        Value::cons(Value::symbol("frames"), frames),
     ];
-    if scale_factor {
+    // GNU's order: mm-size, scale-factor, frames.
+    if let MonitorScaleFactor::Report = scale_factor {
         attributes.push(Value::cons(
             Value::symbol("scale-factor"),
             Value::make_float(monitor.scale),
         ));
     }
     attributes.extend([
+        Value::cons(Value::symbol("frames"), frames),
         Value::cons(
             Value::symbol("name"),
             monitor
@@ -223,14 +235,23 @@ pub(crate) fn builtin_neomacs_display_monitor_attributes_list(
         return Ok(Value::NIL);
     }
 
-    // Wayland is the PGTK case: device-pixel geometry plus a scale factor.
-    let scale_factor = eval.frames.selected_frame().is_some_and(|frame| {
-        matches!(
-            frame.display_identity(),
-            crate::window::FrameDisplayIdentity::Graphical(identity)
-                if identity.backend() == neomacs_display_protocol::GraphicalBackend::Wayland
-        )
+    // The monitor snapshot comes from the one graphical frontend, so its
+    // backend decides, whichever frame is selected. Wayland is the PGTK case:
+    // device-pixel geometry plus a scale factor.
+    let on_wayland = eval.frames.frame_list().into_iter().any(|fid| {
+        eval.frames.get(fid).is_some_and(|frame| {
+            matches!(
+                frame.display_identity(),
+                crate::window::FrameDisplayIdentity::Graphical(identity)
+                    if identity.backend() == neomacs_display_protocol::GraphicalBackend::Wayland
+            )
+        })
     });
+    let scale_factor = if on_wayland {
+        MonitorScaleFactor::Report
+    } else {
+        MonitorScaleFactor::Omit
+    };
     let mut alists = Vec::with_capacity(monitor_values.len());
     for (index, monitor) in monitor_values.iter().enumerate() {
         let frame_list = if index == 0 {
