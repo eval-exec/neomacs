@@ -1986,6 +1986,674 @@ fn gated_for_test_support(attrs: &[syn::Attribute]) -> bool {
     present_cross && test_gated(attrs)
 }
 
+const SLOT_MACRO_NAME: &str = "eval_absent_layer_slots";
+
+/// H2/T1/T2/T3/T4/H4 guard for the EVAL-UNIT-RUNTIME slot table (peer
+/// 22:54:30Z H2/H2a, peer 00:15:30Z T1-T4).
+///
+/// The signed table lives as one macro_rules body: `eval_absent_layer_slots!`
+/// expands a fixed `absent_layer_slots` module of 152 slot functions (141
+/// marker PANICs, 6 absent-by-construction UNLINKED no-ops, 2 structural
+/// ASSERT-EMPTY checks, 2 T2 per-thread handle slots, 1 T3 marker slot). This
+/// guard parses that body and proves, statically:
+/// - every slot body is exactly a marker panic, an exactly-one-call unlinked
+///   no-op, a single marker-carrying assert-empty check, or the signed
+///   handle/marker wrapper shape (a bare empty/default body is red);
+/// - the 6 UNLINKED names and markers, the 2 ASSERT-EMPTY names and markers,
+///   and the 2+1 handle/marker slots are exactly the signed ones; every
+///   marker is unique and carries the `ABSENT-LAYER ` prefix;
+/// - the shared helpers have the signed shapes: record_hit writes the
+///   env-named append-only log and the TLS hit list (H4), the panic helper
+///   records before it aborts, the unlinked helper is exactly one recorded
+///   no-op, the assert-empty helper panics unless the upper state is empty,
+///   the two handles are lazily created per thread through OnceCell
+///   get_or_init (T2), the fontset alias is an uninterned ABSENT-LAYER marker
+///   symbol and never NIL (T3), and the bootstrap binder binds each upper
+///   name to an uninterned ABSENT-LAYER marker (T4);
+/// - T1: eval's dependency sections contain no system/display/core edge, so
+///   the six absent-by-construction upper states cannot exist in its test
+///   binary.
+/// The file is skipped until the EVAL-UNIT-RUNTIME spike lands; from then on
+/// this is the P2 slot-table gate. Any slot-kind change must come back to the
+/// peer (T7), so the counts and the special maps are pinned.
+fn unit_runtime_slot_violation(workspace: &Path) -> Result<(), String> {
+    let file = workspace.join("crates/neovm-eval/src/emacs_core/runtime/eval/absent_layer.rs");
+    if !file.is_file() {
+        return Ok(());
+    }
+    let source = read(&file)?;
+    if !source.contains("ABSENT-LAYER upper-variable::") {
+        return Err(
+            "ABSENT-LAYER T4: the bootstrap marker name template is not the signed one".into(),
+        );
+    }
+    let items = absent_layer_module_items(&source)?;
+    let summary = classify_absent_layer_slots(&items)?;
+    validate_absent_layer_slot_summary(&summary)?;
+    validate_absent_layer_helpers(&items)?;
+    let cargo = read(&workspace.join("crates/neovm-eval/Cargo.toml"))?;
+    validate_eval_has_no_upper_dependency(&cargo)?;
+    Ok(())
+}
+
+/// Extract the `absent_layer_slots` module items from the macro_rules body.
+fn absent_layer_module_items(source: &str) -> Result<Vec<syn::Item>, String> {
+    let parsed = syn::parse_file(source).map_err(|error| format!("absent-layer macro: {error}"))?;
+    let mut tokens = None;
+    for item in &parsed.items {
+        if let syn::Item::Macro(item_macro) = item {
+            if item_macro
+                .ident
+                .as_ref()
+                .is_some_and(|ident| ident == SLOT_MACRO_NAME)
+            {
+                tokens = Some(item_macro.mac.tokens.clone());
+                break;
+            }
+        }
+    }
+    let tokens =
+        tokens.ok_or_else(|| format!("the single {SLOT_MACRO_NAME}! definition was not found"))?;
+    let mut iter = tokens.into_iter().peekable();
+    let mut body = None;
+    while let Some(token) = iter.next() {
+        if let proc_macro2::TokenTree::Punct(punct) = &token {
+            if punct.as_char() == '=' {
+                if let Some(proc_macro2::TokenTree::Punct(next)) = iter.peek() {
+                    if next.as_char() == '>' {
+                        iter.next();
+                        while let Some(next) = iter.next() {
+                            if let proc_macro2::TokenTree::Group(group) = next {
+                                body = Some(rewrite_dollar_crate(group.stream()));
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    let body =
+        body.ok_or_else(|| format!("{SLOT_MACRO_NAME}! has no macro_rules arm body to inspect"))?;
+    let expansion: syn::File =
+        syn::parse2(body).map_err(|error| format!("{SLOT_MACRO_NAME}! expansion body: {error}"))?;
+    for item in expansion.items {
+        if let syn::Item::Mod(module) = item {
+            if module.ident == "absent_layer_slots" {
+                return module.content.map(|(_, items)| items).ok_or_else(|| {
+                    "the absent_layer_slots module is declared without a body".into()
+                });
+            }
+        }
+    }
+    Err("the macro expansion has no absent_layer_slots module".into())
+}
+
+/// `$crate` is macro metasyntax; rewrite it to a plain `crate` path so the
+/// fixed expansion body parses as ordinary Rust.
+fn rewrite_dollar_crate(tokens: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    let mut out = proc_macro2::TokenStream::new();
+    let mut iter = tokens.into_iter().peekable();
+    while let Some(token) = iter.next() {
+        match token {
+            proc_macro2::TokenTree::Punct(punct) if punct.as_char() == '$' => {
+                if let Some(proc_macro2::TokenTree::Ident(ident)) = iter.peek() {
+                    if ident == "crate" {
+                        let ident = ident.clone();
+                        iter.next();
+                        out.extend([proc_macro2::TokenTree::Ident(ident)]);
+                        continue;
+                    }
+                }
+                out.extend([proc_macro2::TokenTree::Punct(punct)]);
+            }
+            proc_macro2::TokenTree::Group(group) => {
+                let inner = rewrite_dollar_crate(group.stream());
+                out.extend([proc_macro2::TokenTree::Group(proc_macro2::Group::new(
+                    group.delimiter(),
+                    inner,
+                ))]);
+            }
+            other => out.extend([other]),
+        }
+    }
+    out
+}
+
+#[derive(Debug, Default)]
+struct AbsentLayerSlotSummary {
+    panic: Vec<(String, String)>,
+    unlinked: Vec<(String, String)>,
+    assert_empty: Vec<(String, String)>,
+    handle: Vec<(String, String, String)>,
+    marker: Vec<(String, String)>,
+}
+
+const ABSENT_LAYER_HELPERS: &[&str] = &[
+    "record_hit",
+    "absent_layer_unlinked",
+    "absent_layer_panic",
+    "absent_layer_assert_empty",
+    "absent_face_registry_handle",
+    "absent_terminal_registry_handle",
+    "absent_fontset_alias_marker",
+    "bind_absent_bootstrap_vars",
+];
+
+fn absent_layer_call(stmt: &syn::Stmt) -> Option<(String, Option<String>)> {
+    let syn::Stmt::Expr(syn::Expr::Call(call), _) = stmt else {
+        return None;
+    };
+    let syn::Expr::Path(path) = &*call.func else {
+        return None;
+    };
+    let name = path.path.segments.last()?.ident.to_string();
+    let marker = call.args.first().and_then(|argument| {
+        if let syn::Expr::Lit(literal) = argument {
+            if let syn::Lit::Str(value) = &literal.lit {
+                return Some(value.value());
+            }
+        }
+        None
+    });
+    Some((name, marker))
+}
+
+fn classify_absent_layer_slots(items: &[syn::Item]) -> Result<AbsentLayerSlotSummary, String> {
+    let mut summary = AbsentLayerSlotSummary::default();
+    for item in items {
+        let syn::Item::Fn(function) = item else {
+            continue;
+        };
+        let name = function.sig.ident.to_string();
+        if ABSENT_LAYER_HELPERS.contains(&name.as_str()) {
+            continue;
+        }
+        let stmts = &function.block.stmts;
+        let calls: Vec<(String, Option<String>)> =
+            stmts.iter().filter_map(absent_layer_call).collect();
+        let panics: Vec<&(String, Option<String>)> = calls
+            .iter()
+            .filter(|(call, _)| call == "absent_layer_panic")
+            .collect();
+        let unlinked: Vec<&(String, Option<String>)> = calls
+            .iter()
+            .filter(|(call, _)| call == "absent_layer_unlinked")
+            .collect();
+        let asserts: Vec<&(String, Option<String>)> = calls
+            .iter()
+            .filter(|(call, _)| call == "absent_layer_assert_empty")
+            .collect();
+        if panics.len() == 1 && stmts.len() == 1 {
+            let marker = panics[0]
+                .1
+                .clone()
+                .ok_or_else(|| format!("{name}: the panic marker is not a string literal"))?;
+            summary.panic.push((name, marker));
+            continue;
+        }
+        if unlinked.len() == 1 && stmts.len() == 1 {
+            let marker = unlinked[0]
+                .1
+                .clone()
+                .ok_or_else(|| format!("{name}: the unlinked marker is not a string literal"))?;
+            summary.unlinked.push((name, marker));
+            continue;
+        }
+        if asserts.len() == 1 && panics.is_empty() && unlinked.is_empty() {
+            let marker = asserts[0].1.clone().ok_or_else(|| {
+                format!("{name}: the assert-empty marker is not a string literal")
+            })?;
+            summary.assert_empty.push((name, marker));
+            continue;
+        }
+        if stmts.len() == 2 {
+            let first = absent_layer_call(&stmts[0]);
+            let second = absent_layer_call(&stmts[1]);
+            if let (Some((first_name, Some(marker))), Some((second_name, None))) = (first, second) {
+                if first_name == "record_hit" {
+                    if second_name == "absent_face_registry_handle"
+                        || second_name == "absent_terminal_registry_handle"
+                    {
+                        summary.handle.push((name, marker, second_name));
+                        continue;
+                    }
+                    if second_name == "absent_fontset_alias_marker" {
+                        summary.marker.push((name, marker));
+                        continue;
+                    }
+                }
+            }
+        }
+        return Err(format!(
+            "ABSENT-LAYER slot `{name}` has no signed body shape (a bare empty/default body is a silent default)"
+        ));
+    }
+    Ok(summary)
+}
+
+fn validate_absent_layer_slot_summary(summary: &AbsentLayerSlotSummary) -> Result<(), String> {
+    if summary.panic.len() != 141
+        || summary.unlinked.len() != 6
+        || summary.assert_empty.len() != 2
+        || summary.handle.len() != 2
+        || summary.marker.len() != 1
+    {
+        return Err(format!(
+            "ABSENT-LAYER slot table drifted: {} PANIC, {} UNLINKED, {} ASSERT-EMPTY, {} HANDLE, {} MARKER (pinned 141/6/2/2/1)",
+            summary.panic.len(),
+            summary.unlinked.len(),
+            summary.assert_empty.len(),
+            summary.handle.len(),
+            summary.marker.len()
+        ));
+    }
+    let unlinked: BTreeMap<&str, &str> = summary
+        .unlinked
+        .iter()
+        .map(|(name, marker)| (name.as_str(), marker.as_str()))
+        .collect();
+    let expected_unlinked = [
+        (
+            "dbusbind_reset_thread_locals",
+            "ABSENT-LAYER system::dbusbind.reset_thread_locals",
+        ),
+        (
+            "boot_clear_font_cache_state",
+            "ABSENT-LAYER display::boot.clear_font_cache_state",
+        ),
+        (
+            "terminal_reset_thread_locals",
+            "ABSENT-LAYER display::terminal.reset_thread_locals",
+        ),
+        (
+            "terminal_reset_handle",
+            "ABSENT-LAYER display::terminal.reset_handle",
+        ),
+        ("timefns_reset", "ABSENT-LAYER system::timefns.reset"),
+        ("sqlite_reset", "ABSENT-LAYER system::sqlite.reset"),
+    ];
+    for (name, marker) in expected_unlinked {
+        if unlinked.get(name) != Some(&marker) {
+            return Err(format!(
+                "ABSENT-LAYER: UNLINKED slot `{name}` must be exactly one absent_layer_unlinked(\"{marker}\") call (T1)"
+            ));
+        }
+    }
+    let assert_empty: BTreeMap<&str, &str> = summary
+        .assert_empty
+        .iter()
+        .map(|(name, marker)| (name.as_str(), marker.as_str()))
+        .collect();
+    let expected_assert_empty = [
+        (
+            "dynamic_module_collect_gc_roots",
+            "ABSENT-LAYER system::dynamic_module.collect_gc_roots",
+        ),
+        (
+            "absent_sqlite_installer",
+            "ABSENT-LAYER core::sqlite.install_finalizer_table",
+        ),
+    ];
+    for (name, marker) in expected_assert_empty {
+        if assert_empty.get(name) != Some(&marker) {
+            return Err(format!(
+                "ABSENT-LAYER: ASSERT-EMPTY slot `{name}` must assert with marker \"{marker}\" (H2a)"
+            ));
+        }
+    }
+    let handles: BTreeMap<&str, (&str, &str)> = summary
+        .handle
+        .iter()
+        .map(|(name, marker, helper)| (name.as_str(), (marker.as_str(), helper.as_str())))
+        .collect();
+    let expected_handles = [
+        (
+            "terminal_current_registry_handle",
+            "ABSENT-LAYER display::terminal.current_registry_handle",
+            "absent_terminal_registry_handle",
+        ),
+        (
+            "xfaces_current_registry_handle",
+            "ABSENT-LAYER display::xfaces.current_registry_handle",
+            "absent_face_registry_handle",
+        ),
+    ];
+    for (name, marker, helper) in expected_handles {
+        if handles.get(name) != Some(&(marker, helper)) {
+            return Err(format!(
+                "ABSENT-LAYER: T2 handle slot `{name}` must record \"{marker}\" and return `{helper}()`"
+            ));
+        }
+    }
+    if summary.marker.len() != 1 {
+        return Err("ABSENT-LAYER: exactly one T3 marker slot is signed".into());
+    }
+    let (marker_name, marker_text) = &summary.marker[0];
+    if marker_name != "fontset_alias_alist_startup_value"
+        || marker_text != "ABSENT-LAYER display::fontset.alias_alist_startup_value"
+    {
+        return Err(format!(
+            "ABSENT-LAYER: the T3 slot must be fontset_alias_alist_startup_value with the signed marker, got `{marker_name}` \"{marker_text}\""
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    let mut markers: Vec<&str> = Vec::new();
+    markers.extend(summary.panic.iter().map(|(_, marker)| marker.as_str()));
+    markers.extend(summary.unlinked.iter().map(|(_, marker)| marker.as_str()));
+    markers.extend(
+        summary
+            .assert_empty
+            .iter()
+            .map(|(_, marker)| marker.as_str()),
+    );
+    markers.extend(summary.handle.iter().map(|(_, marker, _)| marker.as_str()));
+    markers.extend(summary.marker.iter().map(|(_, marker)| marker.as_str()));
+    for marker in markers {
+        if !marker.starts_with("ABSENT-LAYER ") || !marker.contains("::") {
+            return Err(format!(
+                "ABSENT-LAYER: marker \"{marker}\" must be \"ABSENT-LAYER <layer>::<slot>\""
+            ));
+        }
+        if !seen.insert(marker.clone()) {
+            return Err(format!("ABSENT-LAYER: duplicate slot marker \"{marker}\""));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct AbsentLayerHelperFacts {
+    calls: BTreeSet<String>,
+    methods: BTreeSet<String>,
+    macros: BTreeSet<String>,
+    strings: Vec<String>,
+    paths: BTreeSet<String>,
+    has_thread_local: bool,
+    top_level_calls: Vec<String>,
+    top_level_macros: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for AbsentLayerHelperFacts {
+    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(path) = &*node.func {
+            if let Some(segment) = path.path.segments.last() {
+                self.calls.insert(segment.ident.to_string());
+            }
+        }
+        visit::visit_expr_call(self, node);
+    }
+    fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+        self.methods.insert(node.method.to_string());
+        visit::visit_expr_method_call(self, node);
+    }
+    fn visit_macro(&mut self, node: &'ast syn::Macro) {
+        if let Some(segment) = node.path.segments.last() {
+            self.macros.insert(segment.ident.to_string());
+        }
+        visit::visit_macro(self, node);
+    }
+    fn visit_lit_str(&mut self, node: &'ast syn::LitStr) {
+        self.strings.push(node.value());
+        visit::visit_lit_str(self, node);
+    }
+    fn visit_path(&mut self, node: &'ast syn::Path) {
+        if let Some(segment) = node.segments.last() {
+            self.paths.insert(segment.ident.to_string());
+        }
+        visit::visit_path(self, node);
+    }
+    fn visit_item_macro(&mut self, node: &'ast syn::ItemMacro) {
+        if node.mac.path.is_ident("thread_local") {
+            self.has_thread_local = true;
+        }
+        visit::visit_item_macro(self, node);
+    }
+}
+
+fn absent_layer_helper_facts(function: &syn::ItemFn) -> AbsentLayerHelperFacts {
+    let mut facts = AbsentLayerHelperFacts {
+        top_level_calls: function
+            .block
+            .stmts
+            .iter()
+            .filter_map(|stmt| absent_layer_call(stmt).map(|(name, _)| name))
+            .collect(),
+        ..AbsentLayerHelperFacts::default()
+    };
+    for stmt in &function.block.stmts {
+        if let syn::Stmt::Expr(syn::Expr::Macro(expr_macro), _) = stmt {
+            if let Some(segment) = expr_macro.mac.path.segments.last() {
+                facts.top_level_macros.push(segment.ident.to_string());
+            }
+        }
+    }
+    facts.visit_item_fn(function);
+    facts
+}
+
+fn absent_layer_helper<'a>(items: &'a [syn::Item], name: &str) -> Result<&'a syn::ItemFn, String> {
+    for item in items {
+        if let syn::Item::Fn(function) = item {
+            if function.sig.ident == name {
+                return Ok(function);
+            }
+        }
+    }
+    Err(format!(
+        "ABSENT-LAYER: the shared helper `{name}` is missing"
+    ))
+}
+
+fn validate_record_hit(function: &syn::ItemFn) -> Result<(), String> {
+    let facts = absent_layer_helper_facts(function);
+    if !facts.calls.contains("var_os") {
+        return Err(
+            "ABSENT-LAYER H4: record_hit must read the NEOVM_ABSENT_LAYER_LOG env var".into(),
+        );
+    }
+    for name in ["get_or_init", "create", "append", "open", "lock", "push"] {
+        if !facts.methods.contains(name) {
+            return Err(format!(
+                "ABSENT-LAYER H4: record_hit must use the `{name}` step of the out-of-band record"
+            ));
+        }
+    }
+    if !facts.macros.contains("writeln") {
+        return Err(
+            "ABSENT-LAYER H4: record_hit must append the marker to the env-named log".into(),
+        );
+    }
+    if !facts
+        .strings
+        .iter()
+        .any(|value| value == "NEOVM_ABSENT_LAYER_LOG")
+    {
+        return Err("ABSENT-LAYER H4: the hit log env var must be NEOVM_ABSENT_LAYER_LOG".into());
+    }
+    if !facts.paths.contains("HITS") {
+        return Err("ABSENT-LAYER H4: record_hit must also push to the process hit list".into());
+    }
+    Ok(())
+}
+
+fn validate_unlinked_helper(function: &syn::ItemFn) -> Result<(), String> {
+    let facts = absent_layer_helper_facts(function);
+    if function.block.stmts.len() != 1 || facts.top_level_calls != ["record_hit".to_string()] {
+        return Err(
+            "ABSENT-LAYER T1: absent_layer_unlinked must be exactly one recorded no-op (record_hit)".into(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_panic_helper(function: &syn::ItemFn) -> Result<(), String> {
+    let stmts = &function.block.stmts;
+    if stmts.len() != 3 {
+        return Err("ABSENT-LAYER H4: absent_layer_panic must record, print and panic".into());
+    }
+    let first = absent_layer_call(&stmts[0]);
+    if !matches!(first, Some((ref name, _)) if name == "record_hit") {
+        return Err("ABSENT-LAYER H4: the panic path must record the hit BEFORE it aborts".into());
+    }
+    let facts = absent_layer_helper_facts(function);
+    if !facts.macros.contains("eprintln") || !facts.macros.contains("panic") {
+        return Err("ABSENT-LAYER H2a: the panic path must print the marker and panic".into());
+    }
+    Ok(())
+}
+
+fn validate_assert_empty_helper(function: &syn::ItemFn) -> Result<(), String> {
+    let stmts = &function.block.stmts;
+    let Some(syn::Stmt::Expr(syn::Expr::If(if_expr), _)) = stmts.first() else {
+        return Err(
+            "ABSENT-LAYER H2a: absent_layer_assert_empty must assert the upper state is empty before returning"
+                .into(),
+        );
+    };
+    let syn::Expr::Unary(unary) = &*if_expr.cond else {
+        return Err("ABSENT-LAYER H2a: the assert-empty condition must be `!empty`".into());
+    };
+    if !matches!(&*unary.expr, syn::Expr::Path(path) if path.path.is_ident("empty")) {
+        return Err("ABSENT-LAYER H2a: the assert-empty condition must be `!empty`".into());
+    }
+    let mut facts = AbsentLayerHelperFacts::default();
+    facts.visit_block(&if_expr.then_branch);
+    if !facts.calls.contains("absent_layer_panic") {
+        return Err("ABSENT-LAYER H2a: a non-empty upper state must panic with the marker".into());
+    }
+    Ok(())
+}
+
+fn validate_handle_helper(function: &syn::ItemFn) -> Result<(), String> {
+    let facts = absent_layer_helper_facts(function);
+    if !(facts.has_thread_local || facts.macros.contains("thread_local"))
+        || !facts.methods.contains("get_or_init")
+    {
+        return Err(
+            "ABSENT-LAYER T2: a per-thread handle must be lazily created through a thread-local OnceCell get_or_init"
+                .into(),
+        );
+    }
+    if !facts.methods.contains("with") || !facts.methods.contains("clone") {
+        return Err(
+            "ABSENT-LAYER T2: the handle helper must return the SAME cached per-thread handle (with + clone)"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_alias_marker_helper(function: &syn::ItemFn) -> Result<(), String> {
+    let facts = absent_layer_helper_facts(function);
+    if !facts
+        .calls
+        .contains("make_uninterned_symbol_with_name_value")
+    {
+        return Err(
+            "ABSENT-LAYER T3: the fontset alias must be an uninterned marker symbol".into(),
+        );
+    }
+    if !facts
+        .strings
+        .iter()
+        .any(|value| value == "ABSENT-LAYER display::fontset.alias_alist_startup_value")
+    {
+        return Err("ABSENT-LAYER T3: the fontset alias marker text is not the signed one".into());
+    }
+    if facts.paths.contains("NIL") || facts.strings.iter().any(|value| value == "NIL") {
+        return Err("ABSENT-LAYER T3: the fontset alias slot must never return nil".into());
+    }
+    Ok(())
+}
+
+fn validate_bootstrap_binder(function: &syn::ItemFn) -> Result<(), String> {
+    let facts = absent_layer_helper_facts(function);
+    if !facts
+        .calls
+        .contains("make_uninterned_symbol_with_name_value")
+    {
+        return Err(
+            "ABSENT-LAYER T4: each upper bootstrap variable must bind to an uninterned marker"
+                .into(),
+        );
+    }
+    if !facts.macros.contains("format") {
+        return Err(
+            "ABSENT-LAYER T4: bootstrap markers must be named ABSENT-LAYER upper-variable::<name>"
+                .into(),
+        );
+    }
+    for method in ["make_special", "set_symbol_value"] {
+        if !facts.methods.contains(method) {
+            return Err(format!(
+                "ABSENT-LAYER T4: the binder must call `{method}` so boundp/special-variable shapes match"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_absent_layer_helpers(items: &[syn::Item]) -> Result<(), String> {
+    validate_record_hit(absent_layer_helper(items, "record_hit")?)?;
+    validate_unlinked_helper(absent_layer_helper(items, "absent_layer_unlinked")?)?;
+    validate_panic_helper(absent_layer_helper(items, "absent_layer_panic")?)?;
+    validate_assert_empty_helper(absent_layer_helper(items, "absent_layer_assert_empty")?)?;
+    validate_handle_helper(absent_layer_helper(items, "absent_face_registry_handle")?)?;
+    validate_handle_helper(absent_layer_helper(
+        items,
+        "absent_terminal_registry_handle",
+    )?)?;
+    validate_alias_marker_helper(absent_layer_helper(items, "absent_fontset_alias_marker")?)?;
+    validate_bootstrap_binder(absent_layer_helper(items, "bind_absent_bootstrap_vars")?)?;
+    Ok(())
+}
+
+/// T1 second half: the six absent-by-construction slots name the system and
+/// display layers, so eval's dependency sections must not link either crate
+/// (nor core). A dependency edge would let the upper state exist in eval's
+/// test binary, contradicting the body shape.
+fn validate_eval_has_no_upper_dependency(cargo: &str) -> Result<(), String> {
+    let forbidden = ["neovm-system", "neovm-display", "neovm-core"];
+    let mut section = String::new();
+    for line in cargo.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            section = trimmed.trim_matches(&['[', ']'][..]).to_string();
+            for name in forbidden {
+                if section == format!("dependencies.{name}")
+                    || section == format!("dev-dependencies.{name}")
+                    || section == format!("build-dependencies.{name}")
+                {
+                    return Err(format!(
+                        "ABSENT-LAYER T1: eval has a `{section}` dependency edge; the absent-by-construction upper state would exist in its test binary"
+                    ));
+                }
+            }
+            continue;
+        }
+        if !(section == "dependencies"
+            || section == "dev-dependencies"
+            || section == "build-dependencies")
+        {
+            continue;
+        }
+        if trimmed.starts_with('#') || trimmed.is_empty() {
+            continue;
+        }
+        let name = trimmed.split('=').next().unwrap_or("").trim();
+        for forbidden_name in forbidden {
+            if name == forbidden_name {
+                return Err(format!(
+                    "ABSENT-LAYER T1: eval's [{section}] contains `{name}`; the absent-by-construction upper state would exist in its test binary"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn record_cfg_split(
     declarations: &mut BTreeMap<(String, String), Vec<(bool, bool)>>,
     kind: &str,
@@ -3915,6 +4583,216 @@ mod tests {
         );
         let error = check().expect_err("ungated definition");
         assert!(error.contains("gated"), "{error}");
+    }
+
+    #[test]
+    fn unit_runtime_slot_table_matches_the_signed_shapes() {
+        unit_runtime_slot_violation(&workspace_root()).expect("the AbsentLayer slot table");
+    }
+
+    #[test]
+    fn unit_runtime_slot_mutations() {
+        let synthetic = |slots: &str| {
+            format!(
+                "macro_rules! eval_absent_layer_slots {{ () => {{ pub(crate) mod absent_layer_slots {{ {slots} }} }} }}"
+            )
+        };
+        let valid_slots = r#"
+            fn panic_slot() -> ! { absent_layer_panic("ABSENT-LAYER a::panic") }
+            fn unlinked_slot() { absent_layer_unlinked("ABSENT-LAYER a::unlinked"); }
+            fn assert_slot(roots: &mut Vec<u8>) {
+                let before = roots.len();
+                absent_layer_assert_empty("ABSENT-LAYER a::assert", roots.len() == before);
+            }
+            fn handle_slot() { record_hit("ABSENT-LAYER a::handle"); absent_face_registry_handle() }
+            fn marker_slot() { record_hit("ABSENT-LAYER a::marker"); absent_fontset_alias_marker() }
+        "#;
+        let items = absent_layer_module_items(&synthetic(valid_slots)).expect("valid macro");
+        let summary = classify_absent_layer_slots(&items).expect("valid slot shapes");
+        assert_eq!(summary.panic.len(), 1);
+        assert_eq!(summary.unlinked.len(), 1);
+        assert_eq!(summary.assert_empty.len(), 1);
+        assert_eq!(summary.handle.len(), 1);
+        assert_eq!(summary.marker.len(), 1);
+        // A defaulting slot body (bare return, no marker) goes red.
+        let defaulting = synthetic("fn panic_slot() -> Value { Value::NIL }");
+        let items = absent_layer_module_items(&defaulting).expect("macro parses");
+        let error = classify_absent_layer_slots(&items).expect_err("defaulting slot");
+        assert!(error.contains("silent default"), "{error}");
+        // An ASSERT-EMPTY body with the assert removed goes red.
+        let bare_assert = synthetic("fn assert_slot() { }");
+        let items = absent_layer_module_items(&bare_assert).expect("macro parses");
+        let error = classify_absent_layer_slots(&items).expect_err("bare assert-empty");
+        assert!(error.contains("silent default"), "{error}");
+        // An UNLINKED body with an extra statement is not the signed one call.
+        let extra_unlinked = synthetic(
+            "fn unlinked_slot() { let _ = 1; absent_layer_unlinked(\"ABSENT-LAYER a::u\"); }",
+        );
+        let items = absent_layer_module_items(&extra_unlinked).expect("macro parses");
+        let error = classify_absent_layer_slots(&items).expect_err("extra unlinked statement");
+        assert!(error.contains("silent default"), "{error}");
+
+        let function = |source: &str| syn::parse_str::<syn::ItemFn>(source).expect("helper fn");
+        // H4: the out-of-band record must write the env-named append-only log
+        // and the process hit list.
+        validate_record_hit(&function(
+            r#"fn record_hit(marker: &'static str) {
+                let enabled = std::env::var_os("NEOVM_ABSENT_LAYER_LOG");
+                if let Some(path) = enabled {
+                    let log = HIT_LOG.get_or_init(|| {
+                        let file = std::fs::OpenOptions::new().create(true).append(true).open(path).ok();
+                        Mutex::new(file)
+                    });
+                    if let Ok(mut guard) = log.lock() {
+                        if let Some(file) = guard.as_mut() {
+                            let _ = writeln!(file, "{marker}");
+                        }
+                    }
+                }
+                HITS.with(|hits| hits.borrow_mut().push(marker));
+            }"#,
+        ))
+        .expect("valid record_hit");
+        let no_tls = function(
+            r#"fn record_hit(marker: &'static str) {
+                let enabled = std::env::var_os("NEOVM_ABSENT_LAYER_LOG");
+                if let Some(path) = enabled {
+                    let log = HIT_LOG.get_or_init(|| {
+                        let file = std::fs::OpenOptions::new().create(true).append(true).open(path).ok();
+                        Mutex::new(file)
+                    });
+                    if let Ok(mut guard) = log.lock() {
+                        if let Some(file) = guard.as_mut() {
+                            let _ = writeln!(file, "{marker}");
+                        }
+                    }
+                }
+            }"#,
+        );
+        assert!(
+            validate_record_hit(&no_tls).is_err(),
+            "missing TLS hit record"
+        );
+        let no_log = function(
+            r#"fn record_hit(marker: &'static str) {
+                HITS.with(|hits| hits.borrow_mut().push(marker));
+            }"#,
+        );
+        assert!(
+            validate_record_hit(&no_log).is_err(),
+            "missing append-only log"
+        );
+        // T1: the unlinked helper is exactly one recorded no-op.
+        validate_unlinked_helper(&function(
+            "fn absent_layer_unlinked(marker: &'static str) { record_hit(marker); }",
+        ))
+        .expect("valid unlinked helper");
+        assert!(
+            validate_unlinked_helper(&function(
+                "fn absent_layer_unlinked(marker: &'static str) { let _ = marker; record_hit(marker); }",
+            ))
+            .is_err(),
+            "an unlinked body with an extra statement must be red"
+        );
+        // H4: the panic path records BEFORE it aborts.
+        validate_panic_helper(&function(
+            r#"fn absent_layer_panic(marker: &'static str) -> ! {
+                record_hit(marker);
+                eprintln!("{marker}");
+                panic!("{marker}")
+            }"#,
+        ))
+        .expect("valid panic helper");
+        assert!(
+            validate_panic_helper(&function(
+                r#"fn absent_layer_panic(marker: &'static str) -> ! {
+                    eprintln!("{marker}");
+                    record_hit(marker);
+                    panic!("{marker}")
+                }"#,
+            ))
+            .is_err(),
+            "a panic path that records after printing must be red"
+        );
+        // H2a: assert-empty proves emptiness before returning.
+        validate_assert_empty_helper(&function(
+            "fn absent_layer_assert_empty(marker: &'static str, empty: bool) { if !empty { absent_layer_panic(marker); } }",
+        ))
+        .expect("valid assert-empty helper");
+        assert!(
+            validate_assert_empty_helper(&function(
+                "fn absent_layer_assert_empty(marker: &'static str, empty: bool) { }",
+            ))
+            .is_err(),
+            "an assert-empty helper without the assert must be red"
+        );
+        // T2: a per-thread handle is lazily created and reused.
+        validate_handle_helper(&function(
+            r#"fn absent_face_registry_handle() -> Handle {
+                thread_local! {
+                    static HANDLE: std::cell::OnceCell<Handle> = const { std::cell::OnceCell::new() };
+                }
+                HANDLE.with(|cell| cell.get_or_init(|| Handle::new()).clone())
+            }"#,
+        ))
+        .expect("valid handle helper");
+        assert!(
+            validate_handle_helper(&function(
+                "fn absent_face_registry_handle() -> Handle { Handle::new() }",
+            ))
+            .is_err(),
+            "a fresh handle per call must be red"
+        );
+        // T3: an uninterned marker, never nil.
+        validate_alias_marker_helper(&function(
+            r#"fn absent_fontset_alias_marker() -> Value {
+                let name = Value::string("ABSENT-LAYER display::fontset.alias_alist_startup_value");
+                Value::from_sym_id(neovm_value::intern::make_uninterned_symbol_with_name_value(name))
+            }"#,
+        ))
+        .expect("valid alias marker helper");
+        assert!(
+            validate_alias_marker_helper(&function(
+                "fn absent_fontset_alias_marker() -> Value { Value::NIL }",
+            ))
+            .is_err(),
+            "nil for the fontset alias must be red"
+        );
+        // T4: bootstrap names bind to uninterned markers and stay special.
+        validate_bootstrap_binder(&function(
+            r#"fn bind_absent_bootstrap_vars(obarray: &mut Obarray, names: &[&'static str]) {
+                for name in names {
+                    let marker_name = Value::string(format!("ABSENT-LAYER upper-variable::{name}"));
+                    let marker = Value::from_sym_id(make_uninterned_symbol_with_name_value(marker_name));
+                    obarray.make_special(name);
+                    obarray.set_symbol_value(name, marker);
+                }
+            }"#,
+        ))
+        .expect("valid bootstrap binder");
+        assert!(
+            validate_bootstrap_binder(&function(
+                r#"fn bind_absent_bootstrap_vars(obarray: &mut Obarray, names: &[&'static str]) {
+                    for name in names {
+                        let marker_name = Value::string(format!("ABSENT-LAYER upper-variable::{name}"));
+                        let marker = Value::from_sym_id(make_uninterned_symbol_with_name_value(marker_name));
+                        obarray.set_symbol_value(name, marker);
+                    }
+                }"#,
+            ))
+            .is_err(),
+            "a binder that skips make_special must be red"
+        );
+        // T1 metadata: an upper dependency edge in eval is red.
+        validate_eval_has_no_upper_dependency(
+            "[dependencies]\nneovm-value = { path = \"../neovm-value\" }\n[dev-dependencies]\nneovm-text = { path = \"../neovm-text\" }\n",
+        )
+        .expect("no upper edge");
+        let error = validate_eval_has_no_upper_dependency(
+            "[dev-dependencies.neovm-display]\npath = \"../neovm-display\"\n",
+        )
+        .expect_err("upper dependency edge");
+        assert!(error.contains("dependency edge"), "{error}");
     }
 
     #[test]
