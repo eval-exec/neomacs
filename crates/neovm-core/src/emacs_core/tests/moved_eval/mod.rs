@@ -195,6 +195,8 @@ mod emacs_core_runtime_jit_tests_spec_rest_calls_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/pdump/tests/bool_vectors_test.rs"]
 mod emacs_core_runtime_pdump_tests_bool_vectors_test_rs;
+#[path = "emacs_core/runtime/pdump/tests/bytecode_function_params_full_test.rs"]
+mod emacs_core_runtime_pdump_tests_bytecode_function_params_full_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/pdump/tests/bytecode_slot_objects_test.rs"]
 mod emacs_core_runtime_pdump_tests_bytecode_slot_objects_test_rs;
