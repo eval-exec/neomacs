@@ -15,7 +15,7 @@ fn gui_menu_symbolic_keymap_preserves_submenu_indicator() {
         )
         .unwrap();
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame)
         .unwrap()
         .set_window_system(Some(Value::symbol(gui_window_system_symbol())));

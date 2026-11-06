@@ -9,7 +9,7 @@ fn context() -> Context {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.gc_stress = false;
-    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    eval.set_gc_threshold(usize::MAX);
     eval.set_variable("noninteractive", Value::NIL);
     let buffer = eval
         .edit
@@ -17,9 +17,9 @@ fn context() -> Context {
         .current_buffer_id()
         .expect("current buffer");
     let frame = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("element-attribution", 800, 600, buffer);
-    assert!(eval.frames.select_frame(frame));
+    assert!(eval.frame_manager_mut().select_frame(frame));
     eval.eval_str(
         r#"(defvar ep30-events nil)
            (defvar ep30-tail "OLD")
@@ -205,11 +205,11 @@ fn mode_line_element_attribution_signal_throw_and_recovery_restore_scopes() {
     );
     for kind in ["throw", "reenter-throw"] {
         let roots = save_scratch_gc_roots();
-        let specpdl = eval.specpdl.len();
+        let specpdl = eval.specpdl().len();
         let value = eval.eval_str(&format!(
             r#"(catch 'ep30-escape (format-mode-line '("A" (:eval (ep30-callback '{kind})) "Z")))"#)).unwrap();
         assert_eq!(value.as_bare_symbol_name(), Some("ep30-thrown"));
-        assert_eq!(eval.specpdl.len(), specpdl);
+        assert_eq!(eval.specpdl().len(), specpdl);
         assert_eq!(save_scratch_gc_roots(), roots);
         strict(
             &mut eval,

@@ -28,10 +28,14 @@ fn render(eval: &mut Context, elements: Vec<Value>) -> ModeLineDisplayOutput {
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval
-        .frames
-        .create_frame("mode-line-multibyte-identity", 800, 600, buffer_id);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("mode-line-multibyte-identity", 800, 600, buffer_id);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     format_mode_line_for_display_with_sources(
         eval,
         Value::list(elements),

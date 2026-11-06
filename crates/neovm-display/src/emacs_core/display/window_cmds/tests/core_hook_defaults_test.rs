@@ -15,7 +15,7 @@ fn configuration_hook_core_default_is_nil_only_under_gnu_policy() {
             neovm_eval::emacs_core::data::default_value_by_id(&eval, symbol),
             None
         );
-        assert_eq!(eval.obarray.forward_type(symbol), None);
+        assert_eq!(eval.obarray_view().forward_type(symbol), None);
     }
     {
         let _policy = RedisplayHookPolicyGuard::gnu();
@@ -26,8 +26,11 @@ fn configuration_hook_core_default_is_nil_only_under_gnu_policy() {
             neovm_eval::emacs_core::data::default_value_by_id(&eval, symbol),
             Some(Value::NIL)
         );
-        assert_eq!(eval.obarray.forward_type(symbol), Some(LispFwdType::Obj));
-        assert!(eval.obarray.is_special_id(symbol));
+        assert_eq!(
+            eval.obarray_view().forward_type(symbol),
+            Some(LispFwdType::Obj)
+        );
+        assert!(eval.obarray_view().is_special_id(symbol));
         assert_eq!(
             neovm_eval::emacs_core::data::default_value(
                 &mut eval,

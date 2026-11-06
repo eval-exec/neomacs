@@ -274,7 +274,7 @@ fn raw_context_does_not_prebind_x_selection_aliases() {
         "x-set-selection",
     ] {
         assert!(
-            eval.obarray.symbol_function(name).is_none(),
+            eval.obarray_view().symbol_function(name).is_none(),
             "{name} should come from GNU select.el, not Context::new",
         );
     }
@@ -1432,7 +1432,7 @@ fn x_gui_display_queries_accept_nil_and_live_frames_when_x_is_active() {
     let frame = Value::make_frame(frame_id.0);
     eval.set_variable("initial-window-system", Value::NIL);
     eval.set_variable("window-system", Value::symbol(gui_window_system_symbol()));
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_window_system(Some(Value::symbol(gui_window_system_symbol())));
@@ -1478,7 +1478,7 @@ fn display_queries_default_to_selected_frame_window_system_surface() {
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let frame = Value::make_frame(frame_id.0);
 
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_window_system(Some(Value::symbol(gui_window_system_symbol())));
@@ -3361,7 +3361,7 @@ fn graphical_display_dimensions_use_monitor_extent() {
     use neovm_eval::emacs_core::builtins::{NeomacsMonitorInfo, set_neomacs_monitor_info};
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let fid = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(fid)
         .unwrap()
         .set_window_system(Some(Value::symbol("neo")));
@@ -3472,7 +3472,7 @@ fn graphical_display_without_monitor_snapshot_does_not_invent_dimensions() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_window_system(Some(Value::symbol(gui_window_system_symbol())));
@@ -3489,7 +3489,7 @@ fn eval_x_display_mm_queries_accept_selected_gui_display() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_window_system(Some(Value::symbol(gui_window_system_symbol())));
@@ -3513,7 +3513,7 @@ fn x_focus_frame_accepts_live_neomacs_gui_frame() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_window_system(Some(Value::symbol(gui_window_system_symbol())));
@@ -3533,7 +3533,7 @@ fn x_focus_frame_rejects_live_tty_frame() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_window_system(None);
@@ -3728,7 +3728,7 @@ fn window_system_prefers_selected_frame_then_global_fallback() {
         Value::NIL
     );
     assert!(
-        eval.frames.frame_list().is_empty(),
+        eval.frame_manager().frame_list().is_empty(),
         "window-system should not synthesize a frame when no frame exists"
     );
 
@@ -3738,12 +3738,12 @@ fn window_system_prefers_selected_frame_then_global_fallback() {
         Value::symbol("tty")
     );
     assert!(
-        eval.frames.frame_list().is_empty(),
+        eval.frame_manager().frame_list().is_empty(),
         "window-system should use the global fallback without synthesizing a frame"
     );
 
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_parameter(Value::symbol("window-system"), Value::symbol("x"));
@@ -3756,7 +3756,7 @@ fn window_system_prefers_selected_frame_then_global_fallback() {
         builtin_window_system(&mut eval, vec![Value::make_frame(frame_id.0)]).unwrap(),
         Value::symbol("x")
     );
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_window_system(None);
@@ -3787,7 +3787,7 @@ fn display_graphic_p_uses_global_window_system_without_live_frame() {
         Value::T
     );
     assert!(
-        eval.frames.frame_list().is_empty(),
+        eval.frame_manager().frame_list().is_empty(),
         "display-graphic-p should not synthesize a frame when only the global backend is known"
     );
 }
@@ -4112,13 +4112,13 @@ fn display_supports_face_attributes_p_uses_live_gui_font_capabilities() {
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.edit.buffers.create_buffer("*scratch*");
     let frame_id = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("gui-face-support", 800, 600, scratch);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("GUI frame")
         .set_window_system(Some(Value::symbol("neo")));
-    eval.frames.select_frame(frame_id);
+    eval.frame_manager_mut().select_frame(frame_id);
     eval.set_display_host(Box::new(ItalicCapableDisplayHost));
 
     let attrs = Value::list(vec![Value::keyword("slant"), Value::symbol("italic")]);
@@ -4134,14 +4134,14 @@ fn display_supports_face_attributes_p_ignores_fresh_handles_for_the_same_font() 
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.edit.buffers.create_buffer("*scratch*");
-    let frame_id = eval
-        .frames
-        .create_frame("gui-face-support-same-font", 800, 600, scratch);
-    eval.frames
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("gui-face-support-same-font", 800, 600, scratch);
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("GUI frame")
         .set_window_system(Some(Value::symbol("neo")));
-    eval.frames.select_frame(frame_id);
+    eval.frame_manager_mut().select_frame(frame_id);
     eval.set_display_host(Box::new(FreshIdSameFontDisplayHost::default()));
 
     let attrs = Value::list(vec![
@@ -4160,14 +4160,14 @@ fn display_supports_face_attributes_p_reports_gui_wave_underline() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.edit.buffers.create_buffer("*scratch*");
-    let frame_id = eval
-        .frames
-        .create_frame("gui-face-support-wave-underline", 800, 600, scratch);
-    eval.frames
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("gui-face-support-wave-underline", 800, 600, scratch);
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("GUI frame")
         .set_window_system(Some(Value::symbol("neo")));
-    eval.frames.select_frame(frame_id);
+    eval.frame_manager_mut().select_frame(frame_id);
     eval.set_display_host(Box::new(FreshIdSameFontDisplayHost::default()));
 
     let attrs = Value::list(vec![
@@ -4186,14 +4186,14 @@ fn display_supports_face_attributes_p_requires_every_gui_attribute_to_be_support
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.edit.buffers.create_buffer("*scratch*");
-    let frame_id = eval
-        .frames
-        .create_frame("gui-face-support-mixed-request", 800, 600, scratch);
-    eval.frames
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("gui-face-support-mixed-request", 800, 600, scratch);
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("GUI frame")
         .set_window_system(Some(Value::symbol("neo")));
-    eval.frames.select_frame(frame_id);
+    eval.frame_manager_mut().select_frame(frame_id);
     eval.set_display_host(Box::new(FreshIdSameFontDisplayHost::default()));
 
     let attrs = Value::list(vec![
@@ -4218,14 +4218,17 @@ fn display_supports_face_attributes_p_rejects_gui_attribute_equal_to_default() {
     eval.face_table_mut().define("default", default_face);
 
     let scratch = eval.edit.buffers.create_buffer("*scratch*");
-    let frame_id = eval
-        .frames
-        .create_frame("gui-face-support-default-equality", 800, 600, scratch);
-    eval.frames
+    let frame_id = eval.frame_manager_mut().create_frame(
+        "gui-face-support-default-equality",
+        800,
+        600,
+        scratch,
+    );
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("GUI frame")
         .set_window_system(Some(Value::symbol("neo")));
-    eval.frames.select_frame(frame_id);
+    eval.frame_manager_mut().select_frame(frame_id);
     eval.set_display_host(Box::new(FreshIdSameFontDisplayHost::default()));
 
     let attrs = Value::list(vec![Value::keyword("extend"), Value::T]);
@@ -4241,14 +4244,14 @@ fn display_supports_face_attributes_p_uses_graphical_host_capabilities() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.edit.buffers.create_buffer("*scratch*");
-    let frame_id = eval
-        .frames
-        .create_frame("gui-face-support-no-decorations", 800, 600, scratch);
-    eval.frames
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("gui-face-support-no-decorations", 800, 600, scratch);
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("GUI frame")
         .set_window_system(Some(Value::symbol("neo")));
-    eval.frames.select_frame(frame_id);
+    eval.frame_manager_mut().select_frame(frame_id);
     // This host opts into italic font materialization only; the default
     // DisplayHost capability answer for graphical decorations is false.
     eval.set_display_host(Box::new(ItalicCapableDisplayHost));
@@ -4277,14 +4280,17 @@ fn display_supports_face_attributes_p_accepts_disabling_nondefault_gui_decoratio
     eval.face_table_mut().define("default", default_face);
 
     let scratch = eval.edit.buffers.create_buffer("*scratch*");
-    let frame_id =
-        eval.frames
-            .create_frame("gui-face-support-disable-decoration", 800, 600, scratch);
-    eval.frames
+    let frame_id = eval.frame_manager_mut().create_frame(
+        "gui-face-support-disable-decoration",
+        800,
+        600,
+        scratch,
+    );
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("GUI frame")
         .set_window_system(Some(Value::symbol("neo")));
-    eval.frames.select_frame(frame_id);
+    eval.frame_manager_mut().select_frame(frame_id);
     eval.set_display_host(Box::new(FreshIdSameFontDisplayHost::default()));
 
     let attrs = Value::list(vec![Value::keyword("underline"), Value::NIL]);
@@ -4299,8 +4305,10 @@ fn display_supports_face_attributes_p_accepts_disabling_nondefault_gui_decoratio
 fn x_popup_menu_interactive_keymap_returns_selected_event() {
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.edit.buffers.create_buffer("*scratch*");
-    let frame_id = eval.frames.create_frame("popup-owner", 800, 600, scratch);
-    eval.frames.select_frame(frame_id);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("popup-owner", 800, 600, scratch);
+    eval.frame_manager_mut().select_frame(frame_id);
     let tx = crate::host_input::HostInputPublisher::install(&mut eval);
 
     let host = RecordingPopupHost::default();
@@ -4475,8 +4483,10 @@ fn tty_menu_help_tracker_distinguishes_no_publication_from_a_clear() {
 fn x_popup_dialog_interactive_returns_selected_value() {
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.edit.buffers.create_buffer("*scratch*");
-    let frame_id = eval.frames.create_frame("dialog-owner", 800, 600, scratch);
-    eval.frames.select_frame(frame_id);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("dialog-owner", 800, 600, scratch);
+    eval.frame_manager_mut().select_frame(frame_id);
     let tx = crate::host_input::HostInputPublisher::install(&mut eval);
 
     let host = RecordingPopupHost::default();
@@ -4531,10 +4541,12 @@ fn x_popup_menu_interactive_keymap_collapses_submenu_on_tty() {
     // screen height.
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.edit.buffers.create_buffer("*scratch*");
-    let frame_id = eval.frames.create_frame("popup-owner", 800, 600, scratch);
-    eval.frames.select_frame(frame_id);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("popup-owner", 800, 600, scratch);
+    eval.frame_manager_mut().select_frame(frame_id);
     assert!(
-        eval.frames
+        eval.frame_manager()
             .get(frame_id)
             .and_then(|f| f.effective_window_system())
             .is_none(),
@@ -4594,7 +4606,7 @@ fn x_popup_menu_interactive_submenu_selection_returns_full_event_path() {
     // `#if USE_X_TOOLKIT || ...` branch in src/menu.c:422-433) and the child
     // entry is reachable. Selecting it returns the full nested event path.
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_window_system(Some(Value::symbol(gui_window_system_symbol())));
@@ -4780,12 +4792,14 @@ fn x_popup_menu_interactive_cancel_returns_nil() {
 fn x_popup_menu_interactive_menu_bar_position_anchors_below_menu_bar() {
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.edit.buffers.create_buffer("*scratch*");
-    let frame_id = eval.frames.create_frame("popup-owner", 800, 600, scratch);
-    eval.frames
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("popup-owner", 800, 600, scratch);
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("frame")
         .menu_bar_height = 24;
-    eval.frames.select_frame(frame_id);
+    eval.frame_manager_mut().select_frame(frame_id);
     let tx = crate::host_input::HostInputPublisher::install(&mut eval);
 
     let host = RecordingPopupHost::default();
@@ -4842,12 +4856,14 @@ fn x_popup_menu_interactive_menu_bar_position_anchors_below_menu_bar() {
 fn x_popup_menu_interactive_menu_bar_position_uses_pending_native_anchor() {
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.edit.buffers.create_buffer("*scratch*");
-    let frame_id = eval.frames.create_frame("popup-owner", 800, 600, scratch);
-    eval.frames
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("popup-owner", 800, 600, scratch);
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("frame")
         .menu_bar_height = 24;
-    eval.frames.select_frame(frame_id);
+    eval.frame_manager_mut().select_frame(frame_id);
     let tx = crate::host_input::HostInputPublisher::install(&mut eval);
 
     let host = RecordingPopupHost::default();
@@ -4983,8 +4999,10 @@ fn x_popup_menu_interactive_menu_bar_right_returns_next_menu_position() {
 fn x_popup_menu_preserves_heading_click_queued_before_old_cancellation() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.create_buffer("*menu-switch*");
-    let frame = eval.frames.create_frame("menu-owner", 800, 600, buffer);
-    eval.frames.select_frame(frame);
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("menu-owner", 800, 600, buffer);
+    eval.frame_manager_mut().select_frame(frame);
     eval.eval_str("(progn (setq global-map (make-sparse-keymap)) (use-global-map global-map) (define-key global-map [menu-bar mouse-1] 'ignore))").unwrap();
     let tx = crate::host_input::HostInputPublisher::install(&mut eval);
 
@@ -5060,8 +5078,8 @@ fn tty_frame_uses_terminal_capabilities_even_with_a_frontend_host() {
         .current_buffer()
         .expect("current buffer")
         .id();
-    let frame = eval.frames.create_frame("F1", 80, 25, buffer);
-    eval.frames.select_frame(frame);
+    let frame = eval.frame_manager_mut().create_frame("F1", 80, 25, buffer);
+    eval.frame_manager_mut().select_frame(frame);
     // The live `-nw` frontend installs a display host for popup interaction.
     // That integration object does not turn its frame into a window-system
     // frame: GNU dispatches this predicate from `is_tty_frame (f)`.

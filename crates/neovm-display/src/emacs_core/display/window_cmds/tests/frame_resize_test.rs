@@ -4,8 +4,10 @@ use super::*;
 fn overlapping_native_observations_keep_the_latest_requested_grid_for_font_changes() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.create_buffer("*overlapping-resize*");
-    let fid = eval.frames.create_frame("overlapping", 800, 600, buffer);
-    let frame = eval.frames.get_mut(fid).unwrap();
+    let fid = eval
+        .frame_manager_mut()
+        .create_frame("overlapping", 800, 600, buffer);
+    let frame = eval.frame_manager_mut().get_mut(fid).unwrap();
     frame.set_window_system(Some(Value::symbol("neo")));
     frame.char_width = 8.0;
     frame.char_height = 16.0;
@@ -24,7 +26,9 @@ fn overlapping_native_observations_keep_the_latest_requested_grid_for_font_chang
     let a = requests.borrow().last().unwrap().clone();
     eval.eval_str("(set-frame-width nil 101)").unwrap();
     let b = requests.borrow().last().unwrap().clone();
-    let other = eval.frames.create_frame("other", 300, 200, buffer);
+    let other = eval
+        .frame_manager_mut()
+        .create_frame("other", 300, 200, buffer);
     let tx = crate::host_input::HostInputPublisher::install(&mut eval);
 
     for event in [
@@ -56,8 +60,8 @@ fn overlapping_native_observations_keep_the_latest_requested_grid_for_font_chang
     );
     assert_eq!(
         (
-            eval.frames.get(other).unwrap().width,
-            eval.frames.get(other).unwrap().height
+            eval.frame_manager().get(other).unwrap().width,
+            eval.frame_manager().get(other).unwrap().height
         ),
         (320, 240)
     );
@@ -81,7 +85,11 @@ fn overlapping_native_observations_keep_the_latest_requested_grid_for_font_chang
         );
     }
     assert!(
-        eval.frames.get(fid).unwrap().pending_gui_resize.is_none(),
+        eval.frame_manager()
+            .get(fid)
+            .unwrap()
+            .pending_gui_resize
+            .is_none(),
         "attaining the target releases pending intent"
     );
     eval.apply_resize_input_event(84 * 16, c.height, 1.0, fid.0, false)
@@ -97,8 +105,10 @@ fn overlapping_native_observations_keep_the_latest_requested_grid_for_font_chang
 fn font_resize_propagates_nonlocal_exits_from_window_minimum_policy() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.create_buffer("*font-minimum-exit*");
-    let fid = eval.frames.create_frame("minimum-exit", 800, 600, buffer);
-    let frame = eval.frames.get_mut(fid).unwrap();
+    let fid = eval
+        .frame_manager_mut()
+        .create_frame("minimum-exit", 800, 600, buffer);
+    let frame = eval.frame_manager_mut().get_mut(fid).unwrap();
     frame.set_window_system(Some(Value::symbol("neo")));
     frame.char_width = 8.0;
     frame.char_height = 16.0;
@@ -122,8 +132,10 @@ fn font_resize_propagates_nonlocal_exits_from_window_minimum_policy() {
 fn explicit_frame_minimum_overrides_inhibited_font_resize_on_only_that_axis() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.create_buffer("*font-minimum*");
-    let fid = eval.frames.create_frame("minimum", 800, 600, buffer);
-    let frame = eval.frames.get_mut(fid).unwrap();
+    let fid = eval
+        .frame_manager_mut()
+        .create_frame("minimum", 800, 600, buffer);
+    let frame = eval.frame_manager_mut().get_mut(fid).unwrap();
     frame.set_window_system(Some(Value::symbol("neo")));
     frame.char_width = 8.0;
     frame.char_height = 16.0;
@@ -149,8 +161,10 @@ fn explicit_frame_minimum_overrides_inhibited_font_resize_on_only_that_axis() {
 fn native_resize_counts_the_entire_grown_minibuffer_in_frame_height() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.create_buffer("*grown-minibuffer*");
-    let fid = eval.frames.create_frame("grown", 640, 384, buffer);
-    let frame = eval.frames.get_mut(fid).unwrap();
+    let fid = eval
+        .frame_manager_mut()
+        .create_frame("grown", 640, 384, buffer);
+    let frame = eval.frame_manager_mut().get_mut(fid).unwrap();
     frame.set_window_system(Some(Value::symbol("neo")));
     frame.char_width = 8.0;
     frame.char_height = 16.0;
@@ -186,9 +200,9 @@ fn frame_scroll_bar_width_reports_only_the_allocated_scroll_bar_area() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.create_buffer("*scroll-bar-area*");
     let fid = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("scroll-bar-area", 640, 480, buffer);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(fid)
         .unwrap()
         .set_window_system(Some(Value::symbol("neo")));
@@ -209,9 +223,9 @@ fn gui_frames_take_gnu_toolkit_scroll_bar_defaults_and_report_realized_parameter
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.create_buffer("*scroll-bar-defaults*");
     let fid = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("scroll-bar-defaults", 640, 480, buffer);
-    let frame = eval.frames.get_mut(fid).unwrap();
+    let frame = eval.frame_manager_mut().get_mut(fid).unwrap();
     frame.set_window_system(Some(Value::symbol("neo")));
     frame.char_width = 8.0;
     frame.char_height = 17.0;
@@ -270,8 +284,10 @@ fn moving_a_child_frame_marks_it_for_redisplay() {
     let _policy = RedisplayHookPolicyGuard::gnu();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.create_buffer("*child-move*");
-    let fid = eval.frames.create_frame("child-move", 640, 480, buffer);
-    eval.frames
+    let fid = eval
+        .frame_manager_mut()
+        .create_frame("child-move", 640, 480, buffer);
+    eval.frame_manager_mut()
         .get_mut(fid)
         .unwrap()
         .set_window_system(Some(Value::symbol("neo")));
@@ -312,8 +328,10 @@ fn moving_a_child_frame_marks_it_for_redisplay() {
 fn child_initial_text_columns_include_explicit_fringe_and_border_chrome() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.create_buffer("*child-chrome*");
-    let fid = eval.frames.create_frame("parent", 640, 480, buffer);
-    let frame = eval.frames.get_mut(fid).unwrap();
+    let fid = eval
+        .frame_manager_mut()
+        .create_frame("parent", 640, 480, buffer);
+    let frame = eval.frame_manager_mut().get_mut(fid).unwrap();
     frame.set_window_system(Some(Value::symbol("neo")));
     frame.char_width = 8.0;
     frame.char_height = 16.0;
@@ -344,8 +362,10 @@ fn child_initial_text_columns_include_explicit_fringe_and_border_chrome() {
 fn inhibited_font_change_preserves_an_unsent_explicit_resize() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.create_buffer("*font-resize*");
-    let fid = eval.frames.create_frame("F1", 800, 600, buffer);
-    let frame = eval.frames.get_mut(fid).unwrap();
+    let fid = eval
+        .frame_manager_mut()
+        .create_frame("F1", 800, 600, buffer);
+    let frame = eval.frame_manager_mut().get_mut(fid).unwrap();
     frame.set_window_system(Some(Value::symbol("neo")));
     frame.char_width = 8.0;
     frame.char_height = 16.0;
@@ -409,8 +429,10 @@ fn inhibited_font_change_preserves_an_unsent_explicit_resize() {
 fn clearing_fullscreen_requests_native_window_restoration() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.create_buffer("*fullscreen*");
-    let frame_id = eval.frames.create_frame("F1", 745, 688, buffer);
-    eval.frames
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 745, 688, buffer);
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .unwrap()
         .set_window_system(Some(Value::symbol("x")));
@@ -444,8 +466,10 @@ fn clearing_fullscreen_requests_native_window_restoration() {
 fn width_only_gui_resize_keeps_exact_native_height_with_chrome_and_partial_row() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.create_buffer("*resize*");
-    let frame_id = eval.frames.create_frame("F1", 745, 688, buffer);
-    let frame = eval.frames.get_mut(frame_id).unwrap();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 745, 688, buffer);
+    let frame = eval.frame_manager_mut().get_mut(frame_id).unwrap();
     frame.set_window_system(Some(Value::symbol("x")));
     frame.install_gnu_gui_default_parameters();
     frame.char_width = 9.0;
@@ -480,8 +504,10 @@ fn width_only_gui_resize_keeps_exact_native_height_with_chrome_and_partial_row()
 fn rejected_and_duplicate_native_resize_completions_preserve_actual_geometry() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.create_buffer("*resize*");
-    let frame_id = eval.frames.create_frame("F1", 745, 688, buffer);
-    let frame = eval.frames.get_mut(frame_id).unwrap();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 745, 688, buffer);
+    let frame = eval.frame_manager_mut().get_mut(frame_id).unwrap();
     frame.set_window_system(Some(Value::symbol("x")));
     frame.install_gnu_gui_default_parameters();
     frame.char_width = 9.0;

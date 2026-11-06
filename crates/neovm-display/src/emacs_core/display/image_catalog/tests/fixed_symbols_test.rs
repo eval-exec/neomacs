@@ -35,7 +35,7 @@ fn fixed_image_keys_keep_dynamic_values_and_unwind() {
         ImageDefaultScale::Explicit(ImageScaleFactor::try_from(1.25).expect("scale"))
     );
     assert_eq!(original.size_limit().maximum().dimensions(), (72, 72));
-    let count = eval.specpdl.len();
+    let count = eval.specpdl().len();
     eval.try_specbind(
         ImageVariable::ScalingFactor.sym_id(),
         Value::make_float(2.0),

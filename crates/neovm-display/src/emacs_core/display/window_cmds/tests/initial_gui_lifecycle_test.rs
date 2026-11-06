@@ -34,8 +34,8 @@ fn terminal_startup_context() -> Context {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.create_buffer("*scratch*");
     eval.edit.buffers.set_current(buffer);
-    let terminal = eval.frames.create_frame("F1", 80, 25, buffer);
-    let frame = eval.frames.get_mut(terminal).unwrap();
+    let terminal = eval.frame_manager_mut().create_frame("F1", 80, 25, buffer);
+    let frame = eval.frame_manager_mut().get_mut(terminal).unwrap();
     frame.set_window_system(None);
     frame.char_width = 1.0;
     frame.char_height = 1.0;
@@ -49,7 +49,7 @@ fn window_system_variable_follows_initial_frame_selection_and_dynamic_binding() 
     // selected frame's keyboard. Initial terminal state must not become a
     // permanent global nil after Lisp selects its first graphical frame.
     let mut eval = terminal_startup_context();
-    let terminal = eval.frames.selected_frame().unwrap().id;
+    let terminal = eval.frame_manager().selected_frame().unwrap().id;
     crate::emacs_core::terminal::pure::configure_terminal_runtime(
         crate::emacs_core::terminal::pure::TerminalRuntimeConfig::window_system(
             GraphicalDisplayIdentity::anonymous_connection(GraphicalBackend::X11),
@@ -60,7 +60,10 @@ fn window_system_variable_follows_initial_frame_selection_and_dynamic_binding() 
         "initial_terminal",
         crate::emacs_core::terminal::pure::TerminalRuntimeConfig::inactive(),
     );
-    eval.frames.get_mut(terminal).unwrap().terminal_id = 1;
+    eval.frame_manager_mut()
+        .get_mut(terminal)
+        .unwrap()
+        .terminal_id = 1;
     eval.set_variable("window-system", Value::NIL);
     eval.set_variable("initial-window-system", Value::symbol("neo"));
     eval.set_variable("issue417-terminal", Value::make_frame(terminal.0));
@@ -112,7 +115,7 @@ fn window_system_variable_follows_initial_frame_selection_and_dynamic_binding() 
 #[test]
 fn graphical_terminal_initialization_replaces_cached_tty_keyboard_lifetime() {
     let mut eval = terminal_startup_context();
-    let terminal = eval.frames.selected_frame().unwrap().id;
+    let terminal = eval.frame_manager().selected_frame().unwrap().id;
     eval.set_variable("issue417-terminal", Value::make_frame(terminal.0));
     assert_eq!(
         format_eval_result(
@@ -120,7 +123,7 @@ fn graphical_terminal_initialization_replaces_cached_tty_keyboard_lifetime() {
         ),
         "OK nil",
     );
-    let depth = eval.specpdl.len();
+    let depth = eval.specpdl().len();
     eval.try_specbind(
         neovm_value::intern::intern("window-system"),
         Value::symbol("w32"),
@@ -135,7 +138,10 @@ fn graphical_terminal_initialization_replaces_cached_tty_keyboard_lifetime() {
         "initial_terminal",
         crate::emacs_core::terminal::pure::TerminalRuntimeConfig::inactive(),
     );
-    eval.frames.get_mut(terminal).unwrap().terminal_id = 1;
+    eval.frame_manager_mut()
+        .get_mut(terminal)
+        .unwrap()
+        .terminal_id = 1;
     // The host reassigned this frame in place. Lisp's same-frame selection
     // is a no-op, so explicitly publish the new terminal ownership.
     eval.sync_keyboard_terminal_owner();
@@ -176,7 +182,7 @@ fn first_graphical_frame_uses_opened_host_font_instead_of_terminal_cells() {
         .eval_str("(x-create-frame '((name . \"Initial\")))")
         .unwrap();
     let frame = eval
-        .frames
+        .frame_manager()
         .get(FrameId(value.as_frame_id().unwrap()))
         .unwrap();
     assert_eq!(frame.char_width, 9.0);
@@ -204,7 +210,7 @@ fn raw_visible_initial_frame_finishes_without_make_frame_wrapper() {
 
     let value = eval.eval_str("(x-create-frame nil)").unwrap();
     let frame = eval
-        .frames
+        .frame_manager()
         .get(FrameId(value.as_frame_id().unwrap()))
         .unwrap();
     let finished = finished.borrow();
@@ -246,7 +252,7 @@ fn frame_creation_finish_observes_final_lisp_dimensions() {
     eval.eval_str("(frame-after-make-frame issue417-frame t)")
         .unwrap();
     let frame = eval
-        .frames
+        .frame_manager()
         .get(FrameId(value.as_frame_id().unwrap()))
         .unwrap();
     let finished = finished.borrow();

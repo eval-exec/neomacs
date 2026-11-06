@@ -300,8 +300,15 @@ fn test_format_mode_line_eval_optional_designators() {
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval.frames.create_frame("xdisp-format", 80, 24, buffer_id);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window.0 as i64;
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("xdisp-format", 80, 24, buffer_id);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window
+        .0 as i64;
 
     let ok = builtin_format_mode_line_ctx(
         &mut eval,
@@ -377,10 +384,14 @@ fn test_resolve_live_window_display_context_uses_selected_window_buffer_point() 
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval
-        .frames
-        .create_frame("xdisp-selected-point", 800, 600, selected_buffer_id);
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("xdisp-selected-point", 800, 600, selected_buffer_id);
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     {
         let buffer = eval
             .edit
@@ -394,7 +405,7 @@ fn test_resolve_live_window_display_context_uses_selected_window_buffer_point() 
     eval.edit.buffers.set_current(other_id);
 
     let ctx = resolve_live_window_display_context(
-        &eval.frames,
+        &eval.frame_manager(),
         &eval.edit.buffers,
         Some(&Value::make_window(selected_window.0)),
     )
@@ -441,11 +452,11 @@ fn test_format_mode_line_eval_uses_window_buffer_instead_of_current_buffer() {
         .current_buffer_id()
         .expect("current buffer");
     let frame_id = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("xdisp-window", 80, 24, saved_current);
     let other_id = eval.edit.buffers.create_buffer("*window*");
     let window_id = {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         let selected = frame.selected_window;
         let window = frame
             .find_window_mut(selected)
@@ -488,11 +499,11 @@ fn test_format_mode_line_in_state_uses_buffer_local_symbols_and_restores_buffer(
         .expect("mode-name local should set");
 
     let rendered = format_mode_line_from_state(
-        VariableView::new(&eval.obarray, &eval.owner),
+        VariableView::new(&eval.obarray_view(), &eval.owner()),
         &[],
-        &eval.frames,
+        &eval.frame_manager(),
         &mut eval.edit.buffers,
-        &eval.processes,
+        &eval.processes(),
         vec![
             Value::list(vec![
                 Value::string("%b "),
@@ -578,11 +589,11 @@ fn test_format_mode_line_in_state_with_eval_keeps_shared_buffer_context_around_e
         .expect("mode-name local should set");
 
     let rendered = finish_format_mode_line_in_state_with_eval(
-        VariableView::new(&eval.obarray, &eval.owner),
+        VariableView::new(&eval.obarray_view(), &eval.owner()),
         &[],
-        &eval.frames,
+        &eval.frame_manager(),
         &mut eval.edit.buffers,
-        &eval.processes,
+        &eval.processes(),
         &[
             Value::list(vec![
                 Value::string("%b "),
@@ -627,7 +638,8 @@ fn test_format_mode_line_preserves_raw_unibyte_literal_segments() {
 fn test_format_mode_line_symbol_conditional_uses_only_selected_branch() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    eval.obarray.set_symbol_value("mode-line-flag", Value::T);
+    eval.obarray_view()
+        .set_symbol_value("mode-line-flag", Value::T);
 
     let then_rendered = builtin_format_mode_line_ctx(
         &mut eval,
@@ -642,7 +654,8 @@ fn test_format_mode_line_symbol_conditional_uses_only_selected_branch() {
     )
     .expect("format-mode-line should use then branch");
 
-    eval.obarray.set_symbol_value("mode-line-flag", Value::NIL);
+    eval.obarray_view()
+        .set_symbol_value("mode-line-flag", Value::NIL);
     let else_rendered = builtin_format_mode_line_ctx(
         &mut eval,
         &vec![Value::list(vec![
@@ -671,11 +684,11 @@ fn test_format_mode_line_string_valued_symbols_render_literally() {
         .expect("mode-name local should set");
 
     let rendered = format_mode_line_from_state(
-        VariableView::new(&eval.obarray, &eval.owner),
+        VariableView::new(&eval.obarray_view(), &eval.owner()),
         &[],
-        &eval.frames,
+        &eval.frame_manager(),
         &mut eval.edit.buffers,
-        &eval.processes,
+        &eval.processes(),
         vec![
             Value::list(vec![Value::string("%b "), Value::symbol("mode-name")]),
             Value::NIL,
@@ -696,11 +709,11 @@ fn test_format_mode_line_fixnum_elements_pad_and_truncate_tail() {
     let other_id = eval.edit.buffers.create_buffer("xy");
 
     let rendered = format_mode_line_from_state(
-        VariableView::new(&eval.obarray, &eval.owner),
+        VariableView::new(&eval.obarray_view(), &eval.owner()),
         &[],
-        &eval.frames,
+        &eval.frame_manager(),
         &mut eval.edit.buffers,
-        &eval.processes,
+        &eval.processes(),
         vec![
             Value::list(vec![
                 Value::list(vec![Value::fixnum(5), Value::string("%b")]),
@@ -725,11 +738,11 @@ fn test_format_mode_line_percent_specs_keep_gnu_field_width_and_dash_semantics()
     let other_id = eval.edit.buffers.create_buffer("xy");
 
     let rendered = format_mode_line_from_state(
-        VariableView::new(&eval.obarray, &eval.owner),
+        VariableView::new(&eval.obarray_view(), &eval.owner()),
         &[],
-        &eval.frames,
+        &eval.frame_manager(),
         &mut eval.edit.buffers,
-        &eval.processes,
+        &eval.processes(),
         vec![
             Value::string("%5b|%-|%2*"),
             Value::NIL,
@@ -747,18 +760,18 @@ fn test_format_mode_line_percent_specs_keep_gnu_field_width_and_dash_semantics()
 fn test_format_mode_line_respects_risky_local_variable_for_eval_forms() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    eval.obarray.set_symbol_value(
+    eval.obarray_view().set_symbol_value(
         "unsafe-mode-line",
         Value::list(vec![
             Value::symbol(":eval"),
             Value::list(vec![Value::symbol("error"), Value::string("boom")]),
         ]),
     );
-    eval.obarray.set_symbol_value(
+    eval.obarray_view().set_symbol_value(
         "trusted-mode-line",
         Value::list(vec![Value::symbol(":eval"), Value::string("ok")]),
     );
-    eval.obarray
+    eval.obarray_view()
         .put_property("trusted-mode-line", "risky-local-variable", Value::T)
         .unwrap();
 
@@ -865,10 +878,14 @@ fn mode_line_display_preserves_nested_literal_string_sources() {
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval
-        .frames
-        .create_frame("mode-line-string-sources", 800, 600, buffer_id);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("mode-line-string-sources", 800, 600, buffer_id);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     let first = Value::string(" first ");
     let second = Value::string(" second ");
 
@@ -1052,12 +1069,12 @@ fn test_format_mode_line_recursive_depth_specs_match_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
 
-    eval.command_loop.recursive_depth = 4;
+    eval.command_loop_mut().recursive_depth = 4;
     let shallow =
         builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%[|%]")]).expect("depth 3");
     assert_eq!(shallow, Value::string("[[[|]]]"));
 
-    eval.command_loop.recursive_depth = 7;
+    eval.command_loop_mut().recursive_depth = 7;
     let deep =
         builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%[|%]")]).expect("depth 6");
     assert_eq!(deep, Value::string("[[[... | ...]]]"));
@@ -1078,7 +1095,7 @@ fn test_format_mode_line_size_and_process_specs_match_gnu() {
         builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%i|%I|%s")]).expect("specs");
     assert_eq!(no_process, Value::string("1536|1.5k|no process"));
 
-    eval.processes.create_process(
+    eval.processes_mut().create_process(
         "mode-line-proc".into(),
         Value::make_buffer(buffer_id),
         "cat".into(),
@@ -1194,12 +1211,16 @@ fn format_mode_line_line_uses_the_target_windows_point_not_the_buffer_point() {
         // Selected window / live buffer point -> line 1.
         buffer.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
-    let frame_id = eval
-        .frames
-        .create_frame("mode-line-window-point", 800, 600, buffer_id);
-    let selected = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("mode-line-window-point", 800, 600, buffer_id);
+    let selected = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     let other = eval
-        .frames
+        .frame_manager_mut()
         .split_window(
             frame_id,
             selected,
@@ -1211,7 +1232,7 @@ fn format_mode_line_line_uses_the_target_windows_point_not_the_buffer_point() {
         .expect("split produced a second window");
     // Put the second (non-selected) window's point on line 3 (char 13).
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         match frame.find_window_mut(other).expect("second window") {
             crate::window::Window::Leaf { point, .. } => {
                 *point = LispCharPos1::from_one_based_usize(13)
@@ -1328,12 +1349,14 @@ fn test_format_mode_line_frame_name_f_spec_prefers_title_and_preserves_raw_uniby
     let buffer_id = eval.edit.buffers.create_buffer("frame-title-test");
     eval.edit.buffers.set_current(buffer_id);
 
-    let frame_id = eval.frames.create_frame("frame-name", 80, 24, buffer_id);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("frame-name", 80, 24, buffer_id);
     let raw_title = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
         0xFF, b'-', b'F',
     ]));
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.title = raw_title;
     }
 
@@ -1362,9 +1385,11 @@ fn test_format_mode_line_frame_name_f_spec_uses_emacs_for_gui_frame_without_expl
     let buffer_id = eval.edit.buffers.create_buffer("frame-name-default-test");
     eval.edit.buffers.set_current(buffer_id);
 
-    let frame_id = eval.frames.create_frame("F1", 80, 24, buffer_id);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 80, 24, buffer_id);
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.set_window_system(Some(Value::symbol("x")));
     }
 
@@ -1484,7 +1509,7 @@ fn test_format_mode_line_blanks_coding_mnemonics_for_unibyte_buffer() {
         .expect("window-system coding");
     assert_eq!(window_system, Value::string(" | :"));
 
-    eval.frames
+    eval.frame_manager_mut()
         .create_frame("unibyte-tty-coding-frame", 80, 24, buffer_id);
     let tty =
         builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%z|%Z")]).expect("TTY coding");
@@ -1510,7 +1535,7 @@ fn test_format_mode_line_big_z_preserves_raw_unibyte_eol_indicator() {
             Value::symbol("undecided-dos"),
         )
         .expect("set coding");
-    eval.obarray.set_symbol_value(
+    eval.obarray_view().set_symbol_value(
         "eol-mnemonic-dos",
         Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
             0xFF,
@@ -1533,7 +1558,7 @@ fn test_format_mode_line_tty_z_uses_live_coding_manager_state() {
     utf8_locale_terminal(&mut eval);
     let buffer_id = eval.edit.buffers.create_buffer("tty-coding-test");
     eval.edit.buffers.set_current(buffer_id);
-    eval.frames
+    eval.frame_manager_mut()
         .create_frame("tty-coding-frame", 80, 24, buffer_id);
 
     eval.edit
@@ -1544,9 +1569,9 @@ fn test_format_mode_line_tty_z_uses_live_coding_manager_state() {
             Value::symbol("utf-8-unix"),
         )
         .expect("set coding");
-    eval.obarray
+    eval.obarray_view()
         .set_symbol_value("terminal-coding-system", Value::NIL);
-    eval.obarray
+    eval.obarray_view()
         .set_symbol_value("keyboard-coding-system", Value::NIL);
 
     let rendered =
@@ -1564,7 +1589,7 @@ fn test_format_mode_line_tty_z_uses_prefer_utf8_declared_mnemonic() {
         .buffers
         .create_buffer("tty-prefer-utf8-coding-test");
     eval.edit.buffers.set_current(buffer_id);
-    eval.frames
+    eval.frame_manager_mut()
         .create_frame("tty-coding-frame", 80, 24, buffer_id);
 
     eval.edit
@@ -1587,17 +1612,17 @@ fn test_format_mode_line_tty_z_orders_keyboard_before_terminal() {
     let mut eval = interactive_context();
     let buffer_id = eval.edit.buffers.create_buffer("tty-coding-order-test");
     eval.edit.buffers.set_current(buffer_id);
-    eval.frames
+    eval.frame_manager_mut()
         .create_frame("tty-coding-frame", 80, 24, buffer_id);
 
     neovm_text::emacs_core::coding::builtin_set_keyboard_coding_system(
-        &mut eval.coding_systems,
+        eval.coding_systems_mut(),
         vec![Value::symbol("utf-8-unix")],
         neovm_value::tagged::value::SymbolMode::Bare,
     )
     .expect("set keyboard coding");
     neovm_text::emacs_core::coding::builtin_set_terminal_coding_system(
-        &mut eval.coding_systems,
+        eval.coding_systems_mut(),
         vec![Value::symbol("no-conversion")],
         neovm_value::tagged::value::SymbolMode::Bare,
     )
@@ -1626,7 +1651,7 @@ fn test_format_mode_line_tty_z_reads_visible_buffer_file_coding_value_without_lo
         .buffers
         .create_buffer("tty-coding-visible-slot-test");
     eval.edit.buffers.set_current(buffer_id);
-    eval.frames
+    eval.frame_manager_mut()
         .create_frame("tty-coding-frame", 80, 24, buffer_id);
 
     eval.edit
@@ -1642,9 +1667,9 @@ fn test_format_mode_line_tty_z_reads_visible_buffer_file_coding_value_without_lo
         .get_mut(buffer_id)
         .expect("buffer")
         .set_slot_local_flag(BUFFER_SLOT_BUFFER_FILE_CODING_SYSTEM, false);
-    eval.obarray
+    eval.obarray_view()
         .set_symbol_value("terminal-coding-system", Value::NIL);
-    eval.obarray
+    eval.obarray_view()
         .set_symbol_value("keyboard-coding-system", Value::NIL);
 
     let rendered =
@@ -1659,7 +1684,7 @@ fn test_format_mode_line_tty_big_z_uses_live_coding_manager_state_and_eol_indica
     utf8_locale_terminal(&mut eval);
     let buffer_id = eval.edit.buffers.create_buffer("tty-coding-big-z-test");
     eval.edit.buffers.set_current(buffer_id);
-    eval.frames
+    eval.frame_manager_mut()
         .create_frame("tty-coding-frame", 80, 24, buffer_id);
 
     eval.edit
@@ -1670,9 +1695,9 @@ fn test_format_mode_line_tty_big_z_uses_live_coding_manager_state_and_eol_indica
             Value::symbol("utf-8-unix"),
         )
         .expect("set coding");
-    eval.obarray
+    eval.obarray_view()
         .set_symbol_value("terminal-coding-system", Value::NIL);
-    eval.obarray
+    eval.obarray_view()
         .set_symbol_value("keyboard-coding-system", Value::NIL);
 
     let rendered =
@@ -1728,10 +1753,14 @@ fn mode_line_display_does_not_flush_a_terminal_min_width_run() {
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval
-        .frames
-        .create_frame("mode-line-min-width", 800, 600, buffer_id);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("mode-line-min-width", 800, 600, buffer_id);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     let display = Value::list(vec![
         Value::symbol("min-width"),
         Value::list(vec![Value::make_float(5.0)]),
@@ -1772,10 +1801,17 @@ fn mode_line_display_closes_a_min_width_run_when_another_one_starts() {
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval
-        .frames
-        .create_frame("mode-line-min-width-transition", 800, 600, buffer_id);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id = eval.frame_manager_mut().create_frame(
+        "mode-line-min-width-transition",
+        800,
+        600,
+        buffer_id,
+    );
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     let min_width = |columns: f64| {
         Value::list(vec![
             Value::symbol("min-width"),
@@ -1829,11 +1865,17 @@ fn test_format_mode_line_position_o_and_q_specs() {
     assert_eq!(all_visible, Value::string("All|All"));
 
     // Set up frame/window to test partial visibility.
-    let frame_id = eval.frames.create_frame("pos-frame", 80, 24, buffer_id);
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("pos-frame", 80, 24, buffer_id);
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     // Window showing middle portion: start=20, simulated visible range [20..80].
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         let window = frame
             .find_window_mut(selected_window)
             .expect("selected window");
@@ -1861,7 +1903,7 @@ fn test_format_mode_line_position_o_and_q_specs() {
 
     // Window at the very start
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         let window = frame
             .find_window_mut(selected_window)
             .expect("selected window");
@@ -1899,11 +1941,17 @@ fn test_format_mode_line_percent_specs_use_window_buffer_and_completed_window_en
         let buffer = eval.edit.buffers.get_mut(other_id).expect("other buffer");
         buffer.insert(&"y".repeat(1000));
     }
-    let frame_id = eval.frames.create_frame("pos-frame", 80, 24, target_id);
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("pos-frame", 80, 24, target_id);
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     {
         let target = eval.edit.buffers.get(target_id).expect("target buffer");
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         let window = frame
             .find_window_mut(selected_window)
             .expect("selected window");
@@ -1980,11 +2028,11 @@ fn line_pixel_height_on_a_gui_frame_is_the_line_height_not_one() {
     let mut ev = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*lph*");
     ev.edit.buffers.set_current(buf);
-    let fid = ev.frames.create_frame("GUI", 800, 600, buf);
-    let frame = ev.frames.get_mut(fid).unwrap();
+    let fid = ev.frame_manager_mut().create_frame("GUI", 800, 600, buf);
+    let frame = ev.frame_manager_mut().get_mut(fid).unwrap();
     frame.set_window_system(Some(Value::symbol("neo")));
     frame.char_height = 14.0;
-    assert!(ev.frames.select_frame(fid));
+    assert!(ev.frame_manager_mut().select_frame(fid));
     let result = builtin_line_pixel_height(&mut ev, &[]).unwrap();
     assert_eq!(result, Value::fixnum(14));
 }
@@ -2004,12 +2052,12 @@ fn line_pixel_height_gui_context(
     ev.edit.buffers.set_current(buf);
     ev.edit.buffers.get_mut(buf).unwrap().insert(text);
     ev.eval_str(&format!("(goto-char {point})")).unwrap();
-    let fid = ev.frames.create_frame("GUI", 800, 600, buf);
-    let frame = ev.frames.get_mut(fid).unwrap();
+    let fid = ev.frame_manager_mut().create_frame("GUI", 800, 600, buf);
+    let frame = ev.frame_manager_mut().get_mut(fid).unwrap();
     frame.set_window_system(Some(Value::symbol("neo")));
     frame.char_height = 14.0;
-    assert!(ev.frames.select_frame(fid));
-    let (_, wid) = resolve_live_window_identity(&ev.frames, None)
+    assert!(ev.frame_manager_mut().select_frame(fid));
+    let (_, wid) = resolve_live_window_identity(&ev.frame_manager(), None)
         .unwrap()
         .expect("selected window");
     (ev, fid, wid, buf)
@@ -2041,13 +2089,13 @@ fn commit_line_pixel_height_snapshot(
     buf: neovm_edit::buffer::BufferId,
 ) {
     crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
-        &mut ev.frames,
+        &mut ev.frame_manager(),
         &mut ev.edit.buffers,
         fid,
     );
     let freshness = ev.window_display_snapshot_freshness(fid, wid, buf).unwrap();
     let modiff = ev.edit.buffers.get(buf).unwrap().modified_tick();
-    ev.frames
+    ev.frame_manager_mut()
         .get_mut(fid)
         .unwrap()
         .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
@@ -2274,9 +2322,11 @@ fn test_window_text_pixel_size_from_t_starts_at_first_non_empty_line() {
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval.frames.create_frame("xdisp-test", 80, 24, buf_id);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("xdisp-test", 80, 24, buf_id);
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.char_width = 1.0;
         frame.char_height = 1.0;
         frame.font_pixel_size = 1.0;
@@ -2286,7 +2336,12 @@ fn test_window_text_pixel_size_from_t_starts_at_first_non_empty_line() {
         let buffer = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buffer.insert("\n\n  abc\n");
     }
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window.0 as i64;
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window
+        .0 as i64;
 
     let result = builtin_window_text_pixel_size_ctx(
         &mut eval,
@@ -2308,8 +2363,15 @@ fn test_window_text_pixel_size_eval_window_validation() {
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval.frames.create_frame("xdisp-test", 80, 24, buf_id);
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window.0 as i64;
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("xdisp-test", 80, 24, buf_id);
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window
+        .0 as i64;
 
     let ok = builtin_window_text_pixel_size_ctx(
         &mut eval,
@@ -2339,9 +2401,11 @@ fn test_window_text_pixel_size_tty_frame_uses_char_cell_metrics() {
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval.frames.create_frame("xdisp-test", 80, 24, buf_id);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("xdisp-test", 80, 24, buf_id);
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.char_width = 1.0;
         frame.char_height = 1.0;
         frame.font_pixel_size = 1.0;
@@ -2351,7 +2415,12 @@ fn test_window_text_pixel_size_tty_frame_uses_char_cell_metrics() {
         let buffer = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buffer.insert("tiny\n");
     }
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window.0 as i64;
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window
+        .0 as i64;
 
     let result = builtin_window_text_pixel_size_ctx(
         &mut eval,
@@ -2380,9 +2449,11 @@ fn window_text_pixel_size_counts_tty_wrapped_screen_rows() {
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval.frames.create_frame("xdisp-wrap-test", 10, 24, buf_id);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("xdisp-wrap-test", 10, 24, buf_id);
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.char_width = 1.0;
         frame.char_height = 1.0;
         frame.font_pixel_size = 1.0;
@@ -2393,7 +2464,12 @@ fn window_text_pixel_size_counts_tty_wrapped_screen_rows() {
         .get_mut(buf_id)
         .expect("buffer")
         .insert("123456789012\nnext\n");
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window.0;
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window
+        .0;
 
     let result = builtin_window_text_pixel_size_ctx(
         &mut eval,
@@ -2426,10 +2502,10 @@ fn window_text_pixel_size_honors_tty_truncate_lines() {
         .expect("current buffer")
         .id;
     let frame_id = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("xdisp-truncate-test", 10, 24, buf_id);
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.char_width = 1.0;
         frame.char_height = 1.0;
         frame.font_pixel_size = 1.0;
@@ -2444,7 +2520,12 @@ fn window_text_pixel_size_honors_tty_truncate_lines() {
         .get_mut(buf_id)
         .expect("buffer")
         .insert("123456789012345678901234567890\nnext");
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window.0;
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window
+        .0;
 
     let result = builtin_window_text_pixel_size_ctx(
         &mut eval,
@@ -2473,9 +2554,11 @@ fn test_window_text_pixel_size_ctx_coerces_bignum_positions_like_gnu() {
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval.frames.create_frame("xdisp-test", 80, 24, buf_id);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("xdisp-test", 80, 24, buf_id);
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.char_width = 1.0;
         frame.char_height = 1.0;
         frame.font_pixel_size = 1.0;
@@ -2486,7 +2569,12 @@ fn test_window_text_pixel_size_ctx_coerces_bignum_positions_like_gnu() {
         .get_mut(buf_id)
         .expect("buffer")
         .insert("abc\n");
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window.0 as i64;
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window
+        .0 as i64;
     let positive_big = Value::bignum(Integer::from(1u64) << 100u32);
 
     let result = builtin_window_text_pixel_size_ctx(
@@ -2518,9 +2606,11 @@ fn test_window_text_pixel_size_matches_gnu_trailing_line_semantics() {
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval.frames.create_frame("xdisp-test", 80, 24, buf_id);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("xdisp-test", 80, 24, buf_id);
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.char_width = 1.0;
         frame.char_height = 1.0;
         frame.font_pixel_size = 1.0;
@@ -2530,7 +2620,12 @@ fn test_window_text_pixel_size_matches_gnu_trailing_line_semantics() {
         let buffer = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buffer.insert("hello\nworld\n\n");
     }
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window.0 as i64;
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window
+        .0 as i64;
 
     let result = builtin_window_text_pixel_size_ctx(
         &mut eval,
@@ -2572,9 +2667,11 @@ fn test_window_text_pixel_size_uses_char_positions_for_multibyte_range() {
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval.frames.create_frame("xdisp-test", 80, 24, buf_id);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("xdisp-test", 80, 24, buf_id);
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.char_width = 1.0;
         frame.char_height = 1.0;
         frame.font_pixel_size = 1.0;
@@ -2584,7 +2681,12 @@ fn test_window_text_pixel_size_uses_char_positions_for_multibyte_range() {
         let buffer = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buffer.insert("α\nwide");
     }
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window.0 as i64;
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window
+        .0 as i64;
 
     let result = builtin_window_text_pixel_size_ctx(
         &mut eval,
@@ -2612,16 +2714,21 @@ fn pixel_size_tty_context() -> (Context, i64) {
         .expect("current buffer")
         .id;
     let frame_id = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("xdisp-display-spec", 200, 24, buf_id);
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.char_width = 1.0;
         frame.char_height = 1.0;
         frame.font_pixel_size = 1.0;
         frame.set_window_system(None);
     }
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window.0 as i64;
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window
+        .0 as i64;
     (eval, selected_window)
 }
 
@@ -2652,10 +2759,10 @@ fn pixel_size_image_context() -> (Context, i64) {
         .expect("current buffer")
         .id;
     let frame_id = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("xdisp-image-pixels", 200, 24, buf_id);
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.char_width = 10.0;
         frame.char_height = 20.0;
         frame.font_pixel_size = 16.0;
@@ -2674,11 +2781,11 @@ fn pixel_size_image_context() -> (Context, i64) {
     // cells -- and a soft wrap would land in the middle of a character, which
     // is a frame geometry no window has.
     let chrome = {
-        let frame = eval.frames.get(frame_id).expect("frame");
+        let frame = eval.frame_manager().get(frame_id).expect("frame");
         let bounds = *frame.root_window().bounds();
-        (bounds.width - window_body_width(&eval.frames, frame_id)).max(0.0)
+        (bounds.width - window_body_width(&eval.frame_manager(), frame_id)).max(0.0)
     };
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("frame")
         .root_window_mut()
@@ -2689,7 +2796,12 @@ fn pixel_size_image_context() -> (Context, i64) {
             24.0 * 20.0,
         ));
     eval.set_display_host(Box::new(DecodedImageHost));
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window.0 as i64;
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window
+        .0 as i64;
     (eval, selected_window)
 }
 
@@ -3681,7 +3793,7 @@ fn window_text_pixel_size_positive_cons_offset_moves_forward() {
 fn window_text_pixel_size_positive_subrow_offset_stays_on_current_row() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    eval.frames
+    eval.frame_manager_mut()
         .selected_frame_mut()
         .expect("selected frame")
         .char_height = 16.0;
@@ -3717,7 +3829,7 @@ fn window_text_pixel_size_positive_subrow_offset_stays_on_current_row() {
 fn window_text_pixel_size_offset_uses_live_row_pixel_heights() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    eval.frames
+    eval.frame_manager_mut()
         .selected_frame_mut()
         .expect("selected frame")
         .char_height = 16.0;
@@ -3742,7 +3854,7 @@ fn window_text_pixel_size_offset_uses_live_row_pixel_heights() {
         ..Default::default()
     };
     let window_id = crate::window::WindowId(selected_window as u64);
-    eval.frames
+    eval.frame_manager_mut()
         .selected_frame_mut()
         .expect("selected frame")
         .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
@@ -3776,7 +3888,7 @@ fn window_text_pixel_size_offset_uses_live_row_pixel_heights() {
 fn window_text_pixel_size_rejects_snapshot_after_overlay_change() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    eval.frames
+    eval.frame_manager_mut()
         .selected_frame_mut()
         .expect("selected frame")
         .char_height = 16.0;
@@ -3813,11 +3925,15 @@ fn window_text_pixel_size_rejects_snapshot_after_overlay_change() {
         ..Default::default()
     };
     let window_id = crate::window::WindowId(selected_window as u64);
-    let frame_id = eval.frames.selected_frame().expect("selected frame").id;
+    let frame_id = eval
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame")
+        .id;
     let layout_freshness = eval
         .window_display_snapshot_freshness(frame_id, window_id, buf_id)
         .expect("freshness token");
-    eval.frames
+    eval.frame_manager_mut()
         .selected_frame_mut()
         .expect("selected frame")
         .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
@@ -3862,7 +3978,7 @@ fn window_text_pixel_size_rejects_snapshot_after_overlay_change() {
 fn window_text_pixel_size_rejects_snapshot_after_narrowing() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    eval.frames
+    eval.frame_manager_mut()
         .selected_frame_mut()
         .expect("selected frame")
         .char_height = 16.0;
@@ -3893,11 +4009,15 @@ fn window_text_pixel_size_rejects_snapshot_after_narrowing() {
         ..Default::default()
     };
     let window_id = crate::window::WindowId(selected_window as u64);
-    let frame_id = eval.frames.selected_frame().expect("selected frame").id;
+    let frame_id = eval
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame")
+        .id;
     let layout_freshness = eval
         .window_display_snapshot_freshness(frame_id, window_id, buf_id)
         .expect("freshness token");
-    eval.frames
+    eval.frame_manager_mut()
         .selected_frame_mut()
         .expect("selected frame")
         .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
@@ -3948,11 +4068,15 @@ fn retained_display_rows_reject_window_system_changes() {
         .expect("buffer")
         .insert("a\n");
     let window_id = crate::window::WindowId(selected_window as u64);
-    let frame_id = eval.frames.selected_frame().expect("selected frame").id;
+    let frame_id = eval
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame")
+        .id;
     let layout_freshness = eval
         .window_display_snapshot_freshness(frame_id, window_id, buf_id)
         .expect("freshness token");
-    eval.frames
+    eval.frame_manager_mut()
         .selected_frame_mut()
         .expect("selected frame")
         .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
@@ -3966,7 +4090,7 @@ fn retained_display_rows_reject_window_system_changes() {
             .is_some()
     );
 
-    eval.frames
+    eval.frame_manager_mut()
         .selected_frame_mut()
         .expect("selected frame")
         .set_window_system(Some(Value::symbol("neo")));
@@ -3990,12 +4114,12 @@ fn retained_display_rows_reject_local_tab_width_reset() {
     // GNU 31.1: current-column changes from 4 to 8 after resetting locals.
     assert_eq!(eval.eval_str("(current-column)").unwrap(), Value::fixnum(4));
     let buffer_id = eval.edit.buffers.current_buffer_id().unwrap();
-    let frame_id = eval.frames.selected_frame().unwrap().id;
+    let frame_id = eval.frame_manager().selected_frame().unwrap().id;
     let window_id = crate::window::WindowId(selected_window as u64);
     let recorded = eval
         .window_display_snapshot_freshness(frame_id, window_id, buffer_id)
         .unwrap();
-    eval.frames
+    eval.frame_manager_mut()
         .selected_frame_mut()
         .unwrap()
         .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
@@ -4043,11 +4167,15 @@ fn retained_display_rows_reject_window_margin_changes() {
         .expect("current buffer")
         .id;
     let window_id = crate::window::WindowId(selected_window as u64);
-    let frame_id = eval.frames.selected_frame().expect("selected frame").id;
+    let frame_id = eval
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame")
+        .id;
     let layout_freshness = eval
         .window_display_snapshot_freshness(frame_id, window_id, buf_id)
         .expect("freshness token");
-    eval.frames
+    eval.frame_manager_mut()
         .selected_frame_mut()
         .expect("selected frame")
         .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
@@ -4081,16 +4209,20 @@ fn retained_display_rows_reject_window_display_table_changes() {
         .expect("current buffer")
         .id;
     let window_id = crate::window::WindowId(selected_window as u64);
-    let frame_id = eval.frames.selected_frame().expect("selected frame").id;
+    let frame_id = eval
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame")
+        .id;
     let display_table = eval
         .eval_str("(make-char-table 'display-table)")
         .expect("make display table");
-    eval.frames
+    eval.frame_manager_mut()
         .set_window_display_table(window_id, display_table);
     let layout_freshness = eval
         .window_display_snapshot_freshness(frame_id, window_id, buf_id)
         .expect("freshness token");
-    eval.frames
+    eval.frame_manager_mut()
         .selected_frame_mut()
         .expect("selected frame")
         .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
@@ -4114,7 +4246,7 @@ fn retained_display_rows_reject_window_display_table_changes() {
     )
     .expect("mutate installed display table in place");
     assert_eq!(
-        eval.frames.window_display_table(window_id).bits(),
+        eval.frame_manager().window_display_table(window_id).bits(),
         display_table.bits()
     );
 
@@ -4135,11 +4267,15 @@ fn retained_display_rows_reject_window_face_filter_parameter_changes() {
         .expect("current buffer")
         .id;
     let window_id = crate::window::WindowId(selected_window as u64);
-    let frame_id = eval.frames.selected_frame().expect("selected frame").id;
+    let frame_id = eval
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame")
+        .id;
     let layout_freshness = eval
         .window_display_snapshot_freshness(frame_id, window_id, buf_id)
         .expect("freshness token");
-    eval.frames
+    eval.frame_manager_mut()
         .selected_frame_mut()
         .expect("selected frame")
         .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
@@ -4173,16 +4309,20 @@ fn retained_display_rows_reject_restored_window_parameter_state() {
         .expect("current buffer")
         .id;
     let window_id = crate::window::WindowId(selected_window as u64);
-    let frame_id = eval.frames.selected_frame().expect("selected frame").id;
+    let frame_id = eval
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame")
+        .id;
     let saved_window = eval
-        .frames
+        .frame_manager()
         .selected_frame()
         .expect("selected frame")
         .selected_window()
         .expect("selected window")
         .clone();
 
-    eval.frames
+    eval.frame_manager_mut()
         .selected_frame_mut()
         .expect("selected frame")
         .selected_window_mut()
@@ -4192,7 +4332,7 @@ fn retained_display_rows_reject_restored_window_parameter_state() {
     let layout_freshness = eval
         .window_display_snapshot_freshness(frame_id, window_id, buf_id)
         .expect("freshness token");
-    eval.frames
+    eval.frame_manager_mut()
         .selected_frame_mut()
         .expect("selected frame")
         .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
@@ -4211,7 +4351,7 @@ fn retained_display_rows_reject_restored_window_parameter_state() {
         .parameters_mut()
         .push((Value::symbol("indent-bars-whr"), Value::symbol("left")));
     *eval
-        .frames
+        .frame_manager_mut()
         .selected_frame_mut()
         .expect("selected frame")
         .root_window_mut() = restored_window;
@@ -4226,7 +4366,7 @@ fn retained_display_rows_reject_restored_window_parameter_state() {
 fn window_text_pixel_size_preserves_pixel_progress_beyond_live_rows() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    eval.frames
+    eval.frame_manager_mut()
         .selected_frame_mut()
         .expect("selected frame")
         .char_height = 16.0;
@@ -4251,7 +4391,7 @@ fn window_text_pixel_size_preserves_pixel_progress_beyond_live_rows() {
         ..Default::default()
     };
     let window_id = crate::window::WindowId(selected_window as u64);
-    eval.frames
+    eval.frame_manager_mut()
         .selected_frame_mut()
         .expect("selected frame")
         .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
@@ -4422,16 +4562,21 @@ fn window_text_pixel_size_backend_trace(kind: BufferTextBackendKind) -> (i64, i6
         .expect("current buffer")
         .id;
     let frame_id = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("xdisp-backend-pixels", 80, 24, buf_id);
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.char_width = 2.0;
         frame.char_height = 3.0;
         frame.font_pixel_size = 3.0;
         frame.set_window_system(None);
     }
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window.0 as i64;
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window
+        .0 as i64;
 
     let size = builtin_window_text_pixel_size_ctx(
         &mut eval,
@@ -4540,15 +4685,21 @@ fn test_pos_visible_in_window_p_eval_returns_partial_geometry_for_live_window() 
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval.frames.create_frame("xdisp-pos", 160, 64, buf_id);
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("xdisp-pos", 160, 64, buf_id);
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     {
         let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("abc\ndef\nghi\n");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(4));
     }
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         let window = frame
             .find_window_mut(selected_window)
             .expect("selected window");
@@ -4590,8 +4741,10 @@ fn pos_visible_queries_target_rows_but_last_row_still_queries_the_viewport() {
         .get_mut(buffer)
         .unwrap()
         .insert("first\nsecond\nthird\n");
-    let frame = eval.frames.create_frame("target-query", 160, 96, buffer);
-    let window = eval.frames.get(frame).unwrap().selected_window;
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("target-query", 160, 96, buffer);
+    let window = eval.frame_manager().get(frame).unwrap().selected_window;
     eval.eval_str("(goto-char 5)").unwrap();
     let scopes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let observed = scopes.clone();
@@ -4632,9 +4785,9 @@ fn posn_at_point_queries_the_target_instead_of_completing_the_viewport() {
         .unwrap()
         .insert("first\nsecond\nthird\n");
     let frame = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("point-target-query", 160, 96, buffer);
-    let window = eval.frames.get(frame).unwrap().selected_window;
+    let window = eval.frame_manager().get(frame).unwrap().selected_window;
     let scopes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let observed = scopes.clone();
     eval.install_window_layout_query(move |_, _, _, scope| {
@@ -4682,9 +4835,12 @@ fn line_numbers_point_independence_uses_defaults_and_local_overrides() {
     ] {
         let mut eval = interactive_context();
         let buffer = eval.edit.buffers.current_buffer().unwrap().id;
-        let frame = eval
-            .frames
-            .create_frame("line-number-point-independence", 160, 96, buffer);
+        let frame = eval.frame_manager_mut().create_frame(
+            "line-number-point-independence",
+            160,
+            96,
+            buffer,
+        );
         eval.eval_str(setup).unwrap();
         assert_eq!(
             line_numbers_are_point_independent(&eval, frame, buffer),
@@ -4701,7 +4857,7 @@ fn line_number_faces_use_gnu_frame_local_inherit_equality() {
     let mut eval = interactive_context();
     let buffer = eval.edit.buffers.current_buffer().unwrap().id;
     let frame = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("line-number-face-equality", 160, 96, buffer);
 
     // GNU's default `line-number-current-line` is `(t :inherit line-number)`:
@@ -4709,7 +4865,7 @@ fn line_number_faces_use_gnu_frame_local_inherit_equality() {
     // with INHERIT=t considers the definitions equal (src/xfaces.c:4556-4594).
     // Bind this frame's table: `(frame--face-hash-table)` reads the selected
     // frame, which a test context need not have selected.
-    let table = eval.frames.get(frame).unwrap().face_hash_table();
+    let table = eval.frame_manager().get(frame).unwrap().face_hash_table();
     eval.set_variable("line-number-test-face-table", table);
     eval.eval_str(
         "(let ((vector (make-vector 20 'unspecified)))
@@ -4775,13 +4931,13 @@ fn assert_point_only_warm_query_reuse_with_face_setup(
     let buffer = eval.edit.buffers.current_buffer().unwrap().id;
     eval.edit.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
     let frame = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("point-only-row-query", 160, 96, buffer);
-    let window = eval.frames.get(frame).unwrap().selected_window;
-    eval.frames.get_mut(frame).unwrap().initial = false;
+    let window = eval.frame_manager().get(frame).unwrap().selected_window;
+    eval.frame_manager_mut().get_mut(frame).unwrap().initial = false;
     eval.set_variable("point-query-window", Value::make_window(window.0));
     if let Some(face_setup) = face_setup {
-        let table = eval.frames.get(frame).unwrap().face_hash_table();
+        let table = eval.frame_manager().get(frame).unwrap().face_hash_table();
         eval.set_variable("point-query-face-table", table);
         eval.eval_str(face_setup).unwrap();
     }
@@ -4796,7 +4952,7 @@ fn assert_point_only_warm_query_reuse_with_face_setup(
     .unwrap();
     eval.eval_str(setup).unwrap();
     match eval
-        .frames
+        .frame_manager_mut()
         .get_mut(frame)
         .unwrap()
         .find_window_mut(window)
@@ -4857,7 +5013,7 @@ fn assert_point_only_warm_query_reuse_with_face_setup(
     };
     warm.regions.text_body.width = 160.0;
     warm.regions.text_body.height = 32.0;
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame)
         .unwrap()
         .commit_redisplay_cache_for_test(vec![warm]);
@@ -4913,7 +5069,7 @@ fn assert_point_only_warm_query_reuse_with_face_setup(
         .unwrap()
         .goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(3));
     match eval
-        .frames
+        .frame_manager_mut()
         .get_mut(frame)
         .unwrap()
         .find_window_mut(window)
@@ -4984,10 +5140,10 @@ fn posn_at_point_requeries_warm_rows_after_point_moves_with_default_relative_num
     let buffer = eval.edit.buffers.current_buffer().unwrap().id;
     eval.edit.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
     let frame = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("relative-row-query", 160, 96, buffer);
-    let window = eval.frames.get(frame).unwrap().selected_window;
-    eval.frames.get_mut(frame).unwrap().initial = false;
+    let window = eval.frame_manager().get(frame).unwrap().selected_window;
+    eval.frame_manager_mut().get_mut(frame).unwrap().initial = false;
     eval.eval_str("(progn (set-default 'display-line-numbers 'relative) (goto-char 1))")
         .unwrap();
     let freshness = eval
@@ -5017,7 +5173,7 @@ fn posn_at_point_requeries_warm_rows_after_point_moves_with_default_relative_num
         layout_freshness: Some(freshness.clone()),
         ..Default::default()
     };
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame)
         .unwrap()
         .commit_redisplay_cache_for_test(vec![warm]);
@@ -5041,7 +5197,7 @@ fn posn_at_point_requeries_warm_rows_after_point_moves_with_default_relative_num
     eval.eval_str("(goto-char 3)").unwrap();
     // Keep the non-selected test window's saved point in sync with buffer point.
     match eval
-        .frames
+        .frame_manager_mut()
         .get_mut(frame)
         .unwrap()
         .find_window_mut(window)
@@ -5086,10 +5242,10 @@ fn posn_at_point_requeries_warm_rows_after_face_overlay_height_changes_or_moves(
         let buffer = eval.edit.buffers.current_buffer().unwrap().id;
         eval.edit.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
         let frame = eval
-            .frames
+            .frame_manager_mut()
             .create_frame("overlay-row-query", 160, 96, buffer);
-        let window = eval.frames.get(frame).unwrap().selected_window;
-        eval.frames.get_mut(frame).unwrap().initial = false;
+        let window = eval.frame_manager().get(frame).unwrap().selected_window;
+        eval.frame_manager_mut().get_mut(frame).unwrap().initial = false;
         eval.eval_str(setup).unwrap();
         let buffer_modiff = eval.edit.buffers.get(buffer).unwrap().modified_tick();
         let overlay_modiff = eval
@@ -5126,7 +5282,7 @@ fn posn_at_point_requeries_warm_rows_after_face_overlay_height_changes_or_moves(
         };
         let mut warm = snapshot(16);
         warm.layout_freshness = Some(freshness);
-        eval.frames
+        eval.frame_manager_mut()
             .get_mut(frame)
             .unwrap()
             .commit_redisplay_cache_for_test(vec![warm]);
@@ -5192,12 +5348,16 @@ fn pos_visible_in_new_live_window_falls_back_when_active_presentation_predates_i
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval
-        .frames
-        .create_frame("xdisp-new-window", 800, 600, original_buffer);
-    let original_window = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("xdisp-new-window", 800, 600, original_buffer);
+    let original_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.set_window_system(Some(Value::symbol("neo")));
         frame
             .prepare_and_activate_display_presentation_for_test(
@@ -5216,7 +5376,7 @@ fn pos_visible_in_new_live_window_falls_back_when_active_presentation_predates_i
     // presented a frame containing that new window.
     let help_buffer = eval.edit.buffers.create_buffer("*Disabled Command*");
     let help_window = eval
-        .frames
+        .frame_manager_mut()
         .split_window(
             frame_id,
             original_window,
@@ -5251,12 +5411,21 @@ fn test_pos_visible_in_window_p_noninteractive_returns_nil_like_gnu_batch() {
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval.frames.create_frame("xdisp-batch-pos", 160, 64, buf_id);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("xdisp-batch-pos", 160, 64, buf_id);
     // GNU `pos_visible_p` answers nil because the --batch frame is the
     // INITIAL frame (`FRAME_INITIAL_P`), not because `noninteractive` is t:
     // model the batch condition the way GNU carries it.
-    eval.frames.get_mut(frame_id).expect("frame").initial = true;
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .initial = true;
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     {
         let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("abc\ndef\n");
@@ -5293,16 +5462,20 @@ fn test_window_line_height_eval_returns_live_gui_row_metrics() {
         .expect("current buffer")
         .id;
     let frame_id = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("xdisp-line-height", 160, 64, buf_id);
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     {
         let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("abc\ndef\nghi\n");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(4));
     }
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         let window = frame
             .find_window_mut(selected_window)
             .expect("selected window");
@@ -5336,7 +5509,7 @@ fn test_window_line_height_eval_returns_live_gui_row_metrics() {
             end_source: Default::default(),
             fringe: Default::default(),
         };
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
             point_rows: None,
             window_id: selected_window,
@@ -5384,12 +5557,16 @@ fn test_window_line_height_eval_uses_exact_chrome_rows() {
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval
-        .frames
-        .create_frame("xdisp-line-height-chrome", 160, 80, buf_id);
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("xdisp-line-height-chrome", 160, 80, buf_id);
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame
             .prepare_and_activate_display_presentation_for_test(
                 crate::window::geometry::PresentationId::new(1),
@@ -5516,12 +5693,16 @@ fn test_window_line_height_eval_reports_text_rows_relative_to_text_area() {
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval
-        .frames
-        .create_frame("xdisp-line-height-text-origin", 160, 80, buf_id);
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("xdisp-line-height-text-origin", 160, 80, buf_id);
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
             point_rows: None,
             window_id: selected_window,
@@ -5628,8 +5809,14 @@ fn test_posn_at_point_eval_uses_exact_redisplay_snapshot() {
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval.frames.create_frame("xdisp-posn", 160, 64, buf_id);
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("xdisp-posn", 160, 64, buf_id);
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     {
         let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("abcdef\n");
@@ -5637,7 +5824,7 @@ fn test_posn_at_point_eval_uses_exact_redisplay_snapshot() {
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(4));
     }
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         let window = frame
             .find_window_mut(selected_window)
             .expect("selected window");
@@ -5754,15 +5941,19 @@ fn test_posn_at_point_reports_text_area_relative_y_below_window_chrome() {
         .expect("current buffer")
         .id;
     let frame_id = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("xdisp-posn-chrome", 800, 600, buf_id);
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     {
         let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("completion");
     }
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
             point_rows: None,
             window_id: selected_window,
@@ -5851,10 +6042,17 @@ fn posn_at_point_recomputes_a_terminal_window_redisplay_has_not_drawn_yet() {
         .expect("current buffer")
         .id;
     let frame_id = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("xdisp-posn-cold", 800, 600, buf_id);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
-    eval.frames.get_mut(frame_id).expect("frame").initial = false;
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .initial = false;
     {
         let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("completion");
@@ -5864,7 +6062,7 @@ fn posn_at_point_recomputes_a_terminal_window_redisplay_has_not_drawn_yet() {
     // window, which is exactly the state a `-l` script sees before the command
     // loop's first redisplay.
     assert!(
-        eval.frames
+        eval.frame_manager()
             .get(frame_id)
             .expect("frame")
             .redisplay_snapshot(window_id)
@@ -5954,7 +6152,7 @@ fn posn_at_point_recomputes_a_terminal_window_redisplay_has_not_drawn_yet() {
         "each query performs exactly one canonical row walk"
     );
     assert!(
-        eval.frames
+        eval.frame_manager()
             .get(frame_id)
             .expect("frame")
             .redisplay_snapshot(window_id)
@@ -5968,15 +6166,21 @@ fn gui_posn_at_point_uses_next_presented_glyph_only_within_the_same_body_row() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
     let buffer = eval.edit.buffers.current_buffer().expect("buffer").id;
-    let frame_id = eval.frames.create_frame("posn-hidden", 800, 600, buffer);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("posn-hidden", 800, 600, buffer);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     eval.edit
         .buffers
         .get_mut(buffer)
         .expect("buffer")
         .insert("abcdefghijklmnopqrstuvwxyz\n");
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.set_window_system(Some(Value::symbol("neo")));
         frame
             .prepare_and_activate_display_presentation_for_test(
@@ -6154,9 +6358,13 @@ fn tty_posn_at_x_y_uses_the_named_live_grid_approximation() {
         .expect("current buffer")
         .id;
     let frame_id = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("xdisp-posn-xy-chrome", 160, 80, buf_id);
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     {
         let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("abcdef\n");
@@ -6183,10 +6391,16 @@ fn posn_at_x_y_uses_one_presented_transform_for_text_window_and_frame_coordinate
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
     let buffer = eval.edit.buffers.current_buffer().expect("buffer").id;
-    let frame_id = eval.frames.create_frame("posn-presented", 800, 600, buffer);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("posn-presented", 800, 600, buffer);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.set_window_system(Some(Value::symbol("neo")));
         frame
             .prepare_and_activate_display_presentation_for_test(
@@ -6259,13 +6473,13 @@ fn posn_at_x_y_uses_one_presented_transform_for_text_window_and_frame_coordinate
     }
 
     assert!(
-        eval.frames
+        eval.frame_manager_mut()
             .get_mut(frame_id)
             .expect("frame")
             .retire_display_presentation(crate::window::geometry::PresentationId::new(1))
     );
     assert!(
-        eval.frames
+        eval.frame_manager()
             .get(frame_id)
             .expect("frame")
             .active_presentation_geometry()
@@ -6292,10 +6506,16 @@ fn frame_relative_posn_at_x_y_rejects_new_surface_area_outside_stale_presentatio
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
     let buffer = eval.edit.buffers.current_buffer().expect("buffer").id;
-    let frame_id = eval.frames.create_frame("posn-expose", 800, 600, buffer);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("posn-expose", 800, 600, buffer);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.set_window_system(Some(Value::symbol("neo")));
         frame
             .prepare_and_activate_display_presentation_for_test(
@@ -6378,15 +6598,21 @@ fn test_posn_at_x_y_eval_uses_exact_redisplay_snapshot() {
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval.frames.create_frame("xdisp-posn-xy", 160, 64, buf_id);
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("xdisp-posn-xy", 160, 64, buf_id);
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     {
         let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("abcdef\n");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(4));
     }
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
             point_rows: None,
             window_id: selected_window,
@@ -6577,12 +6803,16 @@ fn posn_at_x_y_on_the_mode_line_answers_the_mode_line() {
         .expect("current buffer")
         .id;
     let frame_id = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("xdisp-posn-mode-line", 640, 384, buf_id);
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     {
         let (point, row) = fixture_text_row(0, 0, 1);
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
             point_rows: None,
             window_id: selected_window,
@@ -6696,13 +6926,17 @@ fn posn_at_x_y_at_y_zero_of_a_window_with_a_header_line_answers_row_minus_one() 
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval
-        .frames
-        .create_frame("xdisp-posn-header-line", 640, 384, buf_id);
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("xdisp-posn-header-line", 640, 384, buf_id);
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     {
         let (point, row) = fixture_text_row(1, 16, 1);
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
             point_rows: None,
             window_id: selected_window,
@@ -6811,11 +7045,11 @@ fn posn_at_x_y_past_a_window_with_no_mode_line_resolves_the_window_below_it() {
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval
-        .frames
-        .create_frame("xdisp-posn-no-mode-line", 640, 384, buf_id);
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("xdisp-posn-no-mode-line", 640, 384, buf_id);
     let (selected_window, minibuffer_window) = {
-        let frame = eval.frames.get(frame_id).expect("frame");
+        let frame = eval.frame_manager().get(frame_id).expect("frame");
         (
             frame.selected_window,
             frame
@@ -6828,7 +7062,7 @@ fn posn_at_x_y_past_a_window_with_no_mode_line_resolves_the_window_below_it() {
     {
         let (body_point, body_row) = fixture_text_row(0, 0, 1);
         let (mini_point, mini_row) = fixture_text_row(0, 0, 1);
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.commit_redisplay_cache_for_test(vec![
             crate::window::WindowDisplaySnapshot {
                 point_rows: None,
@@ -6936,12 +7170,16 @@ fn posn_at_x_y_outside_every_window_answers_the_frame() {
         .expect("current buffer")
         .id;
     let frame_id = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("xdisp-posn-off-frame", 640, 384, buf_id);
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     {
         let (point, row) = fixture_text_row(0, 0, 1);
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
             point_rows: None,
             window_id: selected_window,
@@ -6990,7 +7228,7 @@ fn test_posn_at_x_y_batch_uses_selected_window_without_snapshot() {
         .buffers
         .current_buffer_id()
         .expect("scratch buffer");
-    eval.frames
+    eval.frame_manager_mut()
         .create_frame("xdisp-batch-posn", 80, 25, scratch);
     let temp = eval.edit.buffers.create_buffer(" *temp*");
     eval.set_current_buffer_unrecorded(temp)
@@ -7019,9 +7257,9 @@ fn test_posn_at_x_y_batch_wraps_long_visual_lines_like_gnu_tty() {
         .buffers
         .current_buffer_id()
         .expect("scratch buffer");
-    let frame_id = eval
-        .frames
-        .create_frame("xdisp-batch-wrap-posn", 80 * 8, 25 * 16, scratch);
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("xdisp-batch-wrap-posn", 80 * 8, 25 * 16, scratch);
     {
         let buffer = eval
             .edit
@@ -7031,7 +7269,7 @@ fn test_posn_at_x_y_batch_wraps_long_visual_lines_like_gnu_tty() {
         buffer.insert(&"x".repeat(500));
     }
     let (char_width, char_height) = {
-        let frame = eval.frames.get(frame_id).expect("frame");
+        let frame = eval.frame_manager().get(frame_id).expect("frame");
         (frame.char_width as i64, frame.char_height as i64)
     };
 
@@ -7797,11 +8035,13 @@ fn test_tool_bar_height_eval_frame_validation() {
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval.frames.create_frame("xdisp-test", 80, 24, buf_id);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("xdisp-test", 80, 24, buf_id);
 
     {
         let frame = eval
-            .frames
+            .frame_manager_mut()
             .get_mut(frame_id)
             .expect("xdisp test frame should exist");
         frame.char_height = 17.0;
@@ -7845,7 +8085,9 @@ fn test_tab_bar_height_eval_frame_validation() {
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval.frames.create_frame("xdisp-test", 80, 24, buf_id);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("xdisp-test", 80, 24, buf_id);
 
     let result =
         builtin_tab_bar_height_ctx(&mut eval, vec![Value::make_frame(frame_id.0)]).unwrap();
@@ -7864,7 +8106,10 @@ fn test_tab_bar_height_eval_reflects_tab_bar_lines_and_pixels() {
     let mut eval = interactive_context();
     let frame_id = super::super::window_cmds::ensure_selected_frame_id(&mut eval);
     {
-        let frame = eval.frames.get_mut(frame_id).expect("selected frame");
+        let frame = eval
+            .frame_manager_mut()
+            .get_mut(frame_id)
+            .expect("selected frame");
         frame.char_height = 20.0;
     }
     super::super::frame::builtin_modify_frame_parameters(
@@ -7887,7 +8132,7 @@ fn test_tab_bar_height_eval_reflects_tab_bar_lines_and_pixels() {
             .unwrap();
     assert_eq!(pixels, Value::fixnum(20));
 
-    let frame = eval.frames.get(frame_id).expect("selected frame");
+    let frame = eval.frame_manager().get(frame_id).expect("selected frame");
     assert_eq!(frame.tab_bar_height, 20);
 }
 
@@ -7901,7 +8146,7 @@ fn test_line_number_display_width() {
     assert_eq!(result, Value::fixnum(0));
 
     let frame_id = super::super::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .char_width = 8.0;
@@ -7943,7 +8188,7 @@ fn line_number_display_width_uses_byte_newline_count_not_char_pos_scan() {
     let mut eval = interactive_context();
 
     let frame_id = super::super::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .char_width = 8.0;
@@ -8376,10 +8621,14 @@ fn fringe_bitmaps_at_pos_fixture() -> (Context, crate::window::FrameId) {
         .get_mut(buf_id)
         .expect("current buffer")
         .insert("alpha\nbeta\ngamma\n");
-    let frame_id = eval
-        .frames
-        .create_frame("xdisp-fringe-bitmaps-at-pos", 160, 80, buf_id);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("xdisp-fringe-bitmaps-at-pos", 160, 80, buf_id);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
 
     let bitmap = |bits: u16| neovm_eval::emacs_core::builtins::fringe_bitmap::FringeBitmap {
         bits: vec![bits],
@@ -8390,10 +8639,10 @@ fn fringe_bitmaps_at_pos_fixture() -> (Context, crate::window::FrameId) {
         face: None,
     };
     let left = eval
-        .fringe_bitmaps
+        .fringe_bitmaps_mut()
         .define(intern("p39-left"), None, bitmap(255));
     let right = eval
-        .fringe_bitmaps
+        .fringe_bitmaps_mut()
         .define(intern("p39-right"), None, bitmap(129));
 
     let row = |row: i64, start: usize, end: usize, fringe: crate::window::RowFringeBitmaps| {
@@ -8413,7 +8662,7 @@ fn fringe_bitmaps_at_pos_fixture() -> (Context, crate::window::FrameId) {
             fringe,
         }
     };
-    let frame = eval.frames.get_mut(frame_id).expect("frame");
+    let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
     frame.commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
         point_rows: None,
         window_id,
@@ -8589,9 +8838,13 @@ fn window_line_height_refuses_every_line_form_without_a_current_matrix_like_gnu(
         .expect("current buffer")
         .id;
     let frame_id = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("l217-no-current-matrix", 160, 64, buf_id);
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     {
         let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("abc\ndef\nghi\n");
@@ -8643,10 +8896,14 @@ fn redisplay_start_before_point_scans_the_window_buffer_not_the_current_one() {
         .get_mut(window_buffer)
         .expect("window buffer")
         .insert(&text);
-    let frame_id = eval
-        .frames
-        .create_frame("recenter-window-buffer", 80, 24, window_buffer);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("recenter-window-buffer", 80, 24, window_buffer);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
 
     // A four-character buffer is current, as " *Minibuf-1*" is while `M-x`
     // completes; every position the scan probes lies beyond its end.
@@ -8751,14 +9008,14 @@ fn probe_text_region(
 fn reference_frame_body_width() -> i64 {
     let (eval, selected_window) = pixel_size_image_context();
     let fid = eval
-        .frames
+        .frame_manager()
         .find_window_frame_id(crate::window::WindowId(selected_window as u64))
         .expect("frame of the selected window");
-    let frame = eval.frames.get(fid).expect("frame");
+    let frame = eval.frame_manager().get(fid).expect("frame");
     let window = frame
         .find_window(crate::window::WindowId(selected_window as u64))
         .expect("window");
-    crate::emacs_core::window_cmds::window_body_width_pixels(&eval.frames, fid, window)
+    crate::emacs_core::window_cmds::window_body_width_pixels(&eval.frame_manager(), fid, window)
 }
 
 /// FROM does not clip the left side: GNU measures from the start of FROM's

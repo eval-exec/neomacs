@@ -17,10 +17,16 @@ fn tty_posn_split_without_local_output_reads_the_accepted_frame_pool() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
     let buffer = eval.edit.buffers.current_buffer().expect("buffer").id;
-    let frame_id = eval.frames.create_frame("posn-pool-split", 12, 8, buffer);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("posn-pool-split", 12, 8, buffer);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.initial = false;
         frame.char_width = 1.0;
         frame.char_height = 1.0;
@@ -40,7 +46,7 @@ fn tty_posn_split_without_local_output_reads_the_accepted_frame_pool() {
         );
     }
     let bounds = *eval
-        .frames
+        .frame_manager()
         .get(frame_id)
         .unwrap()
         .find_window(window_id)
@@ -78,7 +84,7 @@ fn tty_posn_split_without_local_output_reads_the_accepted_frame_pool() {
     });
     {
         let _on = PosnExtentFixtureGuard::set(PosnObjectExtentMode::On);
-        eval.frames
+        eval.frame_manager_mut()
             .get_mut(frame_id)
             .unwrap()
             .prepare_display_presentation_with_tty_posn_pool(
@@ -89,7 +95,7 @@ fn tty_posn_split_without_local_output_reads_the_accepted_frame_pool() {
             .expect("real accepted presentation");
     }
     assert!(
-        eval.frames
+        eval.frame_manager()
             .get(frame_id)
             .unwrap()
             .redisplay_snapshot(window_id)
@@ -99,7 +105,7 @@ fn tty_posn_split_without_local_output_reads_the_accepted_frame_pool() {
     // redisplay output. Accepted numeric cells must survive both transitions.
     eval.edit.buffers.get_mut(buffer).unwrap().insert("abcd\n");
     let child = eval
-        .frames
+        .frame_manager_mut()
         .split_window(
             frame_id,
             window_id,
@@ -109,7 +115,7 @@ fn tty_posn_split_without_local_output_reads_the_accepted_frame_pool() {
             SplitPlacement::AfterTarget,
         )
         .expect("split");
-    eval.frames
+    eval.frame_manager_mut()
         .apply_staged_split_sizes(
             frame_id,
             child,
@@ -119,7 +125,7 @@ fn tty_posn_split_without_local_output_reads_the_accepted_frame_pool() {
         )
         .expect("applied GNU split sizes");
     assert!(
-        eval.frames
+        eval.frame_manager()
             .get(frame_id)
             .unwrap()
             .redisplay_snapshot(child)
@@ -241,7 +247,7 @@ fn tty_posn_split_without_local_output_reads_the_accepted_frame_pool() {
             "GNU cold child cell metrics"
         );
     }
-    let frame = eval.frames.get(frame_id).unwrap();
+    let frame = eval.frame_manager().get(frame_id).unwrap();
     assert!(Arc::ptr_eq(frame.tty_posn_pool().unwrap(), &accepted));
     assert!(
         frame.redisplay_snapshot(child).is_none(),
@@ -251,7 +257,7 @@ fn tty_posn_split_without_local_output_reads_the_accepted_frame_pool() {
     // A refused identity is no publication authority either.
     let _on = PosnExtentFixtureGuard::set(PosnObjectExtentMode::On);
     assert!(
-        eval.frames
+        eval.frame_manager_mut()
             .get_mut(frame_id)
             .unwrap()
             .prepare_display_presentation_with_tty_posn_pool(
@@ -262,7 +268,11 @@ fn tty_posn_split_without_local_output_reads_the_accepted_frame_pool() {
             .is_err()
     );
     assert!(Arc::ptr_eq(
-        eval.frames.get(frame_id).unwrap().tty_posn_pool().unwrap(),
+        eval.frame_manager()
+            .get(frame_id)
+            .unwrap()
+            .tty_posn_pool()
+            .unwrap(),
         &accepted
     ));
 }

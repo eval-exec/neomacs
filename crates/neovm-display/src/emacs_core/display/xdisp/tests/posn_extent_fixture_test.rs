@@ -43,7 +43,7 @@ pub(super) fn install_accepted_tty_fixture_rows(
     frame_id: FrameId,
     windows: &[(WindowId, usize, usize)],
 ) {
-    let frame = eval.frames.get_mut(frame_id).expect("frame");
+    let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
     let snapshots = windows
         .iter()
         .map(|&(window, row, used)| {

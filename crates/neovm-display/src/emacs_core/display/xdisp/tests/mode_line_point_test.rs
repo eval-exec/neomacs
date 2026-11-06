@@ -20,8 +20,10 @@ fn mode_line_display_point_tracks_eval_moves_and_restrictions() {
         .buffers
         .current_buffer_id()
         .expect("current buffer");
-    let frame = eval.frames.create_frame("point-percent", 120, 40, buffer);
-    assert!(eval.frames.select_frame(frame));
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("point-percent", 120, 40, buffer);
+    assert!(eval.frame_manager_mut().select_frame(frame));
     let format = eval
         .eval_str(
             r#"'("start[%l/%c/%C]"

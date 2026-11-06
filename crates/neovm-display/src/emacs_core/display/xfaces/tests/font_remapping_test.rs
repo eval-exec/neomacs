@@ -56,7 +56,7 @@ impl DisplayHost for PointSizeFontHost {
 fn context() -> Context {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame)
         .unwrap()
         .set_window_system(Some(Value::symbol("neo")));

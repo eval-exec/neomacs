@@ -19,7 +19,8 @@ fn mode_line_outer_binding_errors_block_outer_handlers_and_debugger() {
             .buffers
             .current_buffer_id()
             .expect("current buffer");
-        eval.frames.create_frame("fx2-outer-handlers", 80, 24, bid);
+        eval.frame_manager_mut()
+            .create_frame("fx2-outer-handlers", 80, 24, bid);
         eval.eval_str(&format!(
             r#"
           (fset 'ignore '(lambda (&rest args) nil))
@@ -45,9 +46,13 @@ fn mode_line_outer_binding_errors_block_outer_handlers_and_debugger() {
         .expect("one-shot watcher and format");
         eval.redisplay_fn = Some(Box::new(|eval| {
             eval.set_variable("fx2-callback-hit", Value::T);
-            let window = eval.frames.selected_frame().unwrap().selected_window;
+            let window = eval
+                .frame_manager()
+                .selected_frame()
+                .unwrap()
+                .selected_window;
             let format = eval
-                .obarray
+                .obarray_view()
                 .symbol_value_copied("fx2-outer-format")
                 .unwrap();
             format_mode_line_for_display_with_sources(
@@ -59,7 +64,7 @@ fn mode_line_outer_binding_errors_block_outer_handlers_and_debugger() {
             );
         }));
         let roots = save_scratch_gc_roots();
-        let specpdl = eval.specpdl.len();
+        let specpdl = eval.specpdl().len();
         let conditions = eval.condition_stack_len();
         let value = eval
             .eval_str(
@@ -83,7 +88,7 @@ fn mode_line_outer_binding_errors_block_outer_handlers_and_debugger() {
         assert!(fields[1].is_t(), "native callback ran");
         assert!(fields[2].is_t(), "{phase} watcher signaled");
         observations.push((phase, fields[3].is_nil(), fields[4].is_nil()));
-        assert_eq!(eval.specpdl.len(), specpdl);
+        assert_eq!(eval.specpdl().len(), specpdl);
         assert_eq!(eval.condition_stack_len(), conditions);
         assert_eq!(save_scratch_gc_roots(), roots);
         assert!(eval.redisplay_fn.is_some());

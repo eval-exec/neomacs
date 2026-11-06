@@ -3,7 +3,7 @@ use neovm_eval::emacs_core::eval::Context;
 
 fn roots_for(ctx: &Context) -> Vec<Value> {
     let mut roots = Vec::new();
-    collect_font_registry_gc_roots(&ctx.font_registry, &mut roots);
+    ctx.collect_font_registry_gc_roots_for_test(&mut roots);
     roots
 }
 
@@ -44,7 +44,7 @@ fn gc_tls_ownership_font_roots_exclude_another_live_heap() {
     assert!(
         roots_for(&first)
             .iter()
-            .all(|root| first.tagged_heap.owns_heap_value_for_test(*root)),
+            .all(|root| first.tagged_heap().owns_heap_value_for_test(*root)),
         "font overrides from the second Context are roots of the first heap"
     );
     first.gc_collect_exact();

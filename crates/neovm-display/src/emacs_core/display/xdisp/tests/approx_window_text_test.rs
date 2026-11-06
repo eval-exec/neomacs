@@ -123,17 +123,21 @@ fn window_over(text: &str, window_start: usize) -> (Context, FrameId, WindowId) 
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval
-        .frames
-        .create_frame("approx-window-text", 40 * 8, 12 * 16, buf_id);
-    let window = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("approx-window-text", 40 * 8, 12 * 16, buf_id);
+    let window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     eval.edit
         .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert(text);
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         if let Some(Window::Leaf {
             window_start: start,
             ..
@@ -148,9 +152,14 @@ fn window_over(text: &str, window_start: usize) -> (Context, FrameId, WindowId) 
 fn check(text: &str, window_start: usize) {
     set_bounded_window_text_for_test(Some(true));
     let (eval, frame_id, window) = window_over(text, window_start);
-    let ctx = live_window_display_context_for(&eval.frames, &eval.edit.buffers, frame_id, window)
-        .expect("context")
-        .expect("a live window");
+    let ctx = live_window_display_context_for(
+        &eval.frame_manager(),
+        &eval.edit.buffers,
+        frame_id,
+        window,
+    )
+    .expect("context")
+    .expect("a live window");
     let chars: Vec<char> = text.chars().collect();
     let start = window_start.saturating_sub(1).min(chars.len());
     let wrap = approx_wrap_cols(&ctx);
@@ -194,7 +203,7 @@ fn check(text: &str, window_start: usize) {
                 Some(ApproxPointAtCoords::Point(metrics, _)) => Some(metrics),
                 Some(ApproxPointAtCoords::NeedsAllText) => {
                     let whole = live_window_display_context_with_all_text(
-                        &eval.frames,
+                        &eval.frame_manager(),
                         &eval.edit.buffers,
                         frame_id,
                         window,
@@ -254,9 +263,14 @@ fn a_large_buffer_is_read_only_as_far_as_the_window_shows() {
     set_bounded_window_text_for_test(Some(true));
     let text: String = (0..20_000).map(|i| format!("line {i}\n")).collect();
     let (eval, frame_id, window) = window_over(&text, 1);
-    let ctx = live_window_display_context_for(&eval.frames, &eval.edit.buffers, frame_id, window)
-        .expect("context")
-        .expect("a live window");
+    let ctx = live_window_display_context_for(
+        &eval.frame_manager(),
+        &eval.edit.buffers,
+        frame_id,
+        window,
+    )
+    .expect("context")
+    .expect("a live window");
     let budget = ((ctx.body_lines + 2) * (approx_wrap_cols(&ctx) + 1) + 1) as usize;
     assert!(
         ctx.text.chars.len() <= budget,
@@ -267,9 +281,14 @@ fn a_large_buffer_is_read_only_as_far_as_the_window_shows() {
 
     // Off, the text runs to the end of the buffer, as before.
     set_bounded_window_text_for_test(Some(false));
-    let ctx = live_window_display_context_for(&eval.frames, &eval.edit.buffers, frame_id, window)
-        .expect("context")
-        .expect("a live window");
+    let ctx = live_window_display_context_for(
+        &eval.frame_manager(),
+        &eval.edit.buffers,
+        frame_id,
+        window,
+    )
+    .expect("context")
+    .expect("a live window");
     assert_eq!(ctx.text.chars.len(), text.chars().count());
     set_bounded_window_text_for_test(None);
 }
@@ -282,9 +301,10 @@ fn exact_target_decoding_matches_approximate_context_without_text_acquisition() 
         (String::new(), 1),
     ] {
         let (eval, fid, wid) = window_over(&text, start);
-        let ctx = live_window_display_context_for(&eval.frames, &eval.edit.buffers, fid, wid)
-            .unwrap()
-            .unwrap();
+        let ctx =
+            live_window_display_context_for(&eval.frame_manager(), &eval.edit.buffers, fid, wid)
+                .unwrap()
+                .unwrap();
         for pos in [
             None,
             Some(Value::NIL),
@@ -297,7 +317,7 @@ fn exact_target_decoding_matches_approximate_context_without_text_acquisition() 
             APPROX_WINDOW_TEXT_COPIED_CHARS.with(|count| count.set(0));
             assert_eq!(
                 resolve_live_target_position(
-                    &eval.frames,
+                    &eval.frame_manager(),
                     &eval.edit.buffers,
                     fid,
                     wid,

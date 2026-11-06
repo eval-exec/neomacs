@@ -45,8 +45,14 @@ fn compare_fresh_gnu_row(kind: &str) {
     let mut eval = interactive_context();
     utf8_locale_terminal(&mut eval);
     let buffer_id = eval.edit.buffers.current_buffer_id().expect("buffer");
-    let frame_id = eval.frames.create_frame("D5-F", 800, 600, buffer_id);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("D5-F", 800, 600, buffer_id);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     eval.edit
         .buffers
         .set_buffer_local_property(buffer_id, "mode-name", Value::string("MODE"))
@@ -59,7 +65,7 @@ fn compare_fresh_gnu_row(kind: &str) {
             Value::symbol("utf-8-unix"),
         )
         .expect("set buffer coding");
-    eval.obarray
+    eval.obarray_view()
         .set_symbol_value("eol-mnemonic-unix", Value::string("EOL"));
     let format = eval.eval_str(format_for(kind)).expect("GNU format setup");
     let output = format_mode_line_for_display_with_sources(

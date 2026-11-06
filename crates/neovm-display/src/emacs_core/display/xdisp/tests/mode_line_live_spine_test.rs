@@ -14,7 +14,7 @@ fn replacing_tail(generational: bool, display: bool) {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.gc_stress = false;
-    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    eval.set_gc_threshold(usize::MAX);
     eval.set_variable("noninteractive", Value::NIL);
     eval.gc_collect_exact();
     eval.eval_str(
@@ -32,7 +32,7 @@ fn replacing_tail(generational: bool, display: bool) {
     let before_roots = save_scratch_gc_roots();
     let rendered = if display {
         let format = eval
-            .obarray
+            .obarray_view()
             .symbol_value_copied("review-mode-line-live-format")
             .expect("installed mode-line format");
         format_mode_line_for_display_with_sources(&mut eval, format, Value::NIL, Value::NIL, 80)
@@ -77,11 +77,11 @@ fn mode_line_split_callback_follows_replaced_live_tail() {
     let mut callbacks = 0;
     let before_roots = save_scratch_gc_roots();
     let rendered = finish_format_mode_line_in_state_with_eval(
-        neovm_eval::emacs_core::eval::VariableView::new(&eval.obarray, &eval.owner),
+        neovm_eval::emacs_core::eval::VariableView::new(&eval.obarray_view(), &eval.owner()),
         &[],
-        &eval.frames,
+        &eval.frame_manager(),
         &mut eval.edit.buffers,
-        &eval.processes,
+        &eval.processes(),
         &[format, Value::fixnum(0)],
         |_, _| {
             callbacks += 1;
@@ -138,7 +138,7 @@ fn collecting_checkpoint_format(eval: &mut Context) -> (Value, usize, usize) {
     )
     .expect("install collecting checkpoint format");
     let format = eval
-        .obarray
+        .obarray_view()
         .symbol_value_copied("review-mode-line-checkpoint-format")
         .expect("installed checkpoint format");
     // GNU's first doubling transition checkpoints C after displaying B.
@@ -150,7 +150,7 @@ fn collecting_checkpoint_format(eval: &mut Context) -> (Value, usize, usize) {
 fn assert_checkpoint_retained(eval: &Context, checkpoint_bits: usize, car_bits: usize) {
     let checkpoint = Value::from_bits(checkpoint_bits);
     assert!(
-        eval.tagged_heap.owns_heap_value_for_test(checkpoint),
+        eval.tagged_heap().owns_heap_value_for_test(checkpoint),
         "the detached Brent checkpoint cons was collected during :eval"
     );
     // Ownership guards the cons-cell read. Collection statistics can reuse a
@@ -172,7 +172,7 @@ fn checkpoint_survives_detaching_eval(generational: bool, display: bool) {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.gc_stress = false;
-    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    eval.set_gc_threshold(usize::MAX);
     eval.set_variable("noninteractive", Value::NIL);
     eval.gc_collect_exact();
     let (format, checkpoint_bits, car_bits) = collecting_checkpoint_format(&mut eval);
@@ -221,12 +221,12 @@ fn split_checkpoint_survives_collection(generational: bool) {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.gc_stress = false;
-    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    eval.set_gc_threshold(usize::MAX);
     eval.gc_collect_exact();
     let (format, checkpoint_bits, car_bits) = collecting_checkpoint_format(&mut eval);
     // Separate manager copies let the callback collect through Context without
     // aliasing the state references borrowed by the split walker.
-    let obarray = eval.obarray.clone();
+    let obarray = (*eval.obarray_view()).clone();
     let buffers = eval.edit.buffers.clone();
     let processes = crate::emacs_core::process::ProcessManager::new();
     let pctx = ModeLinePercentContext::default();

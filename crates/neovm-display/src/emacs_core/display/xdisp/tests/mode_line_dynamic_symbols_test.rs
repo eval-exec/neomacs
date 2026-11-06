@@ -21,7 +21,7 @@ enum Walker {
 fn context() -> Context {
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.gc_stress = false;
-    ctx.tagged_heap.set_gc_threshold(usize::MAX);
+    ctx.set_gc_threshold(usize::MAX);
     let buffer = ctx
         .edit
         .buffers
@@ -71,7 +71,7 @@ fn render_into(
                 ctx.variables(),
                 &[],
                 &ctx.edit.buffers,
-                &ctx.processes,
+                &ctx.processes(),
                 pctx,
                 &format,
                 rendered,
@@ -85,7 +85,7 @@ fn render_into(
                 ctx.variables(),
                 &[],
                 &ctx.edit.buffers,
-                &ctx.processes,
+                &ctx.processes(),
                 pctx,
                 &format,
                 rendered,
@@ -145,7 +145,7 @@ fn p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth_child() {
             intern("p3sym-c5-held-pass-input-right"),
         ];
         for holder in holders {
-            ctx.obarray
+            ctx.obarray_view()
                 .set_symbol_value_id(holder, Value::string(&fresh));
         }
         // Only the process registry grows here. The World remains at its old
@@ -166,7 +166,7 @@ fn p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth_child() {
             })
             .expect("C5 pass owned admission")
             .expect("C5 pass history after normal serial recovery");
-        assert!(ctx.obarray.admission_matches_canonical());
+        assert!(ctx.obarray_view().admission_matches_canonical());
         assert!(receipt.after.chunks >= receipt.before.chunks + 2);
         assert_eq!(receipt.after.chunks, receipt.after.sides);
         assert!(receipt.after.sides > receipt.before.sides);
@@ -408,7 +408,7 @@ fn mode_line_dynamic_symbols_read_live_projected_owner_bindings() {
             .value(ctx.variables(), &ctx.edit.buffers),
         Some(Value::fixnum(41))
     );
-    let depth = ctx.specpdl.len();
+    let depth = ctx.specpdl().len();
     ctx.try_specbind(id, Value::fixnum(42))
         .expect("owner binding");
     let value = pctx
@@ -468,7 +468,7 @@ fn mode_line_dynamic_symbols_split_callback_keeps_live_value_reads() {
         ctx.variables(),
         &[],
         &ctx.edit.buffers,
-        &ctx.processes,
+        &ctx.processes(),
         &pctx,
         &format,
         &mut result,
@@ -527,9 +527,10 @@ fn mode_line_dynamic_symbols_restore_invalidates_only_pass_identities() {
     assert!(unintern_canonical_id(old));
     let restored = restore_runtime_interner(&[LispString::from_utf8(name)], &[0], Some(&[true]))
         .expect("unique canonical restore");
-    let new = restored.symbols[0];
+    let new = restored.into_parts().1[0];
     assert_ne!(new, old);
-    ctx.obarray.set_symbol_value_id(new, Value::fixnum(52));
+    ctx.obarray_view()
+        .set_symbol_value_id(new, Value::fixnum(52));
     assert_eq!(
         pctx.resolve_dynamic_symbol(name)
             .value(ctx.variables(), &ctx.edit.buffers),
@@ -554,12 +555,12 @@ fn mode_line_dynamic_symbols_keep_object_identity_for_noncanonical_and_encoded_n
             ),
         ),
     ] {
-        let input_id = ctx.obarray.intern_lisp_string(&atom);
+        let input_id = ctx.obarray_view().intern_lisp_string(&atom);
         let spelling_id = intern(name);
         assert_ne!(input_id, spelling_id);
-        ctx.obarray
+        ctx.obarray_view()
             .set_symbol_value_id(input_id, Value::string("input-object"));
-        ctx.obarray
+        ctx.obarray_view()
             .set_symbol_value_id(spelling_id, Value::string("spelling"));
         let format = Value::from_sym_id(input_id);
         for walker in [Walker::Context, Walker::State, Walker::StateWithEval] {
@@ -572,7 +573,7 @@ fn mode_line_dynamic_symbols_keep_object_identity_for_noncanonical_and_encoded_n
     let name = "ttykey-k5-dynamic-noncanonical";
     ctx.set_variable(name, Value::string("canonical"));
     let uninterned = intern_uninterned(name);
-    ctx.obarray
+    ctx.obarray_view()
         .set_symbol_value_id(uninterned, Value::string("uninterned"));
     assert_eq!(
         render(
@@ -591,7 +592,7 @@ fn mode_line_dynamic_symbols_physical_atom_and_conditional_admission_matches_gnu
     let name = "ttykey-k5-dynamic-positioned";
     ctx.set_variable(name, Value::string("positioned"));
     let positioned = ctx
-        .tagged_heap
+        .tagged_heap()
         .alloc_symbol_with_pos(Value::from_sym_id(intern(name)), Value::fixnum(3));
     assert!(
         positioned
@@ -618,10 +619,11 @@ fn mode_line_dynamic_symbols_physical_atom_and_conditional_admission_matches_gnu
     );
     // GNU's conditional CAR uses SYMBOLP/XSYMBOL, unlike atom dispatch.
     let actual = intern_uninterned(name);
-    ctx.obarray.set_symbol_value_id(actual, Value::NIL);
-    ctx.obarray.set_symbol_value_id(intern(name), Value::T);
+    ctx.obarray_view().set_symbol_value_id(actual, Value::NIL);
+    ctx.obarray_view()
+        .set_symbol_value_id(intern(name), Value::T);
     let positioned_actual = ctx
-        .tagged_heap
+        .tagged_heap()
         .alloc_symbol_with_pos(Value::from_sym_id(actual), Value::fixnum(7));
     let conditional = Value::list(vec![
         positioned_actual,
@@ -638,8 +640,8 @@ fn mode_line_dynamic_symbols_physical_atom_and_conditional_admission_matches_gnu
         "FALSE"
     );
     let atom = LispString::from_unibyte_slice(b"ttykey-k5-dynamic-invalid-\xff");
-    let invalid = ctx.obarray.intern_lisp_string(&atom);
-    ctx.obarray
+    let invalid = ctx.obarray_view().intern_lisp_string(&atom);
+    ctx.obarray_view()
         .set_symbol_value_id(invalid, Value::string("ACTUAL-INTERNED-BYTE"));
     assert!(Value::from_sym_id(invalid).as_bare_symbol_name().is_none());
     for walker in [Walker::Context, Walker::State, Walker::StateWithEval] {
@@ -663,7 +665,7 @@ fn mode_line_dynamic_symbols_plain_void_and_alias_void_match_owner_fallback() {
     let projected_id = intern(projected);
     ctx.project_thread_variable_for_test(projected_id)
         .expect("project owner variable");
-    let depth = ctx.specpdl.len();
+    let depth = ctx.specpdl().len();
     ctx.try_specbind(projected_id, Value::fixnum(62))
         .expect("owner slab active");
     ctx.eval_str(
@@ -701,9 +703,9 @@ fn mode_line_symbol_object_identity_and_conditional_match_gnu() {
     let name = "mode-line-symbol-object-identity";
     let canonical = intern(name);
     let actual = intern_uninterned(name);
-    ctx.obarray
+    ctx.obarray_view()
         .set_symbol_value_id(canonical, Value::string("CANONICAL"));
-    ctx.obarray
+    ctx.obarray_view()
         .set_symbol_value_id(actual, Value::string("ACTUAL"));
     let format = Value::from_sym_id(actual);
     assert_eq!(
@@ -715,8 +717,8 @@ fn mode_line_symbol_object_identity_and_conditional_match_gnu() {
         ),
         "ACTUAL"
     );
-    ctx.obarray.set_symbol_value_id(actual, Value::NIL);
-    ctx.obarray.set_symbol_value_id(canonical, Value::T);
+    ctx.obarray_view().set_symbol_value_id(actual, Value::NIL);
+    ctx.obarray_view().set_symbol_value_id(canonical, Value::T);
     let conditional = Value::list(vec![format, Value::string("TRUE"), Value::string("FALSE")]);
     assert_eq!(
         render(
@@ -738,13 +740,13 @@ fn mode_line_symbol_object_risk_property_matches_gnu() {
     let value = ctx
         .eval_str("'(:eval (propertize \"RISK-EVAL\" 'ep33-symbol-probe-property 'present))")
         .expect("GNU probe value");
-    ctx.obarray.set_symbol_value_id(canonical, value);
-    ctx.obarray.set_symbol_value_id(actual, value);
+    ctx.obarray_view().set_symbol_value_id(canonical, value);
+    ctx.obarray_view().set_symbol_value_id(actual, value);
     let risk = ModeLineSymbol::RiskyLocalVariable.id();
-    ctx.obarray
+    ctx.obarray_view()
         .put_property_id(actual, risk, Value::T)
         .expect("valid risk plist");
-    ctx.obarray
+    ctx.obarray_view()
         .put_property_id(canonical, risk, Value::NIL)
         .expect("valid risk plist");
     let format = Value::from_sym_id(actual);
@@ -767,10 +769,10 @@ fn mode_line_symbol_object_risk_property_matches_gnu() {
         ),
         Some(Value::symbol("present"))
     );
-    ctx.obarray
+    ctx.obarray_view()
         .put_property_id(actual, risk, Value::NIL)
         .expect("valid risk plist");
-    ctx.obarray
+    ctx.obarray_view()
         .put_property_id(canonical, risk, Value::T)
         .expect("valid risk plist");
     assert_eq!(

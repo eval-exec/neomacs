@@ -5,8 +5,12 @@ fn default_slot_projection_observes_same_generation_winners_and_refuses_stale_ca
     let mut context = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut context);
     let attributes = Face::default();
-    let generation = context.face_change_count;
-    let cache = &mut context.frames.get_mut(frame).unwrap().face_realization;
+    let generation = context.face_change_count_for_test();
+    let cache = &mut context
+        .frame_manager_mut()
+        .get_mut(frame)
+        .unwrap()
+        .face_realization;
     cache.prepare(generation, crate::face::FaceTable::new());
     cache.insert_basic(BasicFace::Default, attributes.clone(), attributes.clone());
     assert_eq!(
@@ -14,7 +18,7 @@ fn default_slot_projection_observes_same_generation_winners_and_refuses_stale_ca
         crate::face::realization::CachedFaceSlot::Default
     );
     context
-        .frames
+        .frame_manager_mut()
         .get_mut(frame)
         .unwrap()
         .face_realization
@@ -23,8 +27,8 @@ fn default_slot_projection_observes_same_generation_winners_and_refuses_stale_ca
         context.cached_display_face_slot_for_frame(frame, &attributes),
         crate::face::realization::CachedFaceSlot::NonDefault
     );
-    assert_eq!(context.face_change_count, generation);
-    context.face_change_count += 1;
+    assert_eq!(context.face_change_count_for_test(), generation);
+    *context.face_change_count_mut() += 1;
     assert_eq!(
         context.cached_display_face_slot_for_frame(frame, &attributes),
         crate::face::realization::CachedFaceSlot::Unavailable
@@ -40,9 +44,9 @@ fn definition_root_lease_is_reused_until_source_retirement_and_keeps_old_sources
     unused.family = Some(Value::string("retained-unused-family"));
     unused.stipple = Some(Value::list(vec![Value::string("retained-unused-stipple")]));
     old.define("not-yet-displayed", unused);
-    let initial = context.face_change_count;
+    let initial = context.face_change_count_for_test();
     context
-        .frames
+        .frame_manager_mut()
         .get_mut(frame)
         .expect("selected frame")
         .face_realization
@@ -57,25 +61,29 @@ fn definition_root_lease_is_reused_until_source_retirement_and_keeps_old_sources
     drop(warm);
 
     context
-        .frames
+        .frame_manager_mut()
         .get_mut(frame)
         .unwrap()
         .face_realization
         .preserve_across_change(initial, initial + 1);
-    context.face_change_count = initial + 1;
+    *context.face_change_count_mut() = initial + 1;
     let retagged = context
         .display_face_table_root_lease(frame, &old)
         .expect("unaffected frame keeps its source lease");
     assert!(std::sync::Arc::ptr_eq(&retained, &retagged));
     drop(retagged);
 
-    let cache = &mut context.frames.get_mut(frame).unwrap().face_realization;
+    let cache = &mut context
+        .frame_manager_mut()
+        .get_mut(frame)
+        .unwrap()
+        .face_realization;
     cache.definitions_changed(initial + 1, initial + 2, None);
     assert!(cache.root_lease().is_none());
     cache.replace_definitions(crate::face::FaceTable::new());
-    context.face_change_count = initial + 2;
+    *context.face_change_count_mut() = initial + 2;
     let replacement = context
-        .frames
+        .frame_manager()
         .get(frame)
         .unwrap()
         .face_realization
@@ -87,14 +95,14 @@ fn definition_root_lease_is_reused_until_source_retirement_and_keeps_old_sources
         .expect("replacement snapshot gets its own lease");
     assert!(!std::sync::Arc::ptr_eq(&retained, &replaced));
     context
-        .frames
+        .frame_manager_mut()
         .get_mut(frame)
         .unwrap()
         .face_realization
         .invalidate();
     assert!(
         context
-            .frames
+            .frame_manager()
             .get(frame)
             .unwrap()
             .face_realization
@@ -124,26 +132,28 @@ fn face_change_walks_only_frames_whose_realizations_stay_valid() {
     let mut context = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let selected = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut context);
     let buffer = context.edit.buffers.create_buffer("*face-change-other*");
-    let other = context.frames.create_frame("other", 80, 25, buffer);
+    let other = context
+        .frame_manager_mut()
+        .create_frame("other", 80, 25, buffer);
 
     assert!(!super::other_frames_keep_realizations(
-        &context.frames,
+        &context.frame_manager(),
         FaceChangeScope::AllFrames,
     ));
     assert!(!super::other_frames_keep_realizations(
-        &context.frames,
+        &context.frame_manager(),
         FaceChangeScope::Frames(&[selected, other]),
     ));
     assert!(super::other_frames_keep_realizations(
-        &context.frames,
+        &context.frame_manager(),
         FaceChangeScope::Frames(&[selected]),
     ));
     assert!(super::other_frames_keep_realizations(
-        &context.frames,
+        &context.frame_manager(),
         FaceChangeScope::Frames(&[]),
     ));
     assert!(super::other_frames_keep_realizations(
-        &context.frames,
+        &context.frame_manager(),
         FaceChangeScope::DefinitionsOnly(&[selected]),
     ));
 }
@@ -228,14 +238,21 @@ fn initial_terminal_faces_hide_creation_colors_and_restore_owners() {
     let foreground = Value::string("#123456");
     let background = Value::string("#654321");
     let definitions = {
-        let owner = context.frames.get_mut(frame).expect("selected frame");
+        let owner = context
+            .frame_manager_mut()
+            .get_mut(frame)
+            .expect("selected frame");
         owner.set_known_parameter(FrameParam::ForegroundColor, foreground);
         owner.set_known_parameter(FrameParam::BackgroundColor, background);
         owner.face_hash_table
     };
     {
         let initial = InitialTerminalFaces::new(&mut context, frame).expect("live frame");
-        let owner = initial.context.frames.get(frame).expect("live frame");
+        let owner = initial
+            .context
+            .frame_manager()
+            .get(frame)
+            .expect("live frame");
         assert_eq!(
             owner.known_parameter(FrameParam::ForegroundColor),
             Some(Value::string("unspecified-fg"))
@@ -246,7 +263,7 @@ fn initial_terminal_faces_hide_creation_colors_and_restore_owners() {
         );
         assert_ne!(owner.face_hash_table, definitions);
     }
-    let owner = context.frames.get(frame).expect("live frame");
+    let owner = context.frame_manager().get(frame).expect("live frame");
     assert_eq!(
         owner.known_parameter(FrameParam::ForegroundColor),
         Some(foreground)
@@ -268,7 +285,7 @@ fn creation_color_replay_defers_the_other_color_and_initial_error_restores_param
     let background_pair = Value::cons(FrameParam::BackgroundColor.symbol(), background);
     let _roots = RealizationRoots::from_values([foreground_pair, background_pair]);
     {
-        let owner = context.frames.get_mut(frame).unwrap();
+        let owner = context.frame_manager_mut().get_mut(frame).unwrap();
         owner.set_known_parameter(FrameParam::ForegroundColor, foreground);
         owner.set_known_parameter(FrameParam::BackgroundColor, background);
     }
@@ -277,7 +294,7 @@ fn creation_color_replay_defers_the_other_color_and_initial_error_restores_param
         assert_eq!(
             initial
                 .context
-                .frames
+                .frame_manager()
                 .get(frame)
                 .unwrap()
                 .known_parameter(FrameParam::ForegroundColor),
@@ -291,7 +308,7 @@ fn creation_color_replay_defers_the_other_color_and_initial_error_restores_param
     assert!(failed_initialization.is_err());
     assert_eq!(
         context
-            .frames
+            .frame_manager()
             .get(frame)
             .unwrap()
             .known_parameter(FrameParam::ForegroundColor),
@@ -299,7 +316,7 @@ fn creation_color_replay_defers_the_other_color_and_initial_error_restores_param
     );
     assert_eq!(
         context
-            .frames
+            .frame_manager()
             .get(frame)
             .unwrap()
             .known_parameter(FrameParam::BackgroundColor),
@@ -309,7 +326,7 @@ fn creation_color_replay_defers_the_other_color_and_initial_error_restores_param
     defer_creation_color_parameters(&mut context, frame, &[foreground_pair, background_pair]);
     assert_eq!(
         context
-            .frames
+            .frame_manager()
             .get(frame)
             .unwrap()
             .known_parameter(FrameParam::ForegroundColor),
@@ -317,7 +334,7 @@ fn creation_color_replay_defers_the_other_color_and_initial_error_restores_param
     );
     assert_eq!(
         context
-            .frames
+            .frame_manager()
             .get(frame)
             .unwrap()
             .known_parameter(FrameParam::BackgroundColor),
@@ -333,7 +350,7 @@ fn creation_color_replay_defers_the_other_color_and_initial_error_restores_param
     .expect("first reverse-order color handler");
     assert_eq!(
         context
-            .frames
+            .frame_manager()
             .get(frame)
             .unwrap()
             .known_parameter(FrameParam::ForegroundColor),
@@ -341,7 +358,7 @@ fn creation_color_replay_defers_the_other_color_and_initial_error_restores_param
     );
     assert_eq!(
         context
-            .frames
+            .frame_manager()
             .get(frame)
             .unwrap()
             .known_parameter(FrameParam::BackgroundColor),
@@ -362,7 +379,7 @@ fn creation_color_replay_defers_the_other_color_and_initial_error_restores_param
     .expect("second reverse-order color handler");
     assert_eq!(
         context
-            .frames
+            .frame_manager()
             .get(frame)
             .unwrap()
             .known_parameter(FrameParam::ForegroundColor),
@@ -370,7 +387,7 @@ fn creation_color_replay_defers_the_other_color_and_initial_error_restores_param
     );
     assert_eq!(
         context
-            .frames
+            .frame_manager()
             .get(frame)
             .unwrap()
             .known_parameter(FrameParam::BackgroundColor),
@@ -468,14 +485,16 @@ fn face_frame_class_uses_live_terminal_output_kind() {
     pure::reset_terminal_runtime();
     let initial = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut context);
     let buffer = context.edit.buffers.current_buffer_id().unwrap();
-    let bare = context.frames.create_frame("bare-frame", 80, 25, buffer);
-    assert!(!context.frames.get(bare).unwrap().initial);
+    let bare = context
+        .frame_manager_mut()
+        .create_frame("bare-frame", 80, 25, buffer);
+    assert!(!context.frame_manager().get(bare).unwrap().initial);
     assert_eq!(
-        frame_face_class(context.frames.get(initial).unwrap()),
+        frame_face_class(context.frame_manager().get(initial).unwrap()),
         Some(FrameFaceClass::Initial)
     );
     assert_eq!(
-        frame_face_class(context.frames.get(bare).unwrap()),
+        frame_face_class(context.frame_manager().get(bare).unwrap()),
         Some(FrameFaceClass::Initial)
     );
     assert!(!context.frame_is_tty_face_target(bare));
@@ -495,18 +514,21 @@ fn face_frame_class_uses_live_terminal_output_kind() {
 
     let secondary_id = 27;
     pure::ensure_terminal_runtime_owner(secondary_id, "secondary-tty", config());
-    let secondary =
-        context
-            .frames
-            .create_frame_on_terminal("secondary-frame", secondary_id, 80, 25, buffer);
+    let secondary = context.frame_manager_mut().create_frame_on_terminal(
+        "secondary-frame",
+        secondary_id,
+        80,
+        25,
+        buffer,
+    );
     assert!(context.frame_is_tty_face_target(secondary));
     context
-        .frames
+        .frame_manager_mut()
         .get_mut(bare)
         .unwrap()
         .set_window_system(Some(Value::symbol("neo")));
     assert_eq!(
-        frame_face_class(context.frames.get(bare).unwrap()),
+        frame_face_class(context.frame_manager().get(bare).unwrap()),
         Some(FrameFaceClass::WindowSystem)
     );
     assert!(!context.frame_is_tty_face_target(bare));
@@ -540,7 +562,7 @@ fn same_value_face_set_marks_no_definitions_dirty() {
     )
     .expect("same-value set is accepted");
     let cache = &context
-        .frames
+        .frame_manager()
         .get(frame)
         .expect("selected frame")
         .face_realization;
@@ -590,7 +612,7 @@ fn changed_face_marks_only_its_name_and_refresh_matches_a_full_rebuild() {
     .expect("genuine change is accepted");
     {
         let cache = &context
-            .frames
+            .frame_manager()
             .get(frame)
             .expect("selected frame")
             .face_realization;
@@ -601,12 +623,12 @@ fn changed_face_marks_only_its_name_and_refresh_matches_a_full_rebuild() {
         assert_eq!(dirty.iter().count(), 1);
         assert!(dirty.contains("incremental-face-b"));
         assert!(
-            cache.table(context.face_change_count).is_none(),
+            cache.table(context.face_change_count_for_test()).is_none(),
             "a dirty definition cannot serve as current"
         );
     }
     prepare_runtime_faces_result(&mut context, frame).expect("incremental refresh runs");
-    let incremental = context.face_table.clone();
+    let incremental = context.face_table().clone();
     let full = runtime_face_table_from_frame_lisp_faces(&context, frame, false);
     for face in ["incremental-face-a", "incremental-face-b", "default"] {
         assert_eq!(
@@ -616,7 +638,7 @@ fn changed_face_marks_only_its_name_and_refresh_matches_a_full_rebuild() {
         );
     }
     let cache = &context
-        .frames
+        .frame_manager()
         .get(frame)
         .expect("selected frame")
         .face_realization;
@@ -627,7 +649,7 @@ fn changed_face_marks_only_its_name_and_refresh_matches_a_full_rebuild() {
             .1
             .is_empty()
     );
-    assert!(cache.table(context.face_change_count).is_some());
+    assert!(cache.table(context.face_change_count_for_test()).is_some());
 }
 
 #[test]
@@ -650,14 +672,14 @@ fn unnamed_face_change_retires_every_reusable_definition() {
     record_face_change(&mut context, FaceChangeScope::Frames(&[frame]));
     assert!(
         context
-            .frames
+            .frame_manager()
             .get(frame)
             .expect("selected frame")
             .face_realization
             .definitions_all_dirty()
     );
     prepare_runtime_faces_result(&mut context, frame).expect("full refresh runs");
-    let refreshed = context.face_table.clone();
+    let refreshed = context.face_table().clone();
     let full = runtime_face_table_from_frame_lisp_faces(&context, frame, false);
     assert_eq!(
         refreshed.get("incremental-unnamed-face"),
@@ -698,20 +720,20 @@ fn realization_miss_roots_the_source_table_through_the_frame_lease() {
         ),
     ));
     assert!(context.frame_is_tty_face_target(frame));
-    let generation = context.face_change_count;
+    let generation = context.face_change_count_for_test();
     let mut table = crate::face::FaceTable::new();
     let mut rooted = Face::new("lease-rooted-family");
     rooted.family = Some(Value::string("lease-rooted"));
     table.define("lease-rooted-family", rooted);
     context
-        .frames
+        .frame_manager_mut()
         .get_mut(frame)
         .expect("selected frame")
         .face_realization
         .prepare(generation, table);
     assert!(
         context
-            .frames
+            .frame_manager()
             .get(frame)
             .unwrap()
             .face_realization
@@ -724,7 +746,7 @@ fn realization_miss_roots_the_source_table_through_the_frame_lease() {
     // now share the frame cache's retained batch lease instead.
     let first = context.realize_display_face_for_frame(frame, &Face::new("first-miss"));
     let installed = context
-        .frames
+        .frame_manager()
         .get(frame)
         .unwrap()
         .face_realization
@@ -732,7 +754,7 @@ fn realization_miss_roots_the_source_table_through_the_frame_lease() {
         .expect("realization miss installed the frame lease");
     let second = context.realize_display_face_for_frame(frame, &Face::new("second-miss"));
     let warm = context
-        .frames
+        .frame_manager()
         .get(frame)
         .unwrap()
         .face_realization

@@ -62,7 +62,7 @@ fn deleted_terminal_stays_dead_after_context_reactivation() {
     builtin_set_terminal_parameter(&mut ctx, vec![terminal_handle_value(), key, payload])
         .expect("set the live terminal's parameter");
     builtin_delete_terminal(&mut ctx, vec![deleted]).expect("delete the secondary terminal");
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
+    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap());
 
     let _other = Context::new(crate::test_utils::unit_runtime());
     ctx.setup_thread_locals();
@@ -73,7 +73,7 @@ fn deleted_terminal_stays_dead_after_context_reactivation() {
             .bits(),
         payload.bits()
     );
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
+    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap());
 
     ctx.setup_thread_locals();
     assert_deleted_terminal(&mut ctx, deleted);
@@ -148,12 +148,12 @@ fn terminal_creation_order_survives_native_manager_rebuild_and_reactivation() {
         assert_eq!(terminal_list_ids(), creation_order);
         assert_eq!(live_terminal_ids_in_keyboard_poll_order(), poll_order);
     }
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
+    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap());
     let _other = Context::new(crate::test_utils::unit_runtime());
     ctx.setup_thread_locals();
     assert_eq!(terminal_list_ids(), creation_order);
     assert_eq!(live_terminal_ids_in_keyboard_poll_order(), poll_order);
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
+    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap());
     ctx.setup_thread_locals();
 }
 

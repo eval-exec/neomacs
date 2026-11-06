@@ -101,7 +101,7 @@ fn raw_context_does_not_prebind_x_color_aliases() {
     let eval = Context::new(crate::test_utils::unit_runtime());
     for name in ["x-defined-colors", "x-color-defined-p", "x-color-values"] {
         assert!(
-            eval.obarray.symbol_function(name).is_none(),
+            eval.obarray_view().symbol_function(name).is_none(),
             "{name} should come from GNU faces.el, not Context::new",
         );
     }
@@ -186,7 +186,7 @@ fn context_prebinds_gnu_font_style_tables() {
     let eval = Context::new(crate::test_utils::unit_runtime());
 
     let weight_table = eval
-        .obarray
+        .obarray_view()
         .symbol_value_copied("font-weight-table")
         .expect("font-weight-table");
     let rows = weight_table.as_vector_data().expect("weight table vector");
@@ -197,7 +197,7 @@ fn context_prebinds_gnu_font_style_tables() {
     assert_eq!(ultra_light[4].as_bare_symbol_name(), Some("extralight"));
 
     let slant_table = eval
-        .obarray
+        .obarray_view()
         .symbol_value_copied("font-slant-table")
         .expect("font-slant-table");
     let rows = slant_table.as_vector_data().expect("slant table vector");
@@ -208,7 +208,7 @@ fn context_prebinds_gnu_font_style_tables() {
     assert_eq!(normal[3].as_bare_symbol_name(), Some("unspecified"));
 
     let width_table = eval
-        .obarray
+        .obarray_view()
         .symbol_value_copied("font-width-table")
         .expect("font-width-table");
     let rows = width_table.as_vector_data().expect("width table vector");
@@ -295,11 +295,14 @@ fn gnu_font_style_tables_are_constant_symbols() {
     crate::test_utils::init_test_tracing();
     let eval = Context::new(crate::test_utils::unit_runtime());
     for name in ["font-weight-table", "font-slant-table", "font-width-table"] {
-        assert!(eval.obarray.is_constant(name), "{name} should be constant");
+        assert!(
+            eval.obarray_view().is_constant(name),
+            "{name} should be constant"
+        );
     }
-    assert!(!eval.obarray.is_constant("font-log"));
+    assert!(!eval.obarray_view().is_constant("font-log"));
     assert_eq!(
-        eval.obarray
+        eval.obarray_view()
             .symbol_value_copied("font-log")
             .expect("font-log"),
         Value::T
@@ -2204,7 +2207,7 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
     eval.gc_stress = false;
     // Establish the old generation before creating the cache-only young graph.
     eval.gc_collect_exact();
-    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    eval.set_gc_threshold(usize::MAX);
 
     let build = |eval: &mut Context| {
         neovm_text::emacs_core::composite::composition_get_gstring(
@@ -2259,13 +2262,13 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
     });
     // Only native integer snapshots escape setup: no Lisp variable, scratch
     // root, callback capture, argument vector or other owner retains the graph.
-    assert_eq!(eval.gstring_shape_cache.len(), 1);
+    assert_eq!(eval.gstring_shape_cache_mut().len(), 1);
     let check_cached_graph = |eval: &Context| {
         // Check allocation membership before any payload access, including on
         // the mutation where the serial cache visitor is removed.
         for snapshot in &snapshots {
             assert!(
-                eval.tagged_heap
+                eval.tagged_heap()
                     .retains_veclike(Value::from_bits(snapshot.identity_bits)),
                 "cache-only gstring vector was reclaimed"
             );
@@ -2283,40 +2286,40 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
     };
 
     let completed = eval.gc_count;
-    if eval.tagged_heap.generational_enabled() {
-        assert!(eval.tagged_heap.should_run_minor(false, false));
+    if eval.tagged_heap().generational_enabled() {
+        assert!(eval.tagged_heap().should_run_minor(false, false));
         assert!(
             !eval
-                .tagged_heap
+                .tagged_heap()
                 .value_is_old_for_test(Value::from_bits(cached_bits))
         );
         eval.gc_pending = true;
         eval.gc_safe_point_exact();
         assert!(
-            eval.tagged_heap.sweep_in_progress(),
+            eval.tagged_heap().sweep_in_progress(),
             "expected deferred minor sweep"
         );
-        assert!(!eval.tagged_heap.concurrent_mark_running());
+        assert!(!eval.tagged_heap().concurrent_mark_running());
         for _ in 0..10_000 {
-            if !eval.tagged_heap.sweep_in_progress() {
+            if !eval.tagged_heap().sweep_in_progress() {
                 break;
             }
             eval.gc_safe_point_exact();
         }
         assert!(
-            !eval.tagged_heap.sweep_in_progress(),
+            !eval.tagged_heap().sweep_in_progress(),
             "minor sweep did not finish"
         );
-        assert!(!eval.tagged_heap.mark_in_progress());
+        assert!(!eval.tagged_heap().mark_in_progress());
     } else {
         // GEN0 has no minor collector: exercise its real full entry instead.
         eval.gc_collect_exact();
     }
     assert_eq!(eval.gc_count, completed + 1);
     check_cached_graph(&eval);
-    if eval.tagged_heap.generational_enabled() {
+    if eval.tagged_heap().generational_enabled() {
         assert!(
-            eval.tagged_heap
+            eval.tagged_heap()
                 .value_is_old_for_test(Value::from_bits(cached_bits))
         );
     }
@@ -2332,7 +2335,7 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
         let hit = font_shape_gstring(eval, vec![fresh, Value::NIL]).expect("same-key hit");
         assert_eq!(hit.bits(), cached_bits, "cache hit must preserve identity");
     });
-    assert_eq!(eval.gstring_shape_cache.len(), 1);
+    assert_eq!(eval.gstring_shape_cache_mut().len(), 1);
     check_cached_graph(&eval);
 }
 

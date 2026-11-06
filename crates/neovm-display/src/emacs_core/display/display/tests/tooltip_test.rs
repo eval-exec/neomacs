@@ -58,7 +58,7 @@ fn help_callback_cannot_stamp_stale_help_with_a_new_generation() {
 fn gui() -> (Context, Arc<Mutex<TooltipProbe>>) {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame)
         .unwrap()
         .set_window_system(Some(Value::symbol("neo")));

@@ -29,7 +29,7 @@ fn resumed_tty_invalidates_idle_redisplay() {
         ),
     ));
     let buffer = eval.edit.buffers.current_buffer_id().unwrap();
-    eval.frames
+    eval.frame_manager_mut()
         .create_frame("resume-idle-tty", 640, 384, buffer);
     let log = Rc::new(RefCell::new(Vec::new()));
     set_terminal_host(Box::new(RecordingTerminalHost {

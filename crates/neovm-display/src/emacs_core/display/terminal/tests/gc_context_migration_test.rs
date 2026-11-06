@@ -10,7 +10,7 @@ fn gc_tls_ownership_terminal_values_survive_owner_collection_and_reactivation() 
     let payload = Value::vector(vec![child]);
     builtin_set_terminal_parameter(&mut ctx, vec![handle, key, payload]).unwrap();
     let expected = [handle.bits(), payload.bits(), child.bits()];
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
+    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap());
 
     let _other = Context::new(crate::test_utils::unit_runtime());
     ctx.setup_thread_locals();
@@ -19,7 +19,7 @@ fn gc_tls_ownership_terminal_values_survive_owner_collection_and_reactivation() 
     ctx.gc_collect_exact();
     for bits in expected {
         assert!(
-            ctx.tagged_heap
+            ctx.tagged_heap()
                 .owns_heap_value_for_test(Value::from_bits(bits)),
             "owner GC lost terminal Lisp state"
         );
@@ -32,7 +32,7 @@ fn gc_tls_ownership_terminal_values_survive_owner_collection_and_reactivation() 
             .bits(),
         expected[1]
     );
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
+    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap());
 
     ctx.setup_thread_locals();
     let restored_handle = terminal_handle_value();
@@ -59,7 +59,7 @@ fn gc_tls_ownership_terminal_handle_reset_keeps_same_heap_parameters() {
     builtin_set_terminal_parameter(&mut ctx, vec![Value::NIL, key, payload]).unwrap();
     reset_terminal_handle();
     ctx.gc_collect_exact();
-    assert!(ctx.tagged_heap.owns_heap_value_for_test(payload));
+    assert!(ctx.tagged_heap().owns_heap_value_for_test(payload));
     assert_eq!(
         builtin_terminal_parameter(&mut ctx, vec![Value::NIL, key])
             .unwrap()

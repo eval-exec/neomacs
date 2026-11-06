@@ -15,7 +15,7 @@ pub(super) fn assert_owned_property(
     let mut found = false;
     while plist.is_cons() {
         assert!(
-            eval.tagged_heap.owns_heap_value_for_test(plist),
+            eval.tagged_heap().owns_heap_value_for_test(plist),
             "retained property name cell"
         );
         let name = plist.cons_car();
@@ -27,7 +27,7 @@ pub(super) fn assert_owned_property(
         let rest = plist.cons_cdr();
         assert!(rest.is_cons(), "retained property value cell");
         assert!(
-            eval.tagged_heap.owns_heap_value_for_test(rest),
+            eval.tagged_heap().owns_heap_value_for_test(rest),
             "retained property value ownership"
         );
         let value = rest.cons_car();
@@ -80,7 +80,7 @@ fn assert_accumulated_property_survives(
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.gc_stress = false;
-    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    eval.set_gc_threshold(usize::MAX);
     eval.set_variable("noninteractive", Value::NIL);
     eval.gc_collect_exact();
 
@@ -126,7 +126,7 @@ fn assert_accumulated_property_survives(
     eval.eval_str(setup)
         .expect("install rooted mode-line format");
     let format = eval
-        .obarray
+        .obarray_view()
         .symbol_value_copied("u34-mode-line-gc-format")
         .expect("installed mode-line format");
     let before = eval.gc_count;
@@ -191,7 +191,7 @@ fn assert_accumulated_property_survives(
             "a swept mode-line source was reused for the rendered string"
         );
         assert!(
-            eval.tagged_heap.owns_heap_value_for_test(source_value),
+            eval.tagged_heap().owns_heap_value_for_test(source_value),
             "the accumulated source string was swept during the later :eval"
         );
     }

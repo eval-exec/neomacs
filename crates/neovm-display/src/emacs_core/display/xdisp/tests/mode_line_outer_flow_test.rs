@@ -21,7 +21,8 @@ fn mode_line_outer_binding_signals_preserve_non_error_conditions_and_scopes() {
                 .buffers
                 .current_buffer_id()
                 .expect("current buffer");
-            eval.frames.create_frame("fx2-outer-signal", 80, 24, bid);
+            eval.frame_manager_mut()
+                .create_frame("fx2-outer-signal", 80, 24, bid);
             eval.eval_str(
                 "(put 'fx2-derived-quit 'error-conditions '(fx2-derived-quit quit))
                  (put 'fx2-non-error 'error-conditions '(fx2-non-error))
@@ -30,17 +31,24 @@ fn mode_line_outer_binding_signals_preserve_non_error_conditions_and_scopes() {
             .expect("condition hierarchy and format");
             eval.redisplay_fn = Some(Box::new(|eval| {
                 eval.set_variable("fx2-outer-callback-hit", Value::T);
-                let frame = eval.frames.selected_frame().expect("selected frame");
+                let frame = eval
+                    .frame_manager()
+                    .selected_frame()
+                    .expect("selected frame");
                 let window = Value::make_window(frame.selected_window.0);
                 let format = eval
-                    .obarray
+                    .obarray_view()
                     .symbol_value_copied("fx2-outer-format")
                     .unwrap();
                 format_mode_line_for_display_with_sources(eval, format, window, Value::NIL, 80);
             }));
             let roots = save_scratch_gc_roots();
-            let specpdl = eval.specpdl.len();
-            let selected = eval.frames.selected_frame().unwrap().selected_window;
+            let specpdl = eval.specpdl().len();
+            let selected = eval
+                .frame_manager()
+                .selected_frame()
+                .unwrap()
+                .selected_window;
             let expression = format!(
                 "(let ((watcher (lambda (symbol new-value operation where)
                                  (if (eq operation '{operation})
@@ -68,11 +76,14 @@ fn mode_line_outer_binding_signals_preserve_non_error_conditions_and_scopes() {
                 condition,
                 result.as_bare_symbol_name().unwrap().to_owned(),
             ));
-            assert_eq!(eval.specpdl.len(), specpdl, "{operation} {condition}");
+            assert_eq!(eval.specpdl().len(), specpdl, "{operation} {condition}");
             assert_eq!(save_scratch_gc_roots(), roots, "{operation} {condition}");
             assert_eq!(eval.edit.buffers.current_buffer_id(), Some(bid));
             assert_eq!(
-                eval.frames.selected_frame().unwrap().selected_window,
+                eval.frame_manager()
+                    .selected_frame()
+                    .unwrap()
+                    .selected_window,
                 selected
             );
             assert!(eval.redisplay_fn.is_some(), "redisplay callback restored");

@@ -54,7 +54,7 @@ fn pair(snapshot: &WindowDisplaySnapshot) -> (PresentationWindow, PresentationWi
 }
 
 fn view(window: &PresentationWindow) -> SnapshotWindowGeometry<'_> {
-    SnapshotWindowGeometry::new(PresentationId::new(1), FrameId(1), window.id, window).unwrap()
+    SnapshotWindowGeometry::new(PresentationId::new(1), FrameId(1), window.id(), window).unwrap()
 }
 
 #[test]

@@ -125,8 +125,14 @@ fn output_trace(
         .current_buffer()
         .expect("current buffer")
         .id;
-    let frame_id = eval.frames.create_frame("plain-field", 800, 600, buffer_id);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("plain-field", 800, 600, buffer_id);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     eval.edit
         .buffers
         .get_mut(buffer_id)
@@ -154,7 +160,9 @@ fn output_trace(
     for span in output.source_spans() {
         eval.push_specpdl_root(span.source());
     }
-    let input_source = eval.obarray.symbol_value_copied("d5-plain-field-source");
+    let input_source = eval
+        .obarray_view()
+        .symbol_value_copied("d5-plain-field-source");
     let mut identities = Vec::new();
     let text = string_trace(&mut eval, output.value(), order);
     let sources = output
@@ -181,7 +189,7 @@ fn output_trace(
         })
         .collect();
     let eval_count = eval
-        .obarray
+        .obarray_view()
         .symbol_value_copied("d5-plain-field-evals")
         .and_then(Value::as_fixnum)
         .expect("eval counter");

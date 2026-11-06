@@ -122,7 +122,7 @@ fn state_vector_records_frames_then_visible_buffers_then_lambda() {
 
     let state = builtin_symbol_value_1(&mut eval, var).unwrap();
     let slots = state.as_vector_data().expect("state vector");
-    let frame = eval.frames.get(frame_id).expect("selected frame");
+    let frame = eval.frame_manager().get(frame_id).expect("selected frame");
     assert_eq!(slots[0].bits(), Value::make_frame(frame_id.0).bits());
     assert_eq!(slots[1].bits(), frame.name_value().bits());
 

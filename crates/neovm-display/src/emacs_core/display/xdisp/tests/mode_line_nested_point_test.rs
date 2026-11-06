@@ -19,9 +19,15 @@ fn point_context() -> Context {
     )
     .expect("point fixture");
     let buffer = eval.edit.buffers.current_buffer_id().unwrap();
-    let frame = eval.frames.create_frame("nested-point", 120, 40, buffer);
-    assert!(eval.frames.select_frame(frame));
-    let window = eval.frames.selected_frame().unwrap().selected_window;
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("nested-point", 120, 40, buffer);
+    assert!(eval.frame_manager_mut().select_frame(frame));
+    let window = eval
+        .frame_manager()
+        .selected_frame()
+        .unwrap()
+        .selected_window;
     eval.set_variable("d16-point-window", Value::make_window(window.0));
     let foreign = eval.edit.buffers.create_buffer("d16-point-foreign");
     assert!(eval.edit.buffers.switch_current_unrecorded(foreign));
@@ -69,9 +75,13 @@ fn mode_line_nested_point_counter_matches_observed_gnu() {
     ] {
         let mut eval = point_context();
         let original_buffer = eval.edit.buffers.current_buffer_id();
-        let original_window = eval.frames.selected_frame().unwrap().selected_window;
+        let original_window = eval
+            .frame_manager()
+            .selected_frame()
+            .unwrap()
+            .selected_window;
         let roots = save_scratch_gc_roots();
-        let specpdl = eval.specpdl.len();
+        let specpdl = eval.specpdl().len();
         let expression = format!(
             r#"(format-mode-line
                  '("start[%l/%c/%C]"
@@ -92,11 +102,14 @@ fn mode_line_nested_point_counter_matches_observed_gnu() {
             "{name}"
         );
         assert_eq!(
-            eval.frames.selected_frame().unwrap().selected_window,
+            eval.frame_manager()
+                .selected_frame()
+                .unwrap()
+                .selected_window,
             original_window,
             "{name}"
         );
-        assert_eq!(eval.specpdl.len(), specpdl, "{name}");
+        assert_eq!(eval.specpdl().len(), specpdl, "{name}");
         assert_eq!(save_scratch_gc_roots(), roots, "{name}");
     }
 }
@@ -209,7 +222,7 @@ fn mode_line_clip_witness_is_separate_for_shared_indirect_text() {
 fn mode_line_buffer_install_clears_the_live_numeric_base() {
     let mut eval = point_context();
     for target in ["(current-buffer)", "d16-point-foreign"] {
-        eval.frames
+        eval.frame_manager_mut()
             .selected_frame_mut()
             .unwrap()
             .root_window_mut()
@@ -222,7 +235,7 @@ fn mode_line_buffer_install_clears_the_live_numeric_base() {
         eval.eval_str(&format!("(set-window-buffer d16-point-window {target} t)"))
             .expect("actual Lisp window buffer installation");
         assert!(
-            eval.frames
+            eval.frame_manager()
                 .selected_frame()
                 .unwrap()
                 .root_window()

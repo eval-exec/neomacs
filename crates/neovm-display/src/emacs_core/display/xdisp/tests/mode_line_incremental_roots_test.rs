@@ -9,7 +9,7 @@ fn gc_mode_line_rehomed_predecessor_plist_survives_eval() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.gc_stress = false;
-    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    eval.set_gc_threshold(usize::MAX);
     eval.set_variable("noninteractive", Value::NIL);
     let before_roots = save_scratch_gc_roots();
     let rendered = eval
@@ -55,11 +55,11 @@ fn gc_mode_line_split_accumulator_roots_restore_on_throw() {
     let before = save_scratch_gc_roots();
     let tag = Value::symbol("review-mode-line-throw");
     let result = finish_format_mode_line_in_state_with_eval(
-        neovm_eval::emacs_core::eval::VariableView::new(&eval.obarray, &eval.owner),
+        neovm_eval::emacs_core::eval::VariableView::new(&eval.obarray_view(), &eval.owner()),
         &[],
-        &eval.frames,
+        &eval.frame_manager(),
         &mut eval.edit.buffers,
-        &eval.processes,
+        &eval.processes(),
         &[format],
         |_, _| {
             assert!(save_scratch_gc_roots() > before);

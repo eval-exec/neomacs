@@ -19,12 +19,16 @@ fn fixture() -> (
         .current_buffer_id()
         .expect("fixture buffer");
     let frame = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("selection-chrome", 120, 40, buffer);
-    assert!(eval.frames.select_frame(frame));
-    let old = eval.frames.get(frame).expect("frame").selected_window;
+    assert!(eval.frame_manager_mut().select_frame(frame));
+    let old = eval
+        .frame_manager()
+        .get(frame)
+        .expect("frame")
+        .selected_window;
     let new = eval
-        .frames
+        .frame_manager_mut()
         .split_window(
             frame,
             old,
@@ -35,7 +39,7 @@ fn fixture() -> (
         )
         .expect("second leaf");
     let untouched = eval
-        .frames
+        .frame_manager()
         .get(frame)
         .expect("frame")
         .minibuffer_window

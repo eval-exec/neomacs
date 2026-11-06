@@ -11,7 +11,7 @@ fn assert_redraw_request(form: &str) {
         };
         let mut eval = Context::new(crate::test_utils::unit_runtime());
         let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-        let target = eval.frames.get(frame).unwrap();
+        let target = eval.frame_manager().get(frame).unwrap();
         let window = target.selected_window;
         let buffer = target.find_window(window).unwrap().buffer_id().unwrap();
         let body_before = eval.body_redisplay_revision(window, buffer);

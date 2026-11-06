@@ -627,7 +627,7 @@ fn image_mask_p_resolves_image_and_reports_a_clipping_mask_on_gui_frame() {
     let requests = Arc::new(Mutex::new(Vec::new()));
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_window_system(Some(Value::symbol("neo")));
@@ -649,7 +649,7 @@ fn image_mask_p_does_not_confuse_continuous_alpha_with_a_clipping_mask() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_window_system(Some(Value::symbol("neo")));
@@ -932,8 +932,10 @@ fn image_flush_accepts_selected_neo_window_system_frame() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.create_buffer("*scratch*");
-    let frame = eval.frames.create_frame("F1", 960, 640, buffer);
-    eval.frames
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, buffer);
+    eval.frame_manager_mut()
         .get_mut(frame)
         .expect("test frame")
         .set_window_system(Some(Value::symbol("neo")));
@@ -954,8 +956,10 @@ fn image_flush_lisp_call_accepts_selected_neo_window_system_frame() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.create_buffer("*scratch*");
-    let frame = eval.frames.create_frame("F1", 960, 640, buffer);
-    eval.frames
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, buffer);
+    eval.frame_manager_mut()
         .get_mut(frame)
         .expect("test frame")
         .set_window_system(Some(Value::symbol("neo")));
@@ -974,8 +978,10 @@ fn image_flush_invalidates_exact_spec_across_its_face_variants() {
     let invalidations = Arc::new(Mutex::new(Vec::new()));
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.create_buffer("*scratch*");
-    let frame = eval.frames.create_frame("F1", 960, 640, buffer);
-    eval.frames
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, buffer);
+    eval.frame_manager_mut()
         .get_mut(frame)
         .expect("test frame")
         .set_window_system(Some(Value::symbol("neo")));
@@ -1021,8 +1027,10 @@ fn image_flush_all_frames_invalidates_spec_with_display_host() {
     let invalidations = Arc::new(Mutex::new(Vec::new()));
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.create_buffer("*scratch*");
-    let frame = eval.frames.create_frame("F1", 960, 640, buffer);
-    eval.frames
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, buffer);
+    eval.frame_manager_mut()
         .get_mut(frame)
         .expect("test frame")
         .set_window_system(Some(Value::symbol("neo")));
@@ -1148,7 +1156,7 @@ fn clear_image_cache_nil_filter_clears_catalog_with_gui_host() {
     let clear_all_calls = Arc::new(Mutex::new(0usize));
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_window_system(Some(Value::symbol("neo")));
@@ -1350,7 +1358,7 @@ fn image_metadata_returns_nil_on_gui_frame_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_window_system(Some(Value::symbol("neo")));
@@ -1372,7 +1380,7 @@ fn image_metadata_converts_typed_animation_metadata_at_the_lisp_boundary() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_window_system(Some(Value::symbol("neo")));
@@ -1423,7 +1431,7 @@ fn neomacs_image_extent_returns_size_plist_on_gui_frame() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_window_system(Some(Value::symbol("neo")));
@@ -1547,7 +1555,7 @@ fn image_transforms_p_reports_the_transforms_neomacs_implements() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_window_system(Some(Value::symbol("neo")));
@@ -1816,7 +1824,7 @@ fn image_size_uses_display_host_resolution_in_gui_context() {
     let requests = Arc::new(Mutex::new(Vec::new()));
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_window_system(Some(Value::symbol("neo")));
@@ -1857,7 +1865,10 @@ fn image_size_pixels_t_converts_logical_layout_to_device_pixels() {
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     {
-        let frame = eval.frames.get_mut(frame_id).expect("selected frame");
+        let frame = eval
+            .frame_manager_mut()
+            .get_mut(frame_id)
+            .expect("selected frame");
         frame.set_window_system(Some(Value::symbol("neo")));
         frame.device_scale_factor = 1.25;
         frame.char_width = 8.0;
@@ -1898,7 +1909,7 @@ fn image_size_includes_margin_and_relief_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_window_system(Some(Value::symbol("neo")));
@@ -1929,7 +1940,10 @@ fn image_size_pixels_nil_returns_character_units_as_floats() {
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     {
-        let frame = eval.frames.get_mut(frame_id).expect("selected frame");
+        let frame = eval
+            .frame_manager_mut()
+            .get_mut(frame_id)
+            .expect("selected frame");
         frame.set_window_system(Some(Value::symbol("neo")));
         frame.char_width = 10.0;
         frame.char_height = 20.0;

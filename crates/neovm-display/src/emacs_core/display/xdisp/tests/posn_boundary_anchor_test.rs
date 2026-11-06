@@ -17,8 +17,14 @@ fn tty_extent_on_retains_canonical_eol_and_synthetic_tail_offsets() {
         .get_mut(buffer)
         .expect("buffer")
         .insert("abcdef\n");
-    let frame_id = eval.frames.create_frame("posn-tty-offset", 120, 40, buffer);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("posn-tty-offset", 120, 40, buffer);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     let point = |pos, x, y, col, role| DisplayPointSnapshot {
         buffer_pos: LispCharPos1::new(pos),
         role,
@@ -62,7 +68,7 @@ fn tty_extent_on_retains_canonical_eol_and_synthetic_tail_offsets() {
         ..Default::default()
     };
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.char_width = 1.0;
         frame.char_height = 1.0;
         frame.font_pixel_size = 1.0;
@@ -112,7 +118,7 @@ fn tty_extent_on_retains_canonical_eol_and_synthetic_tail_offsets() {
     synthetic
         .points
         .retain(|point| point.buffer_pos != LispCharPos1::new(8));
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("frame")
         .replace_redisplay_cache_for_test(vec![synthetic]);
@@ -142,7 +148,7 @@ fn tty_extent_on_retains_canonical_eol_and_synthetic_tail_offsets() {
             })
             .collect(),
     }));
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("frame")
         .replace_redisplay_cache_for_test(vec![below_chrome]);
@@ -163,9 +169,13 @@ fn tty_extent_on_empty_hscrolled_eob_offsets_preserve_off_geometry() {
         .expect("buffer")
         .insert("\t\n");
     let frame_id = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("posn-empty-hscroll", 120, 40, buffer);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     let snapshot = crate::window::WindowDisplaySnapshot {
         window_id,
         points: vec![
@@ -239,7 +249,7 @@ fn tty_extent_on_empty_hscrolled_eob_offsets_preserve_off_geometry() {
         ..Default::default()
     };
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.char_width = 1.0;
         frame.char_height = 1.0;
         frame.font_pixel_size = 1.0;
@@ -301,7 +311,7 @@ fn tty_extent_on_empty_hscrolled_eob_offsets_preserve_off_geometry() {
         );
     }
     assert_eq!(
-        eval.frames
+        eval.frame_manager()
             .get(frame_id)
             .expect("frame")
             .redisplay_snapshot(window_id)

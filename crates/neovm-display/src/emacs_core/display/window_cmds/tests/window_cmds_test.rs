@@ -37,8 +37,8 @@ fn gui_frame_position_requests_move_the_native_window() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let root = ev.frames.create_frame("Root", 800, 600, buf);
-    ev.frames
+    let root = ev.frame_manager_mut().create_frame("Root", 800, 600, buf);
+    ev.frame_manager_mut()
         .get_mut(root)
         .unwrap()
         .set_window_system(Some(Value::symbol("neo")));
@@ -85,8 +85,8 @@ fn accepted_root_and_child_alpha_operations_survive_numeric_then_nil_without_lay
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let root = ev.frames.create_frame("Root", 800, 600, buf);
-    ev.frames
+    let root = ev.frame_manager_mut().create_frame("Root", 800, 600, buf);
+    ev.frame_manager_mut()
         .get_mut(root)
         .unwrap()
         .set_window_system(Some(Value::symbol("neo")));
@@ -110,7 +110,7 @@ fn x_create_frame_returns_the_realized_frame_when_alpha_sync_fails() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    ev.frames.create_frame("F1", 800, 600, buf);
+    ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     let host = RecordingDisplayHost {
         fail_alpha_sync: true,
         ..RecordingDisplayHost::new()
@@ -131,7 +131,7 @@ fn focus_redirect_sync_failure_keeps_frame_creation_and_restoration_effects() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    ev.frames.create_frame("F1", 800, 600, buf);
+    ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     let host = RecordingDisplayHost::new();
     let fail_focus_sync = host.fail_focus_sync.clone();
     fail_focus_sync.set(true);
@@ -181,7 +181,7 @@ fn x_create_frame_resolves_alpha_defaults_and_explicit_nil() {
         let mut ev = Context::new(crate::test_utils::unit_runtime());
         let buf = ev.edit.buffers.create_buffer("*scratch*");
         ev.edit.buffers.set_current(buf);
-        ev.frames.create_frame("F1", 800, 600, buf);
+        ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
         ev.set_display_host(Box::new(RecordingDisplayHost::new()));
         let src = format!(
             "(let ((default-frame-alist '(({parameter} . {value})))) (x-create-frame {explicit}))"
@@ -189,7 +189,7 @@ fn x_create_frame_resolves_alpha_defaults_and_explicit_nil() {
         let result = ev.eval_str_each(&src);
         let frame_value = result[0].as_ref().expect("valid inherited/default alpha");
         let id = crate::window::FrameId(frame_value.as_frame_id().expect("created frame"));
-        let frame = ev.frames.get(id).unwrap();
+        let frame = ev.frame_manager().get(id).unwrap();
         assert_eq!(frame.frame_alpha, expected, "{src}");
         assert_eq!(frame.background_alpha, background, "{src}");
     }
@@ -205,7 +205,7 @@ fn x_create_frame_resolves_alpha_defaults_and_explicit_nil() {
 fn frame_scale_factor_reads_the_selected_frames_presented_device_scale() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame_id = super::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .device_scale_factor = 1.75;
@@ -223,7 +223,7 @@ fn eval_with_frame(src: &str) -> Vec<String> {
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
     // Create a frame so window/frame builtins have something to work with.
-    ev.frames.create_frame("F1", 800, 600, buf);
+    ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     // Tests that exercise `make-frame` need a usable terminal (production
     // --batch deliberately has none, so frame creation errors like GNU).
     crate::emacs_core::terminal::pure::mark_selected_terminal_usable_for_test(&ev);
@@ -262,9 +262,9 @@ fn eval_with_gui_frame(src: &str) -> Vec<String> {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     {
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         frame.set_window_system(Some(Value::symbol("neo")));
     }
     ev.eval_str_each(src)
@@ -279,8 +279,8 @@ fn publish_selected_gui_window_regions(
     presentation: u64,
     regions: crate::window::PresentedWindowRegions,
 ) {
-    let window_id = ev.frames.get(fid).expect("frame").selected_window;
-    ev.frames
+    let window_id = ev.frame_manager().get(fid).expect("frame").selected_window;
+    ev.frame_manager_mut()
         .get_mut(fid)
         .expect("frame")
         .prepare_and_activate_display_presentation_for_test(
@@ -312,18 +312,19 @@ fn active_minibuffer_window_tracks_live_minibuffer_state() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
-    ev.frames.create_frame("F1", 800, 600, buf);
+    ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
 
-    let fid = super::ensure_selected_frame_id_in_state(&mut ev.frames, &mut ev.edit.buffers);
+    let fid =
+        super::ensure_selected_frame_id_in_state(&mut ev.frame_manager(), &mut ev.edit.buffers);
     let minibuffer_buffer_id = {
-        let frame = ev.frames.get(fid).expect("selected frame");
+        let frame = ev.frame_manager().get(fid).expect("selected frame");
         let minibuffer_wid = frame.minibuffer_window.expect("minibuffer window");
         frame
             .find_window(minibuffer_wid)
             .and_then(|window| window.buffer_id())
             .expect("minibuffer buffer")
     };
-    ev.minibuffers
+    ev.minibuffers()
         .read_from_minibuffer(minibuffer_buffer_id, "M-x ", None, None)
         .expect("active minibuffer state");
 
@@ -995,8 +996,12 @@ fn window_old_buffer_reports_the_recorded_buffer_after_a_change_epoch() {
         "after an epoch the window reports the buffer it was showing, not t"
     );
     assert_eq!(
-        ev.frames
-            .window_old_buffer(ev.frames.selected_frame().expect("frame").selected_window),
+        ev.frame_manager().window_old_buffer(
+            ev.frame_manager()
+                .selected_frame()
+                .expect("frame")
+                .selected_window
+        ),
         crate::window::WindowOldBuffer::Recorded(buffer),
         "and it is the buffer the window actually shows"
     );
@@ -1497,12 +1502,12 @@ fn selected_window_sync_prefers_live_current_buffer_point_before_resync() {
     assert_eq!(pre_buffer_point, 5);
 
     crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
-        &mut ev.frames,
+        &mut ev.frame_manager(),
         &mut ev.edit.buffers,
         frame_id,
     );
     crate::emacs_core::window_cmds::sync_selected_window_buffer_in_state(
-        &ev.frames,
+        &ev.frame_manager(),
         &mut ev.edit.buffers,
         frame_id,
     );
@@ -1581,8 +1586,10 @@ fn window_body_remap_uses_the_current_buffer_default_face_metrics() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.create_buffer("*remapped-window-body*");
     eval.edit.buffers.set_current(buffer);
-    let frame_id = eval.frames.create_frame("F1", 800, 600, buffer);
-    eval.frames
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 800, 600, buffer);
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("frame")
         .set_window_system(Some(Value::symbol("neo")));
@@ -1616,8 +1623,10 @@ fn window_body_remap_uses_the_current_buffers_face_remapping_like_gnu() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let displayed = eval.edit.buffers.create_buffer("*displayed-window-body*");
     eval.edit.buffers.set_current(displayed);
-    let frame_id = eval.frames.create_frame("F1", 800, 600, displayed);
-    eval.frames
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 800, 600, displayed);
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("frame")
         .set_window_system(Some(Value::symbol("neo")));
@@ -1660,9 +1669,9 @@ fn gui_window_body_geometry_excludes_fringes_and_margins() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     {
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         frame.set_window_system(Some(Value::symbol("neo")));
     }
 
@@ -1682,8 +1691,8 @@ fn gui_window_body_geometry_excludes_fringes_and_margins() {
         .expect("set-window-fringes"),
         Value::T
     );
-    let window_id = ev.frames.get(fid).expect("frame").selected_window;
-    ev.frames
+    let window_id = ev.frame_manager().get(fid).expect("frame").selected_window;
+    ev.frame_manager_mut()
         .get_mut(fid)
         .expect("frame")
         .prepare_and_activate_display_presentation_for_test(
@@ -1764,8 +1773,8 @@ fn gui_window_fringes_default_to_frame_defaults_when_reset() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
-    ev.frames
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
+    ev.frame_manager_mut()
         .get_mut(fid)
         .expect("frame")
         .set_window_system(Some(Value::symbol("neo")));
@@ -1843,8 +1852,8 @@ fn gui_window_scroll_bars_round_trip_explicit_state() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
-    ev.frames
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
+    ev.frame_manager_mut()
         .get_mut(fid)
         .expect("frame")
         .set_window_system(Some(Value::symbol("neo")));
@@ -1896,8 +1905,8 @@ fn gui_window_body_geometry_excludes_scroll_bar_area() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
-    ev.frames
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
+    ev.frame_manager_mut()
         .get_mut(fid)
         .expect("frame")
         .set_window_system(Some(Value::symbol("neo")));
@@ -1939,9 +1948,9 @@ fn gui_set_window_buffer_applies_buffer_local_display_defaults() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(scratch);
-    let fid = ev.frames.create_frame("F1", 800, 600, scratch);
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, scratch);
     {
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         frame.set_window_system(Some(Value::symbol("neo")));
     }
     let buffer_name = " *gui-swb-display*";
@@ -1977,8 +1986,8 @@ fn gui_set_window_buffer_applies_buffer_local_display_defaults() {
 
     ev.eval_str("(set-window-buffer (selected-window) \" *gui-swb-display*\")")
         .expect("set-window-buffer");
-    let window_id = ev.frames.get(fid).expect("frame").selected_window;
-    ev.frames
+    let window_id = ev.frame_manager().get(fid).expect("frame").selected_window;
+    ev.frame_manager_mut()
         .get_mut(fid)
         .expect("frame")
         .prepare_and_activate_display_presentation_for_test(
@@ -2079,16 +2088,17 @@ fn get_buffer_window_list_returns_matching_windows() {
 fn get_buffer_window_list_includes_active_minibuffer_by_default() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
-    let fid = super::seed_batch_startup_frame_in_state(&mut ev.frames, &mut ev.edit.buffers);
+    let fid =
+        super::seed_batch_startup_frame_in_state(&mut ev.frame_manager(), &mut ev.edit.buffers);
     let minibuffer_buffer = {
-        let frame = ev.frames.get(fid).expect("frame should exist");
+        let frame = ev.frame_manager().get(fid).expect("frame should exist");
         let minibuffer_wid = frame.minibuffer_window.expect("minibuffer window");
         frame
             .find_window(minibuffer_wid)
             .and_then(|window| window.buffer_id())
             .expect("minibuffer buffer")
     };
-    ev.minibuffers
+    ev.minibuffers()
         .read_from_minibuffer(minibuffer_buffer, "M-x ", None, None)
         .expect("active minibuffer state");
     ev.edit.buffers.set_current(minibuffer_buffer);
@@ -4350,12 +4360,13 @@ fn window_cursor_info_returns_last_redisplay_cursor_geometry() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
-    let wid = ev.frames.get(fid).expect("frame").selected_window;
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
+    let wid = ev.frame_manager().get(fid).expect("frame").selected_window;
 
-    ev.frames.set_window_cursor_type(wid, Value::symbol("bar"));
+    ev.frame_manager_mut()
+        .set_window_cursor_type(wid, Value::symbol("bar"));
     {
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         frame.commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
             point_rows: None,
             window_id: wid,
@@ -4390,12 +4401,13 @@ fn window_cursor_info_hides_and_restores_live_cursor_geometry() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
-    let wid = ev.frames.get(fid).expect("frame").selected_window;
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
+    let wid = ev.frame_manager().get(fid).expect("frame").selected_window;
 
-    ev.frames.set_window_cursor_type(wid, Value::symbol("bar"));
+    ev.frame_manager_mut()
+        .set_window_cursor_type(wid, Value::symbol("bar"));
     {
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         frame.commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
             point_rows: None,
             window_id: wid,
@@ -5275,7 +5287,7 @@ fn raw_context_does_not_prebind_window_inside_aliases() {
     let eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     for name in ["window-inside-pixel-edges", "window-inside-edges"] {
         assert!(
-            eval.obarray.symbol_function(name).is_none(),
+            eval.obarray_view().symbol_function(name).is_none(),
             "{name} should come from GNU window.el, not Context::new"
         );
     }
@@ -5565,9 +5577,9 @@ fn frame_query_builtins_report_pixel_sizes_for_gui_frames() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
-    let fid = ev.frames.create_frame("gui", 800, 600, buf);
+    let fid = ev.frame_manager_mut().create_frame("gui", 800, 600, buf);
     {
-        let frame = ev.frames.get_mut(fid).expect("gui frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("gui frame");
         frame.set_window_system(Some(Value::symbol("x")));
     }
 
@@ -5609,15 +5621,15 @@ fn frame_text_width_ignores_window_local_fringe_overrides_for_gui_frames() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
-    let fid = ev.frames.create_frame("gui", 800, 600, buf);
+    let fid = ev.frame_manager_mut().create_frame("gui", 800, 600, buf);
     let selected_window = {
-        let frame = ev.frames.get_mut(fid).expect("gui frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("gui frame");
         frame.set_window_system(Some(Value::symbol("x")));
         frame.selected_window
     };
 
     assert!(
-        ev.frames
+        ev.frame_manager_mut()
             .set_window_fringes(selected_window, Some(5), Some(5), false, false),
         "window-local fringes should change"
     );
@@ -5636,9 +5648,9 @@ fn frame_query_builtins_use_internal_window_system_state() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
-    let fid = ev.frames.create_frame("gui", 800, 600, buf);
+    let fid = ev.frame_manager_mut().create_frame("gui", 800, 600, buf);
     {
-        let frame = ev.frames.get_mut(fid).expect("gui frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("gui frame");
         frame.set_window_system(Some(Value::symbol("x")));
         frame.remove_parameter(Value::symbol("window-system"));
     }
@@ -5720,10 +5732,10 @@ fn make_terminal_frame_creates_tty_child_frame_with_gnu_geometry_semantics() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(scratch);
-    let root_id = ev.frames.create_frame("F1", 80, 25, scratch);
+    let root_id = ev.frame_manager_mut().create_frame("F1", 80, 25, scratch);
     crate::emacs_core::terminal::pure::mark_selected_terminal_usable_for_test(&ev);
     {
-        let root = ev.frames.get_mut(root_id).expect("root frame");
+        let root = ev.frame_manager_mut().get_mut(root_id).expect("root frame");
         root.char_width = 1.0;
         root.char_height = 1.0;
         root.font_pixel_size = 1.0;
@@ -5770,12 +5782,12 @@ fn make_terminal_frame_creates_tty_child_frame_with_gnu_geometry_semantics() {
     );
 
     let root_minibuffer = ev
-        .frames
+        .frame_manager()
         .get(root_id)
         .expect("root frame")
         .minibuffer_window
         .expect("root minibuffer");
-    let child_frame = ev.frames.get(child_id).expect("child frame");
+    let child_frame = ev.frame_manager().get(child_id).expect("child frame");
     assert_eq!(child_frame.minibuffer_window, Some(root_minibuffer));
     assert!(child_frame.minibuffer_leaf.is_none());
     assert_eq!(
@@ -5824,10 +5836,10 @@ fn make_terminal_frame_accepts_tty_minibuffer_window_parameter() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(scratch);
-    let root_id = ev.frames.create_frame("F1", 80, 25, scratch);
+    let root_id = ev.frame_manager_mut().create_frame("F1", 80, 25, scratch);
     crate::emacs_core::terminal::pure::mark_selected_terminal_usable_for_test(&ev);
     {
-        let root = ev.frames.get_mut(root_id).expect("root frame");
+        let root = ev.frame_manager_mut().get_mut(root_id).expect("root frame");
         root.char_width = 1.0;
         root.char_height = 1.0;
         root.font_pixel_size = 1.0;
@@ -5835,7 +5847,7 @@ fn make_terminal_frame_accepts_tty_minibuffer_window_parameter() {
 
     let root = Value::make_frame(root_id.0);
     let root_minibuffer = ev
-        .frames
+        .frame_manager()
         .get(root_id)
         .expect("root frame")
         .minibuffer_window
@@ -5852,7 +5864,7 @@ fn make_terminal_frame_accepts_tty_minibuffer_window_parameter() {
     let child = crate::emacs_core::frame::builtin_make_terminal_frame(&mut ev, vec![params])
         .expect("make-terminal-frame");
     let child_id = crate::window::FrameId(child.as_frame_id().expect("child frame"));
-    let child_frame = ev.frames.get(child_id).expect("child frame");
+    let child_frame = ev.frame_manager().get(child_id).expect("child frame");
     assert_eq!(child_frame.minibuffer_window, Some(root_minibuffer));
     assert!(child_frame.minibuffer_leaf.is_none());
     assert_eq!(
@@ -5867,10 +5879,10 @@ fn tty_child_frame_accepts_text_pixel_size_parameters() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(scratch);
-    let root_id = ev.frames.create_frame("F1", 80, 25, scratch);
+    let root_id = ev.frame_manager_mut().create_frame("F1", 80, 25, scratch);
     crate::emacs_core::terminal::pure::mark_selected_terminal_usable_for_test(&ev);
     {
-        let root = ev.frames.get_mut(root_id).expect("root frame");
+        let root = ev.frame_manager_mut().get_mut(root_id).expect("root frame");
         root.char_width = 1.0;
         root.char_height = 1.0;
         root.font_pixel_size = 1.0;
@@ -5878,7 +5890,7 @@ fn tty_child_frame_accepts_text_pixel_size_parameters() {
 
     let root = Value::make_frame(root_id.0);
     let root_minibuffer = ev
-        .frames
+        .frame_manager()
         .get(root_id)
         .expect("root frame")
         .minibuffer_window
@@ -5896,7 +5908,7 @@ fn tty_child_frame_accepts_text_pixel_size_parameters() {
     let child = crate::emacs_core::frame::builtin_make_terminal_frame(&mut ev, vec![params])
         .expect("make-terminal-frame");
     let child_id = crate::window::FrameId(child.as_frame_id().expect("child frame"));
-    let child_frame = ev.frames.get(child_id).expect("child frame");
+    let child_frame = ev.frame_manager().get(child_id).expect("child frame");
     assert_eq!(child_frame.width, 17);
     assert_eq!(child_frame.height, 4);
     assert_eq!(child_frame.parameter("width"), Some(Value::fixnum(17)));
@@ -5913,10 +5925,10 @@ fn modify_frame_parameters_accepts_text_pixel_size_on_tty_child_frame() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(scratch);
-    let root_id = ev.frames.create_frame("F1", 80, 25, scratch);
+    let root_id = ev.frame_manager_mut().create_frame("F1", 80, 25, scratch);
     crate::emacs_core::terminal::pure::mark_selected_terminal_usable_for_test(&ev);
     {
-        let root = ev.frames.get_mut(root_id).expect("root frame");
+        let root = ev.frame_manager_mut().get_mut(root_id).expect("root frame");
         root.char_width = 1.0;
         root.char_height = 1.0;
         root.font_pixel_size = 1.0;
@@ -5924,7 +5936,7 @@ fn modify_frame_parameters_accepts_text_pixel_size_on_tty_child_frame() {
 
     let root = Value::make_frame(root_id.0);
     let root_minibuffer = ev
-        .frames
+        .frame_manager()
         .get(root_id)
         .expect("root frame")
         .minibuffer_window
@@ -5948,7 +5960,7 @@ fn modify_frame_parameters_accepts_text_pixel_size_on_tty_child_frame() {
 
     crate::emacs_core::frame::builtin_modify_frame_parameters(&mut ev, vec![child, alist])
         .expect("modify-frame-parameters");
-    let child_frame = ev.frames.get(child_id).expect("child frame");
+    let child_frame = ev.frame_manager().get(child_id).expect("child frame");
     assert_eq!(child_frame.width, 91);
     assert_eq!(child_frame.height, 18);
     assert_eq!(child_frame.parameter("width"), Some(Value::fixnum(91)));
@@ -5965,10 +5977,10 @@ fn window_text_pixel_size_uses_supplied_child_window_frame() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(scratch);
-    let root_id = ev.frames.create_frame("F1", 80, 25, scratch);
+    let root_id = ev.frame_manager_mut().create_frame("F1", 80, 25, scratch);
     crate::emacs_core::terminal::pure::mark_selected_terminal_usable_for_test(&ev);
     {
-        let root = ev.frames.get_mut(root_id).expect("root frame");
+        let root = ev.frame_manager_mut().get_mut(root_id).expect("root frame");
         root.char_width = 1.0;
         root.char_height = 1.0;
         root.font_pixel_size = 1.0;
@@ -5976,7 +5988,7 @@ fn window_text_pixel_size_uses_supplied_child_window_frame() {
 
     let root = Value::make_frame(root_id.0);
     let root_minibuffer = ev
-        .frames
+        .frame_manager()
         .get(root_id)
         .expect("root frame")
         .minibuffer_window
@@ -6000,7 +6012,10 @@ fn window_text_pixel_size_uses_supplied_child_window_frame() {
         .expect("make-terminal-frame");
     let child_id = crate::window::FrameId(child.as_frame_id().expect("child frame"));
     let child_window = {
-        let frame = ev.frames.get_mut(child_id).expect("child frame");
+        let frame = ev
+            .frame_manager_mut()
+            .get_mut(child_id)
+            .expect("child frame");
         let child_window = frame.root_window().id();
         frame
             .find_window_mut(child_window)
@@ -6024,10 +6039,10 @@ fn shared_tty_child_minibuffer_window_apis_use_owner_frame() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(scratch);
-    let root_id = ev.frames.create_frame("F1", 80, 25, scratch);
+    let root_id = ev.frame_manager_mut().create_frame("F1", 80, 25, scratch);
     crate::emacs_core::terminal::pure::mark_selected_terminal_usable_for_test(&ev);
     {
-        let root = ev.frames.get_mut(root_id).expect("root frame");
+        let root = ev.frame_manager_mut().get_mut(root_id).expect("root frame");
         root.char_width = 1.0;
         root.char_height = 1.0;
         root.font_pixel_size = 1.0;
@@ -6035,7 +6050,7 @@ fn shared_tty_child_minibuffer_window_apis_use_owner_frame() {
 
     let root = Value::make_frame(root_id.0);
     let root_minibuffer = ev
-        .frames
+        .frame_manager()
         .get(root_id)
         .expect("root frame")
         .minibuffer_window
@@ -6052,19 +6067,20 @@ fn shared_tty_child_minibuffer_window_apis_use_owner_frame() {
     let child = crate::emacs_core::frame::builtin_make_terminal_frame(&mut ev, vec![params])
         .expect("make-terminal-frame");
     let child_id = crate::window::FrameId(child.as_frame_id().expect("child frame"));
-    let child_frame = ev.frames.get(child_id).expect("child frame");
+    let child_frame = ev.frame_manager().get(child_id).expect("child frame");
     assert_eq!(child_frame.minibuffer_window, Some(root_minibuffer));
     assert!(child_frame.minibuffer_leaf.is_none());
 
     assert_eq!(
-        ev.frames.find_window_frame_id(root_minibuffer),
+        ev.frame_manager().find_window_frame_id(root_minibuffer),
         Some(root_id)
     );
     assert_eq!(
-        ev.frames.find_valid_window_frame_id(root_minibuffer),
+        ev.frame_manager()
+            .find_valid_window_frame_id(root_minibuffer),
         Some(root_id)
     );
-    assert!(ev.frames.lookup_window(root_minibuffer).is_some());
+    assert!(ev.frame_manager().lookup_window(root_minibuffer).is_some());
     assert_eq!(
         super::builtin_window_frame(&mut ev, &vec![root_minibuffer_value]).expect("window-frame"),
         root
@@ -6084,8 +6100,10 @@ fn x_create_frame_creates_live_frame_and_preserves_char_geometry_params() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
-    let fid = ev.frames.create_frame("bootstrap", 800, 600, scratch);
-    ev.frames
+    let fid = ev
+        .frame_manager_mut()
+        .create_frame("bootstrap", 800, 600, scratch);
+    ev.frame_manager_mut()
         .get_mut(fid)
         .expect("bootstrap frame")
         .set_parameter(Value::symbol("window-system"), Value::symbol("x"));
@@ -6104,8 +6122,8 @@ fn x_create_frame_creates_live_frame_and_preserves_char_geometry_params() {
             .unwrap_or_else(|| panic!("expected frame object, got {:?}", created)),
     );
     assert_ne!(created_id, fid);
-    let frame = ev.frames.get(created_id).expect("created frame");
-    assert_eq!(ev.frames.frame_list().len(), 2);
+    let frame = ev.frame_manager().get(created_id).expect("created frame");
+    assert_eq!(ev.frame_manager().frame_list().len(), 2);
     assert_eq!(frame.name_runtime_string_owned(), "GUI");
     assert_eq!(frame.parameter("width"), Some(Value::fixnum(80)));
     assert_eq!(frame.parameter("height"), Some(Value::fixnum(25)));
@@ -6119,9 +6137,14 @@ fn x_create_frame_creates_opening_frame_and_notifies_host() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
-    let fid = ev.frames.create_frame("bootstrap", 960, 640, scratch);
+    let fid = ev
+        .frame_manager_mut()
+        .create_frame("bootstrap", 960, 640, scratch);
     {
-        let frame = ev.frames.get_mut(fid).expect("bootstrap frame");
+        let frame = ev
+            .frame_manager_mut()
+            .get_mut(fid)
+            .expect("bootstrap frame");
         frame.set_parameter(Value::symbol("window-system"), Value::symbol("x"));
         if let Some(mini_leaf) = frame.minibuffer_leaf.as_mut() {
             mini_leaf.set_bounds(crate::window::Rect::new(0.0, 608.0, 960.0, 32.0));
@@ -6147,8 +6170,11 @@ fn x_create_frame_creates_opening_frame_and_notifies_host() {
             .unwrap_or_else(|| panic!("expected frame object, got {:?}", created)),
     );
     assert_ne!(created_id, fid);
-    assert_eq!(ev.frames.frame_list().len(), 2);
-    let frame = ev.frames.get(created_id).expect("created opening frame");
+    assert_eq!(ev.frame_manager().frame_list().len(), 2);
+    let frame = ev
+        .frame_manager()
+        .get(created_id)
+        .expect("created opening frame");
     assert_eq!(frame.parameter("width"), Some(Value::fixnum(80)));
     assert_eq!(frame.parameter("height"), Some(Value::fixnum(25)));
     let requests = requests.borrow();
@@ -6158,7 +6184,10 @@ fn x_create_frame_creates_opening_frame_and_notifies_host() {
     assert_eq!(requests[0].width, frame.width);
     assert_eq!(requests[0].height, frame.height);
     assert_eq!(
-        ev.frames.selected_frame().expect("selected frame").id,
+        ev.frame_manager()
+            .selected_frame()
+            .expect("selected frame")
+            .id,
         created_id
     );
 }
@@ -6168,9 +6197,14 @@ fn x_create_frame_fullscreen_maximized_param_reaches_display_host() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
-    let fid = ev.frames.create_frame("bootstrap", 960, 640, scratch);
+    let fid = ev
+        .frame_manager_mut()
+        .create_frame("bootstrap", 960, 640, scratch);
     {
-        let frame = ev.frames.get_mut(fid).expect("bootstrap frame");
+        let frame = ev
+            .frame_manager_mut()
+            .get_mut(fid)
+            .expect("bootstrap frame");
         frame.set_parameter(Value::symbol("window-system"), Value::symbol("x"));
     }
     ev.set_variable("terminal-frame", Value::make_frame(fid.0));
@@ -6189,7 +6223,10 @@ fn x_create_frame_fullscreen_maximized_param_reaches_display_host() {
             .as_frame_id()
             .unwrap_or_else(|| panic!("expected frame object, got {:?}", created)),
     );
-    let frame = ev.frames.get(created_id).expect("created opening frame");
+    let frame = ev
+        .frame_manager()
+        .get(created_id)
+        .expect("created opening frame");
     assert_eq!(
         frame.known_parameter(FrameParam::Fullscreen),
         Some(Value::symbol("maximized"))
@@ -6206,9 +6243,14 @@ fn x_create_frame_with_parent_frame_creates_gui_child_overlay_without_host_windo
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
-    let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
+    let parent_id = ev
+        .frame_manager_mut()
+        .create_frame("parent", 960, 640, scratch);
     {
-        let parent = ev.frames.get_mut(parent_id).expect("parent frame");
+        let parent = ev
+            .frame_manager_mut()
+            .get_mut(parent_id)
+            .expect("parent frame");
         parent.set_window_system(Some(Value::symbol("neo")));
         parent.set_display_identity(crate::window::FrameDisplayIdentity::wayland("wayland-7"));
         parent.char_width = 10.0;
@@ -6218,7 +6260,7 @@ fn x_create_frame_with_parent_frame_creates_gui_child_overlay_without_host_windo
             mini_leaf.set_bounds(crate::window::Rect::new(0.0, 600.0, 960.0, 40.0));
         }
     }
-    ev.frames.select_frame(parent_id);
+    ev.frame_manager_mut().select_frame(parent_id);
     let host = RecordingDisplayHost::new();
     let requests = host.realized.clone();
     ev.set_display_host(Box::new(host));
@@ -6245,11 +6287,11 @@ fn x_create_frame_with_parent_frame_creates_gui_child_overlay_without_host_windo
             .unwrap_or_else(|| panic!("expected frame object, got {:?}", created)),
     );
     let parent_minibuffer = ev
-        .frames
+        .frame_manager()
         .get(parent_id)
         .and_then(|frame| frame.minibuffer_window)
         .expect("parent minibuffer");
-    let child = ev.frames.get(child_id).expect("child frame");
+    let child = ev.frame_manager().get(child_id).expect("child frame");
 
     assert_eq!(requests.borrow().len(), 0);
     assert_eq!(child.parent_frame, Value::make_frame(parent_id.0));
@@ -6281,12 +6323,17 @@ fn x_create_frame_root_window_positions_follow_buffer_edits() {
     let scratch = ev.edit.buffers.create_buffer("*x-child-marker*");
     ev.edit.buffers.set_current(scratch);
     ev.edit.buffers.insert_into_buffer(scratch, input);
-    let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
+    let parent_id = ev
+        .frame_manager_mut()
+        .create_frame("parent", 960, 640, scratch);
     {
-        let parent = ev.frames.get_mut(parent_id).expect("parent frame");
+        let parent = ev
+            .frame_manager_mut()
+            .get_mut(parent_id)
+            .expect("parent frame");
         parent.set_window_system(Some(Value::symbol("neo")));
     }
-    ev.frames.select_frame(parent_id);
+    ev.frame_manager_mut().select_frame(parent_id);
 
     let params = Value::list(vec![
         Value::cons(
@@ -6303,7 +6350,10 @@ fn x_create_frame_root_window_positions_follow_buffer_edits() {
     );
     let old_end = LispCharPos1::from_one_based_usize(input.chars().count() + 1);
     {
-        let child = ev.frames.get_mut(child_id).expect("child frame");
+        let child = ev
+            .frame_manager_mut()
+            .get_mut(child_id)
+            .expect("child frame");
         crate::window::window_markers::set_window_point_with_marker(
             &mut ev.edit.buffers,
             child.root_window_mut(),
@@ -6324,7 +6374,7 @@ fn x_create_frame_root_window_positions_follow_buffer_edits() {
         ));
     ev.sync_window_positions(scratch);
 
-    let child = ev.frames.get(child_id).expect("child frame");
+    let child = ev.frame_manager().get(child_id).expect("child frame");
     let crate::window::Window::Leaf {
         point,
         position_markers,
@@ -6354,19 +6404,22 @@ fn x_create_frame_root_window_position_markers_survive_garbage_collection() {
     ev.edit.buffers.insert_into_buffer(minibuffer, input);
 
     let parent_id = ev
-        .frames
+        .frame_manager_mut()
         .create_frame("vertico-parent", 960, 640, minibuffer);
     let parent_minibuffer = ev
-        .frames
+        .frame_manager()
         .get(parent_id)
         .expect("parent frame")
         .selected_window;
     {
-        let parent = ev.frames.get_mut(parent_id).expect("parent frame");
+        let parent = ev
+            .frame_manager_mut()
+            .get_mut(parent_id)
+            .expect("parent frame");
         parent.set_window_system(Some(Value::symbol("neo")));
         parent.minibuffer_window = Some(parent_minibuffer);
     }
-    ev.frames.select_frame(parent_id);
+    ev.frame_manager_mut().select_frame(parent_id);
 
     // This is the shape used by posframe: a child frame with no minibuffer of
     // its own, sharing the parent's minibuffer window, whose ordinary root
@@ -6388,7 +6441,7 @@ fn x_create_frame_root_window_position_markers_survive_garbage_collection() {
             .unwrap_or_else(|| panic!("expected frame object, got {created:?}")),
     );
     let child_window = ev
-        .frames
+        .frame_manager()
         .get(child_id)
         .expect("child frame")
         .selected_window;
@@ -6425,7 +6478,7 @@ fn x_create_frame_root_window_position_markers_survive_garbage_collection() {
         ));
     ev.sync_window_positions(minibuffer);
 
-    let child = ev.frames.get(child_id).expect("child frame");
+    let child = ev.frame_manager().get(child_id).expect("child frame");
     let crate::window::Window::Leaf { point, .. } = &child.root_window() else {
         panic!("child root must remain a live leaf window");
     };
@@ -6441,7 +6494,9 @@ fn x_create_frame_with_parent_frame_inherits_parent_font_state() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
-    let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
+    let parent_id = ev
+        .frame_manager_mut()
+        .create_frame("parent", 960, 640, scratch);
     let parent_font_name = Value::string("-*-Hack-regular-normal-*-*-102-*-*-*-m-0-iso10646-1");
     let mut parent_font_face = crate::face::Face::new("default");
     parent_font_face.family = Some(Value::string("Hack"));
@@ -6451,7 +6506,10 @@ fn x_create_frame_with_parent_frame_inherits_parent_font_state() {
     parent_font_face.height = Some(crate::face::FaceHeight::Absolute(102));
     let parent_font_object = crate::emacs_core::font::build_font_object(&parent_font_face);
     {
-        let parent = ev.frames.get_mut(parent_id).expect("parent frame");
+        let parent = ev
+            .frame_manager_mut()
+            .get_mut(parent_id)
+            .expect("parent frame");
         parent.set_window_system(Some(Value::symbol("neo")));
         parent.set_known_parameter(FrameParam::Font, parent_font_name);
         parent.set_parameter(Value::symbol("font-parameter"), parent_font_object);
@@ -6459,7 +6517,7 @@ fn x_create_frame_with_parent_frame_inherits_parent_font_state() {
         parent.char_height = 17.0;
         parent.font_pixel_size = 13.0;
     }
-    ev.frames.select_frame(parent_id);
+    ev.frame_manager_mut().select_frame(parent_id);
     ev.set_display_host(Box::new(RecordingDisplayHost::new()));
 
     let params = Value::list(vec![
@@ -6475,7 +6533,7 @@ fn x_create_frame_with_parent_frame_inherits_parent_font_state() {
             .as_frame_id()
             .unwrap_or_else(|| panic!("expected frame object, got {:?}", created)),
     );
-    let child = ev.frames.get(child_id).expect("child frame");
+    let child = ev.frame_manager().get(child_id).expect("child frame");
 
     assert_eq!(
         child.known_parameter(FrameParam::Font),
@@ -6489,16 +6547,21 @@ fn x_create_frame_with_explicit_font_resolves_internal_font_parameter() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
-    let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
+    let parent_id = ev
+        .frame_manager_mut()
+        .create_frame("parent", 960, 640, scratch);
     {
-        let parent = ev.frames.get_mut(parent_id).expect("parent frame");
+        let parent = ev
+            .frame_manager_mut()
+            .get_mut(parent_id)
+            .expect("parent frame");
         parent.set_window_system(Some(Value::symbol("neo")));
         parent.set_known_parameter(FrameParam::Font, Value::string("JetBrains Mono-9"));
         parent.char_width = 7.2;
         parent.char_height = 17.0;
         parent.font_pixel_size = 13.0;
     }
-    ev.frames.select_frame(parent_id);
+    ev.frame_manager_mut().select_frame(parent_id);
     ev.set_display_host(Box::new(RecordingDisplayHost::with_resolved_frame_font(
         resolved_frame_font(
             "JetBrains Mono",
@@ -6530,7 +6593,7 @@ fn x_create_frame_with_explicit_font_resolves_internal_font_parameter() {
             .as_frame_id()
             .unwrap_or_else(|| panic!("expected frame object, got {:?}", created)),
     );
-    let child = ev.frames.get(child_id).expect("child frame");
+    let child = ev.frame_manager().get(child_id).expect("child frame");
 
     assert!(
         child
@@ -6549,12 +6612,17 @@ fn live_default_font_change_on_child_frame_skips_top_level_geometry_hints() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(scratch);
-    let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
+    let parent_id = ev
+        .frame_manager_mut()
+        .create_frame("parent", 960, 640, scratch);
     {
-        let parent = ev.frames.get_mut(parent_id).expect("parent frame");
+        let parent = ev
+            .frame_manager_mut()
+            .get_mut(parent_id)
+            .expect("parent frame");
         parent.set_window_system(Some(Value::symbol("neo")));
     }
-    ev.frames.select_frame(parent_id);
+    ev.frame_manager_mut().select_frame(parent_id);
     let host = RecordingDisplayHost::with_resolved_frame_font(resolved_frame_font(
         "Noto Sans Mono",
         "NotoSansMono-Regular",
@@ -6597,7 +6665,7 @@ fn live_default_font_change_on_child_frame_skips_top_level_geometry_hints() {
     )
     .expect("set child default face font");
 
-    let child_frame = ev.frames.get(child_id).expect("child frame");
+    let child_frame = ev.frame_manager().get(child_id).expect("child frame");
     assert_eq!(child_frame.char_width, 13.0);
     assert_eq!(child_frame.char_height, 31.0);
     assert!(
@@ -6611,15 +6679,20 @@ fn x_create_frame_accepts_text_pixel_size_on_gui_child_frame() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
-    let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
+    let parent_id = ev
+        .frame_manager_mut()
+        .create_frame("parent", 960, 640, scratch);
     {
-        let parent = ev.frames.get_mut(parent_id).expect("parent frame");
+        let parent = ev
+            .frame_manager_mut()
+            .get_mut(parent_id)
+            .expect("parent frame");
         parent.set_window_system(Some(Value::symbol("neo")));
         parent.char_width = 10.0;
         parent.char_height = 20.0;
         parent.font_pixel_size = 20.0;
     }
-    ev.frames.select_frame(parent_id);
+    ev.frame_manager_mut().select_frame(parent_id);
     let host = RecordingDisplayHost::new();
     let requests = host.realized.clone();
     ev.set_display_host(Box::new(host));
@@ -6638,7 +6711,7 @@ fn x_create_frame_accepts_text_pixel_size_on_gui_child_frame() {
     let created = super::builtin_x_create_frame(&mut ev, vec![params]).expect("x-create-frame");
     let child_id = crate::window::FrameId(created.as_frame_id().expect("child frame"));
 
-    let child = ev.frames.get(child_id).expect("child frame");
+    let child = ev.frame_manager().get(child_id).expect("child frame");
     assert_eq!(requests.borrow().len(), 0);
     // FRAME_TEXT_TO_PIXEL_WIDTH (src/frame.h:1790-1794): 190 text pixels + 2x8 px fringes +
     // the 16 px toolkit scroll-bar area (src/xfns.c:2393-2407) + two 2 px borders.
@@ -6657,15 +6730,20 @@ fn modify_frame_parameters_resizes_gui_child_frame_text_pixels() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(scratch);
-    let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
+    let parent_id = ev
+        .frame_manager_mut()
+        .create_frame("parent", 960, 640, scratch);
     {
-        let parent = ev.frames.get_mut(parent_id).expect("parent frame");
+        let parent = ev
+            .frame_manager_mut()
+            .get_mut(parent_id)
+            .expect("parent frame");
         parent.set_window_system(Some(Value::symbol("neo")));
         parent.char_width = 10.0;
         parent.char_height = 20.0;
         parent.font_pixel_size = 20.0;
     }
-    ev.frames.select_frame(parent_id);
+    ev.frame_manager_mut().select_frame(parent_id);
     ev.set_display_host(Box::new(RecordingDisplayHost::new()));
 
     let params = Value::list(vec![
@@ -6692,7 +6770,7 @@ fn modify_frame_parameters_resizes_gui_child_frame_text_pixels() {
     crate::emacs_core::frame::builtin_modify_frame_parameters(&mut ev, vec![created, alist])
         .expect("modify-frame-parameters");
 
-    let child = ev.frames.get(child_id).expect("child frame");
+    let child = ev.frame_manager().get(child_id).expect("child frame");
     assert_eq!(child.width, 194);
     assert_eq!(child.height, 82);
     assert_eq!(child.internal_border_width(), 2);
@@ -6708,15 +6786,20 @@ fn modify_frame_parameters_resolves_child_fractional_size_before_position() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(scratch);
-    let parent_id = ev.frames.create_frame("parent", 624, 648, scratch);
+    let parent_id = ev
+        .frame_manager_mut()
+        .create_frame("parent", 624, 648, scratch);
     {
-        let parent = ev.frames.get_mut(parent_id).expect("parent frame");
+        let parent = ev
+            .frame_manager_mut()
+            .get_mut(parent_id)
+            .expect("parent frame");
         parent.set_window_system(Some(Value::symbol("neo")));
         parent.char_width = 8.0;
         parent.char_height = 16.0;
         parent.font_pixel_size = 16.0;
     }
-    ev.frames.select_frame(parent_id);
+    ev.frame_manager_mut().select_frame(parent_id);
     ev.set_display_host(Box::new(RecordingDisplayHost::new()));
 
     let params = Value::list(vec![
@@ -6735,7 +6818,7 @@ fn modify_frame_parameters_resolves_child_fractional_size_before_position() {
         Value::cons(Value::symbol("visibility"), Value::NIL),
     ]);
     let child = super::x_create_frame_impl(
-        &mut ev.frames,
+        &mut ev.frame_manager(),
         &mut ev.edit.buffers,
         &mut ev.display_host,
         vec![params],
@@ -6755,7 +6838,7 @@ fn modify_frame_parameters_resolves_child_fractional_size_before_position() {
     let child_native_width =
         crate::emacs_core::frame::builtin_frame_native_width(&mut ev, vec![child])
             .expect("frame-native-width");
-    let child_frame = ev.frames.get(child_id).expect("child frame");
+    let child_frame = ev.frame_manager().get(child_id).expect("child frame");
     assert_eq!(
         (
             child_native_width,
@@ -6771,15 +6854,20 @@ fn delete_frame_removes_gui_child_overlay_from_display_host() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
-    let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
+    let parent_id = ev
+        .frame_manager_mut()
+        .create_frame("parent", 960, 640, scratch);
     {
-        let parent = ev.frames.get_mut(parent_id).expect("parent frame");
+        let parent = ev
+            .frame_manager_mut()
+            .get_mut(parent_id)
+            .expect("parent frame");
         parent.set_window_system(Some(Value::symbol("x")));
         parent.char_width = 10.0;
         parent.char_height = 20.0;
         parent.font_pixel_size = 20.0;
     }
-    ev.frames.select_frame(parent_id);
+    ev.frame_manager_mut().select_frame(parent_id);
     let host = RecordingDisplayHost::new();
     let removed_child_frames = host.removed_child_frames.clone();
     ev.set_display_host(Box::new(host));
@@ -6799,7 +6887,7 @@ fn delete_frame_removes_gui_child_overlay_from_display_host() {
     crate::emacs_core::frame::builtin_delete_frame(&mut ev, vec![created])
         .expect("delete child frame");
 
-    assert!(ev.frames.get(child_id).is_none());
+    assert!(ev.frame_manager().get(child_id).is_none());
     assert_eq!(*removed_child_frames.borrow(), vec![child_id]);
 }
 
@@ -6808,15 +6896,20 @@ fn make_frame_invisible_removes_gui_child_overlay_from_display_host() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
-    let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
+    let parent_id = ev
+        .frame_manager_mut()
+        .create_frame("parent", 960, 640, scratch);
     {
-        let parent = ev.frames.get_mut(parent_id).expect("parent frame");
+        let parent = ev
+            .frame_manager_mut()
+            .get_mut(parent_id)
+            .expect("parent frame");
         parent.set_window_system(Some(Value::symbol("neo")));
         parent.char_width = 10.0;
         parent.char_height = 20.0;
         parent.font_pixel_size = 20.0;
     }
-    ev.frames.select_frame(parent_id);
+    ev.frame_manager_mut().select_frame(parent_id);
     let host = RecordingDisplayHost::new();
     let removed_child_frames = host.removed_child_frames.clone();
     ev.set_display_host(Box::new(host));
@@ -6836,7 +6929,10 @@ fn make_frame_invisible_removes_gui_child_overlay_from_display_host() {
     crate::emacs_core::frame::builtin_make_frame_invisible(&mut ev, vec![created])
         .expect("make child frame invisible");
 
-    let child = ev.frames.get(child_id).expect("child frame remains live");
+    let child = ev
+        .frame_manager()
+        .get(child_id)
+        .expect("child frame remains live");
     assert_eq!(child.visibility, crate::window::FrameVisibility::Invisible);
     assert_eq!(*removed_child_frames.borrow(), vec![child_id]);
 }
@@ -6846,15 +6942,20 @@ fn make_frame_visible_shows_gui_child_overlay_from_display_host() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
-    let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
+    let parent_id = ev
+        .frame_manager_mut()
+        .create_frame("parent", 960, 640, scratch);
     {
-        let parent = ev.frames.get_mut(parent_id).expect("parent frame");
+        let parent = ev
+            .frame_manager_mut()
+            .get_mut(parent_id)
+            .expect("parent frame");
         parent.set_window_system(Some(Value::symbol("neo")));
         parent.char_width = 10.0;
         parent.char_height = 20.0;
         parent.font_pixel_size = 20.0;
     }
-    ev.frames.select_frame(parent_id);
+    ev.frame_manager_mut().select_frame(parent_id);
     let host = RecordingDisplayHost::new();
     let shown_child_frames = host.shown_child_frames.clone();
     ev.set_display_host(Box::new(host));
@@ -6876,7 +6977,10 @@ fn make_frame_visible_shows_gui_child_overlay_from_display_host() {
     crate::emacs_core::frame::builtin_make_frame_visible(&mut ev, vec![created])
         .expect("make child frame visible");
 
-    let child = ev.frames.get(child_id).expect("child frame remains live");
+    let child = ev
+        .frame_manager()
+        .get(child_id)
+        .expect("child frame remains live");
     assert_eq!(child.visibility, crate::window::FrameVisibility::Visible);
     assert_eq!(*shown_child_frames.borrow(), vec![child_id]);
 }
@@ -6886,15 +6990,20 @@ fn timer_deferred_make_frame_invisible_removes_gui_child_overlay_from_display_ho
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
-    let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
+    let parent_id = ev
+        .frame_manager_mut()
+        .create_frame("parent", 960, 640, scratch);
     {
-        let parent = ev.frames.get_mut(parent_id).expect("parent frame");
+        let parent = ev
+            .frame_manager_mut()
+            .get_mut(parent_id)
+            .expect("parent frame");
         parent.set_window_system(Some(Value::symbol("neo")));
         parent.char_width = 10.0;
         parent.char_height = 20.0;
         parent.font_pixel_size = 20.0;
     }
-    ev.frames.select_frame(parent_id);
+    ev.frame_manager_mut().select_frame(parent_id);
     let host = RecordingDisplayHost::new();
     let removed_child_frames = host.removed_child_frames.clone();
     ev.set_display_host(Box::new(host));
@@ -6931,7 +7040,10 @@ fn timer_deferred_make_frame_invisible_removes_gui_child_overlay_from_display_ho
 
     ev.fire_pending_timers();
 
-    let child = ev.frames.get(child_id).expect("child frame remains live");
+    let child = ev
+        .frame_manager()
+        .get(child_id)
+        .expect("child frame remains live");
     assert_eq!(child.visibility, crate::window::FrameVisibility::Invisible);
     assert_eq!(*removed_child_frames.borrow(), vec![child_id]);
 }
@@ -6941,15 +7053,19 @@ fn delete_frame_destroys_top_level_gui_window_from_display_host() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
-    let first_id = ev.frames.create_frame("first", 960, 640, scratch);
-    let second_id = ev.frames.create_frame("second", 800, 500, scratch);
+    let first_id = ev
+        .frame_manager_mut()
+        .create_frame("first", 960, 640, scratch);
+    let second_id = ev
+        .frame_manager_mut()
+        .create_frame("second", 800, 500, scratch);
     for frame_id in [first_id, second_id] {
-        ev.frames
+        ev.frame_manager_mut()
             .get_mut(frame_id)
             .expect("gui frame")
             .set_window_system(Some(Value::symbol("x")));
     }
-    ev.frames.select_frame(first_id);
+    ev.frame_manager_mut().select_frame(first_id);
     let host = RecordingDisplayHost::new();
     let destroyed_gui_frames = host.destroyed_gui_frames.clone();
     let removed_child_frames = host.removed_child_frames.clone();
@@ -6958,8 +7074,8 @@ fn delete_frame_destroys_top_level_gui_window_from_display_host() {
     crate::emacs_core::frame::builtin_delete_frame(&mut ev, vec![Value::make_frame(second_id.0)])
         .expect("delete top-level gui frame");
 
-    assert!(ev.frames.get(first_id).is_some());
-    assert!(ev.frames.get(second_id).is_none());
+    assert!(ev.frame_manager().get(first_id).is_some());
+    assert!(ev.frame_manager().get(second_id).is_none());
     assert_eq!(*destroyed_gui_frames.borrow(), vec![second_id]);
     assert!(removed_child_frames.borrow().is_empty());
 }
@@ -6969,16 +7085,23 @@ fn delete_parent_frame_cascades_to_gui_child_overlays() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
-    let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
-    let other_id = ev.frames.create_frame("other", 960, 640, scratch);
+    let parent_id = ev
+        .frame_manager_mut()
+        .create_frame("parent", 960, 640, scratch);
+    let other_id = ev
+        .frame_manager_mut()
+        .create_frame("other", 960, 640, scratch);
     {
-        let parent = ev.frames.get_mut(parent_id).expect("parent frame");
+        let parent = ev
+            .frame_manager_mut()
+            .get_mut(parent_id)
+            .expect("parent frame");
         parent.set_window_system(Some(Value::symbol("x")));
         parent.char_width = 10.0;
         parent.char_height = 20.0;
         parent.font_pixel_size = 20.0;
     }
-    ev.frames.select_frame(parent_id);
+    ev.frame_manager_mut().select_frame(parent_id);
     let host = RecordingDisplayHost::new();
     let removed_child_frames = host.removed_child_frames.clone();
     ev.set_display_host(Box::new(host));
@@ -6998,9 +7121,9 @@ fn delete_parent_frame_cascades_to_gui_child_overlays() {
     crate::emacs_core::frame::builtin_delete_frame(&mut ev, vec![Value::make_frame(parent_id.0)])
         .expect("delete parent frame");
 
-    assert!(ev.frames.get(parent_id).is_none());
-    assert!(ev.frames.get(child_id).is_none());
-    assert!(ev.frames.get(other_id).is_some());
+    assert!(ev.frame_manager().get(parent_id).is_none());
+    assert!(ev.frame_manager().get(child_id).is_none());
+    assert!(ev.frame_manager().get(other_id).is_some());
     assert_eq!(*removed_child_frames.borrow(), vec![child_id]);
 }
 
@@ -7009,8 +7132,10 @@ fn x_create_frame_reserves_tab_bar_space_above_root_window() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
-    let fid = ev.frames.create_frame("bootstrap", 960, 640, scratch);
-    ev.frames
+    let fid = ev
+        .frame_manager_mut()
+        .create_frame("bootstrap", 960, 640, scratch);
+    ev.frame_manager_mut()
         .get_mut(fid)
         .expect("bootstrap frame")
         .set_parameter(Value::symbol("window-system"), Value::symbol("x"));
@@ -7035,7 +7160,7 @@ fn x_create_frame_reserves_tab_bar_space_above_root_window() {
             .as_frame_id()
             .unwrap_or_else(|| panic!("expected frame object, got {:?}", created)),
     );
-    let frame = ev.frames.get(created_id).expect("created frame");
+    let frame = ev.frame_manager().get(created_id).expect("created frame");
 
     assert_eq!(frame.tab_bar_height, 16);
     assert_eq!(
@@ -7053,9 +7178,14 @@ fn x_create_frame_realizes_the_gui_frame_make_frame_delegates_to() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
-    let fid = ev.frames.create_frame("bootstrap", 960, 640, scratch);
+    let fid = ev
+        .frame_manager_mut()
+        .create_frame("bootstrap", 960, 640, scratch);
     {
-        let frame = ev.frames.get_mut(fid).expect("bootstrap frame");
+        let frame = ev
+            .frame_manager_mut()
+            .get_mut(fid)
+            .expect("bootstrap frame");
         frame.set_window_system(Some(Value::symbol("x")));
         frame.char_width = 10.0;
         frame.char_height = 20.0;
@@ -7086,12 +7216,18 @@ fn x_create_frame_realizes_the_gui_frame_make_frame_delegates_to() {
             .as_frame_id()
             .unwrap_or_else(|| panic!("expected frame object, got {:?}", created)),
     );
-    let frame = ev.frames.get(created_id).expect("created opening frame");
+    let frame = ev
+        .frame_manager()
+        .get(created_id)
+        .expect("created opening frame");
     assert_eq!(frame.effective_window_system(), Some(Value::symbol("neo")));
     assert_eq!(frame.width, 800);
     assert_eq!(frame.height, 500);
     assert_eq!(
-        ev.frames.selected_frame().expect("selected frame").id,
+        ev.frame_manager()
+            .selected_frame()
+            .expect("selected frame")
+            .id,
         created_id
     );
 
@@ -7107,9 +7243,14 @@ fn x_create_frame_syncs_pending_resize_before_adopting_opening_gui_frame() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
-    let fid = ev.frames.create_frame("bootstrap", 960, 640, scratch);
+    let fid = ev
+        .frame_manager_mut()
+        .create_frame("bootstrap", 960, 640, scratch);
     {
-        let frame = ev.frames.get_mut(fid).expect("bootstrap frame");
+        let frame = ev
+            .frame_manager_mut()
+            .get_mut(fid)
+            .expect("bootstrap frame");
         frame.set_parameter(Value::symbol("window-system"), Value::symbol("x"));
         frame.char_width = 10.0;
         frame.char_height = 20.0;
@@ -7149,7 +7290,10 @@ fn x_create_frame_syncs_pending_resize_before_adopting_opening_gui_frame() {
             .as_frame_id()
             .unwrap_or_else(|| panic!("expected frame object, got {:?}", created)),
     );
-    let frame = ev.frames.get(created_id).expect("created opening frame");
+    let frame = ev
+        .frame_manager()
+        .get(created_id)
+        .expect("created opening frame");
     assert_eq!(frame.width, 1500);
     assert_eq!(frame.height, 1900);
 
@@ -7165,9 +7309,14 @@ fn x_create_frame_prefers_display_host_primary_window_size_without_explicit_geom
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
-    let fid = ev.frames.create_frame("bootstrap", 960, 640, scratch);
+    let fid = ev
+        .frame_manager_mut()
+        .create_frame("bootstrap", 960, 640, scratch);
     {
-        let frame = ev.frames.get_mut(fid).expect("bootstrap frame");
+        let frame = ev
+            .frame_manager_mut()
+            .get_mut(fid)
+            .expect("bootstrap frame");
         frame.set_parameter(Value::symbol("window-system"), Value::symbol("x"));
         frame.char_width = 10.0;
         frame.char_height = 20.0;
@@ -7192,7 +7341,10 @@ fn x_create_frame_prefers_display_host_primary_window_size_without_explicit_geom
             .as_frame_id()
             .unwrap_or_else(|| panic!("expected frame object, got {:?}", created)),
     );
-    let frame = ev.frames.get(created_id).expect("created opening frame");
+    let frame = ev
+        .frame_manager()
+        .get(created_id)
+        .expect("created opening frame");
     assert_eq!(frame.width, 1500);
     assert_eq!(frame.height, 1900);
 
@@ -7201,7 +7353,10 @@ fn x_create_frame_prefers_display_host_primary_window_size_without_explicit_geom
     assert_eq!(requests[0].width, 1500);
     assert_eq!(requests[0].height, 1900);
     assert_eq!(
-        ev.frames.selected_frame().expect("selected frame").id,
+        ev.frame_manager()
+            .selected_frame()
+            .expect("selected frame")
+            .id,
         created_id
     );
 }
@@ -7219,9 +7374,14 @@ fn delete_frame_uses_mru_only_for_the_mru_symbol() {
         let mut ev = Context::new(crate::test_utils::unit_runtime());
         let buffer = ev.edit.buffers.create_buffer("*scratch*");
         ev.edit.buffers.set_current(buffer);
-        let recent = ev.frames.create_frame("recent", 800, 600, buffer);
-        ev.frames.create_frame("fallback", 800, 600, buffer);
-        let victim = ev.frames.create_frame("victim", 800, 600, buffer);
+        let recent = ev
+            .frame_manager_mut()
+            .create_frame("recent", 800, 600, buffer);
+        ev.frame_manager_mut()
+            .create_frame("fallback", 800, 600, buffer);
+        let victim = ev
+            .frame_manager_mut()
+            .create_frame("victim", 800, 600, buffer);
         ev.obarray_mut()
             .set_symbol_value("test-recent-frame", Value::make_frame(recent.0));
         ev.obarray_mut()
@@ -7278,7 +7438,7 @@ fn deleting_last_frame_on_terminal_deletes_terminal_too() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let _primary = ev.frames.create_frame("F1", 800, 600, buf);
+    let _primary = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     crate::emacs_core::terminal::pure::ensure_terminal_runtime_owner(
         7,
         "tty-7",
@@ -7287,7 +7447,9 @@ fn deleting_last_frame_on_terminal_deletes_terminal_too() {
             neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(256),
         ),
     );
-    let secondary = ev.frames.create_frame_on_terminal("F2", 7, 800, 600, buf);
+    let secondary = ev
+        .frame_manager_mut()
+        .create_frame_on_terminal("F2", 7, 800, 600, buf);
     let secondary_terminal =
         crate::emacs_core::terminal::pure::terminal_handle_value_for_id(7).expect("terminal 7");
 
@@ -7322,7 +7484,7 @@ fn framep_returns_window_system_symbol_for_gui_frames() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let frame_id = super::ensure_selected_frame_id(&mut ev);
-    ev.frames
+    ev.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_parameter(Value::symbol("window-system"), Value::symbol("x"));
@@ -7411,7 +7573,7 @@ fn iconify_top_level_gui_frame_reports_iconified_state() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let fid = super::ensure_selected_frame_id(&mut ev);
-    ev.frames
+    ev.frame_manager_mut()
         .get_mut(fid)
         .expect("selected frame")
         .set_window_system(Some(Value::symbol("neo")));
@@ -7440,8 +7602,8 @@ fn select_frame_switches_active_kboard_to_frame_terminal() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let primary = ev.frames.create_frame("F1", 800, 600, buf);
-    ev.command_loop
+    let primary = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
+    ev.command_loop()
         .keyboard
         .set_input_decode_map(Value::symbol("primary-map"));
 
@@ -7453,7 +7615,9 @@ fn select_frame_switches_active_kboard_to_frame_terminal() {
             neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(256),
         ),
     );
-    let secondary = ev.frames.create_frame_on_terminal("F2", 7, 800, 600, buf);
+    let secondary = ev
+        .frame_manager_mut()
+        .create_frame_on_terminal("F2", 7, 800, 600, buf);
 
     assert_eq!(
         crate::emacs_core::frame::builtin_select_frame(
@@ -7463,10 +7627,10 @@ fn select_frame_switches_active_kboard_to_frame_terminal() {
         .expect("select secondary frame"),
         Value::make_frame(secondary.0)
     );
-    assert_eq!(ev.command_loop.keyboard.active_terminal_id(), 7);
-    assert_eq!(ev.command_loop.keyboard.input_decode_map(), Value::NIL);
+    assert_eq!(ev.command_loop().keyboard.active_terminal_id(), 7);
+    assert_eq!(ev.command_loop().keyboard.input_decode_map(), Value::NIL);
 
-    ev.command_loop
+    ev.command_loop()
         .keyboard
         .set_input_decode_map(Value::symbol("secondary-map"));
 
@@ -7476,14 +7640,14 @@ fn select_frame_switches_active_kboard_to_frame_terminal() {
         Value::make_frame(primary.0)
     );
     assert_eq!(
-        ev.command_loop.keyboard.input_decode_map(),
+        ev.command_loop().keyboard.input_decode_map(),
         Value::symbol("primary-map")
     );
 
     crate::emacs_core::frame::builtin_select_frame(&mut ev, vec![Value::make_frame(secondary.0)])
         .expect("reselect secondary frame");
     assert_eq!(
-        ev.command_loop.keyboard.input_decode_map(),
+        ev.command_loop().keyboard.input_decode_map(),
         Value::symbol("secondary-map")
     );
 }
@@ -7535,8 +7699,8 @@ fn redirect_frame_focus_tracks_frame_state_and_selection_redirects() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
-    let primary = ev.frames.create_frame("F1", 800, 600, buf);
-    let secondary = ev.frames.create_frame("F2", 800, 600, buf);
+    let primary = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
+    let secondary = ev.frame_manager_mut().create_frame("F2", 800, 600, buf);
 
     assert_eq!(
         crate::emacs_core::frame::builtin_frame_focus(&mut ev, vec![Value::make_frame(primary.0)])
@@ -7624,7 +7788,7 @@ fn gui_frame_font_parameter_exposes_font_name_not_font_object() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     let mut font_face = crate::face::Face::new("default");
     font_face.family = Some(Value::string("Hack"));
     font_face.weight = Some(FontWeight::NORMAL);
@@ -7639,7 +7803,7 @@ fn gui_frame_font_parameter_exposes_font_name_not_font_object() {
         .expect("opened font name string")
         .to_owned();
     {
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         frame.set_window_system(Some(Value::symbol("neo")));
         frame.set_known_parameter(FrameParam::Font, font_object);
     }
@@ -7865,9 +8029,9 @@ fn modify_frame_parameters_top_level_tty_reports_live_width_height() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     let (initial_width, initial_height) = {
-        let frame = ev.frames.get(fid).expect("frame should exist");
+        let frame = ev.frame_manager().get(fid).expect("frame should exist");
         (
             Value::fixnum(frame.columns() as i64),
             Value::fixnum(frame.lines() as i64),
@@ -7905,9 +8069,9 @@ fn modify_frame_parameters_width_height_resizes_live_gui_frame() {
     ev.set_display_host(Box::new(host));
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     {
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         frame.set_window_system(Some(Value::symbol("neo")));
         frame.char_width = 8.0;
         frame.char_height = 16.0;
@@ -7930,13 +8094,13 @@ fn modify_frame_parameters_width_height_resizes_live_gui_frame() {
     assert_eq!(resize_requests[0].height, 400);
     assert_eq!(
         resize_requests[0].geometry_hints,
-        ev.frames
+        ev.frame_manager()
             .get(fid)
             .expect("frame should exist")
             .gui_geometry_hints()
     );
 
-    let frame = ev.frames.get(fid).expect("frame should exist");
+    let frame = ev.frame_manager().get(fid).expect("frame should exist");
     assert_eq!(frame.width, 672);
     assert_eq!(frame.height, 400);
     assert_eq!(frame.parameter("width"), Some(Value::fixnum(80)));
@@ -7952,9 +8116,9 @@ fn modify_frame_parameters_fullscreen_maximized_updates_live_gui_frame() {
     ev.set_display_host(Box::new(host));
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     {
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         frame.set_window_system(Some(Value::symbol("neo")));
     }
 
@@ -7988,15 +8152,15 @@ fn gui_frame_metrics_default_minibuffer_is_one_line() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     {
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         frame.char_height = 20.0;
         frame.minibuffer_leaf = None;
     }
-    ev.frames.select_frame(fid);
+    ev.frame_manager_mut().select_frame(fid);
 
-    let metrics = super::current_gui_frame_metrics_in_state(&ev.frames);
+    let metrics = super::current_gui_frame_metrics_in_state(&ev.frame_manager());
     assert_eq!(
         metrics.minibuffer_height, 20.0,
         "a frame's default minibuffer must be one text line (char_height), not two"
@@ -8025,9 +8189,9 @@ fn modify_frame_parameters_after_live_font_change_defers_gui_resize_until_geomet
     ev.set_display_host(Box::new(host));
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     {
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         frame.set_window_system(Some(Value::symbol("neo")));
         frame.char_width = 8.0;
         frame.char_height = 16.0;
@@ -8064,7 +8228,7 @@ fn modify_frame_parameters_after_live_font_change_defers_gui_resize_until_geomet
     );
 
     let expected_width = {
-        let frame = ev.frames.get(fid).expect("frame should exist");
+        let frame = ev.frame_manager().get(fid).expect("frame should exist");
         assert_eq!(frame.width, 800);
         assert_eq!(frame.height, 600);
         assert_eq!(frame.parameter("width"), Some(Value::fixnum(80)));
@@ -8100,7 +8264,7 @@ fn modify_frame_parameters_after_live_font_change_defers_gui_resize_until_geomet
     assert_eq!(resize_requests[0].height, 775);
     assert_eq!(
         resize_requests[0].geometry_hints,
-        ev.frames
+        ev.frame_manager()
             .get(fid)
             .expect("frame should exist")
             .gui_geometry_hints()
@@ -8129,9 +8293,9 @@ fn live_default_font_change_updates_gui_geometry_hints() {
     ev.set_display_host(Box::new(host));
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     {
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         frame.set_window_system(Some(Value::symbol("neo")));
         frame.char_width = 8.0;
         frame.char_height = 16.0;
@@ -8153,7 +8317,7 @@ fn live_default_font_change_updates_gui_geometry_hints() {
     assert_eq!(hints[0].0, fid);
     assert_eq!(
         hints[0].1,
-        ev.frames
+        ev.frame_manager()
             .get(fid)
             .expect("frame should exist")
             .gui_geometry_hints()
@@ -8169,16 +8333,16 @@ fn modify_frame_parameters_resize_ignores_window_local_fringes_for_gui_frames() 
     ev.set_display_host(Box::new(host));
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     let selected_window = {
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         frame.set_window_system(Some(Value::symbol("neo")));
         frame.char_width = 8.0;
         frame.char_height = 16.0;
         frame.selected_window
     };
     assert!(
-        ev.frames
+        ev.frame_manager_mut()
             .set_window_fringes(selected_window, Some(5), Some(5), false, false),
         "window-local fringes should change"
     );
@@ -8200,7 +8364,7 @@ fn modify_frame_parameters_resize_ignores_window_local_fringes_for_gui_frames() 
     assert_eq!(resize_requests[0].height, 400);
     assert_eq!(
         resize_requests[0].geometry_hints,
-        ev.frames
+        ev.frame_manager()
             .get(fid)
             .expect("frame should exist")
             .gui_geometry_hints()
@@ -8212,9 +8376,9 @@ fn modify_frame_parameters_tab_bar_lines_reflows_root_window_tree() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     {
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         frame.char_width = 10.0;
         frame.char_height = 20.0;
         // GNU offsets the tab/tool-bar only on a displayed frame (commit
@@ -8230,7 +8394,7 @@ fn modify_frame_parameters_tab_bar_lines_reflows_root_window_tree() {
         out[0]
     );
 
-    let frame = ev.frames.get(fid).expect("frame should exist");
+    let frame = ev.frame_manager().get(fid).expect("frame should exist");
     assert_eq!(frame.tab_bar_height, 20);
     assert_eq!(
         *frame.root_window().bounds(),
@@ -8247,9 +8411,9 @@ fn modify_frame_parameters_tool_bar_lines_reflows_root_window_tree() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     {
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         frame.char_width = 10.0;
         frame.char_height = 20.0;
         // GNU offsets the tab/tool-bar only on a displayed frame (commit
@@ -8266,7 +8430,7 @@ fn modify_frame_parameters_tool_bar_lines_reflows_root_window_tree() {
         out[0]
     );
 
-    let frame = ev.frames.get(fid).expect("frame should exist");
+    let frame = ev.frame_manager().get(fid).expect("frame should exist");
     assert_eq!(frame.tool_bar_height, 40);
     assert_eq!(
         *frame.root_window().bounds(),
@@ -8283,7 +8447,7 @@ fn set_frame_size_builtins_leave_top_level_tty_size_unchanged() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     let out = ev.eval_str_each(
         "(progn
            (set-frame-width (selected-frame) 90)
@@ -8296,7 +8460,7 @@ fn set_frame_size_builtins_leave_top_level_tty_size_unchanged() {
         out[0]
     );
 
-    let frame = ev.frames.get(fid).expect("frame should exist");
+    let frame = ev.frame_manager().get(fid).expect("frame should exist");
     assert_eq!(frame.width, 800);
     assert_eq!(frame.height, 600);
     assert_eq!(frame.parameter("width"), None);
@@ -8309,9 +8473,12 @@ fn set_frame_size_builtins_resize_live_gui_frames_and_notify_host() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     {
-        let frame = ev.frames.get_mut(fid).expect("frame should exist");
+        let frame = ev
+            .frame_manager_mut()
+            .get_mut(fid)
+            .expect("frame should exist");
         frame.set_parameter(Value::symbol("window-system"), Value::symbol("x"));
     }
     let host = RecordingDisplayHost::new();
@@ -8325,7 +8492,7 @@ fn set_frame_size_builtins_resize_live_gui_frames_and_notify_host() {
         out[0]
     );
 
-    let frame = ev.frames.get(fid).expect("frame should exist");
+    let frame = ev.frame_manager().get(fid).expect("frame should exist");
     assert_eq!(frame.width, 800);
     assert_eq!(frame.height, 600);
     assert_eq!(frame.parameter("width"), None);
@@ -8342,7 +8509,7 @@ fn set_frame_size_builtins_resize_live_gui_frames_and_notify_host() {
     assert_eq!(request.height, 560);
     assert_eq!(
         request.geometry_hints,
-        ev.frames
+        ev.frame_manager()
             .get(fid)
             .expect("frame should exist")
             .gui_geometry_hints()
@@ -8354,7 +8521,7 @@ fn set_frame_size_builtins_resize_live_gui_frames_and_notify_host() {
         .expect("resize redisplay");
 
     let frame = ev
-        .frames
+        .frame_manager()
         .get(fid)
         .expect("frame should exist after host ack");
     assert_eq!(frame.width, 832);
@@ -8373,9 +8540,9 @@ fn x_create_frame_minibuffer_only_uses_root_as_minibuffer() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let root_id = ev.frames.create_frame("F1", 624, 648, buf);
+    let root_id = ev.frame_manager_mut().create_frame("F1", 624, 648, buf);
     {
-        let root = ev.frames.get_mut(root_id).expect("root frame");
+        let root = ev.frame_manager_mut().get_mut(root_id).expect("root frame");
         root.set_window_system(Some(Value::symbol("neo")));
         root.char_width = 7.2;
         root.char_height = 17.0;
@@ -8391,14 +8558,14 @@ fn x_create_frame_minibuffer_only_uses_root_as_minibuffer() {
         Value::cons(Value::symbol("visibility"), Value::NIL),
     ]);
     let child = super::x_create_frame_impl(
-        &mut ev.frames,
+        &mut ev.frame_manager(),
         &mut ev.edit.buffers,
         &mut ev.display_host,
         vec![params],
     )
     .expect("x-create-frame");
     let child_id = crate::window::FrameId(child.as_frame_id().expect("child frame"));
-    let child_frame = ev.frames.get(child_id).expect("child frame");
+    let child_frame = ev.frame_manager().get(child_id).expect("child frame");
     let root_window_id = child_frame.root_window().id();
 
     assert!(child_frame.minibuffer_leaf.is_none());
@@ -8426,9 +8593,9 @@ fn pixelwise_child_frame_resize_preserves_requested_text_pixels() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let root_id = ev.frames.create_frame("F1", 624, 648, buf);
+    let root_id = ev.frame_manager_mut().create_frame("F1", 624, 648, buf);
     {
-        let root = ev.frames.get_mut(root_id).expect("root frame");
+        let root = ev.frame_manager_mut().get_mut(root_id).expect("root frame");
         root.set_window_system(Some(Value::symbol("neo")));
         root.char_width = 7.2;
         root.char_height = 17.0;
@@ -8436,7 +8603,7 @@ fn pixelwise_child_frame_resize_preserves_requested_text_pixels() {
     }
     ev.set_display_host(Box::new(RecordingDisplayHost::new()));
     let root_minibuffer = ev
-        .frames
+        .frame_manager()
         .get(root_id)
         .expect("root frame")
         .minibuffer_window
@@ -8457,7 +8624,7 @@ fn pixelwise_child_frame_resize_preserves_requested_text_pixels() {
         Value::cons(Value::symbol("visibility"), Value::NIL),
     ]);
     let child = super::x_create_frame_impl(
-        &mut ev.frames,
+        &mut ev.frame_manager(),
         &mut ev.edit.buffers,
         &mut ev.display_host,
         vec![params],
@@ -8476,9 +8643,9 @@ fn pixelwise_child_frame_resize_preserves_requested_text_pixels() {
     )
     .expect("second pixelwise set-frame-size");
 
-    let child_frame = ev.frames.get(child_id).expect("child frame");
+    let child_frame = ev.frame_manager().get(child_id).expect("child frame");
     assert_eq!(
-        super::frame_text_width_pixels_in_state(&ev.frames, child_id),
+        super::frame_text_width_pixels_in_state(&ev.frame_manager(), child_id),
         525
     );
     assert_eq!(super::frame_text_height_pixels(child_frame), 374);
@@ -8492,9 +8659,9 @@ fn set_frame_size_and_position_pixelwise_resizes_gui_child_frame() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let root_id = ev.frames.create_frame("F1", 624, 648, buf);
+    let root_id = ev.frame_manager_mut().create_frame("F1", 624, 648, buf);
     {
-        let root = ev.frames.get_mut(root_id).expect("root frame");
+        let root = ev.frame_manager_mut().get_mut(root_id).expect("root frame");
         root.set_window_system(Some(Value::symbol("neo")));
         root.char_width = 7.2;
         root.char_height = 17.0;
@@ -8502,7 +8669,7 @@ fn set_frame_size_and_position_pixelwise_resizes_gui_child_frame() {
     }
     ev.set_display_host(Box::new(RecordingDisplayHost::new()));
     let root_minibuffer = ev
-        .frames
+        .frame_manager()
         .get(root_id)
         .expect("root frame")
         .minibuffer_window
@@ -8523,7 +8690,7 @@ fn set_frame_size_and_position_pixelwise_resizes_gui_child_frame() {
         Value::cons(Value::symbol("visibility"), Value::NIL),
     ]);
     let child = super::x_create_frame_impl(
-        &mut ev.frames,
+        &mut ev.frame_manager(),
         &mut ev.edit.buffers,
         &mut ev.display_host,
         vec![params],
@@ -8543,9 +8710,9 @@ fn set_frame_size_and_position_pixelwise_resizes_gui_child_frame() {
     )
     .expect("set-frame-size-and-position-pixelwise");
 
-    let child_frame = ev.frames.get(child_id).expect("child frame");
+    let child_frame = ev.frame_manager().get(child_id).expect("child frame");
     assert_eq!(
-        super::frame_text_width_pixels_in_state(&ev.frames, child_id),
+        super::frame_text_width_pixels_in_state(&ev.frame_manager(), child_id),
         525
     );
     assert_eq!(super::frame_text_height_pixels(child_frame), 374);
@@ -8563,9 +8730,12 @@ fn set_frame_size_syncs_resize_event_before_followup_frame_width_queries() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let fid = ev.frames.create_frame("F1", 1300, 1188, buf);
+    let fid = ev.frame_manager_mut().create_frame("F1", 1300, 1188, buf);
     {
-        let frame = ev.frames.get_mut(fid).expect("frame should exist");
+        let frame = ev
+            .frame_manager_mut()
+            .get_mut(fid)
+            .expect("frame should exist");
         frame.set_parameter(Value::symbol("window-system"), Value::symbol("x"));
         frame.char_width = 16.0;
         frame.char_height = 33.0;
@@ -8605,7 +8775,7 @@ fn set_frame_size_syncs_resize_event_before_followup_frame_width_queries() {
     assert_eq!(requests[0].height, 1386);
     assert_eq!(
         requests[0].geometry_hints,
-        ev.frames
+        ev.frame_manager()
             .get(fid)
             .expect("frame should exist")
             .gui_geometry_hints()
@@ -8618,9 +8788,12 @@ fn set_frame_size_keeps_resize_pending_until_geometry_queries_force_sync() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let fid = ev.frames.create_frame("F1", 1300, 1188, buf);
+    let fid = ev.frame_manager_mut().create_frame("F1", 1300, 1188, buf);
     {
-        let frame = ev.frames.get_mut(fid).expect("frame should exist");
+        let frame = ev
+            .frame_manager_mut()
+            .get_mut(fid)
+            .expect("frame should exist");
         frame.set_parameter(Value::symbol("window-system"), Value::symbol("x"));
         frame.char_width = 16.0;
         frame.char_height = 33.0;
@@ -8878,8 +9051,8 @@ fn window_end_reads_the_atomic_record_when_a_snapshot_disagrees() {
         .get_mut(buf)
         .expect("scratch buffer")
         .insert("hello\nworld\nmore\n");
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
-    let wid = ev.frames.get(fid).expect("frame").selected_window;
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
+    let wid = ev.frame_manager().get(fid).expect("frame").selected_window;
     let point_max = ev
         .edit
         .buffers
@@ -8895,7 +9068,7 @@ fn window_end_reads_the_atomic_record_when_a_snapshot_disagrees() {
         .point_max_emacs_byte_pos();
 
     {
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         let Some(window) = frame.find_window_mut(wid) else {
             panic!("selected window should exist");
         };
@@ -8952,8 +9125,8 @@ fn window_end_record_at_eob_never_exceeds_point_max() {
         .get_mut(buf)
         .expect("scratch buffer")
         .insert("hello");
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
-    let wid = ev.frames.get(fid).expect("frame").selected_window;
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
+    let wid = ev.frame_manager().get(fid).expect("frame").selected_window;
     let point_max = ev
         .edit
         .buffers
@@ -8969,7 +9142,7 @@ fn window_end_record_at_eob_never_exceeds_point_max() {
         .get(buf)
         .expect("scratch buffer")
         .point_max_emacs_byte_pos();
-    ev.frames
+    ev.frame_manager_mut()
         .get_mut(fid)
         .expect("frame")
         .find_window_mut(wid)
@@ -8998,8 +9171,8 @@ fn window_end_update_in_batch_returns_stored_end_without_estimate() {
         .get_mut(buf)
         .expect("scratch buffer")
         .insert(&vec!["line of content"; 50].join("\n"));
-    let fid = ev.frames.create_frame("F1", 80, 25, buf);
-    let wid = ev.frames.get(fid).expect("frame").selected_window;
+    let fid = ev.frame_manager_mut().create_frame("F1", 80, 25, buf);
+    let wid = ev.frame_manager().get(fid).expect("frame").selected_window;
     let point_max = ev
         .edit
         .buffers
@@ -9009,7 +9182,7 @@ fn window_end_update_in_batch_returns_stored_end_without_estimate() {
         .get();
 
     {
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         if let Some(crate::window::Window::Leaf { window_start, .. }) = frame.find_window_mut(wid) {
             *window_start = LispCharPos1::from_one_based_usize(50);
         } else {
@@ -9034,9 +9207,9 @@ fn window_end_update_returns_the_query_record_without_publishing_it() {
         .get_mut(buf)
         .expect("window-end buffer")
         .insert("//! Unicode — repro\nsecond line\nthird line\n");
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
-    let wid = ev.frames.get(fid).expect("frame").selected_window;
-    ev.frames.get_mut(fid).expect("frame").initial = false;
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
+    let wid = ev.frame_manager().get(fid).expect("frame").selected_window;
+    ev.frame_manager_mut().get_mut(fid).expect("frame").initial = false;
     let buffer_z_char = LispCharPos1::from_one_based_usize(
         ev.edit
             .buffers
@@ -9052,7 +9225,7 @@ fn window_end_update_returns_the_query_record_without_publishing_it() {
         .get(buf)
         .expect("window-end buffer")
         .point_max_emacs_byte_pos();
-    ev.frames
+    ev.frame_manager_mut()
         .get_mut(fid)
         .expect("frame")
         .find_window_mut(wid)
@@ -9107,8 +9280,8 @@ fn window_end_update_signals_when_installed_layout_query_does_not_converge() {
         .get_mut(buf)
         .expect("buffer")
         .insert("one\ntwo\n");
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
-    ev.frames.get_mut(fid).expect("frame").initial = false;
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
+    ev.frame_manager_mut().get_mut(fid).expect("frame").initial = false;
     ev.install_window_layout_query(|_eval, _frame_id, _window_id, _scope| {
         crate::window::WindowLayoutQueryOutcome::Failed(
             crate::window::WindowLayoutQueryFailure::DidNotConverge,
@@ -9140,8 +9313,8 @@ fn window_chrome_height_queries_prefer_last_redisplay_snapshot_when_available() 
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
-    let wid = ev.frames.get(fid).expect("frame").selected_window;
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
+    let wid = ev.frame_manager().get(fid).expect("frame").selected_window;
 
     // Recorded heights measure requested chrome; they do not create chrome
     // whose buffer format is nil (GNU WINDOW_*_LINE_HEIGHT predicates).
@@ -9150,7 +9323,7 @@ fn window_chrome_height_queries_prefer_last_redisplay_snapshot_when_available() 
     buffer.set_buffer_local("tab-line-format", Value::string("TAB"));
 
     {
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         frame.commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
             point_rows: None,
             window_id: wid,
@@ -9181,11 +9354,11 @@ fn window_body_pixel_edges_begin_below_rendered_header_and_tab_lines() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
-    let wid = ev.frames.get(fid).expect("frame").selected_window;
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
+    let wid = ev.frame_manager().get(fid).expect("frame").selected_window;
 
     {
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         frame.set_window_system(Some(Value::symbol("neo")));
         frame
             .prepare_and_activate_display_presentation_for_test(
@@ -9417,9 +9590,13 @@ fn gui_geometry_queries_distinguish_logical_layout_from_presented_output() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buffer = ev.edit.buffers.create_buffer("*geometry-invariant*");
     ev.edit.buffers.set_current(buffer);
-    let frame_id = ev.frames.create_frame("gui", 800, 600, buffer);
-    let window_id = ev.frames.get(frame_id).expect("frame").selected_window;
-    let frame = ev.frames.get_mut(frame_id).expect("frame");
+    let frame_id = ev.frame_manager_mut().create_frame("gui", 800, 600, buffer);
+    let window_id = ev
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    let frame = ev.frame_manager_mut().get_mut(frame_id).expect("frame");
     frame.set_window_system(Some(Value::symbol("neo")));
     frame
         .find_window_mut(window_id)
@@ -9477,17 +9654,21 @@ fn presented_fringe_geometry_and_scrollbar_tuple_keep_live_gnu_configuration() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buffer = ev.edit.buffers.create_buffer("*geometry-tuples*");
     ev.edit.buffers.set_current(buffer);
-    let frame_id = ev.frames.create_frame("gui", 800, 600, buffer);
-    let window_id = ev.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id = ev.frame_manager_mut().create_frame("gui", 800, 600, buffer);
+    let window_id = ev
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     {
-        let frame = ev.frames.get_mut(frame_id).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.set_window_system(Some(Value::symbol("neo")));
     }
     assert!(
-        ev.frames
+        ev.frame_manager_mut()
             .set_window_fringes(window_id, Some(8), Some(0), true, true)
     );
-    assert!(ev.frames.set_window_scroll_bars(
+    assert!(ev.frame_manager_mut().set_window_scroll_bars(
         window_id,
         Some(0),
         Value::symbol("left"),
@@ -9500,7 +9681,7 @@ fn presented_fringe_geometry_and_scrollbar_tuple_keep_live_gnu_configuration() {
     // these non-geometric values from absence of a positive-area rectangle.
     {
         let display = ev
-            .frames
+            .frame_manager_mut()
             .get_mut(frame_id)
             .expect("frame")
             .find_window_mut(window_id)
@@ -9510,7 +9691,7 @@ fn presented_fringe_geometry_and_scrollbar_tuple_keep_live_gnu_configuration() {
         display.vertical_scroll_bar_type = Value::symbol("left");
         display.horizontal_scroll_bar_type = Value::symbol("bottom");
     }
-    ev.frames
+    ev.frame_manager_mut()
         .get_mut(frame_id)
         .expect("frame")
         .prepare_and_activate_display_presentation_for_test(
@@ -9551,7 +9732,7 @@ fn presented_fringe_geometry_and_scrollbar_tuple_keep_live_gnu_configuration() {
 
     {
         let display = ev
-            .frames
+            .frame_manager_mut()
             .get_mut(frame_id)
             .expect("frame")
             .find_window_mut(window_id)
@@ -9674,7 +9855,7 @@ fn set_window_buffer_matches_window_and_buffer_designator_errors() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
-    ev.frames.create_frame("F1", 800, 600, buf);
+    ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     let dead = Value::make_buffer(ev.edit.buffers.create_buffer("swb-dead"));
     ev.set_variable("vm-swb-dead", dead);
     let results = ev
@@ -9755,11 +9936,11 @@ fn recenter_uses_current_buffer_point_for_selected_window() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buf);
-    let fid = ev.frames.create_frame("F1", 800, 600, buf);
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     ev.eval_str_each("(erase-buffer) (insert \"a\\nb\\nc\\nd\\ne\\nf\\ng\\nh\\n\") (goto-char 7)");
-    let wid = ev.frames.get(fid).expect("frame").selected_window;
+    let wid = ev.frame_manager().get(fid).expect("frame").selected_window;
     if let Some(crate::window::Window::Leaf { point, .. }) = ev
-        .frames
+        .frame_manager_mut()
         .get_mut(fid)
         .and_then(|frame| frame.find_window_mut(wid))
     {
@@ -9800,10 +9981,16 @@ fn graphical_recenter_context(
         .get_mut(buffer)
         .expect("buffer")
         .insert(&"line\n".repeat(100));
-    let frame = eval.frames.create_frame("F1", 800, 600, buffer);
-    let window = eval.frames.get(frame).expect("frame").selected_window;
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("F1", 800, 600, buffer);
+    let window = eval
+        .frame_manager()
+        .get(frame)
+        .expect("frame")
+        .selected_window;
     {
-        let frame = eval.frames.get_mut(frame).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame).expect("frame");
         frame.set_window_system(Some(Value::symbol("neo")));
         frame.initial = false;
         frame.char_height = 10.0;
@@ -9967,8 +10154,12 @@ fn graphical_bottom_recenter_keeps_its_target_when_display_callback_selects_anot
                     .to_owned(),
             ),
         );
-        let frame = eval.frames.selected_frame().expect("frame").id;
-        let original = eval.frames.get(frame).expect("frame").selected_window;
+        let frame = eval.frame_manager().selected_frame().expect("frame").id;
+        let original = eval
+            .frame_manager()
+            .get(frame)
+            .expect("frame")
+            .selected_window;
         let other_buffer = eval.edit.buffers.create_buffer("*other-recenter-window*");
         eval.edit
             .buffers
@@ -9976,7 +10167,7 @@ fn graphical_bottom_recenter_keeps_its_target_when_display_callback_selects_anot
             .expect("other buffer")
             .insert("Other window\n");
         let other = if same_frame {
-            eval.frames
+            eval.frame_manager_mut()
                 .split_window(
                     frame,
                     original,
@@ -9987,8 +10178,13 @@ fn graphical_bottom_recenter_keeps_its_target_when_display_callback_selects_anot
                 )
                 .expect("split the graphical window horizontally")
         } else {
-            let other_frame = eval.frames.create_frame("F2", 800, 600, other_buffer);
-            let other_frame = eval.frames.get_mut(other_frame).expect("other frame");
+            let other_frame = eval
+                .frame_manager_mut()
+                .create_frame("F2", 800, 600, other_buffer);
+            let other_frame = eval
+                .frame_manager_mut()
+                .get_mut(other_frame)
+                .expect("other frame");
             other_frame.set_window_system(Some(Value::symbol("neo")));
             other_frame.initial = false;
             other_frame.selected_window
@@ -10031,7 +10227,7 @@ fn only_full_frame_recenter_crosses_the_menu_bar_rebuild_boundary() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buffer = ev.edit.buffers.create_buffer("recenter-menu-boundary");
     ev.edit.buffers.set_current(buffer);
-    ev.frames.create_frame("F1", 800, 600, buffer);
+    ev.frame_manager_mut().create_frame("F1", 800, 600, buffer);
     ev.eval_str("(insert \"a\\nb\\nc\\nd\\n\") (goto-char 3)")
         .expect("prepare recenter buffer");
 
@@ -10055,7 +10251,7 @@ fn deleting_a_window_crosses_the_menu_bar_rebuild_boundary() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buffer = ev.edit.buffers.create_buffer("delete-window-menu-boundary");
     ev.edit.buffers.set_current(buffer);
-    let frame_id = ev.frames.create_frame("F1", 800, 600, buffer);
+    let frame_id = ev.frame_manager_mut().create_frame("F1", 800, 600, buffer);
     ev.eval_str("((lambda (old size side normal)
                    (set-window-new-pixel old
                      (- (if (memq side '(t left right))
@@ -10064,7 +10260,7 @@ fn deleting_a_window_crosses_the_menu_bar_rebuild_boundary() {
                    (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)")
         .expect("split the selected window");
     let deleted_window = ev
-        .frames
+        .frame_manager()
         .get(frame_id)
         .expect("frame")
         .window_list()
@@ -10088,7 +10284,7 @@ fn only_nonselected_window_redisplay_crosses_the_menu_bar_rebuild_boundary() {
         .buffers
         .create_buffer("window-redisplay-menu-boundary");
     ev.edit.buffers.set_current(buffer);
-    let frame_id = ev.frames.create_frame("F1", 800, 600, buffer);
+    let frame_id = ev.frame_manager_mut().create_frame("F1", 800, 600, buffer);
     ev.eval_str("((lambda (old size side normal)
                    (set-window-new-pixel old
                      (- (if (memq side '(t left right))
@@ -10096,8 +10292,16 @@ fn only_nonselected_window_redisplay_crosses_the_menu_bar_rebuild_boundary() {
                           (window-pixel-height old)) size))
                    (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)")
         .expect("split the selected window");
-    let windows = ev.frames.get(frame_id).expect("frame").window_list();
-    let selected = ev.frames.get(frame_id).expect("frame").selected_window;
+    let windows = ev
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .window_list();
+    let selected = ev
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     let nonselected = windows
         .into_iter()
         .find(|window| *window != selected)
@@ -10222,9 +10426,11 @@ fn consecutive_scroll_up_before_redisplay_advances_from_window_start() {
     ev.edit
         .buffers
         .insert_into_buffer(buffer_id, &"line\n".repeat(200));
-    let frame_id = ev.frames.create_frame("F1", 800, 600, buffer_id);
+    let frame_id = ev
+        .frame_manager_mut()
+        .create_frame("F1", 800, 600, buffer_id);
     let window_id = ev
-        .frames
+        .frame_manager()
         .get(frame_id)
         .expect("scroll frame")
         .selected_window;
@@ -10245,7 +10451,7 @@ fn consecutive_scroll_up_before_redisplay_advances_from_window_start() {
         )
     };
     let window = ev
-        .frames
+        .frame_manager_mut()
         .get_mut(frame_id)
         .expect("scroll frame")
         .find_window_mut(window_id)
@@ -10369,7 +10575,7 @@ fn scroll_down_page_scans_buffer_once_not_once_per_screen_row() {
     let buffer_id = ev.edit.buffers.create_buffer("*scroll-complexity*");
     ev.edit.buffers.set_current(buffer_id);
     let frame_id = ev
-        .frames
+        .frame_manager_mut()
         .create_frame("scroll-complexity", 800, 600, buffer_id);
     ev.edit
         .buffers
@@ -10388,12 +10594,12 @@ fn scroll_down_page_scans_buffer_once_not_once_per_screen_row() {
                 .end(),
         );
     let window_id = ev
-        .frames
+        .frame_manager()
         .get(frame_id)
         .expect("scroll frame")
         .selected_window;
     let window = ev
-        .frames
+        .frame_manager_mut()
         .get_mut(frame_id)
         .expect("scroll frame")
         .find_window_mut(window_id)
@@ -11083,10 +11289,10 @@ fn window_lines_pixel_dimensions_fixture() -> (Context, crate::window::WindowId,
     ev.set_variable("noninteractive", Value::NIL);
     let buf = ev.edit.buffers.create_buffer("*wlpd*");
     ev.edit.buffers.set_current(buf);
-    let fid = ev.frames.create_frame("wlpd", 745, 422, buf);
-    let wid = ev.frames.get(fid).expect("frame").selected_window;
+    let fid = ev.frame_manager_mut().create_frame("wlpd", 745, 422, buf);
+    let wid = ev.frame_manager().get(fid).expect("frame").selected_window;
     {
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         frame.char_width = 10.0;
         frame.char_height = 20.0;
         frame.font_pixel_size = 20.0;
@@ -11146,7 +11352,12 @@ fn window_lines_pixel_dimensions_fixture() -> (Context, crate::window::WindowId,
             ..crate::window::WindowDisplaySnapshot::default()
         }]);
     }
-    let window = ev.frames.get(fid).expect("frame").find_window(wid).cloned();
+    let window = ev
+        .frame_manager()
+        .get(fid)
+        .expect("frame")
+        .find_window(wid)
+        .cloned();
     let body = window_lines_pixel_dimensions_body_width(&ev, fid, window.as_ref().expect("window"));
     (ev, wid, body)
 }
@@ -11156,7 +11367,7 @@ fn window_lines_pixel_dimensions_body_width(
     fid: crate::window::FrameId,
     window: &crate::window::Window,
 ) -> i64 {
-    super::window_body_width_pixels(&ev.frames, fid, window)
+    super::window_body_width_pixels(&ev.frame_manager(), fid, window)
 }
 
 fn wlpd(eval: &mut Context, args: Vec<Value>) -> Value {
@@ -11298,8 +11509,8 @@ fn window_lines_pixel_dimensions_stops_at_the_window_edge_and_the_mode_line() {
     // A row that reaches the body's right edge has no room for the cursor
     // cell GNU appends at end of line, so it reports exactly what it drew.
     {
-        let fid = ev.frames.find_window_frame_id(wid).expect("frame");
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let fid = ev.frame_manager().find_window_frame_id(wid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         let mut snapshot = frame.redisplay_snapshot(wid).expect("snapshot").clone();
         snapshot.rows[0].end_x = body;
         frame.replace_redisplay_cache_for_test(vec![snapshot]);
@@ -11335,10 +11546,10 @@ fn window_lines_pixel_dimensions_refuses_what_gnu_refuses() {
     }
 
     // A dead window is `window-live-p`, whatever the other arguments say.
-    let fid = ev.frames.find_window_frame_id(wid).expect("frame");
+    let fid = ev.frame_manager().find_window_frame_id(wid).expect("frame");
     let buffer = ev.edit.buffers.current_buffer().expect("buffer").id;
     let dead = ev
-        .frames
+        .frame_manager_mut()
         .split_window(
             fid,
             wid,
@@ -11348,7 +11559,7 @@ fn window_lines_pixel_dimensions_refuses_what_gnu_refuses() {
             crate::window::SplitPlacement::AfterTarget,
         )
         .expect("split the fixture window");
-    assert!(ev.frames.delete_window(fid, dead));
+    assert!(ev.frame_manager_mut().delete_window(fid, dead));
     let err = super::builtin_window_lines_pixel_dimensions(
         &mut ev,
         vec![Value::make_window(dead.0), Value::fixnum(0)],
@@ -11379,8 +11590,14 @@ fn window_lines_pixel_dimensions_returns_nil_without_a_current_matrix() {
     let mut fresh = Context::new(crate::test_utils::unit_runtime());
     let buf = fresh.edit.buffers.create_buffer("*empty*");
     fresh.edit.buffers.set_current(buf);
-    let fid = fresh.frames.create_frame("wlpd-empty", 800, 442, buf);
-    let wid = fresh.frames.get(fid).expect("frame").selected_window;
+    let fid = fresh
+        .frame_manager_mut()
+        .create_frame("wlpd-empty", 800, 442, buf);
+    let wid = fresh
+        .frame_manager()
+        .get(fid)
+        .expect("frame")
+        .selected_window;
     assert!(wlpd(&mut fresh, vec![Value::make_window(wid.0)]).is_nil());
 }
 

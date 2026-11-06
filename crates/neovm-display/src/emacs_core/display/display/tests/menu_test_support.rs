@@ -5,7 +5,7 @@ pub(super) fn publish(
     source: &str,
 ) -> Result<Vec<neovm_eval::emacs_core::eval::PopupMenuEntry>, Flow> {
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame)
         .unwrap()
         .set_window_system(Some(Value::symbol(gui_window_system_symbol())));

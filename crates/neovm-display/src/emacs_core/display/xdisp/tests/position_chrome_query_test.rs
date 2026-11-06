@@ -16,10 +16,10 @@ fn assert_point_only_warm_query_reuse(setup: &str, reuse_after_move: bool) {
     let buffer = eval.edit.buffers.current_buffer().unwrap().id;
     eval.edit.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
     let frame = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("point-only-row-query", 160, 96, buffer);
-    let window = eval.frames.get(frame).unwrap().selected_window;
-    eval.frames.get_mut(frame).unwrap().initial = false;
+    let window = eval.frame_manager().get(frame).unwrap().selected_window;
+    eval.frame_manager_mut().get_mut(frame).unwrap().initial = false;
     eval.set_variable("point-query-window", Value::make_window(window.0));
     eval.eval_str(
         "(progn
@@ -32,7 +32,7 @@ fn assert_point_only_warm_query_reuse(setup: &str, reuse_after_move: bool) {
     .unwrap();
     eval.eval_str(setup).unwrap();
     match eval
-        .frames
+        .frame_manager_mut()
         .get_mut(frame)
         .unwrap()
         .find_window_mut(window)
@@ -93,7 +93,7 @@ fn assert_point_only_warm_query_reuse(setup: &str, reuse_after_move: bool) {
     };
     warm.regions.text_body.width = 160.0;
     warm.regions.text_body.height = 32.0;
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame)
         .unwrap()
         .commit_redisplay_cache_for_test(vec![warm]);
@@ -149,7 +149,7 @@ fn assert_point_only_warm_query_reuse(setup: &str, reuse_after_move: bool) {
         .unwrap()
         .goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(3));
     match eval
-        .frames
+        .frame_manager_mut()
         .get_mut(frame)
         .unwrap()
         .find_window_mut(window)

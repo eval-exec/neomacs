@@ -68,7 +68,7 @@ fn mode_line_fixed_read_uses_the_running_owner_dynamic_binding() {
         compare(&ctx, key, "risky-local-variable"),
         Some(Value::fixnum(5))
     );
-    let depth = ctx.specpdl.len();
+    let depth = ctx.specpdl().len();
     ctx.try_specbind(symbol, Value::fixnum(9))
         .expect("bind owner value");
     let bound = compare(&ctx, key, "risky-local-variable");
@@ -107,11 +107,11 @@ fn mode_line_risky_lookup_caches_only_property_identity() {
         .expect("set risk property");
     ModeLineSymbol::RiskyLocalVariable.id();
     reset_intern_calls();
-    assert!(mode_line_symbol_is_risky(&ctx.obarray, name));
+    assert!(mode_line_symbol_is_risky(&ctx.obarray_view(), name));
     assert_eq!(intern_call_names(), vec![name.to_owned()]);
     ctx.eval_str("(put 'ttykey-k4-risky-dynamic-mode-symbol 'risky-local-variable nil)")
         .expect("clear risk property");
-    assert!(!mode_line_symbol_is_risky(&ctx.obarray, name));
+    assert!(!mode_line_symbol_is_risky(&ctx.obarray_view(), name));
 }
 
 #[test]
@@ -148,10 +148,10 @@ fn mode_line_fixed_safe_eval_keeps_bindings_and_live_function_cell() {
     // The subsequent eval_str can collect; keep this reused form in a traced
     // variable cell rather than relying on a Rust local as a GC root.
     ctx.set_variable("ttykey-k4-rooted-mode-line-form", form);
-    let depth = ctx.specpdl.len();
+    let depth = ctx.specpdl().len();
     let result = mode_line_flow_policy::eval_form(&mut ctx, &form).expect("first safe eval");
     assert_eq!(neovm_eval::emacs_core::print::print_value(&result), "(t t)");
-    assert_eq!(ctx.specpdl.len(), depth);
+    assert_eq!(ctx.specpdl().len(), depth);
     ctx.eval_str("(fset 'eval (lambda (_form lexical) (list 'ttykey-k4-live-eval lexical inhibit-redisplay inhibit-quit)))")
         .expect("replace function cell after cache warmup");
     let result = mode_line_flow_policy::eval_form(&mut ctx, &form).expect("live safe eval");
@@ -159,7 +159,7 @@ fn mode_line_fixed_safe_eval_keeps_bindings_and_live_function_cell() {
         neovm_eval::emacs_core::print::print_value(&result),
         "(ttykey-k4-live-eval t t t)"
     );
-    assert_eq!(ctx.specpdl.len(), depth);
+    assert_eq!(ctx.specpdl().len(), depth);
     assert!(
         ctx.variable_value_or_nil(ModeLineSymbol::InhibitRedisplay.id())
             .is_nil()

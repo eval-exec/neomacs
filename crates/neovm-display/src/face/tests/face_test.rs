@@ -256,7 +256,7 @@ fn face_table_pdump_preserves_lisp_owned_attrs() {
     face.foundry = Some(Value::string("OpenAI"));
     face.stipple = Some(Value::symbol("unspecified"));
     face.doc = Some(Value::string("Face doc"));
-    eval.face_table.define("pdump-face", face);
+    eval.face_table_mut().define("pdump-face", face);
 
     let dump = neovm_eval::emacs_core::pdump::convert::dump_evaluator(&eval);
     assert!(dump.face_table.faces.is_empty());
@@ -307,7 +307,7 @@ fn face_table_pdump_keeps_inherit_as_symbols() {
         Value::symbol("font-lock-keyword-face"),
         Value::symbol("warning"),
     ]));
-    eval.face_table.define("pdump-inherit-face", face);
+    eval.face_table_mut().define("pdump-inherit-face", face);
 
     let dump = neovm_eval::emacs_core::pdump::convert::dump_evaluator(&eval);
     let dumped = dump

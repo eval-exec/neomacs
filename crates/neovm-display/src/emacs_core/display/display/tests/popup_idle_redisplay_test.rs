@@ -62,10 +62,12 @@ fn assert_tty_popup_teardown_repaints(exit: PopupExit) {
     let _idle_skip = IdleSkipOn::new();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.current_buffer_id().unwrap();
-    let frame = eval.frames.create_frame("tty-popup", 80, 24, buffer);
-    eval.frames.select_frame(frame);
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("tty-popup", 80, 24, buffer);
+    eval.frame_manager_mut().select_frame(frame);
     assert!(
-        eval.frames
+        eval.frame_manager()
             .get(frame)
             .unwrap()
             .effective_window_system()
@@ -116,7 +118,7 @@ fn assert_tty_popup_teardown_repaints(exit: PopupExit) {
         before,
         "fixture must skip unchanged forced redisplay"
     );
-    assert!(eval.current_message.is_none());
+    assert!(eval.current_message().is_none());
 
     let tx = crate::host_input::HostInputPublisher::install(&mut eval);
 
@@ -172,7 +174,7 @@ fn assert_tty_popup_teardown_repaints(exit: PopupExit) {
     assert_eq!(shown.len(), 1);
     assert!(shown[0].entries.iter().all(|entry| entry.help.is_none()));
     assert!(
-        eval.current_message.is_none(),
+        eval.current_message().is_none(),
         "help must not mask the stale-screen bug"
     );
     assert_eq!(

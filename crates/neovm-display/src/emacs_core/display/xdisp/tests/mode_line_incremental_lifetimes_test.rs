@@ -7,7 +7,7 @@ use neovm_eval::emacs_core::eval::save_scratch_gc_roots;
 fn context() -> Context {
     let mut eval = interactive_context();
     eval.gc_stress = false;
-    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    eval.set_gc_threshold(usize::MAX);
     eval
 }
 
@@ -20,7 +20,7 @@ fn assert_live_interval_plists(eval: &Context, value: Value) {
         let mut plist = run.plist();
         while plist.is_cons() {
             assert!(
-                eval.tagged_heap.owns_heap_value_for_test(plist),
+                eval.tagged_heap().owns_heap_value_for_test(plist),
                 "GC reclaimed an accumulated plist cell"
             );
             assert!(
@@ -32,7 +32,7 @@ fn assert_live_interval_plists(eval: &Context, value: Value) {
                 break;
             }
             assert!(
-                eval.tagged_heap.owns_heap_value_for_test(tail),
+                eval.tagged_heap().owns_heap_value_for_test(tail),
                 "GC reclaimed an accumulated property value cell"
             );
             assert!(
@@ -47,10 +47,14 @@ fn assert_live_interval_plists(eval: &Context, value: Value) {
 fn display_setup(setup: &str) -> (Context, ModeLineDisplayOutput) {
     let mut eval = context();
     let buffer_id = eval.edit.buffers.current_buffer_id().expect("buffer");
-    let frame_id = eval
-        .frames
-        .create_frame("incremental-lifetimes", 800, 600, buffer_id);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("incremental-lifetimes", 800, 600, buffer_id);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     let format = eval.eval_str(setup).expect("format setup");
     let before = save_scratch_gc_roots();
     let gc = eval.gc_count;
@@ -85,7 +89,7 @@ fn mode_line_incremental_fresh_source_and_nested_payload_survive_sibling_gc() {
     );
     assert_eq!(output.value().as_utf8_str(), Some("AB"));
     assert_eq!(
-        eval.obarray.symbol_value_copied("d5-root-evals"),
+        eval.obarray_view().symbol_value_copied("d5-root-evals"),
         Some(Value::fixnum(2))
     );
     let first = output
@@ -93,7 +97,7 @@ fn mode_line_incremental_fresh_source_and_nested_payload_survive_sibling_gc() {
         .iter()
         .find(|span| span.output_start() == 0)
         .expect("first source");
-    assert!(eval.tagged_heap.owns_heap_value_for_test(first.source()));
+    assert!(eval.tagged_heap().owns_heap_value_for_test(first.source()));
     assert_eq!(first.source().as_utf8_str(), Some("A"));
     assert_ne!(
         first.source(),
@@ -104,9 +108,9 @@ fn mode_line_incremental_fresh_source_and_nested_payload_survive_sibling_gc() {
     let payload = table
         .get_property_at_char_pos(CharPos0::ZERO, Value::symbol("help-echo"))
         .expect("nested payload");
-    assert!(eval.tagged_heap.owns_heap_value_for_test(payload));
+    assert!(eval.tagged_heap().owns_heap_value_for_test(payload));
     assert!(
-        eval.tagged_heap
+        eval.tagged_heap()
             .owns_heap_value_for_test(payload.cons_car())
     );
     assert_eq!(payload.cons_car().as_utf8_str(), Some("payload"));
@@ -139,9 +143,9 @@ fn mode_line_incremental_top_format_and_face_survive_replacement_during_gc() {
         .get_property_at_char_pos(CharPos0::ZERO, Value::symbol("face"))
         .expect("default face");
     assert_eq!(result_face, face, "preserve face object identity");
-    assert!(eval.tagged_heap.owns_heap_value_for_test(result_face));
+    assert!(eval.tagged_heap().owns_heap_value_for_test(result_face));
     let face_value = result_face.cons_cdr().cons_car();
-    assert!(eval.tagged_heap.owns_heap_value_for_test(face_value));
+    assert!(eval.tagged_heap().owns_heap_value_for_test(face_value));
     assert_eq!(face_value.as_utf8_str(), Some("red"));
 }
 
@@ -166,7 +170,7 @@ fn mode_line_incremental_resolved_symbol_survives_replacement_during_gc() {
     assert_eq!(value.as_utf8_str(), Some("XY"));
     assert_eq!(eval.gc_count, gc + 1);
     assert_eq!(
-        eval.obarray.symbol_value_copied("d5-scalar-format"),
+        eval.obarray_view().symbol_value_copied("d5-scalar-format"),
         Some(Value::NIL)
     );
     assert_eq!(save_scratch_gc_roots(), before);
@@ -191,7 +195,7 @@ fn mode_line_incremental_current_tail_survives_ancestor_detach_and_gc() {
         Some(Value::symbol("bold"))
     );
     let last = output.source_spans().last().expect("last source").source();
-    assert!(eval.tagged_heap.owns_heap_value_for_test(last));
+    assert!(eval.tagged_heap().owns_heap_value_for_test(last));
     assert_eq!(last.as_utf8_str(), Some("C"));
 }
 
@@ -239,7 +243,7 @@ fn mode_line_incremental_split_fresh_format_survives_nested_context_gc() {
     // Independent manager copies permit collection through the real owning
     // Context without aliasing fields borrowed by the compatibility callback.
     // Every Value still belongs to that same active heap and mutator thread.
-    let obarray = eval.obarray.clone();
+    let obarray = (*eval.obarray_view()).clone();
     let mut buffers = eval.edit.buffers.clone();
     let frames = crate::window::FrameManager::new();
     let processes = crate::emacs_core::process::ProcessManager::new();
@@ -302,9 +306,9 @@ fn mode_line_incremental_split_fresh_format_survives_nested_context_gc() {
         let payload = table
             .get_property_at_char_pos(CharPos0::new(pos), Value::symbol("help-echo"))
             .expect("owned payload");
-        assert!(eval.tagged_heap.owns_heap_value_for_test(payload));
+        assert!(eval.tagged_heap().owns_heap_value_for_test(payload));
         assert!(
-            eval.tagged_heap
+            eval.tagged_heap()
                 .owns_heap_value_for_test(payload.cons_car())
         );
         assert_eq!(payload.cons_car().as_utf8_str(), Some(expected));
@@ -331,11 +335,11 @@ fn mode_line_incremental_split_panic_releases_accumulator_owners() {
     let mut calls = 0;
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = finish_format_mode_line_in_state_with_eval(
-            neovm_eval::emacs_core::eval::VariableView::new(&eval.obarray, &eval.owner),
+            neovm_eval::emacs_core::eval::VariableView::new(&eval.obarray_view(), &eval.owner()),
             &[],
-            &eval.frames,
+            &eval.frame_manager(),
             &mut eval.edit.buffers,
-            &eval.processes,
+            &eval.processes(),
             &[format],
             |_, _| {
                 calls += 1;

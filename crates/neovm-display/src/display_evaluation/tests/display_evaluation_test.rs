@@ -208,7 +208,7 @@ fn frame_display_context_keeps_window_recovery_armed_during_cleanup_panic() {
         NativeFn::ContextVec(watcher),
         SubrArity::new(4, Some(4)),
     ));
-    let depth = eval.specpdl.len();
+    let depth = eval.specpdl().len();
     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = eval.with_frame_display_context(target_frame, |eval| {
             eval.try_specbind(symbol, Value::fixnum(20)).expect("bind");
@@ -232,7 +232,7 @@ fn frame_display_context_keeps_window_recovery_armed_during_cleanup_panic() {
         eval.frame_manager().selected_frame().map(|frame| frame.id),
         Some(caller_frame)
     );
-    assert_eq!(eval.specpdl.len(), depth);
+    assert_eq!(eval.specpdl().len(), depth);
     assert_eq!(
         eval.obarray().symbol_value_id_or_nil(symbol),
         Value::fixnum(10)

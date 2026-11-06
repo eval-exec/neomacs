@@ -8,15 +8,15 @@ fn terminal_gc_roots_exclude_another_live_heap() {
     let other = Context::new(crate::test_utils::unit_runtime());
 
     let mut roots = Vec::new();
-    collect_terminal_gc_roots(&mut roots, collecting.tagged_heap.identity());
+    collect_terminal_gc_roots(&mut roots, collecting.tagged_heap().identity());
     assert!(
         roots
             .iter()
-            .all(|root| collecting.tagged_heap.owns_heap_value_for_test(*root)),
+            .all(|root| collecting.tagged_heap().owns_heap_value_for_test(*root)),
         "the terminal root walk retained another evaluator's handle"
     );
     let mut active_roots = Vec::new();
-    collect_terminal_gc_roots(&mut active_roots, other.tagged_heap.identity());
+    collect_terminal_gc_roots(&mut active_roots, other.tagged_heap().identity());
     let active_handle = builtin_selected_terminal(vec![]).expect("selected terminal");
     assert!(active_roots.contains(&active_handle));
 }
@@ -41,7 +41,7 @@ fn terminal_gc_handle_refreshes_when_the_active_heap_changes() {
 
     let handle = builtin_selected_terminal(vec![]).expect("selected terminal");
     assert!(
-        first.tagged_heap.owns_heap_value_for_test(handle),
+        first.tagged_heap().owns_heap_value_for_test(handle),
         "selected-terminal returned a handle allocated by another evaluator"
     );
     assert_eq!(terminal_runtime_color_cells(), 256);

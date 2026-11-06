@@ -168,7 +168,9 @@ fn frame_zero_realizes_integer_font_size_for_each_live_frame() {
         .buffers
         .current_buffer_id()
         .expect("current buffer");
-    let other_frame = eval.frames.create_frame("other", 800, 600, buffer_id);
+    let other_frame = eval
+        .frame_manager_mut()
+        .create_frame("other", 800, 600, buffer_id);
     for frame_id in [selected_frame, other_frame] {
         eval.frame_manager_mut()
             .get_mut(frame_id)
@@ -297,7 +299,7 @@ fn default_face_font_change_resizes_mini_window_to_one_line_of_the_new_font() {
     )
     .expect("realize the new default font");
 
-    let frame = eval.frames.get(frame_id).expect("selected frame");
+    let frame = eval.frame_manager().get(frame_id).expect("selected frame");
     assert_eq!(
         frame.char_height, 18.0,
         "frame line height follows the font"
@@ -385,7 +387,7 @@ fn default_face_font_change_resets_a_grown_mini_window_to_one_line() {
     // unit whatever it held before (window.c:5051-5053,5125-5128); a
     // three-line 33px mini-window under the old 11px font becomes 18px.
     let (eval, frame_id) = frame_after_default_font_change(Some(33.0), 18, false);
-    let frame = eval.frames.get(frame_id).expect("selected frame");
+    let frame = eval.frame_manager().get(frame_id).expect("selected frame");
     let mini = frame
         .minibuffer_leaf
         .as_ref()
@@ -402,7 +404,7 @@ fn inhibited_font_resize_preserves_grown_minibuffer_pixel_height() {
     // mini-window keeps its allocation; redisplay separately applies the
     // resize-mini-windows content policy.
     let (eval, frame_id) = frame_after_default_font_change(Some(33.0), 18, true);
-    let frame = eval.frames.get(frame_id).expect("selected frame");
+    let frame = eval.frame_manager().get(frame_id).expect("selected frame");
     assert_eq!(frame.char_height, 18.0);
     let mini = frame
         .minibuffer_leaf
@@ -429,7 +431,7 @@ fn default_face_font_change_with_the_same_line_height_keeps_the_mini_window() {
     // frame with a fractional last line would be resized to whole lines by
     // the implied native resize, which is not ported.)
     let (eval, frame_id) = frame_after_default_font_change(Some(33.0), 11, false);
-    let frame = eval.frames.get(frame_id).expect("selected frame");
+    let frame = eval.frame_manager().get(frame_id).expect("selected frame");
     assert_eq!(frame.char_height, 11.0);
     let mini = frame
         .minibuffer_leaf
@@ -449,7 +451,7 @@ fn default_face_font_change_resyncs_a_frame_without_its_own_mini_window() {
     // whose minibuffer lives elsewhere (window.c:5051): no mini-window rule,
     // but the root window still spans the frame in the new units.
     let (eval, frame_id) = frame_after_default_font_change(None, 18, false);
-    let frame = eval.frames.get(frame_id).expect("selected frame");
+    let frame = eval.frame_manager().get(frame_id).expect("selected frame");
     assert_eq!(frame.char_height, 18.0);
     assert!(frame.minibuffer_leaf.is_none());
     let root = frame.root_window().bounds();

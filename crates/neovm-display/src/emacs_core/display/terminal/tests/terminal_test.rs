@@ -599,7 +599,7 @@ fn delete_terminal_force_defers_frame_hooks_until_pending_safe_funcalls_flush() 
         Value::NIL
     );
     assert!(
-        eval.frames.get(doomed).is_none(),
+        eval.frame_manager().get(doomed).is_none(),
         "delete-terminal should remove frames on that terminal immediately"
     );
     assert_eq!(
@@ -736,7 +736,7 @@ fn make_terminal_frame_is_eval_backed_frame_creation() {
         .expect("make-terminal-frame");
 
     assert!(frame.as_frame_id().is_some());
-    assert_eq!(eval.frames.frame_list().len(), 1);
+    assert_eq!(eval.frame_manager().frame_list().len(), 1);
 }
 
 #[test]
@@ -768,14 +768,18 @@ fn make_terminal_frame_opens_and_owns_an_explicit_secondary_tty() {
     let frame = crate::emacs_core::frame::builtin_make_terminal_frame(&mut eval, vec![params])
         .expect("make-terminal-frame should open the requested tty");
     let frame_id = crate::window::FrameId(frame.as_frame_id().expect("frame id"));
-    let terminal_id = eval.frames.get(frame_id).expect("frame").terminal_id;
+    let terminal_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .terminal_id;
 
     // GNU `init_sys_modes` publishes each initialized terminal's ERASE byte as
     // `tty-erase-char` (src/sysdep.c:1130); the recording host reports 127.
     // A fresh Context never seeded the variable, so this fails if the frame
     // creation path forgets to publish the attaching terminal's answer.
     assert_eq!(
-        eval.obarray.symbol_value_copied("tty-erase-char"),
+        eval.obarray_view().symbol_value_copied("tty-erase-char"),
         Some(Value::fixnum(127)),
         "creating a tty frame must publish that terminal's ERASE byte"
     );
@@ -784,7 +788,7 @@ fn make_terminal_frame_opens_and_owns_an_explicit_secondary_tty() {
         terminal_id, TERMINAL_ID,
         "the GUI terminal must remain distinct"
     );
-    let opened_frame = eval.frames.get(frame_id).expect("frame");
+    let opened_frame = eval.frame_manager().get(frame_id).expect("frame");
     assert_eq!(opened_frame.width, 132);
     assert_eq!(opened_frame.height, 43);
     assert_eq!(opened_frame.char_width, 1.0);
@@ -931,12 +935,16 @@ fn make_terminal_frame_without_a_device_reuses_the_selected_secondary_terminal()
     let first = crate::emacs_core::frame::builtin_make_terminal_frame(&mut eval, vec![params])
         .expect("open secondary terminal");
     let first_id = crate::window::FrameId(first.as_frame_id().expect("first frame id"));
-    let terminal_id = eval.frames.get(first_id).expect("first frame").terminal_id;
+    let terminal_id = eval
+        .frame_manager()
+        .get(first_id)
+        .expect("first frame")
+        .terminal_id;
 
     let second = crate::emacs_core::frame::builtin_make_terminal_frame(&mut eval, vec![Value::NIL])
         .expect("reuse selected secondary terminal");
     let second_id = crate::window::FrameId(second.as_frame_id().expect("second frame id"));
-    let second_frame = eval.frames.get(second_id).expect("second frame");
+    let second_frame = eval.frame_manager().get(second_id).expect("second frame");
     assert_eq!(second_frame.terminal_id, terminal_id);
     assert_eq!((second_frame.width, second_frame.height), (132, 43));
     assert_eq!(
@@ -979,8 +987,11 @@ fn make_terminal_frame_reuses_an_active_tty_already_open_on_the_named_device() {
     let second_id = crate::window::FrameId(second.as_frame_id().expect("second frame id"));
 
     assert_eq!(
-        eval.frames.get(first_id).expect("first frame").terminal_id,
-        eval.frames
+        eval.frame_manager()
+            .get(first_id)
+            .expect("first frame")
+            .terminal_id,
+        eval.frame_manager()
             .get(second_id)
             .expect("second frame")
             .terminal_id
@@ -1007,7 +1018,7 @@ fn make_terminal_frame_rolls_back_the_provisional_frame_when_tty_open_fails() {
     let scratch = eval.edit.buffers.create_buffer("*scratch*");
     eval.edit.buffers.set_current(scratch);
     let original_frame = crate::emacs_core::window_cmds::make_frame_plain(
-        &mut eval.frames,
+        &mut eval.frame_manager(),
         &mut eval.edit.buffers,
         vec![Value::NIL],
     )
@@ -1030,12 +1041,12 @@ fn make_terminal_frame_rolls_back_the_provisional_frame_when_tty_open_fails() {
         other => panic!("expected TTY open error signal, got {other:?}"),
     }
     assert_eq!(
-        eval.frames.frame_list(),
+        eval.frame_manager().frame_list(),
         vec![crate::window::FrameId(original_frame_id)],
         "a failed host acquisition must not leak the provisional frame"
     );
     assert_eq!(
-        eval.frames.selected_frame().map(|frame| frame.id),
+        eval.frame_manager().selected_frame().map(|frame| frame.id),
         Some(crate::window::FrameId(original_frame_id))
     );
     assert_eq!(

@@ -264,9 +264,13 @@ fn output_trace(setup: &str, case: PropertyReadCase) -> OutputTrace {
         .expect("current buffer")
         .id;
     let frame_id = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("property-borrow", 800, 600, buffer_id);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     eval.edit
         .buffers
         .get_mut(buffer_id)
@@ -294,7 +298,7 @@ fn output_trace(setup: &str, case: PropertyReadCase) -> OutputTrace {
         for span in output.source_spans() {
             eval.push_specpdl_root(span.source());
         }
-        let input_source = eval.obarray.symbol_value_copied("d5-borrow-source");
+        let input_source = eval.obarray_view().symbol_value_copied("d5-borrow-source");
         let mut identities = Vec::new();
         let text = string_trace(eval, output.value());
         let sources = output
@@ -324,7 +328,7 @@ fn output_trace(setup: &str, case: PropertyReadCase) -> OutputTrace {
             })
             .collect();
         let eval_count = CallbackCount(
-            eval.obarray
+            eval.obarray_view()
                 .symbol_value_copied("d5-borrow-evals")
                 .and_then(Value::as_fixnum)
                 .expect("eval counter"),
