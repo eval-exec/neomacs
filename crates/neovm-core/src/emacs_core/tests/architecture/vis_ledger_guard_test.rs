@@ -2146,6 +2146,171 @@ fn check_visibility_coverage(workspace: &Path, ledgers: &[VisRow]) -> Result<(),
     Ok(())
 }
 
+/// TS-COVERAGE (peer 22:14:00Z pre-P2 condition, (a)): the reverse half of
+/// the ledger class, generalized to every provider crate's whole
+/// `src/test_support{.rs,/**}` tree. Every PUBLIC item in that tree must have
+/// exactly one row:
+/// - an AUTHORITY row whose `fence_path` is `<crate>::<module>::<leaf>` (the
+///   signed fence route), or
+/// - a TEST-SUPPORT-VIS row whose defining file is the item's file (the
+///   signed read route).
+/// An item may never have both (V1) and never more than one. `use`
+/// re-exports and inline modules are not items in this arm (the forward
+/// visibility-coverage check owns their widening sites); impl methods are not
+/// top-level items either.
+fn test_support_reverse_coverage_violation(
+    workspace: &Path,
+    vis_rows: &[VisRow],
+    auth: &[AuthRow],
+) -> Result<(), String> {
+    #[derive(Clone)]
+    struct TreeItem {
+        crate_dir: String,
+        file: String,
+        module: Vec<String>,
+        kind: &'static str,
+        leaf: String,
+    }
+
+    fn collect(
+        items: &[syn::Item],
+        crate_dir: &str,
+        file: &str,
+        module: &mut Vec<String>,
+        out: &mut Vec<TreeItem>,
+    ) {
+        let is_public = |vis: &syn::Visibility| matches!(vis, syn::Visibility::Public(_));
+        for item in items {
+            let leaf_kind = match item {
+                syn::Item::Fn(item) if is_public(&item.vis) => {
+                    Some(("fn", item.sig.ident.to_string()))
+                }
+                syn::Item::Struct(item) if is_public(&item.vis) => {
+                    Some(("struct", item.ident.to_string()))
+                }
+                syn::Item::Enum(item) if is_public(&item.vis) => {
+                    Some(("enum", item.ident.to_string()))
+                }
+                syn::Item::Union(item) if is_public(&item.vis) => {
+                    Some(("union", item.ident.to_string()))
+                }
+                syn::Item::Trait(item) if is_public(&item.vis) => {
+                    Some(("trait", item.ident.to_string()))
+                }
+                syn::Item::Type(item) if is_public(&item.vis) => {
+                    Some(("type", item.ident.to_string()))
+                }
+                syn::Item::Const(item) if is_public(&item.vis) => {
+                    Some(("const", item.ident.to_string()))
+                }
+                syn::Item::Static(item) if is_public(&item.vis) => {
+                    Some(("static", item.ident.to_string()))
+                }
+                syn::Item::Mod(item) if is_public(&item.vis) => {
+                    if let Some((_, inner)) = &item.content {
+                        module.push(item.ident.to_string());
+                        collect(inner, crate_dir, file, module, out);
+                        module.pop();
+                    }
+                    None
+                }
+                _ => None,
+            };
+            if let Some((kind, leaf)) = leaf_kind {
+                out.push(TreeItem {
+                    crate_dir: crate_dir.to_owned(),
+                    file: file.to_owned(),
+                    module: module.clone(),
+                    kind,
+                    leaf,
+                });
+            }
+        }
+    }
+
+    let mut items = Vec::new();
+    for crate_dir in VIS_CRATES {
+        let src = workspace.join("crates").join(crate_dir).join("src");
+        let mut files = Vec::new();
+        let plain = src.join("test_support.rs");
+        if plain.is_file() {
+            files.push(plain);
+        }
+        let nested = src.join("test_support");
+        if nested.is_dir() {
+            walk_files(&nested, &mut files)?;
+        }
+        files.sort();
+        for path in files {
+            if path.extension().is_none_or(|extension| extension != "rs") {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(workspace)
+                .map_err(|_| format!("{} is outside the workspace", path.display()))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let after_src = relative
+                .split_once("/src/")
+                .map(|(_, rest)| rest)
+                .ok_or_else(|| format!("{relative}: not under src/"))?;
+            let mut segments: Vec<String> = after_src
+                .trim_end_matches(".rs")
+                .split('/')
+                .map(str::to_string)
+                .collect();
+            if segments.last().map(String::as_str) == Some("mod") {
+                segments.pop();
+            }
+            let parsed =
+                syn::parse_file(&read(&path)?).map_err(|error| format!("{relative}: {error}"))?;
+            collect(
+                &parsed.items,
+                crate_dir,
+                &relative,
+                &mut segments,
+                &mut items,
+            );
+        }
+    }
+    for item in &items {
+        let vis_hits: Vec<&VisRow> = vis_rows
+            .iter()
+            .filter(|row| {
+                row.crate_dir == item.crate_dir
+                    && row.file == item.file
+                    && row.item.rsplit("::").next() == Some(item.leaf.as_str())
+            })
+            .collect();
+        let root = item.crate_dir.replace('-', "_");
+        let expected_fence = format!("{root}::{}::{}", item.module.join("::"), item.leaf);
+        let auth_hits: Vec<&AuthRow> = auth
+            .iter()
+            .filter(|row| row.crate_name == item.crate_dir && auth_expected(row) == expected_fence)
+            .collect();
+        if vis_hits.is_empty() && auth_hits.is_empty() {
+            return Err(format!(
+                "TS-COVERAGE {}: pub {} `{}` has no AUTHORITY fence row and no TEST-SUPPORT-VIS row",
+                item.file, item.kind, item.leaf
+            ));
+        }
+        if !vis_hits.is_empty() && !auth_hits.is_empty() {
+            return Err(format!(
+                "TS-COVERAGE {}: pub {} `{}` has BOTH an AUTHORITY fence row and a TEST-SUPPORT-VIS row (V1)",
+                item.file, item.kind, item.leaf
+            ));
+        }
+        let total = vis_hits.len() + auth_hits.len();
+        if total > 1 {
+            return Err(format!(
+                "TS-COVERAGE {}: pub {} `{}` has {total} rows (exactly one required)",
+                item.file, item.kind, item.leaf
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Resolve a full module path written in `from` (a glob target), keeping
 /// every segment: `crate`/`neovm_value` roots, `self` and leading `super`.
 fn expansion_resolve_module(from: &[String], path: &[String]) -> Option<Vec<String>> {
@@ -3073,6 +3238,7 @@ fn validate(workspace: &Path) -> Result<(), String> {
     }
     check_cfg_split_arm_identity(workspace, &all_rows)?;
     check_visibility_coverage(workspace, &all_rows)?;
+    test_support_reverse_coverage_violation(workspace, &all_rows, &auth_rows(workspace))?;
     if all_rows.iter().any(|row| row.kind == "mod") {
         expanded_mod_rows_violation(workspace, &all_rows, &auth_rows(workspace))?;
     }
@@ -3146,6 +3312,35 @@ mod tests {
         let error =
             authority_public_paths_violation(dir.path(), &rows).expect_err("different type");
         assert!(error.contains("does not declare"), "{error}");
+    }
+
+    #[test]
+    fn test_support_reverse_coverage_mutation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("crates/neovm-edit/src/test_support.rs");
+        std::fs::create_dir_all(file.parent().unwrap()).expect("src");
+        std::fs::write(&file, "pub mod authority {\n    pub fn unrowed() {}\n}\n").expect("fence");
+        let error = test_support_reverse_coverage_violation(dir.path(), &[], &[])
+            .expect_err("unrowed pub fn");
+        assert!(error.contains("no AUTHORITY"), "{error}");
+        let vis_rows = vec![VisRow {
+            crate_dir: "neovm-edit".to_owned(),
+            item: "test_support::authority::unrowed".to_owned(),
+            kind: "fn".to_owned(),
+            file: "crates/neovm-edit/src/test_support.rs".to_owned(),
+            tests: Vec::new(),
+        }];
+        test_support_reverse_coverage_violation(dir.path(), &vis_rows, &[]).expect("rowed read");
+        let auth = vec![AuthRow {
+            crate_name: "neovm-edit".to_owned(),
+            item: "unrowed".to_owned(),
+            defining_file: "crates/neovm-edit/src/test_support.rs".to_owned(),
+            fence_path: "neovm_edit::test_support::authority::unrowed".to_owned(),
+        }];
+        let error = test_support_reverse_coverage_violation(dir.path(), &vis_rows, &auth)
+            .expect_err("both routes");
+        assert!(error.contains("BOTH"), "{error}");
+        test_support_reverse_coverage_violation(dir.path(), &[], &auth).expect("rowed fence");
     }
 
     #[test]
