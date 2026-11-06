@@ -24,6 +24,19 @@ pub fn mark_collection_observed(bits: usize) -> bool {
     crate::tagged::gc::mark_collection_observed(bits)
 }
 
+/// FENCE (N2 counter reset): drop the thread-local function-cell lookup
+/// counter for the re-homed executor tests. The original stays `pub(crate)`
+/// with no A' widening; this fence is its only cross-crate route.
+pub fn reset_function_cell_lookup_count_for_test() {
+    crate::symbol::reset_function_cell_lookup_count();
+}
+
+/// FENCE (N2 counter reset): sibling of the above for the byte-code data
+/// projection counter. The original stays `pub(crate)`.
+pub fn reset_bytecode_data_access_count_for_test() {
+    crate::value::reset_bytecode_data_access_count();
+}
+
 /// The restricted proof-era type used by the re-homed era-fixture tests.
 /// Same item as `tagged::gc::GenericProofEra`; the original path stays
 /// `cfg(any(test, feature = "test-support"))` + `pub(crate)`.

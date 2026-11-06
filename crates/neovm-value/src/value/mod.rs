@@ -344,9 +344,9 @@ thread_local! {
     static BYTECODE_DATA_ACCESS_COUNT: Cell<usize> = const { Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
-pub fn reset_bytecode_data_access_count() {
+pub(crate) fn reset_bytecode_data_access_count() {
     BYTECODE_DATA_ACCESS_COUNT.with(|count| count.set(0));
 }
 
@@ -358,9 +358,10 @@ pub struct BytecodeInteractiveProbe {
     pub(crate) doc_form: Option<Value>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[doc(hidden)]
-pub fn bytecode_data_access_count() -> usize {
+pub(crate) fn bytecode_data_access_count() -> usize {
     BYTECODE_DATA_ACCESS_COUNT.with(Cell::get)
 }
 

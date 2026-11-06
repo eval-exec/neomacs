@@ -168,9 +168,9 @@ thread_local! {
     static PLAIN_VALUE_SLOT_VISITS: Cell<usize> = const { Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
-pub fn reset_function_cell_lookup_count() {
+pub(crate) fn reset_function_cell_lookup_count() {
     FUNCTION_CELL_LOOKUP_COUNT.with(|count| count.set(0));
 }
 
@@ -191,9 +191,10 @@ fn note_plain_value_slot_visit() {
     PLAIN_VALUE_SLOT_VISITS.with(|count| count.set(count.get() + 1));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[doc(hidden)]
-pub fn function_cell_lookup_count() -> usize {
+pub(crate) fn function_cell_lookup_count() -> usize {
     FUNCTION_CELL_LOOKUP_COUNT.with(Cell::get)
 }
 
@@ -3933,7 +3934,7 @@ impl Obarray {
 
     /// Get the function cell of a symbol by identity.
     pub fn symbol_function_id(&self, id: SymId) -> Option<Value> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         FUNCTION_CELL_LOOKUP_COUNT.with(|count| count.set(count.get() + 1));
         match self.function_cell_snapshot(id) {
             FunctionCellSnapshot::Bound(function) => Some(function),

@@ -166,9 +166,10 @@ mod subr_entry_sync;
 #[cfg(feature = "jit")]
 #[doc(hidden)]
 pub use subr_entry_sync::with_static_subr_entry_read;
-#[cfg(all(test, feature = "jit"))]
+#[cfg(all(any(test, feature = "test-support"), feature = "jit"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[doc(hidden)]
-pub use subr_entry_sync::with_static_subr_entry_write;
+pub(crate) use subr_entry_sync::with_static_subr_entry_write;
 /// How a static subr entry registration writes its metadata.
 ///
 /// The upper registration owner decides from its immutable compiler policy

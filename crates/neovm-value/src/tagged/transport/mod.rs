@@ -37,7 +37,8 @@ pub(crate) use root_batch::{
 pub use root_table::cell_census;
 #[doc(hidden)]
 pub use root_table::collect_shared_root_gc_roots;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use root_table::root_table_is_alive_for_test;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use root_table::with_root_table_lock_for_test;
