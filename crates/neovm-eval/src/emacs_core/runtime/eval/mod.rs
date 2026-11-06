@@ -6466,6 +6466,31 @@ impl Context {
         )
     }
 
+    /// Test-support split borrow for the mode-line formatting tests: the
+    /// obarray and owner bindings by shared reference, the frame and process
+    /// managers by shared reference, and the buffer manager mutably.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn mode_line_formatting_inputs_mut(
+        &mut self,
+    ) -> (
+        &Obarray,
+        &owner_bindings::OwnerSlot,
+        &FrameManager,
+        &mut BufferManager,
+        &ProcessManager,
+    ) {
+        (
+            &self.obarray,
+            &self.owner,
+            &self.frames,
+            &mut self.edit.buffers,
+            &self.processes,
+        )
+    }
+
     /// Split borrow for variable reads that also scroll a window: the obarray
     /// and owner bindings by shared reference, the frame and buffer managers
     /// mutably.
