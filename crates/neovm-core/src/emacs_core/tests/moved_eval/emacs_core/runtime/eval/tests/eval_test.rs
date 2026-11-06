@@ -26,10 +26,12 @@ mod moved_eval_prelude {
     pub use crate::emacs_core::threads::ThreadManager;
     pub use crate::window::display::WindowDisplayContextExt;
     pub use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
+    pub use neovm_eval::test_support::authority::service_pending_timers_for_test;
+    #[cfg(feature = "jit")]
     pub use neovm_eval::test_support::authority::{
         force_profit_gate_for_test, jit_compiled_id_for_test, jit_compiled_id_or_assign_for_test,
         jit_is_hot_for_test, jit_mark_cold_for_test, jit_mark_hot_for_test,
-        jit_patched_prefix_for_test, service_pending_timers_for_test,
+        jit_patched_prefix_for_test,
     };
     pub use neovm_system::emacs_core::timer::TimerContextExt;
     pub use neovm_system::emacs_core::wait::WaitContextExt;
@@ -83,6 +85,7 @@ mod moved_eval_prelude {
 }
 use self::moved_eval_prelude::*;
 use crate::emacs_core::builtins;
+#[cfg(feature = "jit")]
 use crate::emacs_core::jit::compile;
 use crate::emacs_core::keyboard::CommandLoopHost;
 

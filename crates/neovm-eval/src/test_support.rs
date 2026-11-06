@@ -436,7 +436,9 @@ pub mod authority {
 
     /// Fence delegate: force the JIT profitability gate override. The
     /// original writes a thread-local test override, so it is fence-only
-    /// (no static/Cell behind a VIS route).
+    /// (no static/Cell behind a VIS route). jit-only: the knob lives in the
+    /// cfg(feature = "jit") compiler module.
+    #[cfg(feature = "jit")]
     pub fn force_profit_gate_for_test(on: bool) {
         crate::emacs_core::jit::compile::force_profit_gate_for_test(on)
     }

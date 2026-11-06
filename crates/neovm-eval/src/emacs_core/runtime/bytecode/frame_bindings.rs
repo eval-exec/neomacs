@@ -63,7 +63,7 @@ impl BindStack {
         self.0.clear();
     }
 
-    #[cfg(any(test, feature = "jit"))]
+    #[cfg(any(test, feature = "jit", feature = "test-support"))]
     #[doc(hidden)]
     pub fn as_slice(&self) -> &[usize] {
         self.0.as_slice()

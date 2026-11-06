@@ -5783,14 +5783,14 @@ pub mod jit_layout {
 
     const WORD: usize = std::mem::size_of::<usize>();
 
-    #[cfg(any(feature = "jit", test))]
+    #[cfg(any(feature = "jit", test, feature = "test-support"))]
     #[doc(hidden)]
     pub const BUFFER_MANAGER_STORAGE_PTR_OFFSET: usize =
         std::mem::offset_of!(BufferManager, storage_ptr);
-    #[cfg(any(feature = "jit", test))]
+    #[cfg(any(feature = "jit", test, feature = "test-support"))]
     #[doc(hidden)]
     pub const BUFFER_STORAGE_BUFFERS_OFFSET: usize = std::mem::offset_of!(BufferStorage, buffers);
-    #[cfg(any(feature = "jit", test))]
+    #[cfg(any(feature = "jit", test, feature = "test-support"))]
     #[doc(hidden)]
     pub const BUFFER_MANAGER_CURRENT_PTR_OFFSET: usize =
         std::mem::offset_of!(BufferManager, current_ptr);

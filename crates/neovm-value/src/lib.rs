@@ -60,7 +60,9 @@ pub use symbol::function_cell_observer::{
     install_function_epoch_move_sink,
 };
 // B3 root PC2 pub use line (peer 01:3xZ): hidden like install_eval_hooks.
+// The module exists only with the sqlite feature (no-jit graph check).
 #[doc(hidden)]
+#[cfg(feature = "sqlite")]
 pub use tagged::header::sqlite_finalizer::{SqliteObjFinalizer, install_sqlite_obj_finalizer};
 pub use value::bytecode_semantics::{BytecodeSemantics, install_bytecode_semantics};
 pub use value::hook_publication::{HookInstallError, HookInstallStatus};
