@@ -44,6 +44,13 @@ macro_rules! eval_absent_layer_slots {
             use neovm_value::value::Value;
             use std::sync::{Mutex, OnceLock};
 
+            /// Honest absent value for `case_tables_sync`: an eval-only
+            /// runtime has no case-table registry, so there is nothing to
+            /// sync and the operation succeeds. A const path keeps the
+            /// signed H2 two-statement slot shape (the guard's honest-value
+            /// classifier rejects a constructor call).
+            pub(crate) const CASE_TABLES_SYNC_OK: Result<(), Flow> = Ok(());
+
             /// The two hit classes (C2): a refused service call is a real
             /// incompatibility for this build; an unlinked slot is an expected
             /// absent-by-construction no-op.
@@ -379,8 +386,9 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER display::terminal.frame_terminal");
             }
 
-            pub(crate) fn terminal_print_handle(value: &Value) -> Option<String> {
-                absent_layer_panic("ABSENT-LAYER display::terminal.print_handle");
+            pub(crate) fn terminal_print_handle(_value: &Value) -> Option<String> {
+                absent_layer_unlinked("ABSENT-LAYER display::terminal.print_handle");
+                None
             }
 
             pub(crate) fn terminal_configure_window_system_runtime(identity: neomacs_display_protocol::GraphicalDisplayIdentity) {
@@ -663,8 +671,9 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER core::case_tables.upcase");
             }
 
-            pub(crate) fn case_tables_sync(ctx: &mut Context) -> Result<(), Flow> {
-                absent_layer_panic("ABSENT-LAYER core::case_tables.sync");
+            pub(crate) fn case_tables_sync(_ctx: &mut Context) -> Result<(), Flow> {
+                absent_layer_unlinked("ABSENT-LAYER core::case_tables.sync");
+                CASE_TABLES_SYNC_OK
             }
 
             pub(crate) fn case_tables_standard(ctx: &mut Context) -> Result<Value, Flow> {

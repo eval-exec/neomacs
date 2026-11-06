@@ -1133,4 +1133,36 @@ mod unit_runtime_construction_census {
             "BASIC smoke paths reached PANIC/Refused absent-layer slot(s): {smoke:?}"
         );
     }
+
+    /// Runtime paths, not construction: a collection reaches the
+    /// current-buffer case-table sync, and ordinary printing reaches the
+    /// terminal print-handle formatter. Both are honest absent-by-
+    /// construction no-ops (`Ok(())`, `None`) and must record Unlinked,
+    /// never Refused. Red before the T7 amendment: the collection panics
+    /// with `ABSENT-LAYER core::case_tables.sync`, then printing panics
+    /// with `ABSENT-LAYER display::terminal.print_handle`.
+    #[test]
+    fn unit_runtime_runtime_paths_reach_only_unlinked_slots() {
+        let hooks = super::unit_runtime();
+        super::unit_runtime::absent_layer_slots::take_absent_layer_hits_for_test();
+        let mut context = Context::new(hooks);
+        let _ = super::unit_runtime::absent_layer_slots::take_absent_layer_hits_for_test();
+        context.gc_collect_exact();
+        let gc = refused_markers(
+            super::unit_runtime::absent_layer_slots::take_absent_layer_hits_for_test(),
+        );
+        assert!(
+            gc.is_empty(),
+            "gc_collect_exact reached PANIC/Refused absent-layer slot(s): {gc:?}"
+        );
+        let printed = crate::emacs_core::print::print_value(&neovm_value::value::Value::fixnum(1));
+        assert_eq!(printed, "1");
+        let print = refused_markers(
+            super::unit_runtime::absent_layer_slots::take_absent_layer_hits_for_test(),
+        );
+        assert!(
+            print.is_empty(),
+            "print_value reached PANIC/Refused absent-layer slot(s): {print:?}"
+        );
+    }
 }
