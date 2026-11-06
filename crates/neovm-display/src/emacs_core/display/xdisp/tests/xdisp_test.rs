@@ -1969,7 +1969,7 @@ fn test_invisible_p() {
 #[test]
 fn test_line_pixel_height() {
     crate::test_utils::init_test_tracing();
-    let mut ev = neovm_eval::emacs_core::eval::Context::new();
+    let mut ev = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_line_pixel_height(&mut ev, &[]).unwrap();
     assert_eq!(result, Value::fixnum(1));
 }
@@ -1977,7 +1977,7 @@ fn test_line_pixel_height() {
 #[test]
 fn line_pixel_height_on_a_gui_frame_is_the_line_height_not_one() {
     crate::test_utils::init_test_tracing();
-    let mut ev = neovm_eval::emacs_core::eval::Context::new();
+    let mut ev = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*lph*");
     ev.edit.buffers.set_current(buf);
     let fid = ev.frames.create_frame("GUI", 800, 600, buf);
@@ -1999,7 +1999,7 @@ fn line_pixel_height_gui_context(
     crate::window::WindowId,
     neovm_edit::buffer::BufferId,
 ) {
-    let mut ev = neovm_eval::emacs_core::eval::Context::new();
+    let mut ev = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let buf = ev.edit.buffers.create_buffer("*lph*");
     ev.edit.buffers.set_current(buf);
     ev.edit.buffers.get_mut(buf).unwrap().insert(text);
@@ -7983,7 +7983,7 @@ fn test_long_line_optimizations_p() {
 fn test_wrong_arity() {
     crate::test_utils::init_test_tracing();
     {
-        let mut ev = neovm_eval::emacs_core::eval::Context::new();
+        let mut ev = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
         assert!(builtin_line_pixel_height(&mut ev, &[Value::fixnum(1)]).is_err());
     }
     {
