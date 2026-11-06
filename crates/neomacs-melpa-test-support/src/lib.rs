@@ -120,10 +120,49 @@ impl RuntimeDirectory {
     }
 }
 
+/// The largest sandbox HOME path the package-TUI prompt row can display.
+///
+/// The save stage writes `Write file: <home>/.gitignore` on one 160-column
+/// row (`helm_gitignore_test/harness.rs`), so a deeper HOME cannot be typed.
+/// Keep a margin for the prompt and the tempfile suffix.
+const MAX_SANDBOX_HOME: usize = 120;
+
+/// Base directory for a scenario's ephemeral case root.
+///
+/// The sandbox root is disposable, so choose the MELPA cache root when its
+/// path leaves the HOME short enough for the package-TUI prompt row; a deep
+/// worktree or CI sandbox falls back to the system temporary directory (and,
+/// on Unix, `/tmp` as the last resort).  This is the same shape as the
+/// socket fixtures' sun_path handling: the harness, not the caller's path,
+/// picks a location the fixture can display and bind.
+fn sandbox_case_base(label: &str) -> PathBuf {
+    // tempfile appends six random characters to the prefix.
+    let prefix_and_suffix = sanitize_label(label).len() + 1 + 6;
+    let needed = prefix_and_suffix + "/home".len();
+    let fits = |base: &Path| base.as_os_str().len() + 1 + needed <= MAX_SANDBOX_HOME;
+
+    let cache_root = neomacs_infra::melpa_cache_root();
+    if fits(&cache_root) {
+        return cache_root;
+    }
+    let system_tmp = std::env::temp_dir();
+    if fits(&system_tmp) {
+        return system_tmp;
+    }
+    #[cfg(unix)]
+    {
+        let slash_tmp = PathBuf::from("/tmp");
+        if fits(&slash_tmp) {
+            return slash_tmp;
+        }
+    }
+    cache_root
+}
+
 impl MelpaSandbox {
     /// Create a sandbox below the melpa cache root.
     pub fn new(label: &str) -> Result<Self, String> {
-        let base = neomacs_infra::melpa_cache_root();
+        let base = sandbox_case_base(label);
         fs::create_dir_all(&base).map_err(|error| {
             format!(
                 "failed to create MELPA scratch directory {}: {error}",
