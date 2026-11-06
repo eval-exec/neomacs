@@ -76,7 +76,7 @@ fn fixnum_range_add_sub_boundaries_and_raw_chains_match_wide_arithmetic() {
 
 #[test]
 fn fixnum_range_overflow_resumes_as_bignum_without_replaying_prior_effects() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for (op, a, b) in [
         (Op::Add, Value::MOST_POSITIVE_FIXNUM, 1),
         (Op::Add, Value::MOST_NEGATIVE_FIXNUM, -1),
@@ -134,7 +134,7 @@ fn fixnum_range_overflow_resumes_as_bignum_without_replaying_prior_effects() {
 
 #[test]
 fn fixnum_range_osr_overflow_after_gc_poll_keeps_current_operands() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for (op, step, bound) in [
         (Op::Add, 1, Value::MOST_POSITIVE_FIXNUM),
         (Op::Add, -1, Value::MOST_NEGATIVE_FIXNUM),

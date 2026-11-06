@@ -163,7 +163,7 @@ const VALUES: &[&str] = &[
 /// signal, and the same array afterwards. No case may deopt.
 #[test]
 fn array_sites_match_the_interpreter_natively() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let aref = aref_fn();
     let aset = aset_fn();
@@ -216,7 +216,7 @@ fn array_sites_match_the_interpreter_natively() {
 #[test]
 fn indexing_loops_stay_on_the_fast_path() {
     use super::dispatch::ARRAY_SHIM_SLOW_CALLS;
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let aref_leaf = compile_bytecode_function(&aref_fn()).expect("aref compiles");
     let aset_leaf = compile_bytecode_function(&aset_fn()).expect("aset compiles");
@@ -261,7 +261,7 @@ fn indexing_loops_stay_on_the_fast_path() {
 /// a wrapper or a signalling replacement. Both VM and native code store.
 #[test]
 fn a_redefined_aset_is_ignored_by_compiled_opcodes() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let aset = aset_fn();
     let aset_leaf = compile_bytecode_function(&aset).expect("aset compiles");
@@ -317,7 +317,7 @@ fn a_redefined_aset_is_ignored_by_compiled_opcodes() {
 ///     (lambda (a i) (condition-case err (aset a i 1) (error (list 'caught err))))
 #[test]
 fn array_signals_are_caught_by_a_leaf_local_handler() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     for (op, extra) in [(Op::Aref, None), (Op::Aset, Some(Op::Constant(1)))] {
         let mut ops = vec![
@@ -362,7 +362,7 @@ fn array_signals_are_caught_by_a_leaf_local_handler() {
 ///     (lambda (a i) (let ((h (cons 1 2))) (condition-case nil (OP a i ...) (error h))))
 #[test]
 fn array_site_edges_keep_the_residual_alive() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     for op in [Op::Aref, Op::Aset] {
         let is_aset = matches!(op, Op::Aset);
@@ -470,7 +470,7 @@ const ELTS: &[&str] = &[
 /// through the compiled site and the interpreter's opcode arm.
 #[test]
 fn list_sites_match_the_interpreter_natively() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let mut checked = 0;
     for op in [Op::Memq, Op::Assq] {
@@ -499,7 +499,7 @@ fn list_sites_match_the_interpreter_natively() {
 #[test]
 fn short_list_lookups_stay_on_the_fast_path() {
     use super::dispatch::ARRAY_SHIM_SLOW_CALLS;
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let memq = compile_bytecode_function(&list_fn(Op::Memq)).expect("memq compiles");
     let assq = compile_bytecode_function(&list_fn(Op::Assq)).expect("assq compiles");
@@ -569,7 +569,7 @@ fn short_list_lookups_stay_on_the_fast_path() {
 #[test]
 fn record_type_of_is_gnus_record_arm() {
     use crate::emacs_core::builtins::types::record_type_of;
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     for (src, want) in [
         ("(record 'foo 1 2)", Some("foo")),
         (
@@ -603,7 +603,7 @@ fn a_later_call_site_roots_what_only_the_aset_fallback_stored() {
     // A one-call body is below the profitability gate; this test is about
     // the lowering, not the gate.
     super::force_profit_gate_for_test(false);
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     eval.eval_str(
         "(fset 'ashim-collect (lambda () (garbage-collect) (make-list 4096 (cons 0 0)) nil))",
@@ -653,7 +653,7 @@ fn a_later_call_site_roots_what_only_the_aset_fallback_stored() {
 /// cell replacement and restoration, matching GNU bytecode.c.
 #[test]
 fn a_warmed_aset_ignores_a_later_redefinition_and_its_undoing() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let aset_leaf = compile_bytecode_function(&aset_fn()).expect("aset compiles");
     let v = eval.eval_str("(vector 0 0)").expect("v");
@@ -698,7 +698,7 @@ fn nth_fn() -> ByteCodeFunction {
 #[test]
 fn byte_code_nth_reports_the_tail_it_stops_at() {
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let f = nth_fn();
     let leaf = compile_bytecode_function(&f).expect("nth compiles");
@@ -761,7 +761,7 @@ fn byte_code_nth_reports_the_tail_it_stops_at() {
 #[test]
 fn byte_code_elt_reports_the_tail_it_stops_at() {
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let f = lexical_fn(
         2,
@@ -846,7 +846,7 @@ fn compiled_aref_reads_plain_vectors_and_records_inline() {
         neovm_value::tagged::header::LispValueVec::jit_slice_offsets().is_some(),
         "owned and mapped vectors keep pointer and length at shared offsets"
     );
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let f = aref_fn();
     // The vector path alone: `NEOVM_JIT_LEAF=string` would inline the
@@ -914,7 +914,7 @@ fn compiled_aref_reads_plain_vectors_and_records_inline() {
 #[test]
 fn list_stores_match_the_interpreter_natively() {
     use super::dispatch::ARRAY_SHIM_SLOW_CALLS;
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let cells: &[(&str, bool)] = &[
         ("(cons 1 2)", true),
@@ -980,7 +980,7 @@ fn compile_string_knob(f: &ByteCodeFunction) -> CompiledLeaf {
 fn string_intrinsics_match_the_interpreter_natively() {
     #[cfg(debug_assertions)]
     use super::lowering::{STRING_AREF_INLINE_EMITTED, STRING_ASET_INLINE_EMITTED};
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let aref = aref_fn();
     let aset = aset_fn();
@@ -1039,7 +1039,7 @@ fn string_intrinsics_match_the_interpreter_natively() {
 #[test]
 fn string_intrinsics_stay_off_the_shims() {
     use super::dispatch::{AREF_SHIM_CALLS, ASET_SHIM_CALLS};
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let aref_leaf = compile_string_knob(&aref_fn());
     let aset_leaf = compile_string_knob(&aset_fn());
@@ -1116,7 +1116,7 @@ fn string_intrinsics_stay_off_the_shims() {
 #[test]
 fn a_redefined_aset_is_ignored_by_an_inline_string_site() {
     use super::dispatch::ASET_SHIM_CALLS;
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let aset = aset_fn();
     let aset_leaf = compile_string_knob(&aset);

@@ -245,7 +245,7 @@ fn cold_marks(clif: &str) -> usize {
 fn cold_exits_change_only_the_cold_marks() {
     force_deopt_for_test(false);
     force_profit_gate_for_test(false);
-    let ev = Context::new();
+    let ev = Context::new(crate::test_utils::unit_runtime());
     for (name, path, f) in corpus() {
         let off = clif_of(&ev, path, &f, ColdExitsMode::Off);
         let on = clif_of(&ev, path, &f, ColdExitsMode::On);
@@ -272,7 +272,7 @@ fn cold_exits_change_only_the_cold_marks() {
 fn cold_exits_mark_every_exit_block() {
     force_deopt_for_test(false);
     force_profit_gate_for_test(false);
-    let ev = Context::new();
+    let ev = Context::new(crate::test_utils::unit_runtime());
     for mode in [ColdExitsMode::On, ColdExitsMode::Share] {
         for (name, path, f) in corpus() {
             for clif in clif_of(&ev, path, &f, mode) {
@@ -311,7 +311,7 @@ fn cold_exits_mark_every_exit_block() {
 fn shared_deopt_tail_serves_every_site() {
     force_deopt_for_test(false);
     force_profit_gate_for_test(false);
-    let ev = Context::new();
+    let ev = Context::new(crate::test_utils::unit_runtime());
     let (name, path, f) = corpus().remove(0);
     let on = clif_of(&ev, path, &f, ColdExitsMode::On);
     let share = clif_of(&ev, path, &f, ColdExitsMode::Share);
@@ -345,7 +345,7 @@ fn cold_exit_census_counts_each_kind() {
     use strum::IntoEnumIterator;
     force_deopt_for_test(false);
     force_profit_gate_for_test(false);
-    let ev = Context::new();
+    let ev = Context::new(crate::test_utils::unit_runtime());
     let mut seen = [0u64; stats::COLD_EXIT_KINDS];
     for (name, path, f) in corpus() {
         let before = cold_census();
@@ -377,7 +377,7 @@ fn cold_exit_census_counts_each_kind() {
 fn cold_exits_run_the_corpus_unchanged() {
     force_deopt_for_test(false);
     force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str("(fset 'cold-exits-callee (lambda (x) (* x 2)))")
         .expect("defines the callee");
     let run = |ev: &mut Context, mode: ColdExitsMode, f: &ByteCodeFunction, args: &[Value]| {

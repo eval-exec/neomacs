@@ -56,7 +56,7 @@ const POOL: &[&str] = &[
 fn check_all(force_deopt: bool) {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_deopt_for_test(force_deopt);
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let values: Vec<Value> = POOL
         .iter()
         .map(|src| {

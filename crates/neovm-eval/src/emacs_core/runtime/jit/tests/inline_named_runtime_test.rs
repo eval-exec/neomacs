@@ -88,7 +88,7 @@ fn native(ctx: &mut Context, f: &ByteCodeFunction, name: &str) -> CompiledLeaf {
 #[test]
 fn inline_named_runtime_inherited_full_before_retier_keeps_real_call() {
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let name = "named-runtime-inherited-full";
     ctx.obarray.set_symbol_function_id(
         intern(name),
@@ -159,7 +159,7 @@ fn capture_assigned_call(ctx: &mut Context, _kind: Value, _data: Value) -> Resul
 #[test]
 fn inline_named_runtime_pure_native_region_preserves_frame_depth_and_roots() {
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let name = "named-runtime-native-increment";
     increment(&mut ctx, name);
     let f = caller(name, 1);
@@ -183,7 +183,7 @@ fn inline_named_runtime_pure_native_region_preserves_frame_depth_and_roots() {
 #[test]
 fn inline_named_runtime_conditional_returns_preserve_each_path() {
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let name = "named-runtime-conditional";
     ctx.set_function(
         name,
@@ -216,7 +216,7 @@ fn inline_named_runtime_conditional_returns_preserve_each_path() {
 #[test]
 fn inline_named_runtime_cell_redefinition_resumes_original_call_with_new_function() {
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let name = "named-runtime-redefined";
     increment(&mut ctx, name);
     let f = caller(name, 1);
@@ -254,7 +254,7 @@ fn inline_named_runtime_cell_redefinition_resumes_original_call_with_new_functio
 #[test]
 fn inline_named_runtime_unrelated_function_cell_write_keeps_native_entry() {
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let name = "named-runtime-unrelated-write";
     increment(&mut ctx, name);
     let f = caller(name, 1);
@@ -272,7 +272,7 @@ fn inline_named_runtime_unrelated_function_cell_write_keeps_native_entry() {
 #[test]
 fn inline_named_runtime_depth_guard_precedes_callee_and_uses_bcall_error() {
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let name = "named-runtime-depth";
     increment(&mut ctx, name);
     let f = caller(name, 1);
@@ -305,7 +305,7 @@ fn inline_named_runtime_depth_guard_precedes_callee_and_uses_bcall_error() {
 #[test]
 fn inline_named_runtime_attention_guard_leaves_before_virtual_entry() {
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let name = "named-runtime-attention";
     increment(&mut ctx, name);
     let f = caller(name, 1);
@@ -329,7 +329,7 @@ fn inline_named_runtime_assigned_argument_is_resumed_without_losing_original_cal
     use neovm_value::tagged::header::SubrDispatchKind;
 
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let name = "named-runtime-assigned-argument";
     let target = Value::make_bytecode(function(
         1,
@@ -410,7 +410,7 @@ fn inline_named_runtime_assigned_argument_is_resumed_without_losing_original_cal
 #[test]
 fn inline_named_runtime_forced_entry_deopt_preserves_cons_identity_under_gc() {
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let name = "named-runtime-forced-identity";
     ctx.set_function(
         name,

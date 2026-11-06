@@ -26,7 +26,7 @@ fn gdl_integer_width_native_signal_roots_operands_through_collecting_hook() {
         .jit_runtime()
         .record_numeric(0, function.ops.len(), NumericFeedback::Other);
     let leaf = compile_bytecode_function(&function).expect("generic multiplication compiles");
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str(
         "(setq integer-width 128
                gdl-width-hook-count 0

@@ -40,7 +40,7 @@ fn context() -> Context {
     // Each nextest case runs in its own process. The heap's generation mode
     // is immutable once constructed, and the environment is restored here.
     unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     context.gc_stress = false;
     context.tagged_heap.set_gc_threshold(usize::MAX);
     assert!(!context.tagged_heap.generational_enabled());

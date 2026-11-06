@@ -51,7 +51,7 @@ fn fuse(ev: &Context, f: &ByteCodeFunction) -> Option<inline::FusedBody> {
 
 #[test]
 fn named_front_preserves_symbol_and_roots_observed_object() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let symbol = Value::symbol("named-front-id");
     let target = Value::make_bytecode(function(vec![Op::StackRef(0), Op::Return], vec![]));
     ev.obarray
@@ -72,7 +72,7 @@ fn named_front_preserves_symbol_and_roots_observed_object() {
 
 #[test]
 fn named_front_refuses_symbol_aliases_and_unbound_cells() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let symbol = Value::symbol("named-front-alias");
     assert!(fuse(&ev, &caller(symbol)).is_none());
     ev.obarray
@@ -82,7 +82,7 @@ fn named_front_refuses_symbol_aliases_and_unbound_cells() {
 
 #[test]
 fn named_front_refuses_observing_callees() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let symbol = Value::symbol("named-front-observing");
     for ops in [
         vec![Op::Constant(0), Op::Call(0), Op::Return],
@@ -98,7 +98,7 @@ fn named_front_refuses_observing_callees() {
 
 #[test]
 fn named_front_enforces_fused_growth_budget() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let symbol = Value::symbol("named-front-growth");
     let mut ops = vec![Op::StackRef(0)];
     ops.extend(std::iter::repeat_n(Op::Dup, 10));
@@ -113,7 +113,7 @@ fn named_front_enforces_fused_growth_budget() {
 
 #[test]
 fn named_front_requires_matching_required_arity() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let symbol = Value::symbol("named-front-arity");
     let mut callee = function(vec![Op::StackRef(0), Op::Return], vec![]);
     let mut params = callee
@@ -147,7 +147,7 @@ fn named_front_off_compile_has_no_named_chains() {
     let _reset = Reset;
     force_inline_for_test(Some(true));
     force_inline2_for_test(Some(Inline2Mode::Off));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let symbol = Value::symbol("named-front-off");
     ev.obarray.set_symbol_function_id(
         symbol.as_bare_symbol_id().unwrap(),
@@ -170,7 +170,7 @@ fn named_front_all_preserves_static_and_hof_sites_in_a_mixed_caller() {
     }
     let _reset = Reset;
     force_inline2_for_test(Some(Inline2Mode::All));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let symbol = Value::symbol("named-front-mixed");
     let target = Value::make_bytecode(function(vec![Op::StackRef(0), Op::Return], vec![]));
     ev.obarray
@@ -215,7 +215,7 @@ fn named_front_all_rebases_closure_prefix_after_appended_named_targets() {
     }
     let _reset = Reset;
     force_inline2_for_test(Some(Inline2Mode::All));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let symbol = Value::symbol("named-front-mixed-capture");
     let target = Value::make_bytecode(function(vec![Op::StackRef(0), Op::Return], vec![]));
     ev.obarray

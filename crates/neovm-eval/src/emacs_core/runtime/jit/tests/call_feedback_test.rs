@@ -68,7 +68,7 @@ fn sources(target: CallTarget) -> Vec<*const RuntimeState> {
 #[test]
 fn a_non_constant_call_site_records_and_counts_through_the_prof_shim() {
     force_feedback_mode_for_test(Some(FeedbackMode::Record));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let caller = lexical_fn(
         2,
         vec![Op::StackRef(1), Op::StackRef(1), Op::Call(1), Op::Return],
@@ -113,7 +113,7 @@ fn a_non_constant_call_site_records_and_counts_through_the_prof_shim() {
 #[test]
 fn an_apply_site_records_the_applied_function() {
     force_feedback_mode_for_test(Some(FeedbackMode::Record));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let caller = lexical_fn(
         2,
         vec![
@@ -150,7 +150,7 @@ fn an_apply_site_records_the_applied_function() {
 #[test]
 fn a_mapping_builtin_records_its_callback() {
     force_feedback_mode_for_test(Some(FeedbackMode::Record));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let caller = lexical_fn(
         2,
         vec![
@@ -191,7 +191,7 @@ fn a_mapping_builtin_records_its_callback() {
 #[test]
 fn with_the_knob_off_nothing_records() {
     force_feedback_mode_for_test(Some(FeedbackMode::Off));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let caller = lexical_fn(
         2,
         vec![Op::StackRef(1), Op::StackRef(1), Op::Call(1), Op::Return],
@@ -216,7 +216,7 @@ fn compiled_sites_record_inside_their_window_unless_census() {
     use crate::emacs_core::jit::feedback::STABLE_WINDOW;
     for mode in [FeedbackMode::Record, FeedbackMode::Census] {
         force_feedback_mode_for_test(Some(mode));
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         let caller = lexical_fn(
             2,
             vec![Op::StackRef(1), Op::StackRef(1), Op::Call(1), Op::Return],

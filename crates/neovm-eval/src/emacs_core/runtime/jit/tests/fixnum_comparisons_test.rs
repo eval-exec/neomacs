@@ -60,7 +60,7 @@ fn fixnum_comparisons_preserve_order_at_boundaries_and_across_raw_arithmetic() {
 
 #[test]
 fn fixnum_comparisons_keep_both_operand_type_guards() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let invalid = [
         Value::NIL,
         Value::T,
@@ -84,7 +84,7 @@ fn fixnum_comparisons_keep_both_operand_type_guards() {
 
 #[test]
 fn fixnum_comparison_deopt_resumes_after_effect_without_replaying_it() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: vec![intern("a"), intern("b")],
         optional: vec![],

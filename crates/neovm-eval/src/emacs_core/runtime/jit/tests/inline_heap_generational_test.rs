@@ -36,7 +36,7 @@ fn context(generational: bool) -> Context {
                 std::env::set_var("NEOVM_GC_GENERATIONAL", "0");
             }
         }
-        Context::new()
+        Context::new(crate::test_utils::unit_runtime())
     };
     context.gc_stress = false;
     context.tagged_heap.set_gc_threshold(usize::MAX);
@@ -138,7 +138,7 @@ fn heapless_runtime_lowering_does_not_install_a_fallback_heap() {
 #[cfg(debug_assertions)]
 #[test]
 fn pure_runtime_lowering_does_not_read_an_owner_dropped_context_heap() {
-    let context = Context::new();
+    let context = Context::new(crate::test_utils::unit_runtime());
     drop(context);
     // Context cannot leave its owner. Dropping it retracts that owner's TLS;
     // lowering must stay heap-independent and must not reinstall a fallback.

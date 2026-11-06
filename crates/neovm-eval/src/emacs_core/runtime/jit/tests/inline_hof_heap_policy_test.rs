@@ -28,7 +28,7 @@ fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
 
 #[test]
 fn inline_hof_heap_policy_detects_hidden_loop_stores_and_releases_scope() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     crate::test_utils::init_test_tracing();
     inline::force_inline_for_test(Some(true));
     compile::force_inline2_for_test(Some(Inline2Mode::Hof));

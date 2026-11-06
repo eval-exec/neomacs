@@ -195,7 +195,7 @@ fn inline_hof_runtime_abort_dispatches_signal_with_live_map_depth_and_frame() {
     use crate::emacs_core::eval::{SubrEntry, register_global_subr_entry};
     use neovm_value::tagged::header::SubrDispatchKind;
 
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let observer = intern("hof-abort-signal-observer");
     register_global_subr_entry(
         observer,
@@ -280,7 +280,7 @@ fn inline_hof_runtime_abort_dispatches_signal_with_live_map_depth_and_frame() {
 
 #[test]
 fn inline_hof_runtime_length_declines_invalid_lists_without_allocation() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let pair = Value::cons(Value::make_int(1), Value::NIL);
     let list = Value::list(vec![
         Value::make_int(1),
@@ -311,7 +311,7 @@ fn inline_hof_runtime_length_declines_invalid_lists_without_allocation() {
 #[test]
 fn inline_hof_runtime_native_mapc_mapcar_preserve_allocation_deltas() {
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let callback = add_callback();
     ctx.push_vm_root_frame();
     ctx.push_vm_frame_root(callback);
@@ -374,7 +374,7 @@ fn inline_hof_runtime_native_mapc_mapcar_preserve_allocation_deltas() {
 
 #[test]
 fn inline_hof_runtime_mid_callback_keeps_prefix_results_and_does_not_replay() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     // Replaying the prefix would replace the already-written car with 999.
     let callback = Value::make_bytecode(function(
         1,
@@ -406,7 +406,7 @@ fn inline_hof_runtime_mid_callback_keeps_prefix_results_and_does_not_replay() {
 
 #[test]
 fn inline_hof_runtime_callback_reads_cdr_after_mutation() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let sequence = Value::list(vec![
         Value::make_int(1),
         Value::make_int(2),
@@ -440,7 +440,7 @@ fn inline_hof_runtime_callback_reads_cdr_after_mutation() {
 
 #[test]
 fn inline_hof_runtime_entry_depth_guard_uses_funcall_and_restores_map() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let callback = add_callback();
     let sequence = Value::list(vec![Value::make_int(1)]);
     let mut state = active(&mut ctx, HofKind::Mapcar, callback, sequence, 0);
@@ -469,7 +469,7 @@ fn inline_hof_runtime_entry_depth_guard_uses_funcall_and_restores_map() {
 
 #[test]
 fn inline_hof_runtime_mid_callback_skips_entry_depth_guard_and_unwinds_error() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let callback = Value::make_bytecode(function(
         1,
         vec![Op::StackRef(0), Op::Car, Op::Return],
@@ -542,7 +542,7 @@ fn metadata(parent_len: u32, callback_pc: u32, callback_len: u32) -> DeoptChain 
 
 #[test]
 fn inline_hof_runtime_metadata_preserves_actual_callback_and_state() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let callback = add_callback();
     let sequence = Value::list(vec![Value::make_int(7), Value::make_int(8)]);
     let state = active(&mut ctx, HofKind::Mapcar, callback, sequence, 1);
@@ -575,7 +575,7 @@ fn inline_hof_runtime_metadata_preserves_actual_callback_and_state() {
 
 #[test]
 fn inline_hof_runtime_metadata_rejects_malformed_state_and_active_handlers() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let callback = add_callback();
     let sequence = Value::list(vec![Value::make_int(7)]);
     let state = active(&mut ctx, HofKind::Mapcar, callback, sequence, 0);
@@ -671,7 +671,7 @@ fn inline_hof_runtime_mid_callback_backtrace_retains_original_argument() {
 #[test]
 fn inline_hof_runtime_native_guard_resumes_lambda_and_parent_after_call() {
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let callback = add_callback();
     let f = caller(HofKind::Mapcar, callback);
     let sequence = Value::list(vec![
@@ -716,7 +716,7 @@ fn inline_hof_runtime_native_deopt_at_each_element_preserves_committed_capture_o
     for gc_stress in [false, true] {
         for kind in [HofKind::Mapc, HofKind::Mapcar] {
             for guard_index in 0..4 {
-                let mut ctx = Context::new();
+                let mut ctx = Context::new(crate::test_utils::unit_runtime());
                 ctx.gc_stress = gc_stress;
                 let cell = Value::cons(Value::make_int(0), Value::NIL);
                 let prototype = Value::make_bytecode(function(
@@ -840,7 +840,7 @@ fn inline_hof_runtime_native_deopt_at_each_element_preserves_committed_capture_o
 #[test]
 fn inline_hof_runtime_native_mutation_shortens_mapping() {
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let sequence = Value::list(vec![
         Value::make_int(1),
         Value::make_int(2),
@@ -868,7 +868,7 @@ fn inline_hof_runtime_native_mutation_shortens_mapping() {
 #[test]
 fn inline_hof_runtime_nonlist_or_invalid_list_keeps_builtin_protocol() {
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let callback = add_callback();
     let f = caller(HofKind::Mapcar, callback);
     let dotted = Value::cons(Value::make_int(1), Value::make_int(2));
@@ -908,7 +908,7 @@ fn inline_hof_runtime_nonlist_or_invalid_list_keeps_builtin_protocol() {
 #[test]
 fn inline_hof_runtime_rechecks_callback_depth_after_a_serviced_poll() {
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str(
         "(setq post-gc-hook (list (lambda () (setq post-gc-hook nil max-lisp-eval-depth 100))))",
     )
@@ -965,7 +965,7 @@ fn inline_hof_runtime_collection_capture_declines_native_loop_and_records_mappin
     }));
     for kind in [HofKind::Mapc, HofKind::Mapcar] {
         for changed_index in 0..4 {
-            let mut ctx = Context::new();
+            let mut ctx = Context::new(crate::test_utils::unit_runtime());
             let callback = add_callback();
             let f = caller(kind, callback);
             let sequence = Value::list((0..4).map(Value::make_int).collect());
@@ -1035,7 +1035,7 @@ fn inline_hof_runtime_native_cache_call_preserves_mid_map_deopt_floor_and_prefix
     use crate::emacs_core::jit::cache::{self, NativeCallOutcome};
 
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.push_vm_root_frame();
     let cell = Value::cons(Value::make_int(0), Value::NIL);
     ctx.push_vm_frame_root(cell);

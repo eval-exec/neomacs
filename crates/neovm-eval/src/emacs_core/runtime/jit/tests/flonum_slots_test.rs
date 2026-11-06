@@ -99,7 +99,7 @@ fn mul_add() -> ByteCodeFunction {
 
 #[test]
 fn a_float_chain_boxes_only_its_escaping_result() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let (leaf, census) = compile_in(FlonumMode::OpLocal, &mul_add());
     assert_eq!(census.results, 2, "both sites leave their result unboxed");
     assert_eq!(census.escape_boxes, 1, "only the returned sum escapes");
@@ -129,7 +129,7 @@ fn a_float_chain_boxes_only_its_escaping_result() {
 
 #[test]
 fn fixnum_pairs_through_a_float_chain_stay_fixnums() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let (leaf, census) = compile_in(FlonumMode::OpLocal, &mul_add());
     assert_eq!(census.results, 2);
     let (run, allocated) = run_counting(
@@ -159,7 +159,7 @@ fn fixnum_pairs_through_a_float_chain_stay_fixnums() {
 
 #[test]
 fn aliases_of_one_result_are_one_object() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
 
     // (lambda (v a b) (let ((x (* a b)))
@@ -265,7 +265,7 @@ fn aliases_of_one_result_are_one_object() {
 
 #[test]
 fn distinct_results_are_distinct_objects() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // (lambda (a b) (eq (* a b) (* a b)))
     let eq_two = float_fn(
         2,
@@ -318,7 +318,7 @@ fn distinct_results_are_distinct_objects() {
 
 #[test]
 fn deopt_mid_chain_boxes_live_flonums_like_the_interpreter() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // (lambda (a b s) (let* ((x (* a b)) (y (+ x a)) (z (- y b))) (+ z s)))
     // with the let-bound copies on the stack: [a b s x y z z s] at the last +.
     let f = float_fn(
@@ -401,7 +401,7 @@ fn deopt_mid_chain_boxes_live_flonums_like_the_interpreter() {
 
 #[test]
 fn signed_zero_and_nan_bits_survive_unboxed_chains() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // (lambda (a b c) (/ (- (* a b) c) b))
     let f = float_fn(
         3,
@@ -457,7 +457,7 @@ fn signed_zero_and_nan_bits_survive_unboxed_chains() {
 
 #[test]
 fn a_flonum_into_a_fixnum_only_site_deopts_with_a_boxed_float() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // (lambda (a b) (1+ (* a b))), `1+` never saw a float (FixnumOnly).
     let f = float_fn(
         2,
@@ -513,7 +513,7 @@ fn a_flonum_into_a_fixnum_only_site_deopts_with_a_boxed_float() {
 
 #[test]
 fn mixed_compare_on_a_flonum_breaks_ties_on_integers() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     // (lambda (a b c) (OP (+ a b) c)), both sites Float.
     let cmp = |op: Op| {
@@ -578,7 +578,7 @@ fn mixed_compare_on_a_flonum_breaks_ties_on_integers() {
 
 #[test]
 fn mode_off_emits_todays_boxing() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let (leaf, census) = compile_in(FlonumMode::Off, &mul_add());
     assert_eq!(
         census,
@@ -602,7 +602,7 @@ fn floats_consed(ev: &Context) -> u64 {
 
 #[test]
 fn flonums_survive_a_call_that_collects() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str("(defalias 'flonum-gc-callee (lambda () (garbage-collect) 7))")
         .expect("define the collecting callee");
     // (lambda (a b) (let* ((x (* a b)) (y (+ x a))) (flonum-gc-callee) (+ x y)))
@@ -669,7 +669,7 @@ fn flonums_survive_a_call_that_collects() {
 
 #[test]
 fn a_handler_sees_boxed_flonums() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str("(defalias 'flonum-signal-fn (lambda () (signal 'error '(\"boom\"))))")
         .expect("define the signalling callee");
     let conditions = ev.eval_str("'(error)").expect("conditions");
@@ -753,7 +753,7 @@ fn a_handler_sees_boxed_flonums() {
 
 #[test]
 fn a_variable_read_keeps_flonums_unboxed_and_its_handler_boxes_them() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str(
         "(defvar flonum-plain-var 0.5) \
          (defvaralias 'flonum-alias-var 'flonum-plain-var)",
@@ -850,7 +850,7 @@ fn a_variable_read_keeps_flonums_unboxed_and_its_handler_boxes_them() {
 fn a_fused_region_entry_boxes_flonums_before_its_framestate() {
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
     crate::emacs_core::jit::inline::force_inline_for_test(Some(true));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // (lambda (x) x), spliced into the caller.
     let mut callee = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).

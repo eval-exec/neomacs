@@ -503,7 +503,7 @@ fn jit_matches_interpreter_on_if_branch() {
     ];
     let constants = [Value::make_int(10), Value::make_int(20)];
     for arg in [Value::T, Value::NIL, Value::make_int(3)] {
-        let mut eval = Context::new_minimal_vm_harness();
+        let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
         let mut f = ByteCodeFunction::new(LambdaParams {
             // SAFETY: test placeholder id, never resolved (peer seal N8).
             required: vec![unsafe { neovm_value::intern::SymId::from_raw(1) }],
@@ -622,7 +622,7 @@ fn compiles_countdown_loop_matches_interpreter() {
     ];
     let constants = [Value::make_int(0)];
     for n in [0i64, 1, 4, 9] {
-        let mut eval = Context::new_minimal_vm_harness();
+        let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
         let mut f = ByteCodeFunction::new(LambdaParams {
             // SAFETY: test placeholder id, never resolved (peer seal N8).
             required: vec![unsafe { neovm_value::intern::SymId::from_raw(1) }],
@@ -677,7 +677,7 @@ fn mir_merge_phi_matches_interpreter() {
     ];
     let constants = [Value::make_int(10), Value::make_int(20)];
     for c in [Value::T, Value::NIL] {
-        let mut eval = Context::new_minimal_vm_harness();
+        let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
         let mut f = ByteCodeFunction::new(LambdaParams {
             // SAFETY: test placeholder id, never resolved (peer seal N8).
             required: vec![unsafe { neovm_value::intern::SymId::from_raw(1) }],
@@ -763,7 +763,7 @@ fn mir_probe_a_emits_one_tag_guard_per_iteration() {
          the intermediate accumulator spilled on the cold precise-deopt path"
     );
     for n in [0i64, 1, 7, 1000] {
-        let mut eval = Context::new_minimal_vm_harness();
+        let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
         let mut f = ByteCodeFunction::new(LambdaParams {
             required: vec![
                 // SAFETY: test placeholder id, never resolved (peer seal N8).
@@ -794,7 +794,7 @@ fn mir_probe_a_emits_one_tag_guard_per_iteration() {
     }
     // The elision is type-directed, so a non-fixnum `n` still deopts on the
     // remaining guard rather than being shifted as a pointer.
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let NativeRun::DeoptAt(resume) = mleaf.call(ctx_ptr, &[Value::make_float(3.0), Value::NIL])
     else {
@@ -824,7 +824,7 @@ fn mir_known_boolean_keeps_its_guard() {
         4,
         "a and b tag guards, the Boolean's tag guard, the 1+ range guard"
     );
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     assert!(
         matches!(
@@ -853,7 +853,7 @@ fn mir_known_boolean_keeps_its_guard() {
 fn mir_rooting_skip_on_an_inferred_fixnum_param_across_an_allocating_call() {
     use crate::emacs_core::eval::Context;
     use neovm_value::intern::SymId;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.gc_stress = true;
     let ctx = &mut ev as *mut Context;
     let mk_sym = |name: &str| {
@@ -1012,7 +1012,7 @@ fn mir_multi_phi_merge_matches_interpreter() {
     ];
     let constants = [Value::make_int(10), Value::make_int(20)];
     for c in [Value::T, Value::NIL] {
-        let mut eval = Context::new_minimal_vm_harness();
+        let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
         let mut f = ByteCodeFunction::new(LambdaParams {
             // SAFETY: test placeholder id, never resolved (peer seal N8).
             required: vec![unsafe { neovm_value::intern::SymId::from_raw(1) }],
@@ -1094,7 +1094,7 @@ fn inlined_callee_redefinition_rejits() {
     // F's cache entry is now stale -> re-JIT -> F computes the NEW C, (1+ a).
     // If the inline-epoch invalidation were broken, the stale inline would
     // return 25 instead of 6. Verifies the redefinition soundness.
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let c_sym = Value::symbol("jit-inline-redef-c");
     let neovm_value::value::ValueKind::Symbol(c_id) = c_sym.kind() else {
@@ -1157,7 +1157,7 @@ fn mir_call_lowering_runs_a_non_inlined_call() {
     // shim, vmctx-threaded) and routes the 1+ guard to PRECISE deopt. Verify
     // F(5) = 1+(id 5) = 6 end-to-end with a REAL Context (the precise-deopt
     // resume path is exercised by the NEOVM_JIT_FORCE_DEOPT gate).
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let c_sym = Value::symbol("jit-mir-call-c");
     let neovm_value::value::ValueKind::Symbol(c_id) = c_sym.kind() else {
@@ -1209,7 +1209,7 @@ fn inline_plus_residual_call_keeps_shared_speculation_in_mir() {
     // The baseline's profitability gate (calls > arithmetic) would refuse F
     // outright; this test is about the tier choice, so switch it off.
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let mk_sym = |name: &str| {
         let s = Value::symbol(name);
@@ -1299,7 +1299,7 @@ fn precise_eviction_only_evicts_inlined_dependents() {
     // DOES evict F (so it re-JITs against the new C) and clears the dep entry.
     // The coarse inline_epoch backstop would re-JIT regardless; this asserts the
     // PRECISE eviction (only dependents are evicted, eagerly).
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let mk_sym = |name: &str| {
         let s = Value::symbol(name);
@@ -1403,7 +1403,7 @@ fn mir_allocates_escaping_cons() {
     // tier via neovm_jit_cons (previously this body bailed to the baseline).
     // Verify it lowers (no bail) + runs to a cons; the contents (3 . 5) are
     // covered by the differential gate. Real Context (the allocation runs).
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let ops = [Op::StackRef(1), Op::StackRef(1), Op::Cons, Op::Return];
     let m = mir::build_mir(&ops, &[], None, 2).expect("builds");
@@ -1458,7 +1458,7 @@ fn a_compiled_loop_polls_quit_whichever_tier_compiles_it() {
     f.ops = ops;
     f.constants = vec![Value::make_int(0)].into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
     assert_eq!(
@@ -1527,7 +1527,7 @@ fn mir_conditional_loops_preserve_poll_cadence_and_quit() {
     };
     use neovm_value::intern::SymId;
 
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     for (on_nil, else_pop) in [(false, false), (true, false), (false, true), (true, true)] {
         let mut f = ByteCodeFunction::new(LambdaParams {
@@ -1588,7 +1588,7 @@ fn mir_loop_keeps_native_list_alive_across_exact_gc() {
     use crate::emacs_core::eval::Context;
     use neovm_value::intern::SymId;
 
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let mut f = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
         required: vec![unsafe { SymId::from_raw(1) }],
@@ -1647,7 +1647,7 @@ fn mir_loop_overflow_after_a_poll_deopts_at_the_current_iteration() {
     };
     use neovm_value::intern::SymId;
 
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let mut f = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
         required: vec![unsafe { SymId::from_raw(1) }, unsafe { SymId::from_raw(2) }],
@@ -1707,7 +1707,7 @@ fn mir_loop_does_not_keep_an_inlined_callee_across_a_gc_hook() {
     use crate::emacs_core::eval::Context;
     use neovm_value::intern::SymId;
 
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let step = Value::symbol("mir-loop-step");
     let mut callee = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
@@ -1800,7 +1800,7 @@ fn backedge_polls_quit_like_the_interpreter() {
         Op::Return,
     ];
     let constants = [Value::make_int(0)];
-    let mut ev = Context::new_minimal_vm_harness();
+    let mut ev = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
     let leaf = lower_leaf(&ops, &constants, 1).unwrap();
 
@@ -1848,7 +1848,7 @@ fn backedge_polls_quit_like_the_interpreter() {
 #[test]
 fn compiles_save_excursion_with_unwind_semantics() {
     use crate::emacs_core::eval::Context;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
     ev.eval_str(r#"(insert "hello world")"#).expect("insert");
     let specpdl_before = ev.specpdl.len();
@@ -1931,7 +1931,8 @@ fn compiles_save_excursion_with_unwind_semantics() {
 
 #[test]
 fn compiles_trivial_natives_carsafe_maxmin_throw_numpreds() {
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let t = NativeRun::Ok(Value::T.bits());
     let nil = NativeRun::Ok(Value::NIL.bits());
@@ -2041,7 +2042,8 @@ fn compiles_trivial_natives_carsafe_maxmin_throw_numpreds() {
 
 #[test]
 fn compiles_direct_builtin_ops() {
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let ok_int = |n: i64| NativeRun::Ok(Value::make_int(n).bits());
     let run = |ops: &[Op], consts: &[Value], ctx: *mut u8| {
@@ -2224,7 +2226,7 @@ fn arith_intrinsic_bitops_jit_match_interp_and_deopt() {
     // Level-B inline OFF so and/or/xor/lognot go through the shim deterministically
     // regardless of NEOVM_JIT_INLINE_ARITH (the inline path is covered separately).
     force_inline_arith_for_test(false);
-    let mut ev = Context::new(); // binds logand/logior/logxor/ash/lognot
+    let mut ev = Context::new(crate::test_utils::unit_runtime()); // binds logand/logior/logxor/ash/lognot
     let ctx = &mut ev as *mut Context as *mut u8;
     // An N-arg body `(OP p0 [p1])`: Constant(OP); StackRef(nargs)*nargs; Call(nargs).
     let mk = |op_name: &str, nargs: usize, ob: &neovm_value::symbol::Obarray| {
@@ -2344,7 +2346,7 @@ fn arith_intrinsic_bitops_jit_match_interp_and_deopt() {
 fn arith_intrinsic_inline_level_b_matches_interp() {
     use crate::emacs_core::eval::Context;
     force_inline_arith_for_test(true);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     let mk = |op_name: &str, nargs: usize, ob: &neovm_value::symbol::Obarray| {
         let mut ops = vec![Op::Constant(0)];
@@ -2430,7 +2432,7 @@ fn arith_intrinsic_inline_level_b_matches_interp() {
 #[test]
 fn osr_entry_resumes_loop_from_seeded_stack() {
     use crate::emacs_core::eval::Context;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     // pcs:  0 Constant0(=0)   -- i = 0  (prologue, UNREACHABLE under OSR)
     //       1 StackRef0       -- loop header / OSR entry, entry_depth = 1
@@ -2526,7 +2528,7 @@ fn osr_transfers_hot_loop_and_matches_interpreter() {
     let want = Value::make_int(n * (n - 1) / 2); // sum 0..n-1
 
     // OSR OFF: pure interpreter baseline.
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     crate::emacs_core::jit::force_osr_for_test(false);
     let f_off = mk();
     let off = Vm::from_context(&mut ev)
@@ -2608,7 +2610,7 @@ fn osr_precise_deopt_resumes_without_replaying_iterations() {
     let counter = |ev: &mut Context| ev.eval_str("osr-deopt-counter").expect("counter");
 
     // OSR OFF: the interpreter baseline.
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str("(setq osr-deopt-counter 0)").unwrap();
     crate::emacs_core::jit::force_osr_for_test(false);
     let off = Vm::from_context(&mut ev)
@@ -2646,7 +2648,7 @@ fn osr_precise_deopt_resumes_without_replaying_iterations() {
 #[test]
 fn compiles_unwind_protect_pop() {
     use crate::emacs_core::eval::Context;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
     // NOTE: the opcode's operand is a LIST of cleanup forms (sf_progn_value),
     // exactly what the byte-compiler pushes for (unwind-protect BODY FORMS..).
@@ -2776,7 +2778,9 @@ fn mir_pure_lowering_matches_interpreter() {
         let leaf = lower_mir_pure(&mir).expect("MIR lowers (pure subset)");
 
         // Interpreter oracle.
-        let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+        let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness(
+            crate::test_utils::unit_runtime(),
+        );
         let mut f = ByteCodeFunction::new(LambdaParams {
             required: (1..=arity)
                 // SAFETY: test placeholder id, never resolved (peer seal N8).
@@ -2843,7 +2847,7 @@ fn mir_pure_lowering_handles_a_call() {
         !eq_leaf.has_side_effects,
         "an eq-only body has no Opaque: it still reruns from the start"
     );
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     let sym = Value::symbol("jit-mir-eq-probe");
     for (a, b, want) in [
@@ -2874,7 +2878,7 @@ fn mir_pure_lowering_handles_a_call() {
 #[test]
 fn mir_hoists_the_root_window_across_shim_sites() {
     use crate::emacs_core::eval::Context;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.gc_stress = true;
     let ctx = &mut ev as *mut Context as *mut u8;
     let churn_sym = Value::symbol("jit-mir-hoist-gcchurn");
@@ -3039,7 +3043,7 @@ fn baseline_tier_a_fallback_stores_do_not_leak_into_the_next_site() {
     use crate::emacs_core::eval::Context;
     use neovm_value::intern::{SymId, intern};
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let ev = Context::new();
+    let ev = Context::new(crate::test_utils::unit_runtime());
     let mut f = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
         required: vec![unsafe { SymId::from_raw(1) }, unsafe { SymId::from_raw(2) }],
@@ -3084,7 +3088,7 @@ fn baseline_reg_args_fallback_stores_do_not_leak_into_the_next_site() {
     use crate::emacs_core::eval::Context;
     use neovm_value::intern::SymId;
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let ev = Context::new();
+    let ev = Context::new(crate::test_utils::unit_runtime());
     let mut f = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
         required: vec![unsafe { SymId::from_raw(1) }, unsafe { SymId::from_raw(2) }],
@@ -3134,7 +3138,7 @@ fn baseline_fallback_meet_keeps_only_the_slots_both_paths_agree_on() {
     use crate::emacs_core::eval::Context;
     use neovm_value::intern::{SymId, intern};
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let ev = Context::new();
+    let ev = Context::new(crate::test_utils::unit_runtime());
     let mut f = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
         required: vec![unsafe { SymId::from_raw(1) }, unsafe { SymId::from_raw(2) }],
@@ -3196,7 +3200,7 @@ fn baseline_handler_dispatch_blocks_do_not_trust_the_block_end_store_record() {
     use crate::emacs_core::eval::Context;
     use neovm_value::intern::{SymId, intern};
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let ev = Context::new();
+    let ev = Context::new(crate::test_utils::unit_runtime());
     let mut f = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
         required: vec![unsafe { SymId::from_raw(1) }],
@@ -3279,7 +3283,7 @@ fn jit_builtin2_pure_matches_the_table() {
     use super::dispatch::{JIT_BUILTIN2, JIT_BUILTIN2_PURE};
     use crate::emacs_core::eval::Context;
     use neovm_value::error::Flow;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str("(put 'jit-pure-sym 'jit-pure-prop 42)")
         .expect("put");
     let pool_src = [
@@ -3342,7 +3346,7 @@ fn jit_builtin1_pure_matches_the_table() {
     use super::dispatch::{JIT_BUILTIN1, JIT_BUILTIN1_PURE};
     use crate::emacs_core::eval::Context;
     use neovm_value::error::Flow;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str(
         "(progn (defvar jit-pure1-var 7) (defvar jit-pure1-unbound) (fset 'jit-pure1-fn 'car))",
     )
@@ -3396,7 +3400,7 @@ fn jit_builtin1_pure_matches_the_table() {
 #[test]
 fn gc_free_unary_builtin_sites_root_no_residual() {
     use crate::emacs_core::eval::Context;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     let ops = [
         Op::StackRef(0), // l   [l l]
@@ -3427,7 +3431,7 @@ fn gc_free_unary_builtin_sites_root_no_residual() {
 #[test]
 fn gc_free_builtin_sites_root_no_residual() {
     use crate::emacs_core::eval::Context;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     let ops = [
         Op::StackRef(1), // a   [a l a]
@@ -3463,7 +3467,7 @@ fn gc_free_builtin_sites_root_no_residual() {
 fn compiled_aset_matches_the_builtin() {
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::print::print_value;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     // (lambda (a i v) (aset a i v))
     let ops = [
@@ -3541,7 +3545,7 @@ fn compiled_aset_matches_the_builtin() {
 #[test]
 fn redefined_aset_cannot_reenter_through_an_opcode() {
     use crate::emacs_core::eval::Context;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     let ops = [
         Op::Constant(0), // 1                 [v 1]
@@ -3608,7 +3612,7 @@ fn tier_gate_sends_a_loop_with_a_shim_op_to_the_baseline() {
     use crate::emacs_core::eval::Context;
     use neovm_value::intern::SymId;
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     // (lambda (n l) (let ((i 0)) (while (< i n) (length l) (setq i (1+ i))) i))
     let loop_ops = vec![
@@ -3721,7 +3725,7 @@ fn mir_inline_call_revalidates_after_fset_and_allows_state_reads() {
     use crate::emacs_core::eval::Context;
     use neovm_value::intern::SymId;
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     let f_sym = Value::symbol("jit-gate-redefined-f");
     let neovm_value::value::ValueKind::Symbol(f_id) = f_sym.kind() else {
@@ -3815,7 +3819,7 @@ fn mir_inline_call_revalidates_after_fset_and_allows_state_reads() {
 /// vmctx (`heap_inline::emit_inline_cons`), so it runs on a real Context.
 #[test]
 fn mir_cons_only_body_does_not_hoist() {
-    let mut ev = crate::emacs_core::eval::Context::new();
+    let mut ev = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Cons, Op::Return];
     let mir = mir::build_mir(&ops, &[], None, 2).expect("MIR builds");
@@ -3843,7 +3847,7 @@ fn mir_cons_only_body_does_not_hoist() {
 #[test]
 fn mir_adapter_lowers_a_variable_read() {
     use crate::emacs_core::eval::Context;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     let sym = Value::symbol("jit-mir-adapter-var");
     let ops = vec![Op::VarRef(0), Op::Return];
@@ -3874,7 +3878,7 @@ fn mir_adapter_deopt_after_a_varset_resumes_past_it() {
     use crate::emacs_core::eval::Context;
     // Every guard fails, for compiles on this thread only.
     crate::emacs_core::jit::compile::force_deopt_for_test(true);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     let sym = Value::symbol("jit-mir-adapter-set");
     ev.eval_str("(setq jit-mir-adapter-set 0)").expect("init");
@@ -3914,7 +3918,7 @@ fn mir_adapter_deopt_after_a_varset_resumes_past_it() {
 #[test]
 fn mir_adapter_sizes_the_args_slot_for_a_wide_list() {
     use crate::emacs_core::eval::Context;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     let ops = vec![
         Op::StackRef(0),
@@ -3953,7 +3957,7 @@ fn mir_adapter_sizes_the_args_slot_for_a_wide_list() {
 fn mir_adapter_keeps_conses_real_across_a_shim() {
     use crate::emacs_core::eval::Context;
     use neovm_value::intern::intern;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     let ops = vec![
         Op::StackRef(1),                                  // a          [a b a]
@@ -4003,7 +4007,7 @@ fn mir_adapter_inlined_predicate_reads_its_own_operand() {
     );
     use crate::emacs_core::eval::Context;
     use neovm_value::intern::SymId;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     let f_sym = Value::symbol("jit-mir-adapter-f");
     let neovm_value::value::ValueKind::Symbol(f_id) = f_sym.kind() else {
@@ -4071,7 +4075,8 @@ fn bails_on_unsupported_op() {
 #[test]
 fn list_and_slice_builtins_run_natively() {
     use crate::emacs_core::print::print_value;
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
 
     // (list 1 2 3)
@@ -4168,7 +4173,8 @@ fn named_builtin_ops_run_natively() {
     // (covered by the eval_test seam differential); Aset's fast path runs
     // against the minimal harness.
     use crate::emacs_core::print::print_value;
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
 
     // Aset: mutate a constant vector natively, read back.
@@ -4214,7 +4220,7 @@ fn cbsym_classifier_selects_shipset_by_name() {
     // VM-owned special names stay generic.
     use crate::emacs_core::eval::Context;
     use neovm_value::intern::intern;
-    let ev = Context::new();
+    let ev = Context::new(crate::test_utils::unit_runtime());
     let point = Op::CallBuiltinSym(intern("point"), 0);
     let insert = Op::CallBuiltinSym(intern("insert"), 1);
     let car = Op::CallBuiltinSym(intern("car"), 1); // plain builtin outside the old allowlist
@@ -4273,7 +4279,7 @@ fn cbsym_shipset_excludes_special_and_reentrant_names() {
     // this automatic; assert it functionally (a collision would classify one).
     use crate::emacs_core::eval::Context;
     use neovm_value::intern::intern;
-    let _ev = Context::new();
+    let _ev = Context::new(crate::test_utils::unit_runtime());
     for name in CBSYM_SPECIAL_NAMES
         .iter()
         .copied()
@@ -4590,7 +4596,7 @@ fn cbsym_intrinsic_ops_no_longer_veto_profitability() {
     // vetoes; a special-name CBSym (generic path) still counts.
     use crate::emacs_core::eval::Context;
     use neovm_value::intern::intern;
-    let _ev = Context::new(); // populate the subr table for cbsym_spec_kind
+    let _ev = Context::new(crate::test_utils::unit_runtime()); // populate the subr table for cbsym_spec_kind
     force_profit_gate_for_test(true);
     force_gate_relax_for_test(false); // pin default (env-independent); Op::Call vetoes
     let point = Op::CallBuiltinSym(intern("point"), 0); // Tier-A eligible
@@ -4624,7 +4630,7 @@ fn gate_relax_lets_user_call_heavy_bodies_tier() {
     // builtin-heavy = neutral, e.g. font-lock). Default OFF preserves
     // `calls <= arith`.
     use crate::emacs_core::eval::Context;
-    let _ev = Context::new(); // subr table for cbsym_spec_kind
+    let _ev = Context::new(crate::test_utils::unit_runtime()); // subr table for cbsym_spec_kind
     force_profit_gate_for_test(true);
     // 4 user calls, 0 arith.
     let user_call_heavy = [
@@ -4680,7 +4686,8 @@ fn gate_relax_lets_user_call_heavy_bodies_tier() {
 #[test]
 fn a_switch_carries_known_fixnum_slots_to_its_arms() {
     use neovm_value::value::HashTableTest;
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let table = Value::hash_table(HashTableTest::Eq);
     let _ = table.with_hash_table_mut(|ht| {
@@ -4756,7 +4763,8 @@ fn switch_jump_table_dispatches_natively() {
     // eq jump table {foo -> byte offset 8} resolving through the GNU
     // byte-offset map to instruction 5. Hit -> 20, miss -> 10.
     use neovm_value::value::HashTableTest;
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let table = Value::hash_table(HashTableTest::Eq);
     let _ = table.with_hash_table_mut(|ht| {
@@ -4821,7 +4829,8 @@ fn lower_switch_on_arg(table: Value) -> CompiledLeaf {
 #[test]
 fn switch_equal_cons_table_dispatches_natively() {
     use neovm_value::value::HashTableTest;
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let (a, b) = (
         Value::symbol("jit-sw-cons-a"),
@@ -4865,7 +4874,8 @@ fn switch_equal_cons_table_dispatches_natively() {
 #[test]
 fn switch_follows_mutation_after_compile() {
     use neovm_value::value::HashTableTest;
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let [a, b, c, d, e] =
         ["a", "b", "c", "d", "e"].map(|n| Value::symbol(format!("jit-sw-mut-{n}")));
@@ -4940,7 +4950,8 @@ fn handler_analysis_bails_on_unbalanced_pophandler() {
 fn handler_body_compiles_and_runs_catch_throw_natively() {
     // (catch 'tag (throw 'tag 42)) — the throw is caught by this same
     // frame's PushCatch via the match shim, natively.
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let tag = Value::symbol("jit-unit-tag");
     let leaf = lower_nullary_leaf(
@@ -4969,7 +4980,8 @@ fn handler_body_compiles_and_runs_catch_throw_natively() {
 fn handler_frames_unwound_on_propagation() {
     // (catch 'a (throw 'b 1)) — no frame matches: the flow propagates as
     // STATUS_SIGNAL (no-catch) and our registered frame is unwound.
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let leaf = lower_nullary_leaf(
         &[
@@ -4999,7 +5011,8 @@ fn handler_frames_unwound_on_propagation() {
 
 #[test]
 fn compiles_varref_and_varset() {
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let var = Value::symbol("jit-test-dynvar");
     let neovm_value::value::ValueKind::Symbol(var_id) = var.kind() else {
@@ -5037,7 +5050,8 @@ fn compiles_varref_and_varset() {
 #[test]
 fn compiles_varbind_unbind_with_full_unwind_semantics() {
     use crate::emacs_core::bytecode::Vm;
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let var = Value::symbol("jit-test-bind-var");
     let neovm_value::value::ValueKind::Symbol(var_id) = var.kind() else {
@@ -5132,7 +5146,7 @@ fn compiles_varbind_unbind_with_full_unwind_semantics() {
 /// value and the global is restored; the fast pop never stores blind.
 #[test]
 fn a_compiled_let_reads_the_symbol_shape_again_when_it_pops() {
-    let mut ev = crate::emacs_core::eval::Context::new();
+    let mut ev = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     ev.eval_str(
         "(progn
            (setq jit-fastlet-var 1 jit-fastlet-log nil)
@@ -5197,7 +5211,7 @@ fn a_compiled_let_reads_the_symbol_shape_again_when_it_pops() {
 #[test]
 fn compiled_unbind_and_frame_exit_propagate_restore_watcher_signals() {
     fn install_restore_watcher(variable: &str) -> crate::emacs_core::eval::Context {
-        let mut eval = crate::emacs_core::eval::Context::new();
+        let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
         let source = format!(
             r#"(progn
                  (setq {variable} 9)
@@ -5260,7 +5274,7 @@ fn compiled_unbind_and_frame_exit_propagate_restore_watcher_signals() {
 fn cleanup_flow_does_not_pop_an_outer_callers_handler() {
     use crate::emacs_core::eval::{ConditionFrame, ResumeTarget, SpecBinding};
 
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let outer_tag = Value::symbol("jit-test-outer-caller-tag");
     let local_tag = Value::symbol("jit-test-unmatched-local-tag");
     let inner_tag = Value::symbol("jit-test-inner-tag");
@@ -5351,7 +5365,8 @@ fn guard_after_varbind_and_unbalanced_unbind_bail() {
 fn guard_after_varset_compiles_and_runs() {
     // Precise deopt: a guard after an assignment compiles and runs; the
     // assignment is NOT replayed on a later deopt (resume is mid-frame).
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let leaf = lower_nullary_leaf(
         &[
@@ -5492,7 +5507,7 @@ fn compiles_cons() {
     // (cons 1 2): allocates a cons cell. No GC between the call and the deref
     // (nothing allocates), so the fresh cons stays valid. The inline cons
     // reads the heap through the vmctx, so the body runs on a real Context.
-    let mut ev = crate::emacs_core::eval::Context::new();
+    let mut ev = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let leaf = lower_nullary_leaf(
         &[Op::Constant(0), Op::Constant(1), Op::Cons, Op::Return],
@@ -5513,7 +5528,7 @@ fn compiles_nested_cons_list() {
     // (cons 7 (cons 8 nil)) = (7 8). The inner cons leaves 7 live below it on
     // the operand stack, exercising the gc_push rooting path. A real Context:
     // the inline cons reads the heap through the vmctx.
-    let mut ev = crate::emacs_core::eval::Context::new();
+    let mut ev = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let leaf = lower_nullary_leaf(
         &[
@@ -5541,7 +5556,8 @@ fn compiles_nested_cons_list() {
 /// Build a harness Context with `name` bound to a lexical one-arg bytecode
 /// callee `(lambda (y) (1+ y))`, returning (ctx, callee symbol Value).
 fn harness_with_inc_callee(name: &str) -> (crate::emacs_core::eval::Context, Value) {
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let sym_val = Value::symbol(name);
     let neovm_value::value::ValueKind::Symbol(sym_id) = sym_val.kind() else {
         panic!("Value::symbol must produce a symbol");
@@ -5608,7 +5624,8 @@ fn call_with_live_values_below_roots_and_returns() {
 fn call_signal_propagates() {
     // Calling an unbound function must surface as NativeRun::Signal with the
     // Flow stashed for the caller — not a deopt, not a crash.
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let sym_val = Value::symbol("jit-test-no-such-function");
     let leaf = lower_nullary_leaf(&[Op::Constant(0), Op::Call(0), Op::Return], &[sym_val]).unwrap();
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
@@ -5626,7 +5643,7 @@ fn guard_after_call_deopts_without_replaying_the_call() {
     // op — the call's side effect happened exactly once (rerun-from-start
     // would have replayed it). Full Context: the resumed 1+ promotes to a
     // bignum through the real builtin dispatch.
-    let mut ev = crate::emacs_core::eval::Context::new();
+    let mut ev = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     // Callee (lambda (x) (setcar CELL (1+ (car CELL))) x): observable
     // side effect (counter cons), returns its argument unchanged.
@@ -5830,7 +5847,8 @@ fn div_wrap_case_matches_interpreter() {
 fn compiles_eq_and_symbolp() {
     // One live Context for the vmctx-reading slow paths (symbols-with-pos
     // is disabled by default, so differing bits -> nil).
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let sym_a = Value::symbol("jit-eq-sym-a");
     let s = Value::string("eq-str");
@@ -5887,7 +5905,8 @@ fn compiles_apply_with_spread() {
 #[test]
 fn compiles_apply_with_leading_args() {
     // (apply 'add2 40 (list 2)) -> 42: leading args + spread tail.
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let sym_val = Value::symbol("jit-test-add2-apply");
     let neovm_value::value::ValueKind::Symbol(sym_id) = sym_val.kind() else {
         panic!("symbol expected");
@@ -6108,7 +6127,7 @@ fn compiles_rest_param_as_list() {
 fn interp_nullary(ops: &[Op], constants: &[Value]) -> Value {
     use crate::emacs_core::bytecode::Vm;
     use crate::emacs_core::eval::Context;
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let mut f = nullary();
     f.ops = ops.to_vec();
     f.constants = constants.to_vec().into();
@@ -6229,7 +6248,7 @@ fn jit_matches_interpreter_with_args() {
     let ops = [Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return];
     let args = [Value::make_int(40), Value::make_int(2)];
 
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: vec![
             // SAFETY: test placeholder id, never resolved (peer seal N8).
@@ -6289,7 +6308,7 @@ fn jit_bench_countdown_loop() {
     let iters: i64 = 3_000_000;
     let calls = 5;
 
-    let mut ev = Context::new_minimal_vm_harness();
+    let mut ev = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
 
     // Tier 0.
     let mut f = ByteCodeFunction::new(LambdaParams {
@@ -6338,7 +6357,7 @@ fn jit_bench_mir_loops_against_baseline() {
     use neovm_value::intern::SymId;
     use std::time::Instant;
 
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     let n = 1_000_000_i64;
     for name in ["countdown", "sum", "polynomial"] {
@@ -6436,7 +6455,7 @@ fn fuzz_straightline_bodies_match_interpreter() {
         x.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
 
-    let mut ev = Context::new_minimal_vm_harness();
+    let mut ev = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
 
     // Constant pool: small fixnums, the fixnum boundaries, nil and t —
@@ -6661,7 +6680,7 @@ fn fuzz_varset_bodies_match_interpreter_state() {
         x.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
 
-    let mut ev = Context::new_minimal_vm_harness();
+    let mut ev = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
 
     // Seeded special variables at constant indices 0..VARS; every stored
@@ -6962,7 +6981,7 @@ fn fuzz_varset_bodies_match_interpreter_state() {
 #[test]
 fn disarmed_spec_slot_never_arms_and_does_not_rearm() {
     use crate::emacs_core::eval::Context;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // Control precondition: no compiler function overrides active (else the
     // helper returns false regardless — the assumption the control relies on).
     assert!(
@@ -7008,7 +7027,7 @@ fn disarmed_spec_slot_never_arms_and_does_not_rearm() {
 #[test]
 fn function_epoch_never_equals_disarmed_sentinel() {
     assert_eq!(SPEC_EPOCH_DISARMED, u64::MAX);
-    let mut ev = crate::emacs_core::eval::Context::new();
+    let mut ev = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     for _ in 0..8 {
         ev.obarray
             .invalidate_all_function_bindings(neovm_value::symbol::FunctionEpochBump::SubrRewrite);
@@ -7054,7 +7073,7 @@ fn subr_spec_many_allowlist_disjoint_from_manyslice() {
 #[test]
 fn subr_spec_kind_rejects_registered_manyslice() {
     use crate::emacs_core::eval::Context;
-    let ev = Context::new();
+    let ev = Context::new(crate::test_utils::unit_runtime());
     let sid = |name: &str| match Value::symbol(name).kind() {
         neovm_value::value::ValueKind::Symbol(id) => id,
         _ => panic!("symbol"),
@@ -7110,7 +7129,7 @@ fn subr_spec_kind_rejects_registered_manyslice() {
 #[test]
 fn subr_spec_kind_classifies_bitwise_arith_at_two_args() {
     use crate::emacs_core::eval::Context;
-    let ev = Context::new();
+    let ev = Context::new(crate::test_utils::unit_runtime());
     let sid = |name: &str| match Value::symbol(name).kind() {
         neovm_value::value::ValueKind::Symbol(id) => id,
         _ => panic!("symbol"),
@@ -7212,7 +7231,7 @@ fn panicking_call_leaf(msg: &str) -> CompiledLeaf {
 
 #[test]
 fn contained_shim_panic_surfaces_as_error_flow_and_vm_survives() {
-    let mut ev = crate::emacs_core::eval::Context::new();
+    let mut ev = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let leaf = panicking_call_leaf("shim-boom");
     assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal);
@@ -7245,7 +7264,7 @@ fn contained_shim_panic_surfaces_as_error_flow_and_vm_survives() {
 
 #[test]
 fn contained_shim_panic_restores_boundary_state() {
-    let mut ev = crate::emacs_core::eval::Context::new();
+    let mut ev = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     // Interpreted middle function: dynamically binds, then calls the
     // panicking subr — the panic unwinds through its LIVE interpreter
@@ -7335,7 +7354,7 @@ fn contained_shim_panic_restores_boundary_state() {
 fn a_panic_contained_in_a_direct_callee_is_healed_by_the_caller() {
     use crate::emacs_core::eval::Context;
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
     let nullary = |ops: Vec<Op>, constants: Vec<Value>| -> ByteCodeFunction {
         let mut f = ByteCodeFunction::new(LambdaParams {
@@ -7451,7 +7470,7 @@ fn a_panic_contained_in_a_direct_callee_is_healed_by_the_caller() {
 fn a_panic_contained_on_the_spec_fast_path_is_healed_by_the_caller() {
     use crate::emacs_core::eval::Context;
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
     let nullary = |ops: Vec<Op>, constants: Vec<Value>| -> ByteCodeFunction {
         let mut f = ByteCodeFunction::new(LambdaParams {
@@ -7575,7 +7594,7 @@ fn a_panic_contained_on_the_spec_fast_path_is_healed_by_the_caller() {
 
 #[test]
 fn contained_shim_panic_is_caught_by_leaf_local_condition_case() {
-    let mut ev = crate::emacs_core::eval::Context::new();
+    let mut ev = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let cond0 = ev.condition_stack.len();
     // (condition-case around the panicking call, in the SAME compiled
@@ -7620,7 +7639,7 @@ fn contained_shim_panic_is_caught_by_leaf_local_condition_case() {
 
 #[test]
 fn contained_shim_panic_with_leaked_callee_handler_still_matches_leaf_handler() {
-    let mut ev = crate::emacs_core::eval::Context::new();
+    let mut ev = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     // Interpreted middle function whose OWN condition-case protects the
     // panicking call: the Rust panic (not a Lisp signal) unwinds straight
@@ -7716,7 +7735,7 @@ fn contained_shim_panic_with_leaked_callee_handler_still_matches_leaf_handler() 
 
 #[test]
 fn contained_shim_panics_leave_no_residue_over_repeats() {
-    let mut ev = crate::emacs_core::eval::Context::new();
+    let mut ev = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     // A BINDING leaf: containment defers specpdl to the next depth-based
     // unwind, which for a `has_binds` leaf is its own exit parity unwind
@@ -7779,7 +7798,7 @@ fn contained_shim_panics_leave_no_residue_over_repeats() {
 
 #[test]
 fn gc_suspect_shim_panic_is_re_raised_not_contained() {
-    let mut ev = crate::emacs_core::eval::Context::new();
+    let mut ev = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     ev.gc_driver_active = true;
     let payload: Box<dyn std::any::Any + Send> = Box::new("must-flee".to_string());
@@ -7798,7 +7817,7 @@ fn contained_panic_wins_over_stale_pending_flow() {
     // A shim body that stashed a real flow and THEN panicked before
     // completing its protocol: the panic must win at take time, and both
     // slots must be consumed.
-    let mut ev = crate::emacs_core::eval::Context::new();
+    let mut ev = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     stash_pending_flow(signal("arith-error", vec![]));
     let payload: Box<dyn std::any::Any + Send> = Box::new("late-panic");
@@ -7826,7 +7845,7 @@ fn parked_panic_survives_leaf_exit_cleanup_running_compiled_code() {
     // and the outer dispatcher's take must still get the panic error
     // afterwards (previously the inner take consumed it and the outer
     // take found nothing — an `.expect` panic inside recovery).
-    let mut ev = crate::emacs_core::eval::Context::new();
+    let mut ev = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     ev.set_variable("jit-fx-witness", Value::NIL);
     // Cleanup: compiled condition-case around (signal 'arith-error nil),
@@ -7940,7 +7959,7 @@ fn wide_arg_call_panic_releases_backtrace_args_cleanly() {
     // release_backtrace_args must treat the healed residue as a no-op
     // instead of tripping its LIFO debug_assert (debug builds would
     // otherwise re-panic inside recovery).
-    let mut ev = crate::emacs_core::eval::Context::new();
+    let mut ev = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let var = Value::symbol("jit-fx-wide-dynvar");
     let mid_sym = Value::symbol("jit-fx-wide-middle");
@@ -8042,7 +8061,7 @@ fn contained_panic_in_load_unwinds_load_bookkeeping() {
     // must leave `load-in-progress` nil and `loads_in_progress` empty
     // once the deferred unwind runs, and repeated containment must not
     // accumulate entries into a spurious "Recursive load".
-    let mut ev = crate::emacs_core::eval::Context::new();
+    let mut ev = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let dir = tempfile::tempdir().expect("tempdir");
     let fixture = dir.path().join("jit-fx-panic-load.el");
@@ -8138,7 +8157,7 @@ fn regalloc_knob_maps_spellings_to_allocators() {
 /// self-reference, and a caller with no obarray all keep the plain shape rule.
 #[test]
 fn a_body_that_calls_itself_is_classified_by_identity() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let self_sym = Value::symbol("jit-self-recursive");
     let other_sym = Value::symbol("jit-other-callee");
     let mk = |ops: Vec<Op>, callee: Value| {
@@ -8326,7 +8345,7 @@ fn unreachable_block_after_an_exit_lowers_without_panicking() {
         f.constants = vec![Value::make_int(7)].into();
         let leaf = compile_bytecode_function_with(&f, None)
             .expect("dead code must not break the lowering");
-        let mut ev = Context::new_minimal_vm_harness();
+        let mut ev = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
         let ctx_ptr = &mut ev as *mut Context as *mut u8;
         assert_eq!(
             leaf.call(ctx_ptr, &[]),
@@ -8407,7 +8426,7 @@ fn a_pure_body_with_a_float_feedback_site_is_rejected_from_the_mir_tier() {
     // Drive the baseline leaf with a REAL Context: `call_for_test` passes a
     // null vmctx, which a runtime-needing baseline body refuses (Deopt) before
     // the float path ever runs.
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let got = match leaf.call(ctx_ptr, &[Value::make_float(1.5), Value::make_float(2.5)]) {
         NativeRun::Ok(bits) => Value::from_bits(bits),
@@ -8467,7 +8486,7 @@ fn a_float_site_compare_breaks_a_double_tie_on_exact_integers_like_gnu() {
         f
     }
     use crate::emacs_core::jit::NumericFeedback as NF;
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let t = Value::T.bits();
     let nil = Value::NIL.bits();
@@ -8593,7 +8612,7 @@ fn generic_arith_sites_match_the_interpreter_without_deopting() {
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::jit::NumericFeedback as NF;
     use crate::emacs_core::print::print_value;
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let pool_src = [
         "0",
@@ -8715,7 +8734,7 @@ fn a_generic_site_result_is_not_a_known_fixnum_across_a_block_edge() {
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f.jit_runtime().record_numeric(2, f.ops.len(), NF::Other);
     let leaf = compile_bytecode_function(&f).expect("compiles");
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let two40 = Value::make_int(1 << 40);
     for c in [Value::T, Value::NIL] {
@@ -8806,7 +8825,7 @@ fn a_generic_arith_signal_is_caught_by_a_leaf_local_handler() {
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f.jit_runtime().record_numeric(3, f.ops.len(), NF::Other);
     let leaf = compile_bytecode_function(&f).expect("compiles");
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let big = eval.eval_str("(expt 2 70)").expect("big");
     match leaf.call(ctx_ptr, &[big, Value::symbol("oops")]) {
@@ -8864,7 +8883,7 @@ fn generic_arith_fallbacks_keep_the_residual_rooted() {
     f.jit_runtime().record_numeric(5, f.ops.len(), NF::Other);
     f.jit_runtime().record_numeric(9, f.ops.len(), NF::Other);
     let leaf = compile_bytecode_function(&f).expect("compiles");
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.gc_stress = true;
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     for _ in 0..3 {
@@ -8922,7 +8941,7 @@ fn a_generic_arith_signal_hook_that_collects_keeps_the_residual_alive() {
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f.jit_runtime().record_numeric(6, f.ops.len(), NF::Other);
     let leaf = compile_bytecode_function(&f).expect("compiles");
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str(
         "(setq signal-hook-function
                (lambda (_sym _data) (garbage-collect) (make-list 4096 (cons 0 0)) nil))",
@@ -8953,7 +8972,7 @@ fn only_a_non_fixnum_operand_records_other_feedback() {
     use crate::emacs_core::bytecode::Vm;
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::jit::NumericFeedback as NF;
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let run = |eval: &mut Context, f: &ByteCodeFunction, args: Vec<Value>| {
         let mut vm = Vm::from_context(eval);
         let _ = vm.execute(f, args);
@@ -9020,7 +9039,7 @@ fn a_record_type_of_site_answers_inline() {
     use crate::emacs_core::eval::Context;
     use neovm_value::intern::{SymId, intern};
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     // (lambda (x) (cons (symbol-name 'zzz) (type-of x))): the subr call
     // before it leaves "zzz" in the call result slot.
@@ -9200,7 +9219,7 @@ fn fboundp_call_sites_answer_as_the_builtin_on_the_fast_path() {
     use crate::emacs_core::eval::Context;
     use neovm_value::intern::{SymId, intern};
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     // A bare Context: `defun`/`defmacro`/`defalias` are not loaded, so the
     // cells are set directly.
@@ -9344,7 +9363,7 @@ fn fboundp_sites_use_the_dedicated_shim() {
     use crate::emacs_core::eval::Context;
     use neovm_value::intern::{SymId, intern};
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     let leaf_for = |name: &str| {
         let mut f = ByteCodeFunction::new(LambdaParams {
@@ -9460,7 +9479,7 @@ fn autoload_do_load_call_sites_answer_as_the_builtin_on_the_fast_path() {
     // its default-on arm would answer the non-autoload FUNDEFs before the
     // shim and hide what this test pins.
     crate::emacs_core::jit::compile::force_inline_predicates_for_test(Some(false));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     let binding = ev
         .obarray
@@ -9618,7 +9637,7 @@ fn type_tag_predicate_sites_answer_inline() {
     use crate::emacs_core::eval::Context;
     use neovm_value::intern::{SymId, intern};
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     let site = |name: &str| {
         let mut f = ByteCodeFunction::new(LambdaParams {
@@ -9786,7 +9805,7 @@ fn autoload_do_load_sites_answer_non_autoload_inline() {
     use crate::emacs_core::eval::Context;
     use neovm_value::intern::{SymId, intern};
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     let mut f = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
@@ -9945,7 +9964,7 @@ fn type_of_call_sites_answer_as_the_builtin_on_the_fast_path() {
     use crate::emacs_core::eval::Context;
     use neovm_value::intern::SymId;
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     let pool_src = "(list 5 (expt 2 70) 1.5 \"s\" (cons 1 2) 'sym nil t :kw \
                     (record 'foo 1) (record (record 'eieio--class 'my-class) 2) \
@@ -10038,7 +10057,7 @@ fn an_unrelated_redefinition_keeps_an_inlining_leaf_compiled() {
     // function epoch but must not recompile F: its leaf is the same object
     // across the next call. Redefining C does recompile F, which then
     // computes with the new C.
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let mk_sym = |name: &str| {
         let s = Value::symbol(name);
@@ -10122,7 +10141,7 @@ fn refsetting_the_same_function_and_repeated_redefinitions_stop_recompiling() {
     // two such evictions C counts as unstable: F recompiles CALLING C, and
     // later redefinitions no longer touch F -- while every answer follows
     // the current C.
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let c_sym = Value::symbol("jit-unstable-c");
     let neovm_value::value::ValueKind::Symbol(c_id) = c_sym.kind() else {
@@ -10235,7 +10254,7 @@ fn subr_spec_screened_entry_cache_engages_and_a_rewrite_invalidates_it() {
 
     let name = "neovm-test--subr-spec-screened-entry";
     let sym = intern(name);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // Materialize the static subr object first (the binding's VALUE), then
     // fill its entry: `register_global_subr_entry` rewrites the object IN
     // PLACE and is a no-op before the object exists.

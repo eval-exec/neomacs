@@ -163,7 +163,7 @@ fn green_owner_turn_invalidates_shared_source_leaf_slots() {
     crate::test_utils::init_test_tracing();
     let _admission = AdmissionScope::enter(Inline2Mode::Off, BgMode::Sync);
     let _backend = compile::opt_mode_scope_for_test(OptMode::Legacy);
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let source = function(vec![Op::StackRef(0), Op::Add1, Op::Return], vec![]);
     let leaf = cache::resolve_compiled_leaf_ptr(&mut context, &source).expect("compiled source");
     let epoch = cache::leaf_slot_epoch();
@@ -216,7 +216,7 @@ fn green_inline_retirement_keeps_native_leaf_allocation_alive() {
     let _backend = compile::opt_mode_scope_for_test(OptMode::Legacy);
     let _inlining = InlineScope::enter();
     let _profit = ProfitScope::enter(ProfitGateTestPolicy::Bypass);
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let callee = intern("green-owner-retired-callee");
     context.with_obarray_mut(|mut obarray| {
         obarray.set_symbol_function_id(
@@ -408,7 +408,7 @@ fn green_park_accepts_entry_and_unregistered_osr_arithmetic() {
     let _backend = compile::opt_mode_scope_for_test(OptMode::Legacy);
     let _arithmetic = ArithmeticScope::enter();
     {
-        let mut context = Context::new();
+        let mut context = Context::new(crate::test_utils::unit_runtime());
         let source = Value::make_bytecode(arithmetic_loop());
         let symbol = intern("green-owner-unguarded-entry");
         context.with_obarray_mut(|mut obarray| obarray.set_symbol_function_id(symbol, source));
@@ -422,7 +422,7 @@ fn green_park_accepts_entry_and_unregistered_osr_arithmetic() {
         assert!(green_owner::ParkedJit::prepare(frame.context).is_ok());
     }
     {
-        let mut context = Context::new();
+        let mut context = Context::new(crate::test_utils::unit_runtime());
         let source = Value::make_bytecode(arithmetic_loop());
         let symbol = intern("green-owner-unguarded-osr");
         context.with_obarray_mut(|mut obarray| obarray.set_symbol_function_id(symbol, source));
@@ -470,11 +470,11 @@ fn green_checkpoint_rejects_foreign_return_before_epoch_mutation() {
     crate::test_utils::init_test_tracing();
     let _admission = AdmissionScope::enter(Inline2Mode::Off, BgMode::Sync);
     let _backend = compile::opt_mode_scope_for_test(OptMode::Legacy);
-    let mut original = Context::new();
+    let mut original = Context::new(crate::test_utils::unit_runtime());
     let checkpoint = green_owner::ParkedJit::prepare(&original).expect("original owner checkpoint");
     assert!(checkpoint.roots().is_empty());
     {
-        let foreign = Context::new();
+        let foreign = Context::new(crate::test_utils::unit_runtime());
         // Context construction may itself invalidate the cache. Measure only
         // the rejected restoration, which must not consume global authority.
         let epoch = cache::leaf_slot_epoch();
@@ -626,7 +626,7 @@ fn green_background_inline_compile_redefined_while_parked_is_retired_before_inst
 fn green_osr_retirement_preserves_relocation_roots_after_publication_retires() {
     let _admission = AdmissionScope::enter(Inline2Mode::Off, BgMode::Sync);
     let _backend = compile::opt_mode_scope_for_test(OptMode::Legacy);
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let literal = Value::cons(Value::fixnum(991), Value::string("retired-osr-only"));
     let source = function(
         vec![

@@ -141,7 +141,7 @@ fn inline_hof_captures_force_deopt_keeps_original_lowering() {
 #[test]
 fn inline_hof_captures_noncons_declines_without_an_early_branch_error() {
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.gc_stress = false;
     for argument in [500, 900] {
         let callback = closure(&mut ctx, Value::make_int(42), true);
@@ -208,7 +208,7 @@ fn inline_hof_captures_noncons_declines_without_an_early_branch_error() {
 #[test]
 fn inline_hof_captures_empty_mapping_skips_the_witness() {
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.gc_stress = false;
     let callback = closure(&mut ctx, Value::make_int(42), false);
     let source = caller(callback);
@@ -225,7 +225,7 @@ fn inline_hof_captures_empty_mapping_skips_the_witness() {
 #[test]
 fn inline_hof_captures_float_car_after_poll_deopts_inside_add1_once() {
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.gc_stress = false;
     let cell = Value::cons(Value::make_int(0), Value::NIL);
     ctx.set_variable("hof-capture-cell", cell);
@@ -292,7 +292,7 @@ fn assert_hof_admitted(source: &ByteCodeFunction) {
 #[test]
 fn inline_hof_flags_keep_conditional_captured_count_and_boundaries() {
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.gc_stress = false;
     let cell = Value::cons(Value::make_int(0), Value::NIL);
     // OR retains the first true result. The shared final conditional is a
@@ -362,7 +362,7 @@ fn inline_hof_flags_keep_all_four_branch_stack_effects() {
     use super::super::CallbackBranch;
     use strum::IntoEnumIterator;
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.gc_stress = false;
     for branch in CallbackBranch::iter() {
         let jump = match branch {
@@ -426,7 +426,7 @@ fn inline_hof_flags_keep_all_four_branch_stack_effects() {
 #[test]
 fn inline_hof_flags_resume_nan_then_error_without_repeating_capture() {
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.gc_stress = false;
     let cell = Value::cons(Value::make_int(0), Value::NIL);
     let callback = closure(&mut ctx, cell, true);
@@ -527,7 +527,7 @@ fn inline_hof_flags_keep_truthy_zero_on_materialized_branches() {
     use super::super::CallbackBranch;
     use strum::IntoEnumIterator;
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.gc_stress = false;
     let inputs = [
         Value::NIL,
@@ -644,7 +644,7 @@ fn inline_hof_flags_all_boolean_producers_keep_exact_results() {
     use super::super::CallbackBranch;
     use strum::IntoEnumIterator;
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.gc_stress = false;
     let zero = Value::make_int(0);
     let one = Value::make_int(1);
@@ -811,7 +811,7 @@ fn flag_shared_consumer_ops() -> Vec<Op> {
 #[test]
 fn inline_hof_flags_shared_consumer_keeps_zero_and_booleans_tagged() {
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.gc_stress = false;
     let callback = Value::make_bytecode(function(
         flag_shared_consumer_ops(),
@@ -952,7 +952,7 @@ fn flag_capture_before_comparison(ctx: &mut Context, cell: Value) -> Value {
 #[test]
 fn inline_hof_flags_producer_deopt_keeps_resume_frontier() {
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.gc_stress = false;
     let cell = Value::cons(Value::make_int(0), Value::NIL);
     let callback = flag_capture_before_comparison(&mut ctx, cell);
@@ -1011,7 +1011,7 @@ fn inline_hof_flags_producer_deopt_keeps_resume_frontier() {
 #[test]
 fn inline_hof_flags_signal_cleanup_allows_next_mapping() {
     let _knobs = Knobs::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.gc_stress = false;
     let cell = Value::cons(Value::make_int(0), Value::NIL);
     let callback = flag_capture_before_comparison(&mut ctx, cell);

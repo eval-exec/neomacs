@@ -125,7 +125,7 @@ fn inline_hof_regalloc_selector_preserves_both_forced_choices() {
 #[test]
 fn inline_hof_regalloc_off_keeps_the_source_allocator() {
     let _knobs = Knobs::enter(Inline2Mode::Off);
-    let ctx = Context::new();
+    let ctx = Context::new(crate::test_utils::unit_runtime());
     let f = caller(false);
     assert!(for_admitted_hof(None, f.executable_ops(), &f.constants).is_none());
     let leaf = compile(&f, &ctx);
@@ -140,7 +140,7 @@ fn inline_hof_regalloc_off_keeps_the_source_allocator() {
 #[test]
 fn inline_hof_regalloc_unadmitted_callback_keeps_the_source_allocator() {
     let _knobs = Knobs::enter(Inline2Mode::Hof);
-    let ctx = Context::new();
+    let ctx = Context::new(crate::test_utils::unit_runtime());
     let f = lexical(
         vec![
             Op::Constant(0),
@@ -190,7 +190,7 @@ fn inline_hof_regalloc_empty_hof_table_keeps_ordinary_inline_policy() {
 #[test]
 fn inline_hof_regalloc_remaining_calls_keep_the_source_allocator() {
     let _knobs = Knobs::enter(Inline2Mode::Hof);
-    let ctx = Context::new();
+    let ctx = Context::new(crate::test_utils::unit_runtime());
     let f = caller(true);
     let body = fused(&f);
     assert!(body.admitted_hof_at(6).is_some());
@@ -208,7 +208,7 @@ fn inline_hof_regalloc_remaining_calls_keep_the_source_allocator() {
 #[test]
 fn inline_hof_regalloc_admitted_native_loop_uses_full_and_keeps_source_metadata() {
     let _knobs = Knobs::enter(Inline2Mode::Hof);
-    let ctx = Context::new();
+    let ctx = Context::new(crate::test_utils::unit_runtime());
     let f = caller(false);
     assert!(!compile::has_back_edge(f.executable_ops()));
     assert!(body_is_call_heavy(f.executable_ops(), &f.constants));

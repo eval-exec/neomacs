@@ -89,7 +89,7 @@ fn capturing_caller(proto: Value) -> ByteCodeFunction {
 #[test]
 fn inline_constant_identity_body_requires_context_for_entry_guards() {
     let _knobs = Knobs::enter(Inline2Mode::Closure);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let proto = Value::make_bytecode(lexical(1, vec![Op::StackRef(0), Op::Return], vec![]));
     let f = lexical(
         1,
@@ -112,7 +112,7 @@ fn inline_constant_identity_body_requires_context_for_entry_guards() {
 #[test]
 fn inline_closure_reads_the_executing_capture_after_cell_mutation() {
     let _knobs = Knobs::enter(Inline2Mode::Closure);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let proto = Value::make_bytecode(lexical(
         1,
         vec![
@@ -160,7 +160,7 @@ fn inline_closure_reads_the_executing_capture_after_cell_mutation() {
 #[test]
 fn inline_closure_chain_retains_assigned_argument_and_committed_store_once() {
     let _knobs = Knobs::enter(Inline2Mode::Closure);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let assigned = Value::symbol("closure-assigned-not-a-number");
     let proto = Value::make_bytecode(lexical(
         1,
@@ -225,7 +225,7 @@ fn inline_closure_chain_retains_assigned_argument_and_committed_store_once() {
 #[test]
 fn inline_closure_source_guard_returns_to_the_original_call() {
     let _knobs = Knobs::enter(Inline2Mode::Closure);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let proto = Value::make_bytecode(lexical(
         1,
         vec![
@@ -272,7 +272,7 @@ fn inline_closure_source_guard_returns_to_the_original_call() {
 fn inline_closure_entry_attention_and_depth_leave_before_the_body() {
     let _knobs = Knobs::enter(Inline2Mode::Closure);
     for cause in [DeoptCause::InlineAttention, DeoptCause::DepthLimit] {
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         let cell = Value::cons(Value::make_int(0), Value::NIL);
         let callee = Value::make_bytecode(lexical(
             1,
@@ -306,7 +306,7 @@ fn inline_closure_entry_attention_and_depth_leave_before_the_body() {
 fn inline_closure_forced_entry_deopt_executes_the_store_once_on_resume() {
     let _knobs = Knobs::enter(Inline2Mode::Closure);
     compile::force_deopt_for_test(true);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let cell = Value::cons(Value::make_int(0), Value::NIL);
     push_scratch_gc_root(cell);
     let proto = Value::make_bytecode(lexical(
@@ -396,7 +396,7 @@ fn inline_closure_chain_roots_outer_residual_across_resumed_gc() {
 fn inline_closure_preserves_capture_cons_and_float_identity_and_off_path() {
     for mode in [Inline2Mode::Closure, Inline2Mode::Off] {
         let _knobs = Knobs::enter(mode);
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         let proto = Value::make_bytecode(lexical(
             1,
             vec![
@@ -429,7 +429,7 @@ fn inline_closure_preserves_capture_cons_and_float_identity_and_off_path() {
 #[test]
 fn inline_closure_wider_same_source_prefix_returns_to_the_original_call() {
     let _knobs = Knobs::enter(Inline2Mode::Closure);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let proto = Value::make_bytecode(lexical(
         1,
         vec![

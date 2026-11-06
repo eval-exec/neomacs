@@ -17,7 +17,7 @@ fn tail_at(mut sequence: Value, offset: usize) -> Value {
 
 #[test]
 fn inline_hof_length_brent_preserves_proper_lengths_at_teleport_and_limit_boundaries() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.push_vm_root_frame();
     let total = HOF_LIST_PREFLIGHT_MAX as usize + 1;
     let sequence = Value::list((0..total).map(|n| Value::make_int(n as i64)).collect());
@@ -40,7 +40,7 @@ fn inline_hof_length_brent_preserves_proper_lengths_at_teleport_and_limit_bounda
 
 #[test]
 fn inline_hof_length_brent_declines_dotted_and_lasso_lists() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.push_vm_root_frame();
     let dotted = Value::cons(Value::make_int(1), Value::make_int(2));
     ctx.push_vm_frame_root(dotted);
@@ -67,7 +67,7 @@ fn inline_hof_length_brent_declines_dotted_and_lasso_lists() {
 
 #[test]
 fn inline_hof_length_brent_reads_mutated_cdrs_without_cached_results() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.push_vm_root_frame();
     let sequence = Value::list((0..6).map(Value::make_int).collect());
     ctx.push_vm_frame_root(sequence);

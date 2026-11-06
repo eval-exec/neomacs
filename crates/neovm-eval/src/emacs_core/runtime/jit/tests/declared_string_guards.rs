@@ -70,7 +70,7 @@ fn declared_name() -> Value {
 
 #[test]
 fn declared_multibyte_high_bytes_miss_jit_raw_byte_aref_and_aset_guards() {
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let _guard = InlineStringGuard::new();
     let aref = compile_bytecode_function(&array_fn(ArrayOp::Aref)).expect("aref compiles");
     let aset = compile_bytecode_function(&array_fn(ArrayOp::Aset)).expect("aset compiles");

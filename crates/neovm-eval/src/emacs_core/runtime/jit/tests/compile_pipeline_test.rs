@@ -55,7 +55,7 @@ fn jit_pipeline_dispatch_compile_is_split_by_phase() {
     force_deopt_for_test(false);
     observe_stats();
     stats::reset_compile_stats();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let f = add1();
     let f_val = Value::make_bytecode(f.clone());
@@ -99,7 +99,7 @@ fn jit_pipeline_first_sight_and_direct_origins() {
     force_deopt_for_test(false);
     observe_stats();
     stats::reset_compile_stats();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let f = add1();
     assert!(crate::emacs_core::jit::test_support::resolve_leaf(ctx, &f).is_some());
@@ -458,7 +458,7 @@ pub(crate) fn corpus() -> Vec<(Vec<Op>, Vec<Value>, usize)> {
 /// body, so each compiles) and return its captured code.
 fn compile_corpus() -> Vec<String> {
     force_deopt_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     captured_code(|| {
         for (ops, constants, arity) in corpus() {
@@ -592,7 +592,7 @@ fn jit_pipeline_shim_table_names_every_registered_shim() {
 fn jit_pipeline_lazy_shim_import_keeps_only_used_imports() {
     force_deopt_for_test(false);
     let cons_body = || {
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         let ctx = &mut ev as *mut Context;
         let f = function(
             vec![Op::StackRef(0), Op::Dup, Op::Cons, Op::Return],

@@ -148,7 +148,7 @@ fn compiled(
 #[test]
 fn inline_entry_cache_empty_loop_never_checks_depth_and_first_call_keeps_original_pc() {
     let _knobs = Knobs::enter();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let f = flag_caller();
     let leaf = compiled(&mut ev, &f, ProtocolMode::Flags);
     ev.depth = 2;
@@ -173,7 +173,7 @@ fn inline_entry_cache_empty_loop_never_checks_depth_and_first_call_keeps_origina
 #[test]
 fn inline_entry_cache_successful_service_poll_rechecks_depth_at_the_next_call() {
     let _knobs = Knobs::enter();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let f = flag_caller();
     let leaf = compiled(&mut ev, &f, ProtocolMode::Flags);
     ev.eval_str(
@@ -202,7 +202,7 @@ fn inline_entry_cache_successful_service_poll_rechecks_depth_at_the_next_call() 
 #[test]
 fn inline_entry_cache_context_write_keeps_every_entry_protocol() {
     let _knobs = Knobs::enter();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let f = caller(true);
     let leaf = compiled(&mut ev, &f, ProtocolMode::Fresh);
     ev.depth = 100;
@@ -222,7 +222,7 @@ fn inline_entry_cache_context_write_keeps_every_entry_protocol() {
 fn inline_entry_physical_admission_fallback_keeps_empty_loops_observation_free() {
     let _knobs = Knobs::enter();
     for cause in [DeoptCause::DepthLimit, DeoptCause::InlineAttention] {
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         let f = caller(false);
         let leaf = compiled(&mut ev, &f, ProtocolMode::Physical);
         ev.depth = 100;
@@ -255,7 +255,7 @@ fn inline_entry_physical_admission_fallback_keeps_empty_loops_observation_free()
 #[test]
 fn inline_entry_physical_admission_fallback_preserves_argument_and_depth_error_order() {
     let _knobs = Knobs::enter();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let step = Value::make_bytecode(lexical(vec![Op::StackRef(0), Op::Sub1, Op::Return], vec![]));
     let f = lexical(
         vec![
@@ -301,7 +301,7 @@ fn inline_entry_physical_admission_fallback_preserves_argument_and_depth_error_o
 #[test]
 fn inline_entry_physical_poll_fallback_resumes_the_header_without_repeating_the_prefix() {
     let _knobs = Knobs::enter();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let counter = Value::cons(Value::make_int(0), Value::NIL);
     ev.set_variable("entry-physical-counter", counter);
     let step = Value::make_bytecode(lexical(

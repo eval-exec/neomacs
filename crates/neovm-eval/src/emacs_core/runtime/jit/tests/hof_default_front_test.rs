@@ -91,7 +91,7 @@ fn inlines_mapcar(leaf: &CompiledLeaf) -> bool {
 #[test]
 fn default_front_inlines_an_admitted_mapcar_callback() {
     let _production = Production::enter(true);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let callback = add1_callback();
     let source = caller(callback);
     ctx.push_vm_root_frame();
@@ -110,7 +110,7 @@ fn default_front_inlines_an_admitted_mapcar_callback() {
 #[test]
 fn default_front_leaves_a_calling_callback_on_legacy() {
     let _production = Production::enter(true);
-    let ctx = Context::new();
+    let ctx = Context::new(crate::test_utils::unit_runtime());
     let source = caller(calling_callback());
     match compile::compile_bytecode_function_with(&source, Some(&ctx.obarray)) {
         Ok(leaf) => assert!(!inlines_mapcar(&leaf)),
@@ -121,7 +121,7 @@ fn default_front_leaves_a_calling_callback_on_legacy() {
 #[test]
 fn hof_inline_off_keeps_the_legacy_front() {
     let _production = Production::enter(false);
-    let ctx = Context::new();
+    let ctx = Context::new(crate::test_utils::unit_runtime());
     let source = caller(add1_callback());
     match compile::compile_bytecode_function_with(&source, Some(&ctx.obarray)) {
         Ok(leaf) => assert!(!inlines_mapcar(&leaf)),

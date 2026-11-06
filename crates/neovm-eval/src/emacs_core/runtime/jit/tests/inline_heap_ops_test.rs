@@ -103,7 +103,7 @@ fn generational_context() -> Context {
         // SAFETY: the process is single-threaded here and the heap reads this
         // knob at construction.
         unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "1") };
-        Context::new()
+        Context::new(crate::test_utils::unit_runtime())
     };
     context.gc_stress = false;
     context.tagged_heap.set_gc_threshold(usize::MAX);
@@ -355,7 +355,7 @@ fn opt_cons_store_proofs_keep_deopt_and_barrier_paths() {
         )
         .expect("store lowers")
     };
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     for op in [Op::Setcar, Op::Setcdr] {
         let is_cdr = matches!(op, Op::Setcdr);

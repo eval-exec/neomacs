@@ -83,7 +83,7 @@ fn synthetic_leaf(
 
 #[test]
 fn inline_chain_deopt_readback_splits_binds_and_preserves_cross_frame_cons_aliases() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = callee();
     let pair = Value::cons(Value::make_int(7), Value::NIL);
     ctx.try_specbind(intern("chain-outer-binding"), Value::make_int(1))
@@ -146,7 +146,7 @@ fn inline_chain_deopt_readback_splits_binds_and_preserves_cross_frame_cons_alias
 #[test]
 fn inline_chain_deopt_native_raw_fixnum_spill_is_retagged_before_readback() {
     compile::force_deopt_for_test(false);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let mut leaf = compile::lower_nullary_leaf(
         &[
             Op::Constant(0),
@@ -174,7 +174,7 @@ fn inline_chain_deopt_native_raw_fixnum_spill_is_retagged_before_readback() {
 #[test]
 fn inline_chain_deopt_native_flonum_spill_boxes_aliases_once() {
     compile::force_deopt_for_test(false);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = function(
         3,
         vec![
@@ -232,7 +232,7 @@ fn inline_chain_deopt_native_flonum_spill_boxes_aliases_once() {
 
 #[test]
 fn inline_chain_deopt_owned_payload_resumes_virtual_frames() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let inner = callee();
     let caller = function(
         0,
@@ -276,7 +276,7 @@ fn inline_chain_deopt_consumer_uses_native_guard_pc_for_repeat_threshold() {
         site_limit: 2,
         ..ReoptKnobs::stress()
     }));
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let inner = callee();
     let caller = function(
         0,
@@ -355,7 +355,7 @@ fn inline_chain_deopt_consumer_uses_native_guard_pc_for_repeat_threshold() {
 
 #[test]
 fn inline_chain_deopt_rejects_unsupported_and_malformed_metadata() {
-    let ctx = Context::new();
+    let ctx = Context::new(crate::test_utils::unit_runtime());
     let f = callee();
     let spill = [
         Value::symbol("chain-callee"),
@@ -404,7 +404,7 @@ fn inline_chain_deopt_rejects_unsupported_and_malformed_metadata() {
 #[test]
 fn inline_chain_deopt_invalid_site_signals_and_resets_before_single_frame() {
     compile::force_deopt_for_test(false);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let leaf = compile::lower_nullary_leaf(
         &[Op::Constant(0), Op::Constant(1), Op::Max, Op::Return],
         &[Value::make_float(1.5), Value::make_int(7)],
@@ -451,7 +451,7 @@ fn inline_chain_deopt_metadata_is_shareable_and_native_outcome_stays_two_words()
 
 #[test]
 fn inline_chain_deopt_direct_cold_forwards_invalid_metadata_signal() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = function(0, vec![Op::Constant(0), Op::Return], vec![Value::NIL]);
     let leaf = synthetic_leaf(
         &[Value::NIL],

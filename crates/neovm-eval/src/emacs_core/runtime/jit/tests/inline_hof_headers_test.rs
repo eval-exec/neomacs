@@ -63,7 +63,7 @@ fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
 fn inline_hof_headers_refresh_captured_cell_after_a_serviced_poll() {
     let _knobs = Knobs::enter();
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.gc_stress = false;
     let cell = Value::cons(Value::make_int(0), Value::NIL);
     ctx.set_variable("hof-header-cell", cell);

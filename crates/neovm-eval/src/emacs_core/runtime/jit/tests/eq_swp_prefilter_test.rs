@@ -189,7 +189,7 @@ fn eq_prefilter_matches_the_interpreter_on_both_tiers() {
         crate::emacs_core::jit::compile::OptMode::Legacy,
     );
     force_profit_gate_for_test(false);
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let mir = eq_body(Shape::RequiredOnly);
     let mir_leaf = compile_bytecode_function(&mir).expect("compiles");
     assert_eq!(mir_leaf.tier, leaf::LeafTier::Mir);
@@ -204,7 +204,7 @@ fn eq_prefilter_matches_the_interpreter_on_both_tiers() {
 fn eq_prefilter_matches_the_interpreter_under_forced_deopt() {
     force_profit_gate_for_test(false);
     force_deopt_for_test(true);
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     for shape in [Shape::RequiredOnly, Shape::WithOptional] {
         let f = eq_body(shape);
         let leaf = compile_bytecode_function(&f).expect("compiles");
@@ -216,7 +216,7 @@ fn eq_prefilter_matches_the_interpreter_under_forced_deopt() {
 #[test]
 fn symbolp_prefilter_matches_the_interpreter() {
     force_profit_gate_for_test(false);
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let f = symbolp_body();
     for deopt in [false, true] {
@@ -244,7 +244,7 @@ fn symbolp_prefilter_matches_the_interpreter() {
 #[test]
 fn eq_prefilter_feeds_branches() {
     force_profit_gate_for_test(false);
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let f = eq_branch_body();
     let leaf = compile_bytecode_function(&f).expect("compiles");
@@ -272,7 +272,7 @@ fn eq_prefilter_feeds_branches() {
 fn eq_prefilter_off_calls_the_shim_for_every_mismatch() {
     force_profit_gate_for_test(false);
     force_eq_prefilter_for_test(false);
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let eq = eq_body(Shape::RequiredOnly);
     let eq_leaf = compile_bytecode_function(&eq).expect("compiles");

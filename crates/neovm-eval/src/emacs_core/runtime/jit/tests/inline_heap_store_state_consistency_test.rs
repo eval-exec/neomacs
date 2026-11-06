@@ -58,7 +58,7 @@ fn run_arm(arm: &str) {
     // Eager mode exercises emit_collection_write itself while captures are
     // active. Observed mode intentionally refuses observed stores to shims.
     assert_eq!(compiled_journal_mode(), CompiledJournalMode::Eager);
-    let mut context = Context::new_minimal_vm_harness();
+    let mut context = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     context.set_gc_threshold(usize::MAX);
     let owners = [
         Value::cons(Value::NIL, Value::NIL),
