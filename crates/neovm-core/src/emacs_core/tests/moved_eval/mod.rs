@@ -215,3 +215,6 @@ mod emacs_core_runtime_pdump_tests_pdump_bytecode_image_full_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/pdump/tests/pdump_mmap_image_readers_full_test.rs"]
 mod emacs_core_runtime_pdump_tests_pdump_mmap_image_readers_full_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/runtime/pdump/tests/pdump_section_inventory_full_test.rs"]
+mod emacs_core_runtime_pdump_tests_pdump_section_inventory_full_test_rs;

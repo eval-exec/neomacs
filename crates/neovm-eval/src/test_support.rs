@@ -1246,3 +1246,110 @@ pub fn builtin_aset_args_bare(
         args,
     )
 }
+
+/// Owned plain-data summary of what a file pdump's raw mmap sections carry.
+///
+/// The section-coverage oracle asserts only these flags/counts; no loader,
+/// decoder or image handle escapes the reader below.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawSectionInventory {
+    pub symbol_table_present: bool,
+    pub object_starts_present: bool,
+    pub object_extra_objects: usize,
+    pub obarray_symbols: usize,
+    pub charset_payload_bytes: usize,
+    pub coding_systems_payload_bytes: usize,
+    pub face_table_payload_bytes: usize,
+    pub buffers_payload_bytes: usize,
+    pub roots_payload_bytes: usize,
+    pub autoloads_payload_bytes: usize,
+    pub runtime_state_present: bool,
+}
+
+/// The ONE copied inspection route for the re-homed section-coverage oracle:
+/// run every production section loader over a loaded file image and return
+/// the owned summary above. The loaders, their decoded types and the image
+/// handle all stay inside this crate; failures keep the production loader's
+/// own panic messages.
+pub fn raw_section_inventory_for_test(
+    image: &crate::emacs_core::pdump::mmap_image::LoadedMmapImage,
+) -> RawSectionInventory {
+    use crate::emacs_core::pdump::mmap_image::DumpSectionKind;
+    let section = |kind: DumpSectionKind| image.section(kind);
+
+    let symbol_table_present = section(DumpSectionKind::SymbolTable).is_some();
+    let object_starts_present = section(DumpSectionKind::ObjectStarts).is_some();
+    let object_extra_objects = {
+        let payload = section(DumpSectionKind::ObjectExtra).expect("object-extra section");
+        crate::emacs_core::pdump::object_extra::load_object_extra(payload)
+            .expect("object extra")
+            .len()
+    };
+    let obarray_symbols = {
+        let payload = section(DumpSectionKind::Obarray).expect("obarray section");
+        crate::emacs_core::pdump::obarray_image::load_obarray_section(payload)
+            .expect("obarray")
+            .symbols
+            .len()
+    };
+    let charset_payload_bytes = {
+        let payload = section(DumpSectionKind::CharsetRegistry).expect("charset-registry section");
+        let _charset = crate::emacs_core::pdump::charset_image::load_charset_section(payload)
+            .expect("charset registry");
+        payload.len()
+    };
+    let coding_systems_payload_bytes = {
+        let payload = section(DumpSectionKind::CodingSystems).expect("coding-systems section");
+        let _coding_systems =
+            crate::emacs_core::pdump::coding_system_image::load_coding_system_section(payload)
+                .expect("coding systems");
+        payload.len()
+    };
+    let face_table_payload_bytes = {
+        let payload = section(DumpSectionKind::FaceTable).expect("face-table section");
+        let _faces = crate::emacs_core::pdump::face_image::load_face_table_section(payload)
+            .expect("face table");
+        payload.len()
+    };
+    let buffers_payload_bytes = {
+        let payload = section(DumpSectionKind::Buffers).expect("buffers section");
+        let _buffers = crate::emacs_core::pdump::buffer_image::load_buffer_manager_section(payload)
+            .expect("buffers");
+        payload.len()
+    };
+    let roots_payload_bytes = {
+        let payload = section(DumpSectionKind::Roots).expect("roots section");
+        let _roots =
+            crate::emacs_core::pdump::roots_image::load_roots_section(payload).expect("roots");
+        payload.len()
+    };
+    let autoloads_payload_bytes = {
+        let payload = section(DumpSectionKind::Autoloads).expect("autoloads section");
+        let _autoloads = crate::emacs_core::pdump::autoloads_image::load_autoloads_section(payload)
+            .expect("autoloads");
+        payload.len()
+    };
+    {
+        let payload = section(DumpSectionKind::RuntimeManagers).expect("runtime-managers section");
+        let _runtime_managers =
+            crate::emacs_core::pdump::runtime_managers_image::load_runtime_managers_section(
+                payload,
+            )
+            .expect("runtime managers");
+    }
+    let runtime_state_present = section(DumpSectionKind::RuntimeState).is_some();
+
+    RawSectionInventory {
+        symbol_table_present,
+        object_starts_present,
+        object_extra_objects,
+        obarray_symbols,
+        charset_payload_bytes,
+        coding_systems_payload_bytes,
+        face_table_payload_bytes,
+        buffers_payload_bytes,
+        roots_payload_bytes,
+        autoloads_payload_bytes,
+        runtime_state_present,
+    }
+}
