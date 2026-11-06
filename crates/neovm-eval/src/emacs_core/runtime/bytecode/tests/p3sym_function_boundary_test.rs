@@ -17,7 +17,7 @@ fn constant(answer: i64) -> Value {
     Value::make_bytecode(f)
 }
 fn fixture() -> (Context, [SymId; 2], Value, Value, Value) {
-    let mut ctx = Context::new_minimal_vm_harness();
+    let mut ctx = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     // The reduced constructor leaves unreachable default weak-table residue.
     // Drain it before creating any test definition/root, retaining the strict
     // production admission fence. This native cache fixture is not a Miri row.

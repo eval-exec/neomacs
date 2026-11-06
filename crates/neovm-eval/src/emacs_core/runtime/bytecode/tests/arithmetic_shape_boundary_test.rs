@@ -154,7 +154,7 @@ fn assert_frontiers(ctx: &Context, specpdl_base: usize, case: &Case<'_>) {
 #[test]
 fn arithmetic_shape_checked_and_verified_dynamic_operands_match_gnu() {
     for verified in [false, true] {
-        let mut ctx = Context::new_vm_runtime_harness();
+        let mut ctx = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
         ctx.set_variable("symbols-with-pos-enabled", Value::T);
         let specpdl_base = ctx.specpdl.len();
         let functions: BTreeMap<_, _> =
@@ -205,7 +205,7 @@ fn arithmetic_shape_checked_and_verified_dynamic_operands_match_gnu() {
 fn arithmetic_shape_dynamic_native_and_precise_deopt_match_gnu() {
     use crate::emacs_core::jit::compile::{NativeRun, lower_leaf, take_pending_flow};
 
-    let mut ctx = Context::new_vm_runtime_harness();
+    let mut ctx = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     ctx.set_variable("symbols-with-pos-enabled", Value::T);
     let specpdl_base = ctx.specpdl.len();
     let functions: BTreeMap<_, _> = ["add1", "sub1", "add", "sub", "eq", "lt", "gt", "le", "ge"]

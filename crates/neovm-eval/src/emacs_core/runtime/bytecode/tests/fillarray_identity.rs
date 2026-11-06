@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn vm_named_fillarray_redefinition_keeps_original_argument() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     let concat = eval.eval_str("(symbol-function 'concat)").unwrap();
     eval.obarray
         .set_symbol_function_id(intern("fillarray"), concat);
@@ -23,7 +23,7 @@ fn vm_named_fillarray_redefinition_keeps_original_argument() {
 #[test]
 fn vm_redefined_fillarray_preserves_global_nested_and_hash_aliases() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     let original = eval
         .eval_str(
             r#"(progn

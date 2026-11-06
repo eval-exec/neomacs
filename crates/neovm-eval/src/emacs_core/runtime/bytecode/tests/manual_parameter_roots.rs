@@ -6,7 +6,7 @@ use crate::emacs_core::eval::Context;
 #[test]
 fn p6_manual_execute_roots_parameters_after_formal_binding_and_body_gc() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     let formal = intern("p6-manual-parameter-root");
     let parameter_list = Value::list(vec![Value::from_sym_id(formal)]);
     let observable_arglist = Value::list(vec![Value::fixnum(91)]);

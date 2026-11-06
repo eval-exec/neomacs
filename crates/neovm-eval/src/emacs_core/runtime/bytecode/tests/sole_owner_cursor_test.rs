@@ -5,7 +5,7 @@ use crate::emacs_core::eval::Context;
 #[test]
 fn sole_owner_cursor_nested_published_phases_keep_operand_roots() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     context
         .bc_buf
         .push(Value::list(vec![Value::string("outer-only")]));
@@ -35,7 +35,7 @@ fn sole_owner_cursor_nested_published_phases_keep_operand_roots() {
 #[test]
 fn sole_owner_cursor_published_panic_retires_without_drop_work() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     context
         .bc_buf
         .push(Value::list(vec![Value::string("panic-only")]));

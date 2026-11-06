@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn vm_unbind_zero_preserves_caller_binding_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let symbol = intern("vm-unbind-zero-caller-binding");
     eval.obarray.set_symbol_value_id(symbol, Value::fixnum(7));
     eval.try_specbind(symbol, Value::fixnum(31)).unwrap();
@@ -30,7 +30,7 @@ fn vm_unbind_zero_preserves_caller_binding_like_gnu() {
 #[test]
 fn vm_unbind_excess_rejects_without_unwinding_caller() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let symbol = intern("vm-unbind-excess-caller-binding");
     eval.obarray.set_symbol_value_id(symbol, Value::fixnum(7));
     eval.try_specbind(symbol, Value::fixnum(31)).unwrap();
@@ -69,7 +69,7 @@ fn vm_unbind_excess_rejects_without_unwinding_caller() {
 #[test]
 fn vm_unbind_excess_signal_is_caught_by_the_same_frame_handler() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let symbol = intern("vm-unbind-excess-handled-binding");
     eval.obarray.set_symbol_value_id(symbol, Value::fixnum(7));
     eval.try_specbind(symbol, Value::fixnum(31)).unwrap();

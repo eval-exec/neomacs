@@ -26,7 +26,7 @@ fn code(nargs: usize, ops: Vec<Op>, constants: Vec<Value>) -> Value {
 fn context() -> Context {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::force_jit_off_for_test(true);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.push_vm_root_frame();
     ctx.depth = 1;
     ctx

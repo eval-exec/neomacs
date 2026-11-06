@@ -5,7 +5,7 @@ use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 #[test]
 fn p3sym_c5_vm_readers_and_function_caches_survive_intern_relocation() {
     let _stamps = Context::c5_function_stamps_for_test();
-    let mut ctx = Context::new_minimal_vm_harness();
+    let mut ctx = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     ctx.set_variable("window-dead-windows-table", Value::NIL);
     ctx.gc_collect_exact();
     let global = intern("p3sym-c5-vm-old-value");

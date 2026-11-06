@@ -6,7 +6,7 @@ use neovm_value::value::LambdaParams;
 #[test]
 fn interpreter_collection_opcodes_keep_capture_dependencies() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_vm_runtime_harness();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     for (op, prefix) in [
         (Op::Car, 1),
         (Op::Cdr, 1),

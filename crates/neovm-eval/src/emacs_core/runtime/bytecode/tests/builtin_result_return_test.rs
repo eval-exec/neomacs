@@ -19,7 +19,7 @@ use neovm_value::value::LambdaParams;
 
 /// Arm a `signal-hook-function` that records whether a backtrace frame for
 /// TARGET (its symbol, or its subr object) is live when a signal is raised.
-/// Special forms only: the bare `Context::new()` has no `when`, and a hook
+/// Special forms only: the bare `Context::new(crate::test_utils::unit_runtime())` has no `when`, and a hook
 /// that signals re-enters itself (GNU does not rebind it either).
 fn install_frame_probe(eval: &mut Context, target: &str) {
     eval.eval_str(&format!("(setq brr-target '{target} brr-seen 'no-signal)"))
@@ -121,7 +121,7 @@ fn run(eval: &mut Context, f: &ByteCodeFunction, args: Vec<Value>) -> EvalResult
 #[test]
 fn bcall_builtin_results_arity_and_signal_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     install_frame_probe(&mut eval, "car");
     let car1 = bcall_fn("car", 1);
     let list = rooted(eval.eval_str("'(7 8)").unwrap());
@@ -154,7 +154,7 @@ fn bcall_builtin_results_arity_and_signal_frame() {
 #[test]
 fn inline_builtin_results_and_frameless_signal() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str("(insert \"abc\")").unwrap();
     install_frame_probe(&mut eval, "char-after");
     let mut f = ByteCodeFunction::new(params(1));
@@ -185,7 +185,7 @@ fn inline_builtin_results_and_frameless_signal() {
 #[test]
 fn arithmetic_opcode_slow_arm_results_and_frameless_signal() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     install_frame_probe(&mut eval, "*");
     let big = rooted(eval.eval_str("(expt 3 90)").unwrap());
     let mul = arith_fn(Op::Mul, 2);
@@ -220,7 +220,7 @@ fn arithmetic_opcode_slow_arm_results_and_frameless_signal() {
 #[test]
 fn spec_subr_stack_results_arity_and_signal_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     install_frame_probe(&mut eval, "car");
     let car = intern("car");
     let subr = <Value as SubrValueExt>::subr_from_sym_id(car);
@@ -257,7 +257,7 @@ fn jit_spec_subr_from_bc_stack_results_and_signal_frame() {
         crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str("(insert \"hello world\")").unwrap();
     install_frame_probe(&mut eval, "re-search-forward");
     let make = |hot: bool| {
@@ -309,7 +309,7 @@ fn jit_arith_generic_results_and_frameless_signal() {
         NativeRun, compile_bytecode_function, take_pending_flow,
     };
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     install_frame_probe(&mut eval, "*");
     let f = arith_fn(Op::Mul, 2);
     f.jit_runtime()

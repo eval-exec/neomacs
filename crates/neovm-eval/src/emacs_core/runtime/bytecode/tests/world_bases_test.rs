@@ -65,7 +65,7 @@ fn throw_after_replacing_buffers(context: &mut Context) -> EvalResult {
 #[test]
 fn world_bases_cursor_reacquires_after_publication_gc_and_manager_replacement() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let global = intern("world-bases-published-global");
     context
         .obarray
@@ -114,7 +114,7 @@ fn world_bases_cursor_reacquires_after_publication_gc_and_manager_replacement() 
 #[test]
 fn world_bases_varref_keeps_plain_forwarded_alias_and_localized_reads() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     context
         .eval_str(
             "(progn
@@ -158,7 +158,7 @@ fn world_bases_varref_keeps_plain_forwarded_alias_and_localized_reads() {
 #[test]
 fn world_bases_varset_keeps_plain_alias_forwarded_local_and_watcher_channels() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     context
         .eval_str(
             "(progn
@@ -218,7 +218,7 @@ fn world_bases_varset_keeps_plain_alias_forwarded_local_and_watcher_channels() {
 #[test]
 fn world_bases_varset_plain_cell_is_a_canonical_root_after_collection() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let target = intern("world-bases-store-canonical-root");
     context.obarray.set_symbol_value_id(target, Value::NIL);
     let code = function(
@@ -248,7 +248,7 @@ fn world_bases_varset_plain_cell_is_a_canonical_root_after_collection() {
 #[test]
 fn world_bases_bytecode_callback_publishes_new_value_and_function_epoch() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new_vm_runtime_harness();
+    let mut context = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     let target = intern("world-bases-redefined-target");
     let callback = intern("world-bases-redefining-callback");
     let variable = intern("world-bases-redefined-variable");
@@ -319,7 +319,7 @@ fn world_bases_bytecode_callback_publishes_new_value_and_function_epoch() {
 #[test]
 fn world_bases_native_callback_rejoins_with_current_buffer_storage_and_selection() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     context.register_subr(SubrSpec::fixed0(
         "world-bases-replace-buffers",
         replace_buffers_and_collect,
@@ -358,7 +358,7 @@ fn world_bases_native_callback_rejoins_with_current_buffer_storage_and_selection
 #[test]
 fn world_bases_signal_rejoin_observes_hook_mutation_after_callback_gc() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     context.register_subr(SubrSpec::fixed0(
         "world-bases-signal-callback",
         signal_after_replacing_buffers,
@@ -404,7 +404,7 @@ fn world_bases_signal_rejoin_observes_hook_mutation_after_callback_gc() {
 #[test]
 fn world_bases_throw_rejoin_delivers_value_and_current_owner_reads() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     context.register_subr(SubrSpec::fixed0(
         "world-bases-throw-callback",
         throw_after_replacing_buffers,
@@ -445,7 +445,7 @@ fn world_bases_varref_reads_nil_undo_and_all_object_forwarders_after_gc() {
     use neovm_value::forward::{LispFwdType, alloc_kboard_objfwd, alloc_objfwd};
 
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     context.obarray.define_bool_variable(
         "world-bases-forwarded-bool",
         false,
@@ -560,7 +560,7 @@ enum VoidVarRefChannel {
 #[test]
 fn world_bases_varref_preserves_missing_keyword_and_void_channel_errors() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let plain = intern("world-bases-void-plain");
     context.obarray.ensure_symbol_id(plain);
     let alias = intern("world-bases-void-alias");

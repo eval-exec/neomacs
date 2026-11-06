@@ -48,7 +48,7 @@ fn slow(eval: &mut Context, kind: ArithGenericKind, args: &[Value]) -> String {
 #[test]
 fn integer_fast_path_matches_the_full_builtin_for_every_kind() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str("(insert \"abcdef\")").unwrap();
     eval.eval_str("(goto-char 3)").unwrap();
     let pool: Vec<(Value, bool, &str)> = POOL
@@ -110,7 +110,7 @@ fn integer_fast_path_matches_the_full_builtin_for_every_kind() {
 #[test]
 fn integer_fast_path_never_reaches_the_debugger_or_signal_hook() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str(
         "(setq afp-entered nil
                debug-on-error t
@@ -141,7 +141,7 @@ fn integer_fast_path_never_reaches_the_debugger_or_signal_hook() {
 #[test]
 fn arithmetic_opcodes_answer_integer_operands_directly() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let cases: &[(Op, &str, &str, &str)] = &[
         (Op::Mul, "(expt 3 50)", "-9", "(* (expt 3 50) -9)"),
         (
@@ -202,7 +202,7 @@ fn arithmetic_opcodes_answer_integer_operands_directly() {
 #[test]
 fn division_opcode_preserves_fixnum_boundaries_and_slow_conditions() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let cases = [
         ("most-negative-fixnum", "-1"),
         ("most-negative-fixnum", "1"),

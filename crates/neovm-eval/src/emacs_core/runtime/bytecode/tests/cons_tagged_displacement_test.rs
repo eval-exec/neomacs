@@ -19,7 +19,7 @@ fn execute(ctx: &mut Context, code: &ByteCodeFunction, cell: Value) -> Value {
 #[test]
 fn bytecode_cons_tagged_displacements_preserve_exact_slots_and_capture() {
     for verified in [false, true] {
-        let mut ctx = Context::new_vm_runtime_harness();
+        let mut ctx = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
         for op in [Op::Car, Op::Cdr, Op::CarSafe, Op::CdrSafe] {
             let roots = ctx.save_vm_roots();
             // Distinct heap-backed values make a wrong slot obvious and are

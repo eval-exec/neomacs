@@ -28,7 +28,7 @@ fn copied_bytecode(target: ResolvedStackCallTarget) -> Value {
 #[test]
 fn world_bases_call_reader_reacquires_after_epoch_retirement() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let symbol = intern("world-bases-pure-call-reader");
     let called = Value::from_sym_id(symbol);
     let first = bytecode(11);
@@ -51,7 +51,7 @@ fn world_bases_call_reader_reacquires_after_epoch_retirement() {
 #[test]
 fn world_bases_call_reader_warm_hit_keeps_current_callee() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let symbol = intern("world-bases-pure-call-reader-count");
     let called = Value::from_sym_id(symbol);
     let callee = bytecode(33);

@@ -7,7 +7,7 @@ use neovm_value::forward::{alloc_kboard_objfwd, alloc_objfwd};
 #[test]
 fn world_bases_admission_distinguishes_direct_nil_and_dedicated_selection() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let nonnil = intern("world-bases-admission-nonnil");
     let nil = intern("world-bases-admission-nil");
     context
@@ -36,7 +36,7 @@ fn world_bases_admission_distinguishes_direct_nil_and_dedicated_selection() {
 #[test]
 fn world_bases_admission_keeps_missing_and_unbound_slot_errors() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let missing_keyword = intern(":world-bases-admission-missing-keyword");
     let missing_plain = intern("world-bases-admission-missing-plain");
     let unbound = intern("world-bases-admission-unbound");
@@ -61,7 +61,7 @@ fn world_bases_admission_keeps_missing_and_unbound_slot_errors() {
 #[test]
 fn world_bases_admission_does_not_steal_forwarded_unbound_as_control() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let object = intern("world-bases-admission-forwarded-object-unbound");
     let keyboard = intern("world-bases-admission-forwarded-keyboard-unbound");
     context
@@ -83,7 +83,7 @@ fn world_bases_admission_does_not_steal_forwarded_unbound_as_control() {
 #[test]
 fn world_bases_admission_dedicated_nil_keeps_the_no_current_buffer_result() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     context.buffers = neovm_edit::buffer::BufferManager::new();
     let undo = intern("buffer-undo-list");
     let mut code = ByteCodeFunction::new(LambdaParams::simple(vec![]));

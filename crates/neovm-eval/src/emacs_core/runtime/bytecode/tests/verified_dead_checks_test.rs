@@ -175,7 +175,7 @@ fn reference(
 }
 
 fn run_case(name: &str, ops: Vec<Op>, constants: Vec<Datum>, args: Vec<Datum>, max_stack: usize) {
-    let mut ctx = Context::new_vm_runtime_harness();
+    let mut ctx = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     let values: Vec<Value> = constants.iter().map(Datum::value).collect();
     let arguments: Vec<Value> = args.iter().map(Datum::value).collect();
     let roots = ctx.save_vm_roots();
