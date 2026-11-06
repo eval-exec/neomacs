@@ -79,7 +79,7 @@ fn quit_request_counts_raised_cells_exactly() {
 #[test]
 fn a_raised_quit_request_sends_the_safe_point_to_its_slow_path() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     assert!(ctx.maybe_quit_hot_ok(), "nothing pending at start");
     ctx.quit_requested.request();
     assert_ne!(crate::emacs_core::eval::ASYNC_ATTENTION.load(), 0);
@@ -101,7 +101,7 @@ fn a_raised_quit_request_sends_the_safe_point_to_its_slow_path() {
 #[test]
 fn quit_request_from_another_thread_interrupts_an_evaluator_loop() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let bridge = ctx.quit_requested.clone();
     let raiser = std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(50));

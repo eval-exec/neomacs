@@ -18,7 +18,7 @@ fn sole_owner_phase_is_pointer_free_and_needs_no_retirement() {
 
 #[test]
 fn sole_owner_factory_registration_adds_no_allocation_lease() {
-    let context = Context::new_minimal_vm_harness();
+    let context = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let before = Arc::strong_count(&context.obarray.lease.0);
     let registration = context.obarray.sole_owner_registration();
     assert_eq!(Arc::strong_count(&context.obarray.lease.0), before);
@@ -31,7 +31,7 @@ fn sole_owner_factory_registration_adds_no_allocation_lease() {
 
 #[test]
 fn sole_owner_policy_keeps_original_context_reborrowable() {
-    let mut context = Context::new_minimal_vm_harness();
+    let mut context = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let epoch = context.dispatch_projection().function_epoch();
     let vm = context.obarray.sole_owner_registration().into_vm();
     let driver = vm.driver();
@@ -51,7 +51,7 @@ fn sole_owner_plain_tokens_allow_ordinary_activation_transport() {
         driver
     }
 
-    let context = Context::new_minimal_vm_harness();
+    let context = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let vm = context.obarray.sole_owner_registration().into_vm();
     let outer = transport(vm.driver());
     let inner = transport(vm.driver());

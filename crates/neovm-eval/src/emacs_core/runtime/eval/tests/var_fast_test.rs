@@ -299,7 +299,7 @@ const FIXTURE_VARS: &[&str] = &[
 fn fixture() -> Context {
     use crate::emacs_core::defvar_bool::ByteBooleanVars;
     use neovm_value::forward::{alloc_kboard_objfwd, alloc_objfwd};
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // Each transcript builds its own context, so its own heap: re-pin the
     // thread's JIT cache to it now, while no native leaf runs, rather than
     // letting a GC root walk inside a JIT program find the heap changed.

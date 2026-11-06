@@ -38,7 +38,7 @@ fn constant_slots_are_reserved_from_every_dynamic_symbol() {
 
 #[test]
 fn colliding_dynamic_read_keeps_the_cached_constant_answer() {
-    let ev = Context::new();
+    let ev = Context::new(crate::test_utils::unit_runtime());
     let lexenv = Value::NIL;
     assert!(ev.lexenv_lookup_cached_in(lexenv, NIL_SYM_ID).is_none());
 
@@ -67,7 +67,7 @@ fn colliding_dynamic_read_keeps_the_cached_constant_answer() {
 
 #[test]
 fn crafted_lexenv_constant_binding_survives_dynamic_reads() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     assert_eq!(
         ev.eval_str("(eval 'nil '((nil . 42)))").unwrap(),
         Value::fixnum(42)

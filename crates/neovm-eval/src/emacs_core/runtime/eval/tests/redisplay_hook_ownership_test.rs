@@ -47,7 +47,7 @@ fn pending_targets_join_until_transaction_reset() {
 fn callback_and_active_guard_restore_during_rust_unwind() {
     use std::cell::Cell;
     use std::rc::Rc;
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let restored = Rc::new(Cell::new(false));
     let observed = restored.clone();
     eval.redisplay_fn = Some(Box::new(move |_| observed.set(true)));
@@ -74,7 +74,7 @@ fn callback_and_active_guard_restore_during_rust_unwind() {
 
 #[test]
 fn exceptional_layout_payload_remains_owned_until_taken() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let payload = Value::string("fresh layout throw");
     eval.defer_redisplay_hook_flow(Flow::throw(Value::symbol("layout-test"), payload));
     assert!(eval.redisplay_hook_flow_pending());
@@ -105,7 +105,7 @@ fn physical_redraw_waits_for_exact_rendered_frame_not_hook_or_display_ack() {
 
 #[test]
 fn committed_scroll_guard_keeps_outer_active_owner_and_restores_idle_owner() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     {
         let guard = eval.gnu_guard_committed_scroll();
         assert!(guard.eval.gnu_redisplay_hooks.active.is_active());
@@ -149,7 +149,7 @@ fn accepted_body_fixture() -> (
 ) {
     use crate::window::{PresentedWindowRegions, WindowDisplaySnapshot};
     use neomacs_display_protocol::types::Rect as TransportRect;
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.current_buffer_id().expect("buffer");
     let frame_id = eval
         .frames
@@ -306,7 +306,7 @@ fn redisplay_transaction_panic_fallback_never_calls_panicking_lisp() {
         panic!("Lisp callback must not run during Rust panic recovery");
     }
     let _policy = RedisplayHookPolicyGuard::gnu();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let sentinel = neovm_value::intern::intern("redisplay-recovery-lisp-ran");
     let symbol = neovm_value::intern::intern("redisplay-recovery-watched");
     eval.obarray.set_symbol_value_id(sentinel, Value::NIL);
@@ -351,7 +351,7 @@ fn redisplay_transaction_panic_fallback_never_calls_panicking_lisp() {
 // Direct window.el commits and preparatory redisplay share GNU's physical
 // current-matrix invalidation. No test below manufactures terminal cell data.
 fn direct_mini_commit_fixture() -> (Context, FrameId, WindowId, i64, i64) {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let (mini, root_height, mini_height) = {
         let state = eval.frames.get_mut(frame).expect("frame");

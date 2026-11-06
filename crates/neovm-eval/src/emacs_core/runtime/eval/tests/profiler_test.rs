@@ -3,7 +3,7 @@ use crate::emacs_core::bytecode::value_api::TaggedValueBytecodePolicyExt;
 
 #[test]
 fn cpu_folded_renders_recorded_stacks_with_names_and_sorts_by_count() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     // Not running, so the profiler_poll() inside profiler_cpu_folded is a
     // no-op and the log holds exactly what we record.
     assert!(!ctx.profiler.is_active());
@@ -25,7 +25,7 @@ fn cpu_folded_renders_recorded_stacks_with_names_and_sorts_by_count() {
 
 #[test]
 fn diagnostics_capture_resets_stale_log_and_does_not_hijack() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     assert!(!ctx.profiler.is_active());
 
     // Stale samples from a hypothetical prior capture.
@@ -83,7 +83,7 @@ fn same_source_interpreted_closure_instances_do_not_merge_like_gnu_function_equa
     // GNU 31: two interpreted-function instances of the same lambda are NOT
     // `function-equal` (they merge EQ-only). Only compiled closures merge by
     // shared bytecode -- see the compiled-closure test below.
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let closures = ctx
         .eval_str(
             "(let ((make-closure (lambda () (lambda (value) value))))
@@ -103,7 +103,7 @@ fn same_source_interpreted_closure_instances_do_not_merge_like_gnu_function_equa
 
 #[test]
 fn same_source_compiled_closure_instances_merge_like_gnu_function_equal() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let closures = ctx
         .eval_str(
             r#"(let* ((prototype (make-byte-code 0 "\300\207" [nil] 1))
@@ -126,7 +126,7 @@ fn same_source_compiled_closure_instances_merge_like_gnu_function_equal() {
 
 #[test]
 fn structurally_equal_export_keys_preserve_all_counts() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let first = ctx.eval_str("(lambda (value) value)").unwrap();
     let second = ctx.eval_str("(lambda (value) value)").unwrap();
     assert_ne!(first.bits(), second.bits());
@@ -166,7 +166,7 @@ fn automatic_gc_samples_use_the_gnu_special_bucket() {
 
 #[test]
 fn profiler_frames_remain_gc_roots_after_the_call_returns() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let closure = ctx.eval_str("(lambda (value) value)").unwrap();
     let mut log = ProfilerLog::new(1, 10);
     log.record(&[closure], 1);
@@ -232,7 +232,7 @@ fn profiler_el_public_memory_workflow_builds_and_renders_a_report() {
 #[test]
 fn profiler_tick_bit_round_trip() {
     use crate::emacs_core::eval::{ASYNC_ATTENTION, AsyncSource};
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     assert!(ctx.maybe_quit_hot_ok());
     ASYNC_ATTENTION.raise(AsyncSource::ProfilerTick);
     assert!(

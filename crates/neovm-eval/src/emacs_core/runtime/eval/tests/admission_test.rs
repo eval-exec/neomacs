@@ -51,7 +51,7 @@ fn legacy_lets(ev: &Context) -> usize {
 
 #[test]
 fn admission_needs_a_green_world_and_is_sticky() {
-    let mut sim = Context::new();
+    let mut sim = Context::new(crate::test_utils::unit_runtime());
     assert!(matches!(sim.admit_threads(), Err(AdmissionError::NotGreen)));
     assert!(!sim.threads_admitted());
 
@@ -363,7 +363,7 @@ fn symbols_born_after_admission_behave_as_before() {
     ];
     let setup = "(progn (defvar tfr-pre 1) (defvar tfr-pre-local 2)
                         (make-variable-buffer-local 'tfr-pre-local))";
-    let mut sim = Context::new();
+    let mut sim = Context::new(crate::test_utils::unit_runtime());
     let mut ev = green();
     eval(&mut sim, setup);
     eval(&mut ev, setup);
