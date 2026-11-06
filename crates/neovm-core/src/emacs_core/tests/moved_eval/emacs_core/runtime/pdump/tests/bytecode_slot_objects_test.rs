@@ -5,9 +5,19 @@
 //! slot object created after the load in a mapped function is a young
 //! object held by a dumped owner, so the write barrier must remember the
 //! owner or the next collection frees it.
-use super::*;
-use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+// API-drift shims (post-split re-home): the pre-split test reached `Context`,
+// `ByteCodeFunction`, `LambdaParams`, `Op`, `dump_to_file` and
+// `load_from_dump` through `use super::*`. The pdump constructor is now the
+// core test facade; the seal goes through the signed AUTHORITY fence (the
+// upper-crate `ByteCodeFunctionExt` trait stays crate-private); the obarray
+// and heap readers use their public accessors.
+use crate::emacs_core::bytecode::chunk::ByteCodeFunction;
+use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+use crate::emacs_core::eval::Context;
+use crate::emacs_core::load_boot::load_from_dump;
+use crate::emacs_core::pdump::dump_to_file;
+use neovm_value::value::{LambdaParams, Value};
 fn eval(ctx: &mut Context, src: &str) -> Value {
     let v = ctx.eval_str(src).unwrap_or_else(|e| panic!("{src}: {e:?}"));
     crate::emacs_core::eval::push_scratch_gc_root(v);
@@ -22,7 +32,7 @@ fn printed(ctx: &mut Context, src: &str) -> String {
 fn bytecode_slot_objects_round_trip_with_their_identity() {
     crate::test_utils::init_test_tracing();
     let scratch_base = crate::emacs_core::eval::save_scratch_gc_roots();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     // GNU bytecode (the reader literal): a self-contained mapped function
     // whose slot objects exist at dump time, and one whose do not.
     eval(
@@ -37,16 +47,16 @@ fn bytecode_slot_objects_round_trip_with_their_identity() {
     decoded.ops = vec![Op::Constant(0), Op::Return];
     decoded.constants = vec![Value::fixnum(7)].into();
     decoded.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
-    decoded.seal_hand_assembled_ops();
-    ctx.obarray
+    neovm_eval::test_support::authority::seal_hand_assembled_ops_for_test(&mut decoded);
+    ctx.obarray_mut()
         .set_symbol_value("psi-decoded", Value::make_bytecode(decoded));
     eval(&mut ctx, "(defvar psi-decoded-consts (aref psi-decoded 2))");
     let mut decoded_fresh = ByteCodeFunction::new(LambdaParams::simple(Vec::new()));
     decoded_fresh.ops = vec![Op::Constant(0), Op::Return];
     decoded_fresh.constants = vec![Value::fixnum(8)].into();
     decoded_fresh.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
-    decoded_fresh.seal_hand_assembled_ops();
-    ctx.obarray
+    neovm_eval::test_support::authority::seal_hand_assembled_ops_for_test(&mut decoded_fresh);
+    ctx.obarray_mut()
         .set_symbol_value("psi-decoded-fresh", Value::make_bytecode(decoded_fresh));
 
     let dir = tempfile::tempdir().unwrap();
@@ -68,7 +78,7 @@ fn bytecode_slot_objects_round_trip_with_their_identity() {
     );
     let consts = eval(&mut loaded, "psi-consts");
     assert!(
-        loaded.tagged_heap.mapped_image_owns_for_test(consts),
+        loaded.tagged_heap().mapped_image_owns_for_test(consts),
         "a dumped slot object is image-resident"
     );
 
@@ -85,7 +95,7 @@ fn bytecode_slot_objects_round_trip_with_their_identity() {
     for (owner, mapped, _) in owners {
         let value = eval(&mut loaded, owner);
         assert_eq!(
-            loaded.tagged_heap.mapped_image_owns_for_test(value),
+            loaded.tagged_heap().mapped_image_owns_for_test(value),
             mapped,
             "{owner}"
         );
@@ -98,7 +108,7 @@ fn bytecode_slot_objects_round_trip_with_their_identity() {
         let before_slot_objects = crate::emacs_core::eval::save_scratch_gc_roots();
         let vector = eval(&mut loaded, &format!("(aref {owner} 2)"));
         let code = eval(&mut loaded, &format!("(aref {owner} 1)"));
-        assert!(!loaded.tagged_heap.mapped_image_owns_for_test(vector));
+        assert!(!loaded.tagged_heap().mapped_image_owns_for_test(vector));
         // From here the function is their only holder.
         crate::emacs_core::eval::restore_scratch_gc_roots(before_slot_objects);
         for gc_stress in [false, true] {

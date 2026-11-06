@@ -1,7 +1,14 @@
 //! Packed bool-vectors (`BoolVectorObj`, P3.2 L0.2) survive a pdump round
 //! trip: their bits, their identity where two holders share one, `equal`
 //! hash-table keys, and a category table's shared category sets.
-use super::*;
+// API-drift shims (post-split re-home): the pre-split test reached the
+// pdump module's `dump_to_file`/`load_from_dump` through `use super::*`;
+// `load_from_dump` now lives in core's load_boot and the evaluator is built
+// through the core test facade.
+use crate::emacs_core::eval::Context;
+use crate::emacs_core::load_boot::load_from_dump;
+use crate::emacs_core::pdump::dump_to_file;
+use neovm_value::value::Value;
 
 fn eval(ctx: &mut Context, src: &str) -> Value {
     let v = ctx.eval_str(src).unwrap_or_else(|e| panic!("{src}: {e:?}"));
@@ -17,7 +24,7 @@ fn printed(ctx: &mut Context, src: &str) -> String {
 fn packed_bool_vectors_round_trip_with_their_identity() {
     crate::test_utils::init_test_tracing();
     let scratch_base = crate::emacs_core::eval::save_scratch_gc_roots();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     eval(
         &mut ctx,
         "(progn

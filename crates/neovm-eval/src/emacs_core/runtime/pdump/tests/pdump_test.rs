@@ -2546,11 +2546,6 @@ fn baked_stub_template_is_stack_state_independent() {
     );
 }
 
-#[path = "bool_vectors_test.rs"]
-mod bool_vectors;
-#[path = "bytecode_slot_objects_test.rs"]
-mod bytecode_slot_objects;
-
 #[cfg(test)]
 #[path = "decode_hardening_test.rs"]
 mod decode_hardening;
