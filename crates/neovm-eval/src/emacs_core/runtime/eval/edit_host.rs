@@ -404,10 +404,15 @@ impl EditHost for Context {
     }
 
     fn sync_window_positions(&mut self, buffer: BufferId) {
-        // Inherent `Context` method (defined beside the window position
-        // caches it refreshes); the path resolves to it, not to this
-        // trait method, because inherent items take precedence.
-        Context::sync_window_positions(self, buffer)
+        // Pre-split inherent body (core window/display.rs, moved by the eval
+        // split): walk every frame and refresh the leaf window caches from
+        // their markers.  The split carried only the free functions, so the
+        // old `Context::sync_window_positions` path now names this trait
+        // method itself and must not be kept.
+        crate::emacs_core::eval::data::window_markers::sync_all_frames_for_buffer(
+            self.frame_manager_mut(),
+            buffer,
+        )
     }
 
     fn invisible_source_run_end(
