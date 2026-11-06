@@ -98,7 +98,7 @@ fn coding_info(name: neovm_value::intern::SymId, label: &str) -> CodingSystemInf
 
 #[test]
 fn deterministic_order_coding_registry_preserves_priority_and_alias_sequences() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let systems: Vec<_> = (0..16)
         .map(|index| {
             let name = intern(&format!("pdump-order-coding-{index}"));
@@ -159,7 +159,7 @@ fn deterministic_order_coding_registry_preserves_priority_and_alias_sequences() 
 
 #[test]
 fn deterministic_order_coding_properties_are_ordered_before_heap_encoding() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let name = intern("pdump-order-single-coding");
     let mut info = coding_info(name, "single coding");
     let properties: Vec<_> = (0..16)
@@ -199,7 +199,7 @@ fn deterministic_order_coding_properties_are_ordered_before_heap_encoding() {
 
 #[test]
 fn deterministic_order_autoloads_preserve_callback_and_loaded_file_sequences() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let entries: Vec<_> = (0..16)
         .map(|index| {
             (
@@ -268,7 +268,7 @@ fn deterministic_order_autoloads_preserve_callback_and_loaded_file_sequences() {
 
 #[test]
 fn deterministic_order_faces_are_ordered_before_value_encoding() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let faces: Vec<_> = (0..16)
         .map(|index| {
             let name = format!("pdump-order-face-{index}");
@@ -297,7 +297,7 @@ fn deterministic_order_faces_are_ordered_before_value_encoding() {
 
 #[test]
 fn deterministic_order_runtime_interactive_specs_are_ordered_before_value_encoding() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let specs: Vec<_> = (0..16)
         .map(|index| {
             (

@@ -84,7 +84,7 @@ fn dumped_gnu_bytecode_does_not_duplicate_derived_instructions() {
         0xC1, 0x87,
     ]));
 
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.obarray
         .set_symbol_value("pdump-bytecode-source", Value::make_bytecode(function));
     let snapshot = snapshot_evaluator(&eval);
@@ -162,7 +162,7 @@ fn pdump_round_trip_preserves_selected_global_map_separately_from_lisp_variable(
 #[test]
 fn restore_snapshot_rejects_non_keymap_selected_global_map() {
     crate::test_utils::init_test_tracing();
-    let mut snapshot = snapshot_evaluator(&Context::new());
+    let mut snapshot = snapshot_evaluator(&Context::new(crate::test_utils::unit_runtime()));
     snapshot.current_global_map = types::DumpValue::Int(42);
 
     let result = restore_snapshot(&snapshot);
@@ -417,7 +417,7 @@ fn pdump_dumps_default_value_for_active_dynamic_plain_binding() {
 #[test]
 fn test_clone_active_evaluator_preserves_in_progress_require_and_load_state() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.require_stack.push(intern("cl-macs"));
     eval.loads_in_progress
         .push(neovm_value::heap_types::LispString::from_utf8(
@@ -444,7 +444,7 @@ fn test_clone_active_evaluator_preserves_in_progress_require_and_load_state() {
 #[test]
 fn restoring_the_live_runtime_after_a_clone_rebuilds_the_terminal_in_the_live_heap() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let live_runtime = snapshot_active_runtime(&mut eval);
     let cloned = clone_active_evaluator(&mut eval).expect("clone should succeed");
     restore_active_runtime(&mut eval, &live_runtime);
@@ -468,7 +468,7 @@ fn test_restore_active_runtime_after_clone_reinstalls_live_charset_registry() {
     crate::test_utils::init_test_tracing();
     neovm_text::emacs_core::charset::reset_charset_registry();
 
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let mut args = vec![value::Value::NIL; 17];
     args[0] = value::Value::symbol("charset-pdump-clone-restore-test");
     args[1] = value::Value::fixnum(1);
@@ -510,7 +510,7 @@ fn test_restore_active_runtime_after_clone_reinstalls_live_charset_registry() {
 #[test]
 fn test_dump_buffers_use_symbol_ids_for_buffer_local_bindings() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let current = eval.buffers.current_buffer_id().expect("current buffer");
     eval.buffers
         .get_mut(current)
@@ -551,7 +551,7 @@ fn test_dump_buffers_use_symbol_ids_for_buffer_local_bindings() {
 #[test]
 fn pdump_round_trip_preserves_last_window_start_lisp_position() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let current = eval.buffers.current_buffer_id().expect("current buffer");
     eval.buffers
         .get_mut(current)
@@ -582,7 +582,7 @@ fn pdump_round_trip_preserves_last_window_start_lisp_position() {
 #[test]
 fn test_dump_modes_use_symbol_ids_for_font_lock_faces() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.modes.register_major_mode(
         "compat-font-lock-mode",
         MajorMode {
@@ -1074,7 +1074,7 @@ fn test_restore_snapshot_isolated_between_clones() {
 #[test]
 fn test_restore_snapshot_preserves_core_subr_callable_surface() {
     crate::test_utils::init_test_tracing();
-    let template = Context::new();
+    let template = Context::new(crate::test_utils::unit_runtime());
     let snapshot = snapshot_evaluator(&template);
 
     let mut restored = restore_snapshot(&snapshot).expect("restored snapshot should succeed");
@@ -1101,7 +1101,7 @@ fn test_restore_snapshot_preserves_core_subr_callable_surface() {
 #[test]
 fn test_restore_snapshot_preserves_lone_uninterned_symbol_identity() {
     crate::test_utils::init_test_tracing();
-    let mut template = Context::new();
+    let mut template = Context::new(crate::test_utils::unit_runtime());
     let solo = neovm_value::intern::intern_uninterned("compat-pdump-solo-uninterned");
     template
         .obarray
@@ -1129,7 +1129,7 @@ fn test_restore_snapshot_preserves_lone_uninterned_symbol_identity() {
 #[test]
 fn test_restore_snapshot_preserves_raw_unibyte_symbol_name_storage() {
     crate::test_utils::init_test_tracing();
-    let mut template = Context::new();
+    let mut template = Context::new(crate::test_utils::unit_runtime());
     let raw_name = neovm_value::heap_types::LispString::from_unibyte(vec![0xFF, b'a']);
     let uninterned = neovm_value::intern::intern_uninterned_lisp_string(&raw_name);
     let canonical = neovm_value::intern::intern_lisp_string(&raw_name);
@@ -1170,7 +1170,7 @@ fn test_restore_snapshot_preserves_raw_unibyte_symbol_name_storage() {
 #[test]
 fn test_restore_snapshot_preserves_subr_name_identity_via_name_atoms() {
     crate::test_utils::init_test_tracing();
-    let mut template = Context::new();
+    let mut template = Context::new(crate::test_utils::unit_runtime());
     let subr = Value::subr(intern("car"));
     template
         .obarray
@@ -1190,7 +1190,7 @@ fn test_restore_snapshot_preserves_subr_name_identity_via_name_atoms() {
 #[test]
 fn test_restore_snapshot_does_not_report_file_based_pdump_session() {
     crate::test_utils::init_test_tracing();
-    let mut template = Context::new();
+    let mut template = Context::new(crate::test_utils::unit_runtime());
     let setup = crate::emacs_core::value_reader::read_all(
         "(progn
            (setq compat-pdump-snapshot-hook-fired nil)
@@ -1244,7 +1244,7 @@ fn test_pdump_rejects_corrupt_runtime_managers_section() {
 #[test]
 fn test_restore_snapshot_rejects_duplicate_obarray_symbol_slots() {
     crate::test_utils::init_test_tracing();
-    let mut snapshot = snapshot_evaluator(&Context::new());
+    let mut snapshot = snapshot_evaluator(&Context::new(crate::test_utils::unit_runtime()));
     let duplicate = snapshot
         .obarray
         .symbols
@@ -1273,7 +1273,7 @@ fn test_restore_snapshot_rejects_duplicate_obarray_symbol_slots() {
 #[test]
 fn test_restore_snapshot_rejects_global_member_without_symbol_entry() {
     crate::test_utils::init_test_tracing();
-    let template = Context::new();
+    let template = Context::new(crate::test_utils::unit_runtime());
     let dangling = neovm_value::intern::intern_uninterned("compat-pdump-missing-global");
     let mut snapshot = snapshot_evaluator(&template);
     snapshot.obarray.global_members.push(DumpSymId(dangling.0));
