@@ -170,7 +170,9 @@ pub(crate) fn concurrent_hash_scan_policy() -> super::concurrent_hash::HashTable
 #[cfg_attr(not(feature = "jit"), allow(dead_code))]
 #[doc(hidden)]
 pub fn card_tag_filter_on() -> bool {
-    #[cfg(test)]
+    // Same gate as the signed setter fence: the override must be honored in
+    // any test-support build, not only this crate's own cfg(test) build.
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(on) = CARD_TAG_FILTER_OVERRIDE.with(|c| c.get()) {
         return on;
     }
