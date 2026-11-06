@@ -5741,6 +5741,131 @@ pub struct Tuple(pub u8);
         };
         assert!(check_cfg_split_arm_identity(dir.path(), &[row]).is_ok());
     }
+
+    // ------------------------------------------------------------------
+    // EVAL-UNIT-RUNTIME H3b/T4 (peer-signed per-module fallback): each of
+    // the four canonical bootstrap-variable binders must bind exactly its
+    // snapshot slice, and every bound name must be special. Within-module
+    // order stays pinned by the generation source; the cross-crate check is
+    // the per-module set + specialness + count.
+
+    const UPPER_BOOTSTRAP_VARS_SNAPSHOT: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../neovm-eval/src/upper_bootstrap_vars.snapshot.tsv"
+    ));
+
+    /// True when a snapshot cfg class is active for this build. eval's
+    /// generator reads the same classes; core's build.rs emits
+    /// `neomacs_have_dbus`, and core's `sqlite` feature forwards to eval's.
+    fn snapshot_cfg_active(cfg: &str) -> bool {
+        match cfg {
+            "always" => true,
+            "macos" => cfg!(target_os = "macos"),
+            "windows" => cfg!(target_os = "windows"),
+            "dbus" => cfg!(neomacs_have_dbus),
+            "sqlite" => cfg!(feature = "sqlite"),
+            other => panic!("unknown snapshot cfg class `{other}`"),
+        }
+    }
+
+    fn bootstrap_snapshot_rows() -> Vec<(&'static str, &'static str, &'static str)> {
+        let mut rows = Vec::new();
+        for (index, line) in UPPER_BOOTSTRAP_VARS_SNAPSHOT.lines().enumerate() {
+            if index == 0 || line.trim().is_empty() {
+                continue;
+            }
+            let fields: Vec<&str> = line.split('\t').collect();
+            assert_eq!(fields.len(), 3, "bootstrap snapshot row shape: {line:?}");
+            rows.push((fields[0], fields[1], fields[2]));
+        }
+        rows
+    }
+
+    /// The snapshots are pure data: a stray item would make the by-path
+    /// include a declaration surface instead of the generated data.
+    fn assert_pure_data_snapshot(label: &str, text: &str) {
+        for needle in ["fn ", "use ", "impl "] {
+            assert!(
+                !text.contains(needle),
+                "{label} must be pure data; found `{needle}`"
+            );
+        }
+    }
+
+    fn bound_names(obarray: &neovm_value::symbol::Obarray) -> BTreeSet<String> {
+        obarray
+            .iter_symbols()
+            .filter(|(id, _)| obarray.boundp_id(*id))
+            .map(|(_, symbol)| neovm_value::intern::resolve_name(symbol.name()).to_owned())
+            .collect()
+    }
+
+    fn assert_binder_binds_its_snapshot_slice(
+        layer: &str,
+        bind: impl FnOnce(&mut neovm_value::symbol::Obarray),
+    ) {
+        let mut obarray = neovm_value::symbol::Obarray::new();
+        // `Obarray::new` pre-binds GNU's t and nil; compare the names the
+        // binder ADDS, so that pair can neither mask a missing name nor
+        // count as an extra one.
+        let before = bound_names(&obarray);
+        bind(&mut obarray);
+        let after = bound_names(&obarray);
+        let actual: BTreeSet<String> = after.difference(&before).cloned().collect();
+        let expected: BTreeSet<String> = bootstrap_snapshot_rows()
+            .into_iter()
+            .filter(|(_, row_layer, cfg)| *row_layer == layer && snapshot_cfg_active(cfg))
+            .map(|(name, _, _)| name.to_owned())
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "the {layer} bootstrap binder's bound-name set must equal its snapshot slice"
+        );
+        for name in &actual {
+            assert!(
+                obarray.is_special(name),
+                "the {layer} bootstrap binder must make `{name}` special"
+            );
+        }
+    }
+
+    #[test]
+    fn unit_runtime_upper_bootstrap_vars_match_the_snapshot() {
+        assert_pure_data_snapshot(
+            "upper_bootstrap_vars.snapshot.tsv",
+            UPPER_BOOTSTRAP_VARS_SNAPSHOT,
+        );
+        // The snapshot's module blocks must appear in the canonical binder
+        // order. Calling the four binders in this same order (below) pins
+        // the module sequence; within-module order comes from the generator.
+        let mut blocks: Vec<&str> = Vec::new();
+        for (_, layer, _) in bootstrap_snapshot_rows() {
+            if blocks.last() != Some(&layer) {
+                blocks.push(layer);
+            }
+        }
+        assert_eq!(
+            blocks,
+            ["fileio", "process", "dbusbind", "xfaces"],
+            "the bootstrap snapshot's module blocks must be fileio, process, dbusbind, xfaces in canonical order"
+        );
+        assert_binder_binds_its_snapshot_slice(
+            "fileio",
+            neovm_system::emacs_core::fileio::register_bootstrap_vars,
+        );
+        assert_binder_binds_its_snapshot_slice(
+            "process",
+            neovm_system::emacs_core::process::register_bootstrap_vars,
+        );
+        assert_binder_binds_its_snapshot_slice(
+            "dbusbind",
+            neovm_system::emacs_core::dbusbind::register_bootstrap_vars,
+        );
+        assert_binder_binds_its_snapshot_slice(
+            "xfaces",
+            neovm_display::emacs_core::xfaces::register_bootstrap_vars,
+        );
+    }
 }
 
 /// LEAD 12:3xZ: a VIS `mod` row is a blanket widening. The expansion must
