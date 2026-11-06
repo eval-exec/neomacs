@@ -2444,7 +2444,8 @@ impl TaggedHeap {
     /// — bytecode stays deferred-at-termination and has no registry).
     /// TEST-ONLY page-span ownership probe for the bytecode arena, for tests
     /// that live outside this module (the pdump restore-path round-trip).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn bytecode_arena_owns_for_test(&self, ptr: *const u8) -> bool {
         self.bytecode_arena.owns(ptr)
     }

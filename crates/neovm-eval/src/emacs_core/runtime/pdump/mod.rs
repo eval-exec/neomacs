@@ -33,7 +33,8 @@ pub(crate) mod mmap_image;
 #[doc(hidden)]
 pub mod mmap_image_test_support {
     pub use super::mmap_image::{
-        DumpSectionKind, ImageSection, LoadedMmapImage, load_image, write_image,
+        DumpSectionKind, ImageSection, LoadedMmapImage, header_size_for_test, load_image,
+        write_image,
     };
 }
 

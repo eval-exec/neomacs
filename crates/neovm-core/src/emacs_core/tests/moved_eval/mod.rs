@@ -210,5 +210,8 @@ mod emacs_core_runtime_pdump_tests_bytecode_slot_objects_test_rs;
 #[path = "emacs_core/runtime/bytecode/tests/resumed_chain_test.rs"]
 mod emacs_core_runtime_bytecode_tests_resumed_chain_test_rs;
 #[cfg(test)]
+#[path = "emacs_core/runtime/pdump/tests/pdump_bytecode_image_full_test.rs"]
+mod emacs_core_runtime_pdump_tests_pdump_bytecode_image_full_test_rs;
+#[cfg(test)]
 #[path = "emacs_core/runtime/pdump/tests/pdump_mmap_image_readers_full_test.rs"]
 mod emacs_core_runtime_pdump_tests_pdump_mmap_image_readers_full_test_rs;

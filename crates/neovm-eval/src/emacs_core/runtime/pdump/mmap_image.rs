@@ -537,7 +537,8 @@ pub(crate) fn relocation_section_bytes(relocations: &[ImageRelocation]) -> Vec<u
 /// round-trip loaded sections through `write_image` — its bake sweep rejects
 /// The on-disk header size, so tests can address trailing header fields
 /// (the stub layout witness is the last u64) without duplicating layout.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn header_size_for_test() -> usize {
     HEADER_SIZE
 }
