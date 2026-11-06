@@ -118,7 +118,7 @@ fn run_teardown_and_collect(
 #[test]
 fn teardown_deletes_all_overlays_on_expired_minibuffer() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let (minibuf_id, _frame_id, _height_after, _char_h) = run_teardown_and_collect(&mut ev);
 
     let overlay_count = ev
@@ -137,7 +137,7 @@ fn teardown_deletes_all_overlays_on_expired_minibuffer() {
 #[test]
 fn teardown_force_resizes_mini_window_to_one_line() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let (_minibuf_id, _frame_id, height_after, char_h) = run_teardown_and_collect(&mut ev);
 
     assert!(
