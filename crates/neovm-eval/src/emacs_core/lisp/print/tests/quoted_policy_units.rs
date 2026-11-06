@@ -19,7 +19,7 @@ fn expected_strings(context: &mut crate::emacs_core::eval::Context, fixture: &st
 fn stateful_quote_policy_matches_saved_gnu_on_string_and_byte_paths() {
     crate::test_utils::init_test_tracing();
     // These inputs are entirely quoted reader forms, requiring no startup Lisp.
-    let mut context = crate::emacs_core::eval::Context::new();
+    let mut context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let expected = expected_strings(&mut context, include_str!("settings_gnu/quoted.expect"));
     assert_eq!(expected.len(), 2);
     for (source, expected) in [r#"'('a #'b `(c ,d))"#, "'(quote x)"]
@@ -55,7 +55,7 @@ fn stateful_quote_policy_matches_saved_gnu_on_string_and_byte_paths() {
 #[test]
 fn evaluator_quote_policy_refresh_affects_later_vector_children() {
     crate::test_utils::init_test_tracing();
-    let mut context = crate::emacs_core::eval::Context::new();
+    let mut context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let expected = expected_strings(
         &mut context,
         include_str!("settings_gnu/live_options.expect"),

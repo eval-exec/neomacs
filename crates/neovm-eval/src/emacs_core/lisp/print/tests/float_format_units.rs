@@ -73,7 +73,7 @@ fn gnu_expected() -> String {
 fn finite_and_nonfinite_format_boundaries_match_saved_gnu() {
     crate::test_utils::init_test_tracing();
     let expected = gnu_expected();
-    let mut context = crate::emacs_core::Context::new();
+    let mut context = crate::emacs_core::Context::new(crate::test_utils::unit_runtime());
     let rows = context
         .eval_str(&format!("(quote {expected})"))
         .expect("GNU fixture");

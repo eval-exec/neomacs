@@ -66,7 +66,7 @@ fn printer_evaluation_body_panic_restores_storage_without_lisp_or_table_seeding(
         Ok(Value::NIL)
     }
     for saved_table in [None, Some(Value::fixnum(99))] {
-        let mut ctx = Context::new();
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
         let original = ctx.buffers.current_buffer_id().unwrap();
         let other = ctx.buffers.create_buffer("printer-body-panic-other");
         let symbol = intern("printer-body-panic-binding");
@@ -152,7 +152,7 @@ fn printer_evaluation_finish_watcher_panic_restores_remaining_scope() {
         Ok(Value::NIL)
     }
     for finish_value in [false, true] {
-        let mut ctx = Context::new();
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
         let original = ctx.buffers.current_buffer_id().unwrap();
         let other = ctx.buffers.create_buffer("printer-finish-panic-other");
         let symbol = intern("printer-finish-panic-binding");
@@ -213,7 +213,7 @@ fn printer_evaluation_finish_watcher_panic_restores_remaining_scope() {
 #[test]
 fn printer_settings_buffer_panic_preserves_absent_or_invalid_standard_table() {
     for saved_table in [None, Some(Value::fixnum(99))] {
-        let mut ctx = Context::new();
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
         let original = ctx.buffers.current_buffer_id().unwrap();
         let other = ctx.buffers.create_buffer("printer-settings-panic-other");
         let table = intern("neovm--standard-case-table-object");
@@ -244,7 +244,7 @@ fn printer_settings_buffer_panic_preserves_absent_or_invalid_standard_table() {
 /// the existing lazy standard-table initialization on a real buffer switch.
 #[test]
 fn printer_settings_buffer_finish_restores_runtime_on_flow_error() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let original = ctx.buffers.current_buffer_id().unwrap();
     let other = ctx.buffers.create_buffer("printer-settings-flow-other");
     let table = intern("neovm--standard-case-table-object");

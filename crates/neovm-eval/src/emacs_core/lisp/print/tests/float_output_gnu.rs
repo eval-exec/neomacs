@@ -50,7 +50,7 @@ fn float_output_gnu_oracle() {
 fn general_float_rounding_preserves_exponent() {
     crate::test_utils::init_test_tracing();
     let expected = expectation();
-    let mut context = crate::emacs_core::Context::new();
+    let mut context = crate::emacs_core::Context::new(crate::test_utils::unit_runtime());
     let rows = context.eval_str(&format!("(quote {expected})")).unwrap();
     let rows = neovm_value::value::list_to_vec(&rows).unwrap();
     let values = [

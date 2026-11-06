@@ -5,7 +5,7 @@ use super::super::*;
 #[test]
 fn immutable_error_string_path_preserves_gnu_charset_policy() {
     crate::test_utils::init_test_tracing();
-    let mut context = crate::emacs_core::Context::new();
+    let mut context = crate::emacs_core::Context::new(crate::test_utils::unit_runtime());
     context.eval_str("(set-charset-priority 'unicode)").unwrap();
     let fixture = context
         .eval_str(&format!(

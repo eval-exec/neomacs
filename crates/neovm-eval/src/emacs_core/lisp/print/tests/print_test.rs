@@ -710,7 +710,7 @@ fn print_markers_use_gnu_style_handles() {
 // ---------------------------------------------------------------------------
 
 fn print_eval_one(src: &str) -> String {
-    let mut ev = crate::emacs_core::Context::new();
+    let mut ev = crate::emacs_core::Context::new(crate::test_utils::unit_runtime());
     let result = ev.eval_str(src);
     crate::emacs_core::format_eval_result(&result)
 }
