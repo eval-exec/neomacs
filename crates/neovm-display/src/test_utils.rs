@@ -71,16 +71,20 @@ mod unit_runtime {
         "face-font-lax-matched-attributes",
     ];
 
-    /// D3: display-owned bootstrap variables are REAL; only the system/core
-    /// names are bound to their absent-layer markers.
+    /// D3/T4: display-owned bootstrap variables are REAL; the remaining
+    /// system/core names use the signed snapshot's typed default (the
+    /// ABSENT-LAYER marker for Lisp_Object slots, the production default for
+    /// forwarded typed slots such as read-process-output-max). T4 replaced
+    /// the old name-only snapshot with this paired table.
     fn boot_register_core_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
         crate::emacs_core::xfaces::register_bootstrap_vars(obarray);
-        for name in UPPER_BOOTSTRAP_VAR_NAMES {
-            if XFACES_BOOTSTRAP_VARS.contains(name) {
-                continue;
+        let mut absent = Vec::with_capacity(UPPER_BOOTSTRAP_VARS.len());
+        for (name, default) in UPPER_BOOTSTRAP_VARS {
+            if !XFACES_BOOTSTRAP_VARS.contains(name) {
+                absent.push((*name, *default));
             }
-            s::bind_absent_bootstrap_vars(obarray, &[*name]);
         }
+        s::bind_absent_bootstrap_vars(obarray, &absent);
     }
 
     /// The signed canonical plan (gapsurvey T6 r2): the full name table and
@@ -1127,7 +1131,6 @@ mod unit_runtime {
 #[cfg(test)]
 #[allow(unused_imports)]
 pub(crate) use unit_runtime::unit_runtime;
-
 /// Display-side T6 pin: a fresh display unit-runtime context registers exactly
 /// the shared expectation builder's sequence (the plan's host-active rows plus
 /// the event marker). This is display's half of the literal-equality gate;
