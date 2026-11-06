@@ -591,6 +591,7 @@ impl ObarrayView {
 
     /// Test the actual descriptor identity, not just two equal Boolean values.
     #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn admission_matches_canonical(&self) -> bool {
         // SAFETY: this shared borrow excludes both manager writers and header
         // retirement; the allocation-root source is kept by this same lease.
