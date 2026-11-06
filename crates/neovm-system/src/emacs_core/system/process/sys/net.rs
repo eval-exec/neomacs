@@ -120,7 +120,7 @@ pub fn sock_seqpacket() -> i32 {
 
 /// Length of an IPv4 `sockaddr_in` past its family field, i.e. the size of the
 /// raw address payload Emacs stores in a network-address vector.
-pub fn sockaddr_in_payload_len() -> usize {
+pub(crate) fn sockaddr_in_payload_len() -> usize {
     cfg_select! {
         unix => {
             std::mem::size_of::<libc::sockaddr_in>() - std::mem::size_of::<libc::sa_family_t>()
@@ -130,7 +130,7 @@ pub fn sockaddr_in_payload_len() -> usize {
 }
 
 /// Length of an IPv6 `sockaddr_in6` past its family field.
-pub fn sockaddr_in6_payload_len() -> usize {
+pub(crate) fn sockaddr_in6_payload_len() -> usize {
     cfg_select! {
         unix => {
             std::mem::size_of::<libc::sockaddr_in6>() - std::mem::size_of::<libc::sa_family_t>()
@@ -226,7 +226,7 @@ pub fn service_port(_service: &str, _protocol: &str) -> Option<u16> {
 /// Whether a failed non-blocking `connect` is merely still in progress (so the
 /// caller should wait for writability) rather than a hard failure. Matches GNU's
 /// `is_non_blocking_client && errno == EINPROGRESS` handling.
-pub fn connect_is_pending(err: &std::io::Error) -> bool {
+pub(crate) fn connect_is_pending(err: &std::io::Error) -> bool {
     if err.kind() == std::io::ErrorKind::WouldBlock {
         return true;
     }

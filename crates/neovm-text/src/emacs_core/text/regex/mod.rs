@@ -5061,7 +5061,7 @@ pub fn replace_match_buffer(
 /// the buffer's own syntax table is always consulted via `buf`.
 /// See audit findings #14/#20 in `drafts/regex-search-audit.md`.
 #[cfg(any(test, feature = "test-support"))]
-pub fn replace_match_buffer_with_syntax(
+pub(crate) fn replace_match_buffer_with_syntax(
     buf: &mut Buffer,
     newtext: &str,
     fixedcase: bool,
