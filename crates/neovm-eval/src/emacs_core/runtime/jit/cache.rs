@@ -2086,6 +2086,7 @@ pub(crate) fn cached_leaf_is_aot_for_test(id: u64) -> Option<bool> {
 /// integration self-test (`aot::testkit_call_bearing_selftest`), which runs in
 /// the lib (not `cfg(test)`), so this is a non-test accessor. `None` if `func`
 /// has no cached `Compiled` leaf.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn cached_leaf_is_aot_for_func(func: &ByteCodeFunction) -> Option<bool> {
     let id = func.jit_runtime().compiled_id_or_assign();
     COMPILED.with(|c| {
@@ -3640,6 +3641,7 @@ fn count_native_outcome(outcome: &NativeRun) {
 
 /// `(ok, deopt_rerun, deopt_at, signal)` totals across all native runs.
 #[allow(dead_code)] // read by tests + measurement sessions
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn native_run_counters() -> (u64, u64, u64, u64) {
     use std::sync::atomic::Ordering;
     (

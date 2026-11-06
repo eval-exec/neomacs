@@ -1363,6 +1363,7 @@ pub(crate) fn aot_body_has_switch(ops: &[Op]) -> bool {
     ops.iter().any(|op| matches!(op, Op::Switch))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn compile_leaf_to_object(
     ops: &[Op],
     constants: &[Value],
@@ -2125,6 +2126,7 @@ fn assert_aot_imports_exported(obj: &[u8]) -> Result<(), CompileError> {
 /// for the loader.  Mach-O has no equivalent to that default: an executable or
 /// bundle must opt into late binding with `-undefined dynamic_lookup`, and a
 /// bundle (`-bundle`) is the macOS shape for a dlopen'd plugin.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn link_object_to_so(
     obj_bytes: &[u8],
     so_path: &std::path::Path,
@@ -4337,7 +4339,7 @@ fn load_unit(content_hash: u128) -> Option<std::sync::Arc<super::compile::Loaded
     // Test seam: a directly-injected unit (see `test_support::inject_unit`) takes
     // precedence over the env-driven index, so a test can pre-load a `.so` it
     // just built and exercise the cache path.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(u) = test_support::injected_unit(content_hash) {
         return Some(u);
     }
@@ -4617,7 +4619,7 @@ pub(crate) fn aot_enabled() -> bool {
     // Test seam: a thread-local override (see `test_support`) lets a unit test
     // exercise the cache AOT path without relying on a process-start env var
     // (the env reads are OnceLock-memoized, so they can't be set per-test).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(forced) = test_support::forced_enabled() {
         return forced;
     }
@@ -5775,9 +5777,11 @@ fn build_object_for_leaf_inner(
 
 /// Test-only seams that let a unit test drive the cache AOT path (`aot_enabled`
 /// and `load_unit`) without a process-start env var (the env reads are
-/// OnceLock-memoized and so cannot be toggled per-test). Production builds never
-/// compile this; `aot_enabled`/`load_unit` consult it only under `cfg(test)`.
-#[cfg(test)]
+/// OnceLock-memoized and so cannot be toggled per-test). Product builds never
+/// compile this; `aot_enabled`/`load_unit` consult it under `cfg(test)` (the
+/// moved eval benches reach the forced-enable/inject seam through the
+/// `neovm_eval::test_support::authority` fences in the test-support build).
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) mod test_support {
     use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
@@ -5791,28 +5795,34 @@ pub(crate) mod test_support {
         /// through to the real resolver); `Some(inner)` = `load_preload` returns
         /// `inner` (so a test can model both a present preload AND a checked miss,
         /// e.g. a fingerprint-mismatch skip→JIT).
+        #[cfg(test)]
         static INJECTED_PRELOAD: RefCell<
             Option<Option<Arc<super::super::compile::LoadedUnit>>>,
         > = const { RefCell::new(None) };
         /// Injected v2 manifest pre-keys for `load_preload_prekeys` (task #11):
         /// `None` = not injected (fall through to the real resolver, which in a
         /// test binary finds no manifest → no pre-filter).
+        #[cfg(test)]
         static INJECTED_PREKEYS: RefCell<Option<super::PreKeyMap>> =
             const { RefCell::new(None) };
         /// `leaf_content_hash` call counter (task #11 probe seam): lets a test
         /// assert the manifest pre-filter skipped a candidate WITHOUT hashing.
+        #[cfg(test)]
         static HASH_CALLS: Cell<usize> = const { Cell::new(0) };
         /// A forced `NEOVM_AOT_PREWARM` policy (P4.2 A4).
+        #[cfg(test)]
         static FORCED_PREWARM_POLICY: Cell<Option<super::PrewarmPolicy>> =
             const { Cell::new(None) };
     }
 
     /// The forced prewarm policy, if a test set one.
+    #[cfg(test)]
     pub(crate) fn forced_prewarm_policy() -> Option<super::PrewarmPolicy> {
         FORCED_PREWARM_POLICY.with(Cell::get)
     }
 
     /// Force the prewarm policy for the rest of this thread (test only).
+    #[cfg(test)]
     pub(crate) fn set_forced_prewarm_policy(policy: super::PrewarmPolicy) {
         FORCED_PREWARM_POLICY.with(|c| c.set(Some(policy)));
     }
@@ -5831,10 +5841,13 @@ pub(crate) mod test_support {
     pub(crate) fn reset() {
         FORCE_ENABLED.with(|c| *c.borrow_mut() = None);
         INJECTED.with(|m| m.borrow_mut().clear());
-        INJECTED_PRELOAD.with(|c| *c.borrow_mut() = None);
-        INJECTED_PREKEYS.with(|c| *c.borrow_mut() = None);
-        HASH_CALLS.with(|c| c.set(0));
-        FORCED_PREWARM_POLICY.with(|c| c.set(None));
+        #[cfg(test)]
+        {
+            INJECTED_PRELOAD.with(|c| *c.borrow_mut() = None);
+            INJECTED_PREKEYS.with(|c| *c.borrow_mut() = None);
+            HASH_CALLS.with(|c| c.set(0));
+            FORCED_PREWARM_POLICY.with(|c| c.set(None));
+        }
     }
 
     /// Inject a pre-loaded unit for `content_hash` so `load_unit` returns it.
@@ -5854,12 +5867,14 @@ pub(crate) mod test_support {
     /// Inject the result `load_preload` should return (the present-preload path).
     /// A test builds a unit + injects it to drive prepopulate without a real `.so`
     /// beside the test binary.
+    #[cfg(test)]
     pub(crate) fn inject_preload(unit: Arc<super::super::compile::LoadedUnit>) {
         INJECTED_PRELOAD.with(|c| *c.borrow_mut() = Some(Some(unit)));
     }
 
     /// Inject a `load_preload` MISS (the stale-interlock / no-preload path) so a
     /// test can assert `prepopulate_aot_from_preload` cleanly does nothing → JIT.
+    #[cfg(test)]
     pub(crate) fn inject_preload_miss() {
         INJECTED_PRELOAD.with(|c| *c.borrow_mut() = Some(None));
     }
@@ -5867,32 +5882,38 @@ pub(crate) mod test_support {
     /// The injected `load_preload` result, if a test set one. Outer `Some` means
     /// "injected" (use the inner value); `None` means fall through to the real
     /// resolver.
+    #[cfg(test)]
     pub(crate) fn injected_preload() -> Option<Option<Arc<super::super::compile::LoadedUnit>>> {
         INJECTED_PRELOAD.with(|c| c.borrow().clone())
     }
 
     /// Inject a v2 pre-key map so `load_preload_prekeys` returns it (task #11:
     /// drives the prepopulate manifest pre-filter without a real manifest).
+    #[cfg(test)]
     pub(crate) fn inject_prekeys(map: super::PreKeyMap) {
         INJECTED_PREKEYS.with(|c| *c.borrow_mut() = Some(map));
     }
 
     /// The injected pre-key map, if a test set one.
+    #[cfg(test)]
     pub(crate) fn injected_prekeys() -> Option<super::PreKeyMap> {
         INJECTED_PREKEYS.with(|c| c.borrow().clone())
     }
 
     /// Count one `leaf_content_hash` attempt (called from that fn under test).
+    #[cfg(test)]
     pub(crate) fn note_hash_call() {
         HASH_CALLS.with(|c| c.set(c.get() + 1));
     }
 
     /// `leaf_content_hash` attempts since the last [`reset_hash_calls`]/[`reset`].
+    #[cfg(test)]
     pub(crate) fn hash_calls() -> usize {
         HASH_CALLS.with(|c| c.get())
     }
 
     /// Zero the hash-attempt counter.
+    #[cfg(test)]
     pub(crate) fn reset_hash_calls() {
         HASH_CALLS.with(|c| c.set(0));
     }

@@ -256,8 +256,10 @@ pub struct ByteCodeFunction {
     /// process-independent bit pattern an `Arc`-backed handle has. Every
     /// executable function carries `Some`; read through
     /// [`Self::jit_runtime`], never the field.
-    #[cfg(feature = "jit")]
+    #[cfg(all(feature = "jit", not(feature = "test-support")))]
     pub(crate) runtime: Option<Runtime>,
+    #[cfg(all(feature = "jit", feature = "test-support"))]
+    pub runtime: Option<Runtime>,
     /// Present for GNU-backed functions whose validated decoded IR has been
     /// released until first execution. One pointer (an `Arc`), so ordinary
     /// bytecode objects continue to fit the existing 384-byte arena slot —

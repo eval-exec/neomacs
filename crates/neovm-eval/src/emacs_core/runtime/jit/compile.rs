@@ -2265,6 +2265,7 @@ fn find_cbsym_spec_sites(ops: &[Op]) -> HashMap<usize, SpecSite> {
 /// collector — so both agree and the leaf actually serves. Obarray-classified, so a
 /// callee redefined away from a spec kind between dump + load simply yields `false`
 /// (the recipe-compare / re-classify then keep it sound — bail-to-JIT or DISARM).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn has_op_call_spec_sites(
     ops: &[Op],
     constants: &[Value],

@@ -146,6 +146,7 @@ pub(crate) fn arm_bytecode_backtraces(n: usize) {
 }
 
 /// The backtraces captured since the last `arm_bytecode_backtraces`.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn bytecode_backtraces() -> Vec<String> {
     BC_TRACES.lock().unwrap().clone()
 }

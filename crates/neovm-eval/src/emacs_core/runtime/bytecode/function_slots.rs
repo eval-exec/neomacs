@@ -302,6 +302,7 @@ impl FormalCursor {
 }
 
 /// Upper policy on the lowered [`FunctionParams`].
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) trait FunctionParamsExt {
     fn stack_shape(&self) -> Option<StackParamShape>;
     fn fixed_arity(&self) -> Option<usize>;

@@ -41,6 +41,7 @@ pub(crate) fn bucket_index(us: u64) -> usize {
 /// Aggregate compile-stall statistics for one thread (compiles are per-thread,
 /// like the [`super::cache`] they populate).
 #[derive(Clone, Copy, Debug, Default)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct CompileStats {
     /// JIT compile attempts — every one a synchronous eval-thread stall,
     /// whether or not it produced native code.
@@ -707,6 +708,7 @@ pub(super) fn record_aot_load(ops_len: usize) {
 
 /// One-line human-readable rendering of a stats snapshot (the periodic
 /// `NEOVM_JIT_COMPILE_STATS` summary and the profiling driver's report).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn format_summary(s: &CompileStats) -> String {
     let mean_us = s.total_us.checked_div(s.total_compiles).unwrap_or(0);
     format!(
@@ -1143,13 +1145,14 @@ pub(crate) fn force_observe_for_test(o: ObserveOverride) {
 }
 
 /// Test-only: this thread's current compile-stall aggregate.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn compile_stats_snapshot() -> CompileStats {
     STATS.with(Cell::get)
 }
 
 /// Test-only: zero this thread's compile-stall aggregate.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn reset_compile_stats() {
     STATS.with(|s| s.set(CompileStats::default()));
 }

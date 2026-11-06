@@ -508,6 +508,47 @@ pub mod authority {
         crate::emacs_core::jit::compile::force_profit_gate_for_test(on)
     }
 
+    /// P2 test-target combo fence (N2 TLS write): force the AOT enabled seam
+    /// for the moved eval AOT benches.  The seam stays pub(crate) in its owning
+    /// module; this fence is its only cross-crate route.
+    #[cfg(feature = "jit")]
+    pub fn aot_set_forced_enabled_for_test(v: bool) {
+        crate::emacs_core::jit::aot::test_support::set_forced_enabled(v);
+    }
+
+    /// P2 test-target combo fence (N2 TLS write): inject a pre-loaded AOT unit
+    /// by content hash for the moved eval AOT benches.  The seam stays
+    /// pub(crate); the unit type is A-prime-widened as a read surface.
+    #[cfg(feature = "jit")]
+    pub fn aot_inject_unit_for_test(
+        content_hash: u128,
+        unit: std::sync::Arc<crate::emacs_core::jit::compile::LoadedUnit>,
+    ) {
+        crate::emacs_core::jit::aot::test_support::inject_unit(content_hash, unit);
+    }
+
+    /// P2 test-target combo fence (N2 TLS reset): clear every AOT test
+    /// override.  The raw reset stays pub(crate) with no A-prime.
+    #[cfg(feature = "jit")]
+    pub fn aot_reset_for_test() {
+        crate::emacs_core::jit::aot::test_support::reset();
+    }
+
+    /// P2 test-target combo fence (N2 TLS reset): drop the compiled-leaf
+    /// cache.  The raw clear stays pub(crate) with no A-prime.
+    #[cfg(feature = "jit")]
+    pub fn clear_jit_cache_for_test() {
+        crate::emacs_core::jit::cache::clear();
+    }
+
+    /// P2 test-target combo fence (N2 TLS reset): zero this thread's
+    /// compile-stall aggregate.  The raw reset stays pub(crate) with no
+    /// A-prime.
+    #[cfg(feature = "jit")]
+    pub fn reset_compile_stats_for_test() {
+        crate::emacs_core::jit::stats::reset_compile_stats();
+    }
+
     /// Fence delegates for the JIT tiering test knobs (writes to the
     /// function's runtime state; no &mut Runtime escapes).
     #[cfg(feature = "jit")]

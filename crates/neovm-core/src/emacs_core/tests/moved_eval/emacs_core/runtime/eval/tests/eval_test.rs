@@ -20314,8 +20314,8 @@ fn jit_bench_fib() {
     let ValueKind::Symbol(cid) = Value::symbol("jit-bench-fib-c").kind() else {
         panic!()
     };
-    ev.obarray.set_symbol_function_id(nid, native);
-    ev.obarray.set_symbol_function_id(cid, cold);
+    ev.obarray_mut().set_symbol_function_id(nid, native);
+    ev.obarray_mut().set_symbol_function_id(cid, cold);
     let want = Value::make_int(196418);
     let nat = jit_bench_min(&mut ev, native, 27, want, 9);
     let int = jit_bench_min(&mut ev, cold, 27, want, 9);
@@ -20438,7 +20438,7 @@ fn jit_bench_call_bound_loop() {
     let ValueKind::Symbol(cbleaf_id) = Value::symbol("jit-bench-cbleaf").kind() else {
         panic!("symbol")
     };
-    ev.obarray
+    ev.obarray_mut()
         .set_symbol_function_id(cbleaf_id, Value::make_bytecode(leaf));
     // Force the profitability gate OFF so the call-dominated caller actually tiers
     // (else NotProfitable keeps BOTH copies interpreted -> interp-vs-interp ~1x).
@@ -20594,8 +20594,8 @@ fn aot_bench_compute_loop() {
     aot::link_object_to_so(&obj, &so_path).expect("link");
     let lib = unsafe { libloading::Library::new(&so_path) }.expect("dlopen");
     let unit = std::sync::Arc::new(crate::emacs_core::jit::compile::LoadedUnit::new(lib));
-    aot::test_support::set_forced_enabled(true);
-    aot::test_support::inject_unit(content_hash, unit);
+    neovm_eval::test_support::authority::aot_set_forced_enabled_for_test(true);
+    neovm_eval::test_support::authority::aot_inject_unit_for_test(content_hash, unit);
 
     // The AOT-served copy: a FRESH bytecode fn (its own compiled_id), cold heat —
     // try_run_compiled will consult AOT FIRST (forced) and serve it native from
@@ -20658,8 +20658,8 @@ fn aot_bench_compute_loop() {
     };
     let int_min = jit_bench_min(&mut ev, cold, n, want, 9);
 
-    aot::test_support::reset();
-    crate::emacs_core::jit::cache::clear();
+    neovm_eval::test_support::authority::aot_reset_for_test();
+    neovm_eval::test_support::authority::clear_jit_cache_for_test();
     panic!(
         "BENCH aot-compute-loop(n={n}): aot-native {aot_min:?} interp {int_min:?} -> {:.2}x (native-from-call-1, no JIT warmup)",
         int_min.as_secs_f64() / aot_min.as_secs_f64()
@@ -20737,7 +20737,8 @@ fn jit_bench_call_heavy_fontlock_reweight() {
 
     // Shape report: op histogram (documents that this really is call-heavy).
     let (mut n_call, mut n_cbsym, mut n_arith) = (0usize, 0usize, 0usize);
-    for op in bc.executable_ops() {
+    let executable_ops = crate::emacs_core::bytecode::executable_ops_for_test(bc);
+    for op in &executable_ops {
         match op {
             Op::Call(_) | Op::Apply(_) | Op::CallBuiltin(..) => n_call += 1,
             Op::CallBuiltinSym(..) => n_cbsym += 1,
@@ -20762,8 +20763,12 @@ fn jit_bench_call_heavy_fontlock_reweight() {
 
     // CONFIRM the #1 Op::Call Many-spec (or round-1 fixed) sites are actually
     // present — so the Hot side really is native+spec, not a silent fallback.
-    let has_spec =
-        compile::has_op_call_spec_sites(bc.executable_ops(), &bc.constants, arity, &ev.obarray);
+    let has_spec = compile::has_op_call_spec_sites(
+        &crate::emacs_core::bytecode::executable_ops_for_test(bc),
+        &bc.constants,
+        arity,
+        ev.obarray(),
+    );
     assert!(
         has_spec,
         "the byte-compiled sweep must carry >=1 Op::Call spec site (re-search-forward / looking-at / parse-partial-sexp); \
@@ -20774,7 +20779,7 @@ fn jit_bench_call_heavy_fontlock_reweight() {
     // otherwise `NotProfitable` would keep BOTH on the interpreter and the bench
     // would measure interp-vs-interp (~1x — which is exactly the state the
     // re-weight would change).
-    compile::force_profit_gate_for_test(false);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     let hot = bc.clone();
     jit_mark_hot_for_test(&hot);
     let hot_val = Value::make_bytecode(hot);
@@ -20836,7 +20841,7 @@ fn jit_bench_call_heavy_fontlock_reweight() {
     panic!(
         "BENCH call-heavy-fontlock(buf={sz:?} matches={want:?} | ops={} call={n_call} cbsym={n_cbsym} arith={n_arith}): \
          native+spec {nat:?} interp {int:?} -> {:.3}x",
-        bc.executable_ops().len(),
+        crate::emacs_core::bytecode::executable_ops_for_test(bc).len(),
         int.as_secs_f64() / nat.as_secs_f64()
     );
 }
@@ -20880,11 +20885,16 @@ fn jit_bench_spec_call_dispatch_upper_bound() {
         .expect("microloop must be byte-compiled");
     let arity = bc.params.fixed_arity().expect("fixed test arity");
     assert!(
-        compile::has_op_call_spec_sites(bc.executable_ops(), &bc.constants, arity, &ev.obarray),
+        compile::has_op_call_spec_sites(
+            &crate::emacs_core::bytecode::executable_ops_for_test(bc),
+            &bc.constants,
+            arity,
+            ev.obarray(),
+        ),
         "microloop must carry the looking-at Op::Call Many-spec site"
     );
 
-    compile::force_profit_gate_for_test(false);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     let hot = bc.clone();
     jit_mark_hot_for_test(&hot);
     let hot_val = Value::make_bytecode(hot);
@@ -21020,8 +21030,8 @@ fn aot_bench_real_algorithm() {
     aot::link_object_to_so(&obj, &so_path).expect("link");
     let lib = unsafe { libloading::Library::new(&so_path) }.expect("dlopen");
     let unit = std::sync::Arc::new(crate::emacs_core::jit::compile::LoadedUnit::new(lib));
-    aot::test_support::set_forced_enabled(true);
-    aot::test_support::inject_unit(content_hash, unit);
+    neovm_eval::test_support::authority::aot_set_forced_enabled_for_test(true);
+    neovm_eval::test_support::authority::aot_inject_unit_for_test(content_hash, unit);
 
     // The AOT-served copy: a fresh bytecode fn, cold heat — try_run_compiled
     // consults AOT FIRST (forced) and serves it native from call 1.
@@ -21118,7 +21128,11 @@ fn aot_bench_real_algorithm() {
                             }
                             .expect("aot run")
                             .expect("aot served");
-                            acc += Value::from_bits(r).as_fixnum().expect("fixnum");
+                            // SAFETY: `r` is a `Value` bit pattern returned by the
+                            // AOT-served call on this test's own context; `from_bits`
+                            // is the inverse of `bits()` and the result is asserted
+                            // to be a fixnum below.
+                            acc += unsafe { Value::from_bits(r) }.as_fixnum().expect("fixnum");
                         }
                     }
                     best = best.min(t.elapsed());
@@ -21158,8 +21172,8 @@ fn aot_bench_real_algorithm() {
     let (b_aot, b_int, _) = regime(&long_seeds, 800);
     let b_ratio = b_int.as_secs_f64() / b_aot.as_secs_f64();
 
-    aot::test_support::reset();
-    crate::emacs_core::jit::cache::clear();
+    neovm_eval::test_support::authority::aot_reset_for_test();
+    neovm_eval::test_support::authority::clear_jit_cache_for_test();
     panic!(
         "BENCH aot-real-collatz [pure-fixnum, ZERO CallBuiltin(Sym) — verified]: \
          (A) realistic many-short-calls(7999×~100it): aot {a_aot:?} interp {a_int:?} -> {a_ratio:.2}x \
@@ -21471,7 +21485,7 @@ fn jit_compile_time_profile() {
            t)",
     )
     .expect("setup defuns + byte-compile");
-    crate::emacs_core::jit::stats::reset_compile_stats();
+    neovm_eval::test_support::authority::reset_compile_stats_for_test();
     for (name, call) in [
         ("jcp-sq", "(jcp-sq 9)"),
         ("jcp-poly", "(jcp-poly 3 4)"),
@@ -21614,7 +21628,8 @@ fn vm_bench_call_dispatch_closure_sym_vs_val() {
     let ValueKind::Symbol(callee_sym) = Value::symbol("vm-bench-callee").kind() else {
         panic!()
     };
-    ev.obarray.set_symbol_function_id(callee_sym, callee_val);
+    ev.obarray_mut()
+        .set_symbol_function_id(callee_sym, callee_val);
 
     let caller_sym = vm_bench_call_loop_caller(Value::symbol("vm-bench-callee"));
     let caller_val = vm_bench_call_loop_caller(callee_val);
@@ -22347,17 +22362,17 @@ fn jit_bench_cons() {
     let ValueKind::Symbol(cid) = Value::symbol("jit-bench-cons-c").kind() else {
         panic!()
     };
-    ev.obarray.set_symbol_function_id(nid, native);
-    ev.obarray.set_symbol_function_id(cid, cold);
+    ev.obarray_mut().set_symbol_function_id(nid, native);
+    ev.obarray_mut().set_symbol_function_id(cid, cold);
     let n = 2_000_000i64;
     let want = Value::make_int(0);
     // GC frequency over ONE native run: gc_collections() counts completed cycles
     // (monotonic). Each ~16-byte cons against the 800 KB gc-cons-threshold means
     // ~40 cycles for 2M conses. (allocated_count is NOT usable here — sweep
     // resets it to the live count, so its delta is net live growth, not volume.)
-    let gc0 = ev.tagged_heap.gc_collections();
+    let gc0 = ev.tagged_heap().gc_collections();
     let nat = jit_bench_min(&mut ev, native, n, want, 9);
-    let gc = ev.tagged_heap.gc_collections() - gc0;
+    let gc = ev.tagged_heap().gc_collections() - gc0;
     let int = jit_bench_min(&mut ev, cold, n, want, 9);
     let per_cons_ns = nat.as_secs_f64() * 1e9 / n as f64;
     let gc_per_run = gc as f64 / 10.0; // jit_bench_min does 1 warmup + 9 timed calls
@@ -26184,7 +26199,7 @@ fn alloc_probe_bytecode_hash_isolation() {
 
     // Call-chain evidence: capture backtraces for the first ByteCode-kind
     // allocations of a short full-recipe run.
-    alloc_probe::arm_bytecode_backtraces(6);
+    neovm_value::test_support::authority::arm_bytecode_backtraces_for_test(6);
     ev.eval_str("(bcp-e 3)").expect("backtrace step");
     let traces = alloc_probe::bytecode_backtraces();
     out.push_str(&format!(

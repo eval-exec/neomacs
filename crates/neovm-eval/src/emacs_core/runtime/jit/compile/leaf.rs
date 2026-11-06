@@ -146,6 +146,7 @@ const _: () = {
 /// cached, since the leaf's `entry` points into the library's code. Shared via
 /// `Arc` so several leaves emitted into one unit can share a single `dlopen`.
 ///
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct LoadedUnit {
     /// The open dynamic library. Dropping it `dlclose`s the `.so` and unmaps its
     /// code, so it must outlive every leaf whose `entry` points into it. Read via

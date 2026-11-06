@@ -141,6 +141,13 @@ fn retire_to_graveyard(heap: crate::tagged::gc::AliasableBox<crate::tagged::gc::
 
 static_assertions::assert_not_impl_any!(TestHeapScope: Send, Sync);
 
+/// FENCE (N2 static store): arm the ByteCode allocation backtrace hook for
+/// the next `n` ByteCode-kind allocations.  The raw `pub(crate)` fn stays
+/// un-widened; this fence is its only cross-crate route.
+pub fn arm_bytecode_backtraces_for_test(n: usize) {
+    crate::tagged::gc::alloc_probe::arm_bytecode_backtraces(n);
+}
+
 /// Publish an exact sticky collection-observation mark for a live heap owner,
 /// without observing a pointer projection or consulting the active heap. The
 /// caller gates this API on observed mode and publishes its own JIT address
