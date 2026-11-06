@@ -169,17 +169,14 @@ fn p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth_child() {
         .expect("C5 pass owned admission")
         .expect("C5 pass history after normal serial recovery");
         assert!(ctx.obarray_view().admission_matches_canonical());
-        assert!(receipt.after_chunks() >= receipt.before_chunks() + 2);
-        assert_eq!(receipt.after_chunks(), receipt.after_sides());
-        assert!(receipt.after_sides() > receipt.before_sides());
+        assert!(receipt.after.chunks >= receipt.before.chunks + 2);
+        assert_eq!(receipt.after.chunks, receipt.after.sides);
+        assert!(receipt.after.sides > receipt.before.sides);
         assert_eq!(
-            receipt.registry_after(),
-            (
-                receipt.registry_before().0 + 1,
-                receipt.registry_before().1 + 1
-            )
+            receipt.registry_after,
+            (receipt.registry_before.0 + 1, receipt.registry_before.1 + 1)
         );
-        assert!(receipt.registry_after().0 > pass_epoch);
+        assert!(receipt.registry_after.0 > pass_epoch);
         assert_eq!(
             pctx.dynamic_symbols.borrow().epoch,
             pass_epoch,

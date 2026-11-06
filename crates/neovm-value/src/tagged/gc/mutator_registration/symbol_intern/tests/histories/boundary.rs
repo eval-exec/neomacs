@@ -10,37 +10,9 @@ pub(crate) struct InternGrowthReceipt {
     pub(crate) registry_after: (u64, usize),
 }
 
-impl InternGrowthReceipt {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn after_chunks(&self) -> usize {
-        self.after.chunks
-    }
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn after_sides(&self) -> usize {
-        self.after.sides
-    }
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn before_chunks(&self) -> usize {
-        self.before.chunks
-    }
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn before_sides(&self) -> usize {
-        self.before.sides
-    }
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn registry_before(&self) -> (u64, usize) {
-        self.registry_before
-    }
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn registry_after(&self) -> (u64, usize) {
-        self.registry_after
-    }
-}
-
 impl ParallelHeapEra<'_> {
     /// Only existing input-holder identities enter. All owners and operand
     /// homes retire before any receipt or assertion outcome returns.
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn c5_intern_growth_for_test(
         &self,
         holders: [SymId; 2],

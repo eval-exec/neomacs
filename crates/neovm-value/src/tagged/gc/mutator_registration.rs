@@ -90,10 +90,8 @@ pub mod symbol_functions;
 mod symbol_globals;
 #[cfg(feature = "test-support")]
 pub mod symbol_globals;
-#[cfg(all(test, not(feature = "test-support")))]
+#[cfg(test)]
 mod symbol_intern;
-#[cfg(feature = "test-support")]
-pub mod symbol_intern;
 #[cfg(test)]
 pub use symbol_authority::FunctionOpKind;
 pub(crate) use symbol_authority::SymbolReadToken;
