@@ -178,7 +178,7 @@ fn neomacsclient_create_frame_requests_window_system_without_display_arg() {
         String::from_utf8(request).expect("utf8 request")
     });
 
-    let master = File::from(
+    let mut master = File::from(
         rustix::pty::openpt(rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY)
             .expect("posix_openpt failed"),
     );
@@ -193,6 +193,9 @@ fn neomacsclient_create_frame_requests_window_system_without_display_arg() {
         .write(true)
         .open(&slave_name)
         .expect("open PTY slave");
+    let master_flags = rustix::fs::fcntl_getfl(&master).expect("read PTY master flags");
+    rustix::fs::fcntl_setfl(&master, master_flags | rustix::fs::OFlags::NONBLOCK)
+        .expect("set the PTY master non-blocking");
 
     let output = Command::new(env!("CARGO_BIN_EXE_neomacsclient"))
         .arg("--socket-name")
@@ -208,8 +211,34 @@ fn neomacsclient_create_frame_requests_window_system_without_display_arg() {
         .expect("neomacsclient should run");
 
     let request = server.join().expect("server thread should finish");
+    // GNU writes the server's `-print' reply to the client's stdout; with
+    // stdout bound to the PTY slave, read the reply back from the master.
+    // The master is non-blocking and the child has exited, so this drains
+    // the buffered output and stops at EOF, EAGAIN, or the closed-slave EIO.
+    let mut reply = Vec::new();
+    let mut buf = [0u8; 256];
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        match master.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => reply.extend_from_slice(&buf[..n]),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if std::time::Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) if error.raw_os_error() == Some(libc::EIO) => break,
+            Err(error) => panic!("read the PTY master: {error}"),
+        }
+    }
     drop(master);
     assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&reply),
+        "FRAME_OK",
+        "the client's stdout (the PTY) must carry the server's -print reply"
+    );
     // GNU emacsclient sends the creating client's environment before `-dir',
     // so a daemon-created frame observes DISPLAY and the rest of the client's
     // process environment (lib-src/emacsclient.c, "Send over our environment").
