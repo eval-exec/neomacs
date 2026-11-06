@@ -772,6 +772,7 @@ pub(crate) static DEBUG_ON_NEXT_CALL_UNRESOLVED: LispBoolFwd = LispBoolFwd {
 /// What the pointer names once the obarray found no `DEFVAR_BOOL` for
 /// `debug-on-next-call` (a bare `Obarray::new()` harness): it reads
 /// DISARMED, exactly what the missing cell has always meant. Read-only.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) static DEBUG_ON_NEXT_CALL_ABSENT: LispBoolFwd = LispBoolFwd {
     ty: LispFwdType::Bool,
     value: AtomicBool::new(false),

@@ -89,6 +89,7 @@ pub unsafe fn install_function_cell_observer(
 /// The installed observer, or `None` before the first `Context` exists (a
 /// typed no-op: no compiled leaf can be stale yet).
 #[inline(always)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn function_cell_observer() -> Option<&'static FunctionCellObserver> {
     FUNCTION_CELL_OBSERVER.get()
 }

@@ -70,7 +70,9 @@ pub use cell::{LispSymbol, SymbolFlags};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use fn_stamps::force_fn_stamps_for_test;
 pub use function_cell_observer::FunctionCellObserver;
-pub(crate) use function_cell_observer::{function_cell_observer, note_function_epoch_move};
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use function_cell_observer::function_cell_observer;
+pub(crate) use function_cell_observer::note_function_epoch_move;
 #[doc(hidden)]
 pub use projection::{
     AdmissionPlanCell, ConcealOutcome, leave_projection_scope, reserve_projection_scope,

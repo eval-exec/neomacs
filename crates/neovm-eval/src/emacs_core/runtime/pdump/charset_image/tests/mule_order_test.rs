@@ -96,7 +96,8 @@ fn charset_section_accepts_legacy_and_derives_mule_priority() {
         .find(|info| !info.supplementary_p)
         .expect("ordinary fixture");
     assert_eq!(
-        neovm_text::emacs_core::charset::EmacsMuleEncoder::new().encode_char(0x1f300),
+        neovm_text::emacs_core::charset::prepared_mule::EmacsMuleEncoder::new()
+            .encode_char(0x1f300),
         Some((
             expected.emacs_mule_id.expect("Mule fixture"),
             expected.dimension,
