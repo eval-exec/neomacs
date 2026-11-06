@@ -2484,7 +2484,7 @@ fn layout_freshness_types_late_chrome_cache_writes_separately_from_body_mutation
         Value::symbol("tab-line-buffers"),
         Value::list(vec![Value::make_buffer(buffer_id)]),
     );
-    eval.obarray_view()
+    eval.obarray_mut()
         .set_symbol_function("neomacs-test-chrome-lazy-load", Value::T);
     let after_chrome_cache = eval
         .window_layout_attempt_freshness(frame_id, window_id, buffer_id)

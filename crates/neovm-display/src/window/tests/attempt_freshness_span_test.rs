@@ -65,7 +65,7 @@ fn native_dispatch_publication_refuses_borrowed_inputs() {
     let before = eval
         .window_layout_attempt_freshness(frame, window, buffer)
         .unwrap();
-    eval.obarray_view()
+    eval.obarray_mut()
         .set_symbol_function("native-freshness-dispatch", Value::T);
     let after = eval
         .window_layout_attempt_freshness_after_span(&before, WindowLayoutLispAdmission::NativeOnly)

@@ -499,12 +499,14 @@ fn test_format_mode_line_in_state_uses_buffer_local_symbols_and_restores_buffer(
         .set_buffer_local_property(other_id, "mode-name", Value::string("Neo"))
         .expect("mode-name local should set");
 
+    let (ml_obarray, ml_owner, ml_frames, ml_buffers, ml_processes) =
+        eval.mode_line_formatting_inputs_mut();
     let rendered = format_mode_line_from_state(
-        VariableView::new(&eval.obarray_view(), &eval.owner()),
+        VariableView::new(ml_obarray, ml_owner),
         &[],
-        &eval.frame_manager(),
-        &mut eval.edit.buffers,
-        &eval.processes(),
+        ml_frames,
+        ml_buffers,
+        ml_processes,
         vec![
             Value::list(vec![
                 Value::string("%b "),
@@ -589,12 +591,14 @@ fn test_format_mode_line_in_state_with_eval_keeps_shared_buffer_context_around_e
         .set_buffer_local_property(other_id, "mode-name", Value::string("Neo"))
         .expect("mode-name local should set");
 
+    let (ml_obarray, ml_owner, ml_frames, ml_buffers, ml_processes) =
+        eval.mode_line_formatting_inputs_mut();
     let rendered = finish_format_mode_line_in_state_with_eval(
-        VariableView::new(&eval.obarray_view(), &eval.owner()),
+        VariableView::new(ml_obarray, ml_owner),
         &[],
-        &eval.frame_manager(),
-        &mut eval.edit.buffers,
-        &eval.processes(),
+        ml_frames,
+        ml_buffers,
+        ml_processes,
         &[
             Value::list(vec![
                 Value::string("%b "),
@@ -639,7 +643,7 @@ fn test_format_mode_line_preserves_raw_unibyte_literal_segments() {
 fn test_format_mode_line_symbol_conditional_uses_only_selected_branch() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    eval.obarray_view()
+    eval.obarray_mut()
         .set_symbol_value("mode-line-flag", Value::T);
 
     let then_rendered = builtin_format_mode_line_ctx(
@@ -655,7 +659,7 @@ fn test_format_mode_line_symbol_conditional_uses_only_selected_branch() {
     )
     .expect("format-mode-line should use then branch");
 
-    eval.obarray_view()
+    eval.obarray_mut()
         .set_symbol_value("mode-line-flag", Value::NIL);
     let else_rendered = builtin_format_mode_line_ctx(
         &mut eval,
@@ -684,12 +688,14 @@ fn test_format_mode_line_string_valued_symbols_render_literally() {
         .set_buffer_local_property(other_id, "mode-name", Value::string("%b"))
         .expect("mode-name local should set");
 
+    let (ml_obarray, ml_owner, ml_frames, ml_buffers, ml_processes) =
+        eval.mode_line_formatting_inputs_mut();
     let rendered = format_mode_line_from_state(
-        VariableView::new(&eval.obarray_view(), &eval.owner()),
+        VariableView::new(ml_obarray, ml_owner),
         &[],
-        &eval.frame_manager(),
-        &mut eval.edit.buffers,
-        &eval.processes(),
+        ml_frames,
+        ml_buffers,
+        ml_processes,
         vec![
             Value::list(vec![Value::string("%b "), Value::symbol("mode-name")]),
             Value::NIL,
@@ -709,12 +715,14 @@ fn test_format_mode_line_fixnum_elements_pad_and_truncate_tail() {
     let mut eval = interactive_context();
     let other_id = eval.edit.buffers.create_buffer("xy");
 
+    let (ml_obarray, ml_owner, ml_frames, ml_buffers, ml_processes) =
+        eval.mode_line_formatting_inputs_mut();
     let rendered = format_mode_line_from_state(
-        VariableView::new(&eval.obarray_view(), &eval.owner()),
+        VariableView::new(ml_obarray, ml_owner),
         &[],
-        &eval.frame_manager(),
-        &mut eval.edit.buffers,
-        &eval.processes(),
+        ml_frames,
+        ml_buffers,
+        ml_processes,
         vec![
             Value::list(vec![
                 Value::list(vec![Value::fixnum(5), Value::string("%b")]),
@@ -738,12 +746,14 @@ fn test_format_mode_line_percent_specs_keep_gnu_field_width_and_dash_semantics()
     let mut eval = interactive_context();
     let other_id = eval.edit.buffers.create_buffer("xy");
 
+    let (ml_obarray, ml_owner, ml_frames, ml_buffers, ml_processes) =
+        eval.mode_line_formatting_inputs_mut();
     let rendered = format_mode_line_from_state(
-        VariableView::new(&eval.obarray_view(), &eval.owner()),
+        VariableView::new(ml_obarray, ml_owner),
         &[],
-        &eval.frame_manager(),
-        &mut eval.edit.buffers,
-        &eval.processes(),
+        ml_frames,
+        ml_buffers,
+        ml_processes,
         vec![
             Value::string("%5b|%-|%2*"),
             Value::NIL,
@@ -761,14 +771,14 @@ fn test_format_mode_line_percent_specs_keep_gnu_field_width_and_dash_semantics()
 fn test_format_mode_line_respects_risky_local_variable_for_eval_forms() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    eval.obarray_view().set_symbol_value(
+    eval.obarray_mut().set_symbol_value(
         "unsafe-mode-line",
         Value::list(vec![
             Value::symbol(":eval"),
             Value::list(vec![Value::symbol("error"), Value::string("boom")]),
         ]),
     );
-    eval.obarray_view().set_symbol_value(
+    eval.obarray_mut().set_symbol_value(
         "trusted-mode-line",
         Value::list(vec![Value::symbol(":eval"), Value::string("ok")]),
     );
@@ -1536,7 +1546,7 @@ fn test_format_mode_line_big_z_preserves_raw_unibyte_eol_indicator() {
             Value::symbol("undecided-dos"),
         )
         .expect("set coding");
-    eval.obarray_view().set_symbol_value(
+    eval.obarray_mut().set_symbol_value(
         "eol-mnemonic-dos",
         Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
             0xFF,
@@ -1570,9 +1580,9 @@ fn test_format_mode_line_tty_z_uses_live_coding_manager_state() {
             Value::symbol("utf-8-unix"),
         )
         .expect("set coding");
-    eval.obarray_view()
+    eval.obarray_mut()
         .set_symbol_value("terminal-coding-system", Value::NIL);
-    eval.obarray_view()
+    eval.obarray_mut()
         .set_symbol_value("keyboard-coding-system", Value::NIL);
 
     let rendered =
@@ -1668,9 +1678,9 @@ fn test_format_mode_line_tty_z_reads_visible_buffer_file_coding_value_without_lo
         .get_mut(buffer_id)
         .expect("buffer")
         .set_slot_local_flag(BUFFER_SLOT_BUFFER_FILE_CODING_SYSTEM, false);
-    eval.obarray_view()
+    eval.obarray_mut()
         .set_symbol_value("terminal-coding-system", Value::NIL);
-    eval.obarray_view()
+    eval.obarray_mut()
         .set_symbol_value("keyboard-coding-system", Value::NIL);
 
     let rendered =
@@ -1696,9 +1706,9 @@ fn test_format_mode_line_tty_big_z_uses_live_coding_manager_state_and_eol_indica
             Value::symbol("utf-8-unix"),
         )
         .expect("set coding");
-    eval.obarray_view()
+    eval.obarray_mut()
         .set_symbol_value("terminal-coding-system", Value::NIL);
-    eval.obarray_view()
+    eval.obarray_mut()
         .set_symbol_value("keyboard-coding-system", Value::NIL);
 
     let rendered =

@@ -37,12 +37,14 @@ fn mode_line_split_throw_restores_buffer_and_roots() {
     let target = eval.edit.buffers.create_buffer("fx2-target");
     let format = eval.eval_str("'(:eval nil)").expect("format");
     let roots = save_scratch_gc_roots();
+    let (ml_obarray, ml_owner, ml_frames, ml_buffers, ml_processes) =
+        eval.mode_line_formatting_inputs_mut();
     let result = finish_format_mode_line_in_state_with_eval(
-        neovm_eval::emacs_core::eval::VariableView::new(&eval.obarray_view(), &eval.owner()),
+        neovm_eval::emacs_core::eval::VariableView::new(ml_obarray, ml_owner),
         &[],
-        &eval.frame_manager(),
-        &mut eval.edit.buffers,
-        &eval.processes(),
+        ml_frames,
+        ml_buffers,
+        ml_processes,
         &[
             format,
             Value::fixnum(0),
@@ -67,12 +69,14 @@ fn mode_line_split_signal_is_demoted_like_gnu() {
     let format = eval
         .eval_str(r#"'("before" (:eval nil) "after")"#)
         .expect("format");
+    let (ml_obarray, ml_owner, ml_frames, ml_buffers, ml_processes) =
+        eval.mode_line_formatting_inputs_mut();
     let result = finish_format_mode_line_in_state_with_eval(
-        neovm_eval::emacs_core::eval::VariableView::new(&eval.obarray_view(), &eval.owner()),
+        neovm_eval::emacs_core::eval::VariableView::new(ml_obarray, ml_owner),
         &[],
-        &eval.frame_manager(),
-        &mut eval.edit.buffers,
-        &eval.processes(),
+        ml_frames,
+        ml_buffers,
+        ml_processes,
         &[format, Value::fixnum(0)],
         |_, _| {
             Err(signal(

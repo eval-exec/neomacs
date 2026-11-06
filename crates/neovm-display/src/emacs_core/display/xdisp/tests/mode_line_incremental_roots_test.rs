@@ -54,12 +54,14 @@ fn gc_mode_line_split_accumulator_roots_restore_on_throw() {
         .expect("nested collecting format");
     let before = save_scratch_gc_roots();
     let tag = Value::symbol("review-mode-line-throw");
+    let (ml_obarray, ml_owner, ml_frames, ml_buffers, ml_processes) =
+        eval.mode_line_formatting_inputs_mut();
     let result = finish_format_mode_line_in_state_with_eval(
-        neovm_eval::emacs_core::eval::VariableView::new(&eval.obarray_view(), &eval.owner()),
+        neovm_eval::emacs_core::eval::VariableView::new(ml_obarray, ml_owner),
         &[],
-        &eval.frame_manager(),
-        &mut eval.edit.buffers,
-        &eval.processes(),
+        ml_frames,
+        ml_buffers,
+        ml_processes,
         &[format],
         |_, _| {
             assert!(save_scratch_gc_roots() > before);

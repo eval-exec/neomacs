@@ -317,8 +317,8 @@ fn active_minibuffer_window_tracks_live_minibuffer_state() {
     let buf = ev.edit.buffers.create_buffer("*scratch*");
     ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
 
-    let fid =
-        super::ensure_selected_frame_id_in_state(&mut ev.frame_manager(), &mut ev.edit.buffers);
+    let (ef_frames, ef_buffers) = ev.frame_manager_and_buffers_mut();
+    let fid = super::ensure_selected_frame_id_in_state(ef_frames, ef_buffers);
     let minibuffer_buffer_id = {
         let frame = ev.frame_manager().get(fid).expect("selected frame");
         let minibuffer_wid = frame.minibuffer_window.expect("minibuffer window");
@@ -1504,15 +1504,13 @@ fn selected_window_sync_prefers_live_current_buffer_point_before_resync() {
         + 1;
     assert_eq!(pre_buffer_point, 5);
 
+    let (rw_frames, rw_buffers) = ev.frame_manager_and_buffers_mut();
     crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
-        &mut ev.frame_manager(),
-        &mut ev.edit.buffers,
-        frame_id,
+        rw_frames, rw_buffers, frame_id,
     );
+    let (sw_frames, sw_buffers) = ev.frame_manager_read_and_buffers_mut();
     crate::emacs_core::window_cmds::sync_selected_window_buffer_in_state(
-        &ev.frame_manager(),
-        &mut ev.edit.buffers,
-        frame_id,
+        sw_frames, sw_buffers, frame_id,
     );
 
     let selected_point = ev
@@ -2091,8 +2089,8 @@ fn get_buffer_window_list_returns_matching_windows() {
 fn get_buffer_window_list_includes_active_minibuffer_by_default() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
-    let fid =
-        super::seed_batch_startup_frame_in_state(&mut ev.frame_manager(), &mut ev.edit.buffers);
+    let (sb_frames, sb_buffers) = ev.frame_manager_and_buffers_mut();
+    let fid = super::seed_batch_startup_frame_in_state(sb_frames, sb_buffers);
     let minibuffer_buffer = {
         let frame = ev.frame_manager().get(fid).expect("frame should exist");
         let minibuffer_wid = frame.minibuffer_window.expect("minibuffer window");
@@ -6820,13 +6818,9 @@ fn modify_frame_parameters_resolves_child_fractional_size_before_position() {
         Value::cons(Value::symbol("minibuffer"), Value::symbol("only")),
         Value::cons(Value::symbol("visibility"), Value::NIL),
     ]);
-    let child = super::x_create_frame_impl(
-        &mut ev.frame_manager(),
-        &mut ev.edit.buffers,
-        &mut ev.display_host,
-        vec![params],
-    )
-    .expect("x-create-frame");
+    let (xf_frames, xf_buffers, xf_host) = ev.frame_manager_buffers_and_display_host_mut();
+    let child = super::x_create_frame_impl(xf_frames, xf_buffers, xf_host, vec![params])
+        .expect("x-create-frame");
     let child_id = crate::window::FrameId(child.as_frame_id().expect("child frame"));
 
     let alist = Value::list(vec![
@@ -8560,13 +8554,9 @@ fn x_create_frame_minibuffer_only_uses_root_as_minibuffer() {
         Value::cons(Value::symbol("child-frame-border-width"), Value::fixnum(3)),
         Value::cons(Value::symbol("visibility"), Value::NIL),
     ]);
-    let child = super::x_create_frame_impl(
-        &mut ev.frame_manager(),
-        &mut ev.edit.buffers,
-        &mut ev.display_host,
-        vec![params],
-    )
-    .expect("x-create-frame");
+    let (xf_frames, xf_buffers, xf_host) = ev.frame_manager_buffers_and_display_host_mut();
+    let child = super::x_create_frame_impl(xf_frames, xf_buffers, xf_host, vec![params])
+        .expect("x-create-frame");
     let child_id = crate::window::FrameId(child.as_frame_id().expect("child frame"));
     let child_frame = ev.frame_manager().get(child_id).expect("child frame");
     let root_window_id = child_frame.root_window().id();
@@ -8626,13 +8616,9 @@ fn pixelwise_child_frame_resize_preserves_requested_text_pixels() {
         ),
         Value::cons(Value::symbol("visibility"), Value::NIL),
     ]);
-    let child = super::x_create_frame_impl(
-        &mut ev.frame_manager(),
-        &mut ev.edit.buffers,
-        &mut ev.display_host,
-        vec![params],
-    )
-    .expect("x-create-frame");
+    let (xf_frames, xf_buffers, xf_host) = ev.frame_manager_buffers_and_display_host_mut();
+    let child = super::x_create_frame_impl(xf_frames, xf_buffers, xf_host, vec![params])
+        .expect("x-create-frame");
     let child_id = crate::window::FrameId(child.as_frame_id().expect("child frame"));
 
     crate::emacs_core::frame::builtin_set_frame_size(
@@ -8692,13 +8678,9 @@ fn set_frame_size_and_position_pixelwise_resizes_gui_child_frame() {
         ),
         Value::cons(Value::symbol("visibility"), Value::NIL),
     ]);
-    let child = super::x_create_frame_impl(
-        &mut ev.frame_manager(),
-        &mut ev.edit.buffers,
-        &mut ev.display_host,
-        vec![params],
-    )
-    .expect("x-create-frame");
+    let (xf_frames, xf_buffers, xf_host) = ev.frame_manager_buffers_and_display_host_mut();
+    let child = super::x_create_frame_impl(xf_frames, xf_buffers, xf_host, vec![params])
+        .expect("x-create-frame");
     let child_id = crate::window::FrameId(child.as_frame_id().expect("child frame"));
 
     crate::emacs_core::frame::builtin_set_frame_size_and_position_pixelwise(
@@ -10453,22 +10435,14 @@ fn consecutive_scroll_up_before_redisplay_advances_from_window_start() {
             buffer.point_max_emacs_byte_pos(),
         )
     };
-    let window = ev
-        .frame_manager_mut()
+    let (wm_frames, wm_buffers) = ev.frame_manager_and_buffers_mut();
+    let window = wm_frames
         .get_mut(frame_id)
         .expect("scroll frame")
         .find_window_mut(window_id)
         .expect("scroll window");
-    crate::window::window_markers::set_window_start_with_marker(
-        &mut ev.edit.buffers,
-        window,
-        start,
-    );
-    crate::window::window_markers::set_window_point_with_marker(
-        &mut ev.edit.buffers,
-        window,
-        point,
-    );
+    crate::window::window_markers::set_window_start_with_marker(wm_buffers, window, start);
+    crate::window::window_markers::set_window_point_with_marker(wm_buffers, window, point);
     window.set_window_end_from_positions(
         buffer_z_char,
         buffer_z_byte,
@@ -10601,14 +10575,14 @@ fn scroll_down_page_scans_buffer_once_not_once_per_screen_row() {
         .get(frame_id)
         .expect("scroll frame")
         .selected_window;
-    let window = ev
-        .frame_manager_mut()
+    let (wm_frames, wm_buffers) = ev.frame_manager_and_buffers_mut();
+    let window = wm_frames
         .get_mut(frame_id)
         .expect("scroll frame")
         .find_window_mut(window_id)
         .expect("scroll window");
-    crate::window::window_markers::set_window_point_with_marker(&mut ev.edit.buffers, window, end);
-    crate::window::window_markers::set_window_start_with_marker(&mut ev.edit.buffers, window, end);
+    crate::window::window_markers::set_window_point_with_marker(wm_buffers, window, end);
+    crate::window::window_markers::set_window_start_with_marker(wm_buffers, window, end);
 
     neovm_edit::test_support::authority::reset_screen_line_scan_steps_for_test();
     neovm_edit::test_support::authority::reset_display_stop_recomputes_for_test();

@@ -1018,12 +1018,10 @@ fn make_terminal_frame_rolls_back_the_provisional_frame_when_tty_open_fails() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.edit.buffers.create_buffer("*scratch*");
     eval.edit.buffers.set_current(scratch);
-    let original_frame = crate::emacs_core::window_cmds::make_frame_plain(
-        &mut eval.frame_manager(),
-        &mut eval.edit.buffers,
-        vec![Value::NIL],
-    )
-    .expect("initial frame");
+    let (mf_frames, mf_buffers) = eval.frame_manager_and_buffers_mut();
+    let original_frame =
+        crate::emacs_core::window_cmds::make_frame_plain(mf_frames, mf_buffers, vec![Value::NIL])
+            .expect("initial frame");
     let original_frame_id = original_frame.as_frame_id().expect("frame id");
     eval.set_tty_frame_host_factory(Box::new(FailingTtyFrameHostFactory));
 

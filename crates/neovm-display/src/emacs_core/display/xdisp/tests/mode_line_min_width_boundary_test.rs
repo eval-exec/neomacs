@@ -65,7 +65,7 @@ fn compare_fresh_gnu_row(kind: &str) {
             Value::symbol("utf-8-unix"),
         )
         .expect("set buffer coding");
-    eval.obarray_view()
+    eval.obarray_mut()
         .set_symbol_value("eol-mnemonic-unix", Value::string("EOL"));
     let format = eval.eval_str(format_for(kind)).expect("GNU format setup");
     let output = format_mode_line_for_display_with_sources(
