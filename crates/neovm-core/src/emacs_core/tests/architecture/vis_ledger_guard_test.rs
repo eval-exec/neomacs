@@ -1987,6 +1987,9 @@ fn gated_for_test_support(attrs: &[syn::Attribute]) -> bool {
 }
 
 const SLOT_MACRO_NAME: &str = "eval_absent_layer_slots";
+const ABSENT_LAYER_HIT_REFUSED: &str = "Refused";
+const ABSENT_LAYER_HIT_UNLINKED: &str = "Unlinked";
+const ABSENT_LAYER_HIT_TAKER: &str = "take_absent_layer_hits_for_test";
 
 /// H2/T1/T2/T3/T4/H4 guard for the EVAL-UNIT-RUNTIME slot table (peer
 /// 22:54:30Z H2/H2a, peer 00:15:30Z T1-T4).
@@ -2003,8 +2006,10 @@ const SLOT_MACRO_NAME: &str = "eval_absent_layer_slots";
 ///   and the 2+1 handle/marker slots are exactly the signed ones; every
 ///   marker is unique and carries the `ABSENT-LAYER ` prefix;
 /// - the shared helpers have the signed shapes: record_hit writes the
-///   env-named append-only log and the TLS hit list (H4), the panic helper
-///   records before it aborts, the unlinked helper is exactly one recorded
+///   env-named append-only log and the TLS hit list with the typed hit class
+///   (H4/C2: every log line and TLS entry is (kind, marker)), the panic
+///   helper records a Refused hit before it aborts, the unlinked helper
+///   records an Unlinked hit and is exactly one recorded
 ///   no-op, the assert-empty helper panics unless the upper state is empty,
 ///   the two handles are lazily created per thread through OnceCell
 ///   get_or_init (T2), the fontset alias is an uninterned ABSENT-LAYER marker
@@ -2132,6 +2137,7 @@ struct AbsentLayerSlotSummary {
 
 const ABSENT_LAYER_HELPERS: &[&str] = &[
     "record_hit",
+    "take_absent_layer_hits_for_test",
     "absent_layer_unlinked",
     "absent_layer_panic",
     "absent_layer_assert_empty",
@@ -2149,15 +2155,27 @@ fn absent_layer_call(stmt: &syn::Stmt) -> Option<(String, Option<String>)> {
         return None;
     };
     let name = path.path.segments.last()?.ident.to_string();
-    let marker = call.args.first().and_then(|argument| {
-        if let syn::Expr::Lit(literal) = argument {
-            if let syn::Lit::Str(value) = &literal.lit {
-                return Some(value.value());
-            }
-        }
-        None
-    });
-    Some((name, marker))
+    let literal = |argument: Option<&syn::Expr>| -> Option<String> {
+        let syn::Expr::Lit(literal) = argument? else {
+            return None;
+        };
+        let syn::Lit::Str(value) = &literal.lit else {
+            return None;
+        };
+        Some(value.value())
+    };
+    if name == "record_hit" {
+        // C2 typed hit record: `record_hit(AbsentLayerHit::<Kind>, marker)`.
+        // The class is part of the call shape, so the pre-C2 untyped spelling
+        // `record_hit(marker)` is not a recognized hit record.
+        let mut arguments = call.args.iter();
+        let kind = match arguments.next()? {
+            syn::Expr::Path(path) => path.path.segments.last()?.ident.to_string(),
+            _ => return None,
+        };
+        return Some((format!("record_hit::{kind}"), literal(arguments.next())));
+    }
+    Some((name, literal(call.args.first())))
 }
 
 fn classify_absent_layer_slots(items: &[syn::Item]) -> Result<AbsentLayerSlotSummary, String> {
@@ -2212,7 +2230,7 @@ fn classify_absent_layer_slots(items: &[syn::Item]) -> Result<AbsentLayerSlotSum
             let first = absent_layer_call(&stmts[0]);
             let second = absent_layer_call(&stmts[1]);
             if let (Some((first_name, Some(marker))), Some((second_name, None))) = (first, second) {
-                if first_name == "record_hit" {
+                if first_name == format!("record_hit::{ABSENT_LAYER_HIT_UNLINKED}") {
                     if second_name == "absent_face_registry_handle"
                         || second_name == "absent_terminal_registry_handle"
                     {
@@ -2373,6 +2391,10 @@ struct AbsentLayerHelperFacts {
     has_thread_local: bool,
     top_level_calls: Vec<String>,
     top_level_macros: Vec<String>,
+    /// Token text of every expression macro. `writeln!`/`format!` arguments
+    /// are not Rust AST nodes, so a method called only inside one (the C2
+    /// `kind.label()` in the log line) is visible only here.
+    macro_texts: Vec<String>,
 }
 
 impl<'ast> Visit<'ast> for AbsentLayerHelperFacts {
@@ -2393,6 +2415,10 @@ impl<'ast> Visit<'ast> for AbsentLayerHelperFacts {
             self.macros.insert(segment.ident.to_string());
         }
         visit::visit_macro(self, node);
+    }
+    fn visit_expr_macro(&mut self, node: &'ast syn::ExprMacro) {
+        self.macro_texts.push(node.mac.tokens.to_string());
+        visit::visit_expr_macro(self, node);
     }
     fn visit_lit_str(&mut self, node: &'ast syn::LitStr) {
         self.strings.push(node.value());
@@ -2447,6 +2473,32 @@ fn absent_layer_helper<'a>(items: &'a [syn::Item], name: &str) -> Result<&'a syn
 }
 
 fn validate_record_hit(function: &syn::ItemFn) -> Result<(), String> {
+    // C2: the hit record is typed: exactly `(kind: AbsentLayerHit, marker)`.
+    let mut inputs = function.sig.inputs.iter();
+    let typed_kind = matches!(
+        inputs.next(),
+        Some(syn::FnArg::Typed(argument))
+            if matches!(
+                &*argument.ty,
+                syn::Type::Path(path)
+                    if path
+                        .path
+                        .segments
+                        .last()
+                        .is_some_and(|segment| segment.ident == "AbsentLayerHit")
+            )
+    );
+    if !typed_kind {
+        return Err(
+            "ABSENT-LAYER H4/C2: record_hit must take the typed hit class first (kind: AbsentLayerHit)"
+                .into(),
+        );
+    }
+    if !matches!(inputs.next(), Some(syn::FnArg::Typed(_))) || inputs.next().is_some() {
+        return Err(
+            "ABSENT-LAYER H4/C2: record_hit must take exactly the hit class and the marker".into(),
+        );
+    }
     let facts = absent_layer_helper_facts(function);
     if !facts.calls.contains("var_os") {
         return Err(
@@ -2475,14 +2527,59 @@ fn validate_record_hit(function: &syn::ItemFn) -> Result<(), String> {
     if !facts.paths.contains("HITS") {
         return Err("ABSENT-LAYER H4: record_hit must also push to the process hit list".into());
     }
+    // C2: the logged line carries the class label and the TLS entry is the
+    // (kind, marker) pair, not a bare marker.
+    if !facts.macro_texts.iter().any(|text| text.contains("label")) {
+        return Err(
+            "ABSENT-LAYER H4/C2: the logged hit line must carry the hit-class label".into(),
+        );
+    }
+    if !facts
+        .macro_texts
+        .iter()
+        .any(|text| text.contains("{}: {marker}"))
+    {
+        return Err(
+            "ABSENT-LAYER H4/C2: the log line must be written as `{label}: {marker}`".into(),
+        );
+    }
+    struct HitPairFacts {
+        pair: bool,
+    }
+    impl<'ast> Visit<'ast> for HitPairFacts {
+        fn visit_expr_tuple(&mut self, node: &'ast syn::ExprTuple) {
+            if node.elems.len() == 2
+                && matches!(&node.elems[0], syn::Expr::Path(path) if path.path.is_ident("kind"))
+                && matches!(&node.elems[1], syn::Expr::Path(path) if path.path.is_ident("marker"))
+            {
+                self.pair = true;
+            }
+            visit::visit_expr_tuple(self, node);
+        }
+    }
+    let mut pairs = HitPairFacts { pair: false };
+    pairs.visit_item_fn(function);
+    if !pairs.pair {
+        return Err(
+            "ABSENT-LAYER H4/C2: the process hit list must record the (kind, marker) pair".into(),
+        );
+    }
     Ok(())
 }
 
 fn validate_unlinked_helper(function: &syn::ItemFn) -> Result<(), String> {
-    let facts = absent_layer_helper_facts(function);
-    if function.block.stmts.len() != 1 || facts.top_level_calls != ["record_hit".to_string()] {
+    let expected = format!("record_hit::{ABSENT_LAYER_HIT_UNLINKED}");
+    if function.block.stmts.len() != 1 {
         return Err(
-            "ABSENT-LAYER T1: absent_layer_unlinked must be exactly one recorded no-op (record_hit)".into(),
+            "ABSENT-LAYER T1/C2: absent_layer_unlinked must be exactly one Unlinked hit record"
+                .into(),
+        );
+    }
+    let call = absent_layer_call(&function.block.stmts[0]);
+    if !matches!(call, Some((ref name, _)) if *name == expected) {
+        return Err(
+            "ABSENT-LAYER T1/C2: absent_layer_unlinked must record an Unlinked hit (record_hit(AbsentLayerHit::Unlinked, marker))"
+                .into(),
         );
     }
     Ok(())
@@ -2493,9 +2590,12 @@ fn validate_panic_helper(function: &syn::ItemFn) -> Result<(), String> {
     if stmts.len() != 3 {
         return Err("ABSENT-LAYER H4: absent_layer_panic must record, print and panic".into());
     }
+    let expected = format!("record_hit::{ABSENT_LAYER_HIT_REFUSED}");
     let first = absent_layer_call(&stmts[0]);
-    if !matches!(first, Some((ref name, _)) if name == "record_hit") {
-        return Err("ABSENT-LAYER H4: the panic path must record the hit BEFORE it aborts".into());
+    if !matches!(first, Some((ref name, _)) if *name == expected) {
+        return Err(
+            "ABSENT-LAYER H4/C2: the panic path must record a Refused hit BEFORE it aborts".into(),
+        );
     }
     let facts = absent_layer_helper_facts(function);
     if !facts.macros.contains("eprintln") || !facts.macros.contains("panic") {
@@ -2595,7 +2695,150 @@ fn validate_bootstrap_binder(function: &syn::ItemFn) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_absent_layer_hit_enum(items: &[syn::Item]) -> Result<(), String> {
+    let hit_enum = items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Enum(value) if value.ident == "AbsentLayerHit" => Some(value),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            "ABSENT-LAYER H4/C2: the slot module must define AbsentLayerHit".to_string()
+        })?;
+    let variants: Vec<String> = hit_enum
+        .variants
+        .iter()
+        .map(|variant| variant.ident.to_string())
+        .collect();
+    if variants != [ABSENT_LAYER_HIT_REFUSED, ABSENT_LAYER_HIT_UNLINKED] {
+        return Err(format!(
+            "ABSENT-LAYER H4/C2: AbsentLayerHit variants must be exactly Refused and Unlinked (got {variants:?})"
+        ));
+    }
+    let mut labels: BTreeMap<String, String> = BTreeMap::new();
+    for item in items {
+        let syn::Item::Impl(block) = item else {
+            continue;
+        };
+        let owner = match &*block.self_ty {
+            syn::Type::Path(path) => path
+                .path
+                .segments
+                .last()
+                .map(|segment| segment.ident.to_string()),
+            _ => None,
+        };
+        if owner.as_deref() != Some("AbsentLayerHit") {
+            continue;
+        }
+        for member in &block.items {
+            let syn::ImplItem::Fn(function) = member else {
+                continue;
+            };
+            if function.sig.ident != "label" {
+                continue;
+            }
+            for stmt in &function.block.stmts {
+                let syn::Stmt::Expr(syn::Expr::Match(match_expr), _) = stmt else {
+                    continue;
+                };
+                for arm in &match_expr.arms {
+                    let syn::Pat::Path(pattern) = &arm.pat else {
+                        continue;
+                    };
+                    let Some(variant) = pattern
+                        .path
+                        .segments
+                        .last()
+                        .map(|segment| segment.ident.to_string())
+                    else {
+                        continue;
+                    };
+                    let syn::Expr::Lit(literal) = &*arm.body else {
+                        continue;
+                    };
+                    let syn::Lit::Str(label) = &literal.lit else {
+                        continue;
+                    };
+                    labels.insert(variant, label.value());
+                }
+            }
+        }
+    }
+    if labels.get(ABSENT_LAYER_HIT_REFUSED).map(String::as_str) != Some("refused")
+        || labels.get(ABSENT_LAYER_HIT_UNLINKED).map(String::as_str) != Some("unlinked")
+    {
+        return Err(format!(
+            "ABSENT-LAYER H4/C2: AbsentLayerHit::label must map Refused->\"refused\" and Unlinked->\"unlinked\" (got {labels:?})"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_take_hits_helper(function: &syn::ItemFn) -> Result<(), String> {
+    let syn::ReturnType::Type(_, ty) = &function.sig.output else {
+        return Err(
+            "ABSENT-LAYER H4/C2: take_absent_layer_hits_for_test must return the drained hit list"
+                .into(),
+        );
+    };
+    let syn::Type::Path(path) = &**ty else {
+        return Err(
+            "ABSENT-LAYER H4/C2: take_absent_layer_hits_for_test must return Vec<(AbsentLayerHit, &'static str)>"
+                .into(),
+        );
+    };
+    let Some(syn::PathSegment { ident, arguments }) = path.path.segments.last() else {
+        return Err("ABSENT-LAYER H4/C2: the drained hit list type is missing".into());
+    };
+    if ident != "Vec" {
+        return Err(
+            "ABSENT-LAYER H4/C2: take_absent_layer_hits_for_test must return Vec<(AbsentLayerHit, &'static str)>"
+                .into(),
+        );
+    }
+    let syn::PathArguments::AngleBracketed(generic) = arguments else {
+        return Err("ABSENT-LAYER H4/C2: the drained hit list must carry its element type".into());
+    };
+    let element_is_pair = generic.args.first().is_some_and(|argument| {
+        matches!(
+            argument,
+            syn::GenericArgument::Type(syn::Type::Tuple(tuple))
+                if tuple.elems.len() == 2
+                    && matches!(
+                        &tuple.elems[0],
+                        syn::Type::Path(path)
+                            if path
+                                .path
+                                .segments
+                                .last()
+                                .is_some_and(|segment| segment.ident == "AbsentLayerHit")
+                    )
+        )
+    });
+    if !element_is_pair {
+        return Err(
+            "ABSENT-LAYER H4/C2: the drained hit list must be Vec<(AbsentLayerHit, &'static str)>"
+                .into(),
+        );
+    }
+    let facts = absent_layer_helper_facts(function);
+    if !facts.paths.contains("HITS")
+        || !facts.calls.contains("take")
+        || !facts.methods.contains("with")
+        || !facts.methods.contains("borrow_mut")
+    {
+        return Err(
+            "ABSENT-LAYER H4/C2: take_absent_layer_hits_for_test must drain the TLS hit list with std::mem::take"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 fn validate_absent_layer_helpers(items: &[syn::Item]) -> Result<(), String> {
+    validate_absent_layer_hit_enum(items)?;
+    validate_take_hits_helper(absent_layer_helper(items, ABSENT_LAYER_HIT_TAKER)?)?;
     validate_record_hit(absent_layer_helper(items, "record_hit")?)?;
     validate_unlinked_helper(absent_layer_helper(items, "absent_layer_unlinked")?)?;
     validate_panic_helper(absent_layer_helper(items, "absent_layer_panic")?)?;
@@ -4604,8 +4847,8 @@ mod tests {
                 let before = roots.len();
                 absent_layer_assert_empty("ABSENT-LAYER a::assert", roots.len() == before);
             }
-            fn handle_slot() { record_hit("ABSENT-LAYER a::handle"); absent_face_registry_handle() }
-            fn marker_slot() { record_hit("ABSENT-LAYER a::marker"); absent_fontset_alias_marker() }
+            fn handle_slot() { record_hit(AbsentLayerHit::Unlinked, "ABSENT-LAYER a::handle"); absent_face_registry_handle() }
+            fn marker_slot() { record_hit(AbsentLayerHit::Unlinked, "ABSENT-LAYER a::marker"); absent_fontset_alias_marker() }
         "#;
         let items = absent_layer_module_items(&synthetic(valid_slots)).expect("valid macro");
         let summary = classify_absent_layer_slots(&items).expect("valid slot shapes");
@@ -4631,12 +4874,20 @@ mod tests {
         let items = absent_layer_module_items(&extra_unlinked).expect("macro parses");
         let error = classify_absent_layer_slots(&items).expect_err("extra unlinked statement");
         assert!(error.contains("silent default"), "{error}");
+        // C2: the direct T2/T3 sites must record the Unlinked class; a
+        // Refused class on an absent-by-construction slot is red.
+        let wrong_kind = synthetic(
+            "fn handle_slot() { record_hit(AbsentLayerHit::Refused, \"ABSENT-LAYER a::handle\"); absent_face_registry_handle() }",
+        );
+        let items = absent_layer_module_items(&wrong_kind).expect("macro parses");
+        let error = classify_absent_layer_slots(&items).expect_err("wrong direct-site kind");
+        assert!(error.contains("silent default"), "{error}");
 
         let function = |source: &str| syn::parse_str::<syn::ItemFn>(source).expect("helper fn");
-        // H4: the out-of-band record must write the env-named append-only log
-        // and the process hit list.
+        // H4/C2: the out-of-band record is typed and writes the env-named
+        // append-only log plus the (kind, marker) TLS entry.
         validate_record_hit(&function(
-            r#"fn record_hit(marker: &'static str) {
+            r#"fn record_hit(kind: AbsentLayerHit, marker: &'static str) {
                 let enabled = std::env::var_os("NEOVM_ABSENT_LAYER_LOG");
                 if let Some(path) = enabled {
                     let log = HIT_LOG.get_or_init(|| {
@@ -4645,16 +4896,16 @@ mod tests {
                     });
                     if let Ok(mut guard) = log.lock() {
                         if let Some(file) = guard.as_mut() {
-                            let _ = writeln!(file, "{marker}");
+                            let _ = writeln!(file, "{}: {marker}", kind.label());
                         }
                     }
                 }
-                HITS.with(|hits| hits.borrow_mut().push(marker));
+                HITS.with(|hits| hits.borrow_mut().push((kind, marker)));
             }"#,
         ))
-        .expect("valid record_hit");
+        .expect("valid typed record_hit");
         let no_tls = function(
-            r#"fn record_hit(marker: &'static str) {
+            r#"fn record_hit(kind: AbsentLayerHit, marker: &'static str) {
                 let enabled = std::env::var_os("NEOVM_ABSENT_LAYER_LOG");
                 if let Some(path) = enabled {
                     let log = HIT_LOG.get_or_init(|| {
@@ -4663,7 +4914,7 @@ mod tests {
                     });
                     if let Ok(mut guard) = log.lock() {
                         if let Some(file) = guard.as_mut() {
-                            let _ = writeln!(file, "{marker}");
+                            let _ = writeln!(file, "{}: {marker}", kind.label());
                         }
                     }
                 }
@@ -4674,30 +4925,77 @@ mod tests {
             "missing TLS hit record"
         );
         let no_log = function(
-            r#"fn record_hit(marker: &'static str) {
-                HITS.with(|hits| hits.borrow_mut().push(marker));
+            r#"fn record_hit(kind: AbsentLayerHit, marker: &'static str) {
+                HITS.with(|hits| hits.borrow_mut().push((kind, marker)));
             }"#,
         );
         assert!(
             validate_record_hit(&no_log).is_err(),
             "missing append-only log"
         );
-        // T1: the unlinked helper is exactly one recorded no-op.
+        // C2 missing-kind: the pre-C2 untyped spelling is not a hit record.
+        let untyped = function(
+            r#"fn record_hit(marker: &'static str) {
+                let enabled = std::env::var_os("NEOVM_ABSENT_LAYER_LOG");
+                HITS.with(|hits| hits.borrow_mut().push(marker));
+            }"#,
+        );
+        assert!(
+            validate_record_hit(&untyped).is_err(),
+            "an untyped record_hit must be red"
+        );
+        // C2 missing label: a typed signature without the class label is red.
+        let no_label = function(
+            r#"fn record_hit(kind: AbsentLayerHit, marker: &'static str) {
+                let enabled = std::env::var_os("NEOVM_ABSENT_LAYER_LOG");
+                if let Some(path) = enabled {
+                    let log = HIT_LOG.get_or_init(|| {
+                        let file = std::fs::OpenOptions::new().create(true).append(true).open(path).ok();
+                        Mutex::new(file)
+                    });
+                    if let Ok(mut guard) = log.lock() {
+                        if let Some(file) = guard.as_mut() {
+                            let _ = writeln!(file, "{marker}");
+                        }
+                    }
+                }
+                HITS.with(|hits| hits.borrow_mut().push((kind, marker)));
+            }"#,
+        );
+        assert!(
+            validate_record_hit(&no_label).is_err(),
+            "an unlabelled hit line must be red"
+        );
+        // C2: the Unlinked helper records the Unlinked class.
         validate_unlinked_helper(&function(
-            "fn absent_layer_unlinked(marker: &'static str) { record_hit(marker); }",
+            "fn absent_layer_unlinked(marker: &'static str) { record_hit(AbsentLayerHit::Unlinked, marker); }",
         ))
         .expect("valid unlinked helper");
         assert!(
             validate_unlinked_helper(&function(
-                "fn absent_layer_unlinked(marker: &'static str) { let _ = marker; record_hit(marker); }",
+                "fn absent_layer_unlinked(marker: &'static str) { let _ = marker; record_hit(AbsentLayerHit::Unlinked, marker); }",
             ))
             .is_err(),
             "an unlinked body with an extra statement must be red"
         );
-        // H4: the panic path records BEFORE it aborts.
+        assert!(
+            validate_unlinked_helper(&function(
+                "fn absent_layer_unlinked(marker: &'static str) { record_hit(marker); }",
+            ))
+            .is_err(),
+            "the pre-C2 untyped unlinked record must be red"
+        );
+        assert!(
+            validate_unlinked_helper(&function(
+                "fn absent_layer_unlinked(marker: &'static str) { record_hit(AbsentLayerHit::Refused, marker); }",
+            ))
+            .is_err(),
+            "an unlinked no-op recording a Refused hit must be red"
+        );
+        // H4/C2: the panic path records a Refused hit BEFORE it aborts.
         validate_panic_helper(&function(
             r#"fn absent_layer_panic(marker: &'static str) -> ! {
-                record_hit(marker);
+                record_hit(AbsentLayerHit::Refused, marker);
                 eprintln!("{marker}");
                 panic!("{marker}")
             }"#,
@@ -4707,12 +5005,55 @@ mod tests {
             validate_panic_helper(&function(
                 r#"fn absent_layer_panic(marker: &'static str) -> ! {
                     eprintln!("{marker}");
-                    record_hit(marker);
+                    record_hit(AbsentLayerHit::Refused, marker);
                     panic!("{marker}")
                 }"#,
             ))
             .is_err(),
             "a panic path that records after printing must be red"
+        );
+        assert!(
+            validate_panic_helper(&function(
+                r#"fn absent_layer_panic(marker: &'static str) -> ! {
+                    record_hit(AbsentLayerHit::Unlinked, marker);
+                    eprintln!("{marker}");
+                    panic!("{marker}")
+                }"#,
+            ))
+            .is_err(),
+            "a panic path recording an Unlinked hit must be red"
+        );
+        // C2: the hit enum, its label spelling and the drain accessor are pinned.
+        let hit_items =
+            |source: &str| absent_layer_module_items(&synthetic(source)).expect("macro parses");
+        validate_absent_layer_hit_enum(&hit_items(
+            "pub(crate) enum AbsentLayerHit { Refused, Unlinked } impl AbsentLayerHit { fn label(self) -> &'static str { match self { Self::Refused => \"refused\", Self::Unlinked => \"unlinked\" } } }",
+        ))
+        .expect("valid hit enum");
+        assert!(
+            validate_absent_layer_hit_enum(&hit_items(
+                "pub(crate) enum AbsentLayerHit { Refused, Absent } impl AbsentLayerHit { fn label(self) -> &'static str { match self { Self::Refused => \"refused\", Self::Absent => \"absent\" } } }",
+            ))
+            .is_err(),
+            "a third hit class must be red"
+        );
+        validate_take_hits_helper(&function(
+            "pub(crate) fn take_absent_layer_hits_for_test() -> Vec<(AbsentLayerHit, &'static str)> { HITS.with(|hits| std::mem::take(&mut *hits.borrow_mut())) }",
+        ))
+        .expect("valid hit-list drain");
+        assert!(
+            validate_take_hits_helper(&function(
+                "pub(crate) fn take_absent_layer_hits_for_test() -> Vec<(AbsentLayerHit, &'static str)> { HITS.with(|hits| hits.borrow().clone()) }",
+            ))
+            .is_err(),
+            "a non-draining hit accessor must be red"
+        );
+        assert!(
+            validate_take_hits_helper(&function(
+                "pub(crate) fn take_absent_layer_hits_for_test() -> Vec<&'static str> { HITS.with(|hits| std::mem::take(&mut *hits.borrow_mut())) }",
+            ))
+            .is_err(),
+            "an untyped hit-list return must be red"
         );
         // H2a: assert-empty proves emptiness before returning.
         validate_assert_empty_helper(&function(

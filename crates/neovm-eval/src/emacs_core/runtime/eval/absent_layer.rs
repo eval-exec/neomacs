@@ -44,11 +44,30 @@ macro_rules! eval_absent_layer_slots {
             use neovm_value::value::Value;
             use std::sync::{Mutex, OnceLock};
 
+            /// The two hit classes (C2): a refused service call is a real
+            /// incompatibility for this build; an unlinked slot is an expected
+            /// absent-by-construction no-op.
+            #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+            pub(crate) enum AbsentLayerHit {
+                Refused,
+                Unlinked,
+            }
+
+            impl AbsentLayerHit {
+                fn label(self) -> &'static str {
+                    match self {
+                        Self::Refused => "refused",
+                        Self::Unlinked => "unlinked",
+                    }
+                }
+            }
+
             /// Out-of-band AbsentLayer hit record (H4): process TLS plus an
-            /// optional append-only log named by NEOVM_ABSENT_LAYER_LOG.
+            /// optional append-only log named by NEOVM_ABSENT_LAYER_LOG. Every
+            /// logged line and every TLS entry carries the hit class.
             static HIT_LOG: OnceLock<Mutex<Option<std::fs::File>>> = OnceLock::new();
 
-            fn record_hit(marker: &'static str) {
+            fn record_hit(kind: AbsentLayerHit, marker: &'static str) {
                 let enabled = std::env::var_os("NEOVM_ABSENT_LAYER_LOG");
                 if let Some(path) = enabled {
                     let log = HIT_LOG.get_or_init(|| {
@@ -62,26 +81,34 @@ macro_rules! eval_absent_layer_slots {
                     if let Ok(mut guard) = log.lock() {
                         if let Some(file) = guard.as_mut() {
                             use std::io::Write;
-                            let _ = writeln!(file, "{marker}");
+                            let _ = writeln!(file, "{}: {marker}", kind.label());
                         }
                     }
                 }
-                HITS.with(|hits| hits.borrow_mut().push(marker));
+                HITS.with(|hits| hits.borrow_mut().push((kind, marker)));
             }
 
             thread_local! {
-                static HITS: std::cell::RefCell<Vec<&'static str>> =
+                static HITS: std::cell::RefCell<Vec<(AbsentLayerHit, &'static str)>> =
                     const { std::cell::RefCell::new(Vec::new()) };
+            }
+
+            /// Drain the in-process hit list for the P2 H4 runtime gate: the
+            /// test can assert zero `Refused` independent of its outcome
+            /// (catch_unwind / #[should_panic] cannot hide a recorded hit).
+            pub(crate) fn take_absent_layer_hits_for_test(
+            ) -> Vec<(AbsentLayerHit, &'static str)> {
+                HITS.with(|hits| std::mem::take(&mut *hits.borrow_mut()))
             }
 
             /// One recorded no-op for a slot whose upper state cannot exist here.
             pub(crate) fn absent_layer_unlinked(marker: &'static str) {
-                record_hit(marker);
+                record_hit(AbsentLayerHit::Unlinked, marker);
             }
 
             /// The only AbsentLayer panic path: recorded before it aborts.
             pub(crate) fn absent_layer_panic(marker: &'static str) -> ! {
-                record_hit(marker);
+                record_hit(AbsentLayerHit::Refused, marker);
                 eprintln!("{marker}");
                 panic!("{marker}")
             }
@@ -354,7 +381,10 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn terminal_current_registry_handle() -> TerminalRegistryHandle {
-                record_hit("ABSENT-LAYER display::terminal.current_registry_handle");
+                record_hit(
+                    AbsentLayerHit::Unlinked,
+                    "ABSENT-LAYER display::terminal.current_registry_handle",
+                );
                 absent_terminal_registry_handle()
             }
 
@@ -367,7 +397,10 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn fontset_alias_alist_startup_value() -> Value {
-                record_hit("ABSENT-LAYER display::fontset.alias_alist_startup_value");
+                record_hit(
+                    AbsentLayerHit::Unlinked,
+                    "ABSENT-LAYER display::fontset.alias_alist_startup_value",
+                );
                 absent_fontset_alias_marker()
             }
 
@@ -468,7 +501,10 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn xfaces_current_registry_handle() -> FontRegistryHandle {
-                record_hit("ABSENT-LAYER display::xfaces.current_registry_handle");
+                record_hit(
+                    AbsentLayerHit::Unlinked,
+                    "ABSENT-LAYER display::xfaces.current_registry_handle",
+                );
                 absent_face_registry_handle()
             }
 
