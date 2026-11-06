@@ -1995,16 +1995,19 @@ const ABSENT_LAYER_HIT_TAKER: &str = "take_absent_layer_hits_for_test";
 /// 22:54:30Z H2/H2a, peer 00:15:30Z T1-T4).
 ///
 /// The signed table lives as one macro_rules body: `eval_absent_layer_slots!`
-/// expands a fixed `absent_layer_slots` module of 152 slot functions (137
-/// marker PANICs, 10 absent-by-construction UNLINKED slots — nine unit no-ops
-/// plus the T7 signal self-pipe that returns `None` — 2 structural
+/// expands a fixed `absent_layer_slots` module of 152 slot functions (135
+/// marker PANICs, 12 absent-by-construction UNLINKED slots — nine unit no-ops
+/// plus three valued T7 slots: the signal self-pipe and the terminal
+/// print-handle return `None`, and the case-table sync returns
+/// `CASE_TABLES_SYNC_OK` — 2 structural
 /// ASSERT-EMPTY checks, 2 T2 per-thread handle slots, 1 T3 marker slot). This
 /// guard parses that body and proves, statically:
 /// - every slot body is exactly a marker panic, an exactly-one-call unlinked
-///   no-op, a recorded unlinked call followed by the honest absent value
-///   (`None`), a single marker-carrying assert-empty check, or the signed
+///   no-op, a recorded unlinked call followed by the honest absent value (a
+///   plain path such as `None` or the const `CASE_TABLES_SYNC_OK`), a single
+///   marker-carrying assert-empty check, or the signed
 ///   handle/marker wrapper shape (a bare empty/default body is red);
-/// - the 10 UNLINKED names, markers and honest values, the 2 ASSERT-EMPTY
+/// - the 12 UNLINKED names, markers and honest values, the 2 ASSERT-EMPTY
 ///   names and markers, and the 2+1 handle/marker slots are exactly the
 ///   signed ones; every marker is unique and carries the `ABSENT-LAYER `
 ///   prefix;
@@ -2283,14 +2286,14 @@ fn classify_absent_layer_slots(items: &[syn::Item]) -> Result<AbsentLayerSlotSum
 }
 
 fn validate_absent_layer_slot_summary(summary: &AbsentLayerSlotSummary) -> Result<(), String> {
-    if summary.panic.len() != 137
-        || summary.unlinked.len() != 10
+    if summary.panic.len() != 135
+        || summary.unlinked.len() != 12
         || summary.assert_empty.len() != 2
         || summary.handle.len() != 2
         || summary.marker.len() != 1
     {
         return Err(format!(
-            "ABSENT-LAYER slot table drifted: {} PANIC, {} UNLINKED, {} ASSERT-EMPTY, {} HANDLE, {} MARKER (pinned 137/10/2/2/1)",
+            "ABSENT-LAYER slot table drifted: {} PANIC, {} UNLINKED, {} ASSERT-EMPTY, {} HANDLE, {} MARKER (pinned 135/12/2/2/1)",
             summary.panic.len(),
             summary.unlinked.len(),
             summary.assert_empty.len(),
@@ -2303,9 +2306,11 @@ fn validate_absent_layer_slot_summary(summary: &AbsentLayerSlotSummary) -> Resul
         .iter()
         .map(|(name, marker, value)| (name.as_str(), (marker.as_str(), value.as_deref())))
         .collect();
-    // The signed T1 unit no-ops plus the T7 construction-reached slots: the
-    // eval construction census (terminal/fontset/xfaces registry hooks) are
-    // no-ops, and the signal self-pipe returns its honest absent value None.
+    // The signed T1 unit no-ops plus the T7 slots reached by construction and
+    // by runtime paths: the eval construction census (terminal/fontset/xfaces
+    // registry hooks) are no-ops, the signal self-pipe and the terminal
+    // print-handle return their honest absent value None, and the case-table
+    // sync returns its honest absent value CASE_TABLES_SYNC_OK.
     let expected_unlinked = [
         (
             "dbusbind_reset_thread_locals",
@@ -2344,6 +2349,16 @@ fn validate_absent_layer_slot_summary(summary: &AbsentLayerSlotSummary) -> Resul
             "input_signal_wake_pipe_read_fd",
             "ABSENT-LAYER system::input.signal_wake_pipe_read_fd",
             Some("None"),
+        ),
+        (
+            "terminal_print_handle",
+            "ABSENT-LAYER display::terminal.print_handle",
+            Some("None"),
+        ),
+        (
+            "case_tables_sync",
+            "ABSENT-LAYER core::case_tables.sync",
+            Some("CASE_TABLES_SYNC_OK"),
         ),
     ];
     for (name, marker, value) in expected_unlinked {
