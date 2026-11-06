@@ -256,7 +256,7 @@ fn set_swp(ctx: &mut Context, on: bool) {
 #[test]
 fn opcode_leaves_match_their_opcode_arm() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     setup(&mut ctx);
     let values = pool(&mut ctx, POOL);
     let mut checked = 0usize;
@@ -291,7 +291,7 @@ fn opcode_leaves_match_their_opcode_arm() {
 /// declared bounce) and non-tables (the signal).
 #[test]
 fn gethash_leaf_matches_the_builtin() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     setup(&mut ctx);
     let tables = pool(
         &mut ctx,
@@ -348,7 +348,7 @@ fn gethash_leaf_matches_the_builtin() {
 /// `plist-get` over plist × prop × predicate: a non-nil PREDICATE bounces.
 #[test]
 fn plist_get_leaf_matches_the_builtin() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     setup(&mut ctx);
     let plists = pool(
         &mut ctx,
@@ -403,7 +403,7 @@ fn plist_get_leaf_matches_the_builtin() {
 /// an overlay, a string object, another buffer, and every position error.
 #[test]
 fn get_char_property_leaf_matches_the_builtin() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str(
         "(progn
            (set-buffer (get-buffer-create \" leaf-gcp\"))
@@ -522,7 +522,7 @@ fn variable_setup(ctx: &mut Context) {
 #[test]
 fn symbol_value_leaf_matches_its_opcode_arm_on_every_variable_shape() {
     use crate::emacs_core::eval::{VarCacheEvent, var_cache_event_count};
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     variable_setup(&mut ctx);
     let variables = pool(&mut ctx, VARIABLES);
     let hits0 = var_cache_event_count(VarCacheEvent::ReadLocalized)
@@ -553,7 +553,7 @@ fn symbol_value_leaf_matches_its_opcode_arm_on_every_variable_shape() {
 #[test]
 fn buffer_local_value_leaf_matches_the_builtin_on_every_variable_shape() {
     use crate::emacs_core::eval::{VarCacheEvent, var_cache_event_count};
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     variable_setup(&mut ctx);
     let variables = pool(&mut ctx, VARIABLES);
     let buffers = pool(
@@ -591,7 +591,7 @@ fn buffer_local_value_leaf_matches_the_builtin_on_every_variable_shape() {
 /// the registered builtins.
 #[test]
 fn batch_leaves_match_their_builtins() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     setup(&mut ctx);
     let values = pool(&mut ctx, POOL);
     let alists = pool(
@@ -629,7 +629,7 @@ fn batch_leaves_match_their_builtins() {
 /// it through funcall).
 #[test]
 fn assoc_leaf_matches_the_builtin() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     setup(&mut ctx);
     let keys = pool(
         &mut ctx,
@@ -682,7 +682,7 @@ fn assoc_leaf_matches_the_builtin() {
 /// behind must print the same.
 #[test]
 fn delq_leaf_matches_the_builtin() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let lists = [
         "(list 'a 'b 'a 'c 'a)",
         "(list 'a)",
@@ -757,7 +757,7 @@ fn every_generic_shape_is_exercised() {
 /// answers, over counts 0..=130 and every list shape in the pool.
 #[test]
 fn nth_fast_half_agrees_with_its_body() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let values = pool(&mut ctx, POOL);
     let counts: Vec<Value> = (-2..=130).map(Value::fixnum).collect();
     let Containment::FastOutside(fast) = NTH.containment else {
