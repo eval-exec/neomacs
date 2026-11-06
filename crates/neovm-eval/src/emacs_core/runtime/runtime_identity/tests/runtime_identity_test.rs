@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn runtime_owned_system_name_refreshes_but_a_lisp_replacement_does_not() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     refresh_system_name_from(&mut eval, "host-after-refresh".to_string());
     assert_eq!(
         eval.obarray()
