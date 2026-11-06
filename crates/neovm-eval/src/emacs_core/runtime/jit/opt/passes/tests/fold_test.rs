@@ -81,7 +81,7 @@ fn returned(ctx: &mut Context, func: &Func, args: &[Value], prefix: &[Value]) ->
 
 #[test]
 fn opt_fold_constant_predicate_prunes_unexecuted_effect_arm() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str("(setq opt-fold-effects 0)").unwrap();
     let function = source(
         vec![
@@ -135,7 +135,7 @@ fn opt_fold_constant_predicate_prunes_unexecuted_effect_arm() {
 
 #[test]
 fn opt_fold_cons_reads_use_non_nil_and_same_block_guard_proofs() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let function = source(
         vec![
             Op::Dup,
@@ -211,7 +211,7 @@ fn opt_fold_cons_reads_use_non_nil_and_same_block_guard_proofs() {
 
 #[test]
 fn opt_fold_impossible_guard_preserves_prior_effect_and_exact_frame() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str("(setq opt-fold-effects 0)").unwrap();
     let function = source(
         vec![
@@ -262,7 +262,7 @@ fn opt_fold_impossible_guard_preserves_prior_effect_and_exact_frame() {
 
 #[test]
 fn opt_fold_environment_constant_is_unknown_for_every_instance() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let function = source(
         vec![
             Op::Constant(0),
@@ -296,7 +296,7 @@ fn opt_fold_environment_constant_is_unknown_for_every_instance() {
 
 #[test]
 fn opt_fold_threads_boolean_phi_without_skipping_pinned_operations() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let function = source(
         vec![
             Op::Dup,
@@ -345,7 +345,7 @@ fn opt_fold_threads_boolean_phi_without_skipping_pinned_operations() {
 
 #[test]
 fn opt_fold_seeded_loop_diamonds_preserve_tier0_and_every_observable_stack() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for seed in 1_u64..=16 {
         let mut state = seed;
         state ^= state << 13;
@@ -428,7 +428,7 @@ fn opt_fold_seeded_loop_diamonds_preserve_tier0_and_every_observable_stack() {
 
 #[test]
 fn opt_fold_gnu_dhry_proc3_alias_join_remains_verifiable() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     // Copied from the GNU-built elisp-benchmarks-1.16 dhrystone.elc fixture.
     // Its ret slot joins the original unknown argument and a heap-load result;
     // later cl-struct checks retain both values in complete source frames.

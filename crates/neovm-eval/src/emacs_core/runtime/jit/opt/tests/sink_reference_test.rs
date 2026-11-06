@@ -93,7 +93,7 @@ fn returned(run: super::Run) -> LispValue {
 
 #[test]
 fn opt_sink_reference_trace_preserves_fresh_aliases_and_distinct_identity() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let seed = LispValue::make_float(-0.5);
     let _roots = Roots::new(&[seed]);
     for same in [true, false] {
@@ -199,7 +199,7 @@ fn opt_sink_reference_zero_trip_keeps_seed_and_overflow_replays_original_frame()
         vec![LispValue::fixnum(1)],
         2,
     );
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let seed = LispValue::make_float(-0.0);
     let _roots = Roots::new(&[seed]);
     let mut selected = plan(&source);

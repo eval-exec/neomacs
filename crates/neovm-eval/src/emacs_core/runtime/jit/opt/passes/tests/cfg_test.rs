@@ -171,7 +171,7 @@ fn diamond() -> Func {
 fn answer(func: &Func, args: &[LispValue]) -> (ValueBits, Vec<(u32, Vec<ValueBits>, u16, u16)>) {
     let run = evaluate(
         func,
-        &mut Context::new(),
+        &mut Context::new(crate::test_utils::unit_runtime()),
         Inputs {
             args,
             ..Inputs::default()
@@ -381,7 +381,7 @@ fn opt_cfg_osr_synthetic_entry_keeps_unknown_seed_and_backedge_poll() {
     );
     let run = evaluate(
         &func,
-        &mut Context::new(),
+        &mut Context::new(crate::test_utils::unit_runtime()),
         Inputs {
             osr_stack: &[LispValue::NIL],
             ..Inputs::default()
@@ -465,7 +465,7 @@ fn opt_cfg_truncated_deopt_discards_detached_insts_and_later_states() {
     });
     func.verify()
         .expect("the contradiction is still an ordinary guard");
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let expected = evaluate(
         &func,
         &mut ctx,

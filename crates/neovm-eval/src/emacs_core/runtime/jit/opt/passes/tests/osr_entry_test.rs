@@ -96,7 +96,7 @@ fn checks_outside_entry(func: &Func) -> usize {
 fn run_osr(func: &Func, stack: &[LispValue]) -> Outcome {
     let saved = save_scratch_gc_roots();
     push_scratch_gc_roots(stack);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let outcome = evaluate(
         func,
         &mut ctx,

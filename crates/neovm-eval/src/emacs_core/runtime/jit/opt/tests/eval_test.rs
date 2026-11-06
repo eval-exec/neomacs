@@ -196,7 +196,7 @@ fn compare(ctx: &mut Context, function: &ByteCodeFunction, args: &[Value]) -> Fu
 
 #[test]
 fn opt_reference_arithmetic_matches_tier0_and_every_source_stack() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let function = function(
         &[
             Op::Constant(0),
@@ -220,7 +220,7 @@ fn opt_reference_arithmetic_matches_tier0_and_every_source_stack() {
 
 #[test]
 fn opt_reference_loop_phis_and_invariant_arguments_match_tier0() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let function = function(
         &[
             Op::Constant(0),
@@ -252,7 +252,7 @@ fn opt_reference_loop_phis_and_invariant_arguments_match_tier0() {
 
 #[test]
 fn opt_reference_diamond_and_else_pop_edges_match_tier0() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let shape = ParamShape {
         required: 1,
         ..ParamShape::default()
@@ -281,7 +281,7 @@ fn opt_reference_diamond_and_else_pop_edges_match_tier0() {
 
 #[test]
 fn opt_reference_cons_allocations_and_heap_writes_match_tier0() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let function = function(
         &[
             Op::Constant(0),
@@ -310,7 +310,7 @@ fn opt_reference_cons_allocations_and_heap_writes_match_tier0() {
 
 #[test]
 fn opt_reference_call_and_variable_store_match_tier0() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str("(setq opt-reference-cell 0)").unwrap();
     let function = function(
         &[
@@ -333,7 +333,7 @@ fn opt_reference_call_and_variable_store_match_tier0() {
 
 #[test]
 fn opt_reference_float_allocation_identity_matches_tier0() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let function = function(
         &[
             Op::Constant(0),
@@ -358,7 +358,7 @@ fn opt_reference_float_allocation_identity_matches_tier0() {
 
 #[test]
 fn opt_reference_normalized_optional_and_rest_slots_match_tier0() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let shape = ParamShape {
         required: 1,
         optional: 1,
@@ -416,7 +416,7 @@ fn opt_reference_normalized_optional_and_rest_slots_match_tier0() {
 
 #[test]
 fn opt_reference_patched_prefix_is_read_from_the_current_instance() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = function(
         &[Op::Constant(0), Op::Return],
         &[Value::NIL],
@@ -448,7 +448,7 @@ fn opt_reference_switch_resolves_gnu_offsets_and_equal_keys_like_tier0() {
     use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
     use neovm_value::value::HashTableTest;
 
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let table = Value::hash_table(HashTableTest::Equal);
     let symbol = Value::symbol("opt-reference-case");
     let list = Value::list(vec![symbol, Value::fixnum(7)]);
@@ -503,7 +503,7 @@ fn opt_reference_switch_resolves_gnu_offsets_and_equal_keys_like_tier0() {
 
 #[test]
 fn opt_reference_gc_keeps_full_frame_and_vector_store_result_like_tier0() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     // GNU garbage-collect returns an allocation census. Return nil from a
     // wrapper so instrumentation allocations do not alter the observed stack.
     let collect = ctx.eval_str("(lambda () (garbage-collect) nil)").unwrap();
@@ -542,7 +542,7 @@ fn opt_reference_gc_keeps_full_frame_and_vector_store_result_like_tier0() {
 
 #[test]
 fn opt_reference_failed_type_guard_reads_exact_pre_operation_frame() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let function = function(
         &[Op::StackRef(0), Op::Car, Op::Return],
         &[],
@@ -576,7 +576,7 @@ fn opt_reference_failed_type_guard_reads_exact_pre_operation_frame() {
 
 #[test]
 fn opt_reference_seeded_stack_programs_match_tier0() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for seed in 1_u64..=32 {
         let mut state = seed;
         let mut depth = 1;
@@ -635,7 +635,7 @@ fn opt_reference_seeded_stack_programs_match_tier0() {
 
 #[test]
 fn opt_reference_poll_cadence_matches_tier0_backedges() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = function(
         &[
             Op::Dup,
@@ -721,7 +721,7 @@ fn typed_emit(
 fn opt_reference_typed_checked_fixnum_operations_deopt_at_the_original_stack() {
     use super::ir::{Opcode, Rep};
     use super::types::TypeSet;
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let cases = [
         (
             Op::Add,
@@ -810,7 +810,7 @@ fn opt_reference_typed_checked_fixnum_operations_deopt_at_the_original_stack() {
 fn opt_reference_typed_float_negation_and_nan_comparison_match_tier0_bits() {
     use super::ir::{BlockData, Cmp, Opcode, Rep, Term};
     use super::types::TypeSet;
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let mut func = Func::new(
         Box::new([]),
         ParamShape {
@@ -957,7 +957,7 @@ fn opt_reference_typed_float_negation_and_nan_comparison_match_tier0_bits() {
 #[test]
 fn opt_reference_typed_heap_and_symbol_operations_match_tier0() {
     use super::ir::Opcode;
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str("(setq opt-reference-cell 0)").unwrap();
     let symbol = intern("opt-reference-cell");
     let source = function(
@@ -1026,7 +1026,7 @@ fn opt_reference_typed_heap_and_symbol_operations_match_tier0() {
 #[test]
 fn opt_reference_extent_operators_are_rejected_without_persistent_frames() {
     use super::eval::EvalError;
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = function(
         &[Op::SaveCurrentBuffer, Op::Nil, Op::Unbind(1), Op::Return],
         &[],
@@ -1040,7 +1040,7 @@ fn opt_reference_extent_operators_are_rejected_without_persistent_frames() {
 
 #[test]
 fn opt_reference_seeded_loop_diamonds_match_tier0_every_stack() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for seed in 1_u64..=16 {
         let mut state = seed;
         state ^= state << 13;

@@ -142,7 +142,7 @@ fn tier0(ctx: &mut Context, source: &ByteCodeFunction, args: &[Value]) -> Value 
 
 #[test]
 fn opt_bool_reference_predicates_use_tier0_and_exact_t_nil() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let inputs = [
         Value::NIL,
         Value::T,
@@ -182,7 +182,7 @@ fn opt_bool_reference_predicates_use_tier0_and_exact_t_nil() {
 
 #[test]
 fn opt_bool_reference_numeric_and_identity_results_match_tier0() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let float = Value::make_float(-0.0);
     let nan = Value::make_float(f64::NAN);
     let upper = Value::make_float(9_007_199_254_740_992.0);
@@ -216,7 +216,7 @@ fn opt_bool_reference_numeric_and_identity_results_match_tier0() {
 
 #[test]
 fn opt_bool_reference_authoritative_opaque_opcode_controls_semantics() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let original = source(Op::Consp, 1);
     let expected_source = source(Op::Not, 1);
     let mut changed = plan(&original);
@@ -236,7 +236,7 @@ fn opt_bool_reference_authoritative_opaque_opcode_controls_semantics() {
 
 #[test]
 fn opt_bool_reference_rejects_non_boolean_success_without_truthiness_shortcut() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = source(Op::Add, 2);
     let mut malformed = plan(&source);
     promote_return(&mut malformed, &Op::Add);

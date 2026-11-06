@@ -459,7 +459,7 @@ fn insert_observer_before(func: &mut Func, before: Inst, owners: [Value; 2]) -> 
 
 #[test]
 fn opt_sink_recipe_same_frame_keeps_early_and_late_box_versions() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::new(&[]);
     let (source, mut original, owners) = fresh_float_pair(&mut ctx, &roots);
     let eq = Inst(
@@ -536,7 +536,7 @@ fn opt_sink_recipe_same_frame_keeps_early_and_late_box_versions() {
 
 #[test]
 fn opt_sink_recipe_borrowed_top_requires_false_ready_word_box_lineage() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::new(&[]);
     let source = frozen_loop_add();
     let seed = LispValue::cons(LispValue::fixnum(41), LispValue::NIL);
@@ -609,7 +609,7 @@ fn opt_sink_recipe_borrowed_top_requires_false_ready_word_box_lineage() {
 
 #[test]
 fn opt_sink_recipe_phi_rejects_incomplete_tuple() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::new(&[]);
     let (_, original, join, owners) = partial_alias_baseline(&mut ctx, &roots);
     let func = selected(&original);
@@ -626,7 +626,7 @@ fn opt_sink_recipe_phi_rejects_incomplete_tuple() {
 }
 #[test]
 fn opt_sink_recipe_phi_rejects_same_rep_mismatched_tuple() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::new(&[]);
     let (_, original, join, owners) = partial_alias_baseline(&mut ctx, &roots);
     let func = selected(&original);
@@ -667,7 +667,7 @@ fn opt_sink_recipe_phi_rejects_same_rep_mismatched_tuple() {
 }
 #[test]
 fn opt_sink_recipe_equal_payload_distinct_producers_keep_identity() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::new(&[]);
     let (_, original, owners) = fresh_float_pair(&mut ctx, &roots);
     let func = selected(&original);
@@ -702,7 +702,7 @@ fn opt_sink_recipe_equal_payload_distinct_producers_keep_identity() {
 }
 #[test]
 fn opt_sink_recipe_partial_alias_phi_shared_edge_has_one_actual_box() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::new(&[]);
     let (_, original, join, owners) = partial_alias_baseline(&mut ctx, &roots);
     let func = selected(&original);
@@ -775,7 +775,7 @@ fn cons_cuts(func: &Func, child: Value, parent: Value) -> (Inst, Value, Value) {
 }
 #[test]
 fn opt_sink_recipe_boxed_cons_roots_stop_old_fields_before_and_after_mutation() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::new(&[]);
     let (_, original, owners, setter, later_frame) =
         nested_cons_mutation_baseline(&mut ctx, &roots);
@@ -816,7 +816,7 @@ fn opt_sink_recipe_boxed_cons_roots_stop_old_fields_before_and_after_mutation() 
 }
 #[test]
 fn opt_sink_recipe_roots_ignore_dead_historical_cons_owners() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::new(&[]);
     let (_, original, owners, setter, frame) = nested_cons_mutation_baseline(&mut ctx, &roots);
     let func = selected(&original);
@@ -831,7 +831,7 @@ fn opt_sink_recipe_roots_ignore_dead_historical_cons_owners() {
 }
 #[test]
 fn opt_sink_recipe_roots_never_publish_numeric_raw_transport_fields() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::new(&[]);
     let source = frozen_loop_add();
     let original = plan(&source);
@@ -877,7 +877,7 @@ fn opt_sink_recipe_roots_never_publish_numeric_raw_transport_fields() {
 }
 #[test]
 fn opt_sink_recipe_cache_phi_rejects_stale_boxed_arm_even_with_matching_edge_ssa() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::new(&[]);
     let source = source(
         vec![
@@ -992,7 +992,7 @@ fn edge_mut(term: &mut Term, index: usize) -> Option<&mut Edge> {
 
 #[test]
 fn opt_sink_recipe_copied_numeric_view_is_complete_and_point_local() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::new(&[]);
     let (source, mut original, owners) = fresh_float_pair(&mut ctx, &roots);
     // Both real operands of these two source multiplications are frozen GNU
@@ -1124,7 +1124,7 @@ fn opt_sink_recipe_copied_numeric_view_is_complete_and_point_local() {
 
 #[test]
 fn opt_sink_recipe_unboxed_cons_view_roots_follow_checked_identity_lineage() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::new(&[]);
     let (source, mut original, owners, setter, later_frame) =
         nested_cons_mutation_baseline(&mut ctx, &roots);
@@ -1328,7 +1328,7 @@ fn dominating_shared_tuple(
 
 #[test]
 fn opt_sink_recipe_dominating_owner_and_partial_phi_share_actual_edge_box() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::new(&[]);
     let (original, join, dominating, phi) = dominating_partial_baseline(&mut ctx, &roots);
     let func = selected(&original);
@@ -1357,7 +1357,7 @@ fn opt_sink_recipe_dominating_owner_and_partial_phi_share_actual_edge_box() {
 
 #[test]
 fn opt_sink_recipe_verifier_rejects_uncached_dominating_partial_alias_edge() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::new(&[]);
     let (original, join, dominating, phi) = dominating_partial_baseline(&mut ctx, &roots);
     let func = selected(&original);

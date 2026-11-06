@@ -212,7 +212,7 @@ fn insert(
 
 #[test]
 fn opt_array_lift_actual_constant_kinds_have_real_ordered_guards() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let vector = LispValue::vector(vec![LispValue::fixnum(13), LispValue::fixnum(23)]);
     let record =
         LispValue::make_record(vec![LispValue::symbol("record-tag"), LispValue::fixnum(29)]);
@@ -260,7 +260,7 @@ fn opt_array_lift_actual_constant_kinds_have_real_ordered_guards() {
 
 #[test]
 fn opt_array_lift_unknown_string_and_dynamic_prefix_are_not_kind_evidence() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let array = LispValue::vector(vec![LispValue::fixnum(1)]);
     let text = LispValue::string("x");
     let unknown = function(
@@ -296,7 +296,7 @@ fn opt_array_lift_unknown_string_and_dynamic_prefix_are_not_kind_evidence() {
 
 #[test]
 fn opt_array_final_proof_rejects_future_current_interval_guard() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let source = repeated(LispValue::vector(vec![
         LispValue::fixnum(13),
         LispValue::fixnum(23),
@@ -332,7 +332,7 @@ fn opt_array_final_proof_rejects_future_current_interval_guard() {
 
 #[test]
 fn opt_array_final_proof_rejects_future_floor_interval_guard() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let source = repeated(LispValue::vector(vec![
         LispValue::fixnum(13),
         LispValue::fixnum(23),
@@ -372,7 +372,7 @@ fn opt_array_final_proof_rejects_future_floor_interval_guard() {
 
 #[test]
 fn opt_array_final_proof_rejects_narrow_declared_refine_without_interval_source() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     // Dynamic checked first index, then literal0. A successful first bounds
     // legitimately proves length>=1; a declared Refine must not invent>=2.
     let source = function(
@@ -442,7 +442,7 @@ fn opt_array_final_proof_rejects_narrow_declared_refine_without_interval_source(
 
 #[test]
 fn opt_array_final_proof_rejects_stale_floor_after_poll_even_if_no_observed_mutation() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let source = repeated(LispValue::vector(vec![
         LispValue::fixnum(13),
         LispValue::fixnum(23),
@@ -475,7 +475,7 @@ fn opt_array_final_proof_rejects_stale_floor_after_poll_even_if_no_observed_muta
 
 #[test]
 fn opt_array_checked_proof_rejects_declared_fix_index_without_executed_tag_guard() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let source = function(
         vec![Op::StackRef(1), Op::StackRef(1), Op::Aref, Op::Return],
         vec![],
@@ -577,7 +577,7 @@ fn opt_array_checked_proof_rejects_declared_fix_index_without_executed_tag_guard
 fn opt_array_cfg_cleanup_preserves_compacted_owner_and_numeric_witnesses() {
     use super::super::cfg::cleanup;
 
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let source = repeated(LispValue::vector(vec![
         LispValue::fixnum(13),
         LispValue::fixnum(23),

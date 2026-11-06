@@ -299,7 +299,7 @@ fn emit(
 
 #[test]
 fn opt_gvn_reference_dominating_pure_reuse_matches_tier0() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let constants = [LispValue::fixnum(31), LispValue::fixnum(7)];
     let source = bytecode(
         vec![Op::Constant(0), Op::Constant(1), Op::Add, Op::Return],
@@ -365,7 +365,7 @@ fn opt_gvn_reference_dominating_pure_reuse_matches_tier0() {
 
 #[test]
 fn opt_gvn_reference_repeated_cons_loads_keep_child_identity_and_source_states() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let mut program = Program::new(1);
     for cdr in [false, false, true, true] {
         program.read(0, cdr);
@@ -421,7 +421,7 @@ fn opt_gvn_reference_repeated_cons_loads_keep_child_identity_and_source_states()
 
 #[test]
 fn opt_gvn_reference_setters_remain_visible_and_forward_exact_heap_value() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for cdr in [false, true] {
         let mut program = Program::new(2);
         program.read(0, !cdr);
@@ -494,7 +494,7 @@ fn opt_gvn_reference_setters_remain_visible_and_forward_exact_heap_value() {
 
 #[test]
 fn opt_gvn_reference_possible_alias_store_kills_only_the_written_field() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for cdr in [false, true] {
         let mut program = Program::new(3);
         program.read(0, cdr);
@@ -583,7 +583,7 @@ fn opt_gvn_reference_possible_alias_store_kills_only_the_written_field() {
 
 #[test]
 fn opt_gvn_reference_one_arm_store_cannot_escape_into_join_loads() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for cdr in [false, true] {
         let mut program = Program::new(3);
         program.read(0, cdr);
@@ -652,7 +652,7 @@ fn opt_gvn_reference_one_arm_store_cannot_escape_into_join_loads() {
 
 #[test]
 fn opt_gvn_reference_actual_call_mutation_invalidates_cons_loads() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for cdr in [false, true] {
         let callback = ctx
             .eval_str(if cdr {
@@ -739,7 +739,7 @@ fn gc_fixture(ctx: &mut Context) -> (LispValue, LispValue) {
 
 #[test]
 fn opt_gvn_reference_gc_call_keeps_eliminated_child_alias_live() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let collect = ctx.eval_str("(lambda () (garbage-collect) nil)").unwrap();
     let _collect = Roots::new(&[collect]);
     let mut program = Program::new(1);
@@ -796,7 +796,7 @@ fn opt_gvn_reference_gc_call_keeps_eliminated_child_alias_live() {
 
 #[test]
 fn opt_gvn_reference_poll_gc_hook_mutation_invalidates_available_load() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     // The independent Tier-0 control reaches the same real post-GC hook.
     let collect = ctx.eval_str("(lambda () (garbage-collect) nil)").unwrap();
     let _collect = Roots::new(&[collect]);
@@ -904,7 +904,7 @@ fn opt_gvn_reference_poll_gc_hook_mutation_invalidates_available_load() {
 
 #[test]
 fn opt_gvn_reference_fresh_float_and_dynamic_positioned_eq_are_excluded() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let constants = [LispValue::make_float(1.25), LispValue::make_float(2.0)];
     let _constants = Roots::new(&constants);
     let source = bytecode(
@@ -1078,7 +1078,7 @@ fn opt_gvn_reference_fresh_float_and_dynamic_positioned_eq_are_excluded() {
 
 #[test]
 fn opt_gvn_reference_forwarded_values_reconstruct_full_cold_frame_after_store() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let mut program = Program::new(3);
     program.store(0, 1, false);
     program.pop();
@@ -1177,7 +1177,7 @@ fn opt_gvn_reference_forwarded_values_reconstruct_full_cold_frame_after_store() 
 
 #[test]
 fn opt_gvn_reference_typed_setter_nonwrite_hints_invalidate_mutable_field() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for cdr in [false, true] {
         for hint in [Effects::PURE, Effects::READ_HEAP] {
             let mut program = Program::new(2);
@@ -1395,7 +1395,7 @@ fn list_guard_reference(
 
 #[test]
 fn opt_gvn_reference_guarded_list_read_between_cons_cdr_retains_nil_and_error_order() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let (cell, _) = children(&mut ctx);
     let _cell = Roots::new(&[cell]);
     let list = ctx.eval_str("(list 'list-head 'list-tail)").unwrap();

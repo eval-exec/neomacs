@@ -346,7 +346,7 @@ fn counter() -> ByteCodeFunction {
 
 #[test]
 fn opt_range_reference_branch_proof_elides_increment_only_on_taken_edge() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = bytecode(
         vec![
             Op::StackRef(0),
@@ -425,7 +425,7 @@ fn opt_range_reference_branch_proof_elides_increment_only_on_taken_edge() {
 
 #[test]
 fn opt_range_reference_real_counter_keeps_accumulator_overflow_guard() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = counter();
     let original = plan(&source, 0, None);
     let sum = checked_add(&original, 8);
@@ -528,7 +528,7 @@ fn raw_phi() -> ByteCodeFunction {
 
 #[test]
 fn opt_range_reference_phi_promotion_preserves_original_cold_frame() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = raw_phi();
     let original = plan(&source, 0, None);
     let hi = LispValue::MOST_POSITIVE_FIXNUM;
@@ -622,7 +622,7 @@ fn opt_range_reference_phi_promotion_preserves_original_cold_frame() {
 
 #[test]
 fn opt_range_reference_unknown_osr_and_prefix_keep_unproved_checks() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = counter();
     let osr = plan(&source, 0, Some((2, 3)));
     let osr_stack = arguments(&[3, LispValue::MOST_POSITIVE_FIXNUM, 0]);
@@ -823,7 +823,7 @@ fn array_rebind() -> ByteCodeFunction {
 
 #[test]
 fn opt_range_reference_bounds_result_preserves_error_order_and_identity() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let array = ctx.eval_str("[7 11 13]").unwrap();
     let _array = Roots::new(&[array]);
     let payload = ctx.eval_str("(list 'heap-companion)").unwrap();
@@ -1053,7 +1053,7 @@ fn cold_loop() -> ByteCodeFunction {
 
 #[test]
 fn opt_licm_reference_zero_trip_and_late_failure_preserve_visible_store() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let payload = ctx.eval_str("(list 'heap-companion)").unwrap();
     let _payload = Roots::new(&[payload]);
     let wrong = LispValue::symbol("wrong");
@@ -1148,7 +1148,7 @@ fn opt_licm_reference_zero_trip_and_late_failure_preserve_visible_store() {
 
 #[test]
 fn opt_licm_reference_anticipated_invariant_guard_replays_loop_entry_once() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let side_symbol = LispValue::symbol("t34-o335-side");
     let source = bytecode(
         vec![
@@ -1247,7 +1247,7 @@ fn opt_licm_reference_anticipated_invariant_guard_replays_loop_entry_once() {
 
 #[test]
 fn opt_licm_reference_immutable_payload_keeps_existing_float_identity() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.set_gc_threshold(usize::MAX);
     ctx.gc_stress = false;
     let seed = ctx.eval_str("-0.0").unwrap();

@@ -178,7 +178,7 @@ pub fn arithmetic(op: Op, constant: i64) -> ByteCodeFunction {
 
 #[test]
 fn opt_reps_lift_six_arithmetic_ops_keep_results_and_full_source_ids() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for op in [Op::Add, Op::Sub, Op::Mul, Op::Add1, Op::Sub1, Op::Negate] {
         let function = arithmetic(op.clone(), 3);
         let original = plan(&function, 0);
@@ -224,7 +224,7 @@ fn opt_reps_lift_six_arithmetic_ops_keep_results_and_full_source_ids() {
 
 #[test]
 fn opt_reps_lift_comparisons_preserve_tagged_and_existing_bool_results() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for op in [Op::Eqlsign, Op::Lss, Op::Gtr, Op::Leq, Op::Geq] {
         for already_bool in [false, true] {
             let function = source(vec![op.clone(), Op::Return], Vec::new(), 2);
@@ -424,7 +424,7 @@ fn opt_reps_lift_verify_rejects_unproved_or_broad_taggedfix_views() {
 
 #[test]
 fn opt_reps_lift_verify_reverse_tagged_views_keep_proof_and_impossible_guard() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for (opcode, ty, impossible) in [
         (Opcode::Refine(TypeSet::FIXNUM), TypeSet::FIXNUM, false),
         (Opcode::CheckType(TypeSet::FIXNUM), TypeSet::FIXNUM, false),
@@ -522,7 +522,7 @@ fn opt_reps_lift_verify_untag_requires_nonempty_fixnum_and_tag_result() {
 
 #[test]
 fn opt_reps_lift_dynamic_prefix_keeps_unknown_identity_and_early_type_frame() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     // The template contains the unary step itself; it must not be reused as a
     // static literal because this pool slot belongs to the patched prefix.
     let function = source(
@@ -562,7 +562,7 @@ fn opt_reps_lift_dynamic_prefix_keeps_unknown_identity_and_early_type_frame() {
 
 #[test]
 fn opt_reps_lift_type_failure_preserves_prior_store_and_complete_frame() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str("(setq opt-reps-lift-side nil)").unwrap();
     let function = source(
         vec![
@@ -650,7 +650,7 @@ fn opt_reps_lift_type_failure_preserves_prior_store_and_complete_frame() {
 
 #[test]
 fn opt_reps_lift_overflow_and_unary_boundaries_keep_original_deopt_stack() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for (op, constant, argument) in [
         (Op::Add, 1, LispValue::MOST_POSITIVE_FIXNUM),
         (Op::Sub, 1, LispValue::MOST_NEGATIVE_FIXNUM),
@@ -710,7 +710,7 @@ fn opt_reps_lift_invalid_input_is_transactional() {
 
 #[test]
 fn opt_reps_lift_reannotates_dependent_list_guard_without_changing_source_ids() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let function = source(
         vec![Op::Dup, Op::Add1, Op::Dup, Op::Car, Op::Return],
         Vec::new(),
@@ -871,7 +871,7 @@ fn opt_reps_lift_real_counter_pipeline_proves_two_phis_and_selects_raw() {
         "proof exposure preserves executable quit polling"
     );
     lifted.verify().unwrap();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for integer in [0, 1, 17, 254, 255, 510] {
         let args = [LispValue::fixnum(integer)];
         let expected = tier0(&mut ctx, &function, &args);
@@ -983,7 +983,7 @@ fn opt_reps_lift_publish_root_keeps_exact_tagged_view_and_original_result() {
     assert_eq!(view_inst.pc, published.pc);
     lifted.verify().unwrap();
 
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for integer in [-17, -1, 0, 1, 19] {
         let args = [LispValue::fixnum(integer)];
         let expected = tier0(&mut ctx, &function, &args);
