@@ -858,7 +858,7 @@ impl Context {
                 Value::T,
             )?;
             let read_result = self.read_command_key_sequence_with_options(
-                crate::keyboard::ReadKeySequenceOptions::new(Value::NIL, false, false, true),
+                crate::keyboard::ReadKeySequenceOptions::for_command_loop(),
             );
 
             // The read result itself is not an EvalResult, but it can carry

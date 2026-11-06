@@ -118,6 +118,84 @@ fn input_after_idle_timer_wakes_wait(read: InputRead) {
 }
 
 #[test]
+fn command_loop_uses_selected_buffers_map_after_async_switch() {
+    let _policy = legacy_redisplay_fixture_policy();
+    let mut ev = runtime_startup_context();
+    let scratch = ev.buffers.create_buffer("*async-old*");
+    ev.buffers.set_current(scratch);
+    let frame = ev.frames.create_frame("F1", 80, 24, scratch);
+    assert!(ev.frames.select_frame(frame));
+    let _input_owner = InputGateOwner::install(&mut ev);
+    fn stop(ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
+        ctx.command_loop.running = false;
+        Ok(Value::NIL)
+    }
+    ev.register_subr(SubrSpec::new(
+        "neo-stop-async-map-test",
+        NativeFn::ContextVec(stop),
+        SubrArity::new(0, Some(0)),
+    ));
+    ev.eval_str(
+        r#"(progn
+             (setq timer-list nil timer-idle-list nil neo-old-map-count 0)
+             (switch-to-buffer "*async-old*")
+             (use-local-map (make-sparse-keymap))
+             (local-set-key "a" (lambda () (interactive)
+                                  (setq neo-old-map-count (1+ neo-old-map-count))))
+             (with-current-buffer (get-buffer-create "*async-new*")
+               (fundamental-mode))
+             (global-set-key "b" (lambda () (interactive) (neo-stop-async-map-test)))
+             (run-at-time 0.01 nil
+               (lambda ()
+                 (save-current-buffer (switch-to-buffer "*async-new*"))
+                 (setq unread-command-events (list ?a ?a ?b)))))"#,
+    )
+    .unwrap();
+    ev.command_loop.running = true;
+    ev.recursive_edit_inner().unwrap();
+    assert_eq!(
+        ev.eval_symbol("neo-old-map-count").unwrap(),
+        Value::fixnum(0)
+    );
+    assert_eq!(
+        ev.eval_str("(with-current-buffer \"*async-new*\" (buffer-string))")
+            .unwrap(),
+        Value::string("aa")
+    );
+}
+
+#[test]
+fn lisp_key_reader_preserves_current_buffer_after_async_display() {
+    let _policy = legacy_redisplay_fixture_policy();
+    let mut ev = runtime_startup_context();
+    let old = ev.buffers.create_buffer("*reader-old*");
+    ev.buffers.set_current(old);
+    let frame = ev.frames.create_frame("F1", 80, 24, old);
+    assert!(ev.frames.select_frame(frame));
+    let _input_owner = InputGateOwner::install(&mut ev);
+    ev.eval_str(
+        r#"(progn
+             (setq timer-list nil timer-idle-list nil)
+             (use-local-map (make-sparse-keymap))
+             (fset 'neo-old-key (lambda () (interactive)))
+             (local-set-key "a" 'neo-old-key)
+             (with-current-buffer (get-buffer-create "*reader-new*")
+               (fundamental-mode))
+             (run-at-time 0.01 nil
+               (lambda ()
+                 (save-current-buffer (switch-to-buffer "*reader-new*"))
+                 (setq unread-command-events (list ?a)))))"#,
+    )
+    .unwrap();
+    let (keys, binding) = ev
+        .read_key_sequence_with_options(ReadKeySequenceOptions::default())
+        .unwrap();
+    assert_eq!(keys, vec![Value::fixnum('a' as i64)]);
+    assert_eq!(binding.original(), Value::symbol("neo-old-key"));
+    assert_eq!(ev.buffers.current_buffer_id(), Some(old));
+}
+
+#[test]
 fn read_char_wakes_for_input_published_at_poll_entry_after_idle_timer() {
     input_after_idle_timer_wakes_wait(InputRead::Character);
 }
