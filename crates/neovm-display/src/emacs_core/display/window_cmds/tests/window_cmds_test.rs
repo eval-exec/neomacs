@@ -10020,7 +10020,7 @@ fn graphical_recenter_context(
             eval.eval_str(&form).expect("display callback");
         }
         let viewport_start = match eval
-            .frames
+            .frame_manager()
             .get(frame)
             .and_then(|frame| frame.find_window(window))
         {

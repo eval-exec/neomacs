@@ -4,6 +4,7 @@ mod attempt_freshness_span_test;
 
 use super::*;
 use crate::window::DisplayFrameTestExt;
+use crate::window::display::WindowDisplayContextExt;
 use crate::window::geometry::DisplayGeometryExt;
 use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
 use neomacs_display_protocol::TransitionDirection;
@@ -97,8 +98,6 @@ fn window_end_state_preserves_one_atomic_record_across_invalidation() {
 #[test]
 fn prepared_presentation_publishes_one_atomic_window_redisplay_output() {
     use super::geometry::PresentationId;
-    use crate::window::display::WindowDisplayContextExt;
-
     let mut frames = FrameManager::new();
     let frame_id = frames.create_frame("atomic-window-output", 800, 600, BufferId(1));
     let frame = frames.get_mut(frame_id).expect("frame");

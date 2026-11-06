@@ -1,3 +1,4 @@
+use crate::window::DisplayFrameManagerExt;
 use crate::window::FrameVisibility;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::emacs_core::print::format_eval_result;
@@ -84,7 +85,6 @@ fn graphical_frame_cannot_be_deleted_when_only_an_invisible_gui_frame_remains() 
 #[test]
 fn last_graphical_frame_deletion_retains_connection_for_replacement_frame() {
     use crate::emacs_core::terminal::pure::{TerminalRuntimeConfig, ensure_terminal_runtime_owner};
-    use crate::window::DisplayFrameManagerExt;
     use neomacs_display_protocol::{GraphicalBackend, GraphicalDisplayIdentity};
 
     crate::test_utils::init_test_tracing();
