@@ -26,7 +26,6 @@ pub mod vm;
 pub(crate) use arith_kind::ArithGenericKind;
 pub(crate) use chunk::ByteCodeFunctionExt;
 
-
 pub(crate) use chunk::fresh_bytecode_source_id;
 pub use chunk::{ByteCodeFunction, ByteCodeStructuralPart};
 pub use function_slots::{
