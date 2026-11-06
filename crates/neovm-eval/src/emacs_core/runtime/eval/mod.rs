@@ -9088,30 +9088,24 @@ mod tier_i;
 pub use cconv_memo::{CconvMemoEvent, CconvMemoMode, EffectSnapshot, HeadVerdict};
 #[cfg(all(test, not(feature = "test-support")))]
 pub(crate) use cconv_memo::{
-    CconvMemoEvent, CconvMemoMode, HeadVerdict, parse_cconv_fast_knob, parse_cconv_memo_knob,
+    CconvMemoEvent, CconvMemoMode, parse_cconv_fast_knob, parse_cconv_memo_knob,
 };
 #[cfg(all(test, feature = "test-support"))]
 pub(crate) use cconv_memo::{parse_cconv_fast_knob, parse_cconv_memo_knob};
 
-#[cfg(all(test, not(feature = "test-support")))]
-pub(crate) use cconv_shape::{
-    ClosureFacts, ClosureShape, EnvSummary, FactsRefusal, SHAPE_NODE_CAP, ShapeRefusal, ShapeTok,
-};
 #[cfg(feature = "test-support")]
 #[doc(hidden)]
 pub use cconv_shape::{
     ClosureFacts, ClosureShape, EnvSummary, FactsRefusal, SHAPE_NODE_CAP, ShapeRefusal, ShapeTok,
 };
 
+#[cfg(all(test, not(feature = "test-support")))]
+pub(crate) use cconv_trust::TrustRefusal;
 #[cfg(feature = "test-support")]
 #[doc(hidden)]
 pub use cconv_trust::{
     EXCLUDED_CALLEES, ExclusionReason, TRUSTED_LISP, TRUSTED_VARIABLES, TrustRefusal,
     TrustedVariableRole,
-};
-#[cfg(all(test, not(feature = "test-support")))]
-pub(crate) use cconv_trust::{
-    EXCLUDED_CALLEES, TRUSTED_LISP, TRUSTED_VARIABLES, TrustRefusal, TrustedVariableRole,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use tier_i::TierIMode;
