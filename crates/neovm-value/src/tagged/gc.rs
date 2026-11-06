@@ -1012,8 +1012,10 @@ fn verify_marked_objects_enabled() -> bool {
     from_env || VERIFY_MARKED_OBJECTS.with(|flag| flag.get())
 }
 
-/// Turn post-mark ownership verification on for THIS thread.
-#[cfg(all(debug_assertions, test))]
+/// Turn post-mark ownership verification on for THIS thread. Re-gated to
+/// the test-support build for eval's GC tests; the signed fence in
+/// `test_support::authority` is the only cross-crate route.
+#[cfg(all(debug_assertions, any(test, feature = "test-support")))]
 pub(crate) fn set_verify_marked_objects_for_test(on: bool) {
     VERIFY_MARKED_OBJECTS.with(|flag| flag.set(on));
 }
@@ -2903,7 +2905,7 @@ mod knobs;
 #[cfg_attr(not(feature = "jit"), allow(unused_imports))]
 #[doc(hidden)]
 pub use knobs::card_tag_filter_on;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use knobs::with_card_tag_filter_for_test;
 
 mod chunk_map;

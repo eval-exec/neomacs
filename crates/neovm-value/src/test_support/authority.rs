@@ -303,6 +303,21 @@ pub unsafe fn make_permanent_for_test(
     header.make_permanent(resident);
 }
 
+/// FENCE (N2 arming knob): toggle post-mark ownership verification for THIS
+/// thread. The original stays `pub(crate)`; this is its only cross-crate
+/// route, with the same debug-only availability.
+#[cfg(debug_assertions)]
+pub fn set_verify_marked_objects_for_test(on: bool) {
+    crate::tagged::gc::set_verify_marked_objects_for_test(on);
+}
+
+/// FENCE (closure-scoped knob): run `f` with the card-tag filter forced to
+/// `on`, restoring the prior thread-local value on exit. The original stays
+/// `pub(crate)`; no state or guard escapes.
+pub fn with_card_tag_filter_for_test<R>(on: bool, f: impl FnOnce() -> R) -> R {
+    crate::tagged::gc::with_card_tag_filter_for_test(on, f)
+}
+
 /// P1-HOOKS-2 FENCE (peer 16:4xZ): opaque copy of an obarray's function-cell
 /// publication clock. The value can only be minted by
 /// [`snapshot_function_epoch_for_test`] from a live obarray and restored into

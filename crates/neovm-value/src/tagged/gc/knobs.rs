@@ -187,8 +187,10 @@ pub fn card_tag_filter_on() -> bool {
     })
 }
 
-/// Nestable test scope for leaves compiled on this thread.
-#[cfg(test)]
+/// Nestable test scope for leaves compiled on this thread. Re-gated to the
+/// test-support build; the signed fence in `test_support::authority` is the
+/// only cross-crate route.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn with_card_tag_filter_for_test<R>(on: bool, f: impl FnOnce() -> R) -> R {
     struct RestoreFilter(Option<bool>);
     impl Drop for RestoreFilter {
