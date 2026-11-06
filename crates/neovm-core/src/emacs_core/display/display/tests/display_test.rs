@@ -3379,6 +3379,42 @@ fn monitor_attributes_geometry_uses_frame_pixel_units() {
 }
 
 #[test]
+fn monitor_attributes_report_scale_factor_only_for_wayland_frames() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::builtins::{NeomacsMonitorInfo, set_neomacs_monitor_info};
+    let mut eval = crate::emacs_core::Context::new();
+    let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+    set_neomacs_monitor_info(vec![NeomacsMonitorInfo {
+        x: 0,
+        y: 0,
+        width: 3024,
+        height: 1964,
+        scale: 2.0,
+        width_mm: 0,
+        height_mm: 0,
+        name: None,
+    }]);
+    let printed = |eval: &mut crate::emacs_core::Context| {
+        let list = crate::emacs_core::builtins::builtin_neomacs_display_monitor_attributes_list(
+            eval,
+            vec![],
+        )
+        .unwrap();
+        crate::emacs_core::print::print_value(&list)
+    };
+    // GNU's NS and X builds omit it; only PGTK reports it.
+    let without = printed(&mut eval);
+    eval.frames
+        .get_mut(frame_id)
+        .expect("selected frame")
+        .set_display_identity(crate::window::FrameDisplayIdentity::wayland("wayland-0"));
+    let with = printed(&mut eval);
+    set_neomacs_monitor_info(vec![]);
+    assert!(!without.contains("scale-factor"), "{without}");
+    assert!(with.contains("(scale-factor . 2.0)"), "{with}");
+}
+
+#[test]
 fn graphical_display_without_monitor_snapshot_does_not_invent_dimensions() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::Context::new();
