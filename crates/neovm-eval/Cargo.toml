@@ -106,3 +106,8 @@ neovm-text = { path = "../neovm-text", default-features = false, features = ["te
 # dependency is tied to the test-support feature, so this dev-dependency makes
 # the attribute macro resolvable in this crate's own cfg(test) build too.
 visibility = "0.1.1"
+# External crates the test tree uses directly (test-only; no product edge).
+tracing-subscriber.workspace = true
+neomacs-infra.workspace = true
+flate2.workspace = true
+tree-sitter-json = "0.24"
