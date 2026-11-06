@@ -3,7 +3,7 @@ use crate::emacs_core::eval::Context;
 
 #[test]
 fn positioned_single_and_list_aspects_follow_eq_policy() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let aspect = ctx
         .tagged_heap
         .alloc_symbol_with_pos(Value::symbol("modify"), Value::fixnum(0));
