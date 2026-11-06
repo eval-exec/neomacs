@@ -7,7 +7,7 @@ fn test_obarray() -> neovm_value::symbol::Obarray {
 }
 
 fn eval_all(source: &str) -> Vec<String> {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let forms = crate::emacs_core::value_reader::read_all(
         source,
         crate::emacs_core::eval::VariableView::canonical(
@@ -29,7 +29,7 @@ fn eval_all(source: &str) -> Vec<String> {
 }
 
 fn eval_one(source: &str) -> String {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     crate::emacs_core::format_eval_result(&ctx.eval_str(source))
 }
 
@@ -71,7 +71,7 @@ fn uninterned_keyword_defaults_do_not_self_evaluate() {
 #[test]
 fn uninterned_value_cells_ignore_buffer_local_namesakes() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let canonical = intern("depth-alist");
     let uninterned = intern_uninterned("depth-alist");
     ctx.buffers
@@ -113,7 +113,7 @@ fn set_default_sets_global() {
 #[test]
 fn set_default_preserves_current_buffer_local_binding() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let current = ctx.buffers.current_buffer_id().expect("current buffer");
     ctx.set_buffer_local_binding_by_id(current, intern("vm-set-default-local"), Value::fixnum(7))
         .expect("buffer-local binding");
