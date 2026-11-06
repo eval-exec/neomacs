@@ -1388,7 +1388,7 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
             Some((row_break_face_id, box_edges, box_membership)),
         ) = (stop, row_break_face)
         {
-            DisplayRowLineEndFinalizer::new(
+            let _ = DisplayRowLineEndFinalizer::new(
                 row_break,
                 row_break_face_id,
                 line_end_right_edge_x - position.x_px(),

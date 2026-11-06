@@ -945,7 +945,9 @@ impl BufferSourceOutputSetup {
                                             cursor_row_pixel_y,
                                             face_height,
                                             face_ascent,
-                                            cursor_height,
+                                            // Fresh capture clamps against the
+                                            // whole row, including spacing.
+                                            row.height_px,
                                             cursor_ascent,
                                             geometry.char_height,
                                             row.ends_at_zv,

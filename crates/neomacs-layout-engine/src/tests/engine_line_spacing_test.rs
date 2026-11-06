@@ -2,6 +2,96 @@
 use super::*;
 
 #[test]
+fn small_newline_face_shrinks_only_its_own_row() {
+    for extend in ["nil", "t"] {
+        let (mut eval, frame, _buffer, window) =
+            incr_editing_frame("Summary: \n\nbody\n", 800, 240);
+        realize_test_gui_frame(&mut eval, frame);
+        eval.eval_str(&format!(
+            "(put-text-property 11 12 'face '(:height 0.1 :inverse-video t :extend {extend}))"
+        ))
+        .unwrap();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
+        crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+        let rows = |engine: &mut LayoutEngine, eval: &mut Context| {
+            let FrameLayoutAttempt::Prepared(output) = engine.redisplay_frame_attempt(eval, frame)
+            else {
+                panic!("separator frame should prepare");
+            };
+            output
+                .window_matrices
+                .iter()
+                .find(|entry| entry.window_id.get() == window.0 as i64)
+                .unwrap()
+                .matrix
+                .rows
+                .iter()
+                .take(3)
+                .map(|row| (row.pixel_y, row.height_px))
+                .collect::<Vec<_>>()
+        };
+        let before = rows(&mut engine, &mut eval);
+        assert!(
+            before[1].1 < before[0].1 / 2.0,
+            "small newline must not inherit the default row height: {before:?}"
+        );
+        assert_eq!(before[2].1, before[0].1);
+        assert_eq!(before[2].0 - before[1].0, before[1].1);
+        eval.eval_str("(set-window-point (selected-window) 11)")
+            .unwrap();
+        assert_eq!(
+            rows(&mut engine, &mut eval),
+            before,
+            "point must not enlarge the separator"
+        );
+    }
+}
+
+#[test]
+fn small_newline_keeps_normal_sized_content_in_the_same_row() {
+    let (mut eval, frame, _buffer, window) = incr_editing_frame("Summary: \nx\nbody\n", 800, 240);
+    realize_test_gui_frame(&mut eval, frame);
+    eval.eval_str("(put-text-property 12 13 'face '(:height 0.1 :extend t))")
+        .unwrap();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+    let FrameLayoutAttempt::Prepared(output) = engine.redisplay_frame_attempt(&mut eval, frame)
+    else {
+        panic!("mixed-font frame should prepare");
+    };
+    let rows = &output
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == window.0 as i64)
+        .unwrap()
+        .matrix
+        .rows;
+    assert_eq!(rows[1].height_px, rows[0].height_px);
+    assert_eq!(rows[2].height_px, rows[0].height_px);
+}
+
+#[test]
+fn small_newline_face_does_not_shrink_terminal_rows() {
+    let (mut eval, frame, _buffer, window) = incr_editing_frame("Summary: \n\nbody\n", 800, 240);
+    eval.eval_str("(put-text-property 11 12 'face '(:height 0.1 :extend t))")
+        .unwrap();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    let FrameLayoutAttempt::Prepared(output) = engine.redisplay_frame_attempt(&mut eval, frame)
+    else {
+        panic!("terminal frame should prepare");
+    };
+    let rows = &output
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == window.0 as i64)
+        .unwrap()
+        .matrix
+        .rows;
+    assert_eq!(rows[1].height_px, rows[0].height_px);
+    assert_eq!(rows[2].height_px, rows[0].height_px);
+}
+
+#[test]
 fn text_cursor_keeps_its_metrics_when_line_spacing_enlarges_the_row() {
     let (mut eval, frame, buffer, _window) = incr_editing_frame("alpha\nbeta\n", 800, 240);
     realize_test_gui_frame(&mut eval, frame);

@@ -1229,7 +1229,7 @@ impl RowProgram {
                         DisplayRowMeasurementMode::LogicalCells
                     }
                 };
-                DisplayRowLineEndFinalizer::new(
+                let finalizer = DisplayRowLineEndFinalizer::new(
                     value,
                     face,
                     self.geometry.right_edge() - position.x_px(),
@@ -1238,18 +1238,14 @@ impl RowProgram {
                     mode,
                     edges,
                     membership,
-                )
-                .finalize(&mut row, &self.faces);
-                if value.line_height != DisplayLineHeightPolicy::Default {
-                    let resolved = crate::display_row::metrics::resolve_line_height(
-                        value.line_height,
-                        (row.height_px, row.ascent_px),
-                        (face_metrics.line_height_px(), face_metrics.ascent_px()),
-                        (
-                            self.geometry.metrics.row_height(),
-                            self.geometry.metrics.ascent(),
-                        ),
-                    );
+                );
+                let finalizer = if mode.uses_concrete_font_geometry() {
+                    terminator_height = minimum.height_px();
+                    finalizer.with_newline_font_metrics(minimum)
+                } else {
+                    finalizer
+                };
+                if let Some(resolved) = finalizer.finalize(&mut row, &self.faces) {
                     terminator_height = resolved.newline_height;
                 }
                 // As in the canonical row transition, line spacing contributes

@@ -31,6 +31,9 @@ mod coding_save;
 #[path = "colrv1_emoji.rs"]
 mod colrv1_emoji;
 
+#[path = "commit_editing.rs"]
+mod commit_editing;
+
 #[path = "compact_frame_geometry.rs"]
 mod compact_frame_geometry;
 
