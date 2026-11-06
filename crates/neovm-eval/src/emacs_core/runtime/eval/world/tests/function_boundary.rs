@@ -1,7 +1,10 @@
 //! Test-only bridge. The owned projection cannot capture this Context/header.
 use crate::emacs_core::eval::{Context, NamedCallTarget};
+#[cfg(feature = "jit")]
 use crate::emacs_core::jit::stats::epoch::EpochCounters;
 use neovm_value::intern::SymId;
+#[cfg(not(feature = "jit"))]
+use neovm_value::tagged::gc::function_boundary_testkit::NoEpochRecorder;
 use neovm_value::tagged::gc::function_boundary_testkit::{
     FunctionBoundaryPoint, FunctionEraEdit, FunctionEraReceipt, WriterEpochRecorder,
 };
@@ -11,12 +14,14 @@ use neovm_value::tagged::transport::SharedRoot;
 /// snapshots this thread's epoch counters before the edit and records the
 /// delta after the writer's post-edit snapshot. The counter type stays here;
 /// value never inspects it.
+#[cfg(feature = "jit")]
 #[derive(Default)]
 struct C4EpochRecorder {
     before: Option<EpochCounters>,
     delta: Option<EpochCounters>,
 }
 
+#[cfg(feature = "jit")]
 impl C4EpochRecorder {
     fn writer_delta(&self) -> EpochCounters {
         self.delta
@@ -24,6 +29,7 @@ impl C4EpochRecorder {
     }
 }
 
+#[cfg(feature = "jit")]
 impl WriterEpochRecorder for C4EpochRecorder {
     fn before_writer(&mut self) {
         self.before = Some(EpochCounters::snapshot());
@@ -37,6 +43,11 @@ impl WriterEpochRecorder for C4EpochRecorder {
     }
 }
 
+#[cfg(feature = "jit")]
+type EraEpochs = EpochCounters;
+#[cfg(not(feature = "jit"))]
+type EraEpochs = ();
+
 impl Context {
     #[doc(hidden)]
     pub fn c4_function_era_for_test(
@@ -45,8 +56,11 @@ impl Context {
         edit: FunctionEraEdit,
         replacement: SharedRoot,
         observe: impl FnMut(FunctionBoundaryPoint),
-    ) -> (FunctionEraReceipt, EpochCounters) {
+    ) -> (FunctionEraReceipt, EraEpochs) {
+        #[cfg(feature = "jit")]
         let mut epochs = C4EpochRecorder::default();
+        #[cfg(not(feature = "jit"))]
+        let mut epochs = NoEpochRecorder;
         let result = self
             .admit_owned_proof_parallel(|projection| {
                 let result =
@@ -67,7 +81,10 @@ impl Context {
             .expect("function boundary owned admission");
         eprintln!("P3SYM_C4_CACHE_BOUNDARY_TEARDOWN_OK");
         let receipt = result.expect("function boundary after clean serial recovery");
-        (receipt, epochs.writer_delta())
+        #[cfg(feature = "jit")]
+        return (receipt, epochs.writer_delta());
+        #[cfg(not(feature = "jit"))]
+        return (receipt, ());
     }
 
     /// Snapshot the actual cache, without filling or relabeling its target.
