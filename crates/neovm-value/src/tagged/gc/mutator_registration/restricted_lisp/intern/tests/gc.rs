@@ -269,7 +269,7 @@ fn p3sym_c5_executor_name_gc_pretrace_unwind_recovers() {
         PlainSymbolBacking::VoidProjection,
         vec![],
         1,
-        |era, session, owner, frame| {
+        |era, session, owner, frame: &mut Frame<'_>| {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 round_with_preflight(era, owner, [TaggedValue::NIL.bits(); 2], || {
                     panic!("C5 executor name-GC pretrace control");
