@@ -37,6 +37,15 @@ pub mod mmap_image_test_support {
     };
 }
 
+/// Test-support facade for the re-homed pdump mmap-reader oracle: the real
+/// object-extra section decoder and the owned record it produces. The
+/// module stays crate-private in production builds.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod object_extra_test_support {
+    pub use super::object_extra::{ObjectExtra, load_object_extra};
+}
+
 pub(crate) mod obarray_image;
 pub(crate) mod object_extra;
 pub(crate) mod object_starts;

@@ -61,7 +61,13 @@ const EXTRA_OBARRAY: u8 = 114;
 const EXTRA_BOOL_VECTOR: u8 = 115;
 
 /// Per-object extra data needed during load.
+///
+/// A-prime: `pub(crate)` in every ordinary build; only a `test-support`
+/// build widens it so the feature-gated `pdump::object_extra_test_support`
+/// facade can re-export it to the re-homed pdump oracle. The module stays
+/// crate-private either way, so the production surface is unchanged.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum ObjectExtra {
     /// Category B: string needs size, size_byte, byte data span, and text_props.
     String {
@@ -442,7 +448,13 @@ fn object_needs_extra(obj: &DumpHeapObject) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Load the sparse ObjectExtra section into the present extra records.
+///
+/// A-prime: `pub(crate)` in every ordinary build; only a `test-support`
+/// build widens it for the feature-gated
+/// `pdump::object_extra_test_support` facade (re-homed pdump oracle). The
+/// module stays crate-private either way.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn load_object_extra(section: &[u8]) -> Result<Vec<ObjectExtra>, DumpError> {
     let (_count, payload) = object_extra_payload(section)?;
     let mut cursor = object_value_codec::Cursor::new_at(payload, 0);

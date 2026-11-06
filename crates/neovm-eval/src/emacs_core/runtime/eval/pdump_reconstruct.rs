@@ -410,7 +410,7 @@ impl Context {
         self.pdump_image = Some(&*Box::leak(Box::new(image)));
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn pdump_image_contains_ptr(&self, ptr: *const u8) -> bool {
         self.pdump_image
