@@ -1995,16 +1995,19 @@ const ABSENT_LAYER_HIT_TAKER: &str = "take_absent_layer_hits_for_test";
 /// 22:54:30Z H2/H2a, peer 00:15:30Z T1-T4).
 ///
 /// The signed table lives as one macro_rules body: `eval_absent_layer_slots!`
-/// expands a fixed `absent_layer_slots` module of 152 slot functions (141
-/// marker PANICs, 6 absent-by-construction UNLINKED no-ops, 2 structural
+/// expands a fixed `absent_layer_slots` module of 152 slot functions (137
+/// marker PANICs, 10 absent-by-construction UNLINKED slots — nine unit no-ops
+/// plus the T7 signal self-pipe that returns `None` — 2 structural
 /// ASSERT-EMPTY checks, 2 T2 per-thread handle slots, 1 T3 marker slot). This
 /// guard parses that body and proves, statically:
 /// - every slot body is exactly a marker panic, an exactly-one-call unlinked
-///   no-op, a single marker-carrying assert-empty check, or the signed
+///   no-op, a recorded unlinked call followed by the honest absent value
+///   (`None`), a single marker-carrying assert-empty check, or the signed
 ///   handle/marker wrapper shape (a bare empty/default body is red);
-/// - the 6 UNLINKED names and markers, the 2 ASSERT-EMPTY names and markers,
-///   and the 2+1 handle/marker slots are exactly the signed ones; every
-///   marker is unique and carries the `ABSENT-LAYER ` prefix;
+/// - the 10 UNLINKED names, markers and honest values, the 2 ASSERT-EMPTY
+///   names and markers, and the 2+1 handle/marker slots are exactly the
+///   signed ones; every marker is unique and carries the `ABSENT-LAYER `
+///   prefix;
 /// - the shared helpers have the signed shapes: record_hit writes the
 ///   env-named append-only log and the TLS hit list with the typed hit class
 ///   (H4/C2: every log line and TLS entry is (kind, marker)), the panic
@@ -2129,7 +2132,11 @@ fn rewrite_dollar_crate(tokens: proc_macro2::TokenStream) -> proc_macro2::TokenS
 #[derive(Debug, Default)]
 struct AbsentLayerSlotSummary {
     panic: Vec<(String, String)>,
-    unlinked: Vec<(String, String)>,
+    /// (slot, marker, honest absent value). `None` is the unit no-op shape
+    /// (the recorded call is the whole body); `Some(name)` is a
+    /// construction-reached slot that returns its honest absent value, e.g.
+    /// the signal self-pipe's `None` (T7).
+    unlinked: Vec<(String, String, Option<String>)>,
     assert_empty: Vec<(String, String)>,
     handle: Vec<(String, String, String)>,
     marker: Vec<(String, String)>,
@@ -2178,6 +2185,16 @@ fn absent_layer_call(stmt: &syn::Stmt) -> Option<(String, Option<String>)> {
     Some((name, literal(call.args.first())))
 }
 
+/// The honest absent value a construction-reached UNLINKED slot returns
+/// after its recorded call: a plain path expression such as `None` (T7).
+/// Anything else (a call, a literal, a block) is not the signed shape.
+fn unlinked_honest_value(stmt: &syn::Stmt) -> Option<String> {
+    let syn::Stmt::Expr(syn::Expr::Path(path), _) = stmt else {
+        return None;
+    };
+    Some(path.path.segments.last()?.ident.to_string())
+}
+
 fn classify_absent_layer_slots(items: &[syn::Item]) -> Result<AbsentLayerSlotSummary, String> {
     let mut summary = AbsentLayerSlotSummary::default();
     for item in items {
@@ -2216,8 +2233,22 @@ fn classify_absent_layer_slots(items: &[syn::Item]) -> Result<AbsentLayerSlotSum
                 .1
                 .clone()
                 .ok_or_else(|| format!("{name}: the unlinked marker is not a string literal"))?;
-            summary.unlinked.push((name, marker));
+            summary.unlinked.push((name, marker, None));
             continue;
+        }
+        // T7: a construction-reached slot records the Unlinked hit and then
+        // returns its honest absent value (the signal self-pipe's `None`).
+        if unlinked.len() == 1
+            && stmts.len() == 2
+            && absent_layer_call(&stmts[0]).is_some_and(|(call, _)| call == "absent_layer_unlinked")
+        {
+            if let Some(value) = unlinked_honest_value(&stmts[1]) {
+                let marker = unlinked[0].1.clone().ok_or_else(|| {
+                    format!("{name}: the unlinked marker is not a string literal")
+                })?;
+                summary.unlinked.push((name, marker, Some(value)));
+                continue;
+            }
         }
         if asserts.len() == 1 && panics.is_empty() && unlinked.is_empty() {
             let marker = asserts[0].1.clone().ok_or_else(|| {
@@ -2252,14 +2283,14 @@ fn classify_absent_layer_slots(items: &[syn::Item]) -> Result<AbsentLayerSlotSum
 }
 
 fn validate_absent_layer_slot_summary(summary: &AbsentLayerSlotSummary) -> Result<(), String> {
-    if summary.panic.len() != 141
-        || summary.unlinked.len() != 6
+    if summary.panic.len() != 137
+        || summary.unlinked.len() != 10
         || summary.assert_empty.len() != 2
         || summary.handle.len() != 2
         || summary.marker.len() != 1
     {
         return Err(format!(
-            "ABSENT-LAYER slot table drifted: {} PANIC, {} UNLINKED, {} ASSERT-EMPTY, {} HANDLE, {} MARKER (pinned 141/6/2/2/1)",
+            "ABSENT-LAYER slot table drifted: {} PANIC, {} UNLINKED, {} ASSERT-EMPTY, {} HANDLE, {} MARKER (pinned 137/10/2/2/1)",
             summary.panic.len(),
             summary.unlinked.len(),
             summary.assert_empty.len(),
@@ -2267,35 +2298,58 @@ fn validate_absent_layer_slot_summary(summary: &AbsentLayerSlotSummary) -> Resul
             summary.marker.len()
         ));
     }
-    let unlinked: BTreeMap<&str, &str> = summary
+    let unlinked: BTreeMap<&str, (&str, Option<&str>)> = summary
         .unlinked
         .iter()
-        .map(|(name, marker)| (name.as_str(), marker.as_str()))
+        .map(|(name, marker, value)| (name.as_str(), (marker.as_str(), value.as_deref())))
         .collect();
+    // The signed T1 unit no-ops plus the T7 construction-reached slots: the
+    // eval construction census (terminal/fontset/xfaces registry hooks) are
+    // no-ops, and the signal self-pipe returns its honest absent value None.
     let expected_unlinked = [
         (
             "dbusbind_reset_thread_locals",
             "ABSENT-LAYER system::dbusbind.reset_thread_locals",
+            None,
         ),
         (
             "boot_clear_font_cache_state",
             "ABSENT-LAYER display::boot.clear_font_cache_state",
+            None,
         ),
         (
             "terminal_reset_thread_locals",
             "ABSENT-LAYER display::terminal.reset_thread_locals",
+            None,
         ),
         (
             "terminal_reset_handle",
             "ABSENT-LAYER display::terminal.reset_handle",
+            None,
         ),
-        ("timefns_reset", "ABSENT-LAYER system::timefns.reset"),
-        ("sqlite_reset", "ABSENT-LAYER system::sqlite.reset"),
+        ("timefns_reset", "ABSENT-LAYER system::timefns.reset", None),
+        ("sqlite_reset", "ABSENT-LAYER system::sqlite.reset", None),
+        (
+            "terminal_install_registry_handle",
+            "ABSENT-LAYER display::terminal.install_registry_handle",
+            None,
+        ),
+        ("fontset_reset", "ABSENT-LAYER display::fontset.reset", None),
+        (
+            "xfaces_install_registry_handle",
+            "ABSENT-LAYER display::xfaces.install_registry_handle",
+            None,
+        ),
+        (
+            "input_signal_wake_pipe_read_fd",
+            "ABSENT-LAYER system::input.signal_wake_pipe_read_fd",
+            Some("None"),
+        ),
     ];
-    for (name, marker) in expected_unlinked {
-        if unlinked.get(name) != Some(&marker) {
+    for (name, marker, value) in expected_unlinked {
+        if unlinked.get(name) != Some(&(marker, value)) {
             return Err(format!(
-                "ABSENT-LAYER: UNLINKED slot `{name}` must be exactly one absent_layer_unlinked(\"{marker}\") call (T1)"
+                "ABSENT-LAYER: UNLINKED slot `{name}` must call absent_layer_unlinked(\"{marker}\") and be the signed shape (unit call-only or honest value {value:?}) (T1/T7)"
             ));
         }
     }
@@ -2359,7 +2413,12 @@ fn validate_absent_layer_slot_summary(summary: &AbsentLayerSlotSummary) -> Resul
     let mut seen = BTreeSet::new();
     let mut markers: Vec<&str> = Vec::new();
     markers.extend(summary.panic.iter().map(|(_, marker)| marker.as_str()));
-    markers.extend(summary.unlinked.iter().map(|(_, marker)| marker.as_str()));
+    markers.extend(
+        summary
+            .unlinked
+            .iter()
+            .map(|(_, marker, _)| marker.as_str()),
+    );
     markers.extend(
         summary
             .assert_empty
@@ -4873,6 +4932,30 @@ mod tests {
         );
         let items = absent_layer_module_items(&extra_unlinked).expect("macro parses");
         let error = classify_absent_layer_slots(&items).expect_err("extra unlinked statement");
+        assert!(error.contains("silent default"), "{error}");
+        // T7: a construction-reached UNLINKED slot records the hit and then
+        // returns its honest absent value; the value is part of the facts.
+        let valued_unlinked = synthetic(
+            "fn unlinked_none() -> Option<i32> { absent_layer_unlinked(\"ABSENT-LAYER a::u\"); None }",
+        );
+        let items = absent_layer_module_items(&valued_unlinked).expect("macro parses");
+        let summary = classify_absent_layer_slots(&items).expect("valued unlinked slot");
+        assert_eq!(summary.unlinked.len(), 1);
+        assert_eq!(summary.unlinked[0].2.as_deref(), Some("None"));
+        // A trailing value that is not a plain path (here a `Some(0)` call)
+        // is not the signed honest-value shape.
+        let valued_call = synthetic(
+            "fn unlinked_none() -> Option<i32> { absent_layer_unlinked(\"ABSENT-LAYER a::u\"); Some(0) }",
+        );
+        let items = absent_layer_module_items(&valued_call).expect("macro parses");
+        let error = classify_absent_layer_slots(&items).expect_err("valued call");
+        assert!(error.contains("silent default"), "{error}");
+        // The recorded call must come first; value-then-call is not the shape.
+        let value_first = synthetic(
+            "fn unlinked_none() -> Option<i32> { None; absent_layer_unlinked(\"ABSENT-LAYER a::u\") }",
+        );
+        let items = absent_layer_module_items(&value_first).expect("macro parses");
+        let error = classify_absent_layer_slots(&items).expect_err("value before call");
         assert!(error.contains("silent default"), "{error}");
         // C2: the direct T2/T3 sites must record the Unlinked class; a
         // Refused class on an absent-by-construction slot is red.
