@@ -111,7 +111,7 @@ impl DisplayHost for CapturingFrameFontDisplayHost {
 #[test]
 fn live_font_spec_keeps_integer_size_in_pixels_until_frame_realization() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let frame = eval
         .frame_manager_mut()
@@ -161,7 +161,7 @@ fn live_font_spec_keeps_integer_size_in_pixels_until_frame_realization() {
 #[test]
 fn frame_zero_realizes_integer_font_size_for_each_live_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let selected_frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
     let other_frame = eval.frames.create_frame("other", 800, 600, buffer_id);
@@ -212,7 +212,7 @@ fn frame_zero_realizes_integer_font_size_for_each_live_frame() {
 #[test]
 fn frame_t_realizes_new_frame_defaults_against_selected_gui_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let selected_frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     eval.frame_manager_mut()
         .get_mut(selected_frame)
@@ -257,7 +257,7 @@ fn default_face_font_change_resizes_mini_window_to_one_line_of_the_new_font() {
     // `FRAME_LINE_HEIGHT`.  Without this the echo area shows only the top
     // 11px of an 18px text line (the clipped-echo-area bug on macOS).
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     {
         let frame = eval
@@ -328,7 +328,7 @@ fn frame_after_default_font_change(
     line_height: i32,
     inhibit_font_resize: bool,
 ) -> (Context, FrameId) {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     if inhibit_font_resize {
         eval.obarray_mut().set_symbol_value(
             "frame-inhibit-implied-resize",

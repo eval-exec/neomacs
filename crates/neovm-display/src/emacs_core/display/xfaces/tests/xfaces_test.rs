@@ -286,7 +286,7 @@ fn register_bootstrap_vars_matches_gnu_defaults() {
 #[test]
 fn frame_face_hash_table_eval_has_initialized_default_face() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let out = builtin_frame_face_hash_table(&mut eval, vec![Value::NIL])
         .expect("live frame face hash table");
     if !out.is_hash_table() {
@@ -300,7 +300,7 @@ fn frame_face_hash_table_eval_has_initialized_default_face() {
 #[test]
 fn frame_face_hash_table_eval_returns_stable_frame_owned_table() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let first =
         builtin_frame_face_hash_table(&mut eval, vec![Value::NIL]).expect("first face hash table");
     let second =
@@ -311,7 +311,7 @@ fn frame_face_hash_table_eval_returns_stable_frame_owned_table() {
 #[test]
 fn ensure_startup_compat_variables_backfills_missing_xfaces_state() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     // GNU protects these forwarded built-ins from makunbound (data.c:
     // 1799-1808). A normal nil assignment to the object-forwarded table
     // reaches the repair branch without detaching any built-in value cell.
@@ -353,7 +353,7 @@ fn ensure_startup_compat_variables_backfills_missing_xfaces_state() {
 #[test]
 fn ensure_startup_compat_variables_reseeds_existing_face_defaults_table() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let table = Value::hash_table(HashTableTest::Eq);
     eval.set_variable("face--new-frame-defaults", table);
 

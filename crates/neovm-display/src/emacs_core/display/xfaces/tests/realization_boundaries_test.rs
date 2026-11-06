@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn default_slot_projection_observes_same_generation_winners_and_refuses_stale_cache() {
-    let mut context = neovm_eval::emacs_core::eval::Context::new();
+    let mut context = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut context);
     let attributes = Face::default();
     let generation = context.face_change_count;
@@ -33,7 +33,7 @@ fn default_slot_projection_observes_same_generation_winners_and_refuses_stale_ca
 
 #[test]
 fn definition_root_lease_is_reused_until_source_retirement_and_keeps_old_sources_alive() {
-    let mut context = neovm_eval::emacs_core::eval::Context::new();
+    let mut context = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut context);
     let mut old = crate::face::FaceTable::new();
     let mut unused = Face::new("not-yet-displayed");
@@ -121,7 +121,7 @@ fn definition_root_lease_is_reused_until_source_retirement_and_keeps_old_sources
 
 #[test]
 fn face_change_walks_only_frames_whose_realizations_stay_valid() {
-    let mut context = neovm_eval::emacs_core::eval::Context::new();
+    let mut context = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let selected = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut context);
     let buffer = context.buffers.create_buffer("*face-change-other*");
     let other = context.frames.create_frame("other", 80, 25, buffer);
@@ -150,7 +150,7 @@ fn face_change_walks_only_frames_whose_realizations_stay_valid() {
 
 #[test]
 fn default_realization_binding_restores_after_lisp_error() {
-    let mut context = neovm_eval::emacs_core::eval::Context::new();
+    let mut context = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     context.set_variable("inhibit-redisplay", Value::NIL);
     let mut scope = RealizationBinding::enter(&mut context, "inhibit-redisplay", Value::T)
         .expect("ordinary special variable accepts its binding");
@@ -171,7 +171,7 @@ fn default_realization_binding_restores_after_lisp_error() {
 
 #[test]
 fn default_realization_binding_drop_restores_native_state() {
-    let mut context = neovm_eval::emacs_core::eval::Context::new();
+    let mut context = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     context.set_variable("inhibit-redisplay", Value::fixnum(7));
     {
         let _scope = RealizationBinding::enter(&mut context, "inhibit-redisplay", Value::T)
@@ -223,7 +223,7 @@ fn foreground_underline_symbol_does_not_become_a_color_name() {
 
 #[test]
 fn initial_terminal_faces_hide_creation_colors_and_restore_owners() {
-    let mut context = neovm_eval::emacs_core::eval::Context::new();
+    let mut context = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut context);
     let foreground = Value::string("#123456");
     let background = Value::string("#654321");
@@ -260,7 +260,7 @@ fn initial_terminal_faces_hide_creation_colors_and_restore_owners() {
 
 #[test]
 fn creation_color_replay_defers_the_other_color_and_initial_error_restores_parameters() {
-    let mut context = neovm_eval::emacs_core::eval::Context::new();
+    let mut context = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut context);
     let foreground = Value::string("#123456");
     let background = Value::string("#654321");
@@ -406,7 +406,7 @@ fn named_and_anonymous_underlines_retain_identical_ordered_operations() {
 
 #[test]
 fn face_no_inherit_property_preserves_all_realization_scopes() {
-    let mut context = neovm_eval::emacs_core::eval::Context::new();
+    let mut context = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut context);
     let local = [frame];
     assert_eq!(
@@ -463,7 +463,7 @@ fn face_frame_class_uses_live_terminal_output_kind() {
             pure::reset_terminal_runtime();
         }
     }
-    let mut context = neovm_eval::emacs_core::eval::Context::new();
+    let mut context = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let _restore = Restore;
     pure::reset_terminal_runtime();
     let initial = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut context);
@@ -518,7 +518,7 @@ fn same_value_face_set_marks_no_definitions_dirty() {
     if !crate::face::realization::enabled() {
         return;
     }
-    let mut context = neovm_eval::emacs_core::eval::Context::new();
+    let mut context = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut context);
     super::builtin_internal_set_lisp_face_attribute(
         &mut context,
@@ -562,7 +562,7 @@ fn changed_face_marks_only_its_name_and_refresh_matches_a_full_rebuild() {
     if !crate::face::realization::enabled() {
         return;
     }
-    let mut context = neovm_eval::emacs_core::eval::Context::new();
+    let mut context = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut context);
     for (face, color) in [
         ("incremental-face-a", "red"),
@@ -635,7 +635,7 @@ fn unnamed_face_change_retires_every_reusable_definition() {
     if !crate::face::realization::enabled() {
         return;
     }
-    let mut context = neovm_eval::emacs_core::eval::Context::new();
+    let mut context = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut context);
     super::builtin_internal_set_lisp_face_attribute(
         &mut context,
@@ -687,7 +687,7 @@ fn realization_miss_roots_the_source_table_through_the_frame_lease() {
             pure::reset_terminal_runtime();
         }
     }
-    let mut context = neovm_eval::emacs_core::eval::Context::new();
+    let mut context = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let _restore = Restore;
     pure::reset_terminal_runtime();
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut context);

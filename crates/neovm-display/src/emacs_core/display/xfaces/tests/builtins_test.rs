@@ -16,7 +16,7 @@ use neovm_value::value::{ValueKind, VecLikeType};
 
 macro_rules! call_font_builtin {
     ($builtin:ident, $args:expr) => {{
-        let mut eval = Context::new();
+        let mut eval = Context::new(crate::test_utils::unit_runtime());
         let args = $args;
         $builtin(&mut eval, args)
     }};
@@ -161,7 +161,7 @@ fn clear_font_cache_resets_face_caches() {
 fn set_lisp_face_attribute_bumps_face_change_count() {
     crate::test_utils::init_test_tracing();
     clear_font_cache_state();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let face_name = "__neovm_incr_layout_probe_face";
     builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol(face_name)]).unwrap();
 
@@ -190,7 +190,7 @@ fn set_lisp_face_attribute_bumps_face_change_count() {
 fn frame_face_attribute_setter_defers_runtime_realization_until_redisplay() {
     crate::test_utils::init_test_tracing();
     clear_font_cache_state();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let frame = Value::make_frame(frame_id.0);
     let face_name = "__neovm_deferred_face_realization";
@@ -233,7 +233,7 @@ fn created_face_runtime_state_uses_symbol_identity() {
     clear_font_cache_state();
     let face_name = "__neovm_symbol_runtime_face";
     let face_symbol = neovm_value::intern::intern(face_name);
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
 
     builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol(face_name)]).unwrap();
     builtin_internal_set_lisp_face_attribute(
@@ -268,7 +268,7 @@ fn created_face_runtime_state_uses_symbol_identity() {
 #[test]
 fn font_at_eval_returns_font_object_for_multibyte_buffer_face() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     ensure_selected_gui_frame(&mut eval);
     install_font_at_display_host(&mut eval, "Serif");
 
@@ -310,7 +310,7 @@ fn font_at_eval_returns_font_object_for_multibyte_buffer_face() {
 #[test]
 fn font_at_eval_returns_font_object_for_multibyte_string_face() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     ensure_selected_gui_frame(&mut eval);
     install_font_at_display_host(&mut eval, "Serif");
 
@@ -353,7 +353,7 @@ fn font_at_eval_returns_font_object_for_multibyte_string_face() {
 #[test]
 fn font_at_eval_preserves_raw_unibyte_string_face() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     ensure_selected_gui_frame(&mut eval);
     install_font_at_display_host(&mut eval, "Serif");
 
@@ -394,7 +394,7 @@ fn font_at_eval_preserves_raw_unibyte_string_face() {
 #[test]
 fn internal_lisp_face_p_symbol_returns_face_vector() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_internal_lisp_face_p(&mut eval, vec![Value::symbol("default")]).unwrap();
     let values = match result.kind() {
         ValueKind::Veclike(VecLikeType::Vector) => result.as_vector_data().unwrap().clone(),
@@ -407,7 +407,7 @@ fn internal_lisp_face_p_symbol_returns_face_vector() {
 #[test]
 fn internal_lisp_face_p_resolves_face_alias_chains() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let target = Value::symbol("__neovm_face_alias_target");
     let intermediate = Value::symbol("__neovm_face_alias_intermediate");
     let alias = Value::symbol("__neovm_face_alias");
@@ -431,7 +431,7 @@ fn internal_lisp_face_p_resolves_face_alias_chains() {
 #[test]
 fn internal_lisp_face_p_rejects_circular_face_aliases() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let first = Value::symbol("__neovm_circular_face_alias_a");
     let second = Value::symbol("__neovm_circular_face_alias_b");
 
@@ -454,7 +454,7 @@ fn internal_lisp_face_p_rejects_circular_face_aliases() {
 #[test]
 fn internal_lisp_face_p_non_symbol() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_internal_lisp_face_p(&mut eval, vec![Value::fixnum(42)]).unwrap();
     assert!(result.is_nil());
 }
@@ -472,7 +472,7 @@ fn internal_lisp_face_p_non_symbol() {
 #[test]
 fn internal_lisp_face_p_is_a_pure_read_of_the_live_table() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
 
     let table = eval
         .obarray()
@@ -536,7 +536,7 @@ fn internal_lisp_face_p_is_a_pure_read_of_the_live_table() {
 #[test]
 fn internal_lisp_face_p_nil_returns_nil() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_internal_lisp_face_p(&mut eval, vec![Value::NIL]).unwrap();
     assert!(result.is_nil());
 }
@@ -544,7 +544,7 @@ fn internal_lisp_face_p_nil_returns_nil() {
 #[test]
 fn internal_lisp_face_p_rejects_non_nil_frame_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result =
         builtin_internal_lisp_face_p(&mut eval, vec![Value::symbol("default"), Value::fixnum(1)]);
     assert!(result.is_err());
@@ -554,7 +554,7 @@ fn internal_lisp_face_p_rejects_non_nil_frame_designator() {
 fn internal_lisp_face_p_with_frame_designator_returns_resolved_vector() {
     crate::test_utils::init_test_tracing();
     clear_font_cache_state();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
 
     let result = builtin_internal_lisp_face_p(
@@ -587,7 +587,7 @@ fn internal_lisp_face_p_with_frame_designator_returns_resolved_vector() {
 fn internal_lisp_face_p_returns_nil_after_face_table_entry_removed() {
     crate::test_utils::init_test_tracing();
     let face_name = "__neovm_face_unload_desync_test";
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
 
     // Create it: predicate sees it (table entry + created-set both present).
     builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol(face_name)]).unwrap();
@@ -617,7 +617,7 @@ fn internal_lisp_face_p_returns_nil_after_face_table_entry_removed() {
 fn internal_make_lisp_face_creates_symbol_visible_to_internal_lisp_face_p() {
     crate::test_utils::init_test_tracing();
     let face_name = "__neovm_make_face_unit_test";
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let made = builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol(face_name)]).unwrap();
     assert!(made.is_vector());
     let exists = builtin_internal_lisp_face_p(&mut eval, vec![Value::symbol(face_name)]).unwrap();
@@ -634,7 +634,7 @@ fn internal_lisp_face_p_without_frame_returns_global_lface_attributes() {
     clear_font_cache_state();
 
     let face_name = "__neovm_global_lface_attrs_unit_test";
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol(face_name)]).unwrap();
     builtin_internal_set_lisp_face_attribute(
         &mut eval,
@@ -672,7 +672,7 @@ fn internal_set_lisp_face_attribute_accepts_gnu_font_style_aliases() {
     clear_font_cache_state();
 
     let face_name = "__neovm_lface_style_aliases_unit_test";
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol(face_name)]).unwrap();
 
     for (attr, value) in [
@@ -705,7 +705,7 @@ fn internal_set_lisp_face_attribute_rejects_numeric_weight_like_gnu() {
     clear_font_cache_state();
 
     let face_name = "__neovm_lface_numeric_weight_unit_test";
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol(face_name)]).unwrap();
 
     let result = builtin_internal_set_lisp_face_attribute(
@@ -726,7 +726,7 @@ fn internal_set_lisp_face_attribute_mutates_live_global_lface_vector() {
     clear_font_cache_state();
 
     let face_name = "__neovm_live_global_lface_vector_unit_test";
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol(face_name)]).unwrap();
     let vector = builtin_internal_lisp_face_p(&mut eval, vec![Value::symbol(face_name)]).unwrap();
 
@@ -750,7 +750,7 @@ fn copy_to_defaults_keeps_ignore_defface_stored_and_get_returns_unspecified() {
     crate::test_utils::init_test_tracing();
     clear_font_cache_state();
 
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let source = "__neovm_copy_defaults_source";
     let target = "__neovm_copy_defaults_target";
     builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol(source)]).unwrap();
@@ -873,7 +873,7 @@ fn internal_copy_lisp_face_keeps_global_and_frame_domains_separate() {
     crate::test_utils::init_test_tracing();
     clear_font_cache_state();
 
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame =
         Value::make_frame(crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0);
     let face_name = "__neovm_copy_face_domains_unit_test";
@@ -906,7 +906,7 @@ fn internal_copy_lisp_face_keeps_global_and_frame_domains_separate() {
 #[test]
 fn internal_make_lisp_face_publishes_known_face_id_property() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let made = builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol("default")]).unwrap();
     assert!(made.is_vector());
     assert_eq!(
@@ -920,7 +920,7 @@ fn internal_make_lisp_face_sets_gnu_face_id_symbol_property() {
     crate::test_utils::init_test_tracing();
     clear_font_cache_state();
 
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let face_name = "__neovm_make_face_id_property_unit_test";
     builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol(face_name)]).unwrap();
 
@@ -958,7 +958,7 @@ fn internal_make_lisp_face_rejects_non_symbol_and_non_nil_frame() {
 #[test]
 fn internal_copy_lisp_face_returns_to_when_frame_t() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_internal_copy_lisp_face(
         &mut eval,
         vec![
@@ -977,7 +977,7 @@ fn internal_copy_lisp_face_sets_gnu_face_id_symbol_property() {
     crate::test_utils::init_test_tracing();
     clear_font_cache_state();
 
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let face_name = "__neovm_copy_face_id_property_unit_test";
     builtin_internal_copy_lisp_face(
         &mut eval,
@@ -1001,7 +1001,7 @@ fn internal_copy_lisp_face_sets_gnu_face_id_symbol_property() {
 #[test]
 fn internal_copy_lisp_face_copies_frame_spec_without_runtime_realization() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let frame = Value::make_frame(frame_id.0);
     builtin_internal_set_lisp_face_attribute(
@@ -1062,7 +1062,7 @@ fn internal_copy_lisp_face_rejects_non_t_frame_designator() {
 #[test]
 fn internal_copy_lisp_face_validates_new_frame_when_frame_designator_used() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let frame = Value::make_frame(frame_id.0);
     let err_t = builtin_internal_copy_lisp_face(
@@ -1119,7 +1119,7 @@ fn internal_copy_lisp_face_uses_symbol_checks_before_frame_checks() {
 fn internal_set_lisp_face_attribute_returns_value() {
     crate::test_utils::init_test_tracing();
     let face_name = "__neovm_set_attr_unit_test";
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_internal_set_lisp_face_attribute(
         &mut eval,
         vec![
@@ -1135,7 +1135,7 @@ fn internal_set_lisp_face_attribute_returns_value() {
 #[test]
 fn internal_get_lisp_face_attribute_default_foreground() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_internal_get_lisp_face_attribute(
         &mut eval,
         vec![Value::symbol("default"), Value::keyword(":foreground")],
@@ -1147,7 +1147,7 @@ fn internal_get_lisp_face_attribute_default_foreground() {
 #[test]
 fn internal_get_lisp_face_attribute_mode_line_returns_unspecified() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_internal_get_lisp_face_attribute(
         &mut eval,
         vec![Value::symbol("mode-line"), Value::keyword(":foreground")],
@@ -1163,7 +1163,7 @@ fn internal_get_lisp_face_attribute_mode_line_returns_unspecified() {
 #[test]
 fn internal_get_lisp_face_attribute_defaults_frame_returns_unspecified() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_internal_get_lisp_face_attribute(
         &mut eval,
         vec![
@@ -1189,7 +1189,7 @@ fn internal_get_lisp_face_attribute_invalid_face_errors() {
 #[test]
 fn internal_get_lisp_face_attribute_invalid_plist_face_spreads_signal_data() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let face = Value::list(vec![
         Value::keyword(":background"),
         Value::string("yellow"),
@@ -1233,7 +1233,7 @@ fn internal_get_lisp_face_attribute_invalid_attr_errors() {
 #[test]
 fn internal_set_lisp_face_attribute_font_object_derives_font_related_attrs() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     // GNU derives font-related attributes from `:font' only on a window-system
     // frame (`Finternal_set_lisp_face_attribute': `FRAME_WINDOW_P (f1)' before
     // `set_lface_from_font'). On the initial tty frame GNU 31.0.90 --batch
@@ -1294,7 +1294,7 @@ fn internal_set_lisp_face_attribute_font_object_derives_font_related_attrs() {
 #[test]
 fn internal_set_lisp_face_attribute_default_font_spec_float_size_derives_absolute_height() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     // GNU derives font-related attributes from `:font' only on a window-system
     // frame (`Finternal_set_lisp_face_attribute': `FRAME_WINDOW_P (f1)' before
     // `set_lface_from_font'). On the initial tty frame GNU 31.0.90 --batch
@@ -1354,7 +1354,7 @@ fn internal_set_lisp_face_attribute_default_font_spec_float_size_derives_absolut
 #[test]
 fn internal_set_lisp_face_attribute_eval_uses_live_frame_font_parameter_for_default_face() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let font_name = Value::string("-*-Hack-regular-normal-*-*-102-*-*-*-m-0-iso10646-1");
     let mut font_face = RuntimeFace::new("default");
@@ -1455,7 +1455,7 @@ fn internal_set_lisp_face_attribute_eval_uses_live_frame_font_parameter_for_defa
 #[test]
 fn internal_set_lisp_face_attribute_eval_realizes_string_font_requests_for_live_default_face() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     {
         let frame = eval
@@ -1565,7 +1565,7 @@ fn internal_set_lisp_face_attribute_eval_realizes_string_font_requests_for_live_
 #[test]
 fn unresolved_live_default_font_request_preserves_opened_font_and_geometry() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = ensure_selected_gui_frame(&mut eval);
     let mut old_face = RuntimeFace::new("default");
     old_face.family = Some(Value::string("Old Mono"));
@@ -1605,7 +1605,7 @@ fn unresolved_live_default_font_request_preserves_opened_font_and_geometry() {
 #[test]
 fn opened_live_default_font_request_applies_its_stored_geometry() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = ensure_selected_gui_frame(&mut eval);
     let mut face = RuntimeFace::new("default");
     face.family = Some(Value::string("Exact Mono"));
@@ -1654,7 +1654,7 @@ fn opened_live_default_font_request_applies_its_stored_geometry() {
 fn internal_set_lisp_face_attribute_eval_uses_resolved_point_height_when_font_request_has_no_size()
 {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     {
         let frame = eval
@@ -1730,7 +1730,7 @@ fn internal_set_lisp_face_attribute_eval_uses_resolved_point_height_when_font_re
 #[test]
 fn face_font_eval_returns_font_name_on_live_gui_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let frame = eval
         .frame_manager_mut()
@@ -1764,7 +1764,7 @@ fn face_font_eval_returns_font_name_on_live_gui_frame() {
 
 #[test]
 fn face_font_returns_nil_when_the_host_cannot_realize_the_face() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     ensure_selected_gui_frame(&mut eval);
     eval.set_display_host(Box::new(LiveFrameFontDisplayHost { realized: None }));
     assert!(
@@ -1777,7 +1777,7 @@ fn face_font_returns_nil_when_the_host_cannot_realize_the_face() {
 #[test]
 fn default_face_font_attribute_stays_unspecified_on_live_tty_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
 
     assert!(
@@ -1805,7 +1805,7 @@ fn default_face_font_attribute_stays_unspecified_on_live_tty_frame() {
 #[test]
 fn setting_font_on_a_live_tty_face_is_a_noop() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let frame = Value::make_frame(frame_id.0);
 
@@ -1832,7 +1832,7 @@ fn setting_font_on_a_live_tty_face_is_a_noop() {
 #[test]
 fn tty_default_face_does_not_expose_transport_font_metadata() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let mut transport_face = RuntimeFace::new("default");
     transport_face.family = Some(Value::string("terminal-cell"));
@@ -2023,7 +2023,7 @@ fn internal_merge_in_global_face_rejects_non_frame_designator() {
 fn internal_merge_in_global_face_copies_defaults_into_selected_face() {
     crate::test_utils::init_test_tracing();
     let face_name = "__neovm_merge_face_unit_test";
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame =
         Value::make_frame(crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0);
     let _ = builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol(face_name)]).unwrap();
@@ -2052,7 +2052,7 @@ fn internal_merge_in_global_face_copies_defaults_into_selected_face() {
 #[test]
 fn internal_lisp_face_helpers_accept_frame_handles() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame =
         Value::make_frame(crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0);
 
@@ -2195,7 +2195,7 @@ fn merge_face_attribute_height_relative_over_relative() {
 #[test]
 fn internal_set_face_height_accepts_function_height_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
 
     builtin_internal_set_lisp_face_attribute(
         &mut eval,
@@ -2223,7 +2223,7 @@ fn internal_set_face_height_accepts_function_height_like_gnu() {
 #[test]
 fn merge_face_attribute_height_calls_function_height_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
 
     let result = builtin_merge_face_attribute_with_eval(
         &mut eval,
@@ -2241,7 +2241,7 @@ fn merge_face_attribute_height_calls_function_height_like_gnu() {
 fn face_list_orders_default_last_and_includes_dynamic_faces() {
     crate::test_utils::init_test_tracing();
     clear_font_cache_state();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol("__neovm_face_list_dynamic")])
         .expect("create dynamic face");
 
@@ -2463,7 +2463,7 @@ fn face_id_rejects_invalid_face() {
 #[test]
 fn internal_get_lisp_face_attribute_eval_reads_live_face_table() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     // internal-get-lisp-face-attribute reads the live LISP face table (not the
     // realized runtime face, dropped in a604c3a19), so a background written
     // through the Lisp face path must be reflected immediately on read-back.
@@ -2494,7 +2494,7 @@ fn internal_get_lisp_face_attribute_eval_reads_live_face_table() {
 #[test]
 fn internal_merge_in_global_face_updates_frame_spec_without_runtime_realization() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let face = Value::symbol("__neovm_internal_merge_global_face_eval");
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
 
@@ -2537,7 +2537,7 @@ fn internal_merge_in_global_face_updates_frame_spec_without_runtime_realization(
 #[test]
 fn internal_merge_in_global_face_publishes_default_colors_to_a_gui_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = ensure_selected_gui_frame(&mut eval);
     {
         let frame = eval
@@ -2583,7 +2583,7 @@ fn internal_merge_in_global_face_publishes_default_colors_to_a_gui_frame() {
 #[test]
 fn runtime_face_sync_uses_frame_lisp_face_vector_as_source_of_truth() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let vector = ensure_frame_lisp_face_vector(
         &mut eval,
@@ -2624,7 +2624,7 @@ fn runtime_face_sync_uses_frame_lisp_face_vector_as_source_of_truth() {
 #[test]
 fn runtime_face_sync_realizes_default_colors_from_frame_parameters() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let vector = ensure_frame_lisp_face_vector(
         &mut eval,
@@ -2661,7 +2661,7 @@ fn runtime_face_sync_realizes_default_colors_from_frame_parameters() {
 fn redisplay_face_preparation_reuses_generation_until_a_lisp_face_changes() {
     crate::test_utils::init_test_tracing();
     clear_font_cache_state();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let frame = Value::make_frame(frame_id.0);
 
@@ -2698,7 +2698,7 @@ fn redisplay_face_preparation_reuses_generation_until_a_lisp_face_changes() {
 #[test]
 fn default_face_font_attr_update_refreshes_live_frame_font_state() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = ensure_selected_gui_frame(&mut eval);
     {
         let frame = eval
@@ -2769,7 +2769,7 @@ fn default_face_font_attr_update_refreshes_live_frame_font_state() {
 #[test]
 fn internal_get_lisp_face_attribute_eval_prefers_explicit_lisp_face_values() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let face = Value::symbol("__neovm_internal_get_lisp_face_attribute_eval_prefers_lisp");
 
     builtin_internal_make_lisp_face(&mut eval, vec![face])
@@ -3142,7 +3142,7 @@ fn color_values_from_color_spec_matches_gnu_numeric_specs() {
 #[test]
 fn color_gray_and_supported_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     assert!(
         builtin_color_gray_p(&mut eval, vec![Value::string("#000000")])
             .unwrap()
@@ -3226,7 +3226,7 @@ fn color_gray_and_supported_semantics() {
 #[test]
 fn color_distance_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let black_white = builtin_color_distance(
         &mut eval,
         vec![Value::string("#000"), Value::string("#fff")],
@@ -3260,7 +3260,7 @@ fn color_distance_semantics() {
 #[test]
 fn xw_color_primitives_follow_live_gui_frame_state() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     {
         let frame = eval
@@ -3303,7 +3303,7 @@ fn xw_color_primitives_follow_live_gui_frame_state() {
 #[test]
 fn xw_color_values_follow_gnu_x11_rgb_database() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     eval.frame_manager_mut()
         .get_mut(frame_id)
@@ -3330,7 +3330,7 @@ fn xw_color_values_follow_gnu_x11_rgb_database() {
 #[test]
 fn color_distance_errors_match_oracle_shape() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let invalid_left =
         builtin_color_distance(&mut eval, vec![Value::string("#00"), Value::string("#fff")])
             .unwrap_err();
@@ -3400,7 +3400,7 @@ fn color_distance_accepts_the_terminal_default_sentinels() {
     // Expectations measured under GNU Emacs 31.0.90, not derived
     // (tmp/coord-colordist-probe.el).
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
 
     for sentinel in ["unspecified-fg", "unspecified-bg"] {
         assert_eq!(

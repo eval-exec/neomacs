@@ -10,7 +10,7 @@ fn roots_for(ctx: &Context) -> Vec<Value> {
 #[test]
 fn gc_tls_ownership_font_reset_discards_a_dropped_heap() {
     let old = {
-        let ctx = Context::new();
+        let ctx = Context::new(crate::test_utils::unit_runtime());
         let value = Value::vector(vec![Value::fixnum(42)]);
         set_face_override("default", LFaceAttr::Font, value, false);
         assert!(
@@ -20,7 +20,7 @@ fn gc_tls_ownership_font_reset_discards_a_dropped_heap() {
         );
         value
     };
-    let mut next = Context::new();
+    let mut next = Context::new(crate::test_utils::unit_runtime());
     assert!(
         !roots_for(&next)
             .iter()
@@ -31,8 +31,8 @@ fn gc_tls_ownership_font_reset_discards_a_dropped_heap() {
 
 #[test]
 fn gc_tls_ownership_font_roots_exclude_another_live_heap() {
-    let mut first = Context::new();
-    let mut second = Context::new();
+    let mut first = Context::new(crate::test_utils::unit_runtime());
+    let mut second = Context::new(crate::test_utils::unit_runtime());
     let value = Value::vector(vec![Value::fixnum(42)]);
     set_face_override("default", LFaceAttr::Font, value, false);
     assert!(
@@ -55,7 +55,7 @@ fn gc_tls_ownership_font_roots_exclude_another_live_heap() {
 
 #[test]
 fn gc_tls_ownership_font_registry_names_do_not_retain_unrooted_properties() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let normalized = ctx.eval_str("(let ((name (propertize \"ISO-10646-1\" 'gc-tls-payload (vector 42)))) (internal-set-alternative-font-registry-alist (list (list name))))").unwrap();
     assert!(
         normalized
@@ -87,10 +87,10 @@ fn gc_tls_ownership_font_registry_names_do_not_retain_unrooted_properties() {
 
 #[test]
 fn gc_tls_ownership_font_overrides_follow_context_swaps() {
-    let mut first = Context::new();
+    let mut first = Context::new(crate::test_utils::unit_runtime());
     let a = Value::vector(vec![Value::fixnum(1)]);
     set_face_override("default", LFaceAttr::Font, a, false);
-    let mut second = Context::new();
+    let mut second = Context::new(crate::test_utils::unit_runtime());
     let b = Value::vector(vec![Value::fixnum(2)]);
     set_face_override("default", LFaceAttr::Font, b, false);
     first.setup_thread_locals();
