@@ -5,7 +5,7 @@ use neovm_value::gc_trace::GcTrace;
 use neovm_value::heap_types::LispString;
 
 fn retained_name_survives_gc(factory: &str, getter: &str) {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str(&format!("(setq retained-name-object {factory})"))
         .unwrap();
     let name = ctx
@@ -63,7 +63,7 @@ fn gc_preserves_condition_variable_name_interval_plists() {
 
 #[test]
 fn thread_current_buffer_survives_gc_through_registry_seed() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let buffer_id = ctx.buffers.create_buffer("thread-current-buffer-root");
     let canonical = Value::make_buffer(buffer_id);
     let thread_id = ctx.threads.current_thread_id();
@@ -412,7 +412,7 @@ fn condition_variable_requires_valid_mutex() {
 #[test]
 fn test_builtin_make_thread_runs_function() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     // Define a simple function that returns 42
     eval.set_variable("thread-test-result", Value::NIL);
     eval.set_function(
@@ -439,7 +439,7 @@ fn test_builtin_make_thread_runs_function() {
 #[test]
 fn test_builtin_make_thread_accepts_buffer_disposition_arg() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_make_thread(
         &mut eval,
         vec![
@@ -471,7 +471,7 @@ fn test_builtin_make_thread_accepts_buffer_disposition_arg() {
 #[test]
 fn test_builtin_make_thread_rejects_more_than_three_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_make_thread(
         &mut eval,
         vec![
@@ -502,7 +502,7 @@ fn test_builtin_make_thread_rejects_more_than_three_args() {
 #[test]
 fn test_builtin_threadp() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let current = builtin_current_thread(&mut eval, vec![]).unwrap();
 
     let r = builtin_threadp(&mut eval, vec![current]);
@@ -531,7 +531,7 @@ fn test_builtin_threadp() {
 #[test]
 fn test_builtin_current_thread() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_current_thread(&mut eval, vec![]);
     assert!(result.is_ok());
     assert_eq!(
@@ -543,7 +543,7 @@ fn test_builtin_current_thread() {
 #[test]
 fn test_builtin_current_thread_returns_stable_handle_identity() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let first = builtin_current_thread(&mut eval, vec![]).unwrap();
     let second = builtin_current_thread(&mut eval, vec![]).unwrap();
     assert!(eq_value(&first, &second));
@@ -552,7 +552,7 @@ fn test_builtin_current_thread_returns_stable_handle_identity() {
 #[test]
 fn test_main_thread_variable_matches_current_thread() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let current = builtin_current_thread(&mut eval, vec![]).unwrap();
     let main_thread = eval.obarray.symbol_value_copied("main-thread").unwrap();
     assert!(eq_value(&current, &main_thread));
@@ -561,7 +561,7 @@ fn test_main_thread_variable_matches_current_thread() {
 #[test]
 fn test_main_thread_tracks_current_buffer() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let original = eval.buffers.current_buffer_id().expect("current buffer");
     assert_eq!(eval.threads.thread_current_buffer(0), Some(original));
     let other = eval.buffers.create_buffer("thread-main-other");
@@ -573,7 +573,7 @@ fn test_main_thread_tracks_current_buffer() {
 #[test]
 fn test_builtin_thread_yield() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_thread_yield(&mut eval, vec![]);
     assert!(result.is_ok());
     assert!(result.unwrap().is_nil());
@@ -582,7 +582,7 @@ fn test_builtin_thread_yield() {
 #[test]
 fn test_thread_yielding_worker_can_be_signaled_and_joined() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = eval
         .eval_str(
             r#"(condition-case e
@@ -598,7 +598,7 @@ fn test_thread_yielding_worker_can_be_signaled_and_joined() {
 #[test]
 fn worker_default_toplevel_write_cannot_mutate_callers_suspended_binding() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = eval
         .eval_str(
             r#"(let ((undo-limit 5))
@@ -618,7 +618,7 @@ fn worker_default_toplevel_write_cannot_mutate_callers_suspended_binding() {
 #[test]
 fn worker_signal_cannot_invoke_callers_handler_bind() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = eval
         .eval_str(
             r#"(progn
@@ -638,7 +638,7 @@ fn worker_signal_cannot_invoke_callers_handler_bind() {
 #[test]
 fn worker_throw_cannot_target_callers_catch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = eval
         .eval_str(
             r#"(catch 'vm-thread-caller-catch
@@ -653,7 +653,7 @@ fn worker_throw_cannot_target_callers_catch() {
 #[test]
 fn parked_caller_specpdl_remains_gc_rooted_while_worker_runs() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = eval
         .eval_str(
             r#"(let ((vm-thread-parked-root (list 'kept)))
@@ -670,7 +670,7 @@ fn parked_caller_specpdl_remains_gc_rooted_while_worker_runs() {
 #[test]
 fn failed_thread_entry_discards_unreturned_thread() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let symbol = neovm_value::intern::intern("undo-limit");
     let specpdl_depth = eval.specpdl.len();
     let outer_default = super::super::data::default_value_by_id(&eval, symbol)
@@ -706,7 +706,7 @@ fn failed_thread_entry_discards_unreturned_thread() {
 #[test]
 fn failed_blocked_thread_entry_preserves_continuation() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let thread_id = eval.threads.create_thread(Value::NIL, ThreadName::UNNAMED);
     eval.threads.start_thread(thread_id);
     let continuation = Value::list(vec![Value::symbol("ignore")]);
@@ -748,7 +748,7 @@ fn failed_blocked_thread_entry_preserves_continuation() {
 #[test]
 fn test_builtin_thread_name_main() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let current = builtin_current_thread(&mut eval, vec![]).unwrap();
     let result = builtin_thread_name(&mut eval, vec![current]);
     assert!(result.is_ok());
@@ -758,7 +758,7 @@ fn test_builtin_thread_name_main() {
 #[test]
 fn test_builtin_thread_live_p_main() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let current = builtin_current_thread(&mut eval, vec![]).unwrap();
     let result = builtin_thread_live_p(&mut eval, vec![current]);
     assert!(result.is_ok());
@@ -768,7 +768,7 @@ fn test_builtin_thread_live_p_main() {
 #[test]
 fn test_builtin_all_threads_includes_main() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_all_threads(&mut eval, vec![]);
     assert!(result.is_ok());
     let list = neovm_value::value::list_to_vec(&result.unwrap()).unwrap();
@@ -782,7 +782,7 @@ fn test_builtin_all_threads_includes_main() {
 #[test]
 fn threads_feature_and_main_thread_binding_match_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = eval
         .eval_str(
             "(list (featurep 'threads)
@@ -804,7 +804,7 @@ fn threads_feature_and_main_thread_binding_match_gnu() {
 #[test]
 fn test_builtin_all_threads_excludes_finished_unjoined_worker() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let worker = builtin_make_thread(
         &mut eval,
         vec![Value::make_lambda(neovm_value::value::LambdaData {
@@ -841,7 +841,7 @@ fn test_builtin_all_threads_excludes_finished_unjoined_worker() {
 #[test]
 fn test_builtin_thread_join_finished() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     // Create and run a thread
     let tid_val = builtin_make_thread(
         &mut eval,
@@ -864,7 +864,7 @@ fn test_builtin_thread_join_finished() {
 #[test]
 fn test_builtin_thread_join_current_thread_errors() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let current = builtin_current_thread(&mut eval, vec![]).unwrap();
     let result = builtin_thread_join(&mut eval, vec![current]);
     match result.kinded() {
@@ -883,7 +883,7 @@ fn test_builtin_thread_join_current_thread_errors() {
 #[test]
 fn test_builtin_thread_signal_non_current_is_noop() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let tid_val = builtin_make_thread(
         &mut eval,
         vec![Value::make_lambda(neovm_value::value::LambdaData {
@@ -918,7 +918,7 @@ fn test_builtin_thread_signal_non_current_is_noop() {
 #[test]
 fn thread_signal_to_main_queues_a_thread_event() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let target = eval.threads.ids.main_thread();
     let main = builtin_current_thread(&mut eval, vec![]).unwrap();
     let worker = eval.threads.create_thread(Value::NIL, ThreadName::UNNAMED);
@@ -981,9 +981,9 @@ fn thread_signal_to_main_queues_a_thread_event() {
 #[test]
 fn thread_event_sharing_reports_a_foreign_heap_as_a_lisp_error() {
     crate::test_utils::init_test_tracing();
-    let first = Context::new();
+    let first = Context::new(crate::test_utils::unit_runtime());
     let sender = Value::string("sender");
-    let _second = Context::new();
+    let _second = Context::new(crate::test_utils::unit_runtime());
     // SAFETY: `first` and `sender` outlive the call, and the identity check
     // fails before either value is touched.
     let result = unsafe { InFlightThreadEvent::share(&first, sender, Value::NIL, Value::NIL) };
@@ -1006,7 +1006,7 @@ fn thread_event_sharing_reports_a_foreign_heap_as_a_lisp_error() {
 #[test]
 fn test_builtin_thread_signal_current_thread_raises() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let current = builtin_current_thread(&mut eval, vec![]).unwrap();
     let result = builtin_thread_signal(
         &mut eval,
@@ -1024,7 +1024,7 @@ fn test_builtin_thread_signal_current_thread_raises() {
 #[test]
 fn test_builtin_thread_signal_preserves_raw_symbol_identity_through_join() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let thread = builtin_make_thread(
         &mut eval,
         vec![Value::make_lambda(neovm_value::value::LambdaData {
@@ -1120,7 +1120,7 @@ fn p15_signal_joined_terminal_thread_green() {
 #[test]
 fn test_builtin_thread_last_error_cleanup() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.threads
         .record_last_error(Value::list(vec![Value::symbol("err"), Value::fixnum(1)]));
 
@@ -1139,7 +1139,7 @@ fn test_builtin_thread_last_error_cleanup() {
 #[test]
 fn test_builtin_thread_blocker_reads_runtime_state() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let current = builtin_current_thread(&mut eval, vec![]).unwrap();
     eval.threads
         .set_thread_blocker(0, Value::symbol("vm-blocked"));
@@ -1157,7 +1157,7 @@ fn test_builtin_thread_blocker_reads_runtime_state() {
 #[test]
 fn test_builtin_thread_buffer_disposition_round_trips() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let worker = builtin_make_thread(
         &mut eval,
         vec![Value::make_lambda(neovm_value::value::LambdaData {
@@ -1188,7 +1188,7 @@ fn test_builtin_thread_buffer_disposition_round_trips() {
 #[test]
 fn test_builtin_thread_set_buffer_disposition_rejects_non_nil_main_thread_value() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let main_thread = builtin_current_thread(&mut eval, vec![]).unwrap();
     match builtin_thread_set_buffer_disposition(&mut eval, vec![main_thread, Value::T]).kinded() {
         Err(FlowKind::Signal(sig)) => {
@@ -1202,7 +1202,7 @@ fn test_builtin_thread_set_buffer_disposition_rejects_non_nil_main_thread_value(
 #[test]
 fn test_builtin_make_thread_preserves_caller_current_buffer() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let main_buffer = eval.buffers.current_buffer_id().expect("current buffer");
     let worker_buffer = eval.buffers.create_buffer("thread-worker-buffer");
 
@@ -1242,7 +1242,7 @@ fn test_builtin_make_thread_preserves_caller_current_buffer() {
 #[test]
 fn test_builtin_make_mutex() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_make_mutex(&mut eval, vec![Value::string("my-mutex")]);
     assert!(result.is_ok());
     let mx = result.unwrap();
@@ -1252,7 +1252,7 @@ fn test_builtin_make_mutex() {
 #[test]
 fn test_builtin_mutexp() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let mx = builtin_make_mutex(&mut eval, vec![]).unwrap();
 
     let r = builtin_mutexp(&mut eval, vec![mx]);
@@ -1276,7 +1276,7 @@ fn test_builtin_mutexp() {
 #[test]
 fn test_builtin_mutex_name() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let mx = builtin_make_mutex(&mut eval, vec![Value::string("named-mx")]).unwrap();
     let result = builtin_mutex_name(&mut eval, vec![mx]);
     assert!(result.is_ok());
@@ -1286,7 +1286,7 @@ fn test_builtin_mutex_name() {
 #[test]
 fn test_builtin_mutex_lock_unlock() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let mx = builtin_make_mutex(&mut eval, vec![]).unwrap();
     let lock_result = builtin_mutex_lock(&mut eval, vec![mx]);
     assert!(lock_result.is_ok());
@@ -1299,7 +1299,7 @@ fn test_builtin_mutex_lock_unlock() {
 #[test]
 fn test_builtin_make_condition_variable() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let mx = builtin_make_mutex(&mut eval, vec![]).unwrap();
     let result = builtin_make_condition_variable(&mut eval, vec![mx, Value::string("my-cv")]);
     assert!(result.is_ok());
@@ -1309,7 +1309,7 @@ fn test_builtin_make_condition_variable() {
 #[test]
 fn test_builtin_condition_variable_p() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let mx = builtin_make_mutex(&mut eval, vec![]).unwrap();
     let cv = builtin_make_condition_variable(&mut eval, vec![mx]).unwrap();
 
@@ -1334,7 +1334,7 @@ fn test_builtin_condition_variable_p() {
 #[test]
 fn test_builtin_condition_name() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let mx = builtin_make_mutex(&mut eval, vec![]).unwrap();
     let unnamed = builtin_make_condition_variable(&mut eval, vec![mx]).unwrap();
     let named =
@@ -1351,7 +1351,7 @@ fn test_builtin_condition_name() {
 #[test]
 fn thread_mutex_and_condition_names_preserve_raw_unibyte_payloads() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let raw = Value::heap_string(LispString::from_unibyte(vec![0xFF]));
 
     let thread = builtin_make_thread(
@@ -1390,7 +1390,7 @@ fn thread_mutex_and_condition_names_preserve_raw_unibyte_payloads() {
 #[test]
 fn test_builtin_condition_mutex() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let mx = builtin_make_mutex(&mut eval, vec![]).unwrap();
     let cv = builtin_make_condition_variable(&mut eval, vec![mx]).unwrap();
     let result = builtin_condition_mutex(&mut eval, vec![cv]).unwrap();
@@ -1400,7 +1400,7 @@ fn test_builtin_condition_mutex() {
 #[test]
 fn test_builtin_condition_name_wrong_type_argument() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_condition_name(&mut eval, vec![Value::NIL]);
     match result.kinded() {
         Err(FlowKind::Signal(sig)) => {
@@ -1417,7 +1417,7 @@ fn test_builtin_condition_name_wrong_type_argument() {
 #[test]
 fn test_builtin_condition_mutex_wrong_type_argument() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_condition_mutex(&mut eval, vec![Value::fixnum(1)]);
     match result.kinded() {
         Err(FlowKind::Signal(sig)) => {
@@ -1434,7 +1434,7 @@ fn test_builtin_condition_mutex_wrong_type_argument() {
 #[test]
 fn test_builtin_condition_wait_noop() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let mx = builtin_make_mutex(&mut eval, vec![]).unwrap();
     let cv = builtin_make_condition_variable(&mut eval, vec![mx]).unwrap();
     let owner_error = builtin_condition_wait(&mut eval, vec![cv]);
@@ -1451,7 +1451,7 @@ fn test_builtin_condition_wait_noop() {
 #[test]
 fn test_builtin_condition_notify_noop() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let mx = builtin_make_mutex(&mut eval, vec![]).unwrap();
     let cv = builtin_make_condition_variable(&mut eval, vec![mx]).unwrap();
     let owner_error = builtin_condition_notify(&mut eval, vec![cv]);
@@ -1470,7 +1470,7 @@ fn test_builtin_condition_notify_noop() {
 fn test_sf_with_mutex_executes_body() {
     crate::test_utils::init_test_tracing();
 
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let mx = builtin_make_mutex(&mut eval, vec![]).unwrap();
     let mx_id = eval.threads.mutex_id_from_handle(&mx).unwrap();
 
@@ -1492,7 +1492,7 @@ fn test_sf_with_mutex_executes_body() {
 fn test_sf_with_mutex_unlocks_on_error() {
     crate::test_utils::init_test_tracing();
 
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let mx = builtin_make_mutex(&mut eval, vec![]).unwrap();
     let mx_id = eval.threads.mutex_id_from_handle(&mx).unwrap();
     eval.set_variable("test-mx2", mx);
@@ -1514,7 +1514,7 @@ fn test_sf_with_mutex_unlocks_on_error() {
 #[test]
 fn test_sf_with_mutex_wrong_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     // No arguments at all
     let result = sf_with_mutex(&mut eval, &[]);
     match result.kinded() {
@@ -1537,7 +1537,7 @@ fn test_sf_with_mutex_wrong_args() {
 #[test]
 fn test_thread_yield_wrong_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_thread_yield(&mut eval, vec![Value::fixnum(1)]);
     assert!(result.is_err());
 }
@@ -1545,7 +1545,7 @@ fn test_thread_yield_wrong_args() {
 #[test]
 fn test_current_thread_wrong_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_current_thread(&mut eval, vec![Value::fixnum(1)]);
     assert!(result.is_err());
 }
@@ -1553,7 +1553,7 @@ fn test_current_thread_wrong_args() {
 #[test]
 fn test_make_thread_non_callable_returns_thread_object() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_make_thread(&mut eval, vec![Value::fixnum(42)]).unwrap();
     let is_thread = builtin_threadp(&mut eval, vec![result]).unwrap();
     assert!(is_thread.is_truthy());
@@ -1562,7 +1562,7 @@ fn test_make_thread_non_callable_returns_thread_object() {
 #[test]
 fn test_make_thread_non_callable_last_error_shape() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let thread = builtin_make_thread(&mut eval, vec![Value::fixnum(1)]).unwrap();
     let result = builtin_thread_join(&mut eval, vec![thread]);
     // GNU `thread-join` does not re-raise an error signalled inside the thread
@@ -1579,7 +1579,7 @@ fn test_make_thread_non_callable_last_error_shape() {
 #[test]
 fn test_thread_last_error_is_published_when_signaled_thread_exits() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let _ = builtin_thread_last_error(&mut eval, vec![Value::T]).unwrap();
 
     let thread = builtin_make_thread(&mut eval, vec![Value::symbol("car")]).unwrap();
@@ -1603,7 +1603,7 @@ fn test_thread_last_error_is_published_when_signaled_thread_exits() {
 #[test]
 fn test_thread_signal_noncurrent_thread_changes_join_outcome_without_publishing_last_error() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let _ = builtin_thread_last_error(&mut eval, vec![Value::T]).unwrap();
     let thread = builtin_make_thread(
         &mut eval,
@@ -1650,7 +1650,7 @@ fn test_thread_signal_noncurrent_thread_changes_join_outcome_without_publishing_
 #[test]
 fn thread_name_returns_the_stored_object_identity() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let name = Value::string("identity-name");
     let thread = builtin_make_thread(
         &mut eval,
@@ -1680,7 +1680,7 @@ fn thread_name_returns_the_stored_object_identity() {
 #[test]
 fn make_thread_rejects_a_non_string_name() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_make_thread(
         &mut eval,
         vec![
@@ -1708,7 +1708,7 @@ fn make_thread_rejects_a_non_string_name() {
 #[test]
 fn test_thread_name_nonexistent() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let fake = Value::cons(Value::symbol("thread"), Value::fixnum(999));
     let result = builtin_thread_name(&mut eval, vec![fake]);
     assert!(result.is_err());
@@ -1717,7 +1717,7 @@ fn test_thread_name_nonexistent() {
 #[test]
 fn test_mutex_lock_nonexistent() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let fake = Value::cons(Value::symbol("mutex"), Value::fixnum(999));
     let result = builtin_mutex_lock(&mut eval, vec![fake]);
     assert!(result.is_err());
@@ -1726,7 +1726,7 @@ fn test_mutex_lock_nonexistent() {
 #[test]
 fn test_condition_wait_nonexistent() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let fake = Value::cons(Value::symbol("condition-variable"), Value::fixnum(999));
     let result = builtin_condition_wait(&mut eval, vec![fake]);
     assert!(result.is_err());
@@ -1757,7 +1757,7 @@ fn test_condition_wait_nonexistent() {
 #[test]
 fn threads_mutexes_and_condition_variables_are_opaque_objects_not_conses() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let results = eval.eval_str_each(
         "(let ((th (current-thread))
                (mx (make-mutex \"m\"))
