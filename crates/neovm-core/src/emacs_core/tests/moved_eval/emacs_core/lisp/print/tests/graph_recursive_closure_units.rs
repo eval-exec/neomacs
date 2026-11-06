@@ -2,8 +2,11 @@
 //! 2781-2801. Raw escaped strings: print.c:2375-2474.
 //! Refresh the saved GNU fixtures with UPDATE_EXPECT=1. Campaign runs wrap
 //! the driver with sandbox-run.sh; NEOMACS_PROBE_SANDBOX may wrap refresh too.
-use super::super::*;
-use neovm_value::value::{LambdaData, LambdaParams};
+use crate::emacs_core::print::{
+    PrintOptions, print_value, print_value_bytes, print_value_bytes_with_options,
+    print_value_with_options,
+};
+use neovm_value::value::{LambdaData, LambdaParams, Value, list_to_vec};
 use std::path::PathBuf;
 
 const CYCLE_FORM: &str = r###"(let* ((binding (cons 'f nil))
@@ -49,7 +52,9 @@ fn gnu_output(name: &str, program: &str) -> Vec<u8> {
 fn write_fixture(name: &str, expected: &str) {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     std::fs::write(
-        root.join(format!("src/emacs_core/lisp/print/tests/{name}.expect")),
+        root.join(format!(
+            "src/emacs_core/tests/moved_eval/emacs_core/lisp/print/tests/{name}.expect"
+        )),
         expected,
     )
     .expect("refresh GNU fixture");

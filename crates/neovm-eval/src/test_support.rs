@@ -20,6 +20,20 @@ pub mod authority {
         crate::emacs_core::builtins::symbols::reset_symbols_thread_locals();
     }
 
+    /// P1 EVAL wave F1 fence (N2 counter reset): zero the continuous
+    /// print-number TLS index used by the production printer.  The original
+    /// stays pub(crate); this fence is the sole cross-crate route.
+    pub fn reset_print_number_index() {
+        crate::emacs_core::print::reset_print_number_index();
+    }
+
+    /// P1 EVAL wave F1 fence (N2 counter advance): step the continuous
+    /// print-number TLS index used by the production printer.  The original
+    /// stays pub(crate); this fence is the sole cross-crate route.
+    pub fn next_print_number_index() -> i64 {
+        crate::emacs_core::print::next_print_number_index()
+    }
+
     use crate::emacs_core::bytecode::vm::resumed_chain_probe::{ChainObservation, FireRequest};
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::eval::GreenStartError;

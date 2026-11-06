@@ -1,6 +1,6 @@
 //! GNU print.c:1222-1284 float-output-format precision and readability.
 //! Each evaluator owns its printer settings; no cross-mutator cache is used.
-use super::super::*;
+use crate::emacs_core::print::{format_float_with_output_format, print_value};
 use std::path::PathBuf;
 
 const PROGRAM: &str = r#"(let (rows)
@@ -12,8 +12,9 @@ const PROGRAM: &str = r#"(let (rows)
   (nreverse rows))"#;
 
 fn expectation() -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("src/emacs_core/lisp/print/tests/float_output_gnu.expect");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+        "src/emacs_core/tests/moved_eval/emacs_core/lisp/print/tests/float_output_gnu.expect",
+    );
     if std::env::var("UPDATE_EXPECT").as_deref() == Ok("1") {
         let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join(format!("../../tmp/float-oracle-{}.el", std::process::id()));
@@ -50,7 +51,7 @@ fn float_output_gnu_oracle() {
 fn general_float_rounding_preserves_exponent() {
     crate::test_utils::init_test_tracing();
     let expected = expectation();
-    let mut context = crate::emacs_core::Context::new(crate::test_utils::unit_runtime());
+    let mut context = crate::test_utils::new_context();
     let rows = context.eval_str(&format!("(quote {expected})")).unwrap();
     let rows = neovm_value::value::list_to_vec(&rows).unwrap();
     let values = [

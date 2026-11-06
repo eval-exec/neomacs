@@ -1,5 +1,8 @@
 //! GNU print.c:2330, 2463-2468, 2530-2568: object-depth domains.
-use super::super::*;
+use crate::emacs_core::print::{
+    PrintOptions, PrintShorthandGuard, print_value_bytes_with_options, print_value_with_options,
+};
+use neovm_value::value::list_to_vec;
 static_assertions::assert_not_impl_any!(PrintShorthandGuard<'static, 'static>: Send, Sync);
 
 #[test]

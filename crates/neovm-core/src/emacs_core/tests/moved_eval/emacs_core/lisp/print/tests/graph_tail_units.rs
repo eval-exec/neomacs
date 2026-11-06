@@ -1,5 +1,6 @@
 //! GNU print.c:2740-2763: byte-sink Brent detector uses cons identity.
-use super::super::*;
+use crate::emacs_core::print::print_value_bytes;
+use neovm_value::value::list_to_vec;
 
 #[test]
 fn byte_sink_circular_tail_matches_gnu_brent_identity() {

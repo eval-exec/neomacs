@@ -7,6 +7,7 @@ use std::borrow::Cow;
 /// Whether GNU's stream preparation enabled escaping of raw byte8 characters.
 /// This is per-render state, borrowed by one mutator; there is no shared cache.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum PrincStringOutput {
     PreserveByte8,
     OctalByte8,
@@ -50,6 +51,7 @@ impl<'a> From<&'a LispString> for PrincStringSource<'a> {
 /// GNU's print_string_1 / string_escape_byte8 escape byte8 in either encoding
 /// and preserve ordinary Unicode and non-Unicode characters (print.c:472-479;
 /// character.c:773-835).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn princ_string_bytes(
     string: &LispString,
     escaping: PrincStringOutput,

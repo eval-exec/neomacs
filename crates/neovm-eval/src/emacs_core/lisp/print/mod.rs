@@ -1,10 +1,21 @@
 //! Value printing (Lisp representation).
 
 mod float_output;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use float_output::FloatNotation;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use float_output::FloatOutputFormat;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use float_output::FloatPrecision;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use float_output::format_float_with_output_format;
 
 mod princ_text;
-pub(crate) use princ_text::{PrincStringDestination, PrincStringOutput, princ_string_bytes};
+pub(crate) use princ_text::PrincStringDestination;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use princ_text::PrincStringOutput;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use princ_text::princ_string_bytes;
 
 mod error_format;
 #[doc(hidden)]
@@ -459,11 +470,26 @@ thread_local! {
     static PRINT_CALL_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+/// Copied diagnostic-depth counter for the re-homed print oracle.  The
+/// thread-local itself stays private: the accessor reads the same cell on the
+/// calling mutator and returns a plain scalar.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn print_call_depth_for_test() -> usize {
+    PRINT_CALL_DEPTH.with(Cell::get)
+}
+
+/// Copied print-number index for the re-homed print oracle (see above).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn print_number_index_for_test() -> i64 {
+    PRINT_NUMBER_INDEX.with(Cell::get)
+}
+
 pub(crate) fn reset_print_number_index() {
     PRINT_NUMBER_INDEX.with(|index| index.set(0));
 }
 
-fn next_print_number_index() -> i64 {
+pub(crate) fn next_print_number_index() -> i64 {
     PRINT_NUMBER_INDEX.with(|index| {
         let next = index.get() + 1;
         index.set(next);
@@ -1528,6 +1554,7 @@ pub(crate) fn print_value_stateful_with_buffers(
     .into_owned()
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn print_value_stateful_bytes_with_buffers(
     value: &Value,
     buffers: Option<&neovm_edit::buffer::BufferManager>,
@@ -2289,7 +2316,8 @@ const _: () = {
 /// printed. Restores depth on early return, Lisp callback failure, or unwind.
 /// Threading: the borrow remains on the owning mutator; no state is shared.
 #[must_use = "printer state is restored when this scope ends"]
-struct PrintDepthGuard<'scope, 'context> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct PrintDepthGuard<'scope, 'context> {
     state: &'scope mut PrintState<'context>,
     saved_depth: i64,
     _mutator: std::marker::PhantomData<*const ()>,
@@ -2606,7 +2634,8 @@ fn symbol_shorthand(id: SymId) -> Option<SymbolShorthand> {
 /// it for backquote/comma; restoration is guaranteed on every exit.
 /// Threading: all references remain on the calling mutator.
 #[must_use = "printer state is restored when this scope ends"]
-struct PrintShorthandGuard<'scope, 'context> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct PrintShorthandGuard<'scope, 'context> {
     state: &'scope mut PrintState<'context>,
     saved_backquote_output_level: usize,
     saved_depth: i64,
@@ -3213,7 +3242,8 @@ pub fn print_value(value: &Value) -> String {
 /// Canonical spelling for the bare symbols in a JIT diagnostic fingerprint.
 /// A symbol cannot invoke the evaluator or traverse an object graph. Keep the
 /// usual encoding and numbering extent without entering the general printer.
-#[cfg(any(test, feature = "jit"))]
+#[cfg(any(test, feature = "jit", feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn diagnostic_symbol_string(id: SymId) -> String {
     let options = PrintOptions {
         print_escape_nonascii: true,

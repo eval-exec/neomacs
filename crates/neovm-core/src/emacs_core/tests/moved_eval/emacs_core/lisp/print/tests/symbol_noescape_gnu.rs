@@ -62,7 +62,9 @@ const PROGRAM: &str = r#"(let ((print-circle nil) (print-continuous-numbering ni
 
 fn expectation() -> String {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let fixture = root.join("src/emacs_core/lisp/print/tests/symbol_noescape_gnu.expect");
+    let fixture = root.join(
+        "src/emacs_core/tests/moved_eval/emacs_core/lisp/print/tests/symbol_noescape_gnu.expect",
+    );
     if std::env::var("UPDATE_EXPECT").as_deref() == Ok("1") {
         let script = root
             .join("../../tmp")
@@ -96,5 +98,8 @@ fn symbol_noescape_gnu_domains_gensym_live_names_and_streams() {
     let actual = context
         .eval_str(PROGRAM)
         .expect("symbol noescape oracle evaluation");
-    assert_eq!(super::super::print_value(&actual), expected.trim_end());
+    assert_eq!(
+        crate::emacs_core::print::print_value(&actual),
+        expected.trim_end()
+    );
 }

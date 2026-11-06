@@ -19,12 +19,16 @@ fn oracle(name: &str, form: &str, fixture: &str) {
             String::from_utf8_lossy(&output.stderr)
         );
         let expected = String::from_utf8(output.stdout).expect("UTF-8 oracle");
-        std::fs::write(
-            root.join("src/emacs_core/lisp/print/tests/settings_gnu")
-                .join(format!("{name}.expect")),
-            &expected,
-        )
-        .expect("GNU fixture");
+        // One home for the three fixtures shared with printer tests that
+        // stay in eval: refresh them in eval's tree (display test_utils
+        // precedent), not in the moved copy.
+        let fixture_dir = if matches!(name, "charset" | "live_options" | "quoted") {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../neovm-eval/src/emacs_core/lisp/print/tests/settings_gnu")
+        } else {
+            root.join("src/emacs_core/tests/moved_eval/emacs_core/lisp/print/tests/settings_gnu")
+        };
+        std::fs::write(fixture_dir.join(format!("{name}.expect")), &expected).expect("GNU fixture");
         expected
     } else {
         fixture.to_owned()
@@ -39,7 +43,10 @@ fn printer_settings_gnu_quoted() {
     oracle(
         "quoted",
         r###"(list (let ((print-quoted nil)) (prin1-to-string '('a #'b `(c ,d)))) (prin1-to-string '(quote x) nil '((quoted . nil))))"###,
-        include_str!("settings_gnu/quoted.expect"),
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../neovm-eval/src/emacs_core/lisp/print/tests/settings_gnu/quoted.expect"
+        )),
     );
 }
 
@@ -75,7 +82,10 @@ fn printer_settings_gnu_charset() {
     oracle(
         "charset",
         r###"(progn (set-charset-priority 'unicode) (list print-charset-text-property (prin1-to-string (propertize "a" 'charset 'ascii)) (prin1-to-string (propertize "a" 'charset 'ascii 'foo 'bar)) (let ((print-charset-text-property nil)) (prin1-to-string (propertize "é" 'charset 'ascii))) (let ((print-charset-text-property t)) (prin1-to-string (propertize "a" 'charset 'ascii))) (let ((print-charset-text-property 'default)) (prin1-to-string (propertize "é" 'charset 'ascii))) (let ((print-charset-text-property 'default)) (prin1-to-string (propertize "é" 'charset 'unicode)))))"###,
-        include_str!("settings_gnu/charset.expect"),
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../neovm-eval/src/emacs_core/lisp/print/tests/settings_gnu/charset.expect"
+        )),
     );
 }
 
@@ -195,7 +205,10 @@ fn printer_settings_gnu_live_options() {
     (puthash (make-marker) '(1 2) h)
     (puthash 'next '(3 4) h)
     (prin1-to-string h)))"###,
-        include_str!("settings_gnu/live_options.expect"),
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../neovm-eval/src/emacs_core/lisp/print/tests/settings_gnu/live_options.expect"
+        )),
     );
 }
 
@@ -479,16 +492,20 @@ fn printer_settings_gnu_format_localized_scratch_escape() {
 fn printer_format_localized_scratch_escape_restores_native_scope() {
     crate::test_utils::init_test_tracing();
     let mut context = crate::test_utils::runtime_startup_context();
-    let depth = context.specpdl.len();
-    let origin = context.buffers.current_buffer_id();
-    let escape_before = context.obarray.symbol_value_copied("print-escape-nonascii");
+    let depth = context.specpdl().len();
+    let origin = context.edit.buffers.current_buffer_id();
+    let escape_before = context
+        .obarray()
+        .symbol_value_copied("print-escape-nonascii");
     context
         .eval_str(FORMAT_LOCALIZED_SCRATCH_ESCAPE)
         .expect("localized formatter scratch-escape scope");
-    assert_eq!(context.specpdl.len(), depth);
-    assert_eq!(context.buffers.current_buffer_id(), origin);
+    assert_eq!(context.specpdl().len(), depth);
+    assert_eq!(context.edit.buffers.current_buffer_id(), origin);
     assert_eq!(
-        context.obarray.symbol_value_copied("print-escape-nonascii"),
+        context
+            .obarray()
+            .symbol_value_copied("print-escape-nonascii"),
         escape_before,
     );
 }

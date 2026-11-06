@@ -3,7 +3,7 @@
 //! Compare the public error path and the shared encoder with GNU-derived data.
 use std::path::PathBuf;
 
-use super::super::{PrincStringOutput, princ_string_bytes, print_value};
+use crate::emacs_core::print::{PrincStringOutput, princ_string_bytes, print_value};
 use neovm_value::value::list_to_vec;
 
 const SOURCES: &str = r#"(let* ((all (apply #'unibyte-string (number-sequence 0 255)))
@@ -59,7 +59,9 @@ fn program() -> String {
 
 fn expectation() -> String {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let fixture = root.join("src/emacs_core/lisp/print/tests/princ_octal_spans_gnu.expect");
+    let fixture = root.join(
+        "src/emacs_core/tests/moved_eval/emacs_core/lisp/print/tests/princ_octal_spans_gnu.expect",
+    );
     if std::env::var("UPDATE_EXPECT").as_deref() != Ok("1") {
         return std::fs::read_to_string(fixture).expect("refresh GNU fixture with UPDATE_EXPECT=1");
     }

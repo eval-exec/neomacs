@@ -3,6 +3,7 @@
 
 use super::{Value, format_float};
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn format_float_with_output_format(f: f64, output_format: Option<Value>) -> String {
     if f.is_nan() || f.is_infinite() {
         return format_float(f);
@@ -24,7 +25,8 @@ pub(crate) fn format_float_with_output_format(f: f64, output_format: Option<Valu
 /// renderer to choose its precision semantics explicitly.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, num_enum::TryFromPrimitive)]
 #[repr(u8)]
-enum FloatNotation {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum FloatNotation {
     Scientific = b'e',
     Fixed = b'f',
     General = b'g',
@@ -33,7 +35,8 @@ enum FloatNotation {
 /// An omitted precision differs from explicit zero in GNU print.c:1266:
 /// only explicit %.0f suppresses the float readability suffix.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum FloatPrecision {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum FloatPrecision {
     Omitted,
     Explicit(u8),
 }
@@ -51,15 +54,23 @@ impl FloatPrecision {
 /// Constructor guarantees precision <= DBL_DIG, and permits explicit zero
 /// only for Fixed. This per-call scalar has no shared or mutator-local state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct FloatOutputFormat {
-    notation: FloatNotation,
-    precision: FloatPrecision,
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct FloatOutputFormat {
+    #[cfg(not(feature = "test-support"))]
+    pub(crate) notation: FloatNotation,
+    #[cfg(feature = "test-support")]
+    pub notation: FloatNotation,
+    #[cfg(not(feature = "test-support"))]
+    pub(crate) precision: FloatPrecision,
+    #[cfg(feature = "test-support")]
+    pub precision: FloatPrecision,
 }
 
 static_assertions::assert_impl_all!(FloatOutputFormat: Send, Sync);
 
 #[derive(Debug, thiserror::Error)]
-enum InvalidFloatOutputFormat {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum InvalidFloatOutputFormat {
     #[error("invalid float-output-format syntax")]
     Syntax,
     #[error("invalid float-output-format precision")]
@@ -182,7 +193,3 @@ fn finish_float_output_format(text: &mut String, precision: FloatPrecision) {
         text.push_str(".0");
     }
 }
-
-#[cfg(test)]
-#[path = "tests/float_format_units.rs"]
-mod float_format_units;

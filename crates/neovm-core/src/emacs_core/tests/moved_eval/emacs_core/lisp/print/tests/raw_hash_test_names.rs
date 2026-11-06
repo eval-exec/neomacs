@@ -1,7 +1,11 @@
 //! Hash-test names use the same byte-safe symbol protocol as all printed symbols.
-use super::super::*;
+use crate::emacs_core::print::{
+    PrintOptions, print_value, print_value_bytes_with_options,
+    print_value_stateful_bytes_with_buffers,
+};
 use neovm_value::heap_types::LispString;
 use neovm_value::intern::{intern_lisp_string, intern_uninterned, intern_uninterned_lisp_string};
+use neovm_value::value::{HashTableTest, Value};
 
 fn character_codes(bytes: Vec<u8>) -> Value {
     let mut codes = Vec::new();
@@ -63,7 +67,9 @@ fn custom_hash_test_names_preserve_raw_bytes_escaping_and_symbol_identity() {
 
 fn gnu_expectation() -> String {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let fixture = root.join("src/emacs_core/lisp/print/tests/raw_hash_test_names.expect");
+    let fixture = root.join(
+        "src/emacs_core/tests/moved_eval/emacs_core/lisp/print/tests/raw_hash_test_names.expect",
+    );
     if std::env::var("UPDATE_EXPECT").as_deref() == Ok("1") {
         let script = root
             .join("../../tmp")

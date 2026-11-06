@@ -41,7 +41,9 @@ const PROGRAM: &str = r#"(let (rows)
 
 fn expectation() -> String {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let fixture = root.join("src/emacs_core/lisp/print/tests/error_string_leaf_gnu.expect");
+    let fixture = root.join(
+        "src/emacs_core/tests/moved_eval/emacs_core/lisp/print/tests/error_string_leaf_gnu.expect",
+    );
     if std::env::var("UPDATE_EXPECT").as_deref() == Ok("1") {
         let script = root.join("../../tmp").join(format!(
             "error-string-leaf-oracle-{}.el",
@@ -76,5 +78,8 @@ fn error_string_leaf_gnu_domains_settings_and_circle_fallback() {
     let actual = context
         .eval_str(PROGRAM)
         .expect("error string leaf oracle evaluation");
-    assert_eq!(super::super::print_value(&actual), expected.trim_end());
+    assert_eq!(
+        crate::emacs_core::print::print_value(&actual),
+        expected.trim_end()
+    );
 }

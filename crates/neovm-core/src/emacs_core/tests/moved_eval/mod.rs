@@ -259,3 +259,54 @@ mod emacs_core_lisp_native_builtins_tests_width_policy_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/debug_on_call/tests/debug_on_call_test.rs"]
 mod emacs_core_runtime_debug_on_call_tests_debug_on_call_test_rs;
+
+// Printer tests re-homed from neovm-eval (P1 EVAL wave F1): they construct a
+// booted Context through this crate's runtime_startup_context / probe
+// helpers.  File names, test names and assertions are byte-identical to the
+// origin; only the use paths and the two UPDATE_EXPECT fixture paths moved.
+#[cfg(test)]
+#[path = "emacs_core/lisp/print/tests/graph_closure_units.rs"]
+mod emacs_core_lisp_print_tests_graph_closure_units_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/print/tests/graph_gnu.rs"]
+mod emacs_core_lisp_print_tests_graph_gnu_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/print/tests/graph_level_units.rs"]
+mod emacs_core_lisp_print_tests_graph_level_units_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/print/tests/graph_recursive_closure_units.rs"]
+mod emacs_core_lisp_print_tests_graph_recursive_closure_units_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/print/tests/graph_tail_units.rs"]
+mod emacs_core_lisp_print_tests_graph_tail_units_rs;
+
+// Remaining printer re-homes of the same P1 EVAL wave F1 batch (boot/oracle
+// helpers live in this crate).  Bodies byte-identical; only use paths and
+// fixture paths changed.
+#[cfg(test)]
+#[path = "emacs_core/lisp/print/tests/compiled_settings_gnu.rs"]
+mod emacs_core_lisp_print_tests_compiled_settings_gnu_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/print/tests/diagnostic_symbols.rs"]
+mod emacs_core_lisp_print_tests_diagnostic_symbols_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/print/tests/error_string_leaf_gnu.rs"]
+mod emacs_core_lisp_print_tests_error_string_leaf_gnu_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/print/tests/float_format_units.rs"]
+mod emacs_core_lisp_print_tests_float_format_units_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/print/tests/float_output_gnu.rs"]
+mod emacs_core_lisp_print_tests_float_output_gnu_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/print/tests/princ_octal_spans_gnu.rs"]
+mod emacs_core_lisp_print_tests_princ_octal_spans_gnu_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/print/tests/raw_hash_test_names.rs"]
+mod emacs_core_lisp_print_tests_raw_hash_test_names_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/print/tests/settings_gnu.rs"]
+mod emacs_core_lisp_print_tests_settings_gnu_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/print/tests/symbol_noescape_gnu.rs"]
+mod emacs_core_lisp_print_tests_symbol_noescape_gnu_rs;

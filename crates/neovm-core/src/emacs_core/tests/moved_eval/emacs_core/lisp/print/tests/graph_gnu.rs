@@ -30,7 +30,7 @@ fn compare(name: &str, form: &str, saved: &str) {
         );
         let expected = String::from_utf8(output.stdout).unwrap();
         let fixture = root.join(format!(
-            "src/emacs_core/lisp/print/tests/graph_{name}.expect"
+            "src/emacs_core/tests/moved_eval/emacs_core/lisp/print/tests/graph_{name}.expect"
         ));
         if std::fs::read_to_string(&fixture).ok().as_deref() != Some(expected.as_str()) {
             std::fs::write(fixture, &expected).unwrap();

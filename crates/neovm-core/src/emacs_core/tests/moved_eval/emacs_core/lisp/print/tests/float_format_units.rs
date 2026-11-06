@@ -1,5 +1,8 @@
 //! GNU print.c:1193-1209, 1222-1284: validated domains and readable output.
-use super::*;
+use crate::emacs_core::print::{
+    FloatNotation, FloatOutputFormat, FloatPrecision, format_float_with_output_format,
+};
+use neovm_value::value::Value;
 use std::path::PathBuf;
 
 #[test]
@@ -62,7 +65,9 @@ fn gnu_expected() -> String {
     );
     let expected = String::from_utf8(output.stdout).expect("GNU output");
     std::fs::write(
-        root.join("src/emacs_core/lisp/print/tests/float_format_units.expect"),
+        root.join(
+            "src/emacs_core/tests/moved_eval/emacs_core/lisp/print/tests/float_format_units.expect",
+        ),
         &expected,
     )
     .expect("refresh");
@@ -73,7 +78,7 @@ fn gnu_expected() -> String {
 fn finite_and_nonfinite_format_boundaries_match_saved_gnu() {
     crate::test_utils::init_test_tracing();
     let expected = gnu_expected();
-    let mut context = crate::emacs_core::Context::new(crate::test_utils::unit_runtime());
+    let mut context = crate::test_utils::new_context();
     let rows = context
         .eval_str(&format!("(quote {expected})"))
         .expect("GNU fixture");

@@ -1,5 +1,8 @@
 //! GNU print.c:2250-2265, 2611-2613: interpreted closure slot limits.
-use super::super::*;
+use crate::emacs_core::print::{
+    PrintDepthGuard, PrintOptions, print_value_bytes_with_options, print_value_with_options,
+};
+use neovm_value::value::list_to_vec;
 static_assertions::assert_not_impl_any!(PrintDepthGuard<'static, 'static>: Send, Sync);
 
 #[test]

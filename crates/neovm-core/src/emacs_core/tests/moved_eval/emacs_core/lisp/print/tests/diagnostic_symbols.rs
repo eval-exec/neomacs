@@ -1,5 +1,9 @@
 //! JIT fingerprints retain GNU print.c:2470-2530 symbol spelling and escapes.
-use super::super::*;
+use crate::emacs_core::print::{
+    diagnostic_symbol_string, print_call_depth_for_test, print_number_index_for_test, print_value,
+};
+use neovm_eval::test_support::authority::{next_print_number_index, reset_print_number_index};
+use neovm_value::value::{Value, list_to_vec};
 use std::path::PathBuf;
 
 const SYMBOLS: &str = r#"(let* ((name (copy-sequence "before")) (live (make-symbol name)))
@@ -77,12 +81,12 @@ fn diagnostic_symbol_string_preserves_general_renderer_domains_and_extent() {
         } else {
             rendered
         };
-        let expected_depth = PRINT_CALL_DEPTH.with(Cell::get);
-        let expected_index = PRINT_NUMBER_INDEX.with(Cell::get);
+        let expected_depth = print_call_depth_for_test();
+        let expected_index = print_number_index_for_test();
         reset_print_number_index();
         next_print_number_index();
         assert_eq!(diagnostic_symbol_string(id), expected);
-        assert_eq!(PRINT_CALL_DEPTH.with(Cell::get), expected_depth);
-        assert_eq!(PRINT_NUMBER_INDEX.with(Cell::get), expected_index);
+        assert_eq!(print_call_depth_for_test(), expected_depth);
+        assert_eq!(print_number_index_for_test(), expected_index);
     }
 }
