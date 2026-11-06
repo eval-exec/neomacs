@@ -180,3 +180,5 @@ mod emacs_core_lisp_native_builtins_tests_keymaps_full_tests_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/jit/tests/hof_credit_test.rs"]
 mod emacs_core_runtime_jit_tests_hof_credit_test_rs;
+#[path = "emacs_core/runtime/jit/tests/switch_dispatch_test.rs"]
+mod emacs_core_runtime_jit_tests_switch_dispatch_test_rs;

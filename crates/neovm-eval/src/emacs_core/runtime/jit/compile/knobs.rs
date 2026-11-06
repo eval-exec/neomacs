@@ -1859,7 +1859,7 @@ pub(crate) fn force_opt_for_test(mode: Option<OptMode>, admit: Option<OptAdmit>)
 /// Select the backend a test asserts, independently of the process configuration.
 /// Threading: test-thread compiler configuration only, never Lisp state; nested
 /// scopes restore the exact previous override, including its absence.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[must_use = "the backend override ends when the returned guard is dropped"]
 pub(crate) fn opt_mode_scope_for_test(mode: OptMode) -> impl Drop {
     /// Threading: scalar override owned and restored on this test's compiler thread.

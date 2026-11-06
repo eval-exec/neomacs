@@ -2,12 +2,11 @@
 //! (`byte-compile-cond-jump-table`, lisp/emacs-lisp/bytecomp.el): the answers
 //! must be the interpreter's for every shape of dispatch value.
 
-use super::*;
-use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::Vm;
-use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::jit::compile::{NativeRun, compile_bytecode_function_with};
+use neovm_value::value::Value;
 
 /// Byte-compile `lambda_src` lexically in a bootstrapped context and return
 /// the function value (rooted for the rest of the test).
@@ -31,11 +30,11 @@ fn byte_compile(ev: &mut Context, lambda_src: &str) -> Value {
 /// fresh list on each side). Returns the printed answer.
 fn native_matches_interpreter(ev: &mut Context, f: Value, arg: Value, what: &str) -> String {
     let data = f.get_bytecode_data().expect("byte-code function");
-    let before = super::switch_dispatch::inline_switch_sites_for_test();
-    let leaf = compile_bytecode_function_with(data, Some(&ev.obarray)).expect("compiles");
+    let before = neovm_eval::test_support::switch_inline_sites_for_test();
+    let leaf = compile_bytecode_function_with(data, Some(ev.obarray())).expect("compiles");
     assert_eq!(
-        super::switch_dispatch::inline_switch_sites_for_test() > before,
-        jit_inline_switch_on(),
+        neovm_eval::test_support::switch_inline_sites_for_test() > before,
+        crate::emacs_core::jit::compile::jit_inline_switch_on(),
         "{what}: the jump table is answered inline exactly when the knob is on"
     );
     let interp = Vm::from_context(ev)
@@ -45,7 +44,10 @@ fn native_matches_interpreter(ev: &mut Context, f: Value, arg: Value, what: &str
     let NativeRun::Ok(bits) = leaf.call(ev as *mut Context as *mut u8, &[arg]) else {
         panic!("{what}: expected a native answer");
     };
-    let native = crate::emacs_core::print::print_value(&Value::from_bits(bits));
+    // SAFETY: the native shim returned this exact tagged word from the run
+    // above; reconstructing the value for comparison is sound (the same
+    // contract the JIT call site documents).
+    let native = crate::emacs_core::print::print_value(&unsafe { Value::from_bits(bits) });
     assert_eq!(native, interp, "{what}");
     interp
 }
@@ -105,50 +107,41 @@ fn pcase_dispatch_answers_every_value_shape_like_the_interpreter() {
 /// instruction indices, the same offsets failed as a stack-model error.
 #[test]
 fn elb_pcase_mir_build_resolves_the_jump_table_through_the_offset_map() {
-    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
-        crate::emacs_core::jit::compile::OptMode::Legacy,
-    );
+    let _backend = neovm_eval::test_support::authority::enter_legacy_opt_mode_for_test();
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::runtime_startup_context();
     let f = byte_compile(&mut ev, ELB_PCASE);
     let data = f.get_bytecode_data().expect("byte-code function");
-    let ops = data.executable_ops();
-    let map = data.executable_gnu_byte_offset_map();
-    assert!(map.is_some(), "real bytecode carries its offset map");
-    let arity = data
-        .params
-        .stack_shape()
-        .expect("fixture stack parameters")
-        .required();
-    assert!(matches!(
-        mir::build_mir(ops, &data.constants, map, arity),
-        Err(CompileError::UnsupportedOp("mir-unmodelled-control:Switch"))
-    ));
-    let unmapped = mir::build_mir(ops, &data.constants, None, arity);
+    let mir_copy = neovm_eval::test_support::mir_build_copy_for_test(data);
+    assert!(
+        mir_copy.has_offset_map,
+        "real bytecode carries its offset map"
+    );
+    assert_eq!(
+        mir_copy.with_map,
+        neovm_eval::test_support::MirBuildVerdictCopy::Unsupported("mir-unmodelled-control:Switch")
+    );
     assert!(
         matches!(
-            unmapped,
-            Err(CompileError::BadOperand
-                | CompileError::StackUnderflow
-                | CompileError::UnsupportedOp(
+            mir_copy.without_map,
+            neovm_eval::test_support::MirBuildVerdictCopy::BadOperand
+                | neovm_eval::test_support::MirBuildVerdictCopy::StackUnderflow
+                | neovm_eval::test_support::MirBuildVerdictCopy::Unsupported(
                     "inconsistent stack depth" | "mir-unreachable-block"
-                ))
+                )
         ),
-        "byte offsets read as indices: {unmapped:?}"
+        "byte offsets read as indices: {:?}",
+        mir_copy.without_map
     );
     // Through the tier-up: still a baseline leaf, whose verdict now names
     // the Switch.
-    crate::emacs_core::jit::stats::force_observe_for_test(
-        crate::emacs_core::jit::stats::ObserveOverride {
-            stats: true,
-            naming: false,
-            entry_count: false,
-        },
-    );
-    let leaf = compile_bytecode_function_with(data, Some(&ev.obarray)).expect("compiles");
-    assert_eq!(leaf.tier().name(), "baseline");
+    let leaf_copy = neovm_eval::test_support::authority::with_stats_observation_for_test(|| {
+        let leaf = compile_bytecode_function_with(data, Some(ev.obarray())).expect("compiles");
+        neovm_eval::test_support::compiled_leaf_copy_for_test(&leaf)
+    });
+    assert_eq!(leaf_copy.tier_name, "baseline");
     assert_eq!(
-        leaf.obs.mir_verdict.as_deref(),
+        leaf_copy.mir_verdict.as_deref(),
         Some("build:UnsupportedOp(\"mir-unmodelled-control:Switch\")")
     );
 }

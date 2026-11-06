@@ -4427,9 +4427,6 @@ mod spec_rest_call_tests;
 #[path = "tests/stack_guard_test.rs"]
 mod stack_guard_tests;
 #[cfg(test)]
-#[path = "tests/switch_dispatch_test.rs"]
-mod switch_dispatch_tests;
-#[cfg(test)]
 #[path = "tests/switch_inline_test.rs"]
 mod switch_inline_tests;
 #[cfg(test)]

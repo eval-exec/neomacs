@@ -854,6 +854,122 @@ pub mod authority {
     pub fn force_hof_inline_for_test(on: Option<bool>) {
         crate::emacs_core::jit::compile::force_hof_inline_for_test(on);
     }
+    /// Re-homed jit switch_dispatch BOOT-FULL batch: enter the LEGACY backend
+    /// scope (scalar per-thread compiler override; restored on drop).
+    #[cfg(feature = "jit")]
+    #[must_use = "the backend override ends when the returned guard is dropped"]
+    pub fn enter_legacy_opt_mode_for_test() -> impl Drop {
+        crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+            crate::emacs_core::jit::compile::OptMode::Legacy,
+        )
+    }
+
+    /// Re-homed jit switch_dispatch BOOT-FULL batch: observe compile stats
+    /// (including the MIR verdict) for the duration of `f`, restoring the
+    /// thread override on exit (including panic).
+    #[cfg(feature = "jit")]
+    pub fn with_stats_observation_for_test<R>(f: impl FnOnce() -> R) -> R {
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                crate::emacs_core::jit::stats::force_observe_for_test(Default::default());
+            }
+        }
+        crate::emacs_core::jit::stats::force_observe_for_test(
+            crate::emacs_core::jit::stats::ObserveOverride {
+                stats: true,
+                naming: false,
+                entry_count: false,
+            },
+        );
+        let _restore = Restore;
+        f()
+    }
+}
+
+/// Re-homed jit switch_dispatch BOOT-FULL batch: copied inline-switch census.
+#[cfg(feature = "jit")]
+pub fn switch_inline_sites_for_test() -> usize {
+    crate::emacs_core::jit::compile::switch_dispatch::inline_switch_sites_for_test()
+}
+
+/// Re-homed jit switch_dispatch BOOT-FULL batch: copied MIR-build verdict.
+#[cfg(feature = "jit")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MirBuildVerdictCopy {
+    Ok,
+    BadOperand,
+    StackUnderflow,
+    Unsupported(&'static str),
+    Other(String),
+}
+
+/// Re-homed jit switch_dispatch BOOT-FULL batch: the independent MIR rebuild
+/// of one body, with and without its GNU byte-offset map.
+#[cfg(feature = "jit")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MirBuildCopy {
+    pub has_offset_map: bool,
+    pub with_map: MirBuildVerdictCopy,
+    pub without_map: MirBuildVerdictCopy,
+}
+
+/// Re-homed jit switch_dispatch BOOT-FULL batch: rebuild the body's MIR from
+/// its own ops/constants/offset map/arity and report both verdicts as copies.
+#[cfg(feature = "jit")]
+pub fn mir_build_copy_for_test(
+    function: &crate::emacs_core::bytecode::ByteCodeFunction,
+) -> MirBuildCopy {
+    use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+    use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
+    let ops = function.executable_ops();
+    let map = function.executable_gnu_byte_offset_map();
+    let arity = function
+        .params
+        .stack_shape()
+        .expect("fixture stack parameters")
+        .required();
+    let constants: Vec<neovm_value::value::Value> = function.constants.iter().copied().collect();
+    let verdict = |offset_map| match crate::emacs_core::jit::mir::build_mir(
+        ops, &constants, offset_map, arity,
+    ) {
+        Ok(_) => MirBuildVerdictCopy::Ok,
+        Err(crate::emacs_core::jit::compile::CompileError::BadOperand) => {
+            MirBuildVerdictCopy::BadOperand
+        }
+        Err(crate::emacs_core::jit::compile::CompileError::StackUnderflow) => {
+            MirBuildVerdictCopy::StackUnderflow
+        }
+        Err(crate::emacs_core::jit::compile::CompileError::UnsupportedOp(what)) => {
+            MirBuildVerdictCopy::Unsupported(what)
+        }
+        Err(other) => MirBuildVerdictCopy::Other(format!("{other:?}")),
+    };
+    MirBuildCopy {
+        has_offset_map: map.is_some(),
+        with_map: verdict(map),
+        without_map: verdict(None),
+    }
+}
+
+/// Re-homed jit switch_dispatch BOOT-FULL batch: copied leaf observations.
+#[cfg(feature = "jit")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompiledLeafCopy {
+    pub tier_name: &'static str,
+    pub mir_verdict: Option<String>,
+}
+
+/// Re-homed jit switch_dispatch BOOT-FULL batch: copied tier + MIR-verdict
+/// read; the leaf and its observation box stay private.
+#[cfg(feature = "jit")]
+pub fn compiled_leaf_copy_for_test(
+    leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+) -> CompiledLeafCopy {
+    CompiledLeafCopy {
+        tier_name: leaf.tier().name(),
+        mir_verdict: leaf.obs.mir_verdict.as_deref().map(str::to_owned),
+    }
 }
 
 /// Re-homed jit/tests BOOT-FULL batch: copied invocation-heat read.
