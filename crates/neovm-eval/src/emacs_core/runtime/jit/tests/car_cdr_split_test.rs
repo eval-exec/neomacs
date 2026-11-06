@@ -4,7 +4,6 @@
 //! every input, conses included.
 
 use super::*;
-use crate::emacs_core::print::print_value;
 
 fn run(op: Op, v: Value) -> Option<usize> {
     lower_nullary_leaf(&[Op::Constant(0), op, Op::Return], &[v])
@@ -38,32 +37,4 @@ fn forced_deopt_fails_the_car_cdr_guard_for_a_cons_too() {
     crate::emacs_core::jit::compile::force_deopt_for_test(false);
     assert_eq!((car, cdr, nil), (None, None, None));
     assert_eq!(run(Op::Car, cons), Some(Value::make_int(11).bits()));
-}
-
-#[test]
-fn hot_cadr_loop_keeps_gnu_results_for_cons_nil_and_non_list() {
-    let mut ctx = crate::test_utils::runtime_startup_context();
-    ctx.eval_str(
-        "(defun jit-car-cdr-split-cadrs (l)
-           (let (acc)
-             (while l
-               (setq acc (cons (car (cdr l)) acc))
-               (setq l (cdr (cdr l))))
-             (nreverse acc)))",
-    )
-    .expect("defun");
-    ctx.eval_str("(byte-compile 'jit-car-cdr-split-cadrs)")
-        .expect("byte-compile");
-    ctx.eval_str("(dotimes (_ 3000) (jit-car-cdr-split-cadrs '(1 2 3 4 5 6)))")
-        .expect("warm up");
-    for (list, want) in [
-        ("'(1 2 3 4)", "(2 4)"),
-        ("'(1 2 3)", "(2 nil)"),
-        ("'(1 . 5)", "(wrong-type-argument listp 5)"),
-        ("'(1 2 3 . 7)", "(wrong-type-argument listp 7)"),
-    ] {
-        let form = format!("(condition-case e (jit-car-cdr-split-cadrs {list}) (error e))");
-        let got = ctx.eval_str(&form).expect("call");
-        assert_eq!(print_value(&got), want, "{list}");
-    }
 }

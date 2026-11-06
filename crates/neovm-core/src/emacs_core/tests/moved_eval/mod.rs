@@ -177,6 +177,9 @@ mod emacs_core_lisp_native_builtins_tests_format_float_gnu_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/native/builtins/tests/keymaps_full_tests.rs"]
 mod emacs_core_lisp_native_builtins_tests_keymaps_full_tests_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/tests/car_cdr_split_full_test.rs"]
+mod emacs_core_runtime_jit_tests_car_cdr_split_full_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/jit/tests/hof_credit_test.rs"]
 mod emacs_core_runtime_jit_tests_hof_credit_test_rs;
