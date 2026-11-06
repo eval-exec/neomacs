@@ -8992,6 +8992,8 @@ fn value_list_to_values(list: &Value) -> LispArgVec {
 // Tests
 // ---------------------------------------------------------------------------
 pub(crate) mod boot_vars;
+#[cfg(feature = "test-support")]
+pub use boot_vars::xdisp::register_bootstrap_vars as register_xdisp_bootstrap_vars_for_test;
 pub mod buffer_kill;
 pub mod call_interactively;
 pub mod case_tables;

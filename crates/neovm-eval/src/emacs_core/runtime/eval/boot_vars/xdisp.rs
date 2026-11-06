@@ -9,6 +9,7 @@ use neovm_value::intern::intern;
 use neovm_value::symbol::LispVariableLocality;
 use neovm_value::value::Value;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn register_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
     fn defvar_buffer_local(obarray: &mut neovm_value::symbol::Obarray, name: &str, default: Value) {
         obarray.define_lisp_variable(name, default, LispVariableLocality::BufferLocalIfSet);

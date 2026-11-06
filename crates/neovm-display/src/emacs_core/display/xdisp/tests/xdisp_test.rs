@@ -128,7 +128,7 @@ fn fragment_current_buffer(eval: &mut Context, text: &str) {
 fn test_register_bootstrap_vars_include_tab_bar_display_vars() {
     crate::test_utils::init_test_tracing();
     let mut obarray = neovm_value::symbol::Obarray::new();
-    register_bootstrap_vars(&mut obarray);
+    neovm_eval::emacs_core::eval::register_xdisp_bootstrap_vars_for_test(&mut obarray);
 
     assert_eq!(
         obarray.symbol_value_copied("inhibit-redisplay"),
