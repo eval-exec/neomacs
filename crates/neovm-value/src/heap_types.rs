@@ -136,6 +136,10 @@ pub struct LispString {
 
 const SIZE_BYTE_UNIBYTE_NORMAL: i64 = -1;
 const SIZE_BYTE_UNIBYTE_RODATA: i64 = -2;
+/// GNU's `-3` unibyte immovable marker. VALUE-A3-COLLAPSE (peer 00:36:00Z
+/// (iv)): the relocated clear-string test names it, so the const itself gains
+/// the test-support A-prime widening (one home; production stays private).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 const SIZE_BYTE_UNIBYTE_IMMOVABLE: i64 = -3;
 
 // Retaining a small cleared payload avoids a second allocation and zero fill.
@@ -2080,33 +2084,11 @@ impl OverlayData {
 pub(crate) mod __test_support {
     use super::*;
 
-    // A3 v2 / R8 payload rows: copied scalars, copied pointer, owned alias snapshot.
-    pub(crate) fn lisp_string_data_ptr(s: &LispString) -> *const u8 {
-        s.data
-    }
-
-    pub(crate) fn lisp_string_size(s: &LispString) -> usize {
-        s.size
-    }
-
-    pub(crate) fn lisp_string_owned_capacity(s: &LispString) -> usize {
-        s.owned_capacity()
-    }
-
+    // VALUE-A3-COLLAPSE: the copied A3 v2/R8 payload delegates collapsed onto
+    // the field / A-prime / production routes; only the owned-storage
+    // predicate (no other route) and the private-constructor mint remain.
     pub(crate) fn lisp_string_has_owned_storage(s: &LispString) -> bool {
         s.has_owned_storage()
-    }
-
-    pub(crate) fn lisp_string_has_trailing_nul(s: &LispString) -> bool {
-        s.has_trailing_nul()
-    }
-
-    pub(crate) fn lisp_string_character_count_kind(s: &LispString) -> StringCharacterCountKind {
-        s.character_count_kind()
-    }
-
-    pub(crate) fn lisp_string_borrowed_alias(s: &LispString) -> Option<LispString> {
-        s.borrowed_alias()
     }
 
     /// # Safety

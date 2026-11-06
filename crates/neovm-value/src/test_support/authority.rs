@@ -564,3 +564,36 @@ pub unsafe fn publish_barrier_window_for_test(heap: &mut crate::tagged::gc::Tagg
     // SAFETY: the caller upholds the identical publication contract above.
     unsafe { heap.publish_barrier_window_for_test() }
 }
+
+/// VALUE-A3-COLLAPSE row (peer 00:36:00Z (ii)): the mint over the private
+/// `LispString::from_borrowed_bytes` constructor. It builds a `LispString`
+/// over caller-supplied raw memory, so it is an authority (mint) capability,
+/// not a copied read; the mis-classed VIS row is removed.
+///
+/// # Safety
+/// Same pointer/length/validation contract as the private constructor:
+/// `ptr` must point to a live, NUL-terminated byte buffer of at least `len`
+/// bytes (`ptr.add(len) == 0`), the bytes must remain mapped and unmodified
+/// for the returned string's lifetime (and for the process lifetime when
+/// `static_rodata` is true), and `size`/`size_byte` must describe the buffer
+/// exactly (`len == payload_len_for(size, size_byte)`; `size_byte` is
+/// negative for unibyte storage and otherwise the byte count, with `size` the
+/// decoded character count for a multibyte payload).
+pub unsafe fn heap_types__LispString__from_borrowed_bytes(
+    ptr: *const u8,
+    len: usize,
+    size: usize,
+    size_byte: i64,
+    static_rodata: bool,
+) -> crate::heap_types::LispString {
+    // SAFETY: the caller upholds the constructor's contract above.
+    unsafe {
+        crate::heap_types::__test_support::lisp_string_from_borrowed_bytes(
+            ptr,
+            len,
+            size,
+            size_byte,
+            static_rodata,
+        )
+    }
+}

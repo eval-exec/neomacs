@@ -5,21 +5,21 @@
 //! here with unchanged assertions. The lower-only
 //! `clear_string_erases_owned_payload_before_release` test stays beside the
 //! `LispString` implementation in `neovm-value`. Private value state is read
-//! through the signed A3 v2 test-support rows; the one driver
-//! (`mark_collection_observed`) crosses through the signed authority fence.
+//! through its already-signed routes: the `data`/`size` field splits, the
+//! A-prime `owned_capacity()`, `has_trailing_nul()` and `borrowed_alias()`
+//! methods, the production `character_count_kind()` and
+//! `collection_observed()` reads, and the test-support `has_owned_storage`
+//! predicate (its only route). The `mark_collection_observed` driver and the
+//! `from_borrowed_bytes` mint cross through the signed authority fence.
 use crate::emacs_core::buffer::builtin_clear_string;
 use crate::tagged::collection_reads::capture;
 use crate::tagged::gc::{TaggedHeap, set_tagged_heap};
 use crate::tagged::header::StringObj;
-use neovm_value::heap_types::{GnuDeclaredCharacterCount, LispString, StringCharacterCountKind};
-use neovm_value::test_support::authority::mark_collection_observed;
-use neovm_value::test_support::{
-    heap_types__LispString__borrowed_alias, heap_types__LispString__character_count_kind,
-    heap_types__LispString__data_ptr, heap_types__LispString__from_borrowed_bytes,
-    heap_types__LispString__has_owned_storage, heap_types__LispString__has_trailing_nul,
-    heap_types__LispString__owned_capacity, heap_types__LispString__size,
-    heap_types__SIZE_BYTE_UNIBYTE_IMMOVABLE, tagged__header__GcHeader__collection_observed,
+use neovm_value::heap_types::{LispString, SIZE_BYTE_UNIBYTE_IMMOVABLE};
+use neovm_value::test_support::authority::{
+    heap_types__LispString__from_borrowed_bytes, mark_collection_observed,
 };
+use neovm_value::test_support::heap_types__LispString__has_owned_storage;
 
 #[test]
 fn clear_string_preserves_owner_and_invalidates_observed_reads() {
@@ -53,10 +53,8 @@ fn clear_string_preserves_owner_and_invalidates_observed_reads() {
         assert_eq!(object.data.sbytes(), len);
         assert!(!object.data.is_multibyte());
         assert!(object.data.as_bytes().iter().all(|byte| *byte == 0));
-        assert!(heap_types__LispString__has_trailing_nul(&object.data));
-        assert!(tagged__header__GcHeader__collection_observed(
-            &object.header
-        ));
+        assert!(object.data.has_trailing_nul());
+        assert!(object.header.collection_observed());
         assert!(!reads.unchanged());
     }
 }
@@ -73,19 +71,19 @@ fn clear_string_retains_small_owned_payload_storage() {
         LispString::from_emacs_bytes("界".repeat(1000).into_bytes()),
     ] {
         let len = payload.sbytes();
-        let data = heap_types__LispString__data_ptr(&payload);
-        let capacity = heap_types__LispString__owned_capacity(&payload);
+        let data = payload.data;
+        let capacity = payload.owned_capacity();
         let owner = heap.alloc_string(payload);
         for _ in 0..2 {
             assert!(builtin_clear_string(vec![owner]).unwrap().is_nil());
             let cleared = owner.as_lisp_string().unwrap();
-            assert_eq!(heap_types__LispString__data_ptr(cleared), data);
-            assert_eq!(heap_types__LispString__owned_capacity(cleared), capacity);
+            assert_eq!(cleared.data, data);
+            assert_eq!(cleared.owned_capacity(), capacity);
             assert_eq!(cleared.schars(), len);
             assert_eq!(cleared.sbytes(), len);
             assert!(!cleared.is_multibyte());
             assert_eq!(cleared.as_bytes(), vec![0; len]);
-            assert!(heap_types__LispString__has_trailing_nul(cleared));
+            assert!(cleared.has_trailing_nul());
         }
     }
 }
@@ -112,15 +110,15 @@ fn clear_string_materializes_borrowed_bytes_without_changing_the_source() {
                 UNIBYTE.as_ptr(),
                 6,
                 6,
-                heap_types__SIZE_BYTE_UNIBYTE_IMMOVABLE,
+                SIZE_BYTE_UNIBYTE_IMMOVABLE,
                 false,
             )
         },
         LispString::from_rodata_unibyte(EMPTY),
     ] {
         let len = payload.sbytes();
-        let data = heap_types__LispString__data_ptr(&payload);
-        let alias = heap_types__LispString__borrowed_alias(&payload).unwrap();
+        let data = payload.data;
+        let alias = payload.borrowed_alias().unwrap();
         let owner = heap.alloc_string(payload);
 
         assert!(builtin_clear_string(vec![owner]).unwrap().is_nil());
@@ -130,11 +128,11 @@ fn clear_string_materializes_borrowed_bytes_without_changing_the_source() {
         assert_eq!(cleared.as_bytes(), vec![0; len]);
         assert_eq!(cleared.schars(), len);
         if len == 0 {
-            assert_eq!(heap_types__LispString__data_ptr(cleared), data);
+            assert_eq!(cleared.data, data);
             assert!(cleared.is_rodata());
         }
         assert!(!cleared.is_multibyte());
-        assert!(heap_types__LispString__has_trailing_nul(cleared));
+        assert!(cleared.has_trailing_nul());
         assert_eq!(alias.sbytes(), len);
         if len != 0 {
             assert!(alias.as_bytes().iter().any(|byte| *byte != 0));
@@ -155,21 +153,18 @@ fn clear_string_keeps_immovable_owned_storage_and_demotes_shape() {
         let len = bytes.len();
         let mut payload = LispString::from_unibyte(bytes);
         payload.pin_immovable();
-        let before_data = heap_types__LispString__data_ptr(&payload);
-        let before_capacity = heap_types__LispString__owned_capacity(&payload);
+        let before_data = payload.data;
+        let before_capacity = payload.owned_capacity();
         let owner = heap.alloc_string(payload);
         assert!(owner.as_lisp_string().unwrap().is_immovable());
         assert!(builtin_clear_string(vec![owner]).unwrap().is_nil());
         // SAFETY: this heap owns the live string, with no intervening safepoint.
         let object = unsafe { &*owner.as_string_ptr().unwrap().cast::<StringObj>() };
-        assert_eq!(heap_types__LispString__data_ptr(&object.data), before_data);
-        assert_eq!(
-            heap_types__LispString__owned_capacity(&object.data),
-            before_capacity
-        );
+        assert_eq!(object.data.data, before_data);
+        assert_eq!(object.data.owned_capacity(), before_capacity);
         assert_eq!(object.data.is_immovable(), len == 0);
         assert_eq!(object.data.as_bytes(), vec![0; len]);
-        assert!(heap_types__LispString__has_trailing_nul(&object.data));
+        assert!(object.data.has_trailing_nul());
         assert!(builtin_clear_string(vec![owner]).unwrap().is_nil());
         assert_eq!(owner.as_lisp_string().unwrap().as_bytes(), vec![0; len]);
         assert_eq!(bytecode.as_slice(), original);
