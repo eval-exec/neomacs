@@ -192,7 +192,7 @@ impl SymbolBacking {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) unsafe fn probe(&self, id: SymId) -> usize {
         // SAFETY: the test holds the real read/write/keeper lease. Only the
         // already-admitted plain backing is read; no RefCell borrow or TLS.

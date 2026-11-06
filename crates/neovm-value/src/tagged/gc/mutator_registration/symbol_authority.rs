@@ -1,4 +1,8 @@
 //! Sealed symbol authority; running values move only between owner root homes.
+#[cfg(all(test, not(feature = "test-support")))]
+mod closed_graph;
+#[cfg(feature = "test-support")]
+pub mod closed_graph;
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 pub(super) mod combined_inputs;
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
