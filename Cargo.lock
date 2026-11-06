@@ -4385,6 +4385,7 @@ dependencies = [
  "neovm-text",
  "neovm-value",
  "num_enum",
+ "pkg-config",
  "regex",
  "rodio",
  "rustc-hash 2.1.3",

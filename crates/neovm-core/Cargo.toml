@@ -127,7 +127,7 @@ dbus = { version = "0.9", default-features = false }
 default = ["jit", "sqlite"]
 # Diagnostic inventory walks and JSONL records; absent from ordinary builds.
 gc-memory-telemetry = ["dep:serde_json", "neovm-value/gc-memory-telemetry", "neovm-eval/gc-memory-telemetry", "neovm-display/gc-memory-telemetry"]
-sqlite = ["dep:rusqlite", "neovm-value/sqlite", "neovm-eval/sqlite", "neovm-system/sqlite"]
+sqlite = ["dep:rusqlite", "neovm-value/sqlite", "neovm-eval/sqlite", "neovm-system/sqlite", "neovm-display/sqlite"]
 # Static-link the crate's bundled libdbus instead of pkg-config `dbus-1`.
 # Production/Nix builds leave this off and use the system library.  The
 # transport (and its dbus dependency) lives in neovm-system since stage 6,
