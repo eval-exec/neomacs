@@ -310,3 +310,17 @@ mod emacs_core_lisp_print_tests_settings_gnu_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/print/tests/symbol_noescape_gnu.rs"]
 mod emacs_core_lisp_print_tests_symbol_noescape_gnu_rs;
+// P1 EVAL wave F1: file_notify Linux driver oracle re-homed from eval
+// (booted Context through core test_utils; driver calls re-pointed to the
+// inotify-* Lisp subrs, TLS reset to the eval authority fence).  The
+// pre-split module gate was cfg(all(test, target_os = "linux")); preserved.
+#[cfg(all(test, target_os = "linux"))]
+#[path = "emacs_core/lisp/native/builtins/file_notify/tests/linux_test.rs"]
+mod emacs_core_lisp_native_builtins_file_notify_tests_linux_test_rs;
+// P1 EVAL wave F1: file_notify fixture/event-queue oracle re-homed from
+// eval (booted Context through core test_utils; drivers through the Lisp
+// subrs, event injection and the thread-local registry through the eval
+// authority fences).  The pre-split module gate was cfg(test); preserved.
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/file_notify/tests/file_notify_test.rs"]
+mod emacs_core_lisp_native_builtins_file_notify_tests_file_notify_test_rs;

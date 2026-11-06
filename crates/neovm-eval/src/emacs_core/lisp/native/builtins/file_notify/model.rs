@@ -109,7 +109,8 @@ impl std::fmt::Display for ErrorDetail {
 /// Keeping this required avoids a representable "backend needs a filename but
 /// none was rooted" state and keeps all Lisp values off native worker threads.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct WatchRegistration {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct WatchRegistration {
     callback: Value,
     registered_file_name: Value,
 }
@@ -145,7 +146,8 @@ impl WatchRegistration {
 /// representation omits it.  This prevents a future descriptor reuse policy
 /// from accidentally delivering a stale event to a newer registration.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(super) struct WatchId {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct WatchId {
     slot: i64,
     generation: i64,
 }
@@ -253,7 +255,8 @@ pub(super) fn finish_watch_drain<Watch: TrackedWatch>(
     watches.retain(|watch| !terminated.contains(watch.watch_id()));
 }
 
-pub(super) trait BackendEvent {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) trait BackendEvent {
     fn watch_id(&self) -> &WatchId;
     fn into_lisp(
         self,
@@ -268,7 +271,8 @@ pub(super) trait BackendEvent {
 /// Lisp-visible event.  Keeping it separate ensures callback roots are
 /// released even when a terminal native notification produces no event for
 /// the watch's requested action set.
-pub(super) struct DrainBatch<Event> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct DrainBatch<Event> {
     pub(super) events: Vec<Event>,
     pub(super) terminated: Vec<WatchId>,
     /// An asynchronous backend failure observed in the same drain.

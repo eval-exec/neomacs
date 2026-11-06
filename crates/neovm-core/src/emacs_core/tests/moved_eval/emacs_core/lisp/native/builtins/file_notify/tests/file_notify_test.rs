@@ -1,9 +1,31 @@
-use super::*;
+//! Re-homed from eval's file_notify/tests/file_notify_test.rs (P1 F1).
+//!
+//! Only these re-points: the boot/workspace helpers come from core's
+//! test_utils; the driver calls go through the GNU-visible Lisp subrs
+//! (`inotify-*`, `kqueue-*`) with Context::funcall_general and
+//! already-evaluated Value arguments (GNU Ffuncall semantics; an eval_form
+//! source form would evaluate the aspect list and callback symbol as code --
+//! peer 14:4xZ hold); the event-injection and thread-local-registry fixtures
+//! go through the eval authority fences.  Test names and assertions are
+//! unchanged.
+use crate::test_utils::init_test_tracing;
+use crate::test_utils::runtime_startup_context;
+use crate::test_utils::workspace_root;
+use neovm_eval::emacs_core::builtins::file_notify::SUBRS;
+use neovm_eval::emacs_core::builtins::file_notify::{
+    FileNotifyEvent, WatchId, WatchRegistration, WatchRegistry, prepare_deliveries,
+    prepare_deliveries_for_test,
+};
+use neovm_eval::test_support::authority::{
+    drain_batch_for_test, file_notify_register_for_test, file_notify_unregister_for_test,
+    reset_file_notify_thread_locals_for_test,
+};
 #[cfg(target_os = "macos")]
 use neovm_value::intern::intern;
+use neovm_value::value::Value;
 
 fn workspace_temp_dir() -> tempfile::TempDir {
-    let parent = crate::test_utils::workspace_root()
+    let parent = workspace_root()
         .as_path()
         .join("target")
         .join("neovm-core-file-notify-tests");
@@ -57,6 +79,11 @@ impl FileNotifyEvent for LifecycleTestEvent {
 
 #[test]
 fn terminal_watch_stays_rooted_until_delivery_finishes() {
+    // Post-split re-point: a dependency crate has no cfg(test) fallback
+    // tagged heap, so fixtures that allocate Lisp values install a
+    // heap-owned one for the test thread (core's moved-value precedent).
+    let mut heap = neovm_value::tagged::gc::TaggedHeap::new();
+    neovm_value::tagged::gc::set_tagged_heap(&mut heap);
     let watch_id = WatchId::new(7, 3);
     let mut registry = WatchRegistry::default();
     registry.register(
@@ -67,11 +94,7 @@ fn terminal_watch_stays_rooted_until_delivery_finishes() {
 
     let (deliveries, terminated, failure) = prepare_deliveries(
         &registry,
-        DrainBatch::<LifecycleTestEvent> {
-            events: Vec::new(),
-            terminated: vec![watch_id],
-            failure: None,
-        },
+        drain_batch_for_test::<LifecycleTestEvent>(Vec::new(), vec![watch_id], None),
     );
 
     assert!(deliveries.is_empty());
@@ -96,7 +119,13 @@ fn terminal_watch_stays_rooted_until_delivery_finishes() {
 
 #[test]
 fn terminal_delivery_values_survive_exact_gc_until_queued() {
-    reset_file_notify_thread_locals();
+    reset_file_notify_thread_locals_for_test();
+    // Post-split re-point: the fixture Values must live on the evaluator's
+    // heap for the exact GC below to trace them (pre-split they were
+    // allocated through the value crate's cfg(test) fallback heap, which a
+    // dependency crate does not have).  The Context is created first for
+    // that reason; the assertions are unchanged.
+    let mut eval = runtime_startup_context();
     let watch_id = WatchId::new(9, 0);
     let callback = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
         b"callback-root".to_vec(),
@@ -104,23 +133,14 @@ fn terminal_delivery_values_survive_exact_gc_until_queued() {
     let file_name = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
         b"file-name-root".to_vec(),
     ));
-    let (deliveries, terminated, failure) = FILE_NOTIFY_STATE.with(|slot| {
-        let mut state = slot.borrow_mut();
-        state
-            .registry
-            .register(watch_id.clone(), callback, file_name);
-        prepare_deliveries(
-            &state.registry,
-            DrainBatch {
-                events: vec![LifecycleTestEvent(watch_id)],
-                terminated: vec![WatchId::new(9, 0)],
-                failure: None,
-            },
-        )
-    });
+    file_notify_register_for_test(watch_id.clone(), callback, file_name);
+    let (deliveries, terminated, failure) = prepare_deliveries_for_test(drain_batch_for_test(
+        vec![LifecycleTestEvent(watch_id)],
+        vec![WatchId::new(9, 0)],
+        None,
+    ));
     assert!(failure.is_none());
 
-    let mut eval = crate::test_utils::runtime_startup_context();
     eval.eval_str("(garbage-collect)")
         .expect("run an exact collection while terminal delivery is pending");
 
@@ -142,16 +162,16 @@ fn terminal_delivery_values_survive_exact_gc_until_queued() {
         b"file-name-root"
     );
 
-    FILE_NOTIFY_STATE.with(|slot| {
-        let mut state = slot.borrow_mut();
-        for watch_id in terminated {
-            state.registry.unregister(&watch_id);
-        }
-    });
+    for watch_id in terminated {
+        file_notify_unregister_for_test(&watch_id);
+    }
 }
 
 #[test]
 fn watch_registry_roots_every_lisp_object_needed_for_delivery() {
+    // Post-split re-point: heap-owned fixture heap for this test thread.
+    let mut heap = neovm_value::tagged::gc::TaggedHeap::new();
+    neovm_value::tagged::gc::set_tagged_heap(&mut heap);
     let watch_id = WatchId::new(8, 0);
     let callback = Value::symbol("file-notify-test-callback");
     let file_name = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
@@ -172,6 +192,44 @@ fn watch_registry_roots_every_lisp_object_needed_for_delivery() {
     assert!(roots.contains(&file_name));
 }
 
+/// The kqueue tests below drive the GNU-visible Lisp subrs through the
+/// evaluator's `funcall_general` with already-evaluated Value arguments
+/// (peer 12:57Z (c) and the 14:4xZ eval_form hold); these thin wrappers keep
+/// each test body's call shape while the symbol resolves to the registered
+/// `kqueue-*` subr, exactly as GNU's Ffuncall does.
+#[cfg(target_os = "macos")]
+fn kqueue_call(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    name: &str,
+    args: Vec<Value>,
+) -> neovm_value::error::EvalResult {
+    eval.funcall_general(Value::symbol(name), args)
+}
+
+#[cfg(target_os = "macos")]
+fn kqueue_add_watch(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> neovm_value::error::EvalResult {
+    kqueue_call(eval, "kqueue-add-watch", args)
+}
+
+#[cfg(target_os = "macos")]
+fn kqueue_rm_watch(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> neovm_value::error::EvalResult {
+    kqueue_call(eval, "kqueue-rm-watch", args)
+}
+
+#[cfg(target_os = "macos")]
+fn kqueue_valid_p(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> neovm_value::error::EvalResult {
+    kqueue_call(eval, "kqueue-valid-p", args)
+}
+
 /// Destructure a `Flow` into its signal payload; Debug-printing a `SymId`
 /// resolves the name best-effort and is not stable under parallel tests, so
 /// error assertions compare interned symbols structurally.
@@ -189,12 +247,12 @@ fn expect_signal(err: neovm_value::error::Flow) -> Box<neovm_value::error::Signa
 #[test]
 #[cfg(target_os = "linux")]
 fn filesystem_changes_reach_the_lisp_callback_through_the_special_event_queue() {
-    crate::test_utils::init_test_tracing();
+    init_test_tracing();
     let directory = workspace_temp_dir();
     let watched_file = directory.path().join("watched.txt");
     std::fs::write(&watched_file, "before").expect("seed watched file");
 
-    let mut eval = crate::test_utils::runtime_startup_context();
+    let mut eval = runtime_startup_context();
     eval.eval_str(
         r#"
         (progn
@@ -205,15 +263,16 @@ fn filesystem_changes_reach_the_lisp_callback_through_the_special_event_queue() 
     )
     .expect("install callback");
 
-    let descriptor = inotify_add_watch(
-        &mut eval,
-        vec![
-            Value::string(directory.path().display().to_string()),
-            Value::list(vec![Value::symbol("modify")]),
-            Value::symbol("neovm-test-file-notify-callback"),
-        ],
-    )
-    .expect("add watch");
+    let descriptor = eval
+        .funcall_general(
+            Value::symbol("inotify-add-watch"),
+            vec![
+                Value::string(directory.path().display().to_string()),
+                Value::list(vec![Value::symbol("modify")]),
+                Value::symbol("neovm-test-file-notify-callback"),
+            ],
+        )
+        .expect("add watch");
 
     std::fs::write(&watched_file, "after").expect("modify watched file");
     eval.eval_str("(read-event nil nil 1)")
@@ -231,7 +290,8 @@ fn filesystem_changes_reach_the_lisp_callback_through_the_special_event_queue() 
     assert_eq!(fields[2], Value::string("watched.txt"));
     assert!(fields[3].as_fixnum().is_some());
 
-    inotify_rm_watch(vec![descriptor]).expect("remove watch");
+    eval.funcall_general(Value::symbol("inotify-rm-watch"), vec![descriptor])
+        .expect("remove watch");
 }
 
 /// GNU `Fkqueue_add_watch` (src/kqueue.c:338) returns a bare opaque fixnum
@@ -243,12 +303,12 @@ fn filesystem_changes_reach_the_lisp_callback_through_the_special_event_queue() 
 #[test]
 #[cfg(target_os = "macos")]
 fn kqueue_file_watch_reports_a_write_action_with_gnus_event_shape() {
-    crate::test_utils::init_test_tracing();
+    init_test_tracing();
     let directory = workspace_temp_dir();
     let watched_file = directory.path().join("watched.txt");
     std::fs::write(&watched_file, "before").expect("seed watched file");
 
-    let mut eval = crate::test_utils::runtime_startup_context();
+    let mut eval = runtime_startup_context();
     eval.eval_str(
         r#"
         (progn
@@ -311,7 +371,7 @@ fn kqueue_file_watch_reports_a_write_action_with_gnus_event_shape() {
         "a file watch reports the watched file's own name"
     );
 
-    kqueue_rm_watch(vec![descriptor]).expect("remove watch");
+    kqueue_rm_watch(&mut eval, vec![descriptor]).expect("remove watch");
 }
 
 /// GNU generates directory events by diffing directory listings
@@ -322,12 +382,12 @@ fn kqueue_file_watch_reports_a_write_action_with_gnus_event_shape() {
 #[test]
 #[cfg(target_os = "macos")]
 fn kqueue_directory_watch_reports_relative_names_from_snapshot_diffs() {
-    crate::test_utils::init_test_tracing();
+    init_test_tracing();
     let directory = workspace_temp_dir();
     let existing = directory.path().join("existing.txt");
     std::fs::write(&existing, "seed").expect("seed existing file");
 
-    let mut eval = crate::test_utils::runtime_startup_context();
+    let mut eval = runtime_startup_context();
     eval.eval_str(
         r#"
         (progn
@@ -370,7 +430,7 @@ fn kqueue_directory_watch_reports_relative_names_from_snapshot_diffs() {
         }),
         "a directory watch reports the created file's relative name: {events:?}"
     );
-    kqueue_rm_watch(vec![descriptor]).expect("remove watch");
+    kqueue_rm_watch(&mut eval, vec![descriptor]).expect("remove watch");
 }
 
 /// `Fkqueue_rm_watch` (src/kqueue.c:475) answers t and unregisters; a
@@ -382,12 +442,12 @@ fn kqueue_directory_watch_reports_relative_names_from_snapshot_diffs() {
 #[test]
 #[cfg(target_os = "macos")]
 fn kqueue_rm_watch_and_valid_p_follow_gnu_and_a_deleted_file_invalidates_its_watch() {
-    crate::test_utils::init_test_tracing();
+    init_test_tracing();
     let directory = workspace_temp_dir();
     let removable = directory.path().join("removable.txt");
     std::fs::write(&removable, "doomed").expect("seed removable file");
 
-    let mut eval = crate::test_utils::runtime_startup_context();
+    let mut eval = runtime_startup_context();
     eval.eval_str(
         r#"
         (progn
@@ -408,11 +468,21 @@ fn kqueue_rm_watch_and_valid_p_follow_gnu_and_a_deleted_file_invalidates_its_wat
     )
     .expect("add kqueue watch");
 
-    assert_eq!(kqueue_valid_p(vec![descriptor]).unwrap(), Value::T);
-    assert_eq!(kqueue_rm_watch(vec![descriptor]).unwrap(), Value::T);
-    assert_eq!(kqueue_valid_p(vec![descriptor]).unwrap(), Value::NIL);
+    assert_eq!(
+        kqueue_valid_p(&mut eval, vec![descriptor]).unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        kqueue_rm_watch(&mut eval, vec![descriptor]).unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        kqueue_valid_p(&mut eval, vec![descriptor]).unwrap(),
+        Value::NIL
+    );
 
-    let signal = expect_signal(kqueue_rm_watch(vec![descriptor]).expect_err("stale descriptor"));
+    let signal =
+        expect_signal(kqueue_rm_watch(&mut eval, vec![descriptor]).expect_err("stale descriptor"));
     assert_eq!(signal.symbol, intern("file-notify-error"), "{signal:?}");
     assert_eq!(
         signal.data[0]
@@ -451,7 +521,7 @@ fn kqueue_rm_watch_and_valid_p_follow_gnu_and_a_deleted_file_invalidates_its_wat
         "deleting the watched file reports a delete action: {events:?}"
     );
     assert_eq!(
-        kqueue_valid_p(vec![descriptor]).unwrap(),
+        kqueue_valid_p(&mut eval, vec![descriptor]).unwrap(),
         Value::NIL,
         "GNU cancels the monitor when the watched file is deleted (src/kqueue.c:330-333)"
     );
@@ -468,12 +538,12 @@ fn kqueue_rm_watch_and_valid_p_follow_gnu_and_a_deleted_file_invalidates_its_wat
 #[test]
 #[cfg(target_os = "macos")]
 fn kqueue_add_watch_checks_arguments_like_gnu_and_ignores_unknown_flags() {
-    crate::test_utils::init_test_tracing();
+    init_test_tracing();
     let directory = workspace_temp_dir();
     let watched_file = directory.path().join("checked.txt");
     std::fs::write(&watched_file, "content").expect("seed watched file");
 
-    let mut eval = crate::test_utils::runtime_startup_context();
+    let mut eval = runtime_startup_context();
     eval.eval_str("(defun neovm-test-kqueue-callback (_event) nil)")
         .expect("install callback");
 
@@ -541,7 +611,7 @@ fn kqueue_add_watch_checks_arguments_like_gnu_and_ignores_unknown_flags() {
         ],
     )
     .expect("an unknown flag symbol is ignored, not an error");
-    kqueue_rm_watch(vec![descriptor]).expect("remove watch");
+    kqueue_rm_watch(&mut eval, vec![descriptor]).expect("remove watch");
 }
 
 /// GNU normalizes kqueue FILE before checking or storing it:
@@ -552,14 +622,20 @@ fn kqueue_add_watch_checks_arguments_like_gnu_and_ignores_unknown_flags() {
 #[test]
 #[cfg(target_os = "macos")]
 fn kqueue_watch_expands_relative_file_against_default_directory() {
-    crate::test_utils::init_test_tracing();
+    init_test_tracing();
     let directory = workspace_temp_dir();
     let watched_file = directory.path().join("relative.txt");
     std::fs::write(&watched_file, "before").expect("seed watched file");
 
-    let mut eval = crate::test_utils::runtime_startup_context();
-    let current_buffer = eval.buffers.current_buffer().expect("current buffer").id;
-    eval.buffers
+    let mut eval = runtime_startup_context();
+    let current_buffer = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    eval.edit
+        .buffers
         .get_mut(current_buffer)
         .expect("current buffer")
         .set_buffer_local(
@@ -605,5 +681,5 @@ fn kqueue_watch_expands_relative_file_against_default_directory() {
         "kqueue stores and reports GNU's normalized absolute FILE: {events:?}"
     );
 
-    kqueue_rm_watch(vec![descriptor]).expect("remove watch");
+    kqueue_rm_watch(&mut eval, vec![descriptor]).expect("remove watch");
 }

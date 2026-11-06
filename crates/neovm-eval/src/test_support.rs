@@ -33,6 +33,22 @@ pub mod authority {
     pub fn next_print_number_index() -> i64 {
         crate::emacs_core::print::next_print_number_index()
     }
+    /// P1 F1 FILE-NOTIFY FENCE (peer 12:57Z (c)): reset the file-notify
+    /// thread-local registry.  A reset is a TLS write (N2); the fence is the
+    /// only cross-crate route and the original stays `pub(crate)` with no
+    /// A-prime.
+    pub fn reset_file_notify_thread_locals_for_test() {
+        crate::emacs_core::builtins::file_notify::reset_file_notify_thread_locals();
+    }
+
+    /// P1 F1 FILE-NOTIFY FENCES (peer 12:57Z (c)): the event-injection and
+    /// thread-local-registry fixtures stay authority-only.  The
+    /// implementations live in the owning module, where the private fields
+    /// and the private thread-local are reachable; the originals stay
+    /// unwidened.
+    pub use crate::emacs_core::builtins::file_notify::authority::{
+        drain_batch_for_test, file_notify_register_for_test, file_notify_unregister_for_test,
+    };
 
     use crate::emacs_core::bytecode::vm::resumed_chain_probe::{ChainObservation, FireRequest};
     use crate::emacs_core::eval::Context;

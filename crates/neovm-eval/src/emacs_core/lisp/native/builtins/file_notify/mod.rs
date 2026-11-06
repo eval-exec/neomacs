@@ -14,17 +14,31 @@ mod platform;
 pub use platform::{BACKEND_SUBRS, REMOVE_WATCH_SEMANTICS, RemoveWatchSemantics};
 #[cfg(not(feature = "test-support"))]
 pub(crate) use platform::{BACKEND_SUBRS, REMOVE_WATCH_SEMANTICS, RemoveWatchSemantics};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) mod authority;
 mod registry;
 
 // Private to the subsystem: every caller is inside `file_notify`, and keeping
 // it here means minting a `file-notify-error` stays within the module that
 // owns `ErrorDetail`.  Descendants still reach it through `use super::*`.
 use lisp::file_notify_error;
+// P1 F1: the re-homed file-notify fixture tests name these test-support
+// types.  Exactly one binding per name: the feature arm is the cross-crate
+// route, the other arm keeps production and this crate's cfg(test) build
+// private.
 use model::{
-    Backend as FileNotifyBackend, BackendEvent as FileNotifyEvent, DrainBatch, ErrorDetail,
-    FileWatch, RemoveWatchOutcome, TrackedWatch, WatchActivity, WatchId, WatchIdAllocator,
-    WatchRegistration, finish_watch_drain,
+    Backend as FileNotifyBackend, ErrorDetail, FileWatch, RemoveWatchOutcome, TrackedWatch,
+    WatchActivity, WatchIdAllocator, finish_watch_drain,
 };
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use model::{BackendEvent as FileNotifyEvent, DrainBatch, WatchId, WatchRegistration};
+#[cfg(not(feature = "test-support"))]
+use model::{BackendEvent as FileNotifyEvent, DrainBatch, WatchId, WatchRegistration};
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use registry::WatchRegistry;
+#[cfg(not(feature = "test-support"))]
 use registry::WatchRegistry;
 
 std::cfg_select! {
@@ -52,10 +66,6 @@ std::cfg_select! {
     }
     _ => {}
 }
-
-#[cfg(all(test, target_os = "linux"))]
-#[path = "tests/linux_test.rs"]
-mod linux_test;
 
 #[cfg(all(
     test,
@@ -107,7 +117,8 @@ pub(crate) fn has_active_file_notify_watches() -> bool {
     FILE_NOTIFY_STATE.with(|slot| slot.borrow().backend.has_watches())
 }
 
-fn prepare_deliveries<Event: FileNotifyEvent>(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn prepare_deliveries<Event: FileNotifyEvent>(
     registry: &WatchRegistry,
     batch: DrainBatch<Event>,
 ) -> (Vec<(Event, WatchRegistration)>, Vec<WatchId>, Option<Flow>) {
@@ -123,6 +134,19 @@ fn prepare_deliveries<Event: FileNotifyEvent>(
         })
         .collect();
     (deliverable, batch.terminated, batch.failure)
+}
+
+/// Observe-only read of the process thread-local registry for the re-homed
+/// fixture tests (peer 14:47Z item 2): `prepare_deliveries` runs against the
+/// BORROWED registry (no borrow_mut, no write), so this is a VIS accessor,
+/// not an authority fence.  The synthetic batch it consumes can only be
+/// constructed by the `drain_batch_for_test` authority forge.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn prepare_deliveries_for_test<Event: FileNotifyEvent>(
+    batch: DrainBatch<Event>,
+) -> (Vec<(Event, WatchRegistration)>, Vec<WatchId>, Option<Flow>) {
+    FILE_NOTIFY_STATE.with(|slot| prepare_deliveries(&slot.borrow().registry, batch))
 }
 
 pub(crate) fn drain_file_notify_events(
@@ -159,10 +183,6 @@ pub(crate) fn drain_file_notify_events(
         None => Ok(count),
     }
 }
-
-#[cfg(test)]
-#[path = "tests/file_notify_test.rs"]
-mod tests;
 
 #[cfg(test)]
 #[path = "tests/gc_tls_ownership_test.rs"]

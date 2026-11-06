@@ -9,7 +9,8 @@ use hashbrown::HashMap;
 use neovm_value::value::Value;
 
 #[derive(Default)]
-pub(super) struct WatchRegistry {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct WatchRegistry {
     registrations: HashMap<WatchId, WatchRegistration>,
 }
 
