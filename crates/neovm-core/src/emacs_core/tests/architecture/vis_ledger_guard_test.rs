@@ -5792,6 +5792,34 @@ pub struct Tuple(pub u8);
         }
     }
 
+    /// A heap scope for the H3b bootstrap binders.
+    ///
+    /// The binders construct tagged values (`Value::string` for the dbus
+    /// version strings, hash tables, ...), so each call needs a
+    /// thread-local `TaggedHeap`. A core `#[test]` thread has none, and the
+    /// binder crates are dependency builds where `cfg(test)` is off, so
+    /// their `with_tagged_heap` panics "no TaggedHeap set for this thread"
+    /// instead of creating the test fallback. Installing a heap around each
+    /// binder keeps the binders on their production path; the `Drop` clears
+    /// the TLS slot before the owned heap is freed, including on a panic.
+    struct BootstrapBinderHeapScope {
+        heap: Box<neovm_value::tagged::gc::TaggedHeap>,
+    }
+
+    impl BootstrapBinderHeapScope {
+        fn new() -> Self {
+            let mut heap = Box::new(neovm_value::tagged::gc::TaggedHeap::new());
+            neovm_value::tagged::gc::set_tagged_heap(&mut heap);
+            Self { heap }
+        }
+    }
+
+    impl Drop for BootstrapBinderHeapScope {
+        fn drop(&mut self) {
+            neovm_value::tagged::gc::clear_tagged_heap_if_installed(&self.heap);
+        }
+    }
+
     fn bound_names(obarray: &neovm_value::symbol::Obarray) -> BTreeSet<String> {
         obarray
             .iter_symbols()
@@ -5808,6 +5836,10 @@ pub struct Tuple(pub u8);
         // `Obarray::new` pre-binds GNU's t and nil; compare the names the
         // binder ADDS, so that pair can neither mask a missing name nor
         // count as an extra one.
+        //
+        // Run the binder inside its own heap scope; the comparison below is
+        // unchanged.
+        let _heap_scope = BootstrapBinderHeapScope::new();
         let before = bound_names(&obarray);
         bind(&mut obarray);
         let after = bound_names(&obarray);
