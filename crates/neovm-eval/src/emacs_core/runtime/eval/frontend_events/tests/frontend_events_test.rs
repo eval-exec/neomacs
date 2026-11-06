@@ -266,7 +266,7 @@ fn every_transport_variant_has_locked_down_semantics() {
     );
     assert_policy(
         InputEvent::SelectWindow {
-            window_id: crate::window::WindowId(1),
+            window_id: neovm_edit::emacs_core::display_metrics::WindowId(1),
         },
         FrontendEventClass::LispSpecial,
         PendingPolicy::Filterable("select-window"),

@@ -52,7 +52,7 @@ fn key_description_esc_boundary_cases() {
         "ESC M-a"
     );
     // [27 M-a] -> ESC M-a (already-meta next key cannot absorb another meta)
-    let m_a = crate::emacs_core::keyboard::pure::KEY_CHAR_META | 97;
+    let m_a = neovm_value::keyboard_pure::KEY_CHAR_META | 97;
     assert_eq!(
         key_description(vec![Value::fixnum(27), Value::fixnum(m_a)]),
         "ESC M-a"

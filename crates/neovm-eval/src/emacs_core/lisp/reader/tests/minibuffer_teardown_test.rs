@@ -40,7 +40,7 @@ fn run_teardown_and_collect(
     // `make-overlay` anchors on the *current* buffer when the BUFFER arg is nil;
     // switch to *Minibuf-1* so the candidate overlay lands there.
     let _ = ev.buffers.switch_current(minibuf_id);
-    let overlay = neovm_edit::emacs_core::buffer::builtin_make_overlay_in_buffers(
+    let overlay = neovm_edit::emacs_core::buffer::builtin_make_overlay(
         &mut ev.buffers,
         vec![
             Value::fixnum(1),

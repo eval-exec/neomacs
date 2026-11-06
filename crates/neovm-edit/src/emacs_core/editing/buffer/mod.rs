@@ -4,7 +4,7 @@ use neovm_value::error::{
     EvalResult, Flow, LispCondition, TakeCount, expect_args, expect_args_range, expect_fixnum,
     expect_max_args, expect_min_args, signal,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::time::Instant;
 
 // ===========================================================================
@@ -1541,7 +1541,8 @@ pub mod replace_diff;
 /// None means timeout or an unavailable comparison workspace; no edit has
 /// occurred. Only tests use this default-cost wrapper; the builtin passes the
 /// caller's MAX-COSTS and MAX-SECS directly.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn replace_region_minimal_change_runs(
     a: &[u32],
     b: &[u32],

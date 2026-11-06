@@ -671,8 +671,8 @@ fn print_terminal_handle_special_form() {
 #[test]
 fn print_frame_handles_use_oracle_style_f_prefix() {
     crate::test_utils::init_test_tracing();
-    let f1 = Value::make_frame(crate::window::FRAME_ID_BASE);
-    let f2 = Value::make_frame(crate::window::FRAME_ID_BASE + 1);
+    let f1 = Value::make_frame(neovm_value::display_vocab::FRAME_ID_BASE);
+    let f2 = Value::make_frame(neovm_value::display_vocab::FRAME_ID_BASE + 1);
     let legacy = Value::make_frame(7);
 
     assert_eq!(print_value(&f1), "#<frame F1 0x100000000>");
