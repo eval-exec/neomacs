@@ -23,9 +23,13 @@
 //!    build script that includes `build_support/host_cfg.rs` and calls
 //!    `host_cfg::configure_all()`, and the shared probe must emit a
 //!    check-cfg for `<x>` (a name the probe does not declare cannot come from
-//!    the shared probe). The mutation test covers mention-without-call,
-//!    mention-without-build-script, an unknown name, a missing probe, and
-//!    the green forms.
+//!    the shared probe). `include!`d files count as part of the INCLUDING
+//!    crate's source: the spliced tokens are compiled in that crate, so a
+//!    `#[cfg(neomacs_have_<x>)]` in an included file is evaluated there even
+//!    when the file lives in another crate's `src` (display includes eval's
+//!    upper snapshot this way). The mutation test covers mention-without-call,
+//!    mention-without-build-script, an unknown name, a missing probe, the
+//!    cross-crate include form, and the green forms.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -89,6 +93,81 @@ fn probe_cfg_names(probe_text: &str) -> BTreeSet<String> {
     names
 }
 
+/// The argument text of the `include!` invocation whose opening paren was
+/// already consumed, plus the byte count through its matching `)`.
+fn include_argument(after: &str) -> Option<(&str, usize)> {
+    let mut depth = 1usize;
+    for (index, character) in after.char_indices() {
+        match character {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((&after[..index], index + 1));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// String literals in `text`, in order. The workspace's `include!` paths are
+/// plain ASCII with no escapes.
+fn string_literals(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find('"') {
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('"') else {
+            break;
+        };
+        out.push(&after[..end]);
+        rest = &after[end + 1..];
+    }
+    out
+}
+
+/// Files an `include!` splices into `file`, for the two literal forms the
+/// workspace's sources use:
+///
+/// * `include!("relative.rs")` — relative to the including file's directory;
+/// * `include!(concat!(env!("CARGO_MANIFEST_DIR"), "/relative.rs"))` —
+///   relative to the crate root.
+///
+/// Other forms (macro-computed or `OUT_DIR` paths) are ignored: they name
+/// files the source tree does not contain. Resolution is textual, so an
+/// `include!` spelled inside a string or a comment is treated the same; a
+/// path that does not exist is filtered out by the caller.
+fn included_files(crate_dir: &Path, file: &Path, text: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(index) = rest.find("include!(") {
+        let after = &rest[index + "include!(".len()..];
+        let Some((argument, consumed)) = include_argument(after) else {
+            break;
+        };
+        rest = &after[consumed..];
+        let argument = argument.trim();
+        let resolved = if let Some(literal) = argument.strip_prefix('"') {
+            let Some(end) = literal.find('"') else {
+                continue;
+            };
+            file.parent().map(|parent| parent.join(&literal[..end]))
+        } else if argument.contains("env!(\"CARGO_MANIFEST_DIR\")") {
+            string_literals(argument)
+                .pop()
+                .map(|literal| crate_dir.join(literal.trim_start_matches('/')))
+        } else {
+            None
+        };
+        if let Some(path) = resolved {
+            out.push(path);
+        }
+    }
+    out
+}
+
 fn workspace_members(workspace: &Path) -> Result<Vec<String>, String> {
     let manifest = read(&workspace.join("Cargo.toml"))?;
     let manifest: toml::Value =
@@ -128,8 +207,23 @@ fn host_cfg_probe_violation(workspace: &Path) -> Result<(), String> {
         let mut files = Vec::new();
         walk_rs_files(&directory.join("src"), &mut files)?;
         let mut mentioned = BTreeSet::new();
-        for file in &files {
-            mentioned.extend(mention_names(&read(file)?));
+        // An `include!` splices the target's tokens into THIS crate, so the
+        // target's cfg mentions are evaluated here and belong to this crate's
+        // requirement — even when the target sits in another crate's `src`.
+        // Follow them transitively; `seen` bounds a self-including file.
+        let mut pending = files;
+        let mut seen = BTreeSet::new();
+        while let Some(file) = pending.pop() {
+            if !seen.insert(file.clone()) {
+                continue;
+            }
+            let text = read(&file)?;
+            mentioned.extend(mention_names(&text));
+            pending.extend(
+                included_files(&directory, &file, &text)
+                    .into_iter()
+                    .filter(|path| path.is_file()),
+            );
         }
         if mentioned.is_empty() {
             continue;
@@ -327,5 +421,80 @@ pub fn configure_all() {
         // RED: the shared probe itself is missing.
         std::fs::remove_file(root.join(SHARED_PROBE)).expect("remove probe");
         assert!(host_cfg_probe_violation(root).is_err());
+    }
+
+    /// `include!` makes its target part of the INCLUDING crate's source: the
+    /// spliced `#[cfg(neomacs_have_<x>)]` tokens are evaluated by the
+    /// including crate, so that crate must run the shared probe. The pre-fix
+    /// scan read only files under the member's own `src` and was silently
+    /// green on this fixture (the display-includes-eval-snapshot case).
+    #[test]
+    fn host_cfg_probe_follows_cross_crate_include_directives() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        write_workspace(root);
+        // The included source lives in `a`'s src, outside `b`'s src tree;
+        // `a` itself is probe-wired, so only `b`'s requirement is at issue.
+        std::fs::create_dir_all(root.join("a/src")).expect("a src");
+        std::fs::write(
+            root.join("a/Cargo.toml"),
+            "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        )
+        .expect("a manifest");
+        std::fs::write(root.join("a/src/lib.rs"), "pub fn a() {}\n").expect("a lib");
+        std::fs::write(
+            root.join("a/src/snapshot.rs"),
+            "#[cfg(neomacs_have_dbus)]\npub fn row() {}\n",
+        )
+        .expect("a snapshot");
+        std::fs::write(root.join("a/build.rs"), probe_build_rs(true, true)).expect("a build");
+
+        // RED: `b` includes the cross-crate snapshot but runs no probe.
+        write_member(
+            root,
+            "b",
+            "include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../a/src/snapshot.rs\"));\n",
+            None,
+        );
+        let error =
+            host_cfg_probe_violation(root).expect_err("cross-crate include without the probe");
+        assert!(
+            error.contains("b: source mentions `neomacs_have_dbus`"),
+            "{error}"
+        );
+        assert!(error.contains("no build.rs"), "{error}");
+
+        // GREEN: the same include with `b`'s own build script wired.
+        write_member(
+            root,
+            "b",
+            "include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../a/src/snapshot.rs\"));\n",
+            Some(&probe_build_rs(true, true)),
+        );
+        host_cfg_probe_violation(root).expect("cross-crate include with the probe");
+
+        // RED: the plain relative form follows the INCLUDING file's dir.
+        std::fs::create_dir_all(root.join("shared")).expect("shared");
+        std::fs::write(
+            root.join("shared/snapshot.rs"),
+            "#[cfg(neomacs_have_dbus)]\npub fn shared_row() {}\n",
+        )
+        .expect("shared snapshot");
+        write_member(root, "b", "include!(\"../../shared/snapshot.rs\");\n", None);
+        let error = host_cfg_probe_violation(root).expect_err("relative include without the probe");
+        assert!(
+            error.contains("b: source mentions `neomacs_have_dbus`"),
+            "{error}"
+        );
+        assert!(error.contains("no build.rs"), "{error}");
+
+        // GREEN: the same relative include, now probe-wired.
+        write_member(
+            root,
+            "b",
+            "include!(\"../../shared/snapshot.rs\");\n",
+            Some(&probe_build_rs(true, true)),
+        );
+        host_cfg_probe_violation(root).expect("relative include with the probe");
     }
 }
