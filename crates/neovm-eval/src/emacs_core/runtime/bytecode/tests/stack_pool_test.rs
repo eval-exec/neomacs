@@ -130,7 +130,9 @@ fn stack_return_reuses_storage_after_an_unhandled_signal() {
     crate::test_utils::init_test_tracing();
     for enabled in [false, true] {
         let _override = StackReturnOverride::new(enabled);
-        let mut context = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+        let mut context = crate::emacs_core::eval::Context::new_minimal_vm_harness(
+            crate::test_utils::unit_runtime(),
+        );
         let mut failing = ByteCodeFunction::new(LambdaParams::simple(vec![]));
         failing.constants = vec![Value::symbol("vm-stack-return-undefined-function")].into();
         failing.ops = vec![Op::Constant(0), Op::Call(0), Op::Return];
@@ -186,8 +188,10 @@ fn stack_pool_is_inline_thread_private_execution_storage() {
 fn stack_pools_do_not_share_cached_execution_allocations() {
     crate::test_utils::init_test_tracing();
     let function = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    let mut first = crate::emacs_core::eval::Context::new_minimal_vm_harness();
-    let mut second = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut first =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
+    let mut second =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     assert_eq!(
         std::mem::size_of_val(&first.interpreter_stacks),
         std::mem::size_of::<InterpreterStackPool>(),
