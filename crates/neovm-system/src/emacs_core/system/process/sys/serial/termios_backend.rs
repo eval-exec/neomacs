@@ -71,12 +71,6 @@ pub(crate) trait DeviceIo {
         event: polling::Event,
     ) -> Result<(), String>;
     fn unregister(&self, poller: &polling::Poller);
-    /// `read(2)`, retrying on `EINTR` as std's `Read` implementations do --
-    /// GNU reads a serial process through `emacs_read`, whose whole reason for
-    /// existing is that retry (src/sysdep.c `emacs_read`).
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize>;
-    /// `write(2)`, with the same `EINTR` retry (GNU's `emacs_write`).
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize>;
 }
 
 impl DeviceIo for Device {
@@ -129,56 +123,6 @@ impl DeviceIo for Device {
 
     fn unregister(&self, poller: &polling::Poller) {
         let _ = poller.delete(&self.fd);
-    }
-
-    /// `read(2)`, retrying on `EINTR` as std's `Read` implementations do --
-    /// GNU reads a serial process through `emacs_read`, whose whole reason for
-    /// existing is that retry (src/sysdep.c `emacs_read`).
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        loop {
-            // SAFETY: `read` writes at most `buffer.len()` bytes through the
-            // pointer, and the descriptor is owned by `self`.
-            let count = unsafe {
-                libc::read(
-                    self.fd.as_raw_fd(),
-                    buffer.as_mut_ptr().cast::<libc::c_void>(),
-                    buffer.len(),
-                )
-            };
-            match usize::try_from(count) {
-                Ok(count) => return Ok(count),
-                Err(_) => {
-                    let err = io::Error::last_os_error();
-                    if err.kind() != io::ErrorKind::Interrupted {
-                        return Err(err);
-                    }
-                }
-            }
-        }
-    }
-
-    /// `write(2)`, with the same `EINTR` retry (GNU's `emacs_write`).
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        loop {
-            // SAFETY: `write` reads at most `buffer.len()` bytes through the
-            // pointer, and the descriptor is owned by `self`.
-            let count = unsafe {
-                libc::write(
-                    self.fd.as_raw_fd(),
-                    buffer.as_ptr().cast::<libc::c_void>(),
-                    buffer.len(),
-                )
-            };
-            match usize::try_from(count) {
-                Ok(count) => return Ok(count),
-                Err(_) => {
-                    let err = io::Error::last_os_error();
-                    if err.kind() != io::ErrorKind::Interrupted {
-                        return Err(err);
-                    }
-                }
-            }
-        }
     }
 }
 

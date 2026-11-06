@@ -223,15 +223,25 @@ pub mod enabled {
 
     fn make_db_handle(id: i64) -> Value {
         // The boot entry already published this exact table; nothing else can
-        // occupy the slot, so a refusal here is a violated invariant.
-        install_sqlite_finalizer_hook()
-            .expect("the canonical sqlite finalizer table is process-unique");
+        // occupy the slot, so a refusal here is a violated invariant. Both a
+        // first publication and the expected idempotent re-publication are
+        // success; the disposition is matched explicitly, never dropped.
+        match install_sqlite_finalizer_hook() {
+            Ok(HookInstallStatus::Installed | HookInstallStatus::AlreadyInstalled) => {}
+            Err(error) => {
+                panic!("the canonical sqlite finalizer table is process-unique: {error:?}")
+            }
+        }
         Value::make_sqlite(false, id)
     }
 
     fn make_stmt_handle(id: i64) -> Value {
-        install_sqlite_finalizer_hook()
-            .expect("the canonical sqlite finalizer table is process-unique");
+        match install_sqlite_finalizer_hook() {
+            Ok(HookInstallStatus::Installed | HookInstallStatus::AlreadyInstalled) => {}
+            Err(error) => {
+                panic!("the canonical sqlite finalizer table is process-unique: {error:?}")
+            }
+        }
         Value::make_sqlite(true, id)
     }
 

@@ -331,7 +331,12 @@ fn decode_y2k() {
 #[test]
 fn builtin_current_time_returns_four_element_list() {
     crate::test_utils::init_test_tracing();
-    let result = builtin_current_time(vec![]).unwrap();
+    // The `current-time` subr's one implementation is the in-context form
+    // (core builtins/subrs.rs); a legacy-list selector reproduces the exact
+    // output mode the removed non-context helper hardcoded.
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.set_variable("current-time-list", Value::T);
+    let result = builtin_current_time_in_context(&mut eval, vec![]).unwrap();
     let items = list_to_vec(&result).unwrap();
     assert_eq!(items.len(), 4);
     // All should be integers.
@@ -348,7 +353,8 @@ fn builtin_current_time_returns_four_element_list() {
 #[test]
 fn builtin_current_time_wrong_arity() {
     crate::test_utils::init_test_tracing();
-    let result = builtin_current_time(vec![Value::fixnum(1)]);
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let result = builtin_current_time_in_context(&mut eval, vec![Value::fixnum(1)]);
     assert!(result.is_err());
 }
 

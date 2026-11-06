@@ -992,12 +992,6 @@ fn parse_time_convert_form(
         _ => Err(invalid_time_frequency_error(form)),
     }
 }
-/// `(current-time)` -> `(HIGH LOW USEC PSEC)` or `(TICKS . HZ)`.
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) fn builtin_current_time(args: Vec<Value>) -> EvalResult {
-    expect_args("current-time", &args, 0)?;
-    Ok(current_time_value(LispTimeOutput::LegacyList))
-}
 #[doc(hidden)]
 pub fn builtin_current_time_in_context(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("current-time", &args, 0)?;

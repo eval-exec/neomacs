@@ -45,8 +45,6 @@ pub(crate) trait DeviceIo {
         _event: polling::Event,
     ) -> Result<(), String>;
     fn unregister(&self, _poller: &polling::Poller);
-    fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize>;
-    fn write(&mut self, _buffer: &[u8]) -> io::Result<usize>;
 }
 
 impl DeviceIo for Device {
@@ -75,14 +73,6 @@ impl DeviceIo for Device {
     }
 
     fn unregister(&self, _poller: &polling::Poller) {
-        match *self {}
-    }
-
-    fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
-        match *self {}
-    }
-
-    fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
         match *self {}
     }
 }
