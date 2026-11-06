@@ -235,12 +235,10 @@ pub use neovm_value::alloc;
 pub mod alloc;
 pub use neovm_eval::emacs_core::bytecode;
 pub mod data {
+    // The data batch declarations live beside their implementations in
+    // neovm-eval; the glob carries SUBRS/register_subrs to the catalog and
+    // to the compatibility sequence.
     pub use neovm_eval::emacs_core::data::*;
-    #[path = "subrs.rs"]
-    mod subrs;
-    #[cfg(test)]
-    pub(crate) use subrs::SUBRS;
-    pub(crate) use subrs::register_subrs;
 }
 pub use neovm_eval::emacs_core::debug;
 pub use neovm_eval::emacs_core::debug_on_call;

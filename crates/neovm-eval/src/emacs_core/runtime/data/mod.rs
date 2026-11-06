@@ -468,3 +468,8 @@ pub mod test_support {
         super::default_value_by_id(ctx, resolved)
     }
 }
+
+#[doc(hidden)]
+pub mod subrs;
+#[doc(hidden)]
+pub use subrs::{SUBRS, register_subrs};

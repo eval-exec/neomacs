@@ -4918,17 +4918,6 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         SubrArity::new(2, Some(2)),
     )));
 
-    // Pure builtins from builtins_extra (previously in old match dispatch).
-    // These don't need &mut Context, so we wrap them.
-    macro_rules! register_pure_subr {
-        ($ctx:expr, $name:expr, $func:expr, $min:expr, $max:expr) => {
-            $ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-                $name,
-                NativeFn::ContextVec(|_eval, args| $func(args)),
-                SubrArity::new($min, $max),
-            )));
-        };
-    }
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "subrp",
         NativeFn::ContextSlice(|_ctx, args| crate::emacs_core::builtins_extra::builtin_subrp(args)),
