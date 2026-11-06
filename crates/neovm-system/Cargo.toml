@@ -13,7 +13,7 @@ jit = ["neovm-value/jit", "neovm-edit/jit", "neovm-text/jit", "neovm-eval/jit"]
 sqlite = ["dep:rusqlite", "neovm-value/sqlite", "neovm-eval/sqlite"]
 # Static-link the bundled libdbus instead of pkg-config `dbus-1` (the
 # detection in build.rs turns this into cfg(neomacs_have_dbus)).
-dbus-vendored = ["dbus/vendored"]
+dbus-vendored = ["dbus/vendored", "neovm-eval/dbus-vendored", "neovm-value/dbus-vendored"]
 # Test-only helpers (P1 post-split test-support pass).  Reachable only from a
 # dev edge; never in default or a product feature.
 test-support = ["neovm-value/test-support", "neovm-text/test-support", "neovm-eval/test-support", "dep:visibility"]

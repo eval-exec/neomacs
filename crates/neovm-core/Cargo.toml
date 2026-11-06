@@ -132,14 +132,14 @@ sqlite = ["dep:rusqlite", "neovm-value/sqlite", "neovm-eval/sqlite", "neovm-syst
 # Production/Nix builds leave this off and use the system library.  The
 # transport (and its dbus dependency) lives in neovm-system since stage 6,
 # so the switch must reach that crate's feature and build script.
-dbus-vendored = ["dbus/vendored", "neovm-system/dbus-vendored"]
+dbus-vendored = ["dbus/vendored", "neovm-system/dbus-vendored", "neovm-eval/dbus-vendored", "neovm-value/dbus-vendored"]
 sound = ["neovm-display/sound"]
 # Set by `neomacs`'s `webview` feature.  `build.rs` turns it into
 # `cfg(neomacs_have_wkwebview)` on macOS, which is what decides whether
 # `xwidget-internal` is provided: the evaluator cannot see
 # `neomacs-webview`'s feature directly, and advertising the layer without the
 # backend leaves `xwidget-webkit-browse-url` failing at creation.
-webview = []
+webview = ["neovm-value/webview"]
 # The Linux display runtime enables this when it links its native GSettings
 # adapter. Bare evaluator builds must not advertise a native subscription.
 desktop-font-settings = ["neovm-eval/desktop-font-settings"]

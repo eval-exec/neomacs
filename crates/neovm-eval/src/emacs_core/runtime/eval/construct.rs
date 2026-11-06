@@ -1369,9 +1369,10 @@ impl Context {
             // UNCONDITIONALLY, then conses `dbus-event' on under
             // `#ifdef HAVE_DBUS', `file-notify' under `USE_FILE_NOTIFY',
             // `thread-event' under `THREADS_ENABLED', and `sleep-event'
-            // unconditionally last.  This build has the file-notify and
-            // threads options and not HAVE_DBUS (ledger 192), so it is GNU's
-            // list minus exactly `dbus-event'.  `sleep-event' and
+            // unconditionally last.  This build always has the file-notify and
+            // threads options; HAVE_DBUS follows the shared host probe
+            // (build_support/host_cfg.rs), so the list includes `dbus-event'
+            // exactly when the library is present.  `sleep-event' and
             // `toolkit-theme-changed' were missing from the base list here and
             // are guarded by nothing in GNU; both restored, ledger 192.
             Value::list({

@@ -19,10 +19,10 @@
 //! snapshot-consistency test includes this module and asserts the TSVs, the
 //! generated source and the compiled registration table agree row for row.
 
-// This file is compiled both by xtask (only rendering is used) and by eval's
-// cfg(test) drift test (the host-cfg predicate is used); the cfg names below
-// are not declared by every consuming crate.
-#![allow(dead_code, unexpected_cfgs)]
+// This file is compiled both by xtask and by eval's cfg(test) drift test;
+// only parsing and rendering are used. The host-cfg predicate lives in
+// neovm-eval's host_cfg module so every consumer shares one implementation.
+#![allow(dead_code)]
 
 use std::path::Path;
 
@@ -47,18 +47,6 @@ pub struct BootstrapVarRow {
     pub name: String,
     pub layer: String,
     pub cfg: String,
-}
-
-/// The host-build predicate a snapshot row is gated on.
-pub fn cfg_active(label: &str) -> bool {
-    match label {
-        "always" => true,
-        "macos" => cfg!(target_os = "macos"),
-        "windows" => cfg!(windows),
-        "dbus" => cfg!(neomacs_have_dbus),
-        "sqlite" => cfg!(feature = "sqlite"),
-        other => panic!("unknown snapshot cfg {other:?}"),
-    }
 }
 
 fn parse_cfg(attr: &str) -> Result<String, String> {

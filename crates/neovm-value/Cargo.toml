@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 description = "Lower NeoVM runtime utilities shared with the core crate"
 
+[build-dependencies]
+# Host-cfg probe shared by core/system/value/eval (build_support/host_cfg.rs).
+pkg-config.workspace = true
+
 [dependencies]
 # B3 TEST-SUPPORT-VIS: pub only in the test-support build; the
 # annotation is on exact test-provider defs.
@@ -50,6 +54,10 @@ gc-memory-telemetry = ["dep:serde_json"]
 jit = []
 perf-probes = []
 sqlite = []
+# Markers matching core's forwarding: value's source branches on the dbus and
+# wkwebview host cfgs, so its build script must reach the same host view.
+dbus-vendored = []
+webview = []
 # Test-only read surface for core-owned tests of moved modules.  Under peer
 # ruling 02:2xZ (TEST-SUPPORT-VIS, B3) each item needed by a re-homed test
 # keeps its production visibility and gains

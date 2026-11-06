@@ -22,6 +22,12 @@ fn compile_float_format(manifest: &Path) {
 #[path = "build_support/generated_lisp.rs"]
 mod generated_lisp;
 
+// Single source of truth for the host capability cfgs (dbus, lcms2,
+// wkwebview), shared with neovm-system, neovm-value and neovm-eval so every
+// crate's view of one host agrees. See build_support/host_cfg.rs.
+#[path = "../../build_support/host_cfg.rs"]
+mod host_cfg;
+
 // Single source of truth (R2-C2): the `neovm_jit_*` shim names, shared with
 // runtime/jit/aot.rs (MIR_SHIM_NAMES) + crates/neomacs/build.rs via `include!` so the
 // emit/salt set and both export sets can never drift.
@@ -52,9 +58,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build_support/float_format.c");
     compile_float_format(&manifest_dir);
 
-    detect_lcms2();
-    detect_dbus();
-    detect_wkwebview();
+    host_cfg::configure_all();
     ensure_generated_unicode_lisp(&project_root);
     ensure_generated_charset_lisp(&project_root);
 
@@ -186,117 +190,4 @@ fn ensure_generated_charset_lisp(project_root: &Path) {
             Err(err) => panic!("{err}"),
         }
     }
-}
-
-/// Whether this build has a native inline web view.
-///
-/// The backend is `crates/neomacs-webview/src/platform/macos`, compiled only
-/// under `neomacs-webview`'s `webview` feature, which `neomacs` forwards to
-/// this crate's `webview` feature.  There is no library to look for --
-/// `WebKit.framework` ships with macOS -- so the probe is "the feature is on
-/// and the target is macOS".  Either half alone is wrong: the feature on
-/// Linux selects the WPE path, whose `xwidget-internal` is still NotBuilt,
-/// and macOS without the feature has no backend behind the symbol.
-fn detect_wkwebview() {
-    println!("cargo:rustc-check-cfg=cfg(neomacs_have_wkwebview)");
-    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_WEBVIEW");
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos")
-        && std::env::var_os("CARGO_FEATURE_WEBVIEW").is_some()
-    {
-        println!("cargo:rustc-cfg=neomacs_have_wkwebview");
-    }
-}
-
-/// Whether this build has a libdbus transport for `dbusbind`.
-///
-/// GNU's `configure.ac:3921-3942` sets `HAVE_DBUS` when `dbus-1 >= 1.0`
-/// links.  The `dbus` crate is a Unix dependency, but not a macOS one:
-/// `Cargo.toml` keeps the rule and says why.  Windows stays the
-/// `--without-dbus` configuration until a socket watch arm exists.
-/// `c_features` reads this cfg so `(featurep 'dbusbind)` cannot go true
-/// without the library.
-fn detect_dbus() {
-    println!("cargo:rustc-check-cfg=cfg(neomacs_have_dbus)");
-    println!("cargo:rerun-if-env-changed=PKG_CONFIG");
-    println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
-    println!("cargo:rerun-if-env-changed=NEOMACS_DISABLE_DBUS");
-
-    // Target, not host: Cargo sets `CARGO_CFG_UNIX` for the crate being built.
-    if std::env::var_os("CARGO_CFG_UNIX").is_none() {
-        return;
-    }
-    // macOS is excluded to match the dependency rule in `Cargo.toml`: the
-    // `dbus` crate is not in that target's graph, so this cfg would compile
-    // `dbusbind` against a crate that is not there.  GNU reaches the same
-    // place on a stock macOS -- no `dbus-1.pc`, so `HAVE_DBUS=no`.
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
-        return;
-    }
-    if std::env::var_os("NEOMACS_DISABLE_DBUS").is_some() {
-        return;
-    }
-
-    let vendored = std::env::var_os("CARGO_FEATURE_DBUS_VENDORED").is_some();
-    let probed = pkg_config::Config::new()
-        .atleast_version("1.0")
-        .cargo_metadata(false)
-        .probe("dbus-1");
-
-    if vendored || probed.is_ok() {
-        println!("cargo:rustc-cfg=neomacs_have_dbus");
-    }
-    if let Ok(library) = probed {
-        if !library.version.is_empty() {
-            println!(
-                "cargo:rustc-env=NEOMACS_DBUS_COMPILED_VERSION={}",
-                library.version
-            );
-        }
-    }
-}
-
-fn detect_lcms2() {
-    println!("cargo:rustc-check-cfg=cfg(neomacs_have_lcms2)");
-    println!("cargo:rerun-if-env-changed=PKG_CONFIG");
-    println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
-    println!("cargo:rerun-if-env-changed=LCMS2_NO_PKG_CONFIG");
-
-    if std::env::var_os("LCMS2_NO_PKG_CONFIG").is_some() {
-        return;
-    }
-
-    let Ok(library) = pkg_config::Config::new()
-        .cargo_metadata(false)
-        .probe("lcms2")
-    else {
-        return;
-    };
-
-    println!("cargo:rustc-cfg=neomacs_have_lcms2");
-    let candidates = lcms2_library_candidates(&library.link_paths);
-    if !candidates.is_empty() {
-        println!("cargo:rustc-env=NEOMACS_LCMS2_LIBRARY_CANDIDATES={candidates}");
-    }
-}
-
-fn lcms2_library_candidates(paths: &[PathBuf]) -> String {
-    let mut candidates = Vec::new();
-    let names: &[&str] = std::cfg_select! {
-        target_os = "windows" => &["liblcms2-2.dll", "lcms2.dll"],
-        target_os = "macos" => &["liblcms2.2.dylib", "liblcms2.dylib"],
-        target_os = "linux" => &["liblcms2.so.2", "liblcms2.so"],
-        unix => &["liblcms2.so.2", "liblcms2.so"],
-        _ => &["lcms2"],
-    };
-
-    for path in paths {
-        for name in names {
-            let candidate = path.join(name);
-            if candidate.exists() {
-                candidates.push(candidate.display().to_string());
-            }
-        }
-    }
-
-    candidates.join(":")
 }

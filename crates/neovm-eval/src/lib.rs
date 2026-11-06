@@ -4,6 +4,9 @@
 //! paths as re-exports.
 
 pub mod emacs_core;
+/// One host-cfg classification shared by the registration plan, the H3b
+/// bootstrap snapshot and the T6 order gate.
+pub mod host_cfg;
 pub mod host_effect;
 
 /// Test support shared by this crate's own unit tests and, behind

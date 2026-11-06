@@ -363,6 +363,7 @@ pub(crate) use unit_runtime::unit_runtime;
 /// for row. Same parser as `cargo xtask upper-snapshots`.
 #[cfg(test)]
 mod snapshot_consistency {
+    use crate::host_cfg::HostCfgClass;
     use crate::upper_snapshots_build_support as generator;
 
     use super::unit_runtime::{
@@ -395,7 +396,11 @@ mod snapshot_consistency {
         let compiled = upper_subrs_for_snapshot_test();
         let active: Vec<_> = rows
             .iter()
-            .filter(|row| generator::cfg_active(&row.cfg))
+            .filter(|row| {
+                HostCfgClass::from_label(&row.cfg)
+                    .expect("snapshot cfg label")
+                    .is_active()
+            })
             .collect();
         assert_eq!(active.len(), compiled.len());
         for (row, compiled) in active.iter().zip(compiled.iter()) {
@@ -407,12 +412,84 @@ mod snapshot_consistency {
         }
         let active_names: Vec<&str> = bootstrap
             .iter()
-            .filter(|row| generator::cfg_active(&row.cfg))
+            .filter(|row| {
+                HostCfgClass::from_label(&row.cfg)
+                    .expect("snapshot cfg label")
+                    .is_active()
+            })
             .map(|row| row.name.as_str())
             .collect();
         assert_eq!(
             active_names.as_slice(),
             upper_bootstrap_vars_for_snapshot_test()
         );
+    }
+}
+
+/// Host-cfg regressions for the shared build-script probe (lead ruling
+/// 04:01Z). On a host that links the library, the cfg-gated production
+/// behavior must actually engage; on one that does not, the absent policy
+/// must stay. The cross-crate red-before guard is the HOST_CFG agreement test;
+/// these pin the evaluator-owned consequences.
+#[cfg(test)]
+mod host_cfg_regressions {
+    use crate::emacs_core::eval::Context;
+
+    const DBUS_COUPLED_VARIABLES: [&str; 9] = [
+        "dbus-compiled-version",
+        "dbus-debug",
+        "dbus-message-type-error",
+        "dbus-message-type-invalid",
+        "dbus-message-type-method-call",
+        "dbus-message-type-method-return",
+        "dbus-message-type-signal",
+        "dbus-registered-objects-table",
+        "dbus-runtime-version",
+    ];
+
+    fn eval(form: &str) -> bool {
+        let mut context = Context::new(crate::test_utils::unit_runtime());
+        context.eval_str(form).expect(form).is_truthy()
+    }
+
+    fn coupled_dbus_rows() -> Vec<&'static str> {
+        crate::emacs_core::provide_coupled_vars::PROVIDE_COUPLED_VARIABLES
+            .iter()
+            .map(|row| row.name)
+            .filter(|name| name.starts_with("dbus-"))
+            .collect()
+    }
+
+    #[cfg(neomacs_have_lcms2)]
+    #[test]
+    fn the_unit_runtime_registers_the_lcms_batch() {
+        assert!(eval("(fboundp 'lcms-cie-de2000)"));
+        assert!(eval("(fboundp 'lcms2-available-p)"));
+    }
+
+    #[cfg(not(neomacs_have_lcms2))]
+    #[test]
+    fn the_lcms_batch_stays_absent_without_the_library() {
+        assert!(!eval("(fboundp 'lcms-cie-de2000)"));
+    }
+
+    #[cfg(neomacs_have_dbus)]
+    #[test]
+    fn the_dbus_event_is_live_and_the_absent_policy_yields_to_dbusbind() {
+        assert!(eval("(memq 'dbus-event while-no-input-ignore-events)"));
+        assert_eq!(
+            coupled_dbus_rows(),
+            Vec::<&str>::new(),
+            "dbusbind binds these on a dbus host; the evaluator must not claim them absent"
+        );
+    }
+
+    #[cfg(not(neomacs_have_dbus))]
+    #[test]
+    fn the_dbus_variables_carry_the_absent_policy_without_the_library() {
+        assert!(!eval("(memq 'dbus-event while-no-input-ignore-events)"));
+        let mut rows = coupled_dbus_rows();
+        rows.sort_unstable();
+        assert_eq!(rows, DBUS_COUPLED_VARIABLES);
     }
 }

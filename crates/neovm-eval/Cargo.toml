@@ -23,6 +23,14 @@ perf-probes = []
 redisplay-test-policy = ["neovm-edit/redisplay-test-policy"]
 sqlite = []
 vm-profile = []
+# Marker: the dbus transport is statically linked by neovm-system, but eval's
+# source still branches on cfg(neomacs_have_dbus). Forwarded by core/system so
+# every crate's build script reaches the same host view.
+dbus-vendored = []
+
+[build-dependencies]
+# Host-cfg probe shared by core/system/value/eval (build_support/host_cfg.rs).
+pkg-config.workspace = true
 
 [dependencies]
 # B3 TEST-SUPPORT-VIS: pub only in the test-support build; product visibility
