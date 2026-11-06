@@ -324,3 +324,11 @@ mod emacs_core_lisp_native_builtins_file_notify_tests_linux_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/native/builtins/file_notify/tests/file_notify_test.rs"]
 mod emacs_core_lisp_native_builtins_file_notify_tests_file_notify_test_rs;
+// P1 EVAL wave F1: the two inotify evaluator-encoding oracles re-homed from
+// eval's platform/linux tests (the event fixtures are forged through the
+// eval authority fence; the remaining pure backend tests stay in eval).
+// The pre-split gate was cfg(test) inside the linux-only platform module,
+// so this mirror is Linux-only.
+#[cfg(all(test, target_os = "linux"))]
+#[path = "emacs_core/lisp/native/builtins/file_notify/platform/linux/tests/event_lisp_test.rs"]
+mod emacs_core_lisp_native_builtins_file_notify_platform_linux_tests_event_lisp_test_rs;

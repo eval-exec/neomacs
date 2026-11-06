@@ -9,7 +9,7 @@
 //! `neovm_eval::test_support::authority` re-exports these with the signed
 //! rows.
 
-use super::{DrainBatch, FILE_NOTIFY_STATE, FileNotifyEvent, WatchId};
+use super::{DrainBatch, FILE_NOTIFY_STATE, FileNotifyEvent, WatchId, WatchRegistration};
 use neovm_value::error::Flow;
 use neovm_value::value::Value;
 
@@ -40,4 +40,45 @@ pub fn file_notify_unregister_for_test(watch_id: &WatchId) {
     FILE_NOTIFY_STATE.with(|slot| {
         slot.borrow_mut().registry.unregister(watch_id);
     });
+}
+
+/// Forge an inotify event with a kernel-supplied native child name and
+/// return its evaluator encoding.  The owning platform module constructs the
+/// event (its fields stay private); this fence is the only public route.
+#[cfg(target_os = "linux")]
+pub fn inotify_event_native_name_lisp_for_test(
+    ctx: &crate::emacs_core::eval::Context,
+    watch_id: WatchId,
+    aspects: Vec<&'static str>,
+    raw_name: Vec<u8>,
+    cookie: u32,
+    registration: WatchRegistration,
+) -> Value {
+    super::platform::linux::inotify_event_native_name_lisp_for_test(
+        ctx,
+        watch_id,
+        aspects,
+        raw_name,
+        cookie,
+        registration,
+    )
+}
+
+/// Forge the nameless inotify terminal event and return its evaluator
+/// encoding (it reuses the registered Lisp filename object).
+#[cfg(target_os = "linux")]
+pub fn inotify_event_registered_name_lisp_for_test(
+    ctx: &crate::emacs_core::eval::Context,
+    watch_id: WatchId,
+    aspects: Vec<&'static str>,
+    cookie: u32,
+    registration: WatchRegistration,
+) -> Value {
+    super::platform::linux::inotify_event_registered_name_lisp_for_test(
+        ctx,
+        watch_id,
+        aspects,
+        cookie,
+        registration,
+    )
 }

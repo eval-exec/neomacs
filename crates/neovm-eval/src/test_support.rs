@@ -49,6 +49,10 @@ pub mod authority {
     pub use crate::emacs_core::builtins::file_notify::authority::{
         drain_batch_for_test, file_notify_register_for_test, file_notify_unregister_for_test,
     };
+    #[cfg(target_os = "linux")]
+    pub use crate::emacs_core::builtins::file_notify::authority::{
+        inotify_event_native_name_lisp_for_test, inotify_event_registered_name_lisp_for_test,
+    };
 
     use crate::emacs_core::bytecode::vm::resumed_chain_probe::{ChainObservation, FireRequest};
     use crate::emacs_core::eval::Context;

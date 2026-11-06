@@ -65,57 +65,6 @@ fn stale_native_descriptor_event_does_not_target_a_reused_watch() {
 }
 
 #[test]
-fn event_file_name_is_decoded_on_the_evaluator_without_loss() {
-    use std::os::unix::ffi::OsStringExt;
-
-    let raw_name = vec![b'n', 0xff, b'm', b'e'];
-    let event = InotifyEvent {
-        watch_id: WatchId::new(17, 0),
-        aspects: vec!["create"],
-        name: InotifyEventName::Native(PathBuf::from(std::ffi::OsString::from_vec(
-            raw_name.clone(),
-        ))),
-        cookie: 0,
-    };
-    let mut eval = crate::test_utils::runtime_startup_context();
-    eval.eval_str("(setq file-name-coding-system nil default-file-name-coding-system nil)")
-        .expect("select identity file-name decoding");
-
-    let registration = WatchRegistration::new(Value::NIL, Value::NIL);
-    let fields = neovm_value::value::list_to_vec(&event.into_lisp(&eval, registration))
-        .expect("inotify event is a proper list");
-    assert_eq!(
-        fields[2]
-            .as_lisp_string()
-            .expect("event file name is a string")
-            .as_bytes(),
-        raw_name
-    );
-}
-
-#[test]
-fn nameless_event_reuses_the_exact_registered_lisp_file_name() {
-    let registered_name =
-        Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
-            b'w', 0xff, b't', b'c', b'h',
-        ]));
-    let event = InotifyEvent {
-        watch_id: WatchId::new(18, 0),
-        aspects: vec!["modify"],
-        name: InotifyEventName::RegisteredWatch,
-        cookie: 0,
-    };
-    let registration = WatchRegistration::new(Value::NIL, registered_name);
-    let mut eval = crate::test_utils::runtime_startup_context();
-    eval.eval_str("(setq file-name-coding-system 'utf-8 default-file-name-coding-system 'utf-8)")
-        .expect("select a coding system that would alter reconstructed bytes");
-
-    let fields = neovm_value::value::list_to_vec(&event.into_lisp(&eval, registration))
-        .expect("inotify event is a proper list");
-    assert_eq!(fields[2], registered_name);
-}
-
-#[test]
 fn inotify_request_keeps_creation_controls_out_of_the_event_filter() {
     let request = InotifyRequest::new(vec![
         "modify".to_owned(),

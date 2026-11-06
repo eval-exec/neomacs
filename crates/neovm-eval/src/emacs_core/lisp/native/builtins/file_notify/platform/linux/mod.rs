@@ -141,6 +141,56 @@ pub(in super::super) struct InotifyEvent {
     cookie: u32,
 }
 
+/// P1 F1 file_notify fixture forge: build an inotify event whose child name
+/// is a kernel-supplied native byte string and encode it for the evaluator.
+///
+/// Construction stays inside this module (the event fields are private); the
+/// only public route is eval's test-support authority fence, which calls
+/// this.  Test-support builds only.
+#[cfg(any(test, feature = "test-support"))]
+pub(in super::super) fn inotify_event_native_name_lisp_for_test(
+    ctx: &crate::emacs_core::eval::Context,
+    watch_id: WatchId,
+    aspects: Vec<&'static str>,
+    raw_name: Vec<u8>,
+    cookie: u32,
+    registration: WatchRegistration,
+) -> Value {
+    use std::os::unix::ffi::OsStringExt;
+    FileNotifyEvent::into_lisp(
+        InotifyEvent {
+            watch_id,
+            aspects,
+            name: InotifyEventName::Native(PathBuf::from(std::ffi::OsString::from_vec(raw_name))),
+            cookie,
+        },
+        ctx,
+        registration,
+    )
+}
+
+/// Same forge for the nameless terminal event, whose encoding reuses the
+/// registered Lisp filename object.
+#[cfg(any(test, feature = "test-support"))]
+pub(in super::super) fn inotify_event_registered_name_lisp_for_test(
+    ctx: &crate::emacs_core::eval::Context,
+    watch_id: WatchId,
+    aspects: Vec<&'static str>,
+    cookie: u32,
+    registration: WatchRegistration,
+) -> Value {
+    FileNotifyEvent::into_lisp(
+        InotifyEvent {
+            watch_id,
+            aspects,
+            name: InotifyEventName::RegisteredWatch,
+            cookie,
+        },
+        ctx,
+        registration,
+    )
+}
+
 impl FileNotifyEvent for InotifyEvent {
     fn watch_id(&self) -> &WatchId {
         &self.watch_id
