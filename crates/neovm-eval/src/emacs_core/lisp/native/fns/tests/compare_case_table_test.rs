@@ -7,7 +7,7 @@ use neovm_value::{emacs_char, string_pos_cache, value::Value};
 
 fn context_with_mappings(mappings: &[(u32, u32)]) -> Context {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let standard = casetab::builtin_standard_case_table(&mut ctx, vec![]).unwrap();
     let table = chartable::copy_char_table(standard).unwrap();
     let up = chartable::copy_char_table(table.as_char_table_obj().unwrap().extras.as_slice()[0])
@@ -88,7 +88,7 @@ fn compare_case_table_missing_entry_does_not_fall_back_to_unicode() {
 #[test]
 fn compare_case_table_standard_object_mutations_are_observed() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let table = casetab::builtin_standard_case_table(&mut ctx, vec![]).unwrap();
     let up = table.as_char_table_obj().unwrap().extras.as_slice()[0];
     chartable::ct_set_single(&up, b'a' as i64, Value::fixnum(b'X' as i64));

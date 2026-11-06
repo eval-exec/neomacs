@@ -6,7 +6,7 @@ use neovm_value::error::{FlowKind, FlowResultExt as _};
 
 /// Test helper: create a minimal eval context for widget-apply tests.
 fn test_eval_ctx() -> crate::emacs_core::eval::Context {
-    crate::emacs_core::eval::Context::new()
+    crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime())
 }
 
 /// Test helper that calls an evaluator builtin and keeps the
@@ -28,7 +28,7 @@ macro_rules! call_fns_builtin {
             static TEST_CTX: RefCell<Option<Box<Context>>> = const { RefCell::new(None) };
         }
         TEST_CTX.with(|slot| {
-            let mut new_ctx = Box::new(Context::new());
+            let mut new_ctx = Box::new(Context::new(crate::test_utils::unit_runtime()));
             let result = $builtin(&mut new_ctx, $args);
             // Replace any prior held context (previous test calls
             // in the same thread) — the new one owns the heap
@@ -228,7 +228,7 @@ fn base64url_encode_string_rejects_multibyte_non_ascii_like_gnu() {
 #[test]
 fn base64_region_eval_encode_decode_roundtrip() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
         let buf = eval.buffers.current_buffer_mut().expect("current buffer");
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
@@ -262,7 +262,7 @@ fn base64_region_eval_encode_decode_roundtrip() {
 #[test]
 fn base64_region_eval_swapped_bounds_and_url_encoding() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
         let buf = eval.buffers.current_buffer_mut().expect("current buffer");
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
@@ -289,7 +289,7 @@ fn base64_region_eval_swapped_bounds_and_url_encoding() {
 #[test]
 fn base64_region_eval_accepts_marker_bounds() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
     {
         let buf = eval.buffers.current_buffer_mut().expect("current buffer");
@@ -324,7 +324,7 @@ fn base64_region_eval_accepts_marker_bounds() {
 #[test]
 fn base64_region_preserves_unibyte_raw_bytes() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
         let buf = eval.buffers.current_buffer_mut().expect("current buffer");
         buf.set_multibyte_value(false);
@@ -363,7 +363,7 @@ fn base64_region_preserves_unibyte_raw_bytes() {
 #[test]
 fn base64_decode_region_noerror_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
         let buf = eval.buffers.current_buffer_mut().expect("current buffer");
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
@@ -409,7 +409,7 @@ fn base64_decode_region_noerror_semantics() {
 #[test]
 fn base64_region_eval_error_shapes() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
         let buf = eval.buffers.current_buffer_mut().expect("current buffer");
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
@@ -460,7 +460,7 @@ fn base64_region_eval_error_shapes() {
 #[test]
 fn base64_decode_region_multibyte_eight_bit_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
         let buf = eval.buffers.current_buffer_mut().expect("current buffer");
         assert!(
@@ -508,7 +508,7 @@ fn base64_decode_region_multibyte_eight_bit_like_gnu() {
 #[test]
 fn base64_encode_region_rejects_multibyte_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
         let buf = eval.buffers.current_buffer_mut().expect("current buffer");
         assert!(buf.get_multibyte());
@@ -785,7 +785,7 @@ fn md5_non_symbol_coding_system_errors() {
 #[test]
 fn md5_eval_buffer_core_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
         let buf = eval.buffers.current_buffer_mut().expect("current buffer");
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
@@ -813,7 +813,7 @@ fn md5_eval_buffer_core_semantics() {
 #[test]
 fn md5_eval_buffer_range_errors() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
         let buf = eval.buffers.current_buffer_mut().expect("current buffer");
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
@@ -836,7 +836,7 @@ fn md5_eval_buffer_range_errors() {
 #[test]
 fn md5_eval_buffer_index_type_error() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let id = eval.buffers.current_buffer().expect("current buffer").id;
 
     match builtin_md5(
@@ -859,7 +859,7 @@ fn md5_eval_buffer_index_type_error() {
 #[test]
 fn md5_eval_deleted_buffer_errors() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let id = eval.buffers.create_buffer("*md5-doomed*");
     assert!(eval.buffers.kill_buffer(id));
 
@@ -878,7 +878,7 @@ fn md5_eval_deleted_buffer_errors() {
 #[test]
 fn md5_and_secure_hash_preserve_unibyte_raw_bytes() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let raw = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
         0xFF,
     ]));
@@ -1077,7 +1077,7 @@ fn secure_hash_invalid_object_errors() {
 #[test]
 fn secure_hash_eval_buffer_sha1() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
         let buf = eval.buffers.current_buffer_mut().expect("current buffer");
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
@@ -1101,7 +1101,7 @@ fn secure_hash_eval_buffer_sha1() {
 #[test]
 fn secure_hash_encodes_multibyte_buffer_raw_byte_characters_for_writing() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
         let buf = eval.buffers.current_buffer_mut().expect("current buffer");
         buf.insert_lisp_string(&neovm_value::heap_types::LispString::from_unibyte(vec![
@@ -1126,7 +1126,7 @@ fn secure_hash_encodes_multibyte_buffer_raw_byte_characters_for_writing() {
 #[test]
 fn secure_hash_eval_buffer_range_errors() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
         let buf = eval.buffers.current_buffer_mut().expect("current buffer");
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
@@ -1158,7 +1158,7 @@ fn secure_hash_eval_buffer_range_errors() {
 #[test]
 fn secure_hash_eval_buffer_index_type_error() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let id = eval.buffers.current_buffer().expect("current buffer").id;
 
     match builtin_secure_hash(
@@ -1186,7 +1186,7 @@ fn secure_hash_eval_buffer_index_type_error() {
 #[test]
 fn secure_hash_eval_buffer_marker_range() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
         let buf = eval.buffers.current_buffer_mut().expect("current buffer");
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
@@ -1221,7 +1221,7 @@ fn secure_hash_eval_buffer_marker_range() {
 #[test]
 fn secure_hash_eval_deleted_buffer_errors() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let id = eval.buffers.create_buffer("*secure-doomed*");
     assert!(eval.buffers.kill_buffer(id));
 
@@ -1245,7 +1245,7 @@ fn secure_hash_eval_deleted_buffer_errors() {
 #[test]
 fn buffer_hash_eval_current_buffer_sha1() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let buf = eval.buffers.current_buffer_mut().expect("current buffer");
     buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
         buf.point_min_emacs_byte_pos().get(),
@@ -1262,7 +1262,7 @@ fn buffer_hash_eval_current_buffer_sha1() {
 #[test]
 fn buffer_hash_eval_by_name_sha1() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let buf = eval.buffers.current_buffer_mut().expect("current buffer");
     buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
         buf.point_min_emacs_byte_pos().get(),
@@ -1294,7 +1294,7 @@ fn buffer_hash_eval_by_name_sha1() {
 #[test]
 fn buffer_hash_ignores_narrowing_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
         let buf = eval.buffers.current_buffer_mut().expect("current buffer");
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
@@ -1332,7 +1332,7 @@ fn buffer_hash_ignores_narrowing_like_gnu() {
 #[test]
 fn buffer_hash_eval_missing_name_errors() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     match builtin_buffer_hash(&mut eval, vec![Value::string("*missing*")]).kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
@@ -1883,15 +1883,15 @@ fn compare_strings_ignore_case_uses_upcase_like_gnu() {
 // ---- string-version-lessp ----
 
 fn call_string_version_lessp(args: Vec<Value>) -> EvalResult {
-    builtin_string_version_lessp(&mut Context::new(), args)
+    builtin_string_version_lessp(&mut Context::new(crate::test_utils::unit_runtime()), args)
 }
 
 fn call_string_collate_lessp(args: Vec<Value>) -> EvalResult {
-    builtin_string_collate_lessp(&mut Context::new(), args)
+    builtin_string_collate_lessp(&mut Context::new(crate::test_utils::unit_runtime()), args)
 }
 
 fn call_string_collate_equalp(args: Vec<Value>) -> EvalResult {
-    builtin_string_collate_equalp(&mut Context::new(), args)
+    builtin_string_collate_equalp(&mut Context::new(crate::test_utils::unit_runtime()), args)
 }
 
 #[test]
@@ -1959,7 +1959,7 @@ fn string_allocated_after_a_dropped_evaluator_stays_readable() {
     // freed heap while the following `Context::new` reuses the same storage.
     for _ in 0..8 {
         let args = vec![Value::string("001"), Value::string("1")];
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         let r =
             builtin_string_version_lessp(&mut ev, args).expect("string-version-lessp evaluates");
         assert!(r.is_nil());
