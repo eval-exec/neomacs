@@ -8594,7 +8594,7 @@ fn line_number_anchor_counts_from_recent_line_and_survives_edits_below() {
         super::prefix_line_and_column(buf, buf.accessible_emacs_byte_region(), p).line,
         1001
     );
-    assert!(buf.line_number_anchor.get().is_some(), "anchor seeded");
+    assert!(buf.line_number_anchor().get().is_some(), "anchor seeded");
     // Simulate the accepted-frame ack, then an edit BELOW the anchor: the
     // anchor stays valid and the count stays exact.
     buf.reset_unchanged_region();
@@ -8646,20 +8646,18 @@ fn fringe_bitmaps_at_pos_fixture() -> (Context, crate::window::FrameId) {
         .expect("frame")
         .selected_window;
 
-    let bitmap = |bits: u16| neovm_eval::emacs_core::builtins::fringe_bitmap::FringeBitmap {
-        bits: vec![bits],
-        height: 1,
-        width: 8,
-        period: 0,
-        align: neovm_eval::emacs_core::builtins::fringe_bitmap::FringeBitmapAlign::Center,
-        face: None,
-    };
+    // Public Lisp-level entry (define-fringe-bitmap) plus the public index
+    // reader; no registry accessor widening is needed for the fixture.
+    eval.eval_str("(define-fringe-bitmap 'p39-left [255])")
+        .expect("define left fringe bitmap");
+    eval.eval_str("(define-fringe-bitmap 'p39-right [129])")
+        .expect("define right fringe bitmap");
     let left = eval
-        .fringe_bitmaps_mut()
-        .define(intern("p39-left"), None, bitmap(255));
+        .fringe_bitmap_index_for_name("p39-left")
+        .expect("left fringe bitmap index");
     let right = eval
-        .fringe_bitmaps_mut()
-        .define(intern("p39-right"), None, bitmap(129));
+        .fringe_bitmap_index_for_name("p39-right")
+        .expect("right fringe bitmap index");
 
     let row = |row: i64, start: usize, end: usize, fringe: crate::window::RowFringeBitmaps| {
         crate::window::DisplayRowSnapshot {

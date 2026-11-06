@@ -450,10 +450,7 @@ pub mod file_notify;
 // naming one OS (see `file_notify/platform/mod.rs`).
 #[cfg(test)]
 pub(crate) use file_notify::{BACKEND_SUBRS, REMOVE_WATCH_SEMANTICS, RemoveWatchSemantics};
-#[cfg(not(feature = "test-support"))]
 pub(crate) mod fringe_bitmap;
-#[cfg(feature = "test-support")]
-pub mod fringe_bitmap;
 pub(crate) mod fringe_standard_bitmaps;
 #[cfg(not(feature = "test-support"))]
 pub(crate) mod hash_user_callback;

@@ -845,9 +845,11 @@ mod tests {
 }
 
 /// Accepted viewport publication for counter-only frontend fixtures.
+///
+/// ONE HOME: the implementation lives in display's test hub (display owns the
+/// window-presentation APIs it drives); core re-exports it for its test tree.
 #[cfg(test)]
-#[path = "test_utils/mock_redisplay.rs"]
-pub mod mock_redisplay;
+pub use neovm_display::test_utils::mock_redisplay;
 
 pub(crate) use crate::emacs_core::eval::SubrValueExt;
 pub(crate) use neovm_eval::test_support::authority::{
