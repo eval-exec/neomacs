@@ -1,38 +1,95 @@
 //! Test bridge: actual owner operations, then actual stopped reconciliation.
 //! No Context, header view, evaluator or native entry is admitted here.
+use super::super::GenericProofEra as ParallelHeapEra;
 use super::retry::{self as contention, Deadline, Retry, retry_owned};
 use super::*;
 use crate::intern::SymId;
-use crate::tagged::gc::{HeapIdentity, Mutator, MutatorPermit, ProofEra as ParallelHeapEra};
+use crate::tagged::gc::{EraKeeper, HeapIdentity, Mutator, MutatorPermit};
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue;
 use std::ops::ControlFlow;
 
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum FunctionEraEdit {
     Same { symbol: usize },
     Replace { symbol: usize },
     Unbind { symbol: usize },
 }
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum FunctionBoundaryPoint {
     BeforeReconcile,
     AfterReconcile,
 }
+
+/// Writer-turn epoch capture hook for the upper layer that owns the counter
+/// type. The testkit calls it once on the WRITER thread immediately before the
+/// edit and once immediately after the writer's post-edit snapshot, so a
+/// thread-local counter delta is attributed to the actual committing thread.
+/// Value itself has no evaluator counter type and never inspects the captured
+/// values; the caller reads them back through its own `&mut` recorder.
+pub trait WriterEpochRecorder: Send {
+    fn before_writer(&mut self);
+    fn after_writer(&mut self);
+}
+
+/// Recorder for value-only consumers that do not attribute epoch bumps.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct NoEpochRecorder;
+impl WriterEpochRecorder for NoEpochRecorder {
+    fn before_writer(&mut self) {}
+    fn after_writer(&mut self) {}
+}
+
 #[derive(Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct FunctionOwnerSnapshot {
     pub(crate) words: [usize; 2],
     pub(crate) facts: [(u64, u64, bool); 2],
-    /// Actual committing thread's delta; reader snapshots leave this empty.
-    #[cfg(feature = "jit")]
-    pub(crate) epoch_bumps: crate::emacs_core::jit::stats::epoch::EpochCounters,
 }
+impl FunctionOwnerSnapshot {
+    /// Copied root words; the snapshot is plain data with no interior cell.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn words(&self) -> [usize; 2] {
+        self.words
+    }
+
+    /// Copied (epoch, stamp, bound) facts per observed key.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn facts(&self) -> [(u64, u64, bool); 2] {
+        self.facts
+    }
+}
+
 #[derive(Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct FunctionEraReceipt {
     pub(crate) before: FunctionOwnerSnapshot,
     pub(crate) writer: FunctionOwnerSnapshot,
     pub(crate) writer_answer: usize,
     pub(crate) after: FunctionOwnerSnapshot,
+}
+impl FunctionEraReceipt {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn before(&self) -> &FunctionOwnerSnapshot {
+        &self.before
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn writer(&self) -> &FunctionOwnerSnapshot {
+        &self.writer
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn after(&self) -> &FunctionOwnerSnapshot {
+        &self.after
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn writer_answer(&self) -> usize {
+        self.writer_answer
+    }
 }
 
 fn attempt<'era, T>(
@@ -110,22 +167,19 @@ fn snapshot(
             Ok((dst.word_for_test(run), run.function_facts_for_test(key)?))
         })?;
     }
-    Ok(FunctionOwnerSnapshot {
-        words,
-        facts,
-        #[cfg(feature = "jit")]
-        epoch_bumps: Default::default(),
-    })
+    Ok(FunctionOwnerSnapshot { words, facts })
 }
 
 /// A keeper callback may inspect only its inactive cache metadata. Fixtures
 /// invoke no compilation/evaluation and capture integer cache identities only.
-pub(crate) fn exercise_function_era(
-    era: &ParallelHeapEra<'_>,
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn exercise_function_era<'heap, K: EraKeeper>(
+    era: &ParallelHeapEra<'heap, K>,
     ids: [SymId; 2],
     edit: FunctionEraEdit,
     replacement: &SharedRoot,
     mut observe: impl FnMut(FunctionBoundaryPoint),
+    epochs: &mut dyn WriterEpochRecorder,
 ) -> Result<FunctionEraReceipt, String> {
     let operations = (|| {
         let handles = ids.map(|id| {
@@ -175,9 +229,7 @@ pub(crate) fn exercise_function_era(
                     let mut dst = attempt(owner, |run| run.root_slot(nil_ref).map_err(Into::into))?;
                     let mut src =
                         attempt(owner, |run| run.root_slot(replacement).map_err(Into::into))?;
-                    #[cfg(feature = "jit")]
-                    let bumps_before =
-                        crate::emacs_core::jit::stats::epoch::EpochCounters::snapshot();
+                    epochs.before_writer();
                     let answer = attempt(owner, |run| {
                         match edit {
                             FunctionEraEdit::Same { .. } => {
@@ -194,13 +246,7 @@ pub(crate) fn exercise_function_era(
                         Ok(dst.word_for_test(run))
                     })?;
                     let observed = snapshot(owner, &writer_handles, nil_ref)?;
-                    #[cfg(feature = "jit")]
-                    let observed = FunctionOwnerSnapshot {
-                        epoch_bumps: crate::emacs_core::jit::stats::epoch::EpochCounters::snapshot(
-                        )
-                        .since(&bumps_before),
-                        ..observed
-                    };
+                    epochs.after_writer();
                     Ok((observed, answer))
                 })
             });

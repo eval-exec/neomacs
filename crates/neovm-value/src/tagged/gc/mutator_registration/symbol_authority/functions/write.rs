@@ -390,7 +390,7 @@ impl KeeperSymbols<'_> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl RunAccess<'_, '_> {
     pub(crate) fn function_facts_for_test(
         &mut self,

@@ -196,7 +196,7 @@ impl SymbolBacking {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) unsafe fn function_facts_for_test(
         &self,
         id: SymId,

@@ -22,8 +22,14 @@ pub(super) enum FunctionOp {
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 mod tests;
 
-#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[cfg(all(
+    test,
+    not(feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
 pub(crate) mod boundary;
+#[cfg(all(feature = "test-support", not(feature = "gc-memory-telemetry")))]
+pub mod boundary;
 
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 pub(super) mod names;

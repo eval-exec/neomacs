@@ -2926,7 +2926,11 @@ pub use facade_mark::{
     ConcurrentMarkPermit, FacadeEpochRetention, FacadeMarkExclusion, FacadeMarkExclusionError,
     QuiescentCollector,
 };
-#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use mutator_registration::symbol_functions::boundary as function_boundary_testkit;
 pub use mutator_registration::{
     AllStopped, AllStoppedFailure, CollectionError, CollectionReport, FunctionActivation,
