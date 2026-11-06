@@ -3,7 +3,7 @@ use neovm_value::value::Value;
 
 #[test]
 fn nil_and_t_are_taken_literally_without_evaluation() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = Value::make_buffer(eval.buffers.current_buffer_id().expect("buffer"));
     assert!(
         !eval
@@ -43,7 +43,7 @@ fn an_uninterned_symbol_named_t_is_evaluated_not_taken_as_t() {
 
 #[test]
 fn form_sees_object_position_and_buffer_position_bound_dynamically() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer_id = eval.buffers.current_buffer_id().expect("buffer");
     let buffer = Value::make_buffer(buffer_id);
     let probe = eval
@@ -70,7 +70,7 @@ fn form_sees_object_position_and_buffer_position_bound_dynamically() {
 
 #[test]
 fn an_error_in_form_counts_as_nil_like_dsafe_eval() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = Value::make_buffer(eval.buffers.current_buffer_id().expect("buffer"));
     let erroring = eval.eval_str("'(car 1)").expect("read");
     assert!(
@@ -84,7 +84,7 @@ fn an_error_in_form_counts_as_nil_like_dsafe_eval() {
 
 #[test]
 fn form_runs_with_redisplay_and_quit_inhibited_and_the_bindings_are_undone_on_error() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = Value::make_buffer(eval.buffers.current_buffer_id().expect("buffer"));
     let probe = eval
         .eval_str("'(and inhibit-redisplay inhibit-quit)")
@@ -105,7 +105,7 @@ fn form_runs_with_redisplay_and_quit_inhibited_and_the_bindings_are_undone_on_er
 
 #[test]
 fn with_display_buffer_current_selects_the_buffer_and_restores_the_callers() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let original = eval.buffers.current_buffer_id().expect("buffer");
     let other = eval.buffers.create_buffer("other");
     let seen = eval
@@ -118,7 +118,7 @@ fn with_display_buffer_current_selects_the_buffer_and_restores_the_callers() {
 #[test]
 fn sites_are_evaluated_once_per_site_with_the_buffer_current_and_survive_gc() {
     use crate::emacs_core::display_when::{DisplayWhenSite, DisplayWhenSiteKey};
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let original = eval.buffers.current_buffer_id().expect("buffer");
     let other = eval.buffers.create_buffer("other");
     let buffer = Value::make_buffer(other);
@@ -177,7 +177,7 @@ fn sites_are_evaluated_once_per_site_with_the_buffer_current_and_survive_gc() {
 #[test]
 fn one_form_on_two_sites_is_evaluated_at_each_with_its_own_bindings() {
     use crate::emacs_core::display_when::{DisplayWhenSite, DisplayWhenSiteKey};
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buf_id = eval.buffers.current_buffer_id().expect("buffer");
     let buffer = Value::make_buffer(buf_id);
     eval.eval_str("(setq dw-seen nil)").expect("reset");
@@ -230,7 +230,7 @@ fn one_form_on_two_sites_is_evaluated_at_each_with_its_own_bindings() {
 #[test]
 fn a_form_cannot_collect_its_detached_replacement_before_classification() {
     use crate::emacs_core::display_when::DisplayWhenSite;
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buf_id = eval.buffers.current_buffer_id().expect("buffer");
     let property = eval
         .eval_str(
@@ -262,7 +262,7 @@ fn a_form_cannot_collect_its_detached_replacement_before_classification() {
 #[test]
 fn a_later_form_roots_the_replacement_installed_by_an_earlier_form() {
     use crate::emacs_core::display_when::DisplayWhenSite;
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buf_id = eval.buffers.current_buffer_id().expect("buffer");
     let property = eval
         .eval_str(

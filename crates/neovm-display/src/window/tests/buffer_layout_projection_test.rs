@@ -5,7 +5,7 @@ use neovm_eval::emacs_core::eval::Context;
 use neovm_value::value::Value;
 
 fn setup() -> (Context, BufferId) {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str("(setq fontification-functions nil)").unwrap();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     (eval, buffer)

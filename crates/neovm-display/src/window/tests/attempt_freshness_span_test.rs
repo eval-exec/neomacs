@@ -3,7 +3,7 @@ use neovm_eval::emacs_core::eval::Context;
 use std::borrow::Cow;
 
 fn fixture() -> (Context, FrameId, WindowId, BufferId) {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     let frame = eval
         .frame_manager_mut()

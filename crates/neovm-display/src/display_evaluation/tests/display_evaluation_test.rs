@@ -2,7 +2,7 @@ use neovm_eval::emacs_core::eval::Context;
 
 #[test]
 fn frame_display_context_selects_target_window_buffer_and_restores_caller() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.setup_thread_locals();
     let caller_buffer = eval.buffer_manager_mut().create_buffer("display-caller");
     let target_buffer = eval.buffer_manager_mut().create_buffer("display-target");
@@ -40,7 +40,7 @@ fn frame_display_context_selects_target_window_buffer_and_restores_caller() {
 
 #[test]
 fn frame_display_context_does_not_restore_a_deleted_caller_frame() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.setup_thread_locals();
     let caller_buffer = eval
         .buffer_manager_mut()
@@ -74,7 +74,7 @@ fn frame_display_context_does_not_restore_a_deleted_caller_frame() {
 
 #[test]
 fn frame_display_context_does_not_restore_a_deleted_target_window() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.setup_thread_locals();
     let first_buffer = eval
         .buffer_manager_mut()
@@ -121,7 +121,7 @@ fn frame_display_context_does_not_restore_a_deleted_target_window() {
 /// the saved context storage-only.
 #[test]
 fn frame_display_context_restores_frame_and_buffer_on_rust_panic() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.setup_thread_locals();
     let caller = eval
         .buffer_manager_mut()
@@ -177,7 +177,7 @@ fn frame_display_context_keeps_window_recovery_armed_during_cleanup_panic() {
         }
         Ok(Value::NIL)
     }
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.setup_thread_locals();
     let caller = eval
         .buffer_manager_mut()

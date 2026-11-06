@@ -24,7 +24,7 @@ use neovm_value::value::Value;
 #[test]
 fn display_name_is_not_declared_before_lisp_because_gnu_has_no_c_defvar() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = Context::new(crate::test_utils::unit_runtime());
 
     assert_eq!(eval.obarray().symbol_value_copied("x-display-name"), None);
     assert!(!eval.obarray().is_special("x-display-name"));
@@ -41,7 +41,7 @@ fn display_name_is_not_declared_before_lisp_because_gnu_has_no_c_defvar() {
 #[test]
 fn resource_name_is_declared_before_lisp_because_gnu_defvars_it_in_c() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = Context::new(crate::test_utils::unit_runtime());
 
     assert_eq!(
         eval.obarray().symbol_value_copied("x-resource-name"),

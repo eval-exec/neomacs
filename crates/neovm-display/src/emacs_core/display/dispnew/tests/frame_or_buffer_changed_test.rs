@@ -21,7 +21,7 @@ fn visible_buffer_name(buffer: &neovm_edit::buffer::Buffer) -> bool {
 #[test]
 fn internal_state_is_changed_once_then_stable() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let _frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
 
     assert_eq!(
@@ -45,7 +45,7 @@ fn internal_state_is_changed_once_then_stable() {
 #[test]
 fn user_variable_tracks_buffer_lifecycle() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let _frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let var = Value::symbol("neb-unit-state");
     builtin_set_2(&mut eval, var, Value::NIL).unwrap();
@@ -108,7 +108,7 @@ fn user_variable_tracks_buffer_lifecycle() {
 #[test]
 fn state_vector_records_frames_then_visible_buffers_then_lambda() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let var = Value::symbol("neb-unit-layout");
     builtin_set_2(&mut eval, var, Value::NIL).unwrap();
@@ -160,7 +160,7 @@ fn state_vector_records_frames_then_visible_buffers_then_lambda() {
 #[test]
 fn unchanged_state_keeps_the_same_vector_object() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let _frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let var = Value::symbol("neb-unit-reuse");
     builtin_set_2(&mut eval, var, Value::NIL).unwrap();
@@ -195,7 +195,7 @@ fn unchanged_state_keeps_the_same_vector_object() {
 #[test]
 fn state_vector_reuse_follows_gnu_reallocation_boundaries() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let _frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let var = Value::symbol("neb-unit-realloc-boundary");
     builtin_set_2(&mut eval, var, Value::NIL).unwrap();
@@ -254,7 +254,7 @@ fn state_vector_reuse_follows_gnu_reallocation_boundaries() {
 #[test]
 fn variable_watchers_run_only_when_the_vector_is_reallocated() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let _frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let var = Value::symbol("neb-unit-watched-state");
     let counter = Value::symbol("neb-unit-watch-count");
@@ -317,7 +317,7 @@ fn variable_watchers_run_only_when_the_vector_is_reallocated() {
 #[test]
 fn unbound_and_non_symbol_variables_signal_gnu_errors() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let _frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
 
     let unbound =

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn resolved_scroll_observer_sees_complete_commit_and_current_command_only() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffer_manager_mut().create_buffer("preview");
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -51,7 +51,7 @@ fn resolved_scroll_observer_sees_complete_commit_and_current_command_only() {
 
 #[test]
 fn compositor_pixel_scroll_policy_requires_definition_and_binding_witnesses() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffer_manager_mut().create_buffer("scroll-policy");
     let frame = eval
         .frame_manager_mut()

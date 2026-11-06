@@ -57,7 +57,7 @@ mod posn_frame_pool_test;
 use posn_extent_fixture_test::{PosnExtentFixtureGuard, install_accepted_tty_fixture_rows};
 
 fn interactive_context() -> Context {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("noninteractive", Value::NIL);
     eval
 }
@@ -186,7 +186,7 @@ fn test_register_bootstrap_vars_include_tab_bar_display_vars() {
 #[test]
 fn display_line_numbers_assignment_is_buffer_local_on_set() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str("(setq display-line-numbers t)")
         .expect("setq display-line-numbers");
     let buffer = eval.edit.buffers.current_buffer().expect("current buffer");
@@ -204,7 +204,7 @@ fn display_line_numbers_assignment_is_buffer_local_on_set() {
 #[test]
 fn redisplay_fontification_walks_successive_unfontified_chunks() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let target = eval
         .edit
         .buffers
@@ -351,7 +351,7 @@ fn test_format_mode_line_eval_optional_designators() {
 #[test]
 fn test_format_mode_line_noninteractive_returns_empty_after_validation() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
 
     let rendered = builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%b")]).unwrap();
     assert_eq!(rendered, Value::string(""));
@@ -370,7 +370,7 @@ fn test_format_mode_line_noninteractive_returns_empty_after_validation() {
 #[test]
 fn test_resolve_live_window_display_context_uses_selected_window_buffer_point() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let selected_buffer_id = eval
         .edit
         .buffers
@@ -1941,7 +1941,7 @@ fn test_format_mode_line_percent_specs_use_window_buffer_and_completed_window_en
 #[test]
 fn test_invisible_p() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let err = builtin_invisible_p(&mut eval, vec![Value::fixnum(0)]).unwrap_err();
     match err.into_kind() {
         FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "args-out-of-range"),
@@ -6984,7 +6984,7 @@ fn posn_at_x_y_outside_every_window_answers_the_frame() {
 #[test]
 fn test_posn_at_x_y_batch_uses_selected_window_without_snapshot() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let scratch = eval
         .edit
         .buffers
@@ -7013,7 +7013,7 @@ fn test_posn_at_x_y_batch_uses_selected_window_without_snapshot() {
 #[test]
 fn test_posn_at_x_y_batch_wraps_long_visual_lines_like_gnu_tty() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let scratch = eval
         .edit
         .buffers
@@ -7657,7 +7657,7 @@ fn test_lookup_image_map() {
 #[test]
 fn test_current_bidi_paragraph_direction() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_current_bidi_paragraph_direction(&mut eval, vec![]).unwrap();
     assert_eq!(result, Value::symbol("left-to-right"));
 
@@ -7765,7 +7765,7 @@ fn test_bidi_find_overridden_directionality() {
 fn test_move_to_window_line() {
     crate::test_utils::init_test_tracing();
     // Without a selected frame, move-to-window-line should signal an error.
-    let mut ev = neovm_eval::emacs_core::eval::Context::new();
+    let mut ev = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     for arg in [Value::fixnum(1), Value::fixnum(0), Value::symbol("left")] {
         let err = builtin_move_to_window_line(&mut ev, vec![arg]).unwrap_err();
         match err.into_kind() {
@@ -7987,13 +7987,13 @@ fn test_wrong_arity() {
         assert!(builtin_line_pixel_height(&mut ev, &[Value::fixnum(1)]).is_err());
     }
     {
-        let mut ev = neovm_eval::emacs_core::eval::Context::new();
+        let mut ev = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
         assert!(builtin_invisible_p(&mut ev, vec![]).is_err());
     }
     assert!(builtin_move_point_visually(vec![]).is_err());
     assert!(builtin_lookup_image_map(vec![Value::fixnum(1), Value::fixnum(2)]).is_err());
     {
-        let mut ev = neovm_eval::emacs_core::eval::Context::new();
+        let mut ev = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
         assert!(builtin_move_to_window_line(&mut ev, vec![]).is_err());
     }
 }
@@ -8225,7 +8225,7 @@ fn snapshot_string(value: Value) -> String {
 
 #[test]
 fn frame_snapshot_errors_without_display_hook() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     assert!(
         eval.eval_str("(neomacs--frame-snapshot)").is_err(),
         "must signal in batch mode (no frontend hook installed)"
@@ -8238,7 +8238,7 @@ fn frame_snapshot_forwards_request_to_installed_hook() {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let seen: Rc<RefCell<Vec<(SnapshotTarget, SnapshotFormat)>>> = Rc::default();
     let sink = seen.clone();
     eval.frame_snapshot_fn = Some(Box::new(move |_eval, request| {
@@ -8270,7 +8270,7 @@ fn frame_snapshot_forwards_request_to_installed_hook() {
 
 #[test]
 fn frame_snapshot_rejects_bad_format_and_dead_frame() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.frame_snapshot_fn = Some(Box::new(|_, _| Ok(String::new())));
     assert!(
         eval.eval_str("(neomacs--frame-snapshot nil 'bogus)")
@@ -8289,7 +8289,7 @@ fn frame_snapshot_rejects_bad_format_and_dead_frame() {
 
 #[test]
 fn write_frame_snapshot_writes_file_and_returns_t() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.frame_snapshot_fn = Some(Box::new(|_, _| Ok("SNAPSHOT-CONTENT".to_string())));
     let path = std::env::temp_dir().join(format!(
         "neomacs-frame-snapshot-test-{}.txt",
@@ -8311,7 +8311,7 @@ fn write_frame_snapshot_writes_file_and_returns_t() {
 #[test]
 fn line_number_anchor_counts_from_recent_line_and_survives_edits_below() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let text = "line\n".repeat(2000);
     eval.eval_str(&format!(
         // `switch-to-buffer' is lisp/window.el:9558 and has no subr any more

@@ -747,7 +747,7 @@ fn discarded_snapshot_preserves_latest_completed_coordinate_queries() {
     use neomacs_display_protocol::types::Rect as TransportRect;
     use neovm_eval::emacs_core::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer_id = eval
         .buffer_manager()
         .current_buffer_id()
@@ -2461,7 +2461,7 @@ fn window_parameters() {
 #[test]
 fn layout_freshness_types_late_chrome_cache_writes_separately_from_body_mutations() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -4373,7 +4373,7 @@ fn a_prepared_presentation_shares_its_window_snapshots() {
 
 #[test]
 fn fontset_changes_invalidate_window_query_and_attempt_freshness() {
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     let frame = eval
         .frame_manager_mut()

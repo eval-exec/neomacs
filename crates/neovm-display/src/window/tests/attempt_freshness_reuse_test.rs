@@ -5,7 +5,7 @@ use neovm_eval::emacs_core::eval::Context;
 use neovm_value::value::Value;
 
 fn setup() -> (Context, BufferId, FrameId, WindowId) {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let live = eval.buffer_manager().current_buffer().unwrap().id();
     let frame = eval
         .frame_manager_mut()
@@ -204,7 +204,7 @@ fn same_buffer_fontifier_name_unintern_child() {
     let (mut eval, live, frame, window) = setup();
     // A second owner has only its own Lisp graph. It removes the shared name,
     // not any A-owned hook/list/string, after the real first projection.
-    let mut other = Context::new();
+    let mut other = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str(
         r#"(progn
           (insert "abcd")

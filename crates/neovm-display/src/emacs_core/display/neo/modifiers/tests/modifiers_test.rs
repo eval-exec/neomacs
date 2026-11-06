@@ -31,7 +31,7 @@ fn policy_from(values: &[(&str, Value)]) -> neomacs_display_protocol::ModifierPo
 }
 
 fn evaluate(text: &str) -> Value {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str(text).expect("evaluation should succeed")
 }
 
@@ -194,7 +194,7 @@ fn subr_compiles_the_seven_variables_and_ships_the_policy() {
     }
 
     let host = CapturingHost::default();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_display_host(Box::new(host.clone()));
     eval.eval_str(
         r#"(progn (setq ns-command-modifier 'meta)
@@ -221,7 +221,7 @@ fn subr_compiles_the_seven_variables_and_ships_the_policy() {
 /// `neomacs-set-modifier-policy` is registered with GNU's arity discipline.
 #[test]
 fn subr_is_registered() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let found = eval
         .eval_str("(list (fboundp 'neomacs-set-modifier-policy))")
         .expect("evaluation");

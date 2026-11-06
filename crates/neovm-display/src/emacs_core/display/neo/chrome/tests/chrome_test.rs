@@ -37,7 +37,7 @@ impl DisplayHost for CapturingHost {
 
 #[test]
 fn chrome_subrs_are_registered() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let found = eval
         .eval_str(
             "(list (fboundp 'neomacs-set-scroll-indicators)
@@ -50,7 +50,7 @@ fn chrome_subrs_are_registered() {
 #[test]
 fn chrome_subrs_reach_the_display_host() {
     let host = CapturingHost::default();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_display_host(Box::new(host.clone()));
     eval.eval_str(
         "(progn
@@ -66,7 +66,7 @@ fn chrome_subrs_reach_the_display_host() {
 
 #[test]
 fn extra_spacing_rejects_non_numbers() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let error = eval
         .eval_str("(neomacs-set-extra-spacing 'x 2)")
         .expect_err("a non-number spacing must signal");
