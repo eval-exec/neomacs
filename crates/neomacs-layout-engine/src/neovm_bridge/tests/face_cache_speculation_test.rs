@@ -39,7 +39,7 @@ fn speculation_face(resolver: &FaceResolver, source: &Arc<RootedFace>) -> Resolv
 
 #[test]
 fn rewind_restores_an_evicted_paint_slot() {
-    let _context = neovm_core::emacs_core::Context::new();
+    let _context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let resolver = speculation_resolver();
     let source = speculation_source();
     let frame = FrameId(7);
@@ -90,7 +90,7 @@ fn rewind_restores_an_evicted_paint_slot() {
 
 #[test]
 fn rewind_drops_a_fresh_named_spec_fold_and_accept_keeps_it() {
-    let _context = neovm_core::emacs_core::Context::new();
+    let _context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let resolver = speculation_resolver();
 
     let mark = resolver.arm_face_cache_speculation();
@@ -126,7 +126,7 @@ fn rewind_drops_a_fresh_named_spec_fold_and_accept_keeps_it() {
 
 #[test]
 fn rewind_restores_a_replaced_named_spec_fold() {
-    let _context = neovm_core::emacs_core::Context::new();
+    let _context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let resolver = speculation_resolver();
 
     let carried = resolver.record_named_overlay_spec_for_alist(
@@ -152,7 +152,7 @@ fn rewind_restores_a_replaced_named_spec_fold() {
 
 #[test]
 fn accept_commits_permanently_against_an_outer_rewind() {
-    let _context = neovm_core::emacs_core::Context::new();
+    let _context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let resolver = speculation_resolver();
 
     // The nesting rule: `accept` truncates the journal, so an inner window

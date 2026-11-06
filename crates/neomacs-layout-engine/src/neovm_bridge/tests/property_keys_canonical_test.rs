@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn direct_mouse_face_extent_does_not_scan_distant_categories() {
     use neovm_core::tagged::collection_reads::capture;
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let id = eval.buffer_manager().current_buffer().unwrap().id();
     let buffer = eval.buffer_manager_mut().get_mut(id).unwrap();
     buffer.insert(&"x".repeat(9_000));
@@ -40,7 +40,7 @@ fn direct_mouse_face_extent_does_not_scan_distant_categories() {
 
 #[test]
 fn effective_extent_crosses_equal_direct_alias_and_default_runs() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str(
         r#"(progn
              (insert "α好cdefgh")
@@ -87,7 +87,7 @@ fn effective_extent_crosses_equal_direct_alias_and_default_runs() {
 
 #[test]
 fn canonical_property_key_inline_skips_heap_after_effective_lookup_and_extent() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
     let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
     buffer.insert("abcdefgh\n");
@@ -136,7 +136,7 @@ fn canonical_property_key_inline_skips_heap_after_effective_lookup_and_extent() 
 
 #[test]
 fn unknown_property_key_keeps_default_and_explicit_nil_semantics() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let property = Value::symbol("d5-unknown-property");
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
     let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
@@ -171,7 +171,7 @@ fn unknown_property_key_keeps_default_and_explicit_nil_semantics() {
 #[test]
 fn fallback_extent_over_long_history_preserves_capture_budget() {
     use neovm_core::tagged::collection_reads::capture;
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let id = eval.buffer_manager().current_buffer().unwrap().id();
     let buffer = eval.buffer_manager_mut().get_mut(id).unwrap();
     let count = 9_000;
@@ -214,7 +214,7 @@ fn fallback_extent_over_long_history_preserves_capture_budget() {
 #[test]
 fn alternating_category_query_near_end_preserves_capture_budget() {
     use neovm_core::tagged::collection_reads::capture;
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let id = eval.buffer_manager().current_buffer().unwrap().id();
     let buffer = eval.buffer_manager_mut().get_mut(id).unwrap();
     let count = 9_000;
@@ -261,7 +261,7 @@ fn alternating_category_query_near_end_preserves_capture_budget() {
 #[test]
 fn explicit_nil_category_presence_splits_runs_without_losing_the_extent() {
     use neovm_core::tagged::collection_reads::capture;
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let id = eval.buffer_manager().current_buffer().unwrap().id();
     let buffer = eval.buffer_manager_mut().get_mut(id).unwrap();
     buffer.insert("abcdef");

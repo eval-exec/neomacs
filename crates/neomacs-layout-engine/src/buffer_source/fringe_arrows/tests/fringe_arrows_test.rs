@@ -234,7 +234,7 @@ fn disabled_row_is_skipped() {
 fn resolve_bitmaps_from_standard_indicator_alist() {
     // With Doom-style / standard `fringe-indicator-alist`, the resolver should
     // yield the four standard arrow bitmaps for truncation/continuation.
-    let mut ctx = neovm_core::emacs_core::Context::new();
+    let mut ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
     let alist = ctx
         .eval_str(
             "'((truncation left-arrow right-arrow) \

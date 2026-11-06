@@ -36,7 +36,7 @@ fn test_ctx() -> PixelCalcContext {
 
 /// Parse an Elisp expression via a fresh Context.
 fn parse(src: &str) -> (Context, Value) {
-    let mut ctx = Context::new();
+    let mut ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
     let v = ctx
         .eval_str(&format!("(quote {})", src))
         .expect("parse should succeed");

@@ -3,7 +3,7 @@ use neovm_core::emacs_core::Context;
 
 #[test]
 fn collect_layout_params_marks_minibuffer_only_root() {
-    let mut evaluator = Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = evaluator
         .buffer_manager_mut()
         .create_buffer("*minibuffer-only*");

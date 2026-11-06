@@ -995,7 +995,7 @@ fn display_row_append_cursor_uses_glyph_measurer() {
 
 #[test]
 fn display_row_append_cursor_appends_explicit_source_item() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let row_layout = layout();
     let mut matrix = DisplayOutputBuilder::new();
     matrix.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
@@ -1027,7 +1027,7 @@ fn display_row_append_cursor_appends_explicit_source_item() {
 
 #[test]
 fn display_row_append_cursor_appends_explicit_source_item_with_glyph_measurer() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let row_layout = layout();
     let mut matrix = DisplayOutputBuilder::new();
     let mut measurer = FixedGlyphAdvances::new();
@@ -1289,7 +1289,7 @@ fn graphical_relative_stretch_measures_the_covered_character() {
 
 #[test]
 fn display_row_builder_consumes_display_item_source() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut source = LispStringSourceCursor::new(
         1,
         Value::string("abc"),
@@ -1508,7 +1508,7 @@ fn display_row_writer_can_append_items_to_left_margin_area() {
 
 #[test]
 fn display_row_writer_consumes_display_item_source() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut row = neomacs_display_protocol::glyph_matrix::GlyphRow::new(GlyphRowRole::Text);
     row.enabled = true;
     crate::glyph_row_writer::push_char_to_row(&mut row, 'x', FaceId::new(2), 0, 8.0);
@@ -2283,7 +2283,7 @@ fn display_row_vertical_metrics_include_in_row_only_grows_extents() {
 /// already passed `false` — the two paths had drifted.
 #[test]
 fn display_row_builder_scales_height_expressions_by_line_height() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // `(+ 1 1)` is an arithmetic form, so it reaches the evaluator rather than
     // the plain-number `Em` arm.
     let expr = eval
@@ -2486,7 +2486,7 @@ fn replacement_string_session_stamps_gnu_string_indices() {
     // wrapped in the covered rewrite): for string "STR" covering buffer
     // [2, 4), GNU stamps glyphs with indices in the STRING, not with the
     // covered buffer start.  Buffer coverage remains on the row/item track.
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let covered = crate::display_item::BufferDisplayReplacementSource::spanning(
         neovm_core::buffer::BufferId(1),
         neovm_core::buffer::CharPos0::new(2),
@@ -2648,7 +2648,7 @@ fn owned_mapped_text_preserves_string_coordinates_and_clipping_on_a_worker() {
     use crate::row_layout::ResolvedMappedTextInput;
     fn require_send_sync<T: Send + Sync + 'static>() {}
     require_send_sync::<ResolvedMappedTextInput>();
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let covered = crate::display_item::BufferDisplayReplacementSource::spanning(
         neovm_core::buffer::BufferId(1),
         neovm_core::buffer::CharPos0::new(2),

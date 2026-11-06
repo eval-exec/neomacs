@@ -6,7 +6,7 @@ use super::*;
 
 #[test]
 fn property_key_aliases_keep_first_matching_order_duplicates_and_heap_fallback() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let face = Value::symbol("face");
     let alias = Value::symbol("font-lock-face");
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
@@ -80,7 +80,7 @@ fn property_key_aliases_keep_first_matching_order_duplicates_and_heap_fallback()
 
 #[test]
 fn duplicate_canonical_aliases_stay_inline_after_complete_effective_extent_lookup() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let face = Value::symbol("face");
     let alias = Value::symbol("font-lock-face");
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
@@ -162,7 +162,7 @@ fn duplicate_canonical_aliases_stay_inline_after_complete_effective_extent_looku
 
 #[test]
 fn property_keys_preserve_category_alias_default_nil_overlay_and_extent_order() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str("(put 'd5-property-category 'face 'd5-category-face)")
         .unwrap();
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();

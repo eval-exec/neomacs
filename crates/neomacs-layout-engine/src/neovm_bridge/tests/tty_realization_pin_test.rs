@@ -14,7 +14,7 @@ impl Drop for RestoreTerminal {
 
 #[test]
 fn tty_realization_pin_shares_realized_faces_across_redisplays() {
-    let mut context = Context::new();
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let _restore = RestoreTerminal;
     context.set_gc_threshold(usize::MAX);
     pure::configure_terminal_runtime(pure::TerminalRuntimeConfig::interactive(

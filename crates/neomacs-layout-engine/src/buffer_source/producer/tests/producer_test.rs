@@ -9,7 +9,7 @@ use neovm_core::emacs_core::Context;
 type ConsumedStep = (BufferSourceConsumedItem, DisplaySourceTextPosition);
 
 fn buffer_snapshot(text: &str) -> (BufferId, LayoutBufferSnapshot) {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()

@@ -106,7 +106,7 @@ fn assert_layout_mutation_with_host(
     graphical: bool,
     host: Option<Box<dyn DisplayHost>>,
 ) {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     if let Some(host) = host {
         eval.set_display_host(host);
     }
@@ -213,7 +213,7 @@ fn assert_layout_mutation_with_host(
 }
 
 fn assert_decoration_mutation_invalidates_presentation(setup: &str, mutation: &str) {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -283,7 +283,7 @@ fn retained_geometry_tracks_explicit_prefix_stretch_height() {
 
 #[test]
 fn tall_stretch_prefix_reserves_vertical_space_before_next_line() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -453,7 +453,7 @@ fn published_prefix_image_reserves_both_vertical_margins() {
         Box::new(ReloadingImageHost::default()),
     ];
     for host in hosts {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         eval.set_display_host(host);
         let buffer = eval.buffer_manager().current_buffer().unwrap().id();
         eval.buffer_manager_mut()
@@ -567,7 +567,7 @@ fn forced_window_update_rebuilds_a_mutated_buffer_image_spec() {
 /// bodies were keyed on the generic generation this window would rebuild.
 #[test]
 fn presentation_only_redisplay_invalidation_retains_body_rows() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -623,7 +623,7 @@ fn presentation_only_redisplay_invalidation_retains_body_rows() {
 fn forced_body_redisplay_rebuilds_only_the_targeted_window() {
     use neovm_core::window::ForcedBodyRedisplay;
 
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_a = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer_a)
@@ -811,7 +811,7 @@ fn retained_geometry_rejects_mutated_replacement_face_height() {
 
 #[test]
 fn cyclic_face_inheritance_capture_tracks_other_attributes() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     let frame = eval
         .frame_manager_mut()
@@ -842,7 +842,7 @@ fn cyclic_face_inheritance_capture_tracks_other_attributes() {
 
 #[test]
 fn string_face_freshness_tracks_mutable_color_bytes() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     let frame = eval
         .frame_manager_mut()
@@ -886,7 +886,7 @@ fn retained_geometry_rejects_mutated_wrapped_replacement_string() {
 
 #[test]
 fn replacement_string_freshness_does_not_recurse_through_display_properties() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     let frame = eval
         .frame_manager_mut()
@@ -944,7 +944,7 @@ fn retained_geometry_rejects_display_vector_precedence_changes() {
 
 #[test]
 fn cyclic_display_spec_capture_terminates_and_tracks_changes() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     let frame = eval
         .frame_manager_mut()
@@ -1002,7 +1002,7 @@ fn retained_geometry_rejects_mutated_wrap_string_space_expression() {
 
 #[test]
 fn prefix_string_space_freshness_ignores_unrelated_property_payloads() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     let frame = eval
         .frame_manager_mut()
@@ -1074,7 +1074,7 @@ fn retained_geometry_rejects_mutated_ellipsis_glyph_vector() {
 
 #[test]
 fn display_table_freshness_ignores_unrelated_vector_mutations() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     let frame = eval
         .frame_manager_mut()
@@ -1138,7 +1138,7 @@ fn retained_geometry_rejects_mutated_invisibility_ellipsis() {
 
 #[test]
 fn invisibility_freshness_tracks_ellipsis_truthiness_not_identity() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     let frame = eval
         .frame_manager_mut()
@@ -1196,7 +1196,7 @@ fn retained_geometry_rejects_mutated_scaled_space_expression() {
 #[test]
 fn cyclic_pixel_input_capture_terminates_and_detects_operand_changes() {
     // Only capture freshness: evaluating cyclic arithmetic is not supported.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     let frame = eval
         .frame_manager_mut()
@@ -1245,7 +1245,7 @@ fn retained_geometry_rejects_mutated_wrap_space_prefix_width() {
 
 #[test]
 fn space_prefix_freshness_ignores_shadowed_and_unknown_operands() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     let frame = eval
         .frame_manager_mut()
@@ -1296,7 +1296,7 @@ fn retained_geometry_rejects_prefix_text_property_changes() {
 
 #[test]
 fn restoring_prefix_bytes_restores_attempt_validity() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     let frame = eval
         .frame_manager_mut()

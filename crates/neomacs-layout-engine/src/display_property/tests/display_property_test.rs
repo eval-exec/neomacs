@@ -8,7 +8,7 @@ use neovm_core::emacs_core::{Context, Value};
 
 #[test]
 fn rejected_nested_when_has_no_text_modifiers() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let spec = eval
         .eval_str("'(when t when nil :raise 2 :height 3)")
         .expect("spec");
@@ -27,7 +27,7 @@ fn rejected_nested_when_has_no_text_modifiers() {
 
 #[test]
 fn rejected_image_has_no_text_modifiers() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let spec = eval.eval_str("'(image :raise 2 :height 3)").expect("spec");
     let classified = classify_display_property(
         spec,
@@ -44,7 +44,7 @@ fn rejected_image_has_no_text_modifiers() {
 
 #[test]
 fn classify_display_property_separates_replacements_from_text_modifiers() {
-    let eval = Context::new();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval
         .buffer_manager()
         .current_buffer()
@@ -204,7 +204,7 @@ fn classify_display_property_separates_replacements_from_text_modifiers() {
 
 #[test]
 fn display_property_classification_names_replacement_accessors() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let string = classify_display_property(
         Value::string("replacement"),
         &crate::display_when::DisplayWhenConditions::structural(),
@@ -266,7 +266,7 @@ fn display_property_classification_names_replacement_accessors() {
 
 #[test]
 fn classify_display_property_parses_space_width_height_and_ascent() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
 
     assert_eq!(
         classify_display_property(
@@ -295,7 +295,7 @@ fn classify_display_property_parses_space_width_height_and_ascent() {
 
 #[test]
 fn classify_display_property_preserves_relative_width_source_basis() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
 
     assert_eq!(
         classify_display_property(
@@ -320,7 +320,7 @@ fn classify_display_property_preserves_relative_width_source_basis() {
 
 #[test]
 fn classify_display_property_keeps_space_width_with_raise_modifier() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let classified = classify_display_property(
         Value::list(vec![
             Value::list(vec![Value::symbol("space-width"), Value::make_float(0.4)]),
@@ -338,7 +338,7 @@ fn classify_display_property_keeps_space_width_with_raise_modifier() {
 
 #[test]
 fn classify_display_property_keeps_space_replacement_without_explicit_width() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
 
     assert_eq!(
         classify_display_property(
@@ -363,7 +363,7 @@ fn classify_display_property_keeps_space_replacement_without_explicit_width() {
 
 #[test]
 fn classify_display_property_recognizes_left_and_right_fringe_specs() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
 
     // `(left-fringe BITMAP FACE)` / `(right-fringe BITMAP FACE)` are replacement
     // specs that produce no inline output (magit's section-heading fold arrows).
@@ -412,7 +412,7 @@ fn classify_display_property_recognizes_left_and_right_fringe_specs() {
 
 #[test]
 fn classify_display_property_unwraps_list_wrapped_fringe_spec() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
 
     // diff-hl / flycheck / git-gutter attach the fringe marker via an overlay
     // before-string whose `display` value is LIST-WRAPPED:
@@ -479,7 +479,7 @@ fn classify_display_property_unwraps_list_wrapped_fringe_spec() {
 
 #[test]
 fn classify_display_property_keeps_fringe_length_units_in_space_specs() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
 
     // The `left-fringe` / `right-fringe` LENGTH UNITS appear inside a `space`
     // `:align-to` pixel expression and must keep resolving as length symbols,
@@ -518,7 +518,7 @@ fn classify_display_property_keeps_fringe_length_units_in_space_specs() {
 /// left. Dashboard and `image-dired` centre banners with this exact form.
 #[test]
 fn align_to_keeps_fractional_image_width_operand() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let expr = eval
         .eval_str(r#"(quote (- center (0.5 . (image :type png :file "x.png"))))"#)
         .expect("read :align-to expression");
@@ -624,7 +624,7 @@ fn margin_display_spec_preserves_its_typed_side_and_content() {
     // The `((margin …) …)` spec must classify as a replacement so the covered
     // placeholder "o" is suppressed inline, not fall through to `None` (which
     // renders the "o" in the text flow). neomacs#188.
-    let _eval = Context::new(); // initialize the tagged heap for Value allocation
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context(); // initialize the tagged heap for Value allocation
     for side in ["left-margin", "right-margin"] {
         let spec = Value::list(vec![
             Value::list(vec![Value::symbol("margin"), Value::symbol(side)]),
@@ -670,7 +670,7 @@ fn margin_display_spec_preserves_its_typed_side_and_content() {
 
 #[test]
 fn margin_nil_routes_content_to_the_text_area_like_gnu() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let classified = classify_display_property(
         Value::list(vec![
             Value::list(vec![Value::symbol("margin"), Value::NIL]),
@@ -692,7 +692,7 @@ fn a_vector_display_value_classifies_its_elements_like_gnu() {
     // GNU `handle_display_spec' iterates a VECTOR of specs (`VECTORP (spec)').
     // This classifier had no vector arm, so `'display ["VEC"]' rendered the
     // original text; GNU renders VEC.
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let classified = classify_display_property(
         Value::vector(vec![
             Value::list(vec![Value::symbol("raise"), Value::make_float(0.2)]),
@@ -714,7 +714,7 @@ fn a_vector_display_value_classifies_its_elements_like_gnu() {
 #[test]
 fn a_list_wrapped_string_spec_carries_the_string_not_the_list() {
     // `("LIST")' is a LIST OF SPECS whose single element replaces the text.
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let classified = classify_display_property(
         Value::list(vec![Value::string("LIST")]),
         &crate::display_when::DisplayWhenConditions::structural(),
@@ -733,7 +733,7 @@ fn a_when_spec_replaces_with_its_inner_spec_like_gnu() {
     // `(when FORM . SPEC)': GNU continues its single-spec arms on SPEC. Verified
     // against GNU 31: `(when t . "DOTTED")' replaces, `(when t "LISTED")' -- whose
     // SPEC is the LIST `("LISTED")' -- does not.
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let dotted = classify_display_property(
         Value::cons(
             Value::symbol("when"),
@@ -780,7 +780,7 @@ fn a_margin_spec_gnu_cannot_display_leaves_the_text_alone() {
     // covered text unchanged, because GNU's `location' stays unbound and the whole
     // cons then fails its `valid_p' test. Same for a valid area whose CONTENT is
     // not displayable.
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     assert!(
         classify_display_property(
             Value::list(vec![
@@ -813,7 +813,7 @@ fn a_margin_spec_gnu_cannot_display_leaves_the_text_alone() {
 fn disable_eval_classifies_the_wrapped_spec() {
     // `(disable-eval SPEC)' from enriched.el: GNU strips the wrapper and handles
     // SPEC (refusing to evaluate inside it).
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let classified = classify_display_property(
         Value::list(vec![Value::symbol("disable-eval"), Value::string("INNER")]),
         &crate::display_when::DisplayWhenConditions::structural(),
@@ -940,7 +940,7 @@ fn an_evaluated_when_form_that_did_not_hold_disables_its_spec() {
     // GNU evaluates FORM (xdisp.c:6130-6160) and skips the spec on nil.  With
     // the walk's results in hand, `(display-graphic-p)`-style forms are no
     // longer taken as true just for being non-nil.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let call = eval.eval_str("'(some-predicate)").expect("read");
     let spec = Value::cons(
         Value::symbol("when"),
@@ -982,7 +982,7 @@ fn buffer_and_string_objects_keep_the_first_replacing_spec() {
     // xdisp.c:6034-6040). Buffer lists continue, but display_replaced guards
     // their already chosen replacement (xdisp.c:6517). The ExactDisplay TUI
     // regression pins this expectation against a running GNU Emacs.
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let specs = Value::list(vec![Value::string("FIRST"), Value::string("LAST")]);
     let structural = crate::display_when::DisplayWhenConditions::structural();
     assert_eq!(

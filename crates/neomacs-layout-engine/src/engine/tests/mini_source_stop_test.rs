@@ -23,7 +23,7 @@ fn measure(
     query_presentation: bool,
 ) -> Measurement {
     let _policy = neovm_core::emacs_core::eval::RedisplayHookPolicyGuard::gnu();
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     assert!(eval.gnu_redisplay_hooks_policy_enabled());
     eval.store_variable_by_name("resize-mini-windows", Value::T);
     eval.store_variable_by_name("max-mini-window-height", Value::fixnum(3));

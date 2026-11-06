@@ -17,7 +17,7 @@ fn identity_face(resolver: &FaceResolver, source: &Arc<RootedFace>) -> ResolvedF
 
 #[test]
 fn shared_source_identity_ignores_enrichment_and_transient_ids() {
-    let _context = neovm_core::emacs_core::Context::new();
+    let _context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
     let source = identity_source();
@@ -49,7 +49,7 @@ fn shared_source_identity_ignores_enrichment_and_transient_ids() {
 
 #[test]
 fn shared_source_identity_still_requires_the_escape_fields() {
-    let _context = neovm_core::emacs_core::Context::new();
+    let _context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
     let source = identity_source();

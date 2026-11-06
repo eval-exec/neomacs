@@ -6,7 +6,7 @@ use neovm_core::face::FaceTable;
 
 #[test]
 fn default_face_plan_uses_buffer_default_face_remap() {
-    let _runtime = neovm_core::emacs_core::Context::new();
+    let _runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x000000, 0xFFFFFF, 14.0, None);
     let mut buffer = Buffer::new_standalone(BufferId(42), Value::string("*default-remap*"));

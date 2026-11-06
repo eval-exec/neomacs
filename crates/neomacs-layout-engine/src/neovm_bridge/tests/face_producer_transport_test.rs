@@ -20,7 +20,7 @@ fn fixed_bridge_face_producers_match_original_complete_face_resolution() {
 
 #[test]
 fn named_face_producers_preserve_frame_realization_and_noncanonical_fallback() {
-    let _runtime = Context::new();
+    let _runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut table = FaceTable::new();
     for name in ["cont9-layout-producer", ":cont9-layout-keyword"] {
         let mut face = NeoFace::new(name);
@@ -51,7 +51,7 @@ fn named_face_producers_preserve_frame_realization_and_noncanonical_fallback() {
 
 #[test]
 fn named_face_producer_keeps_realized_basic_face_short_circuit() {
-    let _runtime = Context::new();
+    let _runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let mut resolver = FaceResolver::new(&table, 0xffffff, 0, 14.0, None);
     let mut basic_faces = enum_map::EnumMap::default();
@@ -73,7 +73,7 @@ fn named_face_producer_keeps_realized_basic_face_short_circuit() {
 
 #[test]
 fn window_named_face_producers_preserve_nil_and_nonempty_remapping_paths() {
-    let runtime = Context::new();
+    let runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut table = FaceTable::new();
     let mut face = NeoFace::new("cont9-window-producer");
     face.foreground = Some(NeoColor::rgb(17, 34, 51));
@@ -105,7 +105,7 @@ fn window_named_face_producers_preserve_nil_and_nonempty_remapping_paths() {
 
 #[test]
 fn layout_named_face_producer_keeps_bare_utf8_admission_boundary() {
-    let runtime = Context::new();
+    let runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0xffffff, 0, 14.0, None);
     let text = Value::string("default");

@@ -499,7 +499,7 @@ struct Fixture {
 
 impl Fixture {
     fn new(case: &StreamCase) -> Self {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let buffer_id = eval
             .buffer_manager()
             .current_buffer()

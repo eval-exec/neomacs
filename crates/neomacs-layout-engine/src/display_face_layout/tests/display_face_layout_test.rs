@@ -27,7 +27,7 @@ fn basis<'a>(canonical: &'a ResolvedFace) -> DisplayHeightFaceBasis<'a> {
 /// the canonical advance by the height factor.
 #[test]
 fn height_adjusted_face_measures_the_scaled_font_when_a_service_is_available() {
-    let _eval = neovm_core::emacs_core::Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let canonical = face("Monospace", 13.0);
     let mut service = crate::font::metrics::test_catalog::metrics_service();
 

@@ -610,7 +610,7 @@ fn explicit_fontset_width_beats_the_face_width_on_live_and_frozen_paths() {
         collection_face(0, FontWidth::Normal),
         collection_face(3, FontWidth::Expanded),
     ];
-    let mut eval = neovm_core::emacs_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str(
         "(let ((font-encoding-alist '((\".*\" unicode)))) \
            (set-fontset-font t ?α (font-spec :family \"Fixture Mono\" :width 'expanded \
@@ -1008,7 +1008,7 @@ fn captured_family_policy_keeps_alias_order_and_fallback_boundary() {
 
 #[test]
 fn frozen_character_requests_survive_live_policy_mutation_and_reject_unknown_queries() {
-    let mut eval = neovm_core::emacs_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str("(let ((font-encoding-alist '((\".*\" unicode)))) (set-fontset-font t #x3042 '(\"Fixture Sans\" . \"iso10646-1\")))").unwrap();
     let policies = FrozenCharacterPolicies::capture(
         &[("Base Mono", 'あ', 400, false, selection_size())],
@@ -1066,7 +1066,7 @@ fn frozen_character_requests_survive_live_policy_mutation_and_reject_unknown_que
 
 #[test]
 fn frozen_explicit_none_does_not_enable_native_fallback() {
-    let mut eval = neovm_core::emacs_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str("(set-fontset-font t #x3042 nil)").unwrap();
     let policies = FrozenCharacterPolicies::capture(
         &[("Base Mono", 'あ', 400, false, selection_size())],

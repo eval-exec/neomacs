@@ -2,7 +2,7 @@
 use super::*;
 
 fn circle_fixture() -> (Context, neovm_core::window::FrameId, LayoutEngine) {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
     let frame_id = eval
         .frame_manager_mut()

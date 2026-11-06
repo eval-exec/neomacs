@@ -4,7 +4,7 @@ use neovm_core::emacs_core::eval::RedisplayHookPolicyGuard;
 #[test]
 fn narrowing_with_active_mini_recenters_the_root_to_its_visible_eob_row() {
     let _policy = RedisplayHookPolicyGuard::legacy();
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.store_variable_by_name("resize-mini-windows", Value::symbol("grow-only"));
     eval.store_variable_by_name("max-mini-window-height", Value::fixnum(11));
     let root_buffer = eval

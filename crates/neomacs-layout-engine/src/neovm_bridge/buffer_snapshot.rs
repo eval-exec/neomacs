@@ -281,7 +281,7 @@ mod category_capture_tests {
 
     #[test]
     fn absent_categories_do_not_observe_unrelated_property_plists() {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let id = eval.buffer_manager().current_buffer().unwrap().id();
         let buffer = eval.buffer_manager_mut().get_mut(id).unwrap();
         buffer.insert("history\n");
@@ -309,7 +309,7 @@ mod category_capture_tests {
 
     #[test]
     fn sparse_categories_in_long_history_preserve_capture_budget() {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let id = eval.buffer_manager().current_buffer().unwrap().id();
         let buffer = eval.buffer_manager_mut().get_mut(id).unwrap();
         let count = 9_000;
@@ -344,7 +344,7 @@ mod category_capture_tests {
 
     #[test]
     fn category_capture_keeps_text_and_overlay_symbol_properties() {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         eval.eval_str(
             "(progn (insert \"abc\")
                (put 'text-category 'face 'bold)
@@ -400,7 +400,7 @@ mod category_capture_tests {
 
     #[test]
     fn category_runs_follow_multibyte_edits_and_syntax_boundaries() {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         eval.eval_str(
             "(progn (insert \"历史输出abc\")
                (put-text-property 2 4 'category 'first-category)

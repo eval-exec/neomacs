@@ -75,7 +75,7 @@ fn classify_in_buffer(
 
 #[test]
 fn classifier_routes_plain_ascii_row_to_item_renderer() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "hello world\n");
     let text = b"hello world\n";
     assert_eq!(
@@ -92,7 +92,7 @@ fn classifier_routes_plain_ascii_row_to_item_renderer() {
 
 #[test]
 fn classifier_routes_trailing_whitespace_row_when_highlight_off() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "ab  \n");
     assert_eq!(
         classify_in_buffer(
@@ -108,7 +108,7 @@ fn classifier_routes_trailing_whitespace_row_when_highlight_off() {
 
 #[test]
 fn classifier_routes_tab_and_wide_char_rows() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // Tabs, narrow non-ASCII (e-acute), and wide CJK chars all route since
     // the phase 2b extension.
     for text in [
@@ -135,7 +135,7 @@ fn classifier_routes_tab_and_wide_char_rows() {
 
 #[test]
 fn plan_reports_tab_wide_flags_and_char_byte_lengths() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "a\t\u{4E2D}b\n";
     let buf_id = buffer_with_text(&mut eval, text);
     let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
@@ -163,7 +163,7 @@ fn plan_reports_tab_wide_flags_and_char_byte_lengths() {
 
 #[test]
 fn plan_face_boundaries_are_char_offsets_on_multibyte_rows() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // "a e-acute CJK b": 4 chars, 7 bytes. A face span over chars 2..4
     // (1-based [2, 4) = e-acute + CJK) must split at CHAR offsets 1 and 3.
     let text = "a\u{00E9}\u{4E2D}b\n";
@@ -194,7 +194,7 @@ fn plan_face_boundaries_are_char_offsets_on_multibyte_rows() {
 
 #[test]
 fn classifier_rejects_tab_line_exactly_filling_the_row() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // "ab\t": the tab expands from col 2 to the col-8 stop, 64px at 8px
     // cells. A 64px row is exact fill — refused; one cell of slack routes.
     let buf_id = buffer_with_text(&mut eval, "ab\t\n");
@@ -223,7 +223,7 @@ fn classifier_rejects_tab_line_exactly_filling_the_row() {
 
 #[test]
 fn classifier_fit_advances_a_full_stop_for_tab_exactly_on_a_stop() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // GNU next_tab_x (xdisp.c gui_produce_glyphs): the +1 in
     // ((1 + x + tab_width - 1) / tab_width) * tab_width forces a tab landing
     // EXACTLY on a stop to advance a FULL stop. "abcdefgh\t": the tab starts
@@ -270,7 +270,7 @@ fn classifier_fit_advances_a_full_stop_for_tab_exactly_on_a_stop() {
 
 #[test]
 fn classifier_rejects_wide_char_exact_fill_and_straddle() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // "abc" + CJK = 5 cols = 40px at 8px cells.
     let text = "abc\u{4E2D}\n";
     let buf_id = buffer_with_text(&mut eval, text);
@@ -310,7 +310,7 @@ fn classifier_rejects_wide_char_exact_fill_and_straddle() {
 
 #[test]
 fn classifier_rejects_content_the_item_route_does_not_cover() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // Control chars, zero-width chars, complex scripts, regional-indicator
     // pairs, and nobreak space/hyphen (nobreak-char-display consults a
     // setting): all stay on the buffer pipeline. (Combining marks on a
@@ -351,7 +351,7 @@ fn classifier_rejects_content_the_item_route_does_not_cover() {
 /// about being mid-line that the classifier needs to refuse.
 #[test]
 fn classifier_routes_mid_line_start() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "abc\n");
     assert_eq!(
         classify_in_buffer(
@@ -377,7 +377,7 @@ fn classifier_routes_mid_line_start() {
 /// behaviour must not.
 #[test]
 fn classifier_refuses_a_mid_line_start_whose_first_char_does_not_fit() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abcdef\n";
     let buf_id = buffer_with_text(&mut eval, text);
     let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
@@ -401,7 +401,7 @@ fn classifier_refuses_a_mid_line_start_whose_first_char_does_not_fit() {
 /// be classified at all.
 #[test]
 fn mid_line_tail_plans_from_its_own_charpos() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abcdef\n";
     let buf_id = buffer_with_text(&mut eval, text);
     let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
@@ -419,7 +419,7 @@ fn mid_line_tail_plans_from_its_own_charpos() {
 /// the tab's width depends on where the resumed walk actually stands.
 #[test]
 fn continuation_resume_tab_expands_from_carried_column() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abc\txy\n";
     let buf_id = buffer_with_text(&mut eval, text);
     let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
@@ -451,7 +451,7 @@ fn continuation_resume_tab_expands_from_carried_column() {
 
 #[test]
 fn continuation_route_preserves_the_physical_line_tab_grid() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abc\txy\n";
     let buf_id = buffer_with_text(&mut eval, text);
     let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
@@ -477,7 +477,7 @@ fn continuation_route_preserves_the_physical_line_tab_grid() {
 /// too: point inside the resumed tail refuses.
 #[test]
 fn continuation_resume_still_refuses_point_in_tail() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abcdef\n";
     let buf_id = buffer_with_text(&mut eval, text);
     let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
@@ -498,7 +498,7 @@ fn continuation_resume_still_refuses_point_in_tail() {
 /// the continuation row.
 #[test]
 fn continuation_resume_at_newline_plans_row_break_only() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abc\n";
     let buf_id = buffer_with_text(&mut eval, text);
     let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
@@ -515,7 +515,7 @@ fn continuation_resume_at_newline_plans_row_break_only() {
 
 #[test]
 fn classifier_rejects_line_exactly_filling_the_row() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "abcd\n");
     // 4 chars * 8px == the full 32px row: exact fill is NOT eligible.
     let exact = fit_to(32.0);
@@ -545,7 +545,7 @@ fn classifier_rejects_line_exactly_filling_the_row() {
 
 #[test]
 fn classifier_rejects_rows_containing_point() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "abc\nxyz\n");
     let text = b"abc\nxyz\n";
     for point in 0..=3 {
@@ -572,7 +572,7 @@ fn classifier_rejects_rows_containing_point() {
 
 #[test]
 fn classifier_rejects_window_policy_features() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "abc\n");
     let text = b"abc\n";
     let policies = [
@@ -604,7 +604,7 @@ fn classifier_rejects_window_policy_features() {
 
 #[test]
 fn classifier_accepts_face_property_span_and_plans_boundaries() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "hello\nworld\n");
     eval.buffer_manager_mut().set_current(buf_id);
     eval.eval_str("(put-text-property 3 5 'face 'bold)")
@@ -635,7 +635,7 @@ fn classifier_accepts_face_property_span_and_plans_boundaries() {
 
 #[test]
 fn classifier_accepts_font_lock_face_and_whole_line_span() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "keyword\n");
     eval.buffer_manager_mut().set_current(buf_id);
     eval.eval_str("(put-text-property 1 8 'font-lock-face 'bold)")
@@ -655,7 +655,7 @@ fn classifier_accepts_font_lock_face_and_whole_line_span() {
 
 #[test]
 fn classifier_accepts_fontified_boundary_as_segment_split() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "abcd\n");
     eval.buffer_manager_mut().set_current(buf_id);
     // A non-face property change (fontified) still splits the run, exactly
@@ -684,7 +684,7 @@ fn classifier_rejects_hazard_properties_anywhere_on_the_line() {
     // replacements route (see the replacement tests below) and every other
     // display shape refuses through the dedicated replacement scan.
     for (prop, value) in [("mouse-face", "'highlight"), ("line-height", "2.0")] {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let buf_id = buffer_with_text(&mut eval, "hello\n");
         eval.buffer_manager_mut().set_current(buf_id);
         eval.eval_str(&format!("(put-text-property 3 5 '{prop} {value})"))
@@ -705,7 +705,7 @@ fn classifier_rejects_hazard_properties_anywhere_on_the_line() {
 
 #[test]
 fn classifier_rejects_hazard_property_on_the_newline() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "hello\nx\n");
     eval.buffer_manager_mut().set_current(buf_id);
     // A display property covering ONLY the newline would replace the line
@@ -726,7 +726,7 @@ fn classifier_rejects_hazard_property_on_the_newline() {
 
 #[test]
 fn classifier_accepts_face_only_overlay_and_plans_boundaries() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "hello\n");
     eval.buffer_manager_mut().set_current(buf_id);
     // Overlay over "el" (elisp 2..4) carrying only face-affecting props.
@@ -754,7 +754,7 @@ fn classifier_accepts_face_only_overlay_and_plans_boundaries() {
 
 #[test]
 fn classifier_merges_overlay_and_text_prop_boundaries() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "hello\n");
     eval.buffer_manager_mut().set_current(buf_id);
     // Text face over "he" plus overlapping overlays: boundaries merge,
@@ -778,7 +778,7 @@ fn classifier_merges_overlay_and_text_prop_boundaries() {
 
 #[test]
 fn classifier_accepts_zero_length_face_only_overlay() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "hello\n");
     eval.buffer_manager_mut().set_current(buf_id);
     // GNU next_overlay_change: an empty overlay contributes exactly one
@@ -818,7 +818,7 @@ fn classifier_rejects_overlay_hazard_properties() {
         ("line-prefix", "\"> \""),
         ("help-echo", "\"tip\""),
     ] {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let buf_id = buffer_with_text(&mut eval, "hello\n");
         eval.buffer_manager_mut().set_current(buf_id);
         eval.eval_str(&format!(
@@ -843,7 +843,7 @@ fn classifier_rejects_overlay_hazard_properties() {
 
 #[test]
 fn classifier_rejects_string_overlay_touching_row_endpoints() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "ab\ncd\n");
     eval.buffer_manager_mut().set_current(buf_id);
     // Overlay ends exactly at the second row's start: its after-string fires
@@ -867,7 +867,7 @@ fn classifier_rejects_string_overlay_touching_row_endpoints() {
     );
     // Overlay starting exactly at the row's newline: its before-string fires
     // at the newline position, which the pipeline's line-break lifecycle owns.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "ab\ncd\n");
     eval.buffer_manager_mut().set_current(buf_id);
     eval.eval_str("(overlay-put (make-overlay 3 5) 'before-string \"B\")")
@@ -887,7 +887,7 @@ fn classifier_rejects_string_overlay_touching_row_endpoints() {
 
 #[test]
 fn classifier_ignores_overlays_on_other_rows() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "hello\nworld\n");
     eval.buffer_manager_mut().set_current(buf_id);
     // A string-carrying overlay entirely on the SECOND row. Neither row is
@@ -924,7 +924,7 @@ fn classifier_ignores_overlays_on_other_rows() {
 /// the plan carries the producer's collection so the commit can delegate it.
 #[test]
 fn classifier_routes_a_mid_line_overlay_string_anchor() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "hello\n");
     eval.buffer_manager_mut().set_current(buf_id);
     eval.eval_str(
@@ -972,7 +972,7 @@ fn classifier_rejects_unroutable_overlay_string_shapes() {
         ),
         ("'not-a-string", "a non-string value is not displayable"),
     ] {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let buf_id = buffer_with_text(&mut eval, "hello\n");
         eval.buffer_manager_mut().set_current(buf_id);
         eval.eval_str(&format!(
@@ -1013,7 +1013,7 @@ fn classifier_routes_a_prefix_whose_unroutable_string_it_never_reaches() {
     let overlay = "(overlay-put (make-overlay 31 33) 'before-string \
                    (propertize \"S\" 'face 'bold))";
 
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, &text);
     eval.buffer_manager_mut().set_current(buf_id);
     eval.eval_str(overlay).expect("overlay");
@@ -1029,7 +1029,7 @@ fn classifier_routes_a_prefix_whose_unroutable_string_it_never_reaches() {
         "a whole-line plan reaches the unroutable string"
     );
 
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, &text);
     eval.buffer_manager_mut().set_current(buf_id);
     eval.eval_str(overlay).expect("overlay");
@@ -1064,7 +1064,7 @@ fn classifier_routes_a_prefix_whose_line_end_anchor_it_never_reaches() {
 
     // Whole-line plan (the coverage IS the line): the anchor sits on the line
     // end the pipeline's line-break lifecycle owns, so the row refuses.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, &text);
     eval.buffer_manager_mut().set_current(buf_id);
     overlay_at_line_end(&mut eval);
@@ -1082,7 +1082,7 @@ fn classifier_routes_a_prefix_whose_line_end_anchor_it_never_reaches() {
 
     // Overflow-prefix plan holding 10 columns: the coverage stops 30 chars
     // short of the anchor, so the prefix still routes.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, &text);
     eval.buffer_manager_mut().set_current(buf_id);
     overlay_at_line_end(&mut eval);
@@ -1114,7 +1114,7 @@ fn classifier_rejects_overlay_string_anchors_in_an_overflow_prefix() {
         // resume, so the prefix still routes.
         (30, RowAcquisitionRoute::ItemRenderer),
     ] {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let buf_id = buffer_with_text(&mut eval, &text);
         eval.buffer_manager_mut().set_current(buf_id);
         eval.eval_str(&format!(
@@ -1139,7 +1139,7 @@ fn classifier_rejects_overlay_string_anchors_in_an_overflow_prefix() {
 
 #[test]
 fn classifier_rejects_active_display_table() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "abc\n");
     {
         let table = neovm_core::emacs_core::Value::make_char_table(
@@ -1164,7 +1164,7 @@ fn classifier_rejects_active_display_table() {
 
 #[test]
 fn classifier_routes_glyphless_char_display_entries_through_the_buffer_pipeline() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "a▼b\n";
     let buf_id = buffer_with_text(&mut eval, text);
     let table = Value::make_char_table(Value::symbol("glyphless-char-display"), Value::NIL, 1);
@@ -1199,7 +1199,7 @@ fn classifier_routes_glyphless_char_display_entries_through_the_buffer_pipeline(
 /// elision scan) before reaching a verdict that never depended on any of it.
 #[test]
 fn classifier_refuses_a_display_table_buffer_before_scanning_the_row() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // A C0 control char: the char scan refuses this row on content alone.
     let text = "a\x01b\n";
     let buf_id = buffer_with_text(&mut eval, text);
@@ -1262,7 +1262,7 @@ fn a_refusal_window_covers_only_the_range_it_was_given() {
 /// visible loop never stands at text end, so neither is a counterexample.)
 #[test]
 fn a_zero_coverage_plan_is_exactly_a_position_standing_on_a_newline() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "ab\n\ncd\n";
     let buf_id = buffer_with_text(&mut eval, text);
     let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
@@ -1294,7 +1294,7 @@ fn a_zero_coverage_plan_is_exactly_a_position_standing_on_a_newline() {
 
 #[test]
 fn plain_source_matches_buffer_text_source_cursor_items() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "hello world\n");
     let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
     let start = CharPos0::ZERO;
@@ -1331,7 +1331,7 @@ fn plain_source_matches_buffer_text_source_cursor_items() {
 
 #[test]
 fn routed_source_matches_buffer_text_source_cursor_items_for_tab_and_wide() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // Tab and a wide CJK char inside the run: the cursor keeps both in ONE
     // plain TextRun (tab and CJK classify as Text), and the routed source
     // must produce the identical item — same UTF-8 text, same char/byte
@@ -1381,7 +1381,7 @@ fn face_resolver_for(eval: &Context) -> FaceResolver {
 
 #[test]
 fn plan_row_face_segments_resolves_per_segment_stable_ids() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "hello\n");
     eval.buffer_manager_mut().set_current(buf_id);
     eval.eval_str("(put-text-property 3 5 'face 'bold)")
@@ -1417,7 +1417,7 @@ fn plan_row_face_segments_resolves_per_segment_stable_ids() {
 
 #[test]
 fn resolve_routed_position_face_covers_the_newline_span() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "abcd\nnext\n");
     eval.buffer_manager_mut().set_current(buf_id);
     // Face span covering the newline (1-based [3, 6) covers chars "cd\n").
@@ -1440,7 +1440,7 @@ fn resolve_routed_position_face_covers_the_newline_span() {
 
     // A span ending exactly at the newline leaves the newline on the base
     // face.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "abcd\nnext\n");
     eval.buffer_manager_mut().set_current(buf_id);
     eval.eval_str("(put-text-property 3 5 'face 'bold)")
@@ -1460,7 +1460,7 @@ fn resolve_routed_position_face_covers_the_newline_span() {
 
 #[test]
 fn routed_segment_item_face_agrees_for_plain_face_spans() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "hello\n");
     eval.buffer_manager_mut().set_current(buf_id);
     eval.eval_str("(put-text-property 3 5 'face 'bold)")
@@ -1493,7 +1493,7 @@ fn routed_segment_item_face_agrees_for_plain_face_spans() {
 
 #[test]
 fn routed_segment_item_face_agrees_under_default_remapping() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "hello\n");
     eval.buffer_manager_mut().set_current(buf_id);
     eval.eval_str("(put-text-property 1 6 'face 'italic)")
@@ -1534,7 +1534,7 @@ fn routed_segment_item_face_agrees_under_default_remapping() {
 
 #[test]
 fn plain_source_segments_produce_per_face_text_runs_and_break_face() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "hello\n");
     let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
     let bold = RenderFaceRef::FaceId(neomacs_display_protocol::types::FaceId::new(40));
@@ -1589,7 +1589,7 @@ fn plain_source_segments_produce_per_face_text_runs_and_break_face() {
 
 #[test]
 fn plain_source_text_only_omits_the_row_break() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "ab\n");
     let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
     let mut source = BufferPlainItemSource::text_only(
@@ -1609,7 +1609,7 @@ fn plain_source_text_only_omits_the_row_break() {
 
 #[test]
 fn classifier_routes_mid_line_plain_elision_and_plans_segments() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // "abXXcd": chars 2..4 invisible (default buffer-invisibility-spec is t,
     // so any non-nil `invisible` value hides without an ellipsis). The row
     // routes with the hidden span elided; the visible segments skip it and
@@ -1643,7 +1643,7 @@ fn classifier_routes_mid_line_plain_elision_and_plans_segments() {
 
 #[test]
 fn classifier_routes_trailing_elision_ending_at_newline() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // "abcXX" with "XX" invisible: the hidden run ends exactly AT the
     // newline, which stays visible — the line structure is unchanged.
     let text = "abcXX\n";
@@ -1669,7 +1669,7 @@ fn classifier_routes_trailing_elision_ending_at_newline() {
 
 #[test]
 fn classifier_rejects_ellipsis_invisible() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // buffer-invisibility-spec entry (org . t) means "hidden WITH ellipsis":
     // the pipeline appends the `...` glyphs with their own rules (GNU
     // setup_for_ellipsis: saved face, newpos-1 provenance) — refused.
@@ -1700,7 +1700,7 @@ fn classifier_elision_uses_entry_run_ellipsis_flag_for_adjacent_runs() {
     // the ENTRY run's (the pipeline's check_invisible contract): a
     // no-ellipsis run followed by an ellipsis run still elides plainly and
     // routes; entering ON the ellipsis run refuses.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "aXYb\n";
     let buf_id = buffer_with_text(&mut eval, text);
     eval.buffer_manager_mut().set_current(buf_id);
@@ -1720,7 +1720,7 @@ fn classifier_elision_uses_entry_run_ellipsis_flag_for_adjacent_runs() {
     .expect("entry run without ellipsis routes");
     assert_eq!(plan.elided(), &[(1, 3)], "adjacent runs collapse into one");
 
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, text);
     eval.buffer_manager_mut().set_current(buf_id);
     eval.eval_str(
@@ -1744,7 +1744,7 @@ fn classifier_elision_uses_entry_run_ellipsis_flag_for_adjacent_runs() {
 
 #[test]
 fn classifier_rejects_invisible_spanning_the_newline() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // The hidden region swallows the newline (org-fold shape): the fold joins
     // buffer lines into one display row — a line-structure change the
     // single-row item route cannot express.
@@ -1765,7 +1765,7 @@ fn classifier_rejects_invisible_spanning_the_newline() {
     );
 
     // The invisible run covering ONLY the newline refuses too.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abc\nx\n";
     let buf_id = buffer_with_text(&mut eval, text);
     eval.buffer_manager_mut().set_current(buf_id);
@@ -1786,7 +1786,7 @@ fn classifier_rejects_invisible_spanning_the_newline() {
 
 #[test]
 fn classifier_rejects_row_start_invisible() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // A hidden run AT the row start is consumed by the visible loop's
     // invisible checkpoint BEFORE the route attempt (the walk then resumes
     // mid-line, which refuses); the classifier mirrors that ordering so a
@@ -1810,7 +1810,7 @@ fn classifier_rejects_row_start_invisible() {
 
 #[test]
 fn classifier_rejects_invisible_from_overlay() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // Overlay-sourced invisibility stays refused (2c allow-list): overlay
     // `invisible` shadows the text property outright in the pipeline's
     // precedence (GNU get_char_property_and_overlay) and interacts with
@@ -1834,7 +1834,7 @@ fn classifier_rejects_invisible_from_overlay() {
 
 #[test]
 fn classifier_routes_non_hiding_invisible_value() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // An `invisible` value NOT in buffer-invisibility-spec hides nothing:
     // the row routes with no elision (the property change still segments,
     // exactly like any other property boundary).
@@ -1862,7 +1862,7 @@ fn classifier_routes_non_hiding_invisible_value() {
 
 #[test]
 fn classifier_routes_display_string_replacement() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // Increment 2i rung 2 (flipping the former 2d refusal pin): a plain
     // property-less single-line string-valued `display` property is now
     // ROUTED. The plan records the covered span; production renders it
@@ -1899,7 +1899,7 @@ fn routed_replacement_extent_follows_the_same_display_object_across_a_property_c
     //
     // Explicit goldens, not values read back off the plan: one span, exactly
     // (2, 6), and a line of 8 chars.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abXXYYcd\n";
     let buf_id = buffer_with_text(&mut eval, text);
     eval.buffer_manager_mut().set_current(buf_id);
@@ -1928,7 +1928,7 @@ fn routed_replacement_extent_stops_at_a_different_display_object_with_equal_text
     // objects that happen to spell the same thing are two replacements, each
     // covering its own run. `eq`-ness is the whole rule, so a fold that
     // compared text would pass the pin above and red here.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abXXYYcd\n";
     let buf_id = buffer_with_text(&mut eval, text);
     eval.buffer_manager_mut().set_current(buf_id);
@@ -1951,7 +1951,7 @@ fn routed_replacement_extent_stops_at_a_different_display_object_with_equal_text
 
 #[test]
 fn classifier_fits_replacement_by_string_width_not_covered_width() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // The fit walk advances by the REPLACEMENT's width (5 cols for "WIDER"),
     // not the covered chars' width (2 cols): "abXXcd" displays as
     // "abWIDERcd" = 9 cols. A 9-col row exactly fills (refuse, the line-end
@@ -2021,7 +2021,7 @@ fn classifier_rejects_unroutable_display_string_shapes() {
             "tab in string",
         ),
     ] {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let text = "abXXcd\n";
         let buf_id = buffer_with_text(&mut eval, text);
         eval.buffer_manager_mut().set_current(buf_id);
@@ -2046,7 +2046,7 @@ fn classifier_rejects_replacement_combined_with_elision_or_overflow() {
     // elision OR a replacement, never both (their skip bookkeeping would
     // interleave), and a replacement row never routes as an overflow prefix
     // (the scan's handoff cut would not be the pipeline's overflow point).
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abXXcdEFGH\n";
     let buf_id = buffer_with_text(&mut eval, text);
     eval.buffer_manager_mut().set_current(buf_id);
@@ -2067,7 +2067,7 @@ fn classifier_rejects_replacement_combined_with_elision_or_overflow() {
         "replacement + elision must keep the buffer pipeline"
     );
 
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abXXcdefghij\n";
     let buf_id = buffer_with_text(&mut eval, text);
     eval.buffer_manager_mut().set_current(buf_id);
@@ -2097,7 +2097,7 @@ fn classifier_rejects_valid_static_composition_prop() {
     // SAME predicate. Both the fixnum-component and string-component Form-A
     // shapes (prettify-symbols / compose-region) refuse.
     for value in ["'((2 . ?x))", "'((2 . \"ab\"))"] {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let buf_id = buffer_with_text(&mut eval, "hello\n");
         eval.buffer_manager_mut().set_current(buf_id);
         eval.eval_str(&format!("(put-text-property 3 5 'composition {value})"))
@@ -2123,7 +2123,7 @@ fn classifier_routes_inert_composition_prop() {
     // the ordinary text run — the row routes, and the property change
     // positions segment it exactly like any other property boundary.
     for value in ["'((0 . 1))", "'garbage"] {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let buf_id = buffer_with_text(&mut eval, "hello\n");
         eval.buffer_manager_mut().set_current(buf_id);
         eval.eval_str(&format!("(put-text-property 3 5 'composition {value})"))
@@ -2163,7 +2163,7 @@ fn classifier_rejects_rows_the_pipeline_would_compose() {
         "\u{0301}x\n",                    // combining mark at row start
         "a\t\u{0301}b\n",                 // combining mark after a tab
     ] {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let buf_id = buffer_with_text(&mut eval, text);
         assert_eq!(
             classify_in_buffer(
@@ -2181,7 +2181,7 @@ fn classifier_rejects_rows_the_pipeline_would_compose() {
 
 #[test]
 fn classifier_routes_plain_space_width_spec() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // Increment 2i rung 3 (flipping the former 2d rung-3 refusal pin): a
     // plain `(space :width N)` spec with a positive fixnum N now ROUTES.
     // Production renders it through the pipeline's replacement session
@@ -2221,7 +2221,7 @@ fn classifier_rejects_space_specs_outside_the_plain_width_form() {
         ("'(space :width 0)", "zero width"),
         ("'(space)", "bare space"),
     ] {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let text = "ab cd\n";
         let buf_id = buffer_with_text(&mut eval, text);
         eval.buffer_manager_mut().set_current(buf_id);
@@ -2243,7 +2243,7 @@ fn classifier_rejects_space_specs_outside_the_plain_width_form() {
 
 #[test]
 fn classifier_fits_space_spec_by_stretch_width() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // "ab cd" with (space :width 3) over the blank displays as 7 cols
     // (ab + 3-col stretch + cd): a 7-col row exactly fills (refuse), an
     // 8-col row routes.
@@ -2278,7 +2278,7 @@ fn classifier_fits_space_spec_by_stretch_width() {
 
 #[test]
 fn classifier_routes_combining_mark_cluster_and_plans_composed() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // "ae\u{301}b": the combining acute is a zero-width extender the shared
     // writer merges into the 'e' Char glyph (Char -> Composite). The row
     // routes with the extender recorded as a composed offset.
@@ -2301,7 +2301,7 @@ fn classifier_routes_combining_mark_cluster_and_plans_composed() {
 
 #[test]
 fn classifier_routes_keycap_cluster() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // "1\u{FE0F}\u{20E3}x": VS16 and the combining enclosing keycap are both
     // zero-width extenders on the '1' base — the same Composite merge.
     let text = "1\u{FE0F}\u{20E3}x\n";
@@ -2320,7 +2320,7 @@ fn classifier_routes_keycap_cluster() {
 
 #[test]
 fn classifier_fit_counts_composed_extenders_as_zero_cols() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // "ae\u{301}b" occupies 3 columns (the mark contributes 0, exactly like
     // GNU cmp->width / string-width): a 3-cell row is exact fill (refused),
     // 4 cells route.
@@ -2346,7 +2346,7 @@ fn classifier_fit_counts_composed_extenders_as_zero_cols() {
 
 #[test]
 fn classifier_rejects_composed_cluster_straddling_face_boundary() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // A face change lands exactly ON the extender: the segment split would
     // put the mark at a segment start, but the writer still merges it into
     // the PREVIOUS segment's base glyph (keeping that base's face) — a
@@ -2372,7 +2372,7 @@ fn classifier_rejects_composed_cluster_straddling_face_boundary() {
 
 #[test]
 fn classifier_rejects_composed_cluster_with_hidden_base() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // The base 'e' is elided but the mark stays visible: the pipeline's
     // walk then merges the mark into the PRECEDING visible glyph ('a'),
     // while the routed segments would render the mark at a segment start —
@@ -2395,7 +2395,7 @@ fn classifier_rejects_composed_cluster_with_hidden_base() {
         "a visible extender whose base is hidden must refuse"
     );
 
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, text);
     eval.buffer_manager_mut().set_current(buf_id);
     eval.eval_str("(put-text-property 3 4 'invisible t)")
@@ -2413,7 +2413,7 @@ fn classifier_rejects_composed_cluster_with_hidden_base() {
 
 #[test]
 fn routed_source_matches_cursor_items_for_combining_mark() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // The cursor keeps the mark inside ONE plain TextRun (it classifies as
     // Text); the routed source must produce the identical item.
     let text = "ae\u{0301}b\n";
@@ -2459,7 +2459,7 @@ fn routed_source_matches_cursor_items_for_combining_mark() {
 
 #[test]
 fn classifier_plans_truncation_prefix_for_overwide_line() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // 8 chars in a 5-cell row (40px at 8px cells): "abcde" fits — the 5th
     // char ends exactly AT the edge, which the pipeline's fit rule accepts
     // (x + advance <= right_edge) — and "f" would cross, so the plan covers
@@ -2494,7 +2494,7 @@ fn classifier_plans_truncation_prefix_for_overwide_line() {
 
 #[test]
 fn classifier_plans_wrap_prefix_for_overwide_line() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // Same prefix cut under character wrap (WINDOW_WRAP): the plan is
     // identical — the wrap-vs-truncate decision is the PIPELINE's, made at
     // the handoff char by its own overflow action (CharacterWrap emits the
@@ -2522,7 +2522,7 @@ fn classifier_routes_hebrew_rtl_rows() {
     // the acquisition seam: both producers emit identical logical-order rows
     // and the same pure function permutes them to visual order (proven
     // glyph-for-glyph by the hebrew/mixed shadow tests in engine_test.rs).
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     for text in [
         "\u{05D0}\u{05D1}\u{05D2}\n",
         "abc \u{05D0}\u{05D1}\u{05D2} def\n",
@@ -2557,7 +2557,7 @@ fn classifier_refuses_directional_formatting_chars() {
     // never sees them and they cannot steer resolution as they do in GNU —
     // a pipeline-wide parity gap on BOTH paths, recorded for the divergence
     // backlog, not a routing divergence.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     for mark in [
         '\u{200E}', // LRM
         '\u{200F}', // RLM
@@ -2606,7 +2606,7 @@ fn classifier_refuses_overwide_line_under_word_wrap() {
     // display-point count) so WordWrapRenderState can be fed during run
     // appends — or the word-wrap candidate search must move behind the
     // append seam entirely.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "aaa bbb ccc\n";
     let buf_id = buffer_with_text(&mut eval, text);
     let policy = RowRouteWindowPolicy {
@@ -2629,7 +2629,7 @@ fn classifier_refuses_overwide_line_under_word_wrap() {
 
 #[test]
 fn classifier_refuses_prefix_when_first_char_overflows() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // A sub-cell row: even the first char crosses the edge, so there is no
     // fitting prefix to route; the pipeline owns the whole line.
     let text = "abc\n";
@@ -2648,7 +2648,7 @@ fn classifier_refuses_prefix_when_first_char_overflows() {
 
 #[test]
 fn classifier_prefix_point_refusal_covers_the_whole_cursor_line() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abcdefgh\n";
     let buf_id = buffer_with_text(&mut eval, text);
     // Point ANYWHERE on the line (through the newline) refuses, including
@@ -2694,7 +2694,7 @@ fn classifier_prefix_point_refusal_covers_the_whole_cursor_line() {
 
 #[test]
 fn classifier_prefix_plans_face_boundaries_inside_prefix_only() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abcdefgh\n";
     let buf_id = buffer_with_text(&mut eval, text);
     eval.buffer_manager_mut().set_current(buf_id);
@@ -2724,7 +2724,7 @@ fn classifier_prefix_plans_face_boundaries_inside_prefix_only() {
 
 #[test]
 fn classifier_prefix_face_span_crossing_the_clip_splits_at_its_start_only() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abcdefgh\n";
     let buf_id = buffer_with_text(&mut eval, text);
     eval.buffer_manager_mut().set_current(buf_id);
@@ -2755,7 +2755,7 @@ fn classifier_prefix_face_span_crossing_the_clip_splits_at_its_start_only() {
 
 #[test]
 fn classifier_prefix_ignores_hazards_beyond_the_handoff() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abcdefgh\n";
     let buf_id = buffer_with_text(&mut eval, text);
     eval.buffer_manager_mut().set_current(buf_id);
@@ -2778,7 +2778,7 @@ fn classifier_prefix_ignores_hazards_beyond_the_handoff() {
 
 #[test]
 fn classifier_prefix_refuses_hazard_inside_the_prefix() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abcdefgh\n";
     let buf_id = buffer_with_text(&mut eval, text);
     eval.buffer_manager_mut().set_current(buf_id);
@@ -2798,7 +2798,7 @@ fn classifier_prefix_refuses_hazard_inside_the_prefix() {
 
 #[test]
 fn classifier_prefix_refuses_elision_inside_the_prefix() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // An invisible span inside the prefix would make the scan's fit walk
     // overcount (it advances the pen for hidden chars too), so the handoff
     // cut would not be the pipeline's overflow point: refuse.
@@ -2821,7 +2821,7 @@ fn classifier_prefix_refuses_elision_inside_the_prefix() {
 
 #[test]
 fn classifier_prefix_byte_len_tracks_multibyte_chars() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // Five 1-column 2-byte chars in a 3-cell row: prefix is 3 chars, 6 bytes.
     let text = "ééééé\n";
     let buf_id = buffer_with_text(&mut eval, text);
@@ -2842,7 +2842,7 @@ fn classifier_prefix_byte_len_tracks_multibyte_chars() {
 
 #[test]
 fn classifier_routes_empty_line_and_plans_row_break_only() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // "x", an empty line, then "y": the empty line (a bare newline at
     // charpos 2) routes with a RowBreak-only plan — zero covered chars, the
     // shared line-end plan consumes the newline (GNU display_line's
@@ -2876,7 +2876,7 @@ fn classifier_routes_empty_line_and_plans_row_break_only() {
 
 #[test]
 fn classifier_refuses_empty_line_when_point_on_newline() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // Point ON the empty line's newline: the cursor rides the appended
     // newline space (GNU set_cursor_from_row's empty_line_p glyph), a
     // documented buffer-pipeline responsibility.
@@ -2897,7 +2897,7 @@ fn classifier_refuses_empty_line_when_point_on_newline() {
 
 #[test]
 fn classifier_refuses_empty_line_with_hazard_prop_on_newline() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "x\n\ny\n";
     let buf_id = buffer_with_text(&mut eval, text);
     eval.buffer_manager_mut().set_current(buf_id);
@@ -2918,7 +2918,7 @@ fn classifier_refuses_empty_line_with_hazard_prop_on_newline() {
 
 #[test]
 fn classifier_refuses_empty_line_with_string_overlay_at_newline() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "x\n\ny\n";
     let buf_id = buffer_with_text(&mut eval, text);
     eval.buffer_manager_mut().set_current(buf_id);
@@ -2938,7 +2938,7 @@ fn classifier_refuses_empty_line_with_string_overlay_at_newline() {
 
 #[test]
 fn plain_source_row_break_only_produces_single_row_break_item() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "x\n\ny\n";
     let buf_id = buffer_with_text(&mut eval, text);
     let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
@@ -2979,7 +2979,7 @@ fn plain_source_row_break_only_produces_single_row_break_item() {
 
 #[test]
 fn classifier_routes_eob_tail_row_without_newline() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // The buffer ends without a trailing newline: the last line ends at the
     // window read's end, which the bounded read guarantees is the accessible
     // end (the read bound always cuts AFTER a newline, never mid-line). The
@@ -3018,7 +3018,7 @@ fn classifier_routes_eob_tail_row_without_newline() {
 
 #[test]
 fn classifier_refuses_eob_tail_containing_point() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abc\nxyz";
     let buf_id = buffer_with_text(&mut eval, text);
     let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
@@ -3053,7 +3053,7 @@ fn point_gate_scans_only_the_narrowed_window_of_a_newline_less_tail() {
     // of the line up front: the rows before the cursor row route their
     // fitting prefix, and only the row whose coverage actually reaches
     // point refuses (the cursor row stays pipeline-owned).
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "a".repeat(200);
     let buf_id = buffer_with_text(&mut eval, &text);
     let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
@@ -3090,7 +3090,7 @@ fn point_gate_scans_only_the_narrowed_window_of_a_newline_less_tail() {
 
 #[test]
 fn classifier_plans_overflow_prefix_for_overwide_eob_tail() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // An over-wide tail line: the routed coverage is the fitting prefix and
     // the pipeline's own overflow machinery consumes the rest, exactly like
     // a phase 2f over-wide newline line.
@@ -3110,7 +3110,7 @@ fn classifier_plans_overflow_prefix_for_overwide_eob_tail() {
 
 #[test]
 fn classifier_routes_exactly_filling_eob_tail() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // A tail line exactly filling the row routes: with no following char
     // there is no continuation/truncation edge to interact with — the
     // pipeline appends the same chars (each satisfying x + advance <=
@@ -3131,7 +3131,7 @@ fn classifier_routes_exactly_filling_eob_tail() {
 
 #[test]
 fn classifier_eob_tail_plans_face_boundaries() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abc\nxyz";
     let buf_id = buffer_with_text(&mut eval, text);
     eval.buffer_manager_mut().set_current(buf_id);
@@ -3157,7 +3157,7 @@ fn classifier_eob_tail_plans_face_boundaries() {
 /// source end keeps the phase-2h end-of-source route.
 #[test]
 fn classifier_refuses_a_line_cut_by_a_character_horizon() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abcdef";
     let buf_id = buffer_with_text(&mut eval, text);
     let buffer = eval.buffer_manager().get(buf_id).expect("buffer");

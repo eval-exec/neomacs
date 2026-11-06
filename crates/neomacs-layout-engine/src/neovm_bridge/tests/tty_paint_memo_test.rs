@@ -24,7 +24,7 @@ fn memo_face(resolver: &FaceResolver, source: &Arc<RootedFace>) -> ResolvedFace 
 
 #[test]
 fn tty_paint_memo_answers_the_unrealized_entry_state() {
-    let _context = neovm_core::emacs_core::Context::new();
+    let _context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
     let source = memo_source();
@@ -57,7 +57,7 @@ fn tty_paint_memo_answers_the_unrealized_entry_state() {
 
 #[test]
 fn tty_paint_memo_installs_the_recorded_snapshot_verbatim() {
-    let _context = neovm_core::emacs_core::Context::new();
+    let _context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
     let source = memo_source();
@@ -103,7 +103,7 @@ fn tty_paint_memo_installs_the_recorded_snapshot_verbatim() {
 
 #[test]
 fn tty_paint_memo_is_scoped_to_frame_and_binding_generation() {
-    let _context = neovm_core::emacs_core::Context::new();
+    let _context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
     let source = memo_source();
@@ -139,7 +139,7 @@ fn tty_paint_memo_is_scoped_to_frame_and_binding_generation() {
 
 #[test]
 fn tty_paint_memo_key_includes_entry_state_and_source_identity() {
-    let _context = neovm_core::emacs_core::Context::new();
+    let _context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
     let source = memo_source();

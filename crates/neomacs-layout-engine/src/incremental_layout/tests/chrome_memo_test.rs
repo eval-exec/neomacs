@@ -35,7 +35,7 @@ const PLAIN: &str = r#"(concat " " (propertize "buf.el" 'face '(:weight bold) 'm
 
 #[test]
 fn two_evaluations_of_the_same_mode_line_fingerprint_equal() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let first = fingerprint(&mut eval, PLAIN).expect("plain data");
     let second = fingerprint(&mut eval, PLAIN).expect("plain data");
     assert_eq!(first, second, "fresh conses with equal contents");
@@ -43,7 +43,7 @@ fn two_evaluations_of_the_same_mode_line_fingerprint_equal() {
 
 #[test]
 fn text_faces_and_mouse_faces_are_part_of_the_fingerprint() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let base = fingerprint(&mut eval, PLAIN).expect("plain data");
     for changed in [
         r#"(concat " " (propertize "buf.el" 'face '(:weight bold) 'mouse-face 'mode-line-highlight) "  L13")"#,
@@ -58,7 +58,7 @@ fn text_faces_and_mouse_faces_are_part_of_the_fingerprint() {
 
 #[test]
 fn request_inputs_are_part_of_the_fingerprint() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let value = eval.eval_str(PLAIN).expect("chrome string");
     let formatted = ModeLineDisplayOutput::from_root_string(value);
     let base = ChromeRowFingerprint::capture(inputs(), &formatted).expect("plain data");
@@ -79,7 +79,7 @@ fn request_inputs_are_part_of_the_fingerprint() {
 #[test]
 fn the_order_of_a_property_list_does_not_matter() {
     // The mode-line formatter merges property lists in no fixed order.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let ab = fingerprint(
         &mut eval,
         r#"(let ((s (copy-sequence "x"))) (set-text-properties 0 1 '(face bold mouse-face highlight) s) s)"#,
@@ -97,7 +97,7 @@ fn the_order_of_a_property_list_does_not_matter() {
 fn mouse_target_properties_are_fingerprinted_by_name_only() {
     // A hit publishes the fresh string's sources, so help-echo and keymaps
     // come from this evaluation and need not match.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let first = fingerprint(
         &mut eval,
         r#"(propertize "buf.el" 'help-echo "one" 'local-map (list 'keymap (cons 'mouse-1 'ignore)))"#,
@@ -115,7 +115,7 @@ fn mouse_target_properties_are_fingerprinted_by_name_only() {
 
 #[test]
 fn a_display_property_or_an_opaque_value_refuses_the_memo() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     for refused in [
         // A display spec can read variables and evaluate `(when ...)`.
         r#"(propertize "x" 'display '(space :align-to 10))"#,
@@ -132,7 +132,7 @@ fn a_display_property_or_an_opaque_value_refuses_the_memo() {
 
 #[test]
 fn a_circular_property_value_is_refused_not_walked_forever() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     assert_eq!(
         fingerprint(
             &mut eval,
@@ -144,7 +144,7 @@ fn a_circular_property_value_is_refused_not_walked_forever() {
 
 #[test]
 fn a_string_that_holds_itself_in_a_property_is_refused() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     assert_eq!(
         fingerprint(
             &mut eval,
@@ -156,7 +156,7 @@ fn a_string_that_holds_itself_in_a_property_is_refused() {
 
 #[test]
 fn strings_inside_property_values_carry_their_own_properties() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let bold = fingerprint(
         &mut eval,
         r#"(propertize "x" 'my-prop (propertize "y" 'face 'bold))"#,
@@ -192,7 +192,7 @@ fn symbol_values_encode_in_name_order() {
 #[test]
 fn the_fingerprint_record_keeps_one_row_per_kind() {
     reset_fingerprint_record();
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let first = fingerprint(&mut eval, PLAIN).expect("plain");
     record_fingerprint(7, WindowChromeKind::ModeLine, Some(first.clone()));
     record_fingerprint(7, WindowChromeKind::ModeLine, Some(first.clone()));

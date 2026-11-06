@@ -33,7 +33,7 @@ fn compare_run(
 
 #[test]
 fn ordinary_run_text_policies_agree_for_every_ordinary_subrange() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     for value in [
         Value::string(""),
         Value::string("plain ASCII text"),
@@ -54,7 +54,7 @@ fn ordinary_run_text_policies_agree_for_every_ordinary_subrange() {
 
 #[test]
 fn ordinary_run_text_preserves_prefixes_before_raw_and_extended_characters() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let characters = [
         EmacsChar::from_char('a'),
         EmacsChar::from_char('é'),
@@ -96,7 +96,7 @@ fn ordinary_run_text_preserves_prefixes_before_raw_and_extended_characters() {
 
 #[test]
 fn ordinary_run_text_noncanonical_bytes_keep_the_scalar_fallback() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // The existing permissive Emacs decoder accepts these overlong A forms.
     // Mutate only the frame's owned native fixture, not Lisp heap storage.
     for encoded in [
@@ -124,7 +124,7 @@ fn ordinary_run_text_noncanonical_bytes_keep_the_scalar_fallback() {
 
 #[test]
 fn ordinary_run_text_obeys_property_and_automatic_composition_limits() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let value = Value::string_with_text_properties(
         "aéx́λz",
         vec![StringTextPropertyRun {
@@ -162,7 +162,7 @@ fn ordinary_run_text_obeys_property_and_automatic_composition_limits() {
 
 #[test]
 fn ordinary_run_text_stops_before_a_captured_terminal_mapping() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval.buffer_manager().current_buffer().expect("buffer").id();
     let table = Value::make_char_table(Value::symbol("glyphless-char-display"), Value::NIL, 1);
     neovm_core::emacs_core::chartable::ct_set_single(
@@ -201,7 +201,7 @@ fn ordinary_run_text_stops_before_a_captured_terminal_mapping() {
 
 #[test]
 fn ordinary_run_text_full_cursor_keeps_special_item_coordinates() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let value = Value::string("aé\nλ\u{7}文\u{feff}z");
     let source = frame(value);
     let mut cursor = LispStringSourceCursor::new(
@@ -244,7 +244,7 @@ fn ordinary_run_text_full_cursor_keeps_special_item_coordinates() {
 
 #[test]
 fn ordinary_run_text_special_legacy_branch_keeps_existing_outcome() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // The low-level scalar helper has an existing debug assertion for an
     // impossible special start. Compare its outcome rather than introducing
     // a new promise about malformed low-level calls in either build mode.

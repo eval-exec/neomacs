@@ -117,7 +117,7 @@ fn fresh_pen_split_value(text: &str, boundaries: &[(usize, usize)]) -> Value {
 
 #[test]
 fn fresh_chrome_integer_pen_preserves_split_lisp_rows_and_source_metadata() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let value = fresh_pen_split_value(
         "ABcdEFghIJkl",
         &[(0, 2), (2, 4), (4, 6), (6, 8), (8, 10), (10, 12)],
@@ -140,7 +140,7 @@ fn fresh_chrome_integer_pen_preserves_split_lisp_rows_and_source_metadata() {
 
 #[test]
 fn fresh_chrome_integer_pen_preserves_clipping_across_lisp_face_segments() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let value = fresh_pen_split_value("ABCD", &[(0, 1), (1, 2), (2, 3), (3, 4)]);
     let canonical = fresh_pen_render_lisp(
         value,
@@ -160,7 +160,7 @@ fn fresh_chrome_integer_pen_preserves_clipping_across_lisp_face_segments() {
 
 #[test]
 fn fresh_chrome_integer_pen_preserves_tab_and_wide_lisp_output() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let value = fresh_pen_split_value("AB\tC中e\u{301}Q", &[(0, 2), (2, 3), (3, 8)]);
     let canonical = fresh_pen_render_lisp(
         value,
@@ -262,7 +262,7 @@ fn fresh_chrome_integer_pen_preserves_fractional_measured_run_then_following_ite
             .expect("fractional split row");
         result.with_row(row)
     }
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let canonical = render(DisplayRowAppendStartPolicy::ReconcileWithRowTail);
     let guarded = render(DisplayRowAppendStartPolicy::ExactIntegerFreshChrome);
     assert_fresh_pen_output_equal(&canonical, &guarded);
@@ -322,7 +322,7 @@ fn fresh_chrome_integer_pen_preserves_cross_item_combining_tail_mutation() {
         .expect("cross-item UnicodeFallback chrome row")
     }
 
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let canonical = render(DisplayRowAppendStartPolicy::ReconcileWithRowTail);
     let guarded = render(DisplayRowAppendStartPolicy::ExactIntegerFreshChrome);
     assert_fresh_pen_output_equal(&canonical, &guarded);
@@ -345,7 +345,7 @@ fn realize_face_realizes_inline_stipple_spec() {
     // what `indent-bars` emits. `realize_face` must turn it into the XBM
     // `StipplePattern` the renderer tiles, with the bytes preserved verbatim.
     // A live `Context` sets up the thread-local value heap the `Value`s need.
-    let _ctx = Context::new();
+    let _ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
     let mut face = neovm_core::face::Face::new("stip");
@@ -599,7 +599,7 @@ fn current_display_row_cluster_tail_reports_live_text_row_tail() {
     builder.begin_row(0, GlyphRowRole::Text);
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, None);
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut font_metrics = None;
 
     assert_eq!(
@@ -1115,7 +1115,7 @@ fn display_row_active_face_state_constructs_from_resolved_and_measured_face() {
 
 #[test]
 fn display_row_renderer_renders_lisp_string_without_layout_engine() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut font_metrics = None;
     let mut renderer =
         DisplayRowRenderer::new(&mut font_metrics, DisplayRowMeasurementMode::LogicalCells);
@@ -1165,7 +1165,7 @@ fn display_row_renderer_renders_lisp_string_without_layout_engine() {
 /// past the buffer model and the TAB over-filled, pushing the greeting right.
 #[test]
 fn tty_complex_run_then_tab_lands_on_buffer_tab_stop() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // font_metrics = None mirrors the TTY frame's fallback measurement path.
     let mut font_metrics = None;
     let mut renderer =
@@ -1213,7 +1213,7 @@ fn tty_complex_run_then_tab_lands_on_buffer_tab_stop() {
 
 #[test]
 fn display_row_source_state_reuses_face_cache_across_items() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let face_resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
     let base_face = face_resolver.default_face();
@@ -1287,7 +1287,7 @@ fn display_row_source_state_reuses_face_cache_across_items() {
 
 #[test]
 fn display_row_renderer_clips_lisp_string_rows_to_geometry_width() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut font_metrics = None;
     let mut renderer =
         DisplayRowRenderer::new(&mut font_metrics, DisplayRowMeasurementMode::LogicalCells);
@@ -1329,7 +1329,7 @@ fn display_row_renderer_clips_lisp_string_rows_to_geometry_width() {
 
 #[test]
 fn display_row_renderer_clips_from_render_bounds_start() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut font_metrics = None;
     let mut renderer =
         DisplayRowRenderer::new(&mut font_metrics, DisplayRowMeasurementMode::LogicalCells);
@@ -1377,7 +1377,7 @@ fn display_row_renderer_clips_from_render_bounds_start() {
 
 #[test]
 fn display_row_renderer_uses_render_bounds_start_for_tab_advance() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut font_metrics = None;
     let mut renderer =
         DisplayRowRenderer::new(&mut font_metrics, DisplayRowMeasurementMode::LogicalCells);
@@ -1762,7 +1762,7 @@ fn render_buffer_display_row_with_properties(
     properties: Vec<(usize, usize, Value, Value)>,
     role: GlyphRowRole,
 ) -> GlyphRow {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1821,7 +1821,7 @@ fn render_buffer_display_row_with_properties(
 
 #[test]
 fn render_display_item_source_row_accepts_buffer_text_source() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1913,7 +1913,7 @@ fn render_display_item_source_row_accepts_buffer_text_source() {
 
 #[test]
 fn render_lisp_string_row_records_xwidget_media_fragments() {
-    let eval = Context::new();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -2070,7 +2070,7 @@ fn render_tab_line_with_sized_media_metadata_host(
 
 #[test]
 fn render_lisp_string_row_centers_image_on_text_centerline() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let rendered_text = Value::string_with_text_properties(
         "AXB",
         vec![neovm_core::emacs_core::value::StringTextPropertyRun {
@@ -2111,7 +2111,7 @@ fn render_lisp_string_row_centers_image_on_text_centerline() {
 
 #[test]
 fn render_lisp_string_row_resolves_image_display_property_through_display_host() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let rendered_text = Value::string_with_text_properties(
         "AXB",
         vec![neovm_core::emacs_core::value::StringTextPropertyRun {
@@ -2145,7 +2145,7 @@ fn render_lisp_string_row_resolves_image_display_property_through_display_host()
 
 #[test]
 fn chrome_image_request_carries_the_rows_fractional_frame_realization() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let rendered_text = Value::string_with_text_properties(
         "X",
         vec![neovm_core::emacs_core::value::StringTextPropertyRun {
@@ -2205,7 +2205,7 @@ fn chrome_image_request_carries_the_rows_fractional_frame_realization() {
 
 #[test]
 fn image_replacement_uses_only_ready_decoded_opaque_background_metadata() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
     let image_text = |explicit_background: bool| {
         let mut spec = vec![
@@ -2279,7 +2279,7 @@ fn image_replacement_uses_only_ready_decoded_opaque_background_metadata() {
 
 #[test]
 fn render_lisp_string_row_resolves_video_display_property_through_display_host() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let rendered_text = Value::string_with_text_properties(
         "AVB",
         vec![neovm_core::emacs_core::value::StringTextPropertyRun {
@@ -2322,7 +2322,7 @@ fn render_lisp_string_row_resolves_video_display_property_through_display_host()
 
 #[test]
 fn render_lisp_string_row_uses_video_handle_without_resolving_a_second_session() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let handle = Value::make_video_handle(VideoId::new(73));
     let rendered_text = Value::string_with_text_properties(
         "AVB",
@@ -2361,7 +2361,7 @@ fn render_lisp_string_row_uses_video_handle_without_resolving_a_second_session()
 
 #[test]
 fn render_lisp_string_row_resolves_webkit_display_property_through_display_host() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let rendered_text = Value::string_with_text_properties(
         "AWB",
         vec![neovm_core::emacs_core::value::StringTextPropertyRun {
@@ -2400,7 +2400,7 @@ fn render_lisp_string_row_resolves_webkit_display_property_through_display_host(
 
 #[test]
 fn display_row_buffer_and_lisp_sources_share_display_space_semantics() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let display_space = Value::list(vec![
         Value::symbol("space"),
         Value::keyword("align-to"),
@@ -2445,7 +2445,7 @@ fn display_row_buffer_and_lisp_sources_share_display_space_semantics() {
 
 #[test]
 fn display_row_buffer_and_lisp_sources_share_display_replacement_string_semantics() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let replacement = Value::string("YZ");
     let lisp_row = render_lisp_display_row(
         Value::string_with_text_properties(
@@ -2480,7 +2480,7 @@ fn display_row_buffer_and_lisp_sources_share_display_replacement_string_semantic
 
 #[test]
 fn display_row_buffer_and_lisp_sources_share_face_property_semantics() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let face = Value::list(vec![Value::keyword("foreground"), Value::string("#ff0000")]);
     let lisp_row = render_lisp_display_row(
         Value::string_with_text_properties(
@@ -2513,7 +2513,7 @@ fn display_row_buffer_and_lisp_sources_share_face_property_semantics() {
 
 #[test]
 fn display_row_buffer_and_lisp_sources_share_raise_property_semantics() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let raise = Value::list(vec![Value::symbol("raise"), Value::make_float(0.25)]);
     let lisp_row = render_lisp_display_row(
         Value::string_with_text_properties(
@@ -2556,7 +2556,7 @@ fn display_row_buffer_and_lisp_sources_share_raise_property_semantics() {
 
 #[test]
 fn display_row_buffer_and_lisp_sources_share_height_property_semantics() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let height = Value::list(vec![Value::symbol("height"), Value::make_float(2.0)]);
     let lisp_row = render_lisp_display_row(
         Value::string_with_text_properties(
@@ -2596,7 +2596,7 @@ fn display_row_buffer_and_lisp_sources_share_height_property_semantics() {
 
 #[test]
 fn display_row_buffer_and_lisp_sources_share_control_and_glyphless_semantics() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // U+FFFC stays glyphless; U+FFF0 would instead escape to `\`+octal.
     let text = "a\u{0001}\u{fffc}b";
     let lisp_row = render_lisp_display_row(Value::string(text), GlyphRowRole::HeaderLine);
@@ -2616,7 +2616,7 @@ fn display_row_buffer_and_lisp_sources_share_control_and_glyphless_semantics() {
 
 #[test]
 fn render_display_item_source_row_uses_spec_tab_policy() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -2673,7 +2673,7 @@ fn render_display_item_source_row_uses_spec_tab_policy() {
 
 #[test]
 fn render_lisp_string_row_uses_explicit_tab_policy() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
     let mut renderer = DisplayRowRenderer::new(
         &mut engine.font_metrics,
@@ -2842,7 +2842,7 @@ fn display_row_gui_measurement_preserves_narrow_proportional_glyph_advance() {
 
 #[test]
 fn display_row_gui_renderer_preserves_narrow_proportional_glyph_advance() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut base = base_face();
     base.font_family = std::sync::Arc::from("Noto Sans");
     base.font_size = 9.12871;
@@ -3291,7 +3291,7 @@ fn display_text_run_measurement_plan_builds_resolved_source_advance() {
 
 #[test]
 fn display_row_baseline_tab_bar_preserves_lisp_string_face_properties() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let rendered = Value::string_with_text_properties(
         "AB",
         vec![neovm_core::emacs_core::value::StringTextPropertyRun {
@@ -3318,7 +3318,7 @@ fn display_row_baseline_tab_bar_preserves_lisp_string_face_properties() {
 
 #[test]
 fn display_row_baseline_tab_bar_preserves_lisp_string_raise_property() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let rendered = Value::string_with_text_properties(
         "AB",
         vec![neovm_core::emacs_core::value::StringTextPropertyRun {
@@ -3343,7 +3343,7 @@ fn display_row_baseline_tab_bar_preserves_lisp_string_raise_property() {
 
 #[test]
 fn display_row_baseline_tab_bar_preserves_lisp_string_height_property() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let rendered = Value::string_with_text_properties(
         "AB",
         vec![neovm_core::emacs_core::value::StringTextPropertyRun {
@@ -3382,7 +3382,7 @@ fn display_row_baseline_tab_bar_preserves_lisp_string_height_property() {
 
 #[test]
 fn display_row_baseline_mode_line_display_space_align_expands_to_spaces() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let rendered = Value::string_with_text_properties(
         "A B",
         vec![neovm_core::emacs_core::value::StringTextPropertyRun {
@@ -3411,7 +3411,7 @@ fn display_row_baseline_mode_line_display_space_align_expands_to_spaces() {
 /// source character is replaced, but no glyph is emitted.
 #[test]
 fn header_line_align_to_current_column_emits_no_glyph() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let rendered = Value::string_with_text_properties(
         " C",
         vec![neovm_core::emacs_core::value::StringTextPropertyRun {
@@ -3442,7 +3442,7 @@ fn header_line_align_to_current_column_emits_no_glyph() {
 
 #[test]
 fn display_row_baseline_header_line_display_space_relative_width_expands_to_stretch() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let rendered = Value::string_with_text_properties(
         "C R",
         vec![neovm_core::emacs_core::value::StringTextPropertyRun {
@@ -3474,7 +3474,7 @@ fn display_row_baseline_header_line_display_space_relative_width_expands_to_stre
 
 #[test]
 fn display_row_baseline_header_line_align_to_symbol_values() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let rendered = Value::string_with_text_properties(
         "C ",
         vec![neovm_core::emacs_core::value::StringTextPropertyRun {
@@ -3518,7 +3518,7 @@ fn display_row_baseline_header_line_align_to_symbol_values() {
 /// the unified path now resolves it through the same authority.
 #[test]
 fn mode_line_align_to_right_region_reaches_window_right_edge() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let rendered = Value::string_with_text_properties(
         "L ",
         vec![neovm_core::emacs_core::value::StringTextPropertyRun {
@@ -3568,7 +3568,7 @@ fn mode_line_align_to_right_region_reaches_window_right_edge() {
 ///   row's right edge (240px), producing a 29-col / 232px stretch.
 #[test]
 fn mode_line_align_to_fringe_region_now_resolves_to_window_edge() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let rendered = Value::string_with_text_properties(
         "L ",
         vec![neovm_core::emacs_core::value::StringTextPropertyRun {
@@ -3613,7 +3613,7 @@ fn mode_line_align_to_fringe_region_now_resolves_to_window_edge() {
 /// 136px instead of 96px, so the stretch after "L" spans 128px / 16 cols.
 #[test]
 fn mode_line_pixel_align_to_adds_window_text_area_left_offset() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let rendered = Value::string_with_text_properties(
         "L R",
         vec![neovm_core::emacs_core::value::StringTextPropertyRun {
@@ -3668,7 +3668,7 @@ fn mode_line_pixel_align_to_adds_window_text_area_left_offset() {
 /// right-aligned segment.
 #[test]
 fn tty_mode_line_space_width_does_not_shift_later_align_to() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let rendered = Value::string_with_text_properties(
         "A  R",
         vec![
@@ -3719,7 +3719,7 @@ fn tty_mode_line_space_width_does_not_shift_later_align_to() {
 /// makes a later `:align-to` land one physical terminal column too far right.
 #[test]
 fn tty_mode_line_relative_space_keeps_cell_and_pixel_pens_together() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let rendered = Value::string_with_text_properties(
         "A  R",
         vec![
@@ -3770,7 +3770,7 @@ fn tty_mode_line_relative_space_keeps_cell_and_pixel_pens_together() {
 /// character produces a stretch filling columns 1..4 after the initial "X".
 #[test]
 fn buffer_align_to_number_unchanged_by_unification() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let row = render_buffer_display_row_with_property(
         "X Y",
         1,
@@ -3796,7 +3796,7 @@ fn buffer_align_to_number_unchanged_by_unification() {
 
 #[test]
 fn display_row_baseline_header_line_align_to_skips_multi_char_interval() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let rendered = Value::string_with_text_properties(
         "X   Y",
         vec![neovm_core::emacs_core::value::StringTextPropertyRun {
@@ -3828,7 +3828,7 @@ fn display_row_baseline_header_line_align_to_skips_multi_char_interval() {
 
 #[test]
 fn display_row_baseline_header_line_align_to_after_multibyte_prefix_uses_character_offsets() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let rendered = Value::string_with_text_properties(
         "λC R",
         vec![neovm_core::emacs_core::value::StringTextPropertyRun {
@@ -3853,7 +3853,7 @@ fn display_row_baseline_header_line_align_to_after_multibyte_prefix_uses_charact
 
 #[test]
 fn render_lisp_string_row_uses_face_specific_glyph_widths() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
     let mut renderer = DisplayRowRenderer::new(
         &mut engine.font_metrics,
@@ -3911,7 +3911,7 @@ fn render_lisp_string_row_uses_face_specific_glyph_widths() {
 
 #[test]
 fn display_row_lisp_string_source_request_uses_render_context() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut font_metrics = None;
     let mut renderer =
         DisplayRowRenderer::new(&mut font_metrics, DisplayRowMeasurementMode::LogicalCells);
@@ -3950,7 +3950,7 @@ fn display_row_lisp_string_source_request_uses_render_context() {
 
 #[test]
 fn display_row_render_executor_renders_lisp_string_source_request() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut font_metrics = None;
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
@@ -3993,7 +3993,7 @@ fn display_row_render_executor_renders_lisp_string_source_request() {
 
 #[test]
 fn display_row_tab_line_wide_char_uses_shared_wide_glyph() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let row = render_lisp_display_row(Value::string("A中B"), GlyphRowRole::TabLine);
     let glyphs = &row.glyphs[1];
     let cjk = glyphs
@@ -4015,7 +4015,7 @@ fn display_row_tab_line_wide_char_uses_shared_wide_glyph() {
 
 #[test]
 fn display_row_tab_line_zwj_emoji_sequence_uses_selected_composition() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     crate::test_composition::install_rules(&mut eval);
     let row = render_composed_lisp_display_row(&eval, Value::string("👩‍💻"), GlyphRowRole::TabLine);
     let glyphs = &row.glyphs[1];
@@ -4032,7 +4032,7 @@ fn display_row_tab_line_zwj_emoji_sequence_uses_selected_composition() {
 
 #[test]
 fn display_row_lisp_chrome_roles_share_wide_and_cluster_builder() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     crate::test_composition::install_rules(&mut eval);
 
     for role in [
@@ -4069,7 +4069,7 @@ fn display_row_lisp_chrome_roles_share_wide_and_cluster_builder() {
 
 #[test]
 fn display_row_unlisted_zwj_sequence_keeps_independent_glyphs() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     crate::test_composition::install_rules(&mut eval);
     // GNU 31.1 find-composition returns nil for this incomplete sequence,
     // and string-width is 4, not the 2 columns of a heuristic grapheme cluster.
@@ -4103,7 +4103,7 @@ fn display_row_tab_line_rtl_text_is_logical_order_at_render() {
     // The reorder to visual "בא" is asserted at install by
     // `frame_chrome_rtl_row_reorders_to_visual_order_at_install` and the
     // `builder_reorders_status_line_rtl_row` chrome-install test.
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let row = render_lisp_display_row(Value::string("אב"), GlyphRowRole::TabLine);
 
     assert_eq!(row.role, GlyphRowRole::TabLine);
@@ -4113,7 +4113,7 @@ fn display_row_tab_line_rtl_text_is_logical_order_at_render() {
 
 #[test]
 fn display_row_fragment_keeps_bidi_unfinalized_for_current_row_append() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut font_metrics = None;
     let mut renderer =
         DisplayRowRenderer::new(&mut font_metrics, DisplayRowMeasurementMode::LogicalCells);
@@ -4171,7 +4171,7 @@ fn display_row_fragment_keeps_bidi_unfinalized_for_current_row_append() {
 
 #[test]
 fn display_row_renderer_can_render_source_fragment_into_existing_row() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut font_metrics = None;
     let mut renderer =
         DisplayRowRenderer::new(&mut font_metrics, DisplayRowMeasurementMode::LogicalCells);
@@ -4601,7 +4601,7 @@ fn render_buffer_text_row_with_display_at_content_x(
     value: Value,
     content_x: f32,
 ) -> GlyphRow {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -4666,7 +4666,7 @@ fn buffer_align_to_center_measures_from_the_text_area_not_the_window_edge() {
     // exactly half the text area wide however wide the left fringe is.  With
     // an 8px fringe the stretch came out 8px short (dashboard's centered
     // banner and title sat one fringe left of center).
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let spec = Value::list(vec![
         Value::symbol("space"),
         Value::keyword("align-to"),

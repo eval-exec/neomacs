@@ -65,7 +65,7 @@ fn bounded_live_source_reacquires_to_the_same_display() {
 /// bounded read would be "correct" but the incremental layout dead).
 #[test]
 fn bounded_live_source_keeps_the_cursor_only_replay() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()

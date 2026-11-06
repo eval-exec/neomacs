@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn image_frame_index_survives_layout_parsing_and_realization() {
-    let mut eval = neovm_core::emacs_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.setup_thread_locals();
     let spec = Value::list(vec![
         Value::symbol("image"),

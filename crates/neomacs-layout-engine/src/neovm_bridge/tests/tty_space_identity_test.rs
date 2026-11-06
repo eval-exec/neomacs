@@ -11,7 +11,7 @@ impl Drop for RestoreTerminal {
 }
 
 fn fixture() -> (Context, FrameId, FaceResolver, RestoreTerminal) {
-    let mut context = Context::new();
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let restore = RestoreTerminal;
     context.set_gc_threshold(usize::MAX);
     pure::configure_terminal_runtime(pure::TerminalRuntimeConfig::interactive(
@@ -137,7 +137,7 @@ fn paint_memo_hits_requery_logical_identity_in_mutable_and_cached_paths() {
 
 #[test]
 fn equal_paint_default_and_other_slots_publish_distinct_arena_identities() {
-    let _context = Context::new();
+    let _context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut canonical = ResolvedFace::default();
     canonical.tty_space_identity = TtySpaceIdentity::CanonicalDefault;
     let mut other = canonical.clone();

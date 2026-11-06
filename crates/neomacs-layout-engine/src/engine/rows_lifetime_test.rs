@@ -13,7 +13,7 @@ fn rows() -> WindowLayoutQueryScope {
 }
 
 fn fixture(warm: bool) -> (Context, FrameId, WindowId, BufferId) {
-    let mut context = Context::new();
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let source = context.buffer_manager().current_buffer().unwrap().id();
     context
         .buffer_manager_mut()

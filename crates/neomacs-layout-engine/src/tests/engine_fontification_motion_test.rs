@@ -5,7 +5,7 @@ use neovm_core::window::WindowLayoutQueryOutcome;
 
 #[test]
 fn installing_fontification_hook_remeasures_retained_motion_before_redisplay() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer)

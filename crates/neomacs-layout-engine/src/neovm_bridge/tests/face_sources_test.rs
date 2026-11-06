@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn retained_face_sources_survive_collection_after_parent_is_dropped() {
-    let mut context = neovm_core::emacs_core::Context::new();
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut attributes = Face::new("retained-source");
     attributes.family = Some(Value::string("retained-family"));
     attributes.foundry = Some(Value::string("retained-foundry"));
@@ -47,7 +47,7 @@ fn retained_face_sources_survive_collection_after_parent_is_dropped() {
 
 #[test]
 fn resolver_definition_roots_preserve_an_unused_face_after_live_table_replacement() {
-    let mut context = neovm_core::emacs_core::Context::new();
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut live_table = FaceTable::new();
     let mut later = Face::new("not-yet-displayed");
     later.family = Some(Value::string("later-family"));

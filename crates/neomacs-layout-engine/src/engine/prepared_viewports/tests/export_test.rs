@@ -3,7 +3,7 @@ use neovm_core::emacs_core::{Context, Value};
 
 #[test]
 fn conflicting_worker_paragraph_does_not_revoke_other_prepared_rows() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     let line = "ordinary offscreen text\n";
     eval.buffer_manager_mut()

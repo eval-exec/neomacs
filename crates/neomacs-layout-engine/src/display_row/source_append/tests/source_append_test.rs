@@ -290,7 +290,7 @@ struct RowTransitionTestContext {
 
 impl RowTransitionTestContext {
     fn new(frame_name: &str) -> Self {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let buf_id = eval
             .buffer_manager()
             .current_buffer()
@@ -599,7 +599,7 @@ fn display_row_append_metrics_builds_display_box_from_active_face_state() {
 
 #[test]
 fn buffer_current_face_resolution_context_skips_before_checkpoint() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -678,7 +678,7 @@ fn buffer_current_face_resolution_context_skips_before_checkpoint() {
 
 #[test]
 fn buffer_current_face_resolution_context_resolves_due_face() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1122,7 +1122,7 @@ fn display_row_transition_render_state_applies_row_start_line_break_policy() {
 /// An empty snapshot-backed buffer view for the hscroll-skip fallback tests:
 /// every property lookup misses, so chars count with the ordinary widths.
 fn hscroll_skip_fixture() -> (Context, LayoutBufferSnapshot) {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1557,7 +1557,7 @@ fn buffer_hscroll_boundary_item_anchors_cursor_at_its_source_start() {
 
 #[test]
 fn buffer_hscroll_skip_action_appends_left_truncation_marker_and_marks_row() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1639,7 +1639,7 @@ fn buffer_invisible_text_scan_context_skips_when_checkpoint_not_reached() {
     let buffer_text = b"visible";
     let mut checkpoints = InvisibleTextScanCheckpoint::new(5);
     let mut position = DisplaySourceTextPosition::new(2, 2);
-    let eval = Context::new();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1656,7 +1656,7 @@ fn buffer_invisible_text_scan_context_skips_when_checkpoint_not_reached() {
 
 #[test]
 fn buffer_invisible_text_scan_context_records_visible_boundary() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1693,7 +1693,7 @@ fn buffer_invisible_text_scan_context_records_visible_boundary() {
 
 #[test]
 fn buffer_invisible_text_scan_context_skips_hidden_region_and_reports_point() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1739,7 +1739,7 @@ fn buffer_invisible_text_scan_context_skips_hidden_region_and_reports_point() {
 
 #[test]
 fn buffer_invisible_text_scan_context_reports_ellipsis_policy() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1779,7 +1779,7 @@ fn buffer_invisible_text_scan_context_reports_ellipsis_policy() {
 
 #[test]
 fn buffer_invisible_text_scan_context_advances_multibyte_source_position() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -1820,7 +1820,7 @@ fn buffer_invisible_text_skip_counts_hidden_newlines() {
     // A fold that hides whole buffer lines must report the newlines it crossed,
     // so display-line-numbers advance past them (GNU counts every buffer newline,
     // visible or not — folding lines 2..4 makes the next visible row read 5).
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -2204,7 +2204,7 @@ fn buffer_selective_display_context_keeps_visible_indented_line() {
 
 #[test]
 fn buffer_text_source_consumption_state_preserves_single_char_source_item() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -2256,7 +2256,7 @@ fn buffer_text_source_consumption_state_preserves_single_char_source_item() {
 
 #[test]
 fn buffer_text_source_consumption_state_can_return_full_text_run_item() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -2293,7 +2293,7 @@ fn buffer_text_source_consumption_state_can_return_full_text_run_item() {
 
 #[test]
 fn buffer_text_source_item_can_build_direct_single_char_step() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -2441,7 +2441,7 @@ fn buffer_text_source_item_without_source_char_rejects_source_mapped_without_sou
 
 #[test]
 fn buffer_text_source_item_builds_direct_multi_char_runs() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -2547,7 +2547,7 @@ fn buffer_text_source_consumption_state_keeps_display_item_layout() {
 
 #[test]
 fn buffer_text_source_consumption_state_splits_persistent_text_run() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -2951,7 +2951,7 @@ fn buffer_text_line_break_source_action_skips_after_state_when_transition_exhaus
 
 #[test]
 fn buffer_text_line_break_render_request_emits_row_transition_and_syncs_position() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -3684,7 +3684,7 @@ fn buffer_text_special_wrap_source_action_applies_transition_state() {
 #[test]
 fn buffer_text_special_overflow_render_request_wraps_then_keeps_prepared_append() {
     let mut context = RowTransitionTestContext::new("special-overflow-wrap-request");
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -4442,7 +4442,7 @@ fn current_buffer_snapshot(eval: &Context, buf_id: BufferId) -> LayoutBufferSnap
 
 #[test]
 fn buffer_text_source_range_append_requests_preserve_source_and_kind() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -4504,7 +4504,7 @@ fn buffer_text_source_range_append_requests_preserve_source_and_kind() {
 
 #[test]
 fn buffer_text_source_text_request_uses_source_step_char_payload() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -4538,7 +4538,7 @@ fn buffer_text_source_text_request_uses_source_step_char_payload() {
 
 #[test]
 fn buffer_text_source_append_context_resolves_natural_measurement_for_ascii() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -4592,7 +4592,7 @@ fn buffer_text_source_append_context_resolves_natural_measurement_for_ascii() {
 
 #[test]
 fn buffer_text_source_append_context_resolves_complex_text_measurement() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -4707,7 +4707,7 @@ fn display_row_append_frame_builds_from_geometry_state() {
 
 #[test]
 fn synthetic_text_append_context_renders_fragment_and_emits_slots() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -4800,7 +4800,7 @@ fn synthetic_text_marker_names_source_ids_and_text() {
 
 #[test]
 fn buffer_synthetic_text_render_context_renders_active_marker() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -4868,7 +4868,7 @@ fn buffer_synthetic_text_render_context_renders_active_marker() {
 
 #[test]
 fn buffer_synthetic_text_render_context_renders_hscroll_marker() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -4936,7 +4936,7 @@ fn buffer_synthetic_text_render_context_renders_hscroll_marker() {
 
 #[test]
 fn display_row_prefix_source_builds_append_request_with_prefix_source_id() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let value = Value::string("=>");
     let source = DisplayRowPrefixRequest::Line
         .source_for_value(value, CharPos0::new(4))
@@ -4953,7 +4953,7 @@ fn display_row_prefix_source_builds_append_request_with_prefix_source_id() {
 
 #[test]
 fn buffer_line_prefix_render_context_renders_default_prefix_and_clears_request() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -5036,7 +5036,7 @@ fn buffer_line_prefix_render_context_renders_default_prefix_and_clears_request()
 
 #[test]
 fn buffer_line_prefix_render_context_appends_gnu_space_align_to_prefix() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -5135,7 +5135,7 @@ fn buffer_line_prefix_render_context_appends_gnu_space_align_to_prefix() {
 
 #[test]
 fn buffer_line_prefix_render_request_applies_rendered_position() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -5224,7 +5224,7 @@ fn buffer_line_prefix_render_request_applies_rendered_position() {
 
 #[test]
 fn synthetic_text_append_context_composes_with_current_row_tail() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -5433,7 +5433,7 @@ fn overlay_string_row_break_context_finishes_current_row() {
 
 #[test]
 fn render_natural_display_item_source_into_current_text_row_and_emit_uses_current_row_tail() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -5516,7 +5516,7 @@ fn render_natural_display_item_source_into_current_text_row_and_emit_uses_curren
 
 #[test]
 fn render_natural_display_item_source_into_current_text_row_stamps_slots_at_current_row_tail() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -5646,7 +5646,7 @@ fn current_text_row_render_outcome_builds_append_progress() {
 
 #[test]
 fn append_rendered_display_row_fragment_to_text_row_and_emit_appends_glyphs_and_slots() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -6352,7 +6352,7 @@ fn display_row_append_frame_preserves_geometry_and_area() {
 
 #[test]
 fn layout_display_source_face_resolver_records_pending_faces_without_builder() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = neovm_core::face::FaceTable::new();
     let face_resolver =
         crate::neovm_bridge::FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, None);
@@ -6427,7 +6427,7 @@ fn display_source_resolve_params_are_built_from_typed_face_basis() {
 
 #[test]
 fn resolve_next_display_source_item_returns_item_and_pending_faces() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = neovm_core::face::FaceTable::new();
     let face_resolver =
         crate::neovm_bridge::FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, None);
@@ -6482,7 +6482,7 @@ fn resolve_next_display_source_item_returns_item_and_pending_faces() {
 
 #[test]
 fn resolve_next_display_source_item_merges_glyphless_char_face() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut table = neovm_core::face::FaceTable::new();
     let mut glyphless = neovm_core::face::Face::new("glyphless-char");
     glyphless.foreground = Some(neovm_core::face::Color::rgb(0x12, 0x34, 0x56));
@@ -6533,7 +6533,7 @@ fn resolve_next_display_source_item_merges_glyphless_char_face() {
 
 #[test]
 fn resolve_next_display_source_item_resolves_height_modifier_to_pending_face() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = neovm_core::face::FaceTable::new();
     let face_resolver =
         crate::neovm_bridge::FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, None);
@@ -6591,7 +6591,7 @@ fn resolve_next_display_source_item_resolves_height_modifier_to_pending_face() {
 
 #[test]
 fn display_row_source_walker_reuses_face_cache_across_items() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = neovm_core::face::FaceTable::new();
     let face_resolver =
         crate::neovm_bridge::FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, None);
@@ -6660,7 +6660,7 @@ fn display_row_source_walker_reuses_face_cache_across_items() {
 
 #[test]
 fn append_lisp_string_to_text_row_appends_propertized_string_items() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -6740,7 +6740,7 @@ fn append_lisp_string_to_text_row_appends_propertized_string_items() {
 
 #[test]
 fn lisp_string_append_context_appends_fragment_items() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -6816,7 +6816,7 @@ fn lisp_string_append_context_appends_fragment_items() {
 
 #[test]
 fn buffer_text_source_append_context_appends_source_char() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -7663,7 +7663,7 @@ fn buffer_text_source_render_request_renders_fit_prefix_before_overflow() {
 
 #[test]
 fn buffer_text_source_append_context_prepares_current_text_row_source_char() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -8095,7 +8095,7 @@ fn buffer_text_window_tail_finalize_reports_missing_cursor_capture() {
 
 #[test]
 fn buffer_text_window_body_install_request_records_positions_and_edge_markers() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -8200,7 +8200,7 @@ fn buffer_text_window_body_install_request_records_positions_and_edge_markers() 
 
 #[test]
 fn buffer_text_window_begin_request_opens_window_and_first_text_row() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -8525,7 +8525,7 @@ fn terminal_right_border_padding_uses_the_effective_window_default_face() {
     // `build_frame_matrix_from_leaf_window` border install replaces only the
     // reserved LAST_AREA cell; it must not turn the text-area tail back into
     // the frame-global default face.
-    let _runtime = Context::new();
+    let _runtime = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let face_resolver = FaceResolver::new(&table, 0x000000, 0xFFFFFF, 14.0, None);
     let mut buffer = Buffer::new_standalone(BufferId(42), Value::string("*border-remap*"));
@@ -8590,7 +8590,7 @@ fn terminal_right_border_padding_uses_the_effective_window_default_face() {
 
 #[test]
 fn buffer_text_window_finish_request_closes_window_and_returns_snapshot_artifacts() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -8644,7 +8644,7 @@ fn buffer_text_window_finish_request_closes_window_and_returns_snapshot_artifact
 
 #[test]
 fn string_only_display_rows_do_not_shrink_the_visible_viewport() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer_id)
@@ -8685,7 +8685,7 @@ fn string_only_display_rows_do_not_shrink_the_visible_viewport() {
 
 #[test]
 fn buffer_text_window_visibility_retry_request_scrolls_down_from_visible_rows() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -8733,7 +8733,7 @@ fn buffer_text_window_visibility_retry_request_scrolls_down_from_visible_rows() 
 
 #[test]
 fn buffer_text_window_visibility_retry_request_detects_partially_visible_point_row() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -8776,7 +8776,7 @@ fn buffer_text_window_visibility_retry_request_detects_partially_visible_point_r
 
 #[test]
 fn buffer_text_window_visibility_retry_keeps_a_fully_visible_continued_point_row() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -8818,7 +8818,7 @@ fn buffer_text_window_visibility_retry_keeps_a_fully_visible_continued_point_row
 
 #[test]
 fn measure_buffer_text_source_range_append_uses_shared_renderer_without_mutating_row() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -8927,7 +8927,7 @@ fn measure_buffer_text_source_range_append_uses_shared_renderer_without_mutating
 
 #[test]
 fn buffer_text_source_append_context_uses_resolved_render_plan() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -9008,7 +9008,7 @@ fn buffer_text_source_append_context_uses_resolved_render_plan() {
 
 #[test]
 fn buffer_text_source_append_context_uses_resolved_item_face_for_fragment_base() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -9101,7 +9101,7 @@ fn buffer_text_source_append_context_uses_resolved_item_face_for_fragment_base()
 
 #[test]
 fn buffer_text_source_append_context_never_rebinds_an_unknown_item_face_id() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -9196,7 +9196,7 @@ fn buffer_text_source_append_context_never_rebinds_an_unknown_item_face_id() {
 
 #[test]
 fn buffer_text_source_append_context_composes_with_current_row_tail() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -9282,7 +9282,7 @@ fn buffer_text_source_append_context_composes_with_current_row_tail() {
 
 #[test]
 fn buffer_text_item_append_context_builds_control_char_item() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -9717,7 +9717,7 @@ fn buffer_text_source_append_item_names_glyphless_display_policy() {
 
 #[test]
 fn buffer_text_item_append_context_builds_mapped_item() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -9862,7 +9862,7 @@ fn buffer_text_item_append_context_builds_mapped_item() {
 
 #[test]
 fn buffer_text_special_source_append_preserves_direct_control_item() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -9944,7 +9944,7 @@ fn buffer_text_special_source_append_preserves_direct_control_item() {
 
 #[test]
 fn buffer_text_item_append_context_builds_glyphless_item() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -10070,7 +10070,7 @@ fn buffer_text_item_append_context_builds_glyphless_item() {
 
 #[test]
 fn append_lisp_string_to_text_row_stops_at_row_break() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -10142,7 +10142,7 @@ fn append_lisp_string_to_text_row_stops_at_row_break() {
 
 #[test]
 fn lisp_string_source_append_context_preserves_source_after_row_break() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -10266,7 +10266,7 @@ fn lisp_string_source_append_context_preserves_source_after_row_break() {
 
 #[test]
 fn append_lisp_string_to_text_row_resolves_image_display_property_through_display_host() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let requests = Arc::new(Mutex::new(Vec::new()));
     eval.set_display_host(Box::new(RecordingAppendImageHost {
         requests: Arc::clone(&requests),
@@ -10434,7 +10434,7 @@ impl DisplayRowRenderPolicy for SourceMappedTextWidthByFace {
 
 #[test]
 fn display_replacement_string_append_item_names_cursor_and_source_policy() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let value = Value::string("ab");
     let item = DisplayReplacementStringSourceItem::display_property_string(
         value,
@@ -10482,7 +10482,7 @@ fn display_replacement_string_append_item_names_cursor_and_source_policy() {
 
 #[test]
 fn display_replacement_string_append_item_measures_source_text_from_active_face() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let active_face = test_active_face_state(FaceId::new(7), 8.0);
     let item = DisplayReplacementStringSourceItem::display_property_string(
         Value::string("abc"),
@@ -10542,7 +10542,7 @@ fn test_display_property_replacement_resolve_context<'a>(
 
 #[test]
 fn display_property_replacement_append_item_resolves_string_replacement() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let active_face = test_active_face_state(FaceId::new(7), 8.0);
     let mut font_metrics = None;
     let value = Value::string("ab");
@@ -10575,7 +10575,7 @@ fn display_property_replacement_append_item_resolves_string_replacement() {
 /// src/image.c:6518), not with the face in effect.
 #[test]
 fn display_property_media_replacement_carries_the_frame_foreground() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let active_face = test_active_face_state(FaceId::new(7), 8.0);
     let mut font_metrics = None;
     let mut params = test_display_space_window_params();
@@ -10629,7 +10629,7 @@ fn display_property_media_replacement_carries_the_frame_foreground() {
 /// reads the same frame foreground (issue #556).
 #[test]
 fn margin_media_replacement_carries_the_frame_foreground() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let active_face = test_active_face_state(FaceId::new(7), 8.0);
     let mut font_metrics = None;
     let mut params = test_display_space_window_params();
@@ -10683,7 +10683,7 @@ fn margin_media_replacement_carries_the_frame_foreground() {
 
 #[test]
 fn display_property_replacement_append_item_resolves_stretch_replacement() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let active_face = test_active_face_state(FaceId::new(7), 8.0);
     let mut font_metrics = None;
     let value = Value::list(vec![
@@ -10719,7 +10719,7 @@ fn display_property_replacement_append_item_resolves_stretch_replacement() {
 
 #[test]
 fn display_property_replacement_append_item_resolves_media_replacement() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let active_face = test_active_face_state(FaceId::new(7), 8.0);
     let mut font_metrics = None;
     let media = DisplayMediaReplacement::xwidget(DisplayXwidgetItem {
@@ -10758,7 +10758,7 @@ fn display_property_replacement_append_item_resolves_media_replacement() {
 
 #[test]
 fn display_property_replacement_append_item_names_cursor_policy() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let active_face = test_active_face_state(FaceId::new(7), 8.0);
     let mut font_metrics = None;
     let value = Value::string("ab");
@@ -10864,7 +10864,7 @@ fn display_property_replacement_row_render_request_keeps_item_policy_and_start_p
 
 #[test]
 fn display_property_replacement_row_render_request_builds_append_plan() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -11001,7 +11001,7 @@ fn buffer_display_property_replacement_outcome_applies_walk_state_and_cursor() {
 
 #[test]
 fn display_property_replacement_resolve_request_appends_and_reports_outcome() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -11118,7 +11118,7 @@ fn display_property_replacement_resolve_request_appends_and_reports_outcome() {
 
 #[test]
 fn buffer_display_property_replacement_render_outcome_updates_progress() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -11355,7 +11355,7 @@ fn test_display_space_window_params() -> WindowParams {
 
 #[test]
 fn display_replacement_space_width_policy_names_width_sources() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let explicit = Value::list(vec![
         Value::symbol("space"),
         Value::keyword("width"),
@@ -11401,7 +11401,7 @@ fn display_replacement_space_width_policy_names_width_sources() {
 
 #[test]
 fn display_replacement_space_height_policy_names_height_sources() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let explicit = Value::list(vec![
         Value::symbol("space"),
         Value::keyword("height"),
@@ -11436,7 +11436,7 @@ fn display_replacement_space_height_policy_names_height_sources() {
 
 #[test]
 fn display_replacement_space_ascent_policy_names_ascent_sources() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let percent = Value::list(vec![
         Value::symbol("space"),
         Value::keyword("ascent"),
@@ -11471,7 +11471,7 @@ fn display_replacement_space_ascent_policy_names_ascent_sources() {
 
 #[test]
 fn display_replacement_stretch_append_item_resolves_display_space_property() {
-    let _eval = Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let active_face = test_active_face_state(FaceId::new(7), 8.0);
     let mut font_metrics = None;
     let spec = Value::list(vec![
@@ -11716,7 +11716,7 @@ fn display_replacement_media_append_item_names_row_extent_policy() {
 
 #[test]
 fn display_replacement_append_context_walks_string_faces_and_measurements() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -11803,7 +11803,7 @@ fn display_replacement_append_context_walks_string_faces_and_measurements() {
 
 #[test]
 fn display_replacement_append_context_uses_face_fallback() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -11879,7 +11879,7 @@ fn display_replacement_append_context_uses_face_fallback() {
 
 #[test]
 fn display_replacement_append_context_advances_stretch_output() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -11964,7 +11964,7 @@ fn display_replacement_append_context_advances_stretch_output() {
 
 #[test]
 fn display_replacement_append_context_advances_source_mapped_text_output() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -12049,7 +12049,7 @@ fn display_replacement_append_context_advances_source_mapped_text_output() {
 
 #[test]
 fn synthetic_text_append_context_uses_source_append_render_request() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -12127,7 +12127,7 @@ fn synthetic_text_append_context_uses_source_append_render_request() {
 
 #[test]
 fn display_replacement_append_context_installs_xwidget_replacements() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -12281,7 +12281,7 @@ fn display_replacement_append_context_installs_xwidget_replacements() {
 
 #[test]
 fn display_replacement_append_context_installs_image_replacements() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -12443,7 +12443,7 @@ fn display_replacement_append_context_installs_image_replacements() {
 /// row stayed and the image vanished.
 #[test]
 fn display_replacement_append_context_crops_an_image_wider_than_the_text_area() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -12601,7 +12601,7 @@ fn display_replacement_append_context_crops_an_image_wider_than_the_text_area() 
 /// from a placed one, so the covered buffer text stayed and the image vanished.
 #[test]
 fn display_replacement_row_render_reports_an_image_the_row_refuses() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -12789,7 +12789,7 @@ fn display_replacement_row_render_reports_an_image_the_row_refuses() {
 
 #[test]
 fn display_replacement_append_context_installs_video_replacements() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -13495,7 +13495,7 @@ fn live_buffer_display_property_mapped_text_replacement_matrix() {
 fn independent_source_width_probes_do_not_copy_preceding_glyphs() {
     use crate::display_current_row_output::SCRATCH_GLYPHS_COPIED;
     use crate::display_item::{DisplayTextRun, SourceSpan};
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0xffffff, 0, 14.0, None);
     let active = test_active_face_state(FaceId::new(7), 8.0);
@@ -13541,7 +13541,7 @@ fn independent_source_width_probes_do_not_copy_preceding_glyphs() {
 #[test]
 fn independent_width_probe_matches_full_row_with_modifiers_and_context() {
     use crate::display_item::{DisplayTextRun, SourceSpan};
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0xffffff, 0, 14.0, None);
     let active = test_active_face_state(FaceId::new(7), 8.0);

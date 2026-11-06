@@ -5,7 +5,7 @@ use neovm_core::buffer::LispCharPos1;
 use std::num::NonZeroUsize;
 
 fn fixture(text: &str) -> (Context, FrameId, WindowId, BufferId) {
-    let mut ctx = Context::new();
+    let mut ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
     let source = ctx.buffer_manager().current_buffer().unwrap().id();
     ctx.buffer_manager_mut()
         .get_mut(source)

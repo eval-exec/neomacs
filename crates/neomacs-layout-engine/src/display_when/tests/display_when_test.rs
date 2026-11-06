@@ -7,7 +7,7 @@ fn read(eval: &mut Context, src: &str) -> Value {
 
 #[test]
 fn holds_takes_nil_and_t_literally_and_falls_back_to_structural() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let call = read(&mut eval, "(some-call)");
     let structural = DisplayWhenConditions::structural();
     let any = DisplayWhenLookup::AnyOccurrence;
@@ -32,7 +32,7 @@ fn holds_takes_nil_and_t_literally_and_falls_back_to_structural() {
 /// run's answer; a position no site covers is unseen.
 #[test]
 fn one_form_on_two_spans_answers_per_span_and_a_run_serves_its_interior() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval.buffers.current_buffer_id().expect("buffer");
     eval.eval_str("(setq dw-seen nil)").expect("reset");
     // One property object on both spans, as a mode applying one spec to
@@ -106,7 +106,7 @@ fn one_form_on_two_spans_answers_per_span_and_a_run_serves_its_interior() {
 /// in it; the frame that walks the string asks with those.
 #[test]
 fn a_string_site_answers_by_string_and_index() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval.buffers.current_buffer_id().expect("buffer");
     let prefix = eval
         .eval_str(
@@ -194,7 +194,7 @@ fn prefix_when_form(string: Value) -> Value {
 
 #[test]
 fn absent_preflight_keys_become_visible_after_property_assignment() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval.buffers.current_buffer_id().expect("buffer");
     {
         let buffer = eval.buffers.get_mut(buf_id).unwrap();
@@ -265,7 +265,7 @@ fn absent_preflight_keys_become_visible_after_property_assignment() {
 
 #[test]
 fn absent_buffer_keys_keep_overlay_default_and_local_prefix_string_forms() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval.buffers.current_buffer_id().expect("buffer");
     eval.eval_str("(insert \"abcdefgh\\n\")").unwrap();
     let prefix = eval
@@ -301,7 +301,7 @@ fn absent_buffer_keys_keep_overlay_default_and_local_prefix_string_forms() {
 
 #[test]
 fn window_span_forms_are_evaluated_from_text_props_overlays_and_prefix_vars() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval.buffers.current_buffer_id().expect("buffer");
     // A `display` spec list on the text, dashboard-style: the two clauses
     // disagree, and only evaluation can tell them apart.
@@ -384,7 +384,7 @@ fn a_disable_eval_wrapper_makes_its_when_forms_fail_like_gnu() {
     // GNU: `if (!NILP (form) && !EQ (form, Qt) && !enable_eval_p) form = Qnil;`
     // (src/xdisp.c:6139-6140), so a true FORM under `(disable-eval …)` still
     // disables the spec.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval.buffers.current_buffer_id().expect("buffer");
     let disabled = read(&mut eval, "(disable-eval (when (= 1 1) . \"HIDDEN\"))");
     {
@@ -489,7 +489,7 @@ fn an_uninterned_symbol_named_t_is_a_form_like_any_other() {
 fn forms_are_evaluated_with_the_window_buffer_current() {
     // GNU selects the window's buffer before the iterator runs
     // (src/xdisp.c:20533-20535); a FORM reading a buffer-local sees it.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let original = eval.buffers.current_buffer_id().expect("buffer");
     let other = eval.buffers.create_buffer("other");
     let spec = read(
@@ -531,7 +531,7 @@ fn an_after_string_binds_buffer_position_to_the_overlay_end() {
     // GNU loads an after-string when the iterator reaches the overlay's end
     // (xdisp.c:7172-7173) and binds `buffer-position` to that position
     // (xdisp.c:5919-5923); a before-string is bound to the start.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval.buffers.current_buffer_id().expect("buffer");
     eval.buffers
         .get_mut(buf_id)
@@ -570,7 +570,7 @@ fn an_after_string_binds_buffer_position_to_the_overlay_end() {
 #[test]
 fn an_overlay_scoped_to_another_window_is_not_scanned() {
     // GNU: "Skip this overlay if it doesn't apply to IT->w" (xdisp.c:7153-7156).
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval.buffers.current_buffer_id().expect("buffer");
     eval.buffers
         .get_mut(buf_id)
@@ -627,7 +627,7 @@ fn a_hidden_overlay_shows_its_after_string_at_the_start_the_walk_reaches() {
     // after-strings from this overlay are visible; start and end position are
     // indistinguishable" (xdisp.c:7158-7175): the after-string loads at the
     // start, so `buffer-position` is the start there.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval.buffers.current_buffer_id().expect("buffer");
     eval.buffers
         .get_mut(buf_id)
@@ -662,7 +662,7 @@ fn an_after_string_ending_at_the_window_start_is_scanned_and_one_beyond_the_span
     // position (xdisp.c:7141-7150), so an overlay ending exactly at the window
     // start still shows its after-string on the first row; one ending past the
     // span is never reached by this walk.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval.buffers.current_buffer_id().expect("buffer");
     eval.buffers
         .get_mut(buf_id)
@@ -710,7 +710,7 @@ fn overlay_strings_anchored_at_point_max_are_evaluated_when_the_span_reaches_it(
     // in `before-string`; the walk displays them through its end-of-buffer
     // anchor path (GNU `reseat` -> `handle_stop` at ZV, xdisp.c:8046-8052),
     // so their forms must be evaluated too.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval.buffers.current_buffer_id().expect("buffer");
     eval.buffers
         .get_mut(buf_id)
@@ -758,7 +758,7 @@ fn an_empty_overlay_supplies_no_display_property() {
     // GNU `get_char_property_and_overlay` skips an overlay whose end is at
     // or before the position (textprop.c:652-653): an empty overlay's
     // `display` never applies, so its form is not evaluated.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval.buffers.current_buffer_id().expect("buffer");
     eval.buffers
         .get_mut(buf_id)
@@ -839,7 +839,7 @@ fn settle(
 /// the one replay, which then finds it where the first walk asked.
 #[test]
 fn a_clause_past_the_scan_is_evaluated_after_the_walk_and_carried_to_one_replay() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let saved_roots = neovm_core::emacs_core::eval::save_scratch_gc_roots();
     eval.eval_str("(setq dw-seen nil)").expect("reset");
     let (buf_id, property) = buffer_with_a_site_past_the_scan(
@@ -895,7 +895,7 @@ fn a_clause_past_the_scan_is_evaluated_after_the_walk_and_carried_to_one_replay(
 /// again after the replay keeps the replay's rows and makes them unknown.
 #[test]
 fn a_second_disagreement_after_the_replay_settles_unknown() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let saved_roots = neovm_core::emacs_core::eval::save_scratch_gc_roots();
     let (buf_id, property) = buffer_with_a_site_past_the_scan(&mut eval, "(null t)");
     let form = when_form(property, 0);
@@ -928,7 +928,7 @@ fn a_second_disagreement_after_the_replay_settles_unknown() {
 /// whose span could not be evaluated at all.
 #[test]
 fn agreement_unanchored_strings_and_empty_spans_settle_without_replay() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let saved_roots = neovm_core::emacs_core::eval::save_scratch_gc_roots();
     let (buf_id, property) = buffer_with_a_site_past_the_scan(&mut eval, "(eq 1 1)");
     let form = when_form(property, 0);
@@ -986,7 +986,7 @@ fn agreement_unanchored_strings_and_empty_spans_settle_without_replay() {
 /// object.)
 #[test]
 fn a_recorded_site_survives_a_collection_between_the_walk_and_its_evaluation() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let saved_roots = neovm_core::emacs_core::eval::save_scratch_gc_roots();
     let (buf_id, _) = buffer_with_a_site_past_the_scan(&mut eval, "(eq 1 1)");
     eval.eval_str("(setq dw-gc-site nil)").expect("reset");

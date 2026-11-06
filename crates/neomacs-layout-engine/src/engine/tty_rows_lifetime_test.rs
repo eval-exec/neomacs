@@ -47,7 +47,7 @@ fn rows() -> WindowLayoutQueryScope {
 }
 
 fn fixture() -> (Context, FrameId, WindowId, BufferId, RestoreTerminal) {
-    let mut context = Context::new();
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let restore = RestoreTerminal;
     context.set_gc_threshold(usize::MAX);
     context.gc_collect_exact();
