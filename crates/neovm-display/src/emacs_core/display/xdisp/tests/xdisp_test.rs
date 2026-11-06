@@ -1966,8 +1966,9 @@ fn test_format_mode_line_percent_specs_use_window_buffer_and_completed_window_en
         .expect("frame")
         .selected_window;
     {
-        let target = eval.edit.buffers.get(target_id).expect("target buffer");
-        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        let (pf_frames, pf_buffers) = eval.frame_manager_and_buffers_mut();
+        let target = pf_buffers.get(target_id).expect("target buffer");
+        let frame = pf_frames.get_mut(frame_id).expect("frame");
         let window = frame
             .find_window_mut(selected_window)
             .expect("selected window");

@@ -6351,12 +6351,10 @@ fn x_create_frame_root_window_positions_follow_buffer_edits() {
     );
     let old_end = LispCharPos1::from_one_based_usize(input.chars().count() + 1);
     {
-        let child = ev
-            .frame_manager_mut()
-            .get_mut(child_id)
-            .expect("child frame");
+        let (cf_frames, cf_buffers) = ev.frame_manager_and_buffers_mut();
+        let child = cf_frames.get_mut(child_id).expect("child frame");
         crate::window::window_markers::set_window_point_with_marker(
-            &mut ev.edit.buffers,
+            cf_buffers,
             child.root_window_mut(),
             old_end,
         );
@@ -10019,7 +10017,7 @@ fn graphical_recenter_context(
             WindowLayoutQueryScope::Position { target } => {
                 let through_target =
                     ((target.as_i64() - viewport_start.as_i64()).max(0) / 5 + 1) as usize;
-                (viewport_start, through_target.min(viewport_count))
+                (*viewport_start, through_target.min(viewport_count))
             }
             WindowLayoutQueryScope::TextExtent { .. } => {
                 return WindowLayoutQueryOutcome::Unavailable;
