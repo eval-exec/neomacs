@@ -1,5 +1,7 @@
 use super::*;
 use crate::core::frame_glyphs::FrameGlyphBuffer;
+// FrameManager's create_frame is an upper extension trait after the display
+// split; the two real-layout tests below call it directly.
 use crate::core::types::Color;
 use crate::render_thread::frame_windows::{FrameLifecycle, GuiFrameRenderState};
 use crate::render_thread::pointer_events::PointerOwner;
@@ -16,6 +18,7 @@ use neomacs_display_protocol::{
     PresentedHitRegion, PresentedPaintSpan, PresentedPointerAppearance, PresentedPointerRegion,
     PresentedPrimitiveKind, PresentedRegionId, PresentedRegionKind,
 };
+use neovm_core::window::DisplayFrameManagerExt;
 use winit::keyboard::{Key, NamedKey, NativeKey, SmolStr};
 use winit::window::ResizeDirection;
 
@@ -1107,7 +1110,7 @@ fn presented_pointer_integration_topmost_child_uses_local_coordinates_then_root_
 
 #[test]
 fn real_layout_publication_routes_overlapping_children_by_published_z_order() {
-    let mut eval = neovm_core::emacs_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     eval.buffer_manager_mut()
         .get_mut(buffer)
@@ -1180,7 +1183,7 @@ fn real_layout_publication_routes_overlapping_children_by_published_z_order() {
 
 #[test]
 fn real_layout_publication_keeps_nested_child_parent_relative_and_runtime_places_it_in_root() {
-    let mut eval = neovm_core::emacs_core::Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = eval.buffer_manager().current_buffer().unwrap().id();
     let root = eval
         .frame_manager_mut()
