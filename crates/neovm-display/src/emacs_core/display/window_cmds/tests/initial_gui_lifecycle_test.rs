@@ -31,7 +31,7 @@ fn initial_host() -> RecordingDisplayHost {
 }
 
 fn terminal_startup_context() -> Context {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.create_buffer("*scratch*");
     eval.buffers.set_current(buffer);
     let terminal = eval.frames.create_frame("F1", 80, 25, buffer);

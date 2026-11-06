@@ -10,7 +10,7 @@ fn configuration_hook_core_default_is_nil_only_under_gnu_policy() {
     let symbol = intern("window-configuration-change-hook");
     {
         let _policy = RedisplayHookPolicyGuard::legacy();
-        let eval = Context::new();
+        let eval = Context::new(crate::test_utils::unit_runtime());
         assert_eq!(
             neovm_eval::emacs_core::data::default_value_by_id(&eval, symbol),
             None
@@ -19,7 +19,7 @@ fn configuration_hook_core_default_is_nil_only_under_gnu_policy() {
     }
     {
         let _policy = RedisplayHookPolicyGuard::gnu();
-        let mut eval = Context::new();
+        let mut eval = Context::new(crate::test_utils::unit_runtime());
         // GNU window.c:9383–9398 declares this C-owned DEFVAR_LISP special
         // object and initializes its default to nil before loading window.el.
         assert_eq!(

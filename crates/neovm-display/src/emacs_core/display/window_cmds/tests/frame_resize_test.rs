@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn overlapping_native_observations_keep_the_latest_requested_grid_for_font_changes() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.create_buffer("*overlapping-resize*");
     let fid = eval.frames.create_frame("overlapping", 800, 600, buffer);
     let frame = eval.frames.get_mut(fid).unwrap();
@@ -95,7 +95,7 @@ fn overlapping_native_observations_keep_the_latest_requested_grid_for_font_chang
 
 #[test]
 fn font_resize_propagates_nonlocal_exits_from_window_minimum_policy() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.create_buffer("*font-minimum-exit*");
     let fid = eval.frames.create_frame("minimum-exit", 800, 600, buffer);
     let frame = eval.frames.get_mut(fid).unwrap();
@@ -120,7 +120,7 @@ fn font_resize_propagates_nonlocal_exits_from_window_minimum_policy() {
 
 #[test]
 fn explicit_frame_minimum_overrides_inhibited_font_resize_on_only_that_axis() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.create_buffer("*font-minimum*");
     let fid = eval.frames.create_frame("minimum", 800, 600, buffer);
     let frame = eval.frames.get_mut(fid).unwrap();
@@ -147,7 +147,7 @@ fn explicit_frame_minimum_overrides_inhibited_font_resize_on_only_that_axis() {
 
 #[test]
 fn native_resize_counts_the_entire_grown_minibuffer_in_frame_height() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.create_buffer("*grown-minibuffer*");
     let fid = eval.frames.create_frame("grown", 640, 384, buffer);
     let frame = eval.frames.get_mut(fid).unwrap();
@@ -183,7 +183,7 @@ fn native_resize_counts_the_entire_grown_minibuffer_in_frame_height() {
 
 #[test]
 fn frame_scroll_bar_width_reports_only_the_allocated_scroll_bar_area() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.create_buffer("*scroll-bar-area*");
     let fid = eval
         .frames
@@ -206,7 +206,7 @@ fn frame_scroll_bar_width_reports_only_the_allocated_scroll_bar_area() {
 
 #[test]
 fn gui_frames_take_gnu_toolkit_scroll_bar_defaults_and_report_realized_parameters() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.create_buffer("*scroll-bar-defaults*");
     let fid = eval
         .frames
@@ -268,7 +268,7 @@ fn moving_a_child_frame_marks_it_for_redisplay() {
     use neovm_eval::emacs_core::eval::RedisplayHookPolicyGuard;
 
     let _policy = RedisplayHookPolicyGuard::gnu();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.create_buffer("*child-move*");
     let fid = eval.frames.create_frame("child-move", 640, 480, buffer);
     eval.frames
@@ -310,7 +310,7 @@ fn moving_a_child_frame_marks_it_for_redisplay() {
 
 #[test]
 fn child_initial_text_columns_include_explicit_fringe_and_border_chrome() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.create_buffer("*child-chrome*");
     let fid = eval.frames.create_frame("parent", 640, 480, buffer);
     let frame = eval.frames.get_mut(fid).unwrap();
@@ -342,7 +342,7 @@ fn child_initial_text_columns_include_explicit_fringe_and_border_chrome() {
 
 #[test]
 fn inhibited_font_change_preserves_an_unsent_explicit_resize() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.create_buffer("*font-resize*");
     let fid = eval.frames.create_frame("F1", 800, 600, buffer);
     let frame = eval.frames.get_mut(fid).unwrap();
@@ -407,7 +407,7 @@ fn inhibited_font_change_preserves_an_unsent_explicit_resize() {
 
 #[test]
 fn clearing_fullscreen_requests_native_window_restoration() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.create_buffer("*fullscreen*");
     let frame_id = eval.frames.create_frame("F1", 745, 688, buffer);
     eval.frames
@@ -442,7 +442,7 @@ fn clearing_fullscreen_requests_native_window_restoration() {
 
 #[test]
 fn width_only_gui_resize_keeps_exact_native_height_with_chrome_and_partial_row() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.create_buffer("*resize*");
     let frame_id = eval.frames.create_frame("F1", 745, 688, buffer);
     let frame = eval.frames.get_mut(frame_id).unwrap();
@@ -478,7 +478,7 @@ fn width_only_gui_resize_keeps_exact_native_height_with_chrome_and_partial_row()
 
 #[test]
 fn rejected_and_duplicate_native_resize_completions_preserve_actual_geometry() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.create_buffer("*resize*");
     let frame_id = eval.frames.create_frame("F1", 745, 688, buffer);
     let frame = eval.frames.get_mut(frame_id).unwrap();

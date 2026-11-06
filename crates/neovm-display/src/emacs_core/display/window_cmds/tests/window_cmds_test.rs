@@ -34,7 +34,7 @@ mod initial_gui_lifecycle_test;
 
 #[test]
 fn gui_frame_position_requests_move_the_native_window() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     let root = ev.frames.create_frame("Root", 800, 600, buf);
@@ -69,7 +69,7 @@ fn gui_frame_position_requests_move_the_native_window() {
 
 #[test]
 fn alpha_lower_limit_variable_projects_without_replaying_alpha_policy() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let host = RecordingDisplayHost::new();
     let limits = host.alpha_limits.clone();
     let operations = host.alpha_operations.clone();
@@ -82,7 +82,7 @@ fn alpha_lower_limit_variable_projects_without_replaying_alpha_policy() {
 
 #[test]
 fn accepted_root_and_child_alpha_operations_survive_numeric_then_nil_without_layout() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     let root = ev.frames.create_frame("Root", 800, 600, buf);
@@ -107,7 +107,7 @@ fn accepted_root_and_child_alpha_operations_survive_numeric_then_nil_without_lay
 
 #[test]
 fn x_create_frame_returns_the_realized_frame_when_alpha_sync_fails() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     ev.frames.create_frame("F1", 800, 600, buf);
@@ -128,7 +128,7 @@ fn x_create_frame_returns_the_realized_frame_when_alpha_sync_fails() {
 
 #[test]
 fn focus_redirect_sync_failure_keeps_frame_creation_and_restoration_effects() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     ev.frames.create_frame("F1", 800, 600, buf);
@@ -178,7 +178,7 @@ fn x_create_frame_resolves_alpha_defaults_and_explicit_nil() {
             1.0,
         ),
     ] {
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         let buf = ev.buffers.create_buffer("*scratch*");
         ev.buffers.set_current(buf);
         ev.frames.create_frame("F1", 800, 600, buf);
@@ -203,7 +203,7 @@ fn x_create_frame_resolves_alpha_defaults_and_explicit_nil() {
 
 #[test]
 fn frame_scale_factor_reads_the_selected_frames_presented_device_scale() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame_id = super::ensure_selected_frame_id(&mut eval);
     eval.frames
         .get_mut(frame_id)
@@ -218,7 +218,7 @@ fn frame_scale_factor_reads_the_selected_frames_presented_device_scale() {
 
 /// Evaluate all forms with a fresh evaluator that has a frame+window set up.
 fn eval_with_frame(src: &str) -> Vec<String> {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // Create a buffer for the initial window.
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
@@ -259,7 +259,7 @@ fn window_tree_primitives_validate_arguments_like_gnu() {
 }
 
 fn eval_with_gui_frame(src: &str) -> Vec<String> {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     let fid = ev.frames.create_frame("F1", 800, 600, buf);
@@ -310,7 +310,7 @@ fn bootstrap_eval_one_with_frame(src: &str) -> String {
 #[test]
 fn active_minibuffer_window_tracks_live_minibuffer_state() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.frames.create_frame("F1", 800, 600, buf);
 
@@ -596,7 +596,7 @@ fn selected_window_returns_window_handle() {
 #[test]
 fn selected_window_bootstraps_initial_frame() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each("(window-live-p (selected-window))")
         .iter()
@@ -608,7 +608,7 @@ fn selected_window_bootstraps_initial_frame() {
 #[test]
 fn frame_selected_window_arity_and_designators() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(windowp (frame-selected-window))
@@ -640,7 +640,7 @@ fn frame_selected_window_accepts_any_valid_window_as_its_own_frame() {
     // minibuffer window all answer the frame's selected window, and only a
     // deleted window falls through to the frame type check.
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(progn ((lambda (old size side normal)
@@ -706,7 +706,7 @@ fn window_new_size_slots_decode_a_valid_window_and_default_to_the_selected_one()
     // WINDOW *write* was dropped on the floor.  window.el's resize engine sets
     // these slots with an omitted WINDOW constantly.
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(progn ((lambda (old size side normal)
@@ -773,7 +773,7 @@ fn window_old_buffer_decodes_any_window_including_internal_and_deleted_ones() {
     // build actually knows; inventing a `t` here would make the test pass
     // while the state behind it stayed missing.
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(progn ((lambda (old size side normal)
@@ -835,7 +835,7 @@ fn coordinates_in_window_p_decodes_a_live_window_before_its_coordinates() {
     // `window-total-width`, which decodes with `window-valid-p`, so an internal
     // window was ACCEPTED and everything else reported the wrong predicate.
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(progn ((lambda (old size side normal)
@@ -891,7 +891,7 @@ fn lower_frame_decodes_a_live_frame() {
     // Neomacs accepted anything: the subr was a stub that checked its arity
     // and returned nil, so a caller passing the wrong object got silence.
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(lower-frame)
@@ -935,7 +935,7 @@ fn window_old_buffer_reports_a_deleted_window_as_a_stale_epoch() {
     // deletion gives it an old_buffer.  Recording the buffer WITHOUT the
     // stamps would answer with the buffer here and diverge.
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(let ((w ((lambda (old size side normal)
@@ -970,7 +970,7 @@ fn window_old_buffer_reports_the_recorded_buffer_after_a_change_epoch() {
     // which is what the command loop does at
     // `runtime/eval/command_loop.rs`.
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buffer = ev.buffers.current_buffer().expect("current buffer").id;
 
     // Before any epoch: the window was created since the last record, so it has
@@ -1023,7 +1023,7 @@ fn window_old_buffer_survives_a_same_epoch_configuration_round_trip() {
     // inference from the docstring instead of a measured answer is exactly how
     // the wrong expectation got written here the first time.
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // Materialise the frame first: the hook runner walks `frame_list`, so
     // running it against a context whose selected frame has not been demanded
     // yet records nothing at all.
@@ -1061,7 +1061,7 @@ fn window_old_buffer_survives_a_same_epoch_configuration_round_trip() {
 #[test]
 fn minibuffer_window_frame_first_window_and_window_minibuffer_p_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
         "(window-minibuffer-p)
@@ -1192,7 +1192,7 @@ fn frame_root_window_p_semantics_and_errors() {
 #[test]
 fn window_at_matches_batch_coordinate_and_error_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(windowp (window-at 0 0))
@@ -1236,7 +1236,7 @@ fn window_at_matches_batch_coordinate_and_error_semantics() {
 #[test]
 fn window_frame_arity_and_designators() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(framep (window-frame))
@@ -1260,7 +1260,7 @@ fn window_frame_arity_and_designators() {
 #[test]
 fn window_designators_bootstrap_nil_and_validate_invalid_window_handles() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(window-start nil)
@@ -1459,7 +1459,7 @@ fn set_window_point_preserves_window_old_point_like_gnu() {
 #[test]
 fn selected_window_sync_prefers_live_current_buffer_point_before_resync() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut ev);
     let selected_wid = ev
         .frame_manager()
@@ -1578,7 +1578,7 @@ fn window_body_width_remap_without_face_remapping_returns_columns() {
 #[test]
 fn window_body_remap_uses_the_current_buffer_default_face_metrics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.create_buffer("*remapped-window-body*");
     eval.edit.buffers.set_current(buffer);
     let frame_id = eval.frames.create_frame("F1", 800, 600, buffer);
@@ -1613,7 +1613,7 @@ fn window_body_remap_uses_the_current_buffer_default_face_metrics() {
 #[test]
 fn window_body_remap_uses_the_current_buffers_face_remapping_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let displayed = eval.edit.buffers.create_buffer("*displayed-window-body*");
     eval.edit.buffers.set_current(displayed);
     let frame_id = eval.frames.create_frame("F1", 800, 600, displayed);
@@ -1657,7 +1657,7 @@ fn batch_window_body_width_excludes_margins() {
 #[test]
 fn gui_window_body_geometry_excludes_fringes_and_margins() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     let fid = ev.frames.create_frame("F1", 800, 600, buf);
@@ -1761,7 +1761,7 @@ fn gui_window_body_geometry_excludes_fringes_and_margins() {
 #[test]
 fn gui_window_fringes_default_to_frame_defaults_when_reset() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     let fid = ev.frames.create_frame("F1", 800, 600, buf);
@@ -1840,7 +1840,7 @@ fn gui_window_fringes_default_to_frame_defaults_when_reset() {
 #[test]
 fn gui_window_scroll_bars_round_trip_explicit_state() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     let fid = ev.frames.create_frame("F1", 800, 600, buf);
@@ -1893,7 +1893,7 @@ fn gui_window_scroll_bars_round_trip_explicit_state() {
 #[test]
 fn gui_window_body_geometry_excludes_scroll_bar_area() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     let fid = ev.frames.create_frame("F1", 800, 600, buf);
@@ -1936,7 +1936,7 @@ fn gui_window_body_geometry_excludes_scroll_bar_area() {
 #[test]
 fn gui_set_window_buffer_applies_buffer_local_display_defaults() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(scratch);
     let fid = ev.frames.create_frame("F1", 800, 600, scratch);
@@ -2071,7 +2071,7 @@ fn get_buffer_window_list_returns_matching_windows() {
 #[test]
 fn get_buffer_window_list_includes_active_minibuffer_by_default() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let fid = super::seed_batch_startup_frame_in_state(&mut ev.frames, &mut ev.buffers);
     let minibuffer_buffer = {
         let frame = ev.frames.get(fid).expect("frame should exist");
@@ -2376,7 +2376,7 @@ fn window_list_has_one_entry() {
 #[test]
 fn window_list_matches_frame_minibuffer_and_all_frames_batch_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(condition-case err (length (window-list)) (error err))
@@ -2412,7 +2412,7 @@ fn window_list_matches_frame_minibuffer_and_all_frames_batch_semantics() {
 #[test]
 fn minibuffer_window_from_window_list_supports_basic_accessors() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(let ((m (car (nthcdr (1- (length (window-list nil t))) (window-list nil t)))))
@@ -2448,7 +2448,7 @@ fn window_dedicated_p_default() {
 #[test]
 fn window_accessors_enforce_max_arity() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(condition-case err (window-buffer nil nil) (error (car err)))
@@ -2483,7 +2483,7 @@ fn set_window_dedicated_p() {
 #[test]
 fn set_window_dedicated_p_bootstraps_nil_and_validates_designators() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(condition-case err (set-window-dedicated-p nil t) (error err))
@@ -3560,7 +3560,7 @@ fn display_buffer_in_top_side_window_places_window_on_top_like_gnu() {
 #[test]
 fn split_window_internal_enforces_arity() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(condition-case err
@@ -3757,7 +3757,7 @@ fn select_window_accepts_minibuffer_window_and_switches_current_buffer() {
 #[test]
 fn select_window_validates_designators_and_arity() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(condition-case err (select-window nil) (error err))
@@ -3918,7 +3918,7 @@ fn other_window_enforces_max_arity() {
 #[test]
 fn selected_frame_bootstraps_initial_frame() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let results = ev.eval_str_each("(list (framep (selected-frame)) (length (frame-list)))");
     assert_eq!(format_eval_result(&results[0]), "OK (t 1)");
 }
@@ -3926,7 +3926,7 @@ fn selected_frame_bootstraps_initial_frame() {
 #[test]
 fn window_size_queries_bootstrap_initial_frame() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let results = ev.eval_str_each(
         "(list (integerp (window-total-height))
                (integerp (window-total-width))
@@ -3939,7 +3939,7 @@ fn window_size_queries_bootstrap_initial_frame() {
 #[test]
 fn window_size_queries_match_batch_defaults_and_invalid_window_predicates() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(window-total-height nil)
@@ -4047,7 +4047,7 @@ fn set_frame_size_lays_out_a_tty_frames_windows_like_gnu() {
 #[test]
 fn window_geometry_helper_queries_match_batch_defaults_and_error_predicates() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(let* ((w (selected-window))
@@ -4093,7 +4093,7 @@ fn window_geometry_helper_queries_match_batch_defaults_and_error_predicates() {
 #[test]
 fn window_use_time_and_old_state_queries_match_batch_defaults_and_error_predicates() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(let* ((w (selected-window))
@@ -4162,7 +4162,7 @@ fn window_use_time_and_old_state_queries_match_batch_defaults_and_error_predicat
 #[test]
 fn window_bump_use_time_shared_state_smoke() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(let* ((w1 (selected-window))
@@ -4194,7 +4194,7 @@ fn window_bump_use_time_shared_state_smoke() {
 #[test]
 fn window_scroll_state_shared_state_smoke() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(let* ((w (selected-window))
@@ -4249,7 +4249,7 @@ fn window_scroll_state_shared_state_smoke() {
 #[test]
 fn window_parameter_helpers_match_batch_defaults_and_key_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(let* ((w (selected-window))
@@ -4316,7 +4316,7 @@ fn window_parameter_helpers_match_batch_defaults_and_key_semantics() {
 #[test]
 fn window_cursor_info_returns_nil_in_batch_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(list (window-cursor-info (selected-window))
@@ -4340,7 +4340,7 @@ fn window_cursor_info_returns_nil_in_batch_like_gnu() {
 #[test]
 fn window_cursor_info_returns_last_redisplay_cursor_geometry() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     let fid = ev.frames.create_frame("F1", 800, 600, buf);
@@ -4380,7 +4380,7 @@ fn window_cursor_info_returns_last_redisplay_cursor_geometry() {
 #[test]
 fn window_cursor_info_hides_and_restores_live_cursor_geometry() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     let fid = ev.frames.create_frame("F1", 800, 600, buf);
@@ -4434,7 +4434,7 @@ fn window_cursor_info_hides_and_restores_live_cursor_geometry() {
 #[test]
 fn window_cursor_info_validates_window_designator_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(list (condition-case err (window-cursor-info 'foo) (error (car err)))
@@ -4460,7 +4460,7 @@ fn window_cursor_info_validates_window_designator_like_gnu() {
 #[test]
 fn set_window_cursor_type_signals_error_on_invalid_type_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(list
@@ -4509,7 +4509,7 @@ fn set_window_cursor_type_signals_error_on_invalid_type_like_gnu() {
 #[test]
 fn window_metadata_shared_state_smoke() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(let* ((w (selected-window))
@@ -5265,7 +5265,7 @@ fn tty_window_body_width_reserves_the_non_rightmost_separator_column() {
 #[test]
 fn raw_context_does_not_prebind_window_inside_aliases() {
     crate::test_utils::init_test_tracing();
-    let eval = neovm_eval::emacs_core::eval::Context::new();
+    let eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     for name in ["window-inside-pixel-edges", "window-inside-edges"] {
         assert!(
             eval.obarray.symbol_function(name).is_none(),
@@ -5404,7 +5404,7 @@ fn one_window_p_enforces_max_arity() {
 #[test]
 fn next_previous_window_enforce_max_arity() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(condition-case err (next-window nil nil nil nil) (error (car err)))
@@ -5456,7 +5456,7 @@ fn previous_window_wraps() {
 #[test]
 fn frame_visible_p_enforces_arity_and_designators() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(condition-case err (frame-visible-p) (error (car err)))
@@ -5476,7 +5476,7 @@ fn frame_visible_p_enforces_arity_and_designators() {
 #[test]
 fn frame_designator_errors_use_emacs_predicates() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(condition-case err (frame-parameter \"x\" 'name) (error err))
@@ -5508,7 +5508,7 @@ fn frame_designator_errors_use_emacs_predicates() {
 #[test]
 fn frame_query_builtins_match_gnu_batch_startup_geometry() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             r#"(list (frame-char-height)
@@ -5532,7 +5532,7 @@ fn frame_query_builtins_match_gnu_batch_startup_geometry() {
 #[test]
 fn frame_identity_builtins_match_gnu_batch_startup_defaults() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             r#"(let ((mouse (mouse-position))
@@ -5556,7 +5556,7 @@ fn frame_identity_builtins_match_gnu_batch_startup_defaults() {
 #[test]
 fn frame_query_builtins_report_pixel_sizes_for_gui_frames() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     let fid = ev.frames.create_frame("gui", 800, 600, buf);
     {
@@ -5600,7 +5600,7 @@ fn frame_query_builtins_report_pixel_sizes_for_gui_frames() {
 #[test]
 fn frame_text_width_ignores_window_local_fringe_overrides_for_gui_frames() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     let fid = ev.frames.create_frame("gui", 800, 600, buf);
     let selected_window = {
@@ -5627,7 +5627,7 @@ fn frame_text_width_ignores_window_local_fringe_overrides_for_gui_frames() {
 #[test]
 fn frame_query_builtins_use_internal_window_system_state() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     let fid = ev.frames.create_frame("gui", 800, 600, buf);
     {
@@ -5657,7 +5657,7 @@ fn frame_query_builtins_use_internal_window_system_state() {
 #[test]
 fn frame_old_selected_window_direct_wrapper_matches_batch_nil_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let fid = super::ensure_selected_frame_id(&mut ev);
 
     assert_eq!(
@@ -5710,7 +5710,7 @@ fn frame_list_has_one() {
 #[test]
 fn make_terminal_frame_creates_tty_child_frame_with_gnu_geometry_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(scratch);
     let root_id = ev.frames.create_frame("F1", 80, 25, scratch);
@@ -5814,7 +5814,7 @@ fn make_terminal_frame_creates_tty_child_frame_with_gnu_geometry_semantics() {
 #[test]
 fn make_terminal_frame_accepts_tty_minibuffer_window_parameter() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(scratch);
     let root_id = ev.frames.create_frame("F1", 80, 25, scratch);
@@ -5857,7 +5857,7 @@ fn make_terminal_frame_accepts_tty_minibuffer_window_parameter() {
 #[test]
 fn tty_child_frame_accepts_text_pixel_size_parameters() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(scratch);
     let root_id = ev.frames.create_frame("F1", 80, 25, scratch);
@@ -5903,7 +5903,7 @@ fn tty_child_frame_accepts_text_pixel_size_parameters() {
 #[test]
 fn modify_frame_parameters_accepts_text_pixel_size_on_tty_child_frame() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(scratch);
     let root_id = ev.frames.create_frame("F1", 80, 25, scratch);
@@ -5955,7 +5955,7 @@ fn modify_frame_parameters_accepts_text_pixel_size_on_tty_child_frame() {
 #[test]
 fn window_text_pixel_size_uses_supplied_child_window_frame() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(scratch);
     let root_id = ev.frames.create_frame("F1", 80, 25, scratch);
@@ -6013,7 +6013,7 @@ fn window_text_pixel_size_uses_supplied_child_window_frame() {
 #[test]
 fn shared_tty_child_minibuffer_window_apis_use_owner_frame() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(scratch);
     let root_id = ev.frames.create_frame("F1", 80, 25, scratch);
@@ -6074,7 +6074,7 @@ fn shared_tty_child_minibuffer_window_apis_use_owner_frame() {
 #[test]
 fn x_create_frame_creates_live_frame_and_preserves_char_geometry_params() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     let fid = ev.frames.create_frame("bootstrap", 800, 600, scratch);
     ev.frames
@@ -6109,7 +6109,7 @@ fn x_create_frame_creates_live_frame_and_preserves_char_geometry_params() {
 #[test]
 fn x_create_frame_creates_opening_frame_and_notifies_host() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     let fid = ev.frames.create_frame("bootstrap", 960, 640, scratch);
     {
@@ -6158,7 +6158,7 @@ fn x_create_frame_creates_opening_frame_and_notifies_host() {
 #[test]
 fn x_create_frame_fullscreen_maximized_param_reaches_display_host() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     let fid = ev.frames.create_frame("bootstrap", 960, 640, scratch);
     {
@@ -6196,7 +6196,7 @@ fn x_create_frame_fullscreen_maximized_param_reaches_display_host() {
 #[test]
 fn x_create_frame_with_parent_frame_creates_gui_child_overlay_without_host_window() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
     {
@@ -6268,7 +6268,7 @@ fn x_create_frame_with_parent_frame_creates_gui_child_overlay_without_host_windo
 #[test]
 fn x_create_frame_root_window_positions_follow_buffer_edits() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let input = "M-x ifconfig";
     let scratch = ev.buffers.create_buffer("*x-child-marker*");
     ev.buffers.set_current(scratch);
@@ -6338,7 +6338,7 @@ fn x_create_frame_root_window_positions_follow_buffer_edits() {
 #[test]
 fn x_create_frame_root_window_position_markers_survive_garbage_collection() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let input = "M-x ifconfig";
     let minibuffer = ev.buffers.create_buffer(" *Minibuf-vertico-gc*");
     ev.buffers.set_current(minibuffer);
@@ -6429,7 +6429,7 @@ fn x_create_frame_root_window_position_markers_survive_garbage_collection() {
 #[test]
 fn x_create_frame_with_parent_frame_inherits_parent_font_state() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
     let parent_font_name = Value::string("-*-Hack-regular-normal-*-*-102-*-*-*-m-0-iso10646-1");
@@ -6477,7 +6477,7 @@ fn x_create_frame_with_parent_frame_inherits_parent_font_state() {
 #[test]
 fn x_create_frame_with_explicit_font_resolves_internal_font_parameter() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
     {
@@ -6536,7 +6536,7 @@ fn x_create_frame_with_explicit_font_resolves_internal_font_parameter() {
 #[test]
 fn live_default_font_change_on_child_frame_skips_top_level_geometry_hints() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(scratch);
     let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
@@ -6599,7 +6599,7 @@ fn live_default_font_change_on_child_frame_skips_top_level_geometry_hints() {
 #[test]
 fn x_create_frame_accepts_text_pixel_size_on_gui_child_frame() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
     {
@@ -6644,7 +6644,7 @@ fn x_create_frame_accepts_text_pixel_size_on_gui_child_frame() {
 #[test]
 fn modify_frame_parameters_resizes_gui_child_frame_text_pixels() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(scratch);
     let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
@@ -6695,7 +6695,7 @@ fn modify_frame_parameters_resizes_gui_child_frame_text_pixels() {
 #[test]
 fn modify_frame_parameters_resolves_child_fractional_size_before_position() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(scratch);
     let parent_id = ev.frames.create_frame("parent", 624, 648, scratch);
@@ -6759,7 +6759,7 @@ fn modify_frame_parameters_resolves_child_fractional_size_before_position() {
 #[test]
 fn delete_frame_removes_gui_child_overlay_from_display_host() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
     {
@@ -6796,7 +6796,7 @@ fn delete_frame_removes_gui_child_overlay_from_display_host() {
 #[test]
 fn make_frame_invisible_removes_gui_child_overlay_from_display_host() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
     {
@@ -6834,7 +6834,7 @@ fn make_frame_invisible_removes_gui_child_overlay_from_display_host() {
 #[test]
 fn make_frame_visible_shows_gui_child_overlay_from_display_host() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
     {
@@ -6874,7 +6874,7 @@ fn make_frame_visible_shows_gui_child_overlay_from_display_host() {
 #[test]
 fn timer_deferred_make_frame_invisible_removes_gui_child_overlay_from_display_host() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
     {
@@ -6929,7 +6929,7 @@ fn timer_deferred_make_frame_invisible_removes_gui_child_overlay_from_display_ho
 #[test]
 fn delete_frame_destroys_top_level_gui_window_from_display_host() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     let first_id = ev.frames.create_frame("first", 960, 640, scratch);
     let second_id = ev.frames.create_frame("second", 800, 500, scratch);
@@ -6957,7 +6957,7 @@ fn delete_frame_destroys_top_level_gui_window_from_display_host() {
 #[test]
 fn delete_parent_frame_cascades_to_gui_child_overlays() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     let parent_id = ev.frames.create_frame("parent", 960, 640, scratch);
     let other_id = ev.frames.create_frame("other", 960, 640, scratch);
@@ -6997,7 +6997,7 @@ fn delete_parent_frame_cascades_to_gui_child_overlays() {
 #[test]
 fn x_create_frame_reserves_tab_bar_space_above_root_window() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     let fid = ev.frames.create_frame("bootstrap", 960, 640, scratch);
     ev.frames
@@ -7041,7 +7041,7 @@ fn x_create_frame_reserves_tab_bar_space_above_root_window() {
 #[test]
 fn x_create_frame_realizes_the_gui_frame_make_frame_delegates_to() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     let fid = ev.frames.create_frame("bootstrap", 960, 640, scratch);
     {
@@ -7095,7 +7095,7 @@ fn x_create_frame_realizes_the_gui_frame_make_frame_delegates_to() {
 #[test]
 fn x_create_frame_syncs_pending_resize_before_adopting_opening_gui_frame() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     let fid = ev.frames.create_frame("bootstrap", 960, 640, scratch);
     {
@@ -7153,7 +7153,7 @@ fn x_create_frame_syncs_pending_resize_before_adopting_opening_gui_frame() {
 #[test]
 fn x_create_frame_prefers_display_host_primary_window_size_without_explicit_geometry() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let scratch = ev.buffers.create_buffer("*scratch*");
     let fid = ev.frames.create_frame("bootstrap", 960, 640, scratch);
     {
@@ -7206,7 +7206,7 @@ fn delete_frame_uses_mru_only_for_the_mru_symbol() {
         ("t", "OK nil"),
         ("'custom", "OK nil"),
     ] {
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         let buffer = ev.buffers.create_buffer("*scratch*");
         ev.buffers.set_current(buffer);
         let recent = ev.frames.create_frame("recent", 800, 600, buffer);
@@ -7265,7 +7265,7 @@ fn delete_frame_force_errors_on_only_frame() {
 #[test]
 fn deleting_last_frame_on_terminal_deletes_terminal_too() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     let _primary = ev.frames.create_frame("F1", 800, 600, buf);
@@ -7310,7 +7310,7 @@ fn framep_true() {
 #[test]
 fn framep_returns_window_system_symbol_for_gui_frames() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let frame_id = super::ensure_selected_frame_id(&mut ev);
     ev.frames
         .get_mut(frame_id)
@@ -7347,7 +7347,7 @@ fn frame_live_p_false() {
 #[test]
 fn frame_builtins_accept_frame_handle_values() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let fid = super::ensure_selected_frame_id(&mut ev);
     let frame = Value::make_frame(fid.0);
 
@@ -7382,7 +7382,7 @@ fn frame_builtins_accept_frame_handle_values() {
 #[test]
 fn iconify_top_level_tty_frame_is_a_noop() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let fid = super::ensure_selected_frame_id(&mut ev);
     let frame = Value::make_frame(fid.0);
 
@@ -7399,7 +7399,7 @@ fn iconify_top_level_tty_frame_is_a_noop() {
 #[test]
 fn iconify_top_level_gui_frame_reports_iconified_state() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let fid = super::ensure_selected_frame_id(&mut ev);
     ev.frames
         .get_mut(fid)
@@ -7427,7 +7427,7 @@ fn iconify_top_level_gui_frame_reports_iconified_state() {
 #[test]
 fn select_frame_switches_active_kboard_to_frame_terminal() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     let primary = ev.frames.create_frame("F1", 800, 600, buf);
@@ -7523,7 +7523,7 @@ fn frame_focus_defaults_to_nil() {
 #[test]
 fn redirect_frame_focus_tracks_frame_state_and_selection_redirects() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     let primary = ev.frames.create_frame("F1", 800, 600, buf);
     let secondary = ev.frames.create_frame("F2", 800, 600, buf);
@@ -7611,7 +7611,7 @@ fn tty_frame_font_and_cursor_parameters_match_gnu_defaults() {
 #[test]
 fn gui_frame_font_parameter_exposes_font_name_not_font_object() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     let fid = ev.frames.create_frame("F1", 800, 600, buf);
@@ -7853,7 +7853,7 @@ fn window_right_divider_width_only_applies_to_non_rightmost_windows() {
 #[test]
 fn modify_frame_parameters_top_level_tty_reports_live_width_height() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     let fid = ev.frames.create_frame("F1", 800, 600, buf);
     let (initial_width, initial_height) = {
@@ -7889,7 +7889,7 @@ fn modify_frame_parameters_top_level_tty_reports_live_width_height() {
 #[test]
 fn modify_frame_parameters_width_height_resizes_live_gui_frame() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let host = RecordingDisplayHost::new();
     let resized = host.resized.clone();
     ev.set_display_host(Box::new(host));
@@ -7936,7 +7936,7 @@ fn modify_frame_parameters_width_height_resizes_live_gui_frame() {
 #[test]
 fn modify_frame_parameters_fullscreen_maximized_updates_live_gui_frame() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let host = RecordingDisplayHost::new();
     let fullscreen_changes = host.fullscreen_changes.clone();
     ev.set_display_host(Box::new(host));
@@ -7975,7 +7975,7 @@ fn gui_frame_metrics_default_minibuffer_is_one_line() {
     // `resize-mini-windows` never shrinks an over-allocated mini-window, so it
     // stayed two lines forever. GNU `make-frame` defaults the minibuffer to a
     // single line.
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     let fid = ev.frames.create_frame("F1", 800, 600, buf);
@@ -7996,7 +7996,7 @@ fn gui_frame_metrics_default_minibuffer_is_one_line() {
 #[test]
 fn modify_frame_parameters_after_live_font_change_defers_gui_resize_until_geometry_query() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let host = RecordingDisplayHost::with_resolved_frame_font(resolved_frame_font(
         "Noto Sans Mono",
         "NotoSansMono-Regular",
@@ -8100,7 +8100,7 @@ fn modify_frame_parameters_after_live_font_change_defers_gui_resize_until_geomet
 #[test]
 fn live_default_font_change_updates_gui_geometry_hints() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let host = RecordingDisplayHost::with_resolved_frame_font(resolved_frame_font(
         "Noto Sans Mono",
         "NotoSansMono-Regular",
@@ -8153,7 +8153,7 @@ fn live_default_font_change_updates_gui_geometry_hints() {
 #[test]
 fn modify_frame_parameters_resize_ignores_window_local_fringes_for_gui_frames() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let host = RecordingDisplayHost::new();
     let resized = host.resized.clone();
     ev.set_display_host(Box::new(host));
@@ -8200,7 +8200,7 @@ fn modify_frame_parameters_resize_ignores_window_local_fringes_for_gui_frames() 
 #[test]
 fn modify_frame_parameters_tab_bar_lines_reflows_root_window_tree() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     let fid = ev.frames.create_frame("F1", 800, 600, buf);
     {
@@ -8235,7 +8235,7 @@ fn modify_frame_parameters_tab_bar_lines_reflows_root_window_tree() {
 #[test]
 fn modify_frame_parameters_tool_bar_lines_reflows_root_window_tree() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     let fid = ev.frames.create_frame("F1", 800, 600, buf);
     {
@@ -8271,7 +8271,7 @@ fn modify_frame_parameters_tool_bar_lines_reflows_root_window_tree() {
 #[test]
 fn set_frame_size_builtins_leave_top_level_tty_size_unchanged() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     let fid = ev.frames.create_frame("F1", 800, 600, buf);
     let out = ev.eval_str_each(
@@ -8297,7 +8297,7 @@ fn set_frame_size_builtins_leave_top_level_tty_size_unchanged() {
 #[test]
 fn set_frame_size_builtins_resize_live_gui_frames_and_notify_host() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     let fid = ev.frames.create_frame("F1", 800, 600, buf);
     {
@@ -8360,7 +8360,7 @@ fn set_frame_size_builtins_resize_live_gui_frames_and_notify_host() {
 #[test]
 fn x_create_frame_minibuffer_only_uses_root_as_minibuffer() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     let root_id = ev.frames.create_frame("F1", 624, 648, buf);
@@ -8412,7 +8412,7 @@ fn x_create_frame_minibuffer_only_uses_root_as_minibuffer() {
 #[test]
 fn pixelwise_child_frame_resize_preserves_requested_text_pixels() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     let root_id = ev.frames.create_frame("F1", 624, 648, buf);
@@ -8478,7 +8478,7 @@ fn pixelwise_child_frame_resize_preserves_requested_text_pixels() {
 #[test]
 fn set_frame_size_and_position_pixelwise_resizes_gui_child_frame() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     let root_id = ev.frames.create_frame("F1", 624, 648, buf);
@@ -8549,7 +8549,7 @@ fn set_frame_size_and_position_pixelwise_resizes_gui_child_frame() {
 #[test]
 fn set_frame_size_syncs_resize_event_before_followup_frame_width_queries() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     let fid = ev.frames.create_frame("F1", 1300, 1188, buf);
@@ -8604,7 +8604,7 @@ fn set_frame_size_syncs_resize_event_before_followup_frame_width_queries() {
 #[test]
 fn set_frame_size_keeps_resize_pending_until_geometry_queries_force_sync() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     let fid = ev.frames.create_frame("F1", 1300, 1188, buf);
@@ -8859,7 +8859,7 @@ fn window_end_greater_than_start() {
 #[test]
 fn window_end_reads_the_atomic_record_when_a_snapshot_disagrees() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     ev.buffers
@@ -8930,7 +8930,7 @@ fn window_end_reads_the_atomic_record_when_a_snapshot_disagrees() {
 #[test]
 fn window_end_record_at_eob_never_exceeds_point_max() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     ev.buffers
@@ -8972,7 +8972,7 @@ fn window_end_record_at_eob_never_exceeds_point_max() {
 #[test]
 fn window_end_update_in_batch_returns_stored_end_without_estimate() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.set_variable("noninteractive", Value::T);
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
@@ -9006,7 +9006,7 @@ fn window_end_update_in_batch_returns_stored_end_without_estimate() {
 #[test]
 fn window_end_update_returns_the_query_record_without_publishing_it() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.set_variable("noninteractive", Value::NIL);
     let buf = ev.buffers.create_buffer("*window-end-layout-query*");
     ev.buffers.set_current(buf);
@@ -9076,7 +9076,7 @@ fn window_end_update_returns_the_query_record_without_publishing_it() {
 #[test]
 fn window_end_update_signals_when_installed_layout_query_does_not_converge() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.set_variable("noninteractive", Value::NIL);
     let buf = ev.buffers.create_buffer("*window-end-layout-failure*");
     ev.buffers.set_current(buf);
@@ -9114,7 +9114,7 @@ fn window_end_update_signals_when_installed_layout_query_does_not_converge() {
 #[test]
 fn window_chrome_height_queries_prefer_last_redisplay_snapshot_when_available() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     let fid = ev.frames.create_frame("F1", 800, 600, buf);
@@ -9155,7 +9155,7 @@ fn window_chrome_height_queries_prefer_last_redisplay_snapshot_when_available() 
 #[test]
 fn window_body_pixel_edges_begin_below_rendered_header_and_tab_lines() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     let fid = ev.frames.create_frame("F1", 800, 600, buf);
@@ -9391,7 +9391,7 @@ fn gnu_lisp_window_edges_use_logical_outer_and_presented_body_regions() {
 #[test]
 fn gui_geometry_queries_distinguish_logical_layout_from_presented_output() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buffer = ev.buffers.create_buffer("*geometry-invariant*");
     ev.buffers.set_current(buffer);
     let frame_id = ev.frames.create_frame("gui", 800, 600, buffer);
@@ -9451,7 +9451,7 @@ fn graphical_logical_window_origin_is_available_before_first_presentation() {
 #[test]
 fn presented_fringe_geometry_and_scrollbar_tuple_keep_live_gnu_configuration() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buffer = ev.buffers.create_buffer("*geometry-tuples*");
     ev.buffers.set_current(buffer);
     let frame_id = ev.frames.create_frame("gui", 800, 600, buffer);
@@ -9649,7 +9649,7 @@ fn display_buffer_missing_or_dead_signals_invalid_buffer() {
 #[test]
 fn set_window_buffer_matches_window_and_buffer_designator_errors() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.frames.create_frame("F1", 800, 600, buf);
     let dead = Value::make_buffer(ev.buffers.create_buffer("swb-dead"));
@@ -9680,7 +9680,7 @@ fn set_window_buffer_matches_window_and_buffer_designator_errors() {
 #[test]
 fn set_window_buffer_bootstraps_initial_frame_for_nil_window_designator() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let out = ev
         .eval_str_each(
             "(condition-case err
@@ -9729,7 +9729,7 @@ fn scroll_and_recenter_use_selected_window_state() {
 #[test]
 fn recenter_uses_current_buffer_point_for_selected_window() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
     let fid = ev.frames.create_frame("F1", 800, 600, buf);
@@ -9768,7 +9768,7 @@ fn graphical_recenter_context(
     };
 
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("noninteractive", Value::NIL);
     let buffer = eval.edit.buffers.create_buffer("*bottom-recenter-pixels*");
     eval.edit.buffers.set_current(buffer);
@@ -10005,7 +10005,7 @@ fn graphical_bottom_recenter_keeps_its_target_when_display_callback_selects_anot
 #[test]
 fn only_full_frame_recenter_crosses_the_menu_bar_rebuild_boundary() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buffer = ev.buffers.create_buffer("recenter-menu-boundary");
     ev.buffers.set_current(buffer);
     ev.frames.create_frame("F1", 800, 600, buffer);
@@ -10029,7 +10029,7 @@ fn only_full_frame_recenter_crosses_the_menu_bar_rebuild_boundary() {
 #[test]
 fn deleting_a_window_crosses_the_menu_bar_rebuild_boundary() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buffer = ev.buffers.create_buffer("delete-window-menu-boundary");
     ev.buffers.set_current(buffer);
     let frame_id = ev.frames.create_frame("F1", 800, 600, buffer);
@@ -10059,7 +10059,7 @@ fn deleting_a_window_crosses_the_menu_bar_rebuild_boundary() {
 #[test]
 fn only_nonselected_window_redisplay_crosses_the_menu_bar_rebuild_boundary() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buffer = ev.buffers.create_buffer("window-redisplay-menu-boundary");
     ev.buffers.set_current(buffer);
     let frame_id = ev.frames.create_frame("F1", 800, 600, buffer);
@@ -10190,7 +10190,7 @@ fn scroll_up_down_updates_window_start_for_multibyte_content() {
 #[test]
 fn consecutive_scroll_up_before_redisplay_advances_from_window_start() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buffer_id = ev.buffers.create_buffer("*queued-scroll*");
     ev.buffers.set_current(buffer_id);
     ev.buffers
@@ -10329,7 +10329,7 @@ fn scroll_down_skips_invisible_logical_lines_when_measuring_a_page() {
 #[test]
 fn scroll_down_page_scans_buffer_once_not_once_per_screen_row() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let buffer_id = ev.buffers.create_buffer("*scroll-complexity*");
     ev.buffers.set_current(buffer_id);
     let frame_id = ev
@@ -11039,7 +11039,7 @@ fn a_hscrolled_truncate_row_is_clipped_hscroll_columns_further_along() {
 fn window_lines_pixel_dimensions_fixture() -> (Context, crate::window::WindowId, i64) {
     // `noninteractive' is what GNU's first bail tests, so the fixture has to
     // look like an interactive session for the matrix to be readable at all.
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.set_variable("noninteractive", Value::NIL);
     let buf = ev.buffers.create_buffer("*wlpd*");
     ev.buffers.set_current(buf);
@@ -11336,7 +11336,7 @@ fn window_lines_pixel_dimensions_returns_nil_without_a_current_matrix() {
     ev.set_variable("noninteractive", Value::NIL);
 
     // A window whose rows were never committed.
-    let mut fresh = Context::new();
+    let mut fresh = Context::new(crate::test_utils::unit_runtime());
     let buf = fresh.buffers.create_buffer("*empty*");
     fresh.buffers.set_current(buf);
     let fid = fresh.frames.create_frame("wlpd-empty", 800, 442, buf);

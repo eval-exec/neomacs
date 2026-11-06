@@ -4,7 +4,7 @@ use neovm_eval::emacs_core::print::format_eval_result;
 use neovm_value::value::Value;
 
 fn context_with_hidden_gui_peer(primary_window_system: Option<&str>) -> Context {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.buffers.create_buffer("*scratch*");
     eval.buffers.set_current(scratch);
     let primary = eval.frames.create_frame("target", 800, 600, scratch);
@@ -77,7 +77,7 @@ fn last_graphical_frame_deletion_retains_connection_for_replacement_frame() {
     use neomacs_display_protocol::{GraphicalBackend, GraphicalDisplayIdentity};
 
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     ensure_terminal_runtime_owner(
         0,
         "graphical connection",
