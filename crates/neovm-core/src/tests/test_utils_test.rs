@@ -22,8 +22,9 @@ use crate::emacs_core::{Context, format_eval_result};
 use crate::heap_types::LispString;
 use std::path::PathBuf;
 
+pub(crate) use neovm_value::test_support::authority::with_legacy_gc;
 pub use neovm_value::test_utils::{
-    cargo_workspace_root, init_test_tracing, nextest_workspace_root, with_legacy_gc, workspace_root,
+    cargo_workspace_root, init_test_tracing, nextest_workspace_root, workspace_root,
 };
 
 /// The abbreviation the platform's own `gmtime_r` reports for UTC.

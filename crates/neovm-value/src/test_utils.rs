@@ -44,9 +44,12 @@ pub fn workspace_root() -> PathBuf {
 ///
 /// This is an environment knob for the GC owned by this crate, so it lives
 /// here rather than beside the boot-owning fixtures in core's test tree
-/// (TEST-SUPPORT-DESIGN.md rev 2, "Where each item lives"); core's
-/// `test_utils` re-exports it for its own and the moved tests.
-pub fn with_legacy_gc<T>(create: impl FnOnce() -> T) -> T {
+/// (TEST-SUPPORT-DESIGN.md rev 2, "Where each item lives").  The body stays
+/// `pub(crate)`: the single cross-crate route is the AUTHORITY fence
+/// `test_support::authority::with_legacy_gc`, which core's and eval's
+/// `test_utils` re-export (peer 10:07Z re-class: a store to process-global
+/// state, even self-restoring, is AUTHORITY, not VIS).
+pub(crate) fn with_legacy_gc<T>(create: impl FnOnce() -> T) -> T {
     struct RestoreGenerationalKnob(Option<std::ffi::OsString>);
 
     impl Drop for RestoreGenerationalKnob {

@@ -597,3 +597,12 @@ pub unsafe fn heap_types__LispString__from_borrowed_bytes(
         )
     }
 }
+
+/// Construct a legacy-GC fixture with the knob selected before heap creation,
+/// restoring the caller's environment on return or unwind.  The knob is
+/// process-global state that the production heap constructor reads, so this
+/// closure-scoped write is an AUTHORITY seam, not a VIS read; the body in
+/// `test_utils` stays `pub(crate)`, making this fence the sole public route.
+pub fn with_legacy_gc<T>(create: impl FnOnce() -> T) -> T {
+    crate::test_utils::with_legacy_gc(create)
+}
