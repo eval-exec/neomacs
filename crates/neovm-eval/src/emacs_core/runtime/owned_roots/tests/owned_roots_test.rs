@@ -59,7 +59,7 @@ fn root_registration_pruning_work_is_amortized_linear() {
 
 #[test]
 fn cloned_lease_survives_exact_gc_and_retires_with_last_owner() {
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     context.gc_collect_exact();
     let baseline = context.tagged_heap.allocated_count();
     let value = Value::cons(Value::fixnum(17), Value::vector(vec![Value::fixnum(23)]));
@@ -103,7 +103,7 @@ fn weak_retainer_registers_live_graphs_without_extending_context_lifetime() {
 
 #[test]
 fn retired_leases_do_not_accumulate_between_collections() {
-    let context = Context::new();
+    let context = Context::new(crate::test_utils::unit_runtime());
     let value = Value::cons(Value::fixnum(1), Value::NIL);
     for _ in 0..1000 {
         let lease = context.retain_gc_roots([value]);
