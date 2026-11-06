@@ -89,7 +89,8 @@ fn atom_only_symbol_names_are_cached_and_rooted_per_heap_identity() {
 #[test]
 fn atom_only_symbol_name_resolution_skips_the_rare_exact_object_table() {
     crate::test_utils::init_test_tracing();
-    let _eval = crate::emacs_core::eval::Context::new();
+    let mut heap = crate::tagged::gc::TaggedHeap::new();
+    crate::tagged::gc::set_tagged_heap(&mut heap);
     let symbol = intern("atom-only-symbol-name-storage-probe");
 
     reset_symbol_name_value_probes();
@@ -126,12 +127,9 @@ fn visible_symbol_name_reads_follow_materialization_mutation_and_gc() {
             resolve_lisp_visible_symbol_name(symbol),
             LispVisibleSymbolName::LispObject(value) if value.bits() == name.bits()
         ));
-        crate::emacs_core::builtins::collections::builtin_aset(vec![
-            name,
-            TaggedValue::fixnum(0),
-            TaggedValue::fixnum(replacement as i64),
-        ])
-        .unwrap();
+        // Same-char-count byte write: the value-layer primitive behind the
+        // former builtin_aset setup; the assertions above/below are unchanged.
+        name.set_string_byte_same_char_count(0, replacement as u8);
         let mut roots = Vec::new();
         collect_symbol_name_gc_roots(&mut roots, heap_id);
         heap.collect_exact(roots.into_iter());
@@ -327,7 +325,8 @@ fn visible_symbol_name_reads_preserve_identity_after_unintern_and_restore() {
 #[test]
 fn lisp_object_symbol_name_resolution_uses_its_declared_storage_first() {
     crate::test_utils::init_test_tracing();
-    let _eval = crate::emacs_core::eval::Context::new();
+    let mut heap = crate::tagged::gc::TaggedHeap::new();
+    crate::tagged::gc::set_tagged_heap(&mut heap);
     let name = crate::value::Value::string("lisp-object-symbol-name-storage-probe");
     let symbol = make_uninterned_symbol_with_name_value(name);
 
@@ -948,12 +947,9 @@ fn reader_name_materialization_preserves_encoding_identity_mutation_and_heap_own
     let first = materialize_symbol_name_value(symbol);
     assert!(first.as_lisp_string().unwrap().is_multibyte());
     assert_eq!(materialize_symbol_name_value(symbol).bits(), first.bits());
-    crate::emacs_core::builtins::collections::builtin_aset(vec![
-        first,
-        TaggedValue::fixnum(0),
-        TaggedValue::fixnum('X' as i64),
-    ])
-    .unwrap();
+    // Same-char-count byte write: the value-layer primitive behind the former
+    // builtin_aset setup; the assertions above/below are unchanged.
+    first.set_string_byte_same_char_count(0, b'X');
     assert_eq!(
         resolve_lisp_visible_symbol_name(symbol).text().as_bytes()[0],
         b'X'
