@@ -2872,6 +2872,8 @@ pub mod arena_pages;
 pub use arena_pages::*;
 
 mod gc_thread;
+#[cfg(any(test, feature = "test-support"))]
+pub use gc_thread::set_tagged_heap;
 pub use gc_thread::*;
 
 #[cfg(not(feature = "test-support"))]
