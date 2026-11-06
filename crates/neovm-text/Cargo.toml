@@ -49,3 +49,7 @@ visibility = { version = "0.1.1", optional = true }
 # (downward only; never a product feature).
 neovm-value = { path = "../neovm-value", default-features = false, features = ["test-support"] }
 neovm-edit = { path = "../neovm-edit", default-features = false, features = ["test-support"] }
+
+[lints.rust]
+# Split-wave class guard (LEAD 11:5xZ): deny accidental self-recursion.
+unconditional_recursion = "deny"

@@ -66,3 +66,7 @@ webview = []
 # this feature (peer ruling A2 and the manifest architecture guard); it is off
 # in every product profile.
 test-support = ["dep:visibility"]
+
+[lints.rust]
+# Split-wave class guard (LEAD 11:5xZ): deny accidental self-recursion.
+unconditional_recursion = "deny"

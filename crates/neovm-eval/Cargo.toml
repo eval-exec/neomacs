@@ -111,3 +111,7 @@ tracing-subscriber.workspace = true
 neomacs-infra.workspace = true
 flate2.workspace = true
 tree-sitter-json = "0.24"
+
+[lints.rust]
+# Split-wave class guard (LEAD 11:5xZ): deny accidental self-recursion.
+unconditional_recursion = "deny"

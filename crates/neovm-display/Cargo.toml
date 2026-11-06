@@ -67,3 +67,7 @@ neovm-eval = { path = "../neovm-eval", default-features = false, features = ["te
 tempfile.workspace = true
 libc.workspace = true
 malachite.workspace = true
+
+[lints.rust]
+# Split-wave class guard (LEAD 11:5xZ): deny accidental self-recursion.
+unconditional_recursion = "deny"

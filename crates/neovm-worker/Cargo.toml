@@ -20,3 +20,7 @@ neovm-core.workspace = true
 neovm-host-abi.workspace = true
 static_assertions.workspace = true
 thiserror.workspace = true
+
+[lints.rust]
+# Split-wave class guard (LEAD 11:5xZ): deny accidental self-recursion.
+unconditional_recursion = "deny"
