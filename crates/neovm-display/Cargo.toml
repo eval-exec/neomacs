@@ -20,10 +20,10 @@ test-support = ["neovm-value/test-support", "neovm-text/test-support"]
 
 [dependencies]
 rodio = { version = "0.20", optional = true }
-neovm-value = { path = "../neovm-value" }
-neovm-edit = { path = "../neovm-edit" }
-neovm-text = { path = "../neovm-text" }
-neovm-eval = { path = "../neovm-eval" }
+neovm-value = { path = "../neovm-value", default-features = false }
+neovm-edit = { path = "../neovm-edit", default-features = false }
+neovm-text = { path = "../neovm-text", default-features = false }
+neovm-eval = { path = "../neovm-eval", default-features = false }
 enum-map.workspace = true
 neomacs-display-protocol.workspace = true
 neomacs-video-model.workspace = true
@@ -40,14 +40,14 @@ tracing.workspace = true
 # Downward-only: shared value test helpers for this crate's own unit tests
 # (dependency crates never have cfg(test), so the provider feature is enabled
 # only by this dev edge, exactly like neovm-eval).
-neovm-value = { path = "../neovm-value", features = ["test-support"] }
+neovm-value = { path = "../neovm-value", default-features = false, features = ["test-support"] }
 # Consumer gate: value's test-support widens CacheRootScan::Snapshot, so the
 # text regex arm that matches it must be compiled in the same test graph.
-neovm-text = { path = "../neovm-text", features = ["test-support"] }
+neovm-text = { path = "../neovm-text", default-features = false, features = ["test-support"] }
 # Downward eval test-support edge: the re-homed display oracles reach the
 # signed eval A-prime fixtures (pdump converters, point-row modes, font
 # fixtures) through lower-crate rows.
-neovm-eval = { path = "../neovm-eval", features = ["test-support", "redisplay-test-policy"] }
+neovm-eval = { path = "../neovm-eval", default-features = false, features = ["test-support", "redisplay-test-policy"] }
 # Display unit tests use GNU oracle and tempfile fixtures directly.
 tempfile.workspace = true
 libc.workspace = true

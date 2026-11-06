@@ -99,9 +99,9 @@ zip = { version = "9.1", default-features = false, features = ["deflate"] }
 neomacs-terminfo = { path = "crates/neomacs-terminfo" }
 neomacs-allocator = { path = "crates/neomacs-allocator" }
 neovm-core = { path = "crates/neovm-core", default-features = false }
-neovm-display-identity = { path = "crates/neovm-display-identity" }
-neovm-host-abi = { path = "crates/neovm-host-abi" }
-neovm-oracle-tests = { path = "crates/neovm-oracle-tests" }
+neovm-display-identity = { path = "crates/neovm-display-identity", default-features = false }
+neovm-host-abi = { path = "crates/neovm-host-abi", default-features = false }
+neovm-oracle-tests = { path = "crates/neovm-oracle-tests", default-features = false }
 neovm-value = { path = "crates/neovm-value", default-features = false }
 neomacs-display-runtime = { path = "crates/neomacs-display-runtime", default-features = false }
 neomacs-display-protocol = { path = "crates/neomacs-display-protocol", default-features = false }

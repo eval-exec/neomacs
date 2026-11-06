@@ -10,7 +10,7 @@ description = "Host system services (files, processes, time, IPC) extracted from
 [features]
 default = ["jit", "sqlite"]
 jit = ["neovm-value/jit", "neovm-edit/jit", "neovm-text/jit", "neovm-eval/jit"]
-sqlite = ["dep:rusqlite", "neovm-eval/sqlite"]
+sqlite = ["dep:rusqlite", "neovm-value/sqlite", "neovm-eval/sqlite"]
 # Static-link the bundled libdbus instead of pkg-config `dbus-1` (the
 # detection in build.rs turns this into cfg(neomacs_have_dbus)).
 dbus-vendored = ["dbus/vendored"]
@@ -22,10 +22,10 @@ test-support = ["neovm-value/test-support", "neovm-text/test-support", "neovm-ev
 # B3 TEST-SUPPORT-VIS: pub only in the test-support build; product visibility
 # is unchanged (peer-signed mechanism V1-V6).
 visibility = { version = "0.1.1", optional = true }
-neovm-value = { path = "../neovm-value" }
-neovm-edit = { path = "../neovm-edit" }
-neovm-text = { path = "../neovm-text" }
-neovm-eval = { path = "../neovm-eval" }
+neovm-value = { path = "../neovm-value", default-features = false }
+neovm-edit = { path = "../neovm-edit", default-features = false }
+neovm-text = { path = "../neovm-text", default-features = false }
+neovm-eval = { path = "../neovm-eval", default-features = false }
 base64.workspace = true
 crossbeam-channel.workspace = true
 dbus = { version = "0.9", default-features = false }
@@ -64,10 +64,10 @@ pkg-config.workspace = true
 [dev-dependencies]
 # Downward test-only edge: the crate's own tests use the value-level helpers
 # through src/test_utils.rs.  Not a product dependency.
-neovm-value = { path = "../neovm-value", features = ["test-support"] }
+neovm-value = { path = "../neovm-value", default-features = false, features = ["test-support"] }
 # The re-homed process/wait tests name eval's test-support surface (wait gates,
 # process-state metadata).  Downward, test-only.
-neovm-eval = { path = "../neovm-eval", features = ["test-support"] }
+neovm-eval = { path = "../neovm-eval", default-features = false, features = ["test-support"] }
 # Feature unification: value/test-support adds CacheRootScan::Snapshot, so the
 # text consumer must compile with its matching test-support arm.
-neovm-text = { path = "../neovm-text", features = ["test-support"] }
+neovm-text = { path = "../neovm-text", default-features = false, features = ["test-support"] }

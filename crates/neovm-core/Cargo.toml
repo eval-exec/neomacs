@@ -12,10 +12,10 @@ autotests = false
 
 [dependencies]
 neovm-system = { path = "../neovm-system", default-features = false }
-neovm-display = { path = "../neovm-display" }
+neovm-display = { path = "../neovm-display", default-features = false }
 neovm-eval = { path = "../neovm-eval", default-features = false }
-neovm-text = { path = "../neovm-text" }
-neovm-edit = { path = "../neovm-edit" }
+neovm-text = { path = "../neovm-text", default-features = false }
+neovm-edit = { path = "../neovm-edit", default-features = false }
 neovm-display-identity.workspace = true
 neovm-host-abi.workspace = true
 neovm-value.workspace = true
@@ -200,8 +200,8 @@ contract-fixtures = ["neovm-eval/contract-fixtures"]
 neovm-value = { workspace = true, features = ["test-support"] }
 # The moved re-homes need text's feature-gated CacheRootScan match to compile
 # in the core-test graph (TEST-SUPPORT-DESIGN rev 2 consumer gate).
-neovm-text = { path = "../neovm-text", features = ["test-support"] }
-neovm-edit = { path = "../neovm-edit", features = ["test-support"] }
+neovm-text = { path = "../neovm-text", default-features = false, features = ["test-support"] }
+neovm-edit = { path = "../neovm-edit", default-features = false, features = ["test-support"] }
 # TEST-SUPPORT-DESIGN.md rev 2: core's moved_* tests consume the lower
 # crates' feature-gated test surfaces (downward enablement from above).
 neovm-eval = { path = "../neovm-eval", default-features = false, features = ["test-support", "redisplay-test-policy"] }
@@ -209,10 +209,10 @@ neovm-eval = { path = "../neovm-eval", default-features = false, features = ["te
 # core's test tree (TEST-SUPPORT-DESIGN §1a option A) and reach the
 # feature-gated system fixtures through this dev-only edge.  The normal
 # dependency above stays feature-free for product builds.
-neovm-system = { path = "../neovm-system", features = ["test-support"] }
+neovm-system = { path = "../neovm-system", default-features = false, features = ["test-support"] }
 # The moved edit textprop oracle drives display's test-support terminal hook;
 # this downward dev edge enables that surface only in core's test build.
-neovm-display = { path = "../neovm-display", features = ["test-support"] }
+neovm-display = { path = "../neovm-display", default-features = false, features = ["test-support"] }
 toml.workspace = true
 serde_json.workspace = true
 static_assertions.workspace = true

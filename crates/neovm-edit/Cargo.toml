@@ -17,7 +17,7 @@ jit = ["neovm-value/jit"]
 redisplay-test-policy = []
 
 [dependencies]
-neovm-value = { path = "../neovm-value" }
+neovm-value = { path = "../neovm-value", default-features = false }
 libc.workspace = true
 malachite.workspace = true
 memchr.workspace = true
@@ -33,5 +33,5 @@ tracing.workspace = true
 visibility = { version = "0.1.1", optional = true }
 
 [dev-dependencies]
-neovm-value = { path = "../neovm-value", features = ["test-support"] }
+neovm-value = { path = "../neovm-value", default-features = false, features = ["test-support"] }
 proptest.workspace = true

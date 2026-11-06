@@ -16,8 +16,8 @@ perf-probes = []
 test-support = ["neovm-value/test-support", "neovm-edit/test-support", "dep:visibility"]
 
 [dependencies]
-neovm-value = { path = "../neovm-value" }
-neovm-edit = { path = "../neovm-edit" }
+neovm-value = { path = "../neovm-value", default-features = false }
+neovm-edit = { path = "../neovm-edit", default-features = false }
 bitflags.workspace = true
 encoding_rs.workspace = true
 enumflags2.workspace = true
@@ -44,5 +44,5 @@ visibility = { version = "0.1.1", optional = true }
 [dev-dependencies]
 # Enables the value provider's test-support surface for text's own test build
 # (downward only; never a product feature).
-neovm-value = { path = "../neovm-value", features = ["test-support"] }
-neovm-edit = { path = "../neovm-edit", features = ["test-support"] }
+neovm-value = { path = "../neovm-value", default-features = false, features = ["test-support"] }
+neovm-edit = { path = "../neovm-edit", default-features = false, features = ["test-support"] }
