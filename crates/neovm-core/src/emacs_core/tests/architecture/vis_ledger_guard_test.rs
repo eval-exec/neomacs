@@ -5849,6 +5849,41 @@ pub struct Tuple(pub u8);
             ["fileio", "process", "dbusbind", "xfaces"],
             "the bootstrap snapshot's module blocks must be fileio, process, dbusbind, xfaces in canonical order"
         );
+        // Coverage closure (H3b r2, LEAD 03:2xZ): the four binder slices
+        // must PARTITION the host-active snapshot. A row in a layer that no
+        // binder covers would otherwise go unchecked, and the count check
+        // rejects a duplicate row that set equality would hide.
+        let rows = bootstrap_snapshot_rows();
+        for (_, layer, _) in &rows {
+            assert!(
+                ["fileio", "process", "dbusbind", "xfaces"].contains(layer),
+                "bootstrap snapshot row in an uncovered layer `{layer}`"
+            );
+        }
+        let active: BTreeSet<&str> = rows
+            .iter()
+            .filter(|(_, _, cfg)| snapshot_cfg_active(cfg))
+            .map(|(name, _, _)| *name)
+            .collect();
+        let mut sliced: BTreeSet<&str> = BTreeSet::new();
+        let mut slice_count = 0usize;
+        for layer in ["fileio", "process", "dbusbind", "xfaces"] {
+            for (name, row_layer, cfg) in &rows {
+                if *row_layer == layer && snapshot_cfg_active(cfg) {
+                    sliced.insert(*name);
+                    slice_count += 1;
+                }
+            }
+        }
+        assert_eq!(
+            sliced, active,
+            "the four binder slices together must equal every host-active snapshot row"
+        );
+        assert_eq!(
+            slice_count,
+            active.len(),
+            "the binder slices must not overlap or duplicate a snapshot row"
+        );
         assert_binder_binds_its_snapshot_slice(
             "fileio",
             neovm_system::emacs_core::fileio::register_bootstrap_vars,
