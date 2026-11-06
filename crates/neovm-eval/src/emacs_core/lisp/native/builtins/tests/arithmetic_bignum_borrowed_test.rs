@@ -118,7 +118,7 @@ fn check(ev: &mut Context, form: &str, want: &str) {
 #[test]
 fn bignum_add_sub_mul_match_owned_arithmetic() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let pool = pool();
     for a in &pool {
         for b in &pool {
@@ -154,7 +154,7 @@ fn bignum_add_sub_mul_match_owned_arithmetic() {
 #[test]
 fn bignum_comparisons_match_owned_arithmetic() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let pool = pool();
     for a in &pool {
         for b in &pool {
@@ -199,7 +199,7 @@ fn bignum_comparisons_match_owned_arithmetic() {
 #[test]
 fn bignum_rounding_matches_the_remainder_algorithm() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let pool = pool();
     for a in &pool {
         for d in &pool {

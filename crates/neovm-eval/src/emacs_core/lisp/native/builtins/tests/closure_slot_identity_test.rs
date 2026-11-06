@@ -34,7 +34,7 @@ const PROTO: &str = "(make-byte-code 0 \"\\300\\301\\302E\\207\" [V0 V1 csi-tail
 
 #[test]
 fn aref_slots_1_and_2_are_the_same_objects_on_every_read() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     eval(&mut ctx, &format!("(setq csi-f {ADDER})"));
     assert_eq!(
         printed(
@@ -68,7 +68,7 @@ fn aref_slots_1_and_2_are_the_same_objects_on_every_read() {
 
 #[test]
 fn slot_objects_are_created_lazily() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     // A reader literal (as `.elc` loading makes them): no Lisp object for
     // slots 1 and 2 exists until something reads them.
     let f = eval(&mut ctx, ADDER_LITERAL);
@@ -98,7 +98,7 @@ fn slot_objects_are_created_lazily() {
 fn make_closure_instances_share_the_prototype_code_string() {
     for in_place in [true, false] {
         super::symbols::force_make_closure_in_place_for_test(in_place);
-        let mut ctx = Context::new();
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
         eval(&mut ctx, &format!("(setq csi-proto {PROTO})"));
         // An instance made BEFORE anything read the prototype's slot 1 must
         // still share it, as must one made after, and an instance of an
@@ -128,7 +128,7 @@ fn make_closure_instances_share_the_prototype_code_string() {
 
 #[test]
 fn sequence_functions_hand_out_the_slot_objects() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     eval(&mut ctx, &format!("(setq csi-f {ADDER})"));
     assert_eq!(
         printed(
@@ -145,7 +145,7 @@ fn sequence_functions_hand_out_the_slot_objects() {
 
 #[test]
 fn print_circle_sees_the_shared_slot_objects() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     assert_eq!(
         printed(
             &mut ctx,
@@ -164,7 +164,7 @@ fn print_circle_sees_the_shared_slot_objects() {
 #[test]
 fn slot_objects_survive_collections_through_the_function() {
     for gc_stress in [false, true] {
-        let mut ctx = Context::new();
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
         eval(&mut ctx, &format!("(setq csi-f {ADDER})"));
         let f = eval(&mut ctx, "csi-f");
         // Create both objects, then drop every Lisp reference to them.
@@ -215,7 +215,7 @@ fn aset_into_the_constants_vector_is_not_seen_by_either_tier() {
             ADDER,
             "(make-closure (make-byte-code 257 \"\\211\\300\\\\\\207\" [V0] 3) 3)",
         ] {
-            let mut ctx = Context::new();
+            let mut ctx = Context::new(crate::test_utils::unit_runtime());
             eval(&mut ctx, &format!("(setq csi-f {source})"));
             let f = eval(&mut ctx, "csi-f");
             let bc = f.get_bytecode_data().expect("byte code");
@@ -256,7 +256,7 @@ fn aset_into_the_constants_vector_is_not_seen_by_either_tier() {
 /// as GNU's does; a pool the construction converted keeps its own vector.
 #[test]
 fn make_byte_code_keeps_the_given_code_string_and_constants_vector() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     assert_eq!(
         printed(
             &mut ctx,

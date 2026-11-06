@@ -21,7 +21,7 @@ fn callback(car: bool) -> Value {
 #[test]
 fn higher_order_callback_policy_observes_bytecode_under_an_outer_capture() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let function = callback(false);
     let roots = eval.save_vm_roots();
     eval.push_vm_frame_root(function);
@@ -52,7 +52,7 @@ fn higher_order_callback_policy_observes_bytecode_under_an_outer_capture() {
 fn higher_order_callback_policy_preserves_gc_and_signal_unwind() {
     crate::test_utils::init_test_tracing();
     for gc_stress in [false, true] {
-        let mut eval = crate::emacs_core::eval::Context::new();
+        let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
         eval.gc_stress = gc_stress;
         let roots = eval.save_vm_roots();
         let function = callback(true);

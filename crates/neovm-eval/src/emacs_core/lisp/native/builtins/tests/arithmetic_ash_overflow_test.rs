@@ -30,7 +30,7 @@ use crate::emacs_core::{Context, format_eval_result};
 /// silent-0 bug (returns "OK 0") from GNU's signal ("OK OVERFLOW").
 fn eval_catching_overflow(expr: &str) -> String {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let src = format!("(condition-case e {expr} (overflow-error 'OVERFLOW))");
     format_eval_result(&ev.eval_str(&src))
 }
@@ -38,7 +38,7 @@ fn eval_catching_overflow(expr: &str) -> String {
 /// Plain evaluation (no condition-case wrapper).
 fn eval_one(src: &str) -> String {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     format_eval_result(&ev.eval_str(src))
 }
 

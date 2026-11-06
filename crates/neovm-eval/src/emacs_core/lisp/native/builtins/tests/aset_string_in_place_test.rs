@@ -48,7 +48,7 @@ fn aset_on_strings_is_observably_unchanged() {
         ),
     ];
     for gc_stress in [false, true] {
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         ev.gc_stress = gc_stress;
         for (form, want) in cases {
             let got = format_eval_result(&ev.eval_str(form));
@@ -77,7 +77,7 @@ fn aset_on_a_multibyte_string_does_not_scan_from_the_start() {
     use neovm_value::emacs_char::position_conversion_scan_steps_for_test;
     use neovm_value::test_support::authority::reset_position_conversion_scan_steps_for_test;
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
 
     // (a) All-ASCII MULTIBYTE: the `SCHARS == SBYTES` identity, so writing at
     // any index costs no conversion scan at all.
@@ -130,7 +130,7 @@ fn putting_a_property_on_a_string_does_not_copy_its_interval_tree() {
     use neovm_edit::buffer::text_props::text_property_table_clones_for_test;
     use neovm_value::test_support::authority::reset_text_property_table_clones_for_test;
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
 
     let setup = eval.eval_str(r#"(setq s (make-string 3000 ?a))"#);
     assert_eq!(format_eval_result(&setup).split(' ').next(), Some("OK"));

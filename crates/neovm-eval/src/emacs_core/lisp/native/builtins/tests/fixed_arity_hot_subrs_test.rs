@@ -85,7 +85,7 @@ const HOT_FIXED_ARITY_SUBRS: [(&str, usize); 71] = [
 #[test]
 fn hot_subrs_dispatch_with_fixed_arity_like_gnu_funcall_subr() {
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
+    let _eval = Context::new(crate::test_utils::unit_runtime());
     for (name, arity) in HOT_FIXED_ARITY_SUBRS {
         let entry = crate::emacs_core::eval::lookup_global_subr_entry(intern(name))
             .unwrap_or_else(|| panic!("{name} must be a registered subr"));
@@ -113,7 +113,7 @@ fn hot_subrs_dispatch_with_fixed_arity_like_gnu_funcall_subr() {
 #[test]
 fn hot_subrs_keep_gnu_semantics_for_absent_and_nil_optionals() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = eval
         .eval_str(
             r#"(format "%S"
@@ -149,7 +149,7 @@ fn hot_subrs_keep_gnu_semantics_for_absent_and_nil_optionals() {
 #[test]
 fn second_batch_keeps_gnu_semantics_for_absent_and_nil_optionals() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = eval
         .eval_str(&format!("(format \"%S\" {})", FA2_FORM))
         .expect("spot-check form evaluates");
@@ -192,7 +192,7 @@ const FA2_EXPECTED: &str = r#"((2 6 7 nil nil nil 0 nil nil (1 6) nil) t 18 18 1
 #[test]
 fn inline_subr_table_mirrors_the_registry() {
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
+    let _eval = Context::new(crate::test_utils::unit_runtime());
     for name in [
         "car",
         "point",
@@ -222,7 +222,7 @@ fn inline_subr_table_mirrors_the_registry() {
 fn inline_subr_kinds_follow_the_gnu_inline_opcode_shape() {
     use crate::emacs_core::eval::{InlineSubrKind, inline_subr};
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
+    let _eval = Context::new(crate::test_utils::unit_runtime());
     let kind = |name: &str| inline_subr(intern(name)).kind;
     assert_eq!(kind("point"), InlineSubrKind::Point);
     assert_eq!(kind("point-min"), InlineSubrKind::PointMin);
@@ -260,7 +260,7 @@ fn inline_subr_kinds_follow_the_gnu_inline_opcode_shape() {
 #[test]
 fn third_batch_and_symbols_with_pos_list_searches_match_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = eval
         .eval_str(&format!("(format \"%S\" {})", THIRD_BATCH_FORM))
         .unwrap_or_else(|error| {
@@ -304,7 +304,7 @@ fn memq_scan_answers_as_the_exact_algorithm() {
     use crate::emacs_core::builtins::cons_list::{builtin_memq_values, memq_exact_for_test};
     use neovm_value::value::Value;
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let describe = |result: &neovm_value::error::EvalResult| match result.kinded_ref() {
         Ok(v) => format!("ok {:#x}", v.bits()),
         Err(neovm_value::error::FlowRef::Signal(sig)) => format!(

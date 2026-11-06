@@ -8,7 +8,7 @@ use neovm_value::value::Value;
 #[test]
 fn assoc_callbacks_identify_pure_implementations_and_aliases() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     for (name, expected) in [
         ("eq", PureAssocPredicate::Eq),
         ("eql", PureAssocPredicate::Eql),
@@ -41,7 +41,7 @@ fn assoc_callbacks_identify_pure_implementations_and_aliases() {
 #[test]
 fn assoc_callbacks_cache_lambda_targets_and_observe_redefinition() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str("(defalias 'assoc-callback-lambda (lambda (entry key) (cons entry key)))")
         .expect("install lambda target");
     let designator = Value::symbol("assoc-callback-lambda");
@@ -80,7 +80,7 @@ fn assoc_callbacks_cache_lambda_targets_and_observe_redefinition() {
 #[test]
 fn assoc_callbacks_pure_guard_sees_alias_changes_and_preserves_subr_objects() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str("(defalias 'assoc-callback-eq 'eq)")
         .expect("install alias");
     let designator = Value::symbol("assoc-callback-eq");
@@ -115,7 +115,7 @@ fn assoc_callbacks_pure_guard_sees_alias_changes_and_preserves_subr_objects() {
 #[test]
 fn assoc_callbacks_decline_autoloads_invalid_values_and_compiler_overrides() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str("(autoload 'assoc-callback-autoload \"assoc-callback-missing-file\")")
         .expect("install autoload");
     for designator in [
@@ -133,7 +133,7 @@ fn assoc_callbacks_decline_autoloads_invalid_values_and_compiler_overrides() {
 #[test]
 fn assoc_callbacks_cached_errors_restore_the_call_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let designator = Value::symbol("string-equal");
     let captured = eval
         .resolve_assoc_predicate(designator)
@@ -168,7 +168,7 @@ fn assoc_callbacks_resolve_and_call_named_bytecode() {
     use neovm_value::intern::intern;
     use neovm_value::value::LambdaParams;
 
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let mut bytecode = ByteCodeFunction::new(LambdaParams {
         required: vec![intern("entry"), intern("lookup")],
         optional: vec![],

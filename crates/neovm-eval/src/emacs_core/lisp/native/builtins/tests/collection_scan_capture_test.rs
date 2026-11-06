@@ -92,7 +92,7 @@ fn collection_scan_active_scope_keeps_alist_and_entry_dependencies() {
 #[test]
 fn collection_scan_positioned_symbol_matches_keep_prefix_dependencies() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let key = Value::symbol("collection-scan-positioned");
     let positioned = eval
         .tagged_heap

@@ -141,7 +141,7 @@ const C_PRIMITIVES_BENEATH_THEM: &[&str] = &[
 #[test]
 fn the_eighteen_window_frame_names_are_void_on_a_bare_evaluator_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
 
     for primitive in C_PRIMITIVES_BENEATH_THEM {
         let result = eval.eval_str(&format!("(fboundp '{primitive})"));
@@ -169,7 +169,7 @@ fn no_rust_subr_is_registered_for_the_eighteen_window_frame_names() {
     crate::test_utils::init_test_tracing();
     // The global subr registry is populated by `init_builtins`, which runs
     // when an evaluator is built; ask for one before reading the table.
-    let _eval = Context::new();
+    let _eval = Context::new(crate::test_utils::unit_runtime());
     for name in LISP_ONLY_WINDOW_FRAME_NAMES {
         assert!(
             lookup_global_subr_entry(intern(name)).is_none(),
@@ -507,7 +507,7 @@ fn display_color_cells_went_with_the_seeding_that_kept_it() {
 
     // 1. No Rust subr -- like the seventeen, and like GNU, which has no
     //    `DEFUN ("display-color-cells"' in src/ at all.
-    let _eval = Context::new();
+    let _eval = Context::new(crate::test_utils::unit_runtime());
     assert!(
         lookup_global_subr_entry(intern("display-color-cells")).is_none(),
         "display-color-cells is lisp/frame.el:2966 and has no GNU C version; \

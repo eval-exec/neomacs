@@ -62,7 +62,7 @@ const CASES: &[(&str, &str)] = &[
 #[test]
 fn float_operand_rounding_is_exact_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     for &(form, gnu) in CASES {
         let got = format_eval_result(&ev.eval_str(form));
         if let Some(rest) = gnu.strip_prefix("(ERR ") {

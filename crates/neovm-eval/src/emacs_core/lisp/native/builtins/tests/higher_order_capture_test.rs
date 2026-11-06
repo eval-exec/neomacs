@@ -11,7 +11,7 @@ fn list_cell(mut list: Value, index: usize) -> Value {
 #[test]
 fn higher_order_capture_records_mapcar_traversal_and_whole_call() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     for whole_call in [false, true] {
         for index in 0..3 {
             let list = Value::list(vec![Value::fixnum(1), Value::fixnum(2), Value::fixnum(3)]);
@@ -41,7 +41,7 @@ fn higher_order_capture_records_mapcar_traversal_and_whole_call() {
 #[test]
 fn higher_order_capture_callback_observes_its_own_nested_reads() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let sources = [
         Value::cons(Value::fixnum(1), Value::NIL),
         Value::cons(Value::fixnum(2), Value::NIL),
@@ -75,7 +75,7 @@ fn higher_order_capture_callback_observes_its_own_nested_reads() {
 #[test]
 fn higher_order_capture_records_mapconcat_identity_list_cells() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     for whole_call in [false, true] {
         for index in 0..3 {
             let list = Value::list(vec![

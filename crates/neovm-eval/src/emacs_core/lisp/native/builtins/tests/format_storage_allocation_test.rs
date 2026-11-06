@@ -85,7 +85,7 @@ fn format_initial_storage_retains_vector_ownership_and_live_null_failure() {
         }
     }
 
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let original = context
         .eval_str("(setq memory-signal-data '(error . format-null-allocation))")
         .expect("live original memory-signal-data");

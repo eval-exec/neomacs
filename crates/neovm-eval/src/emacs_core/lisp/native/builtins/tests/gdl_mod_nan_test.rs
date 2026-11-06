@@ -2,7 +2,7 @@ use super::*;
 #[test]
 fn gdl_mod_preserves_nan_sign_and_payload() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = super::eval::Context::new();
+    let mut ctx = super::eval::Context::new(crate::test_utils::unit_runtime());
     for bits in [
         0x7ff8_0000_0000_0000,
         0x7ff8_0000_0000_0007,

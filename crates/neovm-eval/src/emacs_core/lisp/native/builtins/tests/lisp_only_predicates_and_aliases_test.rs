@@ -39,7 +39,7 @@ const LISP_DEFALIASES: &[(&str, &str)] = &[
 #[test]
 fn the_eleven_names_are_void_on_a_bare_evaluator_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     // A control: the primitives these are BUILT ON are `DEFUN`ed in GNU's
     // `src/`, so a bare evaluator must still answer for them.
     for primitive in ["null", "set-marker", "string-equal", "string-lessp"] {
@@ -293,7 +293,7 @@ fn no_rust_subr_is_registered_for_the_eleven_names() {
     crate::test_utils::init_test_tracing();
     // The global subr registry is populated by `init_builtins`, which runs
     // when an evaluator is built; ask for one before reading the table.
-    let _eval = Context::new();
+    let _eval = Context::new(crate::test_utils::unit_runtime());
     for name in LISP_DEFUN_PREDICATES
         .iter()
         .chain(LISP_DEFALIASES.iter().map(|(n, _)| n))

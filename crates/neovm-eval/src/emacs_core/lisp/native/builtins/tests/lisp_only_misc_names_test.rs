@@ -62,7 +62,7 @@ const C_PRIMITIVES_BESIDE_THEM: &[&str] = &[
 #[test]
 fn the_thirteen_misc_names_are_void_on_a_bare_evaluator_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
 
     for primitive in C_PRIMITIVES_BESIDE_THEM {
         let result = eval.eval_str(&format!("(fboundp '{primitive})"));
@@ -89,7 +89,7 @@ fn no_rust_subr_is_registered_for_the_thirteen_misc_names() {
     crate::test_utils::init_test_tracing();
     // The global subr registry is populated by `init_builtins`, which runs
     // when an evaluator is built; ask for one before reading the table.
-    let _eval = Context::new();
+    let _eval = Context::new(crate::test_utils::unit_runtime());
     for name in LISP_ONLY_MISC_NAMES {
         assert!(
             lookup_global_subr_entry(intern(name)).is_none(),
@@ -110,7 +110,7 @@ fn no_rust_subr_is_registered_for_the_thirteen_misc_names() {
 #[test]
 fn transient_mark_mode_keeps_its_c_variable_on_a_bare_evaluator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = eval.eval_str(
         "(list (boundp 'transient-mark-mode)
                (default-value 'transient-mark-mode)

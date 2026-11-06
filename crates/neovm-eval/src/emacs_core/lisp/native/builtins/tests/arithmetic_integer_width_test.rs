@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 /// binding that leaked out of an earlier form shows up in a later one.
 fn check(cases: &[(&str, &str)]) {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     for &(form, want) in cases {
         let start = Instant::now();
         let got = format_eval_result(&ev.eval_str(&format!("(condition-case e {form} (error e))")));
@@ -304,7 +304,7 @@ fn integer_width_bounds_the_arithmetic_opcodes() {
 #[test]
 fn integer_width_slot_is_retired_with_its_context() {
     crate::test_utils::init_test_tracing();
-    let mut a = Context::new();
+    let mut a = Context::new(crate::test_utils::unit_runtime());
     a.eval_str("(setq integer-width 10)").unwrap();
     assert!(super::integer_width_below(200));
     drop(a);
@@ -312,10 +312,10 @@ fn integer_width_slot_is_retired_with_its_context() {
     assert!(!super::integer_width_below(65536));
     assert!(super::integer_width_below(65537));
 
-    let mut b = Context::new();
+    let mut b = Context::new(crate::test_utils::unit_runtime());
     b.eval_str("(setq integer-width (expt 2 62))").unwrap();
     assert!(!super::integer_width_below(1 << 20));
-    let mut c = Context::new();
+    let mut c = Context::new(crate::test_utils::unit_runtime());
     c.eval_str("(setq integer-width 300)").unwrap();
     drop(b);
     // `c' is the active Context: its slot is still the one read.
@@ -347,7 +347,7 @@ fn integer_width_context_on_its_owner_thread_preserves_the_spawning_threads_defa
         "(setq integer-width (expt 2 62))",
     ] {
         std::thread::spawn(move || {
-            let mut ctx = Context::new();
+            let mut ctx = Context::new(crate::test_utils::unit_runtime());
             ctx.eval_str(form).unwrap();
             assert!(!super::integer_width_below(65537));
             drop(ctx);

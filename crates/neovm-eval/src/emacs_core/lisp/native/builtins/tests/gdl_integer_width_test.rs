@@ -3,7 +3,7 @@ use crate::emacs_core::{Context, format_eval_result};
 #[test]
 fn gdl_integer_width_checks_new_results_and_large_requests() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for form in [
         "(let ((integer-width 64)) (ash 1 128))",
         "(expt 2 65536)",
@@ -50,6 +50,6 @@ fn gdl_integer_width_checks_new_results_and_large_requests() {
 #[test]
 fn gdl_integer_width_preserves_existing_operand_identities() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     assert_eq!(format_eval_result(&ctx.eval_str("(let ((x (expt 2 200))) (let ((integer-width 128)) (list (eq (ash x 0) x) (eq (truncate x) x) (eq (+ x) x) (eq (* x) x) (eq (abs x) x))))")), "OK (t t t t t)");
 }

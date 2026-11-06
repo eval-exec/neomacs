@@ -90,7 +90,7 @@ fn check(ev: &mut Context, form: &str, want: &str) {
 #[test]
 fn lisp_results_demote_at_the_fixnum_edges() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     check(
         &mut ev,
         "(1+ most-positive-fixnum)",
@@ -255,7 +255,7 @@ fn int_add_and_mul_values_match_malachite() {
 #[test]
 fn two_argument_results_are_fresh_objects() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let src = "(let ((b (* most-positive-fixnum 4)) (n (- (* most-positive-fixnum 4))))
                  (list (eq (+ b 0) b) (eq (+ 0 b) b) (eq (- b 0) b) (eq (* b 1) b)
                        (eq (* 1 b) b) (eq (- (- n)) n) (eq (1+ (1- b)) b)

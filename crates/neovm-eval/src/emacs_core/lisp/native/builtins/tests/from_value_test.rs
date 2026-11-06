@@ -17,7 +17,7 @@ fn assert_wrong_type(flow: Flow, predicate: &str, offender: Value) {
 #[test]
 fn value_identity_accepts_anything() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let v = Value::string("anything");
     let out = Value::from_value(&mut eval, v).expect("identity");
     assert!(out.bits() == v.bits());
@@ -26,7 +26,7 @@ fn value_identity_accepts_anything() {
 #[test]
 fn i64_extracts_fixnum_and_signals_integerp() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     assert_eq!(i64::from_value(&mut eval, Value::fixnum(42)).unwrap(), 42);
     let bad = Value::string("x");
     assert_wrong_type(
@@ -39,7 +39,7 @@ fn i64_extracts_fixnum_and_signals_integerp() {
 #[test]
 fn f64_extracts_numbers_and_signals_numberp() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     assert_eq!(f64::from_value(&mut eval, Value::fixnum(3)).unwrap(), 3.0);
     assert_eq!(
         f64::from_value(&mut eval, Value::make_float(2.5)).unwrap(),
@@ -60,7 +60,7 @@ fn f64_extracts_numbers_and_signals_numberp() {
 #[test]
 fn lisp_string_borrow_and_lossy_string_signal_stringp() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let s = Value::string("héllo");
     let borrowed = StringDesignator::from_value(&mut eval, s).unwrap();
     assert_eq!(borrowed.text().schars(), 5);
@@ -81,7 +81,7 @@ fn lisp_string_borrow_and_lossy_string_signal_stringp() {
 #[test]
 fn bool_is_nil_test_and_never_signals() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     assert!(!bool::from_value(&mut eval, Value::NIL).unwrap());
     assert!(bool::from_value(&mut eval, Value::T).unwrap());
     assert!(bool::from_value(&mut eval, Value::fixnum(0)).unwrap());
@@ -90,7 +90,7 @@ fn bool_is_nil_test_and_never_signals() {
 #[test]
 fn sym_id_extracts_symbols_including_nil() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let sym = Value::symbol("from-value-test-symbol");
     let id = SymId::from_value(&mut eval, sym).unwrap();
     assert_eq!(resolve_sym(id), "from-value-test-symbol");
@@ -106,7 +106,7 @@ fn sym_id_extracts_symbols_including_nil() {
 #[test]
 fn option_maps_nil_to_none_and_extracts_some() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     assert_eq!(
         Option::<i64>::from_value(&mut eval, Value::NIL).unwrap(),
         None
@@ -126,7 +126,7 @@ fn option_maps_nil_to_none_and_extracts_some() {
 #[test]
 fn fixnum_wholenum_character_code_predicates() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     assert_eq!(
         Fixnum::from_value(&mut eval, Value::fixnum(-3)).unwrap(),
         Fixnum(-3)
@@ -164,7 +164,7 @@ fn fixnum_wholenum_character_code_predicates() {
 #[test]
 fn string_designator_accepts_symbols() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let string = Value::string("abc");
     let string_storage = string.as_lisp_string().expect("string value has storage");
     let from_string = StringDesignator::from_value(&mut eval, string).unwrap();
@@ -195,7 +195,7 @@ fn string_designator_accepts_symbols() {
 #[test]
 fn string_designator_honors_positioned_symbol_dynamic_view() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let positioned = eval
         .tagged_heap
         .alloc_symbol_with_pos(Value::symbol("alpha"), Value::fixnum(17));
@@ -214,7 +214,7 @@ fn string_designator_honors_positioned_symbol_dynamic_view() {
 #[test]
 fn number_or_marker_reads_live_marker_position() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.buffers
         .current_buffer_mut()
         .expect("current buffer")
@@ -241,7 +241,7 @@ fn number_or_marker_reads_live_marker_position() {
 #[test]
 fn lisp_char_pos_accepts_fixnums_and_markers() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     assert_eq!(
         LispCharPos1::from_value(&mut eval, Value::fixnum(3)).unwrap(),
         LispCharPos1::new(3)
@@ -280,7 +280,7 @@ typed_subr! {
 #[test]
 fn typed_subr_extracts_arguments_in_order_and_signals_typed_errors() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
 
     let ok = sample_typed_repeat(&mut eval, Value::string("ab"), Value::fixnum(3), Value::NIL)
         .expect("typed call");

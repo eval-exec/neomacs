@@ -10,7 +10,7 @@ use crate::emacs_core::{Context, format_eval_result};
 /// prefixed with `OK`/`ERR` by `format_eval_result`.
 fn eval_one(src: &str) -> String {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     format_eval_result(&ev.eval_str(src))
 }
 

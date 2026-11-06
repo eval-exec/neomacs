@@ -69,7 +69,7 @@ fn fringe_index(eval: &mut Context, symbol: &str) -> u32 {
 
 #[test]
 fn define_fringe_bitmap_stores_bits_and_returns_symbol() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = define_via_eval(
         &mut eval,
         "(define-fringe-bitmap 'magit-fringe-bitmap> [#b01100000 #b00110000 #b00011000 \
@@ -99,7 +99,7 @@ fn define_fringe_bitmap_stores_bits_and_returns_symbol() {
 
 #[test]
 fn define_fringe_bitmap_string_bits_parse_msb_first() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     // A unibyte string row "\140" == 0x60; same as the vector form above.
     define_via_eval(
         &mut eval,
@@ -118,7 +118,7 @@ fn define_fringe_bitmap_string_bits_parse_msb_first() {
 
 #[test]
 fn define_fringe_bitmap_redefine_keeps_index() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     define_via_eval(
         &mut eval,
         "(define-fringe-bitmap 'redef-bitmap [#b10000000])",
@@ -147,7 +147,7 @@ fn define_fringe_bitmap_redefine_keeps_index() {
 
 #[test]
 fn define_fringe_bitmap_align_top_and_bottom_parse() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     define_via_eval(
         &mut eval,
         "(define-fringe-bitmap 'top-bitmap [#b10000000] nil 8 'top)",
@@ -174,7 +174,7 @@ fn define_fringe_bitmap_align_top_and_bottom_parse() {
 
 #[test]
 fn define_fringe_bitmap_periodic_align_sets_period() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     define_via_eval(
         &mut eval,
         "(define-fringe-bitmap 'periodic-bitmap [#b10101010 #b01010101] nil 8 '(top t))",
@@ -188,7 +188,7 @@ fn define_fringe_bitmap_periodic_align_sets_period() {
 
 #[test]
 fn destroy_fringe_bitmap_removes_entry() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     define_via_eval(&mut eval, "(define-fringe-bitmap 'doomed [#b10000000])");
     let index = fringe_index(&mut eval, "doomed");
     assert!(eval.fringe_bitmaps.get_by_index(index).is_some());
@@ -211,7 +211,7 @@ fn destroy_fringe_bitmap_removes_entry() {
 /// `index_of` a standard bitmap symbol matches its fringe.c index.
 #[test]
 fn standard_bitmaps_index_of_matches_fringe_c() {
-    let eval = Context::new();
+    let eval = Context::new(crate::test_utils::unit_runtime());
     let idx = |name: &str| {
         let sym = neovm_value::intern::intern(name);
         eval.fringe_bitmaps.index_of(sym)
@@ -235,7 +235,7 @@ fn standard_bitmaps_index_of_matches_fringe_c() {
 /// `'fringe` plist property is set to the same index (mirrors fringe.el's loop).
 #[test]
 fn standard_bitmaps_fringe_property_and_reverse_map() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     // `(get 'right-arrow 'fringe)` == 4.
     let prop = eval
         .eval_str("(get 'right-arrow 'fringe)")
@@ -255,7 +255,7 @@ fn standard_bitmaps_fringe_property_and_reverse_map() {
 /// right-arrow bits/dims match fringe.c (MSB-aligned), align center, period 0.
 #[test]
 fn standard_right_arrow_bits_match_fringe_c() {
-    let eval = Context::new();
+    let eval = Context::new(crate::test_utils::unit_runtime());
     let bitmap = eval
         .fringe_bitmaps
         .get_by_index(4)
@@ -276,7 +276,7 @@ fn standard_right_arrow_bits_match_fringe_c() {
 /// up-arrow aligns TOP; down-arrow aligns BOTTOM (fringe.c).
 #[test]
 fn standard_arrow_alignments_match_fringe_c() {
-    let eval = Context::new();
+    let eval = Context::new(crate::test_utils::unit_runtime());
     assert_eq!(
         eval.fringe_bitmaps.get_by_index(5).expect("up-arrow").align,
         FringeBitmapAlign::Top
@@ -293,7 +293,7 @@ fn standard_arrow_alignments_match_fringe_c() {
 /// empty-line is PERIODIC (period 3), height 72, with the repeating 0x3c tile.
 #[test]
 fn standard_empty_line_is_periodic() {
-    let eval = Context::new();
+    let eval = Context::new(crate::test_utils::unit_runtime());
     let bitmap = eval
         .fringe_bitmaps
         .get_by_index(24)
@@ -314,7 +314,7 @@ fn standard_empty_line_is_periodic() {
 /// gets index 25, never colliding with a seeded standard bitmap.
 #[test]
 fn user_bitmaps_stay_above_standard_range() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str("(define-fringe-bitmap 'vm-above-std [#b10000000])")
         .expect("define");
     let index = eval
@@ -332,7 +332,7 @@ fn user_bitmaps_stay_above_standard_range() {
 /// the existing definition in place).
 #[test]
 fn redefining_standard_bitmap_keeps_standard_index() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str("(define-fringe-bitmap 'right-arrow [#b11000000 #b11000000])")
         .expect("redefine right-arrow");
     let index = eval
@@ -362,7 +362,7 @@ fn redefining_standard_bitmap_keeps_standard_index() {
 /// standard-bitmap `'fringe` indices nor the indicator/cursor-alist defaults.
 #[test]
 fn fringe_bitmaps_variable_is_bound() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let bound = eval.eval_str("(boundp 'fringe-bitmaps)").expect("boundp");
     assert!(
         bound.is_truthy(),
@@ -377,7 +377,7 @@ fn fringe_bitmaps_variable_is_bound() {
 /// confirm the referenced bitmaps all exist so those alists are not dangling.)
 #[test]
 fn indicator_and_cursor_alist_referenced_bitmaps_are_registered() {
-    let eval = Context::new();
+    let eval = Context::new(crate::test_utils::unit_runtime());
     for sym in [
         // fringe-indicator-alist physical bitmaps:
         "left-arrow",
@@ -412,7 +412,7 @@ fn indicator_and_cursor_alist_referenced_bitmaps_are_registered() {
 
 #[test]
 fn set_fringe_bitmap_face_records_override() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     define_via_eval(&mut eval, "(define-fringe-bitmap 'faced [#b10000000])");
     let index = fringe_index(&mut eval, "faced");
     eval.eval_str("(set-fringe-bitmap-face 'faced 'magit-section-heading)")
