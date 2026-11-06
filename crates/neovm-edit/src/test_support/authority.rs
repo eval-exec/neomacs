@@ -32,3 +32,25 @@ pub unsafe fn chain_splice_at_head_for_test(
 pub fn reset_buffer_local_value_lookup_probes() {
     crate::buffer::buffer::reset_buffer_local_value_lookup_probes();
 }
+
+/// P1-CLASSES-ALL-CRATES FENCE (LEAD 10:1xZ retraction): zero the screen-line
+/// scan-step counter for the display fixtures. A reset is a write, so the
+/// fence is the only cross-crate route; the original stays pub(crate) with
+/// no visibility widening.
+pub fn reset_screen_line_scan_steps_for_test() {
+    crate::emacs_core::indent::reset_screen_line_scan_steps_for_test();
+}
+
+/// P1-CLASSES-ALL-CRATES FENCE (LEAD 10:1xZ retraction): zero the
+/// display-stop recompute counter for the display fixtures. A reset is a
+/// write; the original stays pub(crate) with no visibility widening.
+pub fn reset_display_stop_recomputes_for_test() {
+    crate::emacs_core::indent::reset_display_stop_recomputes_for_test();
+}
+
+/// P1-CLASSES-ALL-CRATES FENCE (LEAD 10:1xZ retraction): zero the char/byte
+/// conversion call counter for the display fixtures. A reset is a write; the
+/// original stays pub(crate) with no visibility widening.
+pub fn reset_char_pos_to_emacs_byte_pos_call_count() {
+    crate::buffer::buffer_text::reset_char_pos_to_emacs_byte_pos_call_count();
+}

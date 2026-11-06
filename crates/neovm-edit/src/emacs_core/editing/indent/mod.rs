@@ -882,17 +882,18 @@ fn next_screen_line_scan<H: EditHost, P: ScreenLineScanPolicy<H>>(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static SCREEN_LINE_SCAN_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn reset_screen_line_scan_steps_for_test() {
     SCREEN_LINE_SCAN_STEPS.with(|steps| steps.set(0));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn screen_line_scan_steps_for_test() -> usize {
     SCREEN_LINE_SCAN_STEPS.with(std::cell::Cell::get)
 }
@@ -1752,7 +1753,7 @@ impl DisplayStopCache {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Counts how many times `display_advance_at` recomputes a stop (i.e. runs
     /// the three property probes). For plain text this must be O(scan / cap),
@@ -1761,12 +1762,13 @@ thread_local! {
     static DISPLAY_STOP_RECOMPUTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn reset_display_stop_recomputes_for_test() {
     DISPLAY_STOP_RECOMPUTES.with(|n| n.set(0));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn display_stop_recomputes_for_test() -> usize {
     DISPLAY_STOP_RECOMPUTES.with(std::cell::Cell::get)
 }

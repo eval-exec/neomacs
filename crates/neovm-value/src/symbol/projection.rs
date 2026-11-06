@@ -509,7 +509,8 @@ impl Obarray {
 
     /// [`Self::project_owned`] of one variable, for tests that project
     /// without admitting.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn project_thread_variable_for_test(
         &mut self,
         id: SymId,

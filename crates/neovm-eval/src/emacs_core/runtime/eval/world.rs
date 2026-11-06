@@ -1470,11 +1470,12 @@ impl Context {
 
 /// Thread-projection hooks for tests (Phase 0 step 2): no production path
 /// projects a variable yet.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Context {
     /// Project `id`'s variable through this World's table
     /// (`Obarray::project_thread_variable_for_test`, a redirect change and
     /// so a canonical-changing phase).
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn project_thread_variable_for_test(
         &mut self,
         id: SymId,

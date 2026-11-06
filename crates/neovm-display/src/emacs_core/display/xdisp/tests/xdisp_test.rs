@@ -8205,7 +8205,7 @@ fn line_number_display_width_uses_byte_newline_count_not_char_pos_scan() {
         }
     }
 
-    neovm_edit::buffer::buffer_text::reset_char_pos_to_emacs_byte_pos_call_count();
+    neovm_edit::test_support::authority::reset_char_pos_to_emacs_byte_pos_call_count();
     let result =
         neovm_edit::emacs_core::indent::line_number_display_width(&mut eval, &vec![]).unwrap();
 

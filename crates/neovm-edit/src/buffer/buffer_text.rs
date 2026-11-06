@@ -71,16 +71,17 @@ mod line_index;
 pub mod line_index;
 use line_index::LineIndexRole;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static CHAR_POS_TO_EMACS_BYTE_POS_CALLS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn reset_char_pos_to_emacs_byte_pos_call_count() {
     CHAR_POS_TO_EMACS_BYTE_POS_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn char_pos_to_emacs_byte_pos_call_count() -> usize {
     CHAR_POS_TO_EMACS_BYTE_POS_CALLS.load(std::sync::atomic::Ordering::Relaxed)
 }

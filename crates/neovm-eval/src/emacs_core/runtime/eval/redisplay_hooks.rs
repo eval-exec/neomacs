@@ -519,8 +519,9 @@ impl Context {
 
     /// Forget pending frame-level redisplay requests. Test seam for callers
     /// that must observe one mutation's contribution in isolation.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub fn clear_frame_redisplay_marks(&mut self) {
         self.gnu_redisplay_hooks.redisplay_frames.clear();
     }

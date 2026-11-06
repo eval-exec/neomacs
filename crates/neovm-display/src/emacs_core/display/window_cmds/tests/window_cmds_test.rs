@@ -10610,8 +10610,8 @@ fn scroll_down_page_scans_buffer_once_not_once_per_screen_row() {
     crate::window::window_markers::set_window_point_with_marker(&mut ev.edit.buffers, window, end);
     crate::window::window_markers::set_window_start_with_marker(&mut ev.edit.buffers, window, end);
 
-    neovm_edit::emacs_core::indent::reset_screen_line_scan_steps_for_test();
-    neovm_edit::emacs_core::indent::reset_display_stop_recomputes_for_test();
+    neovm_edit::test_support::authority::reset_screen_line_scan_steps_for_test();
+    neovm_edit::test_support::authority::reset_display_stop_recomputes_for_test();
     super::builtin_scroll_down(&mut ev, vec![Value::NIL]).expect("page up from end");
     let after_start = super::builtin_window_start(&mut ev, &vec![Value::make_window(window_id.0)])
         .expect("window-start after page up")

@@ -413,6 +413,7 @@ mod tests;
 /// decision. `when` forms are resolved structurally rather than evaluated,
 /// matching GNU's own `single_display_spec_string_p` shortcut (the text was
 /// already displayed, so the condition was non-nil).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn display_prop_replacing_p(spec: Value, frame_window_p: bool) -> bool {
     let mut replacing = false;
     // The shape decode (single spec / list of specs / vector of specs, minus a
