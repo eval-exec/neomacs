@@ -61,7 +61,12 @@ pub use serial::{
     SerialFlowControl, SerialParity, SerialPort, SerialStopBits,
 };
 
-pub mod net;
+// K1 narrowing (lead 02:3xZ): every net item is used only by sibling
+// `process` modules in this crate (bootstrap_vars/types/builtins); no
+// cross-crate consumer of `sys::net::*` exists, so the module is
+// crate-visible only in both builds. Its items were the largest
+// consumerless cfg-split block of the TS-UNROWED class.
+pub(crate) mod net;
 
 #[cfg(unix)]
 #[cfg(not(feature = "test-support"))]
