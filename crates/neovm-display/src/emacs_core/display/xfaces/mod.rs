@@ -35,11 +35,16 @@ pub fn register_bootstrap_vars(obarray: &mut Obarray) {
         "face--new-frame-defaults",
         bootstrap_face_new_frame_defaults_table(),
     );
+    // GNU xfaces.c:7618 DEFVAR_LISP, so the variable is special from the
+    // first Lisp form; seeding alone leaves the half-registered state.
+    obarray.make_special("face--new-frame-defaults");
     stamp_face_id_properties(obarray);
     // xfaces.c:7624-7751 DEFVAR cluster, GNU C inits.
     obarray.define_special_variable("face-default-stipple", Value::string("gray3"));
     obarray.define_special_variable("tty-defined-color-alist", Value::NIL);
     obarray.seed_value("scalable-fonts-allowed", Value::NIL);
+    // xfaces.c:7636 DEFVAR_LISP.
+    obarray.make_special("scalable-fonts-allowed");
     obarray.define_special_variable("face-ignored-fonts", Value::NIL);
     obarray.define_special_variable("face-remapping-alist", Value::NIL);
     obarray.define_special_variable("face-font-rescale-alist", Value::NIL);

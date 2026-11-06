@@ -7705,6 +7705,7 @@ pub fn register_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
     obarray.seed_value("default-file-name-coding-system", Value::NIL);
     obarray.make_special("default-file-name-coding-system");
     obarray.seed_value("set-auto-coding-for-load", Value::NIL);
+    obarray.make_special("set-auto-coding-for-load");
     obarray.seed_value("file-name-handler-alist", Value::NIL);
     obarray.make_special("file-name-handler-alist");
     // fileio.c:6856-6944 DEFVAR_LISP cluster, all initialized to nil.
@@ -7718,14 +7719,19 @@ pub fn register_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
     obarray.seed_value("inhibit-file-name-operation", Value::NIL);
     obarray.make_special("inhibit-file-name-operation");
     obarray.seed_value("directory-abbrev-alist", Value::NIL);
+    obarray.make_special("directory-abbrev-alist");
     obarray.seed_value("auto-save-list-file-name", Value::NIL);
     obarray.make_special("auto-save-list-file-name");
     obarray.seed_value("auto-save-list-file-prefix", Value::NIL);
+    obarray.make_special("auto-save-list-file-prefix");
     obarray.seed_value("auto-save-visited-file-name", Value::NIL);
+    obarray.make_special("auto-save-visited-file-name");
     // fileio.c:6944 DEFVAR_LISP, init nil.
     obarray.define_special_variable("auto-save-include-big-deletions", Value::NIL);
     obarray.seed_value("small-temporary-file-directory", Value::NIL);
+    obarray.make_special("small-temporary-file-directory");
     obarray.seed_value("auto-save-file-name-transforms", Value::NIL);
+    obarray.make_special("auto-save-file-name-transforms");
     obarray.seed_value(
         "temporary-file-directory",
         Value::string(temporary_file_directory),
@@ -7734,14 +7740,19 @@ pub fn register_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
 
     // Backup-related variables
     obarray.seed_value("make-backup-files", Value::T);
+    obarray.make_special("make-backup-files");
     obarray.seed_value("backup-inhibited", Value::NIL);
+    obarray.make_special("backup-inhibited");
     obarray.seed_value("version-control", Value::NIL);
+    obarray.make_special("version-control");
     obarray.seed_value("backup-directory-alist", Value::NIL);
+    obarray.make_special("backup-directory-alist");
     // files.el: defvar for vc-hooks.el and locate-dominating-file
     obarray.seed_value(
         "locate-dominating-stop-dir-regexp",
         Value::string(r"\`\(?:[\\/][\\/][^\\/]+[\\/]\|/\(?:net\|afs\|\.\.\.\)/\)\'"),
     );
+    obarray.make_special("locate-dominating-stop-dir-regexp");
 }
 
 // ===========================================================================
