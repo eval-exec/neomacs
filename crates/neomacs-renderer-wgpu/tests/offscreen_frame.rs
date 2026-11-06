@@ -86,6 +86,48 @@ fn try_harness() -> Option<Harness> {
     })
 }
 
+/// Typed adapter precondition for the byte-exact opacity regressions.
+///
+/// Their reference pixels were captured on adapters whose linear-to-sRGB8
+/// conversion rounds to nearest: AMD RADV (this host), Intel ANV and Mesa
+/// llvmpipe 26.2.2 all encode a 0.5-alpha blue background as [0, 0, 188, 128].
+/// A driver that truncates produces [0, 0, 187, 127] and alpha 126 where a
+/// 0.5-weighted pane blend expects 128.  That is an adapter conversion-class
+/// boundary, not a product blend result, so the affected tests declare the
+/// reference class here and fail with this typed reason instead of reporting
+/// a misleading pixel regression.  The pixel assertions keep their recorded
+/// tolerances.
+fn require_reference_srgb_conversion(h: &mut Harness) {
+    let mut frame = FrameGlyphBuffer::with_size(W as f32, H as f32);
+    frame.background = Color::BLUE;
+    frame.background_alpha = 0.5;
+    h.renderer.render_frame_glyphs(
+        &h.view,
+        &frame,
+        &mut h.atlas,
+        mapping_for(&frame, W, H),
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    let probe = px(&read_back(h), 2, 2);
+    assert_eq!(
+        probe,
+        [0, 0, 188, 128],
+        "typed adapter precondition: the byte-exact opacity regressions require \
+         an adapter whose linear 0.5 alpha encodes as sRGB8 [0, 0, 188, 128]; \
+         this adapter produced {probe:?}.  The P2 baseline host's NVIDIA GTX \
+         1650 (nvidia_icd) produced [0, 0, 187, 127] and alpha 126 for a \
+         0.5-weighted pane blend, while AMD RADV, Intel ANV and Mesa llvmpipe \
+         26.2.2 produce [0, 0, 188, 128].  This is an adapter conversion-class \
+         boundary, not a product blend result, so the test fails this declared \
+         precondition rather than widening its pixel tolerance."
+    );
+}
+
 fn mapping_for(frame: &FrameGlyphBuffer, width: u32, height: u32) -> PresentMapping {
     mapping_for_scale(frame, width, height, 1.0)
 }

@@ -44,6 +44,40 @@ fn draw_root(
         None,
     );
 }
+
+/// Typed adapter precondition for the byte-exact opacity assertions in this
+/// module.  Their reference bytes require an adapter whose linear-to-sRGB8
+/// conversion rounds to nearest: AMD RADV (this host), Intel ANV and Mesa
+/// llvmpipe 26.2.2 all encode a 0.5-alpha blue background as [0, 0, 188, 128].
+/// A driver that truncates produces [0, 0, 187, 127] (the P2 baseline host's
+/// NVIDIA GTX 1650 under nvidia_icd).  That is an adapter conversion-class
+/// boundary, not a product blend result, so the test fails this declared
+/// precondition rather than reporting a misleading pixel mismatch.  The pixel
+/// assertions keep their recorded values.
+fn require_reference_srgb_conversion(
+    renderer: &mut WgpuRenderer,
+    render: &mut GuiFrameRenderState,
+) {
+    let mut frame = FrameGlyphBuffer::with_size(W as f32, H as f32);
+    frame.background = Color::BLUE;
+    frame.background_alpha = 0.5;
+    let probe_target = target(renderer);
+    let probe_view = probe_target.create_view(&Default::default());
+    draw_root(renderer, render, &probe_view, &frame);
+    let probe = px(&pixels(renderer, &probe_target), 80, 60);
+    assert_eq!(
+        probe,
+        [0, 0, 188, 128],
+        "typed adapter precondition: the byte-exact opacity regressions require \
+         an adapter whose linear 0.5 alpha encodes as sRGB8 [0, 0, 188, 128]; \
+         this adapter produced {probe:?}.  The P2 baseline host's NVIDIA GTX \
+         1650 (nvidia_icd) produced [0, 0, 187, 127], while AMD RADV, Intel ANV \
+         and Mesa llvmpipe 26.2.2 produce [0, 0, 188, 128].  This is an adapter \
+         conversion-class boundary, not a product blend result, so the test \
+         fails this declared precondition rather than widening its pixel \
+         assertions."
+    );
+}
 fn linear_second() -> MotionSpec {
     MotionSpec::Tween(TweenSpec {
         duration: MotionDuration::new(Duration::from_secs(1)).unwrap(),
@@ -627,6 +661,11 @@ fn production_split_delete_placements_keep_background_opacity() {
     use neomacs_renderer_wgpu::PaneSource;
     let mut renderer =
         WgpuRenderer::new(None, W, H).expect("GPU required for runtime pane regression");
+    {
+        let origin = observe_platform_now();
+        let mut probe_render = GuiFrameRenderState::new(42, renderer.device(), 1.0, false, origin);
+        require_reference_srgb_conversion(&mut renderer, &mut probe_render);
+    }
     let size = SnapshotSize::new(W, H).unwrap();
     let old = renderer.acquire_snapshot(size).unwrap();
     let new = renderer.acquire_snapshot(size).unwrap();

@@ -4,6 +4,7 @@
 fn pane_previous_patches_interpolate_complete_colored_pictures() {
     use neomacs_renderer_wgpu::{PaneBlit, PaneSource};
     let mut h = try_harness().expect("GPU required for pane opacity regression");
+    require_reference_srgb_conversion(&mut h);
     let mut old_frame = picture();
     old_frame.background = Color::GREEN;
     let mut new_frame = old_frame.clone();
@@ -53,6 +54,7 @@ fn dispatched_scale_zoom_preserves_overlap_opacity_and_outside_pixels() {
         DirectionlessTransitionEffect, ResolvedTransitionEffect, TransitionEasing,
     };
     let mut h = try_harness().expect("GPU required for ScaleZoom regression");
+    require_reference_srgb_conversion(&mut h);
     let size = SnapshotSize::new(W, H).unwrap();
     let old = h.renderer.acquire_snapshot(size).unwrap();
     let new = h.renderer.acquire_snapshot(size).unwrap();
@@ -124,6 +126,7 @@ fn dispatched_parallax_adds_overlapping_faded_pictures() {
         TransitionEasing,
     };
     let mut h = try_harness().expect("GPU required for shared weighted transition regression");
+    require_reference_srgb_conversion(&mut h);
     let size = SnapshotSize::new(W, H).unwrap();
     let old = h.renderer.acquire_snapshot(size).unwrap();
     let new = h.renderer.acquire_snapshot(size).unwrap();
@@ -323,6 +326,7 @@ fn background_alpha_keeps_text_opaque_through_crossfade() {
         eprintln!("SKIP: no GPU adapter");
         return;
     };
+    require_reference_srgb_conversion(&mut h);
     let frame = picture();
     let size = SnapshotSize::new(W, H).unwrap();
     let old = h.renderer.acquire_snapshot(size).unwrap();
@@ -449,6 +453,7 @@ fn dispatched_crossfade_and_slide_replace_the_previous_picture() {
         eprintln!("SKIP: no GPU adapter");
         return;
     };
+    require_reference_srgb_conversion(&mut h);
     let frame = picture();
     let size = SnapshotSize::new(W, H).unwrap();
     let old = h.renderer.acquire_snapshot(size).unwrap();
@@ -633,6 +638,7 @@ fn colored_uncovered_child_fill_matches_square_and_rounded() {
 fn child_char_and_stretch_stipple_is_foreground_at_zero_background() {
     use neomacs_display_protocol::StipplePattern;
     let mut h = try_harness().expect("GPU adapter required for stipple regression");
+    require_reference_srgb_conversion(&mut h);
     let mut parent = FrameGlyphBuffer::with_size(W as f32, H as f32);
     parent.background_alpha = 0.0;
     for stretch in [false, true] {
