@@ -251,9 +251,9 @@ fn p3sym_c4_call_stale_generations_index_reuse_and_capacity() {
             run.sym_call_begin(&handles[0], &mut cache, &mut activation)
                 .unwrap();
             run.clear_root_slots().unwrap();
-            let mut fresh = run.private_nil_root().unwrap();
+            let mut fresh = neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
             for _ in 1..8 {
-                let _ = run.private_nil_root().unwrap();
+                let _ = neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
             }
             let mut fresh_cache = FunctionCallCache::new(run).unwrap();
             let mut fresh_activation = FunctionActivation::new(run).unwrap();
