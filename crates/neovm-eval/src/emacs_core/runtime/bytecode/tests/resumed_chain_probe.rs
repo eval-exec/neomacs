@@ -34,6 +34,29 @@ thread_local! {
     static PROBE: RefCell<Option<ChainProbe>> = const { RefCell::new(None) };
 }
 
+/// The evaluator state outside the whole probed call: the dynamic-extent
+/// lengths and active lexical environment the re-homed cleanup oracle
+/// compares entry against exit. A before-op trace cannot see the final
+/// return's teardown, so the probe copies this at arm and disarm instead.
+/// Order: eval depth, specpdl, condition stack, operand stack, bytecode
+/// frames, JIT bind stack, backtrace argument slots, then the lexenv.
+type CleanupState = ([usize; 7], Value);
+
+fn cleanup_state(ctx: &crate::emacs_core::eval::Context) -> CleanupState {
+    (
+        [
+            ctx.depth,
+            ctx.specpdl.len(),
+            ctx.condition_stack.len(),
+            ctx.bc_buf.len(),
+            ctx.bc_frames.len(),
+            ctx.jit_bind_stack.len(),
+            ctx.backtrace_args_stack_len_for_test(),
+        ],
+        ctx.lexenv,
+    )
+}
+
 /// Whether the driver must call the probe before each op.
 #[inline]
 pub(crate) fn armed() -> bool {
@@ -43,13 +66,41 @@ pub(crate) fn armed() -> bool {
 /// Stop the driver at the `op`-th probed op and resume its call chain with
 /// its first `materialized` inlined levels materialized.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) struct FireRequest {
     pub(crate) op: usize,
     pub(crate) materialized: usize,
 }
 
+impl FireRequest {
+    /// Build one stop request. The two fields stay private (N1).
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub const fn new(op: usize, materialized: usize) -> Self {
+        Self { op, materialized }
+    }
+}
+
+/// The copied observation a displaced test gets back from `disarm`: the
+/// per-op trace, the suspended-caller levels, the fire outcome and the
+/// evaluator extents the whole call started and finished with. The probe
+/// itself (with its private maps and floors) stays private.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) struct ChainObservation {
+    pub trace: Vec<OpState>,
+    pub levels: Vec<usize>,
+    pub fired: Fired,
+    /// Arm-time and disarm-time cleanup snapshots, in the tuple order
+    /// documented at the `CleanupState` alias. A completed call must leave
+    /// every extent, and the lexenv, as it found them.
+    pub cleanup_entry: CleanupState,
+    pub cleanup_exit: CleanupState,
+}
+
 /// What became of a [`FireRequest`].
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) enum Fired {
     /// The run never reached the requested op.
     No,
@@ -65,6 +116,7 @@ pub(crate) enum Fired {
 
 /// One probed op's frame state.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) struct OpState {
     /// The executing function, by first-seen order.
     pub(crate) code: u32,
@@ -105,6 +157,8 @@ pub(crate) struct ChainProbe {
     pub(crate) levels: Vec<usize>,
     pub(crate) fire: Option<FireRequest>,
     pub(crate) fired: Fired,
+    cleanup_entry: CleanupState,
+    cleanup_exit: CleanupState,
     identities: HashMap<usize, u64>,
     functions: HashMap<usize, u32>,
     spec_floor: usize,
@@ -123,6 +177,8 @@ pub(crate) fn arm(ctx: &crate::emacs_core::eval::Context, fire: Option<FireReque
             levels: Vec::new(),
             fire,
             fired: Fired::No,
+            cleanup_entry: cleanup_state(ctx),
+            cleanup_exit: cleanup_state(ctx),
             identities: HashMap::new(),
             functions: HashMap::new(),
             spec_floor: ctx.specpdl.len(),
@@ -133,15 +189,30 @@ pub(crate) fn arm(ctx: &crate::emacs_core::eval::Context, fire: Option<FireReque
     ARMED.with(|armed| armed.set(true));
 }
 
-/// Disarm and return what the probe saw.
-pub(crate) fn disarm() -> ChainProbe {
+/// Record the exit cleanup state, disarm and return what the probe saw.
+pub(crate) fn disarm(ctx: &crate::emacs_core::eval::Context) -> ChainProbe {
     ARMED.with(|armed| armed.set(false));
-    PROBE
-        .with(|probe| probe.borrow_mut().take())
-        .expect("the probe was armed")
+    PROBE.with(|probe| {
+        let mut probe = probe.borrow_mut().take().expect("the probe was armed");
+        probe.cleanup_exit = cleanup_state(ctx);
+        probe
+    })
 }
 
 impl ChainProbe {
+    /// Copy out the observable trace for the cross-crate fence.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub(crate) fn observation(&self) -> ChainObservation {
+        ChainObservation {
+            trace: self.trace.clone(),
+            levels: self.levels.clone(),
+            fired: self.fired.clone(),
+            cleanup_entry: self.cleanup_entry,
+            cleanup_exit: self.cleanup_exit,
+        }
+    }
+
     #[doc(hidden)]
     pub fn identity(&mut self, value: Value) -> u64 {
         if !value.is_heap_object() {

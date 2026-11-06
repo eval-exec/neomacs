@@ -16,6 +16,7 @@ pub mod authority {
         crate::emacs_core::builtins::symbols::reset_symbols_thread_locals();
     }
 
+    use crate::emacs_core::bytecode::vm::resumed_chain_probe::{ChainObservation, FireRequest};
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::eval::GreenStartError;
     use crate::emacs_core::eval::hooks_proof::EvalHooksInstalled;
@@ -976,6 +977,18 @@ pub mod authority {
     /// GC (peer condition b).
     pub fn cconv_trusted_empty_env_for_test(context: &Context) -> Value {
         context.cconv_memo.trusted().empty_env()
+    }
+    /// P1 RESUMED-CHAIN family N2 FENCE: arm the per-op probe on this
+    /// thread before a run. The probe thread-locals stay private.
+    pub fn arm_resumed_chain_probe_for_test(context: &Context, fire: Option<FireRequest>) {
+        crate::emacs_core::bytecode::vm::resumed_chain_probe::arm(context, fire);
+    }
+
+    /// P1 RESUMED-CHAIN family N2 FENCE: disarm the probe, copying the
+    /// context's exit cleanup state, and return the copied observation
+    /// (trace, levels, fire outcome, entry/exit cleanup state).
+    pub fn disarm_resumed_chain_probe_for_test(context: &Context) -> ChainObservation {
+        crate::emacs_core::bytecode::vm::resumed_chain_probe::disarm(context).observation()
     }
 }
 

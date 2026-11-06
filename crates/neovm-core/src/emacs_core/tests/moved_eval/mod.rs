@@ -202,3 +202,7 @@ mod emacs_core_runtime_pdump_tests_bytecode_function_params_full_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/pdump/tests/bytecode_slot_objects_test.rs"]
 mod emacs_core_runtime_pdump_tests_bytecode_slot_objects_test_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/runtime/bytecode/tests/resumed_chain_test.rs"]
+mod emacs_core_runtime_bytecode_tests_resumed_chain_test_rs;

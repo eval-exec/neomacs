@@ -4676,9 +4676,9 @@ impl<'a> Vm<'a> {
             let mut pc_local = callers.active().pc();
             // F-I2 must visit every original instruction, including handlers
             // ordinarily combined by the straight-line dispatch shortcuts.
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             let allow_skip_ops = !resumed_chain_probe::armed();
-            #[cfg(not(test))]
+            #[cfg(not(any(test, feature = "test-support")))]
             let allow_skip_ops = true;
             let mut quitcounter = *driver_quitcounter;
             // OSR (on-stack replacement): once a hot loop is detected at a backward
@@ -5033,7 +5033,7 @@ impl<'a> Vm<'a> {
                 // Test builds only: the chain-resume falsifier's per-op probe
                 // (`tests/resumed_chain_probe.rs`), which may take this
                 // driver's frames over and finish them as a resumed chain.
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 if resumed_chain_probe::armed() {
                     publish_phase!();
                     callers
@@ -10366,9 +10366,12 @@ mod resumed_chain;
 #[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use resumed_chain::{ChainBacktrace, ChainFrame, ChainLink, InlinedChainFrame};
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "test-support")))]
 #[path = "tests/resumed_chain_probe.rs"]
 pub(crate) mod resumed_chain_probe;
+#[cfg(feature = "test-support")]
+#[path = "tests/resumed_chain_probe.rs"]
+pub mod resumed_chain_probe;
 #[cfg(feature = "jit")]
 pub(crate) use vm_leaf::render_vm_leaf_stats;
 

@@ -17,10 +17,13 @@
 //! and through a `mapc` callback, so a divergence in any of those shows in
 //! the result or the trace.
 
-use super::*;
-use crate::emacs_core::bytecode::vm::resumed_chain_probe::{self as probe, FireRequest, Fired};
+use crate::emacs_core::bytecode::vm::resumed_chain_probe::{ChainObservation, FireRequest, Fired};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
+use neovm_eval::test_support::authority::{
+    arm_resumed_chain_probe_for_test, disarm_resumed_chain_probe_for_test,
+};
+use neovm_value::value::Value;
 
 /// Helpers every program shares: `neovm--ch-probe` logs the frames visible
 /// from it, down to the program's entry function.
@@ -192,15 +195,13 @@ fn run(
     call: &str,
     fire: Option<FireRequest>,
     collect: bool,
-) -> (String, probe::ChainProbe) {
+) -> (String, ChainObservation) {
     let body = |ev: &mut Context| {
-        let entry = CleanupState::of(ev);
-        probe::arm(ev, fire);
+        arm_resumed_chain_probe_for_test(ev, fire);
         let result = ev.eval_str(call);
-        let seen = probe::disarm();
+        let seen = disarm_resumed_chain_probe_for_test(ev);
         assert_eq!(
-            CleanupState::of(ev),
-            entry,
+            seen.cleanup_exit, seen.cleanup_entry,
             "{call}, {fire:?}: the complete call restored its runtime state"
         );
         (printed(&result), seen)
@@ -209,37 +210,6 @@ fn run(
         body(ev)
     } else {
         ev.with_gc_inhibited(body)
-    }
-}
-
-/// The state outside the whole call, including the final return's teardown,
-/// which a before-op trace cannot see. The limit itself can change as an
-/// observable floor raise; the running depth and owned extents must restore.
-#[derive(Debug, PartialEq, Eq)]
-struct CleanupState {
-    depth: usize,
-    specpdl: usize,
-    conditions: usize,
-    operands: usize,
-    frames: usize,
-    jit_binds: usize,
-    backtrace_args: usize,
-    lexenv: Value,
-}
-
-impl CleanupState {
-    #[doc(hidden)]
-    pub fn of(ev: &Context) -> Self {
-        Self {
-            depth: ev.depth,
-            specpdl: ev.specpdl.len(),
-            conditions: ev.condition_stack.len(),
-            operands: ev.bc_buf.len(),
-            frames: ev.bc_frames.len(),
-            jit_binds: ev.jit_bind_stack.len(),
-            backtrace_args: ev.backtrace_args_stack_len_for_test(),
-            lexenv: ev.lexenv,
-        }
     }
 }
 
@@ -291,7 +261,7 @@ fn falsify(
             if !collect && runs.is_multiple_of(64) {
                 ev.eval_str("(garbage-collect)").expect("collects");
             }
-            let request = FireRequest { op, materialized };
+            let request = FireRequest::new(op, materialized);
             let (result, seen) = run(ev, call, Some(request), collect);
             match seen.fired {
                 Fired::Resumed { .. } => {}
