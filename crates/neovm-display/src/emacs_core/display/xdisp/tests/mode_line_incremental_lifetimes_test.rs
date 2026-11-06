@@ -246,7 +246,7 @@ fn mode_line_incremental_split_fresh_format_survives_nested_context_gc() {
     let obarray = (*eval.obarray_view()).clone();
     let mut buffers = eval.edit.buffers.clone();
     let frames = crate::window::FrameManager::new();
-    let processes = crate::emacs_core::process::ProcessManager::new();
+    let processes = neovm_eval::emacs_core::eval::data::process_state::ProcessManager::new();
     let before = save_scratch_gc_roots();
     let gc = eval.gc_count;
     let mut calls = Vec::new();

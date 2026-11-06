@@ -1106,12 +1106,17 @@ fn test_format_mode_line_size_and_process_specs_match_gnu() {
         builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%i|%I|%s")]).expect("specs");
     assert_eq!(no_process, Value::string("1536|1.5k|no process"));
 
-    eval.processes_mut().create_process(
-        "mode-line-proc".into(),
+    eval.processes_mut().create_process_record(
+        neovm_value::heap_types::LispString::from_utf8("mode-line-proc"),
         Value::make_buffer(buffer_id),
-        "cat".into(),
+        neovm_value::heap_types::LispString::from_utf8("cat"),
         vec![],
-        crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
+        neovm_eval::emacs_core::eval::data::process_state::ProcessKind::Real,
+        None,
+        neovm_eval::emacs_core::eval::data::process_state::ProcessCodingSystems {
+            decode: Value::NIL,
+            encode: Value::NIL,
+        },
     );
     let with_process =
         builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%i|%I|%s")]).expect("specs");

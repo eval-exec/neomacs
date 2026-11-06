@@ -230,7 +230,7 @@ fn split_checkpoint_survives_collection(generational: bool) {
     // aliasing the state references borrowed by the split walker.
     let obarray = (*eval.obarray_view()).clone();
     let buffers = eval.edit.buffers.clone();
-    let processes = crate::emacs_core::process::ProcessManager::new();
+    let processes = neovm_eval::emacs_core::eval::data::process_state::ProcessManager::new();
     let pctx = ModeLinePercentContext::default();
     let before_roots = save_scratch_gc_roots();
     let before_gc = eval.gc_count;
