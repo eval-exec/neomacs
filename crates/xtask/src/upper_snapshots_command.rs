@@ -27,10 +27,11 @@ pub(super) fn run(repo_root: &Path, args: impl IntoIterator<Item = OsString>) ->
     }
     generator::generate(repo_root, check).map_err(|error| format!("upper-snapshots: {error}"))?;
     println!(
-        "{} {} and {}",
+        "{} {}, {} and {}",
         if check { "verified" } else { "wrote" },
         generator::SUBRS_SNAPSHOT,
-        generator::BOOTSTRAP_SNAPSHOT
+        generator::BOOTSTRAP_SNAPSHOT,
+        generator::BOOTSTRAP_SOURCE
     );
     Ok(())
 }

@@ -232,16 +232,17 @@ mod unit_runtime {
 
     include!("upper_subrs.generated.rs");
 
-    // The upper layers' bootstrap variable names, from the checked-in
-    // snapshot generated from the four canonical registrations (fileio,
-    // process, dbusbind, xfaces). T4/H3b: each name is bound to its
-    // uninterned ABSENT-LAYER marker, so boundp and special-variable-p
-    // shapes match production while any use fails loudly. The core-side
-    // snapshot equality test is the P2 gate.
+    // The upper layers' bootstrap variables, generated from the four
+    // canonical production binders (fileio, process, dbusbind, xfaces). T4:
+    // Lisp_Object variables get their uninterned ABSENT-LAYER marker (so
+    // boundp/specialness match production while a use fails loudly); typed
+    // forwarded slots get the binder's own production default, because a
+    // typed slot refuses the marker. The core-side snapshot equality test is
+    // the P2 gate.
     include!("upper_bootstrap_vars.generated.rs");
 
     fn boot_register_core_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
-        s::bind_absent_bootstrap_vars(obarray, UPPER_BOOTSTRAP_VAR_NAMES);
+        s::bind_absent_bootstrap_vars(obarray, UPPER_BOOTSTRAP_VARS);
     }
 
     /// Walk the canonical production registration plan. Eval-owned steps call
@@ -605,8 +606,11 @@ mod unit_runtime {
             .collect()
     }
 
-    pub(crate) fn upper_bootstrap_vars_for_snapshot_test() -> &'static [&'static str] {
-        UPPER_BOOTSTRAP_VAR_NAMES
+    pub(crate) fn upper_bootstrap_vars_for_snapshot_test() -> Vec<(&'static str, String)> {
+        UPPER_BOOTSTRAP_VARS
+            .iter()
+            .map(|(name, default)| (*name, default.snapshot_label()))
+            .collect()
     }
 }
 
@@ -639,12 +643,18 @@ mod snapshot_consistency {
             SUBRS_SNAPSHOT,
             "upper_subrs.snapshot.tsv is stale; run `cargo xtask upper-snapshots`"
         );
-        let bootstrap =
-            generator::parse_bootstrap_vars(BOOTSTRAP_SOURCE).expect("generated bootstrap vars");
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let bootstrap = generator::parse_bootstrap_binders(&repo_root)
+            .expect("the four production bootstrap binders");
         assert_eq!(
             generator::render_bootstrap_vars(&bootstrap),
             BOOTSTRAP_SNAPSHOT,
             "upper_bootstrap_vars.snapshot.tsv is stale; run `cargo xtask upper-snapshots`"
+        );
+        assert_eq!(
+            generator::render_bootstrap_source(&bootstrap).expect("render the bootstrap source"),
+            BOOTSTRAP_SOURCE,
+            "upper_bootstrap_vars.generated.rs is stale; run `cargo xtask upper-snapshots`"
         );
 
         // The host-active slice of the snapshot is exactly the compiled
@@ -666,18 +676,19 @@ mod snapshot_consistency {
                 "compiled registration order/arity diverges from the snapshot"
             );
         }
-        let active_names: Vec<&str> = bootstrap
+        let active_bootstrap: Vec<(&str, String)> = bootstrap
             .iter()
             .filter(|row| {
                 HostCfgClass::from_label(&row.cfg)
                     .expect("snapshot cfg label")
                     .is_active()
             })
-            .map(|row| row.name.as_str())
+            .map(|row| (row.name.as_str(), row.default.label()))
             .collect();
         assert_eq!(
-            active_names.as_slice(),
-            upper_bootstrap_vars_for_snapshot_test()
+            active_bootstrap,
+            upper_bootstrap_vars_for_snapshot_test(),
+            "the compiled bootstrap table diverges from the binder-derived snapshot"
         );
     }
 }

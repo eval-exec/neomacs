@@ -62,6 +62,28 @@ macro_rules! eval_absent_layer_slots {
                 }
             }
 
+            /// The value T4 binds for one upper bootstrap variable.
+            ///
+            /// Typed production slots (DEFVAR_INT/DEFVAR_BOOL) refuse the
+            /// absent-layer symbol marker, so the H3b snapshot carries the
+            /// binder's own production default for them; only Lisp_Object
+            /// variables keep the marker.
+            #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+            pub(crate) enum BootstrapDefault {
+                Marker,
+                Integer(i64),
+            }
+
+            impl BootstrapDefault {
+                /// The snapshot-column spelling of this default.
+                pub(crate) fn snapshot_label(self) -> String {
+                    match self {
+                        Self::Marker => "marker".to_owned(),
+                        Self::Integer(value) => format!("int:{value}"),
+                    }
+                }
+            }
+
             /// Out-of-band AbsentLayer hit record (H4): process TLS plus an
             /// optional append-only log named by NEOVM_ABSENT_LAYER_LOG. Every
             /// logged line and every TLS entry carries the hit class.
@@ -163,20 +185,33 @@ macro_rules! eval_absent_layer_slots {
                 )
             }
 
-            /// Bind each upper bootstrap variable NAME to its uninterned
-            /// ABSENT-LAYER marker, so boundp and special-variable-p shapes
-            /// match production while any use fails loudly (T4/H3b).
+            /// Bind each upper bootstrap variable exactly as T4/H3b specifies:
+            /// typed production slots get their binder's own default (an
+            /// integer or boolean, which a forwarded typed slot accepts), and
+            /// every Lisp_Object variable gets its uninterned ABSENT-LAYER
+            /// marker so boundp/specialness match production while a use fails
+            /// loudly.
             pub(crate) fn bind_absent_bootstrap_vars(
                 obarray: &mut neovm_value::symbol::Obarray,
-                names: &[&'static str],
+                vars: &[(&'static str, BootstrapDefault)],
             ) {
-                for name in names {
-                    let marker_name = Value::string(format!("ABSENT-LAYER upper-variable::{name}"));
-                    let marker = Value::from_sym_id(
-                        neovm_value::intern::make_uninterned_symbol_with_name_value(marker_name),
-                    );
-                    obarray.make_special(name);
-                    obarray.set_symbol_value(name, marker);
+                for (name, default) in vars {
+                    match default {
+                        BootstrapDefault::Marker => {
+                            let marker_name =
+                                Value::string(format!("ABSENT-LAYER upper-variable::{name}"));
+                            let marker = Value::from_sym_id(
+                                neovm_value::intern::make_uninterned_symbol_with_name_value(
+                                    marker_name,
+                                ),
+                            );
+                            obarray.make_special(name);
+                            obarray.set_symbol_value(name, marker);
+                        }
+                        BootstrapDefault::Integer(value) => {
+                            obarray.define_int_variable(name, *value);
+                        }
+                    }
                 }
             }
 
