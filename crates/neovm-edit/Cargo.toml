@@ -8,7 +8,10 @@ repository.workspace = true
 description = "Editor and buffer storage extracted from neovm-core"
 
 [features]
-default = ["jit"]
+# neovm-value/sqlite is a forward, not a default: value's old default
+# features supplied it to this crate's default graph, and the sibling
+# edges now disable defaults.
+default = ["jit", "neovm-value/sqlite"]
 test-support = ["neovm-value/test-support", "dep:visibility"]
 display-stop-validate = []
 jit = ["neovm-value/jit"]

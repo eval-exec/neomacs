@@ -9,7 +9,12 @@ description = "Rust layout engine crate for Neomacs"
 autotests = false
 
 [features]
-default = []
+# Explicit forwards for what neovm-core's dependency edges used to bring in
+# through their enabled defaults.  Kept as features so --no-default-features
+# stays a real no-jit build.
+default = ["jit", "sqlite"]
+jit = ["neovm-core/jit"]
+sqlite = ["neovm-core/sqlite"]
 # Performance probes (the GUI layout benchmark family).  Measurement tools,
 # not correctness tests: compiled out of the default suite and kept building by
 # the build-gate's opt-in feature check.

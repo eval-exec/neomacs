@@ -7,6 +7,14 @@ license.workspace = true
 repository.workspace = true
 description = "Worker runtime and scheduler scaffolding for NeoVM"
 
+[features]
+# Explicit forwards for what neovm-core's dependency edges used to bring in
+# through their enabled defaults.  Kept as features so --no-default-features
+# stays a real no-jit build.
+default = ["jit", "sqlite"]
+jit = ["neovm-core/jit"]
+sqlite = ["neovm-core/sqlite"]
+
 [dependencies]
 neovm-core.workspace = true
 neovm-host-abi.workspace = true

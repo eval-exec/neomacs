@@ -8,7 +8,10 @@ repository.workspace = true
 description = "Text processing layer extracted from neovm-core"
 
 [features]
-default = ["jit"]
+# neovm-value/sqlite is a forward, not a default: value's old default
+# features supplied it to this crate's default graph, and the sibling
+# edges now disable defaults.
+default = ["jit", "neovm-value/sqlite"]
 jit = ["neovm-value/jit", "neovm-edit/jit"]
 perf-probes = []
 # TEST-SUPPORT-DESIGN rev 2 rule 5/7: the consumer above value forwards the

@@ -82,7 +82,12 @@ wayland-live-tests = []
 
 # Native video remains opt-in at this crate boundary. Linux production builds
 # enable it through neomacs's `cargo xtask fresh-build` pipeline.
-default = ["neo-term"]
+default = ["neo-term", "jit", "sqlite"]
+# Explicit forwards for what neovm-core's dependency edges used to bring in
+# through their enabled defaults.  Kept as features so --no-default-features
+# stays a real no-jit build.
+jit = ["neovm-core/jit"]
+sqlite = ["neovm-core/sqlite"]
 tty-backend = []
 # Cross-platform native GPU-resident video
 video = [

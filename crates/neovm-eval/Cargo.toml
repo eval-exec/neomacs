@@ -8,7 +8,11 @@ repository.workspace = true
 description = "Evaluator and Lisp runtime extracted from neovm-core"
 
 [features]
-default = ["jit"]
+# neovm-value/sqlite is a forward, not a default: value's old default
+# features supplied it to this crate's default graph, and the sibling
+# edges now disable defaults.  It does not turn on this crate's own
+# `sqlite` feature (the sqlite subr registrations) -- base did not.
+default = ["jit", "neovm-value/sqlite"]
 # Test-only support surface: enabled only by a dev-dependency of a crate
 # ABOVE neovm-eval (core), never by a product profile.  TEST-SUPPORT-VIS
 # (B3, peer ruling 02:2xZ): named items keep their production visibility and
