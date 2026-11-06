@@ -63,7 +63,8 @@ pub(super) fn frozen_constant(
 }
 
 // Test-only labels for the remaining preparation bodies; no runtime opcode.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FunctionOpKind {
     Function,

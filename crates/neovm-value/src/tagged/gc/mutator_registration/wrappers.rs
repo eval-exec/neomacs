@@ -65,6 +65,16 @@ impl<'heap, K: EraKeeper> ProofEraFinishFailure<'heap, K> {
         self.reason
     }
 
+    /// C5 owned-instance move: give the retained proof era back to the test
+    /// that owns this refusal. No new authority: the era was already this
+    /// failure's, and the caller must still reconcile and finish it
+    /// explicitly, exactly as the in-crate fixture does.
+    #[inline]
+    #[doc(hidden)]
+    pub fn into_era(self) -> ProofEra<'heap, K> {
+        self.era
+    }
+
     /// SEAL: copied retained-authority facts (C4 copy; the backing objects
     /// never escape). Exactly the three `is_some` facts the lifecycle
     /// refusal tests read, so no keeper/collector/registry handle crosses.

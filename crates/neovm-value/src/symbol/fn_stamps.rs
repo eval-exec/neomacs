@@ -252,7 +252,11 @@ pub(crate) fn force_fn_stamps_for_test(on: Option<bool>) {
 /// only.
 #[inline]
 pub(crate) fn fn_stamps_enabled() -> bool {
-    #[cfg(test)]
+    // The setter and the override slot are cfg(any(test, feature)); the
+    // reader must match or the forced policy is inert in the test-support
+    // dependency build (LEAD 12:0xZ executed-evidence finding, same class as
+    // the card-tag knob read).
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(on) = FN_STAMPS_TEST_OVERRIDE.with(|c| c.get()) {
         return on;
     }

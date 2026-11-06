@@ -1,6 +1,19 @@
 //! Bounded call histories on the retained World and private census homes.
 use super::*;
 
+/// Split-era adapter: the value-side poison setter is reached only through
+/// the signed authority fence, while the fixture keeps its original call
+/// shape. Test-local; the original method is not visible from this crate.
+trait RunPoisonForTest {
+    fn set_symbol_poison_for_test(&mut self, poisoned: bool);
+}
+impl RunPoisonForTest for RunAccess<'_, '_> {
+    fn set_symbol_poison_for_test(&mut self, poisoned: bool) {
+        neovm_value::test_support::authority::set_symbol_poison_for_test(self, poisoned);
+    }
+}
+use neovm_value::test_support::authority::plant_scalar_root_for_test;
+
 fn finish<'era>(
     run: &mut RunAccess<'_, 'era>,
     activation: &mut FunctionActivation<'era>,
@@ -14,7 +27,7 @@ fn finish<'era>(
         );
         if run.sym_call_step(activation, dst, NonZeroU32::MIN).unwrap() == FunctionStep::Returned {
             assert_eq!(run.symbol_word_for_test(), 0);
-            return crate::emacs_core::print_value(&Value::from_bits(dst.word_for_test(run)));
+            return crate::emacs_core::print_value(&value_from_raw_bits(dst.word_for_test(run)));
         }
     }
     panic!("constant call exceeded its finite instruction count")
@@ -64,7 +77,7 @@ fn p3sym_c4_call_old_selection_new_binding_and_private_operand_homes() {
 struct Stamps;
 impl Drop for Stamps {
     fn drop(&mut self) {
-        crate::symbol::force_fn_stamps_for_test(None);
+        neovm_value::test_support::authority::force_fn_stamps_for_test(None);
     }
 }
 #[test]
@@ -75,7 +88,7 @@ fn p3sym_c4_call_cache_hits_stamp_resync_and_disabled_fallback() {
     ] {
         fixture(kind, |run, handles, homes| {
             let _stamps = Stamps;
-            crate::symbol::force_fn_stamps_for_test(Some(true));
+            neovm_value::test_support::authority::force_fn_stamps_for_test(Some(true));
             let mut cache = FunctionCallCache::new(run).unwrap();
             let mut activation = FunctionActivation::new(run).unwrap();
             run.sym_call_begin(&handles[0], &mut cache, &mut activation)
@@ -110,7 +123,7 @@ fn p3sym_c4_call_cache_hits_stamp_resync_and_disabled_fallback() {
             let new = finish(run, &mut activation, &mut homes.dst);
             assert_eq!(format!("({old} {new})"), oracle()[5]);
             assert_eq!(cache.counts_for_test(), (2, 1, 1));
-            crate::symbol::force_fn_stamps_for_test(Some(false));
+            neovm_value::test_support::authority::force_fn_stamps_for_test(Some(false));
             run.sym_fset_into(&handles[1], &homes.new, &mut homes.dst)
                 .unwrap();
             run.sym_call_begin(&handles[0], &mut cache, &mut activation)
@@ -128,7 +141,6 @@ fn p3sym_c4_call_cache_hits_stamp_resync_and_disabled_fallback() {
 
 #[test]
 fn p3sym_c4_call_unbind_retains_active_selection_and_void_preserves_answer() {
-    use crate::tagged::gc::mark_word::MarkWord;
     for kind in [
         PlainSymbolBacking::Unprojected,
         PlainSymbolBacking::Projected,
@@ -142,8 +154,7 @@ fn p3sym_c4_call_unbind_retains_active_selection_and_void_preserves_answer() {
                 .unwrap();
             let old = finish(run, &mut activation, &mut homes.dst);
             assert_eq!(old, oracle()[3]);
-            run.owner.local.as_mut().unwrap().root_scratch[homes.dst.index] =
-                MarkWord::of(Value::fixnum(23));
+            unsafe { plant_scalar_root_for_test(run, &homes.dst, Value::fixnum(23)) };
             assert_eq!(
                 run.sym_call_begin(&handles[0], &mut cache, &mut activation),
                 Err(FunctionError::VoidFunction)
@@ -151,7 +162,9 @@ fn p3sym_c4_call_unbind_retains_active_selection_and_void_preserves_answer() {
             assert_eq!(
                 format!(
                     "(void-function {})",
-                    crate::emacs_core::print_value(&Value::from_bits(homes.dst.word_for_test(run)))
+                    crate::emacs_core::print_value(&value_from_raw_bits(
+                        homes.dst.word_for_test(run)
+                    ))
                 ),
                 oracle()[13]
             );
@@ -198,7 +211,7 @@ fn p3sym_c4_call_fuel_terminal_state_and_explicit_clear() {
                 Ok(FunctionStep::Returned)
             );
             assert_eq!(
-                crate::emacs_core::print_value(&Value::from_bits(homes.dst.word_for_test(run))),
+                crate::emacs_core::print_value(&value_from_raw_bits(homes.dst.word_for_test(run))),
                 oracle()[3]
             );
             let answer = homes.dst.word_for_test(run);
@@ -263,13 +276,13 @@ fn p3sym_c4_call_stale_generations_index_reuse_and_capacity() {
                     RegistrationError::StaleRegistration
                 ))
             );
-            assert!(unsafe { Value::from_bits(fresh.word_for_test(run)) }.is_nil());
+            assert!(unsafe { value_from_raw_bits(fresh.word_for_test(run)) }.is_nil());
             run.sym_call_begin(&handles[0], &mut fresh_cache, &mut fresh_activation)
                 .unwrap();
             assert_eq!(finish(run, &mut fresh_activation, &mut fresh), oracle()[3]);
             let mut reserved = Vec::new();
             loop {
-                let before = run.owner.local.as_ref().unwrap().root_scratch.len();
+                let before = run.root_bank_for_test().0;
                 match FunctionCallCache::new(run) {
                     Ok(value) => {
                         reserved.push(value);
@@ -277,7 +290,7 @@ fn p3sym_c4_call_stale_generations_index_reuse_and_capacity() {
                     }
                     Err(error) => {
                         assert_eq!(error, FunctionError::Authority(RegistrationError::Capacity));
-                        assert_eq!(run.owner.local.as_ref().unwrap().root_scratch.len(), before);
+                        assert_eq!(run.root_bank_for_test().0, before);
                         break;
                     }
                 }
@@ -346,7 +359,7 @@ fn p3sym_c4_call_sidecar_poison_refuses_before_registry_poison() {
             let answer = homes.dst.word_for_test(run);
             let selected = activation.selected_epoch();
             let cached = cache.observed_epoch();
-            let capacity = run.owner.local.as_ref().unwrap().root_scratch.len();
+            let capacity = run.root_bank_for_test().0;
             // Model the publication interval: only the sidecar is poisoned.
             // No cell write is performed; restore this test flag before asserts
             // so the unchanged real fixture can always release its homes.
@@ -357,7 +370,7 @@ fn p3sym_c4_call_sidecar_poison_refuses_before_registry_poison() {
             let activation_clear = activation.clear(run);
             let new_cache = FunctionCallCache::new(run).err();
             let new_activation = FunctionActivation::new(run).err();
-            let after_capacity = run.owner.local.as_ref().unwrap().root_scratch.len();
+            let after_capacity = run.root_bank_for_test().0;
             run.set_symbol_poison_for_test(false);
             let poison = FunctionError::Authority(RegistrationError::Poisoned);
             assert_eq!(step, Err(poison));

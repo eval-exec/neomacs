@@ -325,6 +325,7 @@ pub(in crate::tagged::gc::mutator_registration::symbol_authority) fn publish(
 }
 
 impl KeeperSymbols<'_> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(in crate::tagged::gc::mutator_registration) fn append_function_roots(
         &self,
         roots: &mut Vec<Value>,
@@ -392,6 +393,7 @@ impl KeeperSymbols<'_> {
 
 #[cfg(any(test, feature = "test-support"))]
 impl RunAccess<'_, '_> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn function_facts_for_test(
         &mut self,
         key: &SymbolHandle,

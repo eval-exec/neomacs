@@ -24,7 +24,7 @@ fn p3sym_c4_initial_constant_bytecode_admission() {
         PlainSymbolBacking::Unprojected,
         PlainSymbolBacking::Projected,
     ] {
-        let prepared = Context::with_test_symbol_functions_init_era(
+        let prepared = neovm_eval::test_support::authority::with_test_symbol_functions_init_era(
             kind,
             |obarray, ids| obarray.set_symbol_function_id(ids[0], constant_bytecode()),
             |era, ids| {
@@ -88,7 +88,7 @@ fn p3sym_c4_initial_bytecode_exhaustion_refusal_precedence() {
                 obarray.seed_value_id(ids[0], definition);
                 obarray.set_symbol_function_id(ids[0], definition);
                 obarray.set_symbol_function_id(ids[1], constant_bytecode());
-                obarray.set_function_epoch_for_test(u64::MAX - 1);
+                neovm_value::test_support::authority::exhaust_function_epoch_for_test(obarray);
             },
             |run, handles, homes| {
                 let before = run.function_facts_for_test(&handles[0]).unwrap();
@@ -181,7 +181,9 @@ fn p3sym_c4_initial_bytecode_rooted_read_replace_and_restricted_call_refusal() {
                     .nth(1)
                     .unwrap();
                 assert_eq!(
-                    crate::emacs_core::print_value(&Value::from_bits(homes.dst.word_for_test(run))),
+                    crate::emacs_core::print_value(&value_from_raw_bits(
+                        homes.dst.word_for_test(run)
+                    )),
                     expected
                 );
             },
@@ -234,47 +236,52 @@ fn p3sym_c4_initial_bytecode_shape_and_materialization_fence() {
         "extra-slot",
         "pdump-marker",
     ] {
-        let (prepared, accesses) = Context::with_test_symbol_functions_init_era(
-            PlainSymbolBacking::Projected,
-            |obarray, ids| {
-                let mut function = constant_function();
-                match excluded {
-                    "interactive" => function.interactive = Some(Value::T),
-                    "environment" => function.env = Some(Value::T),
-                    "heap-constant" => {
-                        function.constants = vec![Value::cons(Value::T, Value::NIL)].into()
+        let (prepared, accesses) =
+            neovm_eval::test_support::authority::with_test_symbol_functions_init_era(
+                PlainSymbolBacking::Projected,
+                |obarray, ids| {
+                    let mut function = constant_function();
+                    match excluded {
+                        "interactive" => function.interactive = Some(Value::T),
+                        "environment" => function.env = Some(Value::T),
+                        "heap-constant" => {
+                            function.constants = vec![Value::cons(Value::T, Value::NIL)].into()
+                        }
+                        "nonconstant" => {
+                            function.ops =
+                                vec![Op::Constant(0), Op::Constant(0), Op::Cons, Op::Return]
+                        }
+                        "arity" => {
+                            let parameter = crate::intern::intern("p3sym-c4-bytecode-argument");
+                            function.params = LambdaParams::simple(vec![parameter]).into();
+                            function.arglist = Value::list(vec![Value::from_sym_id(parameter)]);
+                        }
+                        "documentation" => function.doc_form = Some(Value::T),
+                        "extra-slot" => function.extra_slots.push(Value::T),
+                        "pdump-marker" => {
+                            // Only exercise the saved-image discriminator: no
+                            // mapped payload access, decoding or collection here.
+                            neovm_value::test_support::authority::forge_pdump_marker_ops_for_test(
+                                &mut function,
+                            );
+                        }
+                        _ => unreachable!("fixture variant"),
                     }
-                    "nonconstant" => {
-                        function.ops = vec![Op::Constant(0), Op::Constant(0), Op::Cons, Op::Return]
-                    }
-                    "arity" => {
-                        let parameter = crate::intern::intern("p3sym-c4-bytecode-argument");
-                        function.params = LambdaParams::simple(vec![parameter]).into();
-                        function.arglist = Value::list(vec![Value::from_sym_id(parameter)]);
-                    }
-                    "documentation" => function.doc_form = Some(Value::T),
-                    "extra-slot" => function.extra_slots.push(Value::T),
-                    "pdump-marker" => {
-                        // Only exercise the saved-image discriminator: no
-                        // mapped payload access, decoding or collection here.
-                        function.ops.clear();
-                        function.ops_sealed = true;
-                    }
-                    _ => unreachable!("fixture variant"),
-                }
-                obarray.set_symbol_function_id(ids[0], Value::make_bytecode(function));
-            },
-            |era, ids| {
-                crate::value::reset_bytecode_data_access_count();
-                let handle = era.admit_plain_symbol(ids[0]).unwrap();
-                let prepared = era.prepare_function_symbol(&handle);
-                let accesses = crate::value::bytecode_data_access_count();
-                let (collector, keeper) = era.finish().expect("excluded bytecode fixture teardown");
-                drop(collector);
-                drop(keeper);
-                (prepared, accesses)
-            },
-        );
+                    obarray.set_symbol_function_id(ids[0], Value::make_bytecode(function));
+                },
+                |era, ids| {
+                    neovm_value::test_support::authority::reset_bytecode_data_access_count_for_test(
+                    );
+                    let handle = era.admit_plain_symbol(ids[0]).unwrap();
+                    let prepared = era.prepare_function_symbol(&handle);
+                    let accesses = crate::value::bytecode_data_access_count();
+                    let (collector, keeper) =
+                        era.finish().expect("excluded bytecode fixture teardown");
+                    drop(collector);
+                    drop(keeper);
+                    (prepared, accesses)
+                },
+            );
         assert_eq!(
             prepared,
             Err(FunctionError::UnsupportedDefinition),

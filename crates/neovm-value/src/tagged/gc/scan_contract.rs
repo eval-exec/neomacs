@@ -147,7 +147,15 @@ static_assertions::assert_not_impl_any!(StoppedMutatorsProof: Send, Sync, Copy, 
 
 /// Parallel drain authority is scoped to the unique AllStopped guard. It owns
 /// no heap loan; A5 must additionally supply disjoint stopped-storage access.
+///
+/// SHAPE-B r2 (LEAD 12:0xZ executed evidence): the type is named by the
+/// EXISTING public `AllStopped::trace` callback signature, so external
+/// re-homed fixtures cannot even type-check the call while it is
+/// crate-restricted. Publishing the TYPE NAME in test-support restores the
+/// pre-split call surface; no constructor, field or mint is exposed
+/// (`from_all_stopped`/`legacy` stay `pub(in crate::tagged::gc)`).
 #[derive(Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(in crate::tagged::gc) struct ParallelStoppedMutatorsProof<'epoch> {
     legacy: StoppedMutatorsProof,
     _epoch: PhantomData<&'epoch ()>,

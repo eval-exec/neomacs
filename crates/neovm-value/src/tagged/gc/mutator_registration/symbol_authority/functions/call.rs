@@ -8,7 +8,7 @@ pub struct FunctionCallCache<'era> {
     home: OwnerRootSlot<'era>,
     symbol: Option<SymbolHandle>,
     observed_epoch: Option<u64>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     counts: (usize, usize, usize), // successful refills, resyncs, equal hits
 }
 impl<'era> FunctionCallCache<'era> {
@@ -18,7 +18,7 @@ impl<'era> FunctionCallCache<'era> {
             home: run.private_nil_root()?,
             symbol: None,
             observed_epoch: None,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             counts: (0, 0, 0),
         })
     }
@@ -41,7 +41,8 @@ impl<'era> FunctionCallCache<'era> {
         self.observed_epoch = None;
         Ok(())
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn counts_for_test(&self) -> (usize, usize, usize) {
         self.counts
     }
@@ -268,7 +269,7 @@ impl<'era> RunAccess<'_, 'era> {
         }
         Ok(FunctionStep::Yielded)
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn set_symbol_poison_for_test(&mut self, poisoned: bool) {
         self.owner
             .registry
@@ -276,7 +277,8 @@ impl<'era> RunAccess<'_, 'era> {
             .poisoned
             .store(poisoned, Ordering::Release);
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn symbol_word_for_test(&self) -> u64 {
         self.owner.registry.symbols.word.load(Ordering::Acquire)
     }
@@ -423,7 +425,7 @@ impl SymbolRef<'_, '_, '_> {
         // metadata records the original clock, never a later clock reload.
         *cache_home = MarkWord::of(definition);
         *selected_home = MarkWord::of(definition);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if !unchanged {
             cache.counts.0 = cache.counts.0.saturating_add(1);
         } else if cache.observed_epoch != Some(clock) {
@@ -431,7 +433,7 @@ impl SymbolRef<'_, '_, '_> {
         } else {
             cache.counts.2 = cache.counts.2.saturating_add(1);
         }
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-support")))]
         let _ = unchanged;
         cache.symbol = Some(self.key);
         cache.observed_epoch = Some(clock);

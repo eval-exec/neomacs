@@ -12,6 +12,8 @@ pub use neovm_value::tagged::gc::mutator_registration::*;
 pub mod execution;
 #[path = "mutator_registration/symbol_authority.rs"]
 pub mod symbol_authority;
+#[path = "mutator_registration/symbol_functions.rs"]
+pub mod symbol_functions;
 #[path = "mutator_registration/symbol_globals.rs"]
 pub mod symbol_globals;
 

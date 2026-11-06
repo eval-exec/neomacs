@@ -1,6 +1,4 @@
 //! Closed C4 instruction syntax and native twins of the production rooted API.
-#[cfg(test)]
-use super::FunctionOpKind;
 use super::{
     FunctionActivation, FunctionCallCache, FunctionError, FunctionStep, OwnerRootSlot, RunAccess,
     SymbolHandle,
@@ -18,9 +16,6 @@ pub(super) enum FunctionOp {
     CallBegin { symbol: u16 },
     CallStep { dst: u16, fuel: NonZeroU32 },
 }
-
-#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
-mod tests;
 
 #[cfg(all(
     test,

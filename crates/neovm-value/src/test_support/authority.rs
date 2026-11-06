@@ -474,6 +474,34 @@ pub fn finish_retry_for_test(
     }
 }
 
+/// FENCE (N2 typed exhaustion, same shape as
+/// `RunAccess::exhaust_root_slot_generation_for_test`): force the canonical
+/// function epoch to the exact pre-wrap value the wrap-skip executor fixtures
+/// use. There is deliberately no general epoch setter.
+pub fn exhaust_function_epoch_for_test(obarray: &mut crate::symbol::Obarray) {
+    obarray.set_function_epoch_for_test(u64::MAX - 1);
+}
+
+/// FENCE (C3 write): set the symbol-authority poison bit on this live owner.
+/// The original stays `pub(crate)`; every subsequent symbol admission is
+/// refused while the bit is set, exactly as the fixture requires.
+pub fn set_symbol_poison_for_test(
+    run: &mut crate::tagged::gc::mutator_registration::RunAccess<'_, '_>,
+    poisoned: bool,
+) {
+    run.set_symbol_poison_for_test(poisoned);
+}
+
+/// FENCE (C1 forge): turn a bytecode function into the saved-image marker
+/// shape the bytecode fixture needs: no resident ops and the sealed marker
+/// set. The production state stays private; this typed forge reproduces the
+/// exact fixture state without a general field setter.
+pub fn forge_pdump_marker_ops_for_test(
+    function: &mut crate::tagged::bytecode::chunk::ByteCodeFunction,
+) {
+    function.forge_pdump_marker_ops_for_test();
+}
+
 /// Value-FENCE row (C1): a forged-index copy of a root home for the relocated
 /// transition fixtures. Safe: every use still goes through the keeper's
 /// binding check, so an invalid index can only be refused.

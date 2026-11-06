@@ -1,12 +1,24 @@
 //! The actual minimal retained World; no bootstrap or setup collection.
-use super::retry::{self as contention, Deadline, Retry, retry_owned};
 use super::*;
 use crate::emacs_core::eval::Context;
 use crate::tagged::gc::{Mutator, PlainSymbolBacking};
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue as Value;
+use neovm_eval::test_support::authority::with_test_symbol_functions_init_era;
+use neovm_value::test_support::authority::{self as contention, Deadline, Retry, retry_owned};
 use std::cell::RefCell;
+use std::num::NonZeroU32;
 use std::ops::ControlFlow;
+
+/// Test-side wrapper for raw-bit value construction. Every call site
+/// constructs a value from bits whose provenance the surrounding fixture
+/// already established (rooted homes, literal immediates); the value is never
+/// retained. The distinct name is load-bearing: the previous `value_from_bits`
+/// name shadowed the imported constructor and made the body call itself
+/// (unconditional recursion, LEAD 12:0xZ).
+fn value_from_raw_bits(bits: usize) -> Value {
+    unsafe { Value::from_bits(bits) }
+}
 use std::rc::Rc;
 
 struct Homes<'era> {
@@ -85,14 +97,16 @@ fn fixture_config(
             InitialFunction::Bound => {}
             InitialFunction::Empty => obarray.clear_function_silent_id(ids[0]),
             InitialFunction::Unbound => obarray.fmakunbound_id(ids[0]),
-            InitialFunction::Exhausted => obarray.set_function_epoch_for_test(u64::MAX - 1),
+            InitialFunction::Exhausted => {
+                neovm_value::test_support::authority::exhaust_function_epoch_for_test(obarray)
+            }
             InitialFunction::ExhaustedEmpty => {
                 obarray.clear_function_silent_id(ids[0]);
-                obarray.set_function_epoch_for_test(u64::MAX - 1);
+                neovm_value::test_support::authority::exhaust_function_epoch_for_test(obarray);
             }
             InitialFunction::ExhaustedUnbound => {
                 obarray.fmakunbound_id(ids[0]);
-                obarray.set_function_epoch_for_test(u64::MAX - 1);
+                neovm_value::test_support::authority::exhaust_function_epoch_for_test(obarray);
             }
         },
         body,
@@ -104,7 +118,7 @@ fn fixture_initialized(
     init: impl FnOnce(&mut crate::symbol::Obarray, &[crate::intern::SymId]),
     body: impl for<'owner, 'era> FnOnce(&mut RunAccess<'owner, 'era>, &[SymbolHandle], &mut Homes<'era>),
 ) -> std::thread::Result<()> {
-    Context::with_test_symbol_functions_init_era(kind, init, |era, ids| {
+    with_test_symbol_functions_init_era(kind, init, |era, ids| {
         let handles: Vec<_> = ids
             .iter()
             .map(|&id| era.admit_plain_symbol(id).unwrap())
@@ -151,9 +165,9 @@ fn fixture_initialized(
             // Existing C3 reads supply actual immutable definition operands.
             run.sym_value_into(&handles[0], &mut homes.old).unwrap();
             run.sym_value_into(&handles[1], &mut homes.new).unwrap();
-            let old = Value::from_bits(homes.old.word_for_test(&run));
+            let old = value_from_raw_bits(homes.old.word_for_test(&run));
             assert!(old.is_cons() || old.is_bytecode());
-            assert!(Value::from_bits(homes.new.word_for_test(&run)).is_cons());
+            assert!(value_from_raw_bits(homes.new.word_for_test(&run)).is_cons());
             body(&mut run, &handles, homes);
         }));
         assert_eq!(
@@ -161,16 +175,16 @@ fn fixture_initialized(
             Some(&Ok(())),
             "C4 fixture teardown failed independently of op outcome"
         );
-        let pending = era.registry().symbols.functions.finish_ready().is_err();
+        let pending = era.function_finish_ready_for_test().is_err();
         let era = if pending {
             let failure = era
                 .finish()
                 .expect_err("dirty function era must refuse serial return");
             assert_eq!(
-                failure.reason,
+                failure.reason(),
                 crate::tagged::gc::RegistrationError::PendingRoots
             );
-            failure.era
+            failure.into_era()
         } else {
             era
         };
@@ -203,9 +217,11 @@ fn fixture_initialized(
     })
 }
 fn oracle() -> Vec<&'static str> {
-    let rows: Vec<_> = include_str!("../symbol_functions_oracle.expected")
-        .lines()
-        .collect();
+    let rows: Vec<_> = include_str!(
+        "../../../../../../neovm-value/src/tagged/gc/mutator_registration/symbol_functions_oracle.expected"
+    )
+    .lines()
+    .collect();
     assert_eq!(rows.len(), 20, "GNU C4 oracle rows");
     rows
 }
@@ -251,7 +267,7 @@ fn primitive(kind: PlainSymbolBacking, op: FunctionOpKind) {
                 Value::bool_val(answer == Value::from_sym_id(homes.symbol).bits()),
                 oracle()[2],
             ),
-            FunctionOpKind::CallBegin => (Value::from_bits(answer), oracle()[3]),
+            FunctionOpKind::CallBegin => (value_from_raw_bits(answer), oracle()[3]),
             _ => unreachable!(),
         };
         assert_eq!(crate::emacs_core::print_value(&value), expected);
@@ -302,7 +318,9 @@ fn p3sym_c4_projected_call() {
 
 #[test]
 fn p3sym_c4_surface_preserves_owner_root_and_fuel_types() {
-    let surface = include_str!("../symbol_functions.rs");
+    let surface = include_str!(
+        "../../../../../../neovm-value/src/tagged/gc/mutator_registration/symbol_functions.rs"
+    );
     for forbidden in [
         "-> Value",
         "-> TaggedValue",
@@ -317,7 +335,10 @@ fn p3sym_c4_surface_preserves_owner_root_and_fuel_types() {
         );
     }
     assert!(surface.contains("fuel: NonZeroU32"));
-    assert!(include_str!("../symbol_authority/functions/write.rs").contains("impl KeeperSymbols"));
+    let write = include_str!(
+        "../../../../../../neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions/write.rs"
+    );
+    assert!(write.contains("impl KeeperSymbols"));
 }
 
 #[test]
@@ -341,7 +362,9 @@ fn p3sym_c4_function_empty_and_unbound_are_nil() {
                     .nth(field)
                     .unwrap();
                 assert_eq!(
-                    crate::emacs_core::print_value(&Value::from_bits(homes.dst.word_for_test(run))),
+                    crate::emacs_core::print_value(&value_from_raw_bits(
+                        homes.dst.word_for_test(run)
+                    )),
                     expected
                 );
             })
@@ -358,8 +381,11 @@ fn p3sym_c4_function_invalid_and_cleared_homes_refuse() {
     ] {
         fixture(kind, |run, handles, homes| {
             let before = homes.dst.word_for_test(run);
-            let mut invalid = homes.dst.clone();
-            invalid.index = usize::MAX;
+            let mut invalid =
+                neovm_value::test_support::authority::owner_root_slot_with_index_for_test(
+                    &homes.dst,
+                    usize::MAX,
+                );
             assert_eq!(
                 run.sym_function_into(&handles[0], &mut invalid),
                 Err(FunctionError::Authority(
@@ -380,7 +406,7 @@ fn p3sym_c4_function_invalid_and_cleared_homes_refuse() {
                     crate::tagged::gc::RegistrationError::StaleRegistration
                 ))
             );
-            assert!(run.owner.local.as_ref().unwrap().root_scratch.is_empty());
+            assert!(run.root_bank_for_test().0 == 0);
         })
         .expect("total function-home validation and cleanup");
     }
@@ -388,7 +414,9 @@ fn p3sym_c4_function_invalid_and_cleared_homes_refuse() {
 
 #[test]
 fn p3sym_c4_function_read_has_no_fatal_decode_or_value_escape() {
-    let source = include_str!("../symbol_authority/functions.rs");
+    let source = include_str!(
+        "../../../../../../neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions.rs"
+    );
     for forbidden in [
         ".expect(",
         ".unwrap(",
@@ -400,7 +428,10 @@ fn p3sym_c4_function_read_has_no_fatal_decode_or_value_escape() {
     ] {
         assert!(
             !source.contains(forbidden)
-                && !include_str!("../symbol_authority/functions/call.rs").contains(forbidden),
+                && !include_str!(
+                    "../../../../../../neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions/call.rs"
+                )
+                .contains(forbidden),
             "rooted function API exposed {forbidden}"
         );
     }
@@ -435,7 +466,7 @@ fn p3sym_c4_fset_noop_and_two_symbol_clock() {
             assert_eq!(run.function_facts_for_test(&handles[0]).unwrap().1, first.1);
             run.sym_function_into(&handles[0], &mut homes.dst).unwrap();
             let literal = |bits| {
-                let value = Value::from_bits(bits);
+                let value = value_from_raw_bits(bits);
                 crate::emacs_core::print_value(
                     &value
                         .cons_cdr_unobserved()
@@ -470,7 +501,9 @@ fn p3sym_c4_fset_nil_distinguishes_empty_and_explicit_unbound() {
                 assert_eq!(after.0, before.0 + u64::from(changed));
                 assert_eq!(after.2, changed);
                 assert_eq!(
-                    crate::emacs_core::print_value(&Value::from_bits(homes.dst.word_for_test(run))),
+                    crate::emacs_core::print_value(&value_from_raw_bits(
+                        homes.dst.word_for_test(run)
+                    )),
                     oracle()[18].split_whitespace().nth(1).unwrap()
                 );
                 run.sym_fset_into(&handles[0], &nil, &mut homes.dst)
@@ -508,7 +541,7 @@ fn p3sym_c4_fset_exhaustion_allows_only_noop() {
 
 #[test]
 fn p3sym_c4_fset_refuses_unprepared_unsupported_and_stale_homes() {
-    use crate::tagged::gc::{RegistrationError, mark_word::MarkWord};
+    use crate::tagged::gc::RegistrationError;
     for kind in [
         PlainSymbolBacking::Unprojected,
         PlainSymbolBacking::Projected,
@@ -533,8 +566,13 @@ fn p3sym_c4_fset_refuses_unprepared_unsupported_and_stale_homes() {
             let before = run.function_facts_for_test(&handles[0]).unwrap();
             let answer = homes.dst.word_for_test(run);
             for bad in [Value::UNBOUND, Value::fixnum(123)] {
-                run.owner.local.as_mut().unwrap().root_scratch[homes.cache.index] =
-                    MarkWord::of(bad);
+                unsafe {
+                    neovm_value::test_support::authority::plant_scalar_root_for_test(
+                        run,
+                        &homes.cache,
+                        bad,
+                    )
+                };
                 assert_eq!(
                     run.sym_fset_into(&handles[0], &homes.cache, &mut homes.dst),
                     Err(FunctionError::UnsupportedDefinition)
@@ -542,8 +580,11 @@ fn p3sym_c4_fset_refuses_unprepared_unsupported_and_stale_homes() {
                 assert_eq!(run.function_facts_for_test(&handles[0]).unwrap(), before);
                 assert_eq!(homes.dst.word_for_test(run), answer);
             }
-            let mut invalid = homes.dst.clone();
-            invalid.index = usize::MAX;
+            let mut invalid =
+                neovm_value::test_support::authority::owner_root_slot_with_index_for_test(
+                    &homes.dst,
+                    usize::MAX,
+                );
             assert_eq!(
                 run.sym_fset_into(&handles[0], &homes.new, &mut invalid),
                 Err(FunctionError::Authority(
@@ -590,7 +631,7 @@ fn p3sym_c4_fmakunbound_transitions_and_exact_identity() {
                     .next()
                     .unwrap();
                 assert_eq!(
-                    crate::emacs_core::print_value(&Value::from_bits(
+                    crate::emacs_core::print_value(&value_from_raw_bits(
                         homes.cache.word_for_test(run)
                     )),
                     nil
@@ -718,8 +759,11 @@ fn p3sym_c4_fmakunbound_unprepared_invalid_and_cleared_homes_refuse() {
         fixture(kind, |run, handles, homes| {
             let before = run.function_facts_for_test(&handles[0]).unwrap();
             let answer = homes.dst.word_for_test(run);
-            let mut invalid = homes.dst.clone();
-            invalid.index = usize::MAX;
+            let mut invalid =
+                neovm_value::test_support::authority::owner_root_slot_with_index_for_test(
+                    &homes.dst,
+                    usize::MAX,
+                );
             assert_eq!(
                 run.sym_fmakunbound_into(&handles[0], &mut invalid),
                 Err(FunctionError::Authority(
@@ -736,11 +780,13 @@ fn p3sym_c4_fmakunbound_unprepared_invalid_and_cleared_homes_refuse() {
                 ))
             );
             assert_eq!(run.function_facts_for_test(&handles[0]).unwrap(), before);
-            assert!(run.owner.local.as_ref().unwrap().root_scratch.is_empty());
+            assert!(run.root_bank_for_test().0 == 0);
         })
         .expect("invalid and cleared homes refuse without recreating a root bank");
     }
 }
 
+#[path = "tests/bytecode.rs"]
 mod bytecode;
+#[path = "tests/call.rs"]
 mod call;

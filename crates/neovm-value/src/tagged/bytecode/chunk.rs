@@ -466,6 +466,15 @@ impl ByteCodeFunction {
         }
     }
 
+    /// Test-only forge of the saved-image marker shape: no resident ops and
+    /// the sealed marker set. Callers go through
+    /// `neovm_value::test_support::authority::forge_pdump_marker_ops_for_test`.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn forge_pdump_marker_ops_for_test(&mut self) {
+        self.ops.clear();
+        self.ops_sealed = true;
+    }
+
     /// Whether `executable_ops` returns `seal_ops`-normalized instructions.
     ///
     /// This is the release-safety gate for the unchecked-fetch dispatch

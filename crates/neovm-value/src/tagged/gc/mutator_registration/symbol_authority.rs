@@ -181,6 +181,14 @@ impl<K: EraKeeper> GenericProofEra<'_, K> {
         symbols.check_symbol_backing(&self.core.registry().symbols.backing, keeper)
     }
 
+    /// C4 copied registry symbol-state observer (observe-only): the retained
+    /// registry's function journal serial-finish check. Returns the copied
+    /// result by value; no registry handle escapes.
+    #[doc(hidden)]
+    pub fn function_finish_ready_for_test(&self) -> Result<(), RegistrationError> {
+        self.core.registry().symbols.functions.finish_ready()
+    }
+
     #[doc(hidden)]
     pub fn check_root_designators_for_test(
         &self,

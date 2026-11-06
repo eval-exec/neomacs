@@ -4955,8 +4955,10 @@ impl Obarray {
         *self.dispatch_cells.function_epoch.get_mut()
     }
 
-    /// Test-only: set `function_epoch` (the wrap-skip tests).
-    #[cfg(test)]
+    /// Test-only: set `function_epoch` (the wrap-skip tests). Re-gated to
+    /// the test-support build; reached only through the typed exhaustion
+    /// fence `test_support::authority::exhaust_function_epoch_for_test`.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn set_function_epoch_for_test(&mut self, epoch: u64) {
         self.dispatch_cells
             .function_epoch
