@@ -1944,7 +1944,7 @@ fn vm_symbol_bytecode_call_resolves_live_function_cell_once() {
     ];
     caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
 
-    neovm_value::symbol::reset_function_cell_lookup_count();
+    neovm_value::test_support::authority::reset_function_cell_lookup_count_for_test();
     let result = {
         let mut vm = new_vm(&mut eval);
         vm.execute(&caller, vec![])
@@ -2495,8 +2495,8 @@ fn vm_repeated_symbol_bytecode_calls_reuse_epoch_validated_resolution() {
     ];
     caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(3);
 
-    neovm_value::symbol::reset_function_cell_lookup_count();
-    neovm_value::value::reset_bytecode_data_access_count();
+    neovm_value::test_support::authority::reset_function_cell_lookup_count_for_test();
+    neovm_value::test_support::authority::reset_bytecode_data_access_count_for_test();
     let result = {
         let mut vm = new_vm(&mut eval);
         vm.execute(&caller, vec![])
@@ -2543,7 +2543,7 @@ fn vm_symbol_bytecode_call_cache_invalidates_after_fset() {
     let second = make_callee(2);
     eval.obarray.set_symbol_function_id(callee_symbol, first);
 
-    neovm_value::symbol::reset_function_cell_lookup_count();
+    neovm_value::test_support::authority::reset_function_cell_lookup_count_for_test();
     let mut vm = new_vm(&mut eval);
     let ResolvedStackCallTarget::ByteCode { callee } =
         vm.resolve_stack_call_target(Value::from_sym_id(callee_symbol))
@@ -12576,7 +12576,7 @@ fn second_bytecode_call_to_a_builtin_resolves_from_the_context_cache() {
         vm.execute(&func, vec![]).expect("symbol-name via Bcall")
     };
     assert_eq!(run(&mut eval).as_utf8_str(), Some("neovm-cache-probe"));
-    neovm_value::symbol::reset_function_cell_lookup_count();
+    neovm_value::test_support::authority::reset_function_cell_lookup_count_for_test();
     assert_eq!(run(&mut eval).as_utf8_str(), Some("neovm-cache-probe"));
     assert_eq!(
         neovm_value::symbol::function_cell_lookup_count(),
