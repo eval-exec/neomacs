@@ -211,9 +211,10 @@ fn old_cons_stores_mark_their_card_inline() {
 fn card_tag_filter_skips_marks_for_immediates_only() {
     let mut context = context(true);
     for filter in [false, true] {
-        let leaf = neovm_value::tagged::gc::with_card_tag_filter_for_test(filter, || {
-            compile_bytecode_function(&store_function(Op::Setcar)).expect("cons store compiles")
-        });
+        let leaf =
+            neovm_value::test_support::authority::with_card_tag_filter_for_test(filter, || {
+                compile_bytecode_function(&store_function(Op::Setcar)).expect("cons store compiles")
+            });
         let owner = Value::cons(Value::NIL, Value::NIL);
         context.assign("u34-inline-owner", owner);
         context.gc_collect_exact();

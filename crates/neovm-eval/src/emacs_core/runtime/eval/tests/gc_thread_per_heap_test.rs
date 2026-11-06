@@ -68,7 +68,7 @@ fn within_timeout(body: impl FnOnce() + Send + 'static) {
 fn two_worlds_on_one_thread_collect_while_both_mark() {
     within_timeout(|| {
         #[cfg(debug_assertions)]
-        neovm_value::tagged::gc::set_verify_marked_objects_for_test(true);
+        neovm_value::test_support::authority::set_verify_marked_objects_for_test(true);
         let mut worlds = [Context::new(), Context::new()];
         for ev in &mut worlds {
             let kept = eval(ev, KEEP);
@@ -99,7 +99,7 @@ fn two_worlds_on_one_thread_collect_while_both_mark() {
             assert_eq!(eval(ev, KEEP_SUM), "1999000");
         }
         #[cfg(debug_assertions)]
-        neovm_value::tagged::gc::set_verify_marked_objects_for_test(false);
+        neovm_value::test_support::authority::set_verify_marked_objects_for_test(false);
     });
 }
 
