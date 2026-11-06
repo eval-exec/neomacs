@@ -2797,7 +2797,7 @@ impl Clone for TextPropertyTable {
 /// `(start, end, plist pairs)` of one interval, as
 /// [`TextPropertyTable::interval_plist_runs_for_test`] reports it.
 #[cfg(any(test, feature = "test-support"))]
-pub type IntervalPlistRun = (usize, usize, Vec<(Value, Value)>);
+pub(crate) type IntervalPlistRun = (usize, usize, Vec<(Value, Value)>);
 
 #[cfg(feature = "gc-memory-telemetry")]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -44,7 +44,7 @@ pub(super) fn registry_state(registry: &InFlightRegistryHandle) -> RegistryState
 /// A bounded retained read-only view of one existing registry.
 ///
 /// The handle stays private; no guard, table, pin or mutable projection escapes.
-pub struct InFlightRegistryObserver {
+pub(crate) struct InFlightRegistryObserver {
     registry: InFlightRegistryHandle,
 }
 
@@ -64,7 +64,7 @@ impl InFlightRegistryObserver {
 }
 
 /// Preserve the canonical getter's lazy installation at the caller's old point.
-pub fn current_in_flight_registry_observer_for_test() -> InFlightRegistryObserver {
+pub(crate) fn current_in_flight_registry_observer_for_test() -> InFlightRegistryObserver {
     InFlightRegistryObserver {
         registry: current_in_flight_registry_handle(),
     }
