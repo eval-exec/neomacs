@@ -31,7 +31,7 @@ fn compiled_subr_batch_is_the_executable_declaration_catalog() {
     assert!(subrs::SUBRS.source_file().ends_with("tests/subrs.rs"));
     assert_eq!(subrs::SUBRS.specs().len(), 1);
 
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     subrs::register_subrs(&mut ctx);
     let value = ctx
         .eval_str("(test-batch-zero)")
@@ -61,7 +61,7 @@ fn fixed_native_function_derives_its_maximum_arity() {
 
 #[test]
 fn registering_a_spec_installs_its_declared_metadata_and_function() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.register_subr(SubrSpec::fixed0("test-zero", zero));
 
     let value = ctx
@@ -73,7 +73,7 @@ fn registering_a_spec_installs_its_declared_metadata_and_function() {
 
 #[test]
 fn registered_spec_is_authoritative_even_for_a_known_compatibility_name() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.register_subr(SubrSpec::fixed0("message", zero));
 
     let arity = ctx
@@ -85,7 +85,7 @@ fn registered_spec_is_authoritative_even_for_a_known_compatibility_name() {
 
 #[test]
 fn registering_a_spec_replaces_its_previous_no_eval_policy() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let name = "test-authoritative-no-eval-policy";
     ctx.register_subr(SubrSpec::fixed0(name, zero).requires_eval_state());
     assert_eq!(

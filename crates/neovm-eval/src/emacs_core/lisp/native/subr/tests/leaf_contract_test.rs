@@ -73,7 +73,7 @@ fn leaf_effects_exclude_gc_reentry_deopt_binding_writes() {
 /// tail, `Fnth` with the list), which a `Bcall` of the builtin must not get.
 #[test]
 fn every_bcall_leaf_is_attached_to_its_registered_subr() {
-    let ctx = Context::new();
+    let ctx = Context::new(crate::test_utils::unit_runtime());
     for leaf in LEAVES {
         let sym = intern(leaf.name);
         assert!(
@@ -116,7 +116,7 @@ static OTHER_GETHASH: LeafSpec = LeafSpec::new(
 
 #[test]
 fn recording_the_same_leaf_again_is_unchanged() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let sym = intern("gethash");
     let current = subr_leaf(sym).expect("attached");
     assert_eq!(record_subr_leaf(sym, Some(current)), LeafChange::Unchanged);
@@ -143,7 +143,7 @@ fn reinstalling_a_different_leaf_clears_the_jit_cache() {
     use neovm_value::value::LambdaParams;
 
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     // `(lambda (a) (+ a 1))`, hot, so one call compiles and caches it.
     let mut f = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).

@@ -66,7 +66,7 @@ fn subr_name_error_for_non_subr() {
 // -- subr-arity --
 
 fn assert_subr_arity(name: &str, min: i64, max: Option<i64>) {
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let function = ctx
         .obarray()
         .symbol_function(name)
@@ -136,7 +136,7 @@ fn subr_arity_returns_cons() {
 #[test]
 fn subr_arity_error_for_non_subr() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_subr_arity(&mut ctx, vec![Value::NIL]);
     assert!(result.is_err());
 }
@@ -152,7 +152,7 @@ fn subr_arity_message_is_one_or_more() {
 #[test]
 fn subr_arity_if_is_unevalled() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_subr_arity(&mut ctx, vec![Value::subr(intern("if"))]).unwrap();
     if result.is_cons() {
         let pair_car = result.cons_car();
@@ -177,7 +177,7 @@ fn subr_arity_core_special_forms_match_oracle_unevalled_shapes() {
         ("condition-case", 2),
         ("unwind-protect", 1),
     ] {
-        let mut ctx = crate::emacs_core::eval::Context::new();
+        let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
         let result = builtin_subr_arity(&mut ctx, vec![Value::subr(intern(name))]).unwrap();
         if result.is_cons() {
             let pair_car = result.cons_car();
@@ -2108,7 +2108,7 @@ fn commandp_rejects_overflow_arity() {
 #[test]
 fn func_arity_lambda_required_only() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let lam = make_lambda(vec!["a", "b"], vec![], None);
     let result = func_arity(&mut ctx, lam).unwrap();
     if result.is_cons() {
@@ -2124,7 +2124,7 @@ fn func_arity_lambda_required_only() {
 #[test]
 fn func_arity_lambda_with_optional() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let lam = make_lambda(vec!["a"], vec!["b", "c"], None);
     let result = func_arity(&mut ctx, lam).unwrap();
     if result.is_cons() {
@@ -2140,7 +2140,7 @@ fn func_arity_lambda_with_optional() {
 #[test]
 fn func_arity_lambda_with_rest() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let lam = make_lambda(vec!["a"], vec![], Some("rest"));
     let result = func_arity(&mut ctx, lam).unwrap();
     if result.is_cons() {
@@ -2156,7 +2156,7 @@ fn func_arity_lambda_with_rest() {
 #[test]
 fn func_arity_bytecode() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let bc = make_bytecode(vec!["x", "y"], Some("rest"));
     let result = func_arity(&mut ctx, bc).unwrap();
     if result.is_cons() {
@@ -2172,7 +2172,7 @@ fn func_arity_bytecode() {
 #[test]
 fn func_arity_subr() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let function = ctx.obarray().symbol_function("+").unwrap();
     let result = builtin_func_arity_ctx(&mut ctx, vec![function]).unwrap();
     if result.is_cons() {
@@ -2188,7 +2188,7 @@ fn func_arity_subr() {
 #[test]
 fn func_arity_subr_uses_registered_metadata() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let message_function = ctx.obarray().symbol_function("message").unwrap();
     let message = builtin_func_arity_ctx(&mut ctx, vec![message_function]).unwrap();
     if message.is_cons() {
@@ -2215,7 +2215,7 @@ fn func_arity_subr_uses_registered_metadata() {
 #[test]
 fn func_arity_macro() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let m = make_macro(vec!["a", "b"]);
     let result = func_arity(&mut ctx, m).unwrap();
     if result.is_cons() {
@@ -2258,7 +2258,7 @@ fn gnu_lisp_macro_forms_are_not_evaluator_special_forms() {
 #[test]
 fn func_arity_error_for_non_callable() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = func_arity(&mut ctx, Value::fixnum(42));
     assert!(result.is_err());
 }
@@ -2266,7 +2266,7 @@ fn func_arity_error_for_non_callable() {
 #[test]
 fn func_arity_autoload_object_signals_wrong_type_argument_symbolp() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let autoload_fn = Value::list(vec![
         Value::symbol("autoload"),
         Value::string("vm-auto-file"),
@@ -2297,7 +2297,7 @@ fn subr_name_wrong_args() {
 #[test]
 fn func_arity_wrong_args() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_func_arity_ctx(&mut ctx, vec![]);
     assert!(result.is_err());
 }

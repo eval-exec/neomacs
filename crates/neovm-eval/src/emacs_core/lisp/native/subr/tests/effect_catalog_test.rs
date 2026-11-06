@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashSet};
 
 #[test]
 fn pentry_catalog_covers_every_installed_subr_opcode_leaf_and_alias() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let primitive_names = INVENTORY
         .iter()
         .filter(|entry| entry.kind == CatalogKind::Primitive)
@@ -221,7 +221,7 @@ fn quoted_symbol(value: Value) -> Option<&'static str> {
 
 #[test]
 fn pentry_catalog_shipped_alias_rows_match_lisp_reader_forms() {
-    let ctx = Context::new();
+    let ctx = Context::new(crate::test_utils::unit_runtime());
     let path = neomacs_infra::crate_root!().join("../../lisp/subr.el");
     let source = std::fs::read_to_string(path).expect("shipped subr.el source");
     // This only reads repository Lisp; it evaluates no forms.
