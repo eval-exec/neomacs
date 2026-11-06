@@ -6,7 +6,7 @@ use crate::test_utils::load_minimal_gnu_backquote_runtime;
 use neovm_value::error::{FlowKind, FlowResultExt as _};
 
 fn bootstrap_eval(src: &str) -> Vec<String> {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     load_minimal_gnu_backquote_runtime(&mut ev);
     ev.eval_str_each(src)
         .iter()
@@ -618,7 +618,7 @@ fn display_line_numbers_update_width_arity() {
 #[test]
 fn recursion_depth_zero() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_recursion_depth(&mut eval, vec![]).unwrap();
     // At top level, depth is 0
     assert!(eq_value(&result, &Value::fixnum(0)));
@@ -627,7 +627,7 @@ fn recursion_depth_zero() {
 #[test]
 fn recursion_depth_counts_recursive_command_loops_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     // Neomacs stores one raw command-loop level for GNU's visible top level.
     // A second active level is therefore one recursive edit.
     eval.command_loop.recursive_depth = 2;
@@ -640,7 +640,7 @@ fn recursion_depth_counts_recursive_command_loops_like_gnu() {
 #[test]
 fn recursion_depth_includes_active_minibuffers_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     eval.command_loop.recursive_depth = 2;
     eval.minibuffers
         .read_from_minibuffer(neovm_edit::buffer::BufferId(1), "Prompt: ", None, None)
@@ -664,7 +664,7 @@ fn recursion_depth_includes_active_minibuffers_like_gnu() {
 #[test]
 fn backtrace_frame_internal_surfaces_live_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
 
     // Push a backtrace frame ourselves so the walker has something to
     // surface without needing a full compile/call round-trip.
@@ -724,7 +724,7 @@ fn eval_sub_cons_pushes_unevalled_frame_for_special_forms() {
     }
 
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     eval.register_subr(SubrSpec::fixed0("__unevalled_probe__", probe));
 
     PROBE.with(|p| p.borrow_mut().clear());
@@ -765,7 +765,7 @@ fn eval_sub_cons_pushes_outer_unevalled_during_arg_eval() {
     }
 
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     eval.register_subr(SubrSpec::fixed0("__arg_eval_probe__", probe));
 
     // Wrap in a user lambda so there's an "outer" non-builtin frame we
@@ -793,7 +793,7 @@ fn eval_sub_cons_pushes_outer_unevalled_during_arg_eval() {
 #[test]
 fn set_backtrace_args_evalled_mutates_in_place() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
 
     let bt_count = eval.specpdl.len();
     let original_args = Value::list(vec![
@@ -825,7 +825,7 @@ fn set_backtrace_args_evalled_mutates_in_place() {
 #[test]
 fn backtrace_frame_internal_surfaces_unevalled_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
 
     let original_args = Value::list(vec![
         Value::symbol("x"),
@@ -857,7 +857,7 @@ fn backtrace_frame_internal_surfaces_unevalled_frame() {
 #[test]
 fn mapbacktrace_base_t_does_not_recurse() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
 
     let result = eval.eval_str(
         r#"(let (bt-frames)
@@ -887,7 +887,7 @@ fn mapbacktrace_base_t_does_not_recurse() {
 #[test]
 fn handler_bind_sees_signaling_eval_frames_before_unwind() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
 
     let result = eval.eval_str(
         r#"(let (seen-eval seen-progn)
@@ -927,7 +927,7 @@ fn handler_bind_sees_signaling_eval_frames_before_unwind() {
 #[test]
 fn handler_bind_sees_eval_symbol_frame_before_feval_unwind() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
 
     let result = eval.eval_str(
         r#"(let (seen-eval)
@@ -963,7 +963,7 @@ fn handler_bind_sees_eval_symbol_frame_before_feval_unwind() {
 #[test]
 fn backtrace_helper_shape_and_errors() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     let thread = super::super::threads::builtin_current_thread(&mut eval, vec![]).unwrap();
     let frames = builtin_backtrace_frames_from_thread(&mut eval, vec![thread]).unwrap();
     assert!(frames.is_list());
@@ -1074,7 +1074,7 @@ fn backtrace_locals_lists_bindings_in_sim_and_green() {
     for mode in [ThreadingMode::Sim, ThreadingMode::Green] {
         #[cfg(feature = "jit")]
         crate::emacs_core::jit::force_jit_off_for_test(true);
-        let mut context = Context::new_with_threading(mode);
+        let mut context = Context::new_with_threading(mode, crate::test_utils::unit_runtime());
         // Keep one World after admission: every Green case below must inspect
         // owner entries, including lexical/default/buffer-local combinations.
         context
@@ -1096,7 +1096,8 @@ fn backtrace_locals_preserves_the_original_owner_alias_symbol() {
     use crate::emacs_core::eval::ThreadingMode;
     #[cfg(feature = "jit")]
     crate::emacs_core::jit::force_jit_off_for_test(true);
-    let mut context = Context::new_with_threading(ThreadingMode::Green);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     let value = context
         .eval_str(
             r#"(progn
@@ -1124,7 +1125,7 @@ fn backtrace_locals_preserves_the_original_owner_alias_symbol() {
 #[test]
 fn backtrace_helper_stubs_arity_checks() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     assert!(matches!(
         builtin_backtrace_debug(&mut eval, vec![]).kinded(),
         Err(FlowKind::Signal(sig))
@@ -1148,7 +1149,7 @@ fn backtrace_helper_stubs_arity_checks() {
 #[test]
 fn backtrace_frame_internal_tracks_runtime_funcall_interactively_marker() {
     crate::test_utils::init_test_tracing();
-    let mut ev = super::super::eval::Context::new();
+    let mut ev = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     let results = ev.eval_str_each(
         r#"
         (progn
@@ -1197,7 +1198,7 @@ fn sf_save_current_buffer_restores() {
 #[test]
 fn sf_with_syntax_table_evaluates_body() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     load_minimal_gnu_backquote_runtime(&mut ev);
     let result = ev
         .eval_str("(with-syntax-table (make-syntax-table) 30)")
@@ -1208,7 +1209,7 @@ fn sf_with_syntax_table_evaluates_body() {
 #[test]
 fn sf_with_syntax_table_restores_original_table_on_success() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     load_minimal_gnu_backquote_runtime(&mut ev);
     let original = neovm_text::emacs_core::syntax::builtin_syntax_table(&mut ev, vec![]).unwrap();
     ev.eval_str("(with-syntax-table (make-syntax-table) 1)")
@@ -1220,7 +1221,7 @@ fn sf_with_syntax_table_restores_original_table_on_success() {
 #[test]
 fn with_syntax_table_restores_original_table_on_error() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     load_minimal_gnu_backquote_runtime(&mut ev);
     let original = neovm_text::emacs_core::syntax::builtin_syntax_table(&mut ev, vec![]).unwrap();
     let _ = ev.eval_str("(ignore-errors (with-syntax-table (make-syntax-table) missing-var))");
