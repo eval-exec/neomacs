@@ -23,7 +23,7 @@ use crate::heap_types::LispString;
 use std::path::PathBuf;
 
 pub use neovm_value::test_utils::{
-    cargo_workspace_root, init_test_tracing, nextest_workspace_root, workspace_root,
+    cargo_workspace_root, init_test_tracing, nextest_workspace_root, with_legacy_gc, workspace_root,
 };
 
 /// The abbreviation the platform's own `gmtime_r` reports for UTC.
@@ -688,28 +688,6 @@ fn probe_sandbox() -> Option<std::ffi::OsString> {
                 .find(|path| path.is_file())
                 .map(std::path::PathBuf::into_os_string)
         })
-}
-
-/// Construct a legacy-GC fixture with the knob selected before heap creation.
-/// Nextest gives each test its own process. Restore the caller's environment
-/// on return or unwind; an existing heap's generation mode is never changed.
-pub(crate) fn with_legacy_gc<T>(create: impl FnOnce() -> T) -> T {
-    struct RestoreGenerationalKnob(Option<std::ffi::OsString>);
-
-    impl Drop for RestoreGenerationalKnob {
-        fn drop(&mut self) {
-            unsafe {
-                match self.0.take() {
-                    Some(previous) => std::env::set_var("NEOVM_GC_GENERATIONAL", previous),
-                    None => std::env::remove_var("NEOVM_GC_GENERATIONAL"),
-                }
-            }
-        }
-    }
-
-    let _restore = RestoreGenerationalKnob(std::env::var_os("NEOVM_GC_GENERATIONAL"));
-    unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
-    create()
 }
 
 /// Create a bare (non-bootstrap) evaluator with the real canonical hook set

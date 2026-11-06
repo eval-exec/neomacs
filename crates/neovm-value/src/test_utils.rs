@@ -37,3 +37,30 @@ pub fn nextest_workspace_root() -> Option<PathBuf> {
 pub fn workspace_root() -> PathBuf {
     nextest_workspace_root().unwrap_or_else(cargo_workspace_root)
 }
+
+/// Construct a legacy-GC fixture with the knob selected before heap creation.
+/// Nextest gives each test its own process. Restore the caller's environment
+/// on return or unwind; an existing heap's generation mode is never changed.
+///
+/// This is an environment knob for the GC owned by this crate, so it lives
+/// here rather than beside the boot-owning fixtures in core's test tree
+/// (TEST-SUPPORT-DESIGN.md rev 2, "Where each item lives"); core's
+/// `test_utils` re-exports it for its own and the moved tests.
+pub fn with_legacy_gc<T>(create: impl FnOnce() -> T) -> T {
+    struct RestoreGenerationalKnob(Option<std::ffi::OsString>);
+
+    impl Drop for RestoreGenerationalKnob {
+        fn drop(&mut self) {
+            unsafe {
+                match self.0.take() {
+                    Some(previous) => std::env::set_var("NEOVM_GC_GENERATIONAL", previous),
+                    None => std::env::remove_var("NEOVM_GC_GENERATIONAL"),
+                }
+            }
+        }
+    }
+
+    let _restore = RestoreGenerationalKnob(std::env::var_os("NEOVM_GC_GENERATIONAL"));
+    unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
+    create()
+}
