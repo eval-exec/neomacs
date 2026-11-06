@@ -1,5 +1,45 @@
 use std::process::Command;
 
+/// Create the local-socket fixture in a directory whose full path fits `sun_path`.
+///
+/// The fixture historically lived under `<workspace>/tmp`; a deeply nested
+/// worktree pushes `<dir>/server` past the 108-byte `sun_path` limit, and
+/// `UnixListener::bind` fails with `InvalidInput` before the client ever runs.
+/// Prefer the repo-local directory when it fits, otherwise the system temp dir.
+#[cfg(unix)]
+fn socket_tempdir(prefix: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    use std::path::Path;
+
+    const MAX_SOCKET_PATH: usize = 100;
+
+    fn fits(dir: &Path) -> bool {
+        dir.join("server").as_os_str().len() + 1 <= MAX_SOCKET_PATH
+    }
+
+    let repo_tmp = neomacs_infra::workspace_root().join("tmp");
+    std::fs::create_dir_all(&repo_tmp).expect("repo-local tmp dir");
+    let repo_dir = tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir_in(&repo_tmp)
+        .expect("repo-local tempdir");
+    if fits(repo_dir.path()) {
+        let socket = repo_dir.path().join("server");
+        return (repo_dir, socket);
+    }
+    drop(repo_dir);
+
+    let system_dir = tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir_in(std::env::temp_dir())
+        .expect("system tempdir");
+    assert!(
+        fits(system_dir.path()),
+        "no socket directory under the {MAX_SOCKET_PATH} byte sun_path limit for prefix {prefix:?}"
+    );
+    let socket = system_dir.path().join("server");
+    (system_dir, socket)
+}
+
 #[test]
 fn neomacsclient_version_matches_emacs_version() {
     let output = Command::new(env!("CARGO_BIN_EXE_neomacsclient"))
@@ -17,18 +57,11 @@ fn neomacsclient_version_matches_emacs_version() {
 #[cfg(unix)]
 #[test]
 fn neomacsclient_sends_gnu_server_request_over_local_socket() {
-    use std::fs;
     use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;
     use std::thread;
 
-    let repo_tmp = neomacs_infra::workspace_root().join("tmp");
-    fs::create_dir_all(&repo_tmp).expect("repo-local tmp dir");
-    let dir = tempfile::Builder::new()
-        .prefix("neomacsclient-cli-")
-        .tempdir_in(repo_tmp)
-        .expect("repo-local tempdir");
-    let socket = dir.path().join("server");
+    let (_dir, socket) = socket_tempdir("neomacsclient-cli-");
     let listener = UnixListener::bind(&socket).expect("bind local socket");
 
     let server = thread::spawn(move || {
@@ -73,18 +106,11 @@ fn neomacsclient_sends_gnu_server_request_over_local_socket() {
 #[cfg(unix)]
 #[test]
 fn neomacsclient_parent_id_implies_a_new_graphical_frame() {
-    use std::fs;
     use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;
     use std::thread;
 
-    let repo_tmp = neomacs_infra::workspace_root().join("tmp");
-    fs::create_dir_all(&repo_tmp).expect("repo-local tmp dir");
-    let dir = tempfile::Builder::new()
-        .prefix("neomacsclient-parent-frame-")
-        .tempdir_in(repo_tmp)
-        .expect("repo-local tempdir");
-    let socket = dir.path().join("server");
+    let (_dir, socket) = socket_tempdir("neomacsclient-parent-frame-");
     let listener = UnixListener::bind(&socket).expect("bind local socket");
     let server = thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept client");
@@ -121,18 +147,18 @@ fn neomacsclient_parent_id_implies_a_new_graphical_frame() {
 #[cfg(unix)]
 #[test]
 fn neomacsclient_create_frame_requests_window_system_without_display_arg() {
-    use std::fs;
+    // The name predates GNU's tty-frame transport: this test once pinned
+    // `-window-system` for `-c` with no display.  GNU 31.1 resolves a
+    // frame-creating request with no available display as a TTY request
+    // (lib-src/emacsclient.c:659-661), sends `-tty NAME TERM` (:2110-2121),
+    // and sends `-window-system` only when `create_frame && !tty` (:2126-2127).
+    use std::fs::File;
     use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;
+    use std::process::Stdio;
     use std::thread;
 
-    let repo_tmp = neomacs_infra::workspace_root().join("tmp");
-    fs::create_dir_all(&repo_tmp).expect("repo-local tmp dir");
-    let dir = tempfile::Builder::new()
-        .prefix("neomacsclient-create-frame-")
-        .tempdir_in(repo_tmp)
-        .expect("repo-local tempdir");
-    let socket = dir.path().join("server");
+    let (_dir, socket) = socket_tempdir("neomacsclient-create-frame-");
     let listener = UnixListener::bind(&socket).expect("bind local socket");
 
     let server = thread::spawn(move || {
@@ -152,6 +178,22 @@ fn neomacsclient_create_frame_requests_window_system_without_display_arg() {
         String::from_utf8(request).expect("utf8 request")
     });
 
+    let master = File::from(
+        rustix::pty::openpt(rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY)
+            .expect("posix_openpt failed"),
+    );
+    rustix::pty::grantpt(&master).expect("grantpt failed");
+    rustix::pty::unlockpt(&master).expect("unlockpt failed");
+    let slave_name = rustix::pty::ptsname(&master, Vec::new())
+        .expect("ptsname_r failed")
+        .to_string_lossy()
+        .into_owned();
+    let slave = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&slave_name)
+        .expect("open PTY slave");
+
     let output = Command::new(env!("CARGO_BIN_EXE_neomacsclient"))
         .arg("--socket-name")
         .arg(&socket)
@@ -160,12 +202,14 @@ fn neomacsclient_create_frame_requests_window_system_without_display_arg() {
         .arg("file.txt")
         .env_remove("DISPLAY")
         .env_remove("WAYLAND_DISPLAY")
+        .env("TERM", "xterm")
+        .stdout(Stdio::from(slave))
         .output()
         .expect("neomacsclient should run");
 
     let request = server.join().expect("server thread should finish");
+    drop(master);
     assert!(output.status.success(), "{output:?}");
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "FRAME_OK");
     // GNU emacsclient sends the creating client's environment before `-dir',
     // so a daemon-created frame observes DISPLAY and the rest of the client's
     // process environment (lib-src/emacsclient.c, "Send over our environment").
@@ -173,7 +217,10 @@ fn neomacsclient_create_frame_requests_window_system_without_display_arg() {
     assert!(request.contains(" -dir "));
     assert!(request.contains(" -nowait "));
     assert!(!request.contains(" -display "));
-    assert!(request.contains(" -window-system "));
+    // No display means a TTY request: GNU sends the client's tty identity and
+    // does not ask the server for a window-system frame.
+    assert!(request.contains(&format!(" -tty {slave_name} xterm ")));
+    assert!(!request.contains(" -window-system "));
     assert!(!request.contains(" -current-frame "));
     assert!(request.contains(" -file file.txt "));
     assert!(request.ends_with(" \n"));
@@ -182,19 +229,13 @@ fn neomacsclient_create_frame_requests_window_system_without_display_arg() {
 #[cfg(unix)]
 #[test]
 fn neomacsclient_tty_identifies_its_terminal_to_the_server() {
-    use std::fs::{self, File, OpenOptions};
+    use std::fs::{File, OpenOptions};
     use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;
     use std::process::Stdio;
     use std::thread;
 
-    let repo_tmp = neomacs_infra::workspace_root().join("tmp");
-    fs::create_dir_all(&repo_tmp).expect("repo-local tmp dir");
-    let dir = tempfile::Builder::new()
-        .prefix("neomacsclient-tty-")
-        .tempdir_in(repo_tmp)
-        .expect("repo-local tempdir");
-    let socket = dir.path().join("server");
+    let (_dir, socket) = socket_tempdir("neomacsclient-tty-");
     let listener = UnixListener::bind(&socket).expect("bind local socket");
 
     let master = File::from(
@@ -251,7 +292,7 @@ fn neomacsclient_tty_identifies_its_terminal_to_the_server() {
 #[cfg(unix)]
 #[test]
 fn neomacsclient_tty_forwards_resize_to_the_server_process() {
-    use std::fs::{self, File, OpenOptions};
+    use std::fs::{File, OpenOptions};
     use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;
     use std::process::Stdio;
@@ -260,13 +301,7 @@ fn neomacsclient_tty_forwards_resize_to_the_server_process() {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    let repo_tmp = neomacs_infra::workspace_root().join("tmp");
-    fs::create_dir_all(&repo_tmp).expect("repo-local tmp dir");
-    let dir = tempfile::Builder::new()
-        .prefix("neomacsclient-resize-")
-        .tempdir_in(repo_tmp)
-        .expect("repo-local tempdir");
-    let socket = dir.path().join("server");
+    let (_dir, socket) = socket_tempdir("neomacsclient-resize-");
     let listener = UnixListener::bind(&socket).expect("bind local socket");
 
     let resize_seen = Arc::new(AtomicBool::new(false));
@@ -339,12 +374,7 @@ fn neomacsclient_sends_gnu_auth_for_tcp_server_file() {
     use std::net::TcpListener;
     use std::thread;
 
-    let repo_tmp = neomacs_infra::workspace_root().join("tmp");
-    fs::create_dir_all(&repo_tmp).expect("repo-local tmp dir");
-    let dir = tempfile::Builder::new()
-        .prefix("neomacsclient-tcp-")
-        .tempdir_in(repo_tmp)
-        .expect("repo-local tempdir");
+    let (dir, _socket) = socket_tempdir("neomacsclient-tcp-");
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind tcp listener");
     let port = listener.local_addr().expect("local addr").port();
     let auth_key = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!?";
