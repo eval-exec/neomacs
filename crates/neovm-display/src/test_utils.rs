@@ -37,6 +37,7 @@ mod unit_runtime {
     use neovm_eval::emacs_core::eval::perf::PerfHooks;
     use neovm_eval::emacs_core::eval::process_hooks::{MainWaitHooks, ProcessHooks, SelectHooks};
     use neovm_eval::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+    use neovm_eval::test_utils::CanonicalEvalStep;
     use neovm_value::display_vocab::FrameId;
     use neovm_value::error::EvalResult;
     use neovm_value::value::Value;
@@ -101,10 +102,228 @@ mod unit_runtime {
     }
 
     struct CanonicalStep {
-        kind: &'static str,
+        kind: CanonicalStepKind,
         id: &'static str,
         first: usize,
         count: usize,
+    }
+
+    /// The plan's step kinds. Exhaustive: the walk cannot fall through a
+    /// string catch-all for a step kind.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum CanonicalStepKind {
+        EvalCall,
+        DisplaySegment,
+        UpperSegment,
+    }
+
+    impl CanonicalStepKind {
+        fn from_label(label: &str) -> Option<Self> {
+            Some(match label {
+                "eval_call" => Self::EvalCall,
+                "display_segment" => Self::DisplaySegment,
+                "upper_segment" => Self::UpperSegment,
+                _ => return None,
+            })
+        }
+    }
+
+    /// The display-owned canonical plan steps, in plan order.
+    ///
+    /// `from_id` parses the checked-in plan, `ALL` is checked against the
+    /// plan's display steps in the walk, and the registration match is
+    /// exhaustive over the variants: a new display step must be added here,
+    /// not handled by a string catch-all.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum DisplayStep {
+        TerminalShaderVideoXwidget,
+        BufferTextPixelSize,
+        FormatModeLine,
+        SelectedWindow,
+        SelectedFrame,
+        NextFrame,
+        XOpenConnection,
+        FaceFont,
+        FrameParameter,
+        InternalLispFaceP,
+        SetFrameSizeAndPositionPixelwise,
+        FontGetSystemFont,
+        FrameAncestorP,
+        FrameInternalBorderWidth,
+        FrameRightDividerWidth,
+        FrameWindowStateChange,
+        HandleSwitchFrame,
+        MakeFrameInvisible,
+        NeomacsFrameSnapshot,
+        RedirectFrameFocus,
+        ResizeMiniWindowInternal,
+        SetFrameWindowStateChange,
+        SetWindowNewNormal,
+        TtyFrameAt,
+        WindowBottomDividerWidth,
+        Font,
+        NeomacsFrameEdges,
+        EffectsModifiersChrome,
+        WindowDiscardBufferFromWindow,
+        WindowTextPixelSize,
+        ActiveMinibufferWindow,
+        InternalLispFaceEqualP,
+        MergeFaceAttribute,
+        ColorDistance,
+        InternalCopyLispFace,
+        RedrawDisplay,
+        ForceWindowUpdate,
+        XFocusFrame,
+        XPopupDialog,
+        DeleteTerminal,
+        ImageTransformsP,
+        CurrentBidiParagraphDirection,
+        MoveToWindowLine,
+    }
+
+    impl DisplayStep {
+        const ALL: [Self; 43] = [
+            Self::TerminalShaderVideoXwidget,
+            Self::BufferTextPixelSize,
+            Self::FormatModeLine,
+            Self::SelectedWindow,
+            Self::SelectedFrame,
+            Self::NextFrame,
+            Self::XOpenConnection,
+            Self::FaceFont,
+            Self::FrameParameter,
+            Self::InternalLispFaceP,
+            Self::SetFrameSizeAndPositionPixelwise,
+            Self::FontGetSystemFont,
+            Self::FrameAncestorP,
+            Self::FrameInternalBorderWidth,
+            Self::FrameRightDividerWidth,
+            Self::FrameWindowStateChange,
+            Self::HandleSwitchFrame,
+            Self::MakeFrameInvisible,
+            Self::NeomacsFrameSnapshot,
+            Self::RedirectFrameFocus,
+            Self::ResizeMiniWindowInternal,
+            Self::SetFrameWindowStateChange,
+            Self::SetWindowNewNormal,
+            Self::TtyFrameAt,
+            Self::WindowBottomDividerWidth,
+            Self::Font,
+            Self::NeomacsFrameEdges,
+            Self::EffectsModifiersChrome,
+            Self::WindowDiscardBufferFromWindow,
+            Self::WindowTextPixelSize,
+            Self::ActiveMinibufferWindow,
+            Self::InternalLispFaceEqualP,
+            Self::MergeFaceAttribute,
+            Self::ColorDistance,
+            Self::InternalCopyLispFace,
+            Self::RedrawDisplay,
+            Self::ForceWindowUpdate,
+            Self::XFocusFrame,
+            Self::XPopupDialog,
+            Self::DeleteTerminal,
+            Self::ImageTransformsP,
+            Self::CurrentBidiParagraphDirection,
+            Self::MoveToWindowLine,
+        ];
+
+        const fn id(self) -> &'static str {
+            match self {
+                Self::TerminalShaderVideoXwidget => "terminal_shader_video_xwidget",
+                Self::BufferTextPixelSize => "buffer_text_pixel_size",
+                Self::FormatModeLine => "format_mode_line",
+                Self::SelectedWindow => "selected_window",
+                Self::SelectedFrame => "selected_frame",
+                Self::NextFrame => "next_frame",
+                Self::XOpenConnection => "x_open_connection",
+                Self::FaceFont => "face_font",
+                Self::FrameParameter => "frame_parameter",
+                Self::InternalLispFaceP => "internal_lisp_face_p",
+                Self::SetFrameSizeAndPositionPixelwise => "set_frame_size_and_position_pixelwise",
+                Self::FontGetSystemFont => "font_get_system_font",
+                Self::FrameAncestorP => "frame_ancestor_p",
+                Self::FrameInternalBorderWidth => "frame_internal_border_width",
+                Self::FrameRightDividerWidth => "frame_right_divider_width",
+                Self::FrameWindowStateChange => "frame_window_state_change",
+                Self::HandleSwitchFrame => "handle_switch_frame",
+                Self::MakeFrameInvisible => "make_frame_invisible",
+                Self::NeomacsFrameSnapshot => "neomacs_frame_snapshot",
+                Self::RedirectFrameFocus => "redirect_frame_focus",
+                Self::ResizeMiniWindowInternal => "resize_mini_window_internal",
+                Self::SetFrameWindowStateChange => "set_frame_window_state_change",
+                Self::SetWindowNewNormal => "set_window_new_normal",
+                Self::TtyFrameAt => "tty_frame_at",
+                Self::WindowBottomDividerWidth => "window_bottom_divider_width",
+                Self::Font => "font",
+                Self::NeomacsFrameEdges => "neomacs_frame_edges",
+                Self::EffectsModifiersChrome => "effects_modifiers_chrome",
+                Self::WindowDiscardBufferFromWindow => "window_discard_buffer_from_window",
+                Self::WindowTextPixelSize => "window_text_pixel_size",
+                Self::ActiveMinibufferWindow => "active_minibuffer_window",
+                Self::InternalLispFaceEqualP => "internal_lisp_face_equal_p",
+                Self::MergeFaceAttribute => "merge_face_attribute",
+                Self::ColorDistance => "color_distance",
+                Self::InternalCopyLispFace => "internal_copy_lisp_face",
+                Self::RedrawDisplay => "redraw_display",
+                Self::ForceWindowUpdate => "force_window_update",
+                Self::XFocusFrame => "x_focus_frame",
+                Self::XPopupDialog => "x_popup_dialog",
+                Self::DeleteTerminal => "delete_terminal",
+                Self::ImageTransformsP => "image_transforms_p",
+                Self::CurrentBidiParagraphDirection => "current_bidi_paragraph_direction",
+                Self::MoveToWindowLine => "move_to_window_line",
+            }
+        }
+
+        fn from_id(id: &str) -> Option<Self> {
+            Some(match id {
+                "terminal_shader_video_xwidget" => Self::TerminalShaderVideoXwidget,
+                "buffer_text_pixel_size" => Self::BufferTextPixelSize,
+                "format_mode_line" => Self::FormatModeLine,
+                "selected_window" => Self::SelectedWindow,
+                "selected_frame" => Self::SelectedFrame,
+                "next_frame" => Self::NextFrame,
+                "x_open_connection" => Self::XOpenConnection,
+                "face_font" => Self::FaceFont,
+                "frame_parameter" => Self::FrameParameter,
+                "internal_lisp_face_p" => Self::InternalLispFaceP,
+                "set_frame_size_and_position_pixelwise" => Self::SetFrameSizeAndPositionPixelwise,
+                "font_get_system_font" => Self::FontGetSystemFont,
+                "frame_ancestor_p" => Self::FrameAncestorP,
+                "frame_internal_border_width" => Self::FrameInternalBorderWidth,
+                "frame_right_divider_width" => Self::FrameRightDividerWidth,
+                "frame_window_state_change" => Self::FrameWindowStateChange,
+                "handle_switch_frame" => Self::HandleSwitchFrame,
+                "make_frame_invisible" => Self::MakeFrameInvisible,
+                "neomacs_frame_snapshot" => Self::NeomacsFrameSnapshot,
+                "redirect_frame_focus" => Self::RedirectFrameFocus,
+                "resize_mini_window_internal" => Self::ResizeMiniWindowInternal,
+                "set_frame_window_state_change" => Self::SetFrameWindowStateChange,
+                "set_window_new_normal" => Self::SetWindowNewNormal,
+                "tty_frame_at" => Self::TtyFrameAt,
+                "window_bottom_divider_width" => Self::WindowBottomDividerWidth,
+                "font" => Self::Font,
+                "neomacs_frame_edges" => Self::NeomacsFrameEdges,
+                "effects_modifiers_chrome" => Self::EffectsModifiersChrome,
+                "window_discard_buffer_from_window" => Self::WindowDiscardBufferFromWindow,
+                "window_text_pixel_size" => Self::WindowTextPixelSize,
+                "active_minibuffer_window" => Self::ActiveMinibufferWindow,
+                "internal_lisp_face_equal_p" => Self::InternalLispFaceEqualP,
+                "merge_face_attribute" => Self::MergeFaceAttribute,
+                "color_distance" => Self::ColorDistance,
+                "internal_copy_lisp_face" => Self::InternalCopyLispFace,
+                "redraw_display" => Self::RedrawDisplay,
+                "force_window_update" => Self::ForceWindowUpdate,
+                "x_focus_frame" => Self::XFocusFrame,
+                "x_popup_dialog" => Self::XPopupDialog,
+                "delete_terminal" => Self::DeleteTerminal,
+                "image_transforms_p" => Self::ImageTransformsP,
+                "current_bidi_paragraph_direction" => Self::CurrentBidiParagraphDirection,
+                "move_to_window_line" => Self::MoveToWindowLine,
+                _ => return None,
+            })
+        }
     }
 
     fn canonical_names() -> Vec<CanonicalName> {
@@ -144,7 +363,8 @@ mod unit_runtime {
                 let fields: Vec<&'static str> = line.split('\t').collect();
                 assert_eq!(fields.len(), 7, "malformed canonical plan row: {line}");
                 CanonicalStep {
-                    kind: fields[1],
+                    kind: CanonicalStepKind::from_label(fields[1])
+                        .unwrap_or_else(|| panic!("unknown canonical step kind {:?}", fields[1])),
                     id: fields[2],
                     first: fields[4].parse().expect("canonical step first"),
                     count: fields[5].parse().expect("canonical step count"),
@@ -167,6 +387,8 @@ mod unit_runtime {
     fn register_core_subrs(ctx: &mut Context) {
         let names = canonical_names();
         let steps = canonical_steps();
+        let mut eval_steps = Vec::new();
+        let mut display_steps = Vec::new();
         // LEAD 05:0xZ (peer): the walk may register an upper row with the
         // plan's arity only if it proves the plan against the COMPILED H3
         // stand-in table, so the T6 equality cannot hold by construction:
@@ -192,7 +414,7 @@ mod unit_runtime {
         // ordered walk: present iff host-active, arity equal to the plan, and
         // exactly one REAL registration site (its display segment).
         for step in &steps {
-            if step.kind != "display_segment" {
+            if step.kind != CanonicalStepKind::DisplaySegment {
                 continue;
             }
             for row in &names[step.first - 1..step.first - 1 + step.count] {
@@ -227,175 +449,208 @@ mod unit_runtime {
         }
         for step in &steps {
             match step.kind {
-                "eval_call" => match step.id {
-                    "eval.lcms" => neovm_eval::emacs_core::builtins::lcms::register_subrs(ctx),
-                    "eval.data" => neovm_eval::emacs_core::data::register_subrs(ctx),
-                    "eval.ordinary" => neovm_eval::emacs_core::eval::register_subrs(ctx),
-                    "eval.fboundp" => {
-                        ctx.register_subr(neovm_eval::emacs_core::eval::FBOUNDP_SUBR);
-                    }
-                    "eval.file_notify" => {
-                        std::cfg_select! {
-                            any(target_os = "linux", target_os = "macos", target_os = "windows") => {
-                                neovm_eval::emacs_core::builtins::file_notify::register_subrs(ctx);
-                            }
-                            _ => {}
+                CanonicalStepKind::EvalCall => {
+                    let eval_step = CanonicalEvalStep::from_id(step.id)
+                        .unwrap_or_else(|| panic!("unknown canonical eval step id {:?}", step.id));
+                    eval_steps.push(eval_step);
+                    match eval_step {
+                        CanonicalEvalStep::Lcms => {
+                            neovm_eval::emacs_core::builtins::lcms::register_subrs(ctx)
                         }
-                    }
-                    "eval.event_properties" => {
-                        // Same production initialization the C14 chain performs;
-                        // it registers no subr (the plan step has count 0).
-                        // SAFETY: compatibility setup only initializes event symbol
-                        // properties; it does not call Lisp or mutate canonical
-                        // function/debugger metadata.
-                        unsafe {
-                            ctx.obarray_view_mut().with_legacy_value_write(
+                        CanonicalEvalStep::Data => {
+                            neovm_eval::emacs_core::data::register_subrs(ctx)
+                        }
+                        CanonicalEvalStep::Ordinary => {
+                            neovm_eval::emacs_core::eval::register_subrs(ctx)
+                        }
+                        CanonicalEvalStep::Fboundp => {
+                            ctx.register_subr(neovm_eval::emacs_core::eval::FBOUNDP_SUBR);
+                        }
+                        CanonicalEvalStep::FileNotify => {
+                            std::cfg_select! {
+                                any(target_os = "linux", target_os = "macos", target_os = "windows") => {
+                                    neovm_eval::emacs_core::builtins::file_notify::register_subrs(ctx);
+                                }
+                                _ => {}
+                            }
+                        }
+                        CanonicalEvalStep::EventProperties => {
+                            // Same production initialization the C14 chain performs;
+                            // it registers no subr (the plan step has count 0).
+                            // SAFETY: compatibility setup only initializes event symbol
+                            // properties; it does not call Lisp or mutate canonical
+                            // function/debugger metadata.
+                            unsafe {
+                                ctx.obarray_view_mut().with_legacy_value_write(
                                 neovm_eval::emacs_core::builtins::symbols::init_event_symbol_properties,
                             );
+                            }
+                        }
+                        CanonicalEvalStep::Public => {
+                            neovm_eval::emacs_core::eval::register_public_subrs(ctx)
                         }
                     }
-                    "eval.public" => neovm_eval::emacs_core::eval::register_public_subrs(ctx),
-                    other => panic!("unknown canonical eval step id {other:?}"),
-                },
-                "display_segment" => match step.id {
-                    "terminal_shader_video_xwidget" => {
-                        crate::emacs_core::display_subrs::register_terminal_shader_video_xwidget(
+                }
+                CanonicalStepKind::DisplaySegment => {
+                    let display_step = DisplayStep::from_id(step.id).unwrap_or_else(|| {
+                        panic!("unknown canonical display step id {:?}", step.id)
+                    });
+                    display_steps.push(display_step);
+                    match display_step {
+                        DisplayStep::TerminalShaderVideoXwidget => {
+                            crate::emacs_core::display_subrs::register_terminal_shader_video_xwidget(
                             ctx,
                         );
-                    }
-                    "buffer_text_pixel_size" => {
-                        crate::emacs_core::display_subrs::register_buffer_text_pixel_size(ctx);
-                    }
-                    "format_mode_line" => {
-                        crate::emacs_core::display_subrs::register_format_mode_line(ctx);
-                    }
-                    "selected_window" => {
-                        crate::emacs_core::display_subrs::register_selected_window(ctx);
-                    }
-                    "selected_frame" => {
-                        crate::emacs_core::display_subrs::register_selected_frame(ctx);
-                    }
-                    "next_frame" => {
-                        crate::emacs_core::display_subrs::register_next_frame(ctx);
-                    }
-                    "x_open_connection" => {
-                        crate::emacs_core::display_subrs::register_x_open_connection(ctx);
-                    }
-                    "face_font" => {
-                        crate::emacs_core::display_subrs::register_face_font(ctx);
-                    }
-                    "frame_parameter" => {
-                        crate::emacs_core::display_subrs::register_frame_parameter(ctx);
-                    }
-                    "internal_lisp_face_p" => {
-                        crate::emacs_core::display_subrs::register_internal_lisp_face_p(ctx);
-                    }
-                    "set_frame_size_and_position_pixelwise" => {
-                        crate::emacs_core::display_subrs::register_set_frame_size_and_position_pixelwise(ctx);
-                    }
-                    "font_get_system_font" => {
-                        crate::emacs_core::display_subrs::register_font_get_system_font(ctx);
-                    }
-                    "frame_ancestor_p" => {
-                        crate::emacs_core::display_subrs::register_frame_ancestor_p(ctx);
-                    }
-                    "frame_internal_border_width" => {
-                        crate::emacs_core::display_subrs::register_frame_internal_border_width(ctx);
-                    }
-                    "frame_right_divider_width" => {
-                        crate::emacs_core::display_subrs::register_frame_right_divider_width(ctx);
-                    }
-                    "frame_window_state_change" => {
-                        crate::emacs_core::display_subrs::register_frame_window_state_change(ctx);
-                    }
-                    "handle_switch_frame" => {
-                        crate::emacs_core::display_subrs::register_handle_switch_frame(ctx);
-                    }
-                    "make_frame_invisible" => {
-                        crate::emacs_core::display_subrs::register_make_frame_invisible(ctx);
-                    }
-                    "neomacs_frame_snapshot" => {
-                        crate::emacs_core::display_subrs::register_neomacs_frame_snapshot(ctx);
-                    }
-                    "redirect_frame_focus" => {
-                        crate::emacs_core::display_subrs::register_redirect_frame_focus(ctx);
-                    }
-                    "resize_mini_window_internal" => {
-                        crate::emacs_core::display_subrs::register_resize_mini_window_internal(ctx);
-                    }
-                    "set_frame_window_state_change" => {
-                        crate::emacs_core::display_subrs::register_set_frame_window_state_change(
+                        }
+                        DisplayStep::BufferTextPixelSize => {
+                            crate::emacs_core::display_subrs::register_buffer_text_pixel_size(ctx);
+                        }
+                        DisplayStep::FormatModeLine => {
+                            crate::emacs_core::display_subrs::register_format_mode_line(ctx);
+                        }
+                        DisplayStep::SelectedWindow => {
+                            crate::emacs_core::display_subrs::register_selected_window(ctx);
+                        }
+                        DisplayStep::SelectedFrame => {
+                            crate::emacs_core::display_subrs::register_selected_frame(ctx);
+                        }
+                        DisplayStep::NextFrame => {
+                            crate::emacs_core::display_subrs::register_next_frame(ctx);
+                        }
+                        DisplayStep::XOpenConnection => {
+                            crate::emacs_core::display_subrs::register_x_open_connection(ctx);
+                        }
+                        DisplayStep::FaceFont => {
+                            crate::emacs_core::display_subrs::register_face_font(ctx);
+                        }
+                        DisplayStep::FrameParameter => {
+                            crate::emacs_core::display_subrs::register_frame_parameter(ctx);
+                        }
+                        DisplayStep::InternalLispFaceP => {
+                            crate::emacs_core::display_subrs::register_internal_lisp_face_p(ctx);
+                        }
+                        DisplayStep::SetFrameSizeAndPositionPixelwise => {
+                            crate::emacs_core::display_subrs::register_set_frame_size_and_position_pixelwise(ctx);
+                        }
+                        DisplayStep::FontGetSystemFont => {
+                            crate::emacs_core::display_subrs::register_font_get_system_font(ctx);
+                        }
+                        DisplayStep::FrameAncestorP => {
+                            crate::emacs_core::display_subrs::register_frame_ancestor_p(ctx);
+                        }
+                        DisplayStep::FrameInternalBorderWidth => {
+                            crate::emacs_core::display_subrs::register_frame_internal_border_width(
+                                ctx,
+                            );
+                        }
+                        DisplayStep::FrameRightDividerWidth => {
+                            crate::emacs_core::display_subrs::register_frame_right_divider_width(
+                                ctx,
+                            );
+                        }
+                        DisplayStep::FrameWindowStateChange => {
+                            crate::emacs_core::display_subrs::register_frame_window_state_change(
+                                ctx,
+                            );
+                        }
+                        DisplayStep::HandleSwitchFrame => {
+                            crate::emacs_core::display_subrs::register_handle_switch_frame(ctx);
+                        }
+                        DisplayStep::MakeFrameInvisible => {
+                            crate::emacs_core::display_subrs::register_make_frame_invisible(ctx);
+                        }
+                        DisplayStep::NeomacsFrameSnapshot => {
+                            crate::emacs_core::display_subrs::register_neomacs_frame_snapshot(ctx);
+                        }
+                        DisplayStep::RedirectFrameFocus => {
+                            crate::emacs_core::display_subrs::register_redirect_frame_focus(ctx);
+                        }
+                        DisplayStep::ResizeMiniWindowInternal => {
+                            crate::emacs_core::display_subrs::register_resize_mini_window_internal(
+                                ctx,
+                            );
+                        }
+                        DisplayStep::SetFrameWindowStateChange => {
+                            crate::emacs_core::display_subrs::register_set_frame_window_state_change(
                             ctx,
                         );
-                    }
-                    "set_window_new_normal" => {
-                        crate::emacs_core::display_subrs::register_set_window_new_normal(ctx);
-                    }
-                    "tty_frame_at" => {
-                        crate::emacs_core::display_subrs::register_tty_frame_at(ctx);
-                    }
-                    "window_bottom_divider_width" => {
-                        crate::emacs_core::display_subrs::register_window_bottom_divider_width(ctx);
-                    }
-                    "font" => {
-                        crate::emacs_core::display_subrs::register_font(ctx);
-                    }
-                    "neomacs_frame_edges" => {
-                        crate::emacs_core::display_subrs::register_neomacs_frame_edges(ctx);
-                    }
-                    "effects_modifiers_chrome" => {
-                        crate::emacs_core::display_subrs::register_effects_modifiers_chrome(ctx);
-                    }
-                    "window_discard_buffer_from_window" => {
-                        crate::emacs_core::display_subrs::register_window_discard_buffer_from_window(ctx);
-                    }
-                    "window_text_pixel_size" => {
-                        crate::emacs_core::display_subrs::register_window_text_pixel_size(ctx);
-                    }
-                    "active_minibuffer_window" => {
-                        crate::emacs_core::display_subrs::register_active_minibuffer_window(ctx);
-                    }
-                    "internal_lisp_face_equal_p" => {
-                        crate::emacs_core::display_subrs::register_internal_lisp_face_equal_p(ctx);
-                    }
-                    "merge_face_attribute" => {
-                        crate::emacs_core::display_subrs::register_merge_face_attribute(ctx);
-                    }
-                    "color_distance" => {
-                        crate::emacs_core::display_subrs::register_color_distance(ctx);
-                    }
-                    "internal_copy_lisp_face" => {
-                        crate::emacs_core::display_subrs::register_internal_copy_lisp_face(ctx);
-                    }
-                    "redraw_display" => {
-                        crate::emacs_core::display_subrs::register_redraw_display(ctx);
-                    }
-                    "force_window_update" => {
-                        crate::emacs_core::display_subrs::register_force_window_update(ctx);
-                    }
-                    "x_focus_frame" => {
-                        crate::emacs_core::display_subrs::register_x_focus_frame(ctx);
-                    }
-                    "x_popup_dialog" => {
-                        crate::emacs_core::display_subrs::register_x_popup_dialog(ctx);
-                    }
-                    "delete_terminal" => {
-                        crate::emacs_core::display_subrs::register_delete_terminal(ctx);
-                    }
-                    "image_transforms_p" => {
-                        crate::emacs_core::display_subrs::register_image_transforms_p(ctx);
-                    }
-                    "current_bidi_paragraph_direction" => {
-                        crate::emacs_core::display_subrs::register_current_bidi_paragraph_direction(
+                        }
+                        DisplayStep::SetWindowNewNormal => {
+                            crate::emacs_core::display_subrs::register_set_window_new_normal(ctx);
+                        }
+                        DisplayStep::TtyFrameAt => {
+                            crate::emacs_core::display_subrs::register_tty_frame_at(ctx);
+                        }
+                        DisplayStep::WindowBottomDividerWidth => {
+                            crate::emacs_core::display_subrs::register_window_bottom_divider_width(
+                                ctx,
+                            );
+                        }
+                        DisplayStep::Font => {
+                            crate::emacs_core::display_subrs::register_font(ctx);
+                        }
+                        DisplayStep::NeomacsFrameEdges => {
+                            crate::emacs_core::display_subrs::register_neomacs_frame_edges(ctx);
+                        }
+                        DisplayStep::EffectsModifiersChrome => {
+                            crate::emacs_core::display_subrs::register_effects_modifiers_chrome(
+                                ctx,
+                            );
+                        }
+                        DisplayStep::WindowDiscardBufferFromWindow => {
+                            crate::emacs_core::display_subrs::register_window_discard_buffer_from_window(ctx);
+                        }
+                        DisplayStep::WindowTextPixelSize => {
+                            crate::emacs_core::display_subrs::register_window_text_pixel_size(ctx);
+                        }
+                        DisplayStep::ActiveMinibufferWindow => {
+                            crate::emacs_core::display_subrs::register_active_minibuffer_window(
+                                ctx,
+                            );
+                        }
+                        DisplayStep::InternalLispFaceEqualP => {
+                            crate::emacs_core::display_subrs::register_internal_lisp_face_equal_p(
+                                ctx,
+                            );
+                        }
+                        DisplayStep::MergeFaceAttribute => {
+                            crate::emacs_core::display_subrs::register_merge_face_attribute(ctx);
+                        }
+                        DisplayStep::ColorDistance => {
+                            crate::emacs_core::display_subrs::register_color_distance(ctx);
+                        }
+                        DisplayStep::InternalCopyLispFace => {
+                            crate::emacs_core::display_subrs::register_internal_copy_lisp_face(ctx);
+                        }
+                        DisplayStep::RedrawDisplay => {
+                            crate::emacs_core::display_subrs::register_redraw_display(ctx);
+                        }
+                        DisplayStep::ForceWindowUpdate => {
+                            crate::emacs_core::display_subrs::register_force_window_update(ctx);
+                        }
+                        DisplayStep::XFocusFrame => {
+                            crate::emacs_core::display_subrs::register_x_focus_frame(ctx);
+                        }
+                        DisplayStep::XPopupDialog => {
+                            crate::emacs_core::display_subrs::register_x_popup_dialog(ctx);
+                        }
+                        DisplayStep::DeleteTerminal => {
+                            crate::emacs_core::display_subrs::register_delete_terminal(ctx);
+                        }
+                        DisplayStep::ImageTransformsP => {
+                            crate::emacs_core::display_subrs::register_image_transforms_p(ctx);
+                        }
+                        DisplayStep::CurrentBidiParagraphDirection => {
+                            crate::emacs_core::display_subrs::register_current_bidi_paragraph_direction(
                             ctx,
                         );
+                        }
+                        DisplayStep::MoveToWindowLine => {
+                            crate::emacs_core::display_subrs::register_move_to_window_line(ctx);
+                        }
                     }
-                    "move_to_window_line" => {
-                        crate::emacs_core::display_subrs::register_move_to_window_line(ctx);
-                    }
-                    other => panic!("unknown canonical display step id {other:?}"),
-                },
-                "upper_segment" => {
+                }
+                CanonicalStepKind::UpperSegment => {
                     for row in &names[step.first - 1..step.first - 1 + step.count] {
                         if !cfg_active(row.cfg) {
                             assert!(
@@ -431,9 +686,41 @@ mod unit_runtime {
                         ));
                     }
                 }
-                other => panic!("unknown canonical step kind {other:?}"),
             }
         }
+        assert_eq!(
+            eval_steps,
+            CanonicalEvalStep::ALL.to_vec(),
+            "the plan's eval steps do not match the exhaustive CanonicalEvalStep order"
+        );
+        assert_eq!(
+            display_steps,
+            DisplayStep::ALL.to_vec(),
+            "the plan's display steps do not match the exhaustive DisplayStep order"
+        );
+        let plan_eval_ids: Vec<&str> = steps
+            .iter()
+            .filter(|step| step.kind == CanonicalStepKind::EvalCall)
+            .map(|step| step.id)
+            .collect();
+        let enum_eval_ids: Vec<&str> = CanonicalEvalStep::ALL
+            .iter()
+            .map(|step| step.id())
+            .collect();
+        assert_eq!(
+            plan_eval_ids, enum_eval_ids,
+            "the plan's eval ids disagree with the exhaustive CanonicalEvalStep ids"
+        );
+        let plan_display_ids: Vec<&str> = steps
+            .iter()
+            .filter(|step| step.kind == CanonicalStepKind::DisplaySegment)
+            .map(|step| step.id)
+            .collect();
+        let enum_display_ids: Vec<&str> = DisplayStep::ALL.iter().map(|step| step.id()).collect();
+        assert_eq!(
+            plan_display_ids, enum_display_ids,
+            "the plan's display ids disagree with the exhaustive DisplayStep ids"
+        );
         for (index, entry) in UPPER_SUBRS.iter().enumerate() {
             assert!(
                 consumed[index] || display_owned[index],

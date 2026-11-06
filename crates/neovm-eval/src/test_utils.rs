@@ -100,11 +100,13 @@ fn canonical_plan_steps() -> Vec<CanonicalPlanStep> {
 
 /// The eval-owned registrar steps of the canonical plan, in production order.
 ///
-/// The unit-runtime walk matches this enum exhaustively, and the plan test
+/// The unit-runtime walks match this enum exhaustively, and the plan test
 /// checks the enum's ids against the checked-in plan, so a new eval step
-/// cannot be added on one side only.
+/// cannot be added on one side only. Public (test-support only) so the
+/// display unit-runtime walk reuses the same typed eval-step vocabulary
+/// instead of matching plan id strings.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CanonicalEvalStep {
+pub enum CanonicalEvalStep {
     Lcms,
     Data,
     Ordinary,
@@ -115,7 +117,7 @@ pub(crate) enum CanonicalEvalStep {
 }
 
 impl CanonicalEvalStep {
-    pub(crate) const ALL: [Self; 7] = [
+    pub const ALL: [Self; 7] = [
         Self::Lcms,
         Self::Data,
         Self::Ordinary,
@@ -125,7 +127,7 @@ impl CanonicalEvalStep {
         Self::Public,
     ];
 
-    pub(crate) const fn id(self) -> &'static str {
+    pub const fn id(self) -> &'static str {
         match self {
             Self::Lcms => "eval.lcms",
             Self::Data => "eval.data",
@@ -137,7 +139,7 @@ impl CanonicalEvalStep {
         }
     }
 
-    pub(crate) fn from_id(id: &str) -> Option<Self> {
+    pub fn from_id(id: &str) -> Option<Self> {
         Some(match id {
             "eval.lcms" => Self::Lcms,
             "eval.data" => Self::Data,
