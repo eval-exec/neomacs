@@ -7,7 +7,7 @@ use super::*;
 #[test]
 fn adoption_reasserts_generated_specialness_on_an_existing_forwarder() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("data-directory", Value::string("/tmp/neomacs-data/"));
     eval.obarray_mut().make_non_special("data-directory");
 
@@ -49,7 +49,7 @@ fn adoption_reasserts_generated_specialness_on_an_existing_forwarder() {
 #[test]
 fn adoption_is_idempotent_and_leaves_no_alias_rows() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     // SAFETY: this noncalling generated adoption pass preserves manager
     // identity/generation and uses canonical descriptor reattachment hooks.
     // A localized Boolean may retarget debugger admission, so it MUST retire.
@@ -76,7 +76,7 @@ fn adoption_is_idempotent_and_leaves_no_alias_rows() {
 #[test]
 fn localized_rows_still_carry_a_forwarder() {
     crate::test_utils::init_test_tracing();
-    let eval = crate::emacs_core::eval::Context::new();
+    let eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ob = eval.obarray();
     let mut localized = 0usize;
     for var in gnu_table::GNU_OBJECT_VARIABLES {
