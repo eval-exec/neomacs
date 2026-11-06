@@ -43,42 +43,89 @@ impl FrameRequest {
 
 #[derive(Debug)]
 struct TtyIdentity {
-    device: String,
-    terminal_type: String,
+    device: OsString,
+    terminal_type: OsString,
+}
+
+/// Why the client could not identify its terminal.
+///
+/// GNU's `find_tty` failures are fatal with its own exact wording:
+/// `message (true, "%s: could not get terminal name\n", progname); fail ();`
+/// (`lib-src/emacsclient.c:1136-1146`), where `fail` exits `EXIT_FAILURE`.
+/// Those keep [`ClientError::GnuFatal`] so stderr and the exit status match
+/// GNU; Neomacs-specific failures stay ordinary diagnostics.
+#[derive(Debug)]
+enum TtyIdentityError {
+    /// Exact GNU `find_tty` message; printed as `<progname>: <message>`.
+    GnuFatal(&'static str),
+    /// Neomacs diagnostic; printed with the historical `*ERROR*:` prefix.
+    Message(String),
+}
+
+/// A client failure, split by the stderr contract it must satisfy.
+#[derive(Debug)]
+enum ClientError {
+    /// GNU `find_tty`/`fail` wording: `<progname>: <message>`, exit 1.
+    GnuFatal(String),
+    /// Neomacs diagnostics keep the historical `*ERROR*:` prefix.
+    Message(String),
+}
+
+impl From<String> for ClientError {
+    fn from(message: String) -> Self {
+        Self::Message(message)
+    }
 }
 
 impl TtyIdentity {
     #[cfg(unix)]
-    fn from_stdout() -> Result<Self, String> {
+    fn from_stdout() -> Result<Self, TtyIdentityError> {
         use std::ffi::CStr;
         use std::os::fd::AsRawFd;
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
-        let terminal_type = env::var("TERM")
-            .ok()
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| "please set the TERM variable to your terminal type".to_string())?;
+        // GNU find_tty reads the type and the name up front but checks the
+        // NAME first (lib-src/emacsclient.c:1139-1155): with stdout not a
+        // terminal and an absent TERM, GNU reports "could not get terminal name".
+        let terminal_type = env::var_os("TERM");
         let mut device = vec![libc::c_char::default(); 1024];
         let error =
             unsafe { libc::ttyname_r(io::stdout().as_raw_fd(), device.as_mut_ptr(), device.len()) };
         if error != 0 {
-            return Err(format!(
-                "could not get terminal name: {}",
-                io::Error::from_raw_os_error(error)
-            ));
+            return Err(TtyIdentityError::GnuFatal("could not get terminal name"));
         }
         let device = unsafe { CStr::from_ptr(device.as_ptr()) }
-            .to_str()
-            .map_err(|_| "terminal name is not valid UTF-8".to_string())?
-            .to_owned();
+            .to_bytes()
+            .to_vec();
+        // GNU egetenv is getenv on POSIX (emacsclient.c:65), so an empty TERM
+        // is SET; only an absent variable is "please set the TERM variable".
+        let terminal_type = terminal_type.ok_or(TtyIdentityError::GnuFatal(
+            "please set the TERM variable to your terminal type",
+        ))?;
+        // GNU find_tty (emacsclient.c:1158-1168): a terminal inside an Emacs
+        // term buffer cannot be opened as a tty frame.
+        let in_emacs_term = env::var_os("INSIDE_EMACS").is_some_and(|value| {
+            value
+                .as_bytes()
+                .windows(b",term:".len())
+                .any(|window| window == b",term:")
+        });
+        if in_emacs_term && terminal_type.as_bytes().starts_with(b"eterm") {
+            return Err(TtyIdentityError::GnuFatal(
+                "opening a frame in an Emacs term buffer is not supported",
+            ));
+        }
         Ok(Self {
-            device,
+            device: OsString::from_vec(device),
             terminal_type,
         })
     }
 
     #[cfg(not(unix))]
-    fn from_stdout() -> Result<Self, String> {
-        Err("creating a TTY frame is not supported on this platform".to_string())
+    fn from_stdout() -> Result<Self, TtyIdentityError> {
+        Err(TtyIdentityError::Message(
+            "creating a TTY frame is not supported on this platform".to_string(),
+        ))
     }
 }
 
@@ -161,17 +208,29 @@ impl Options {
 const DEFAULT_REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn main() {
-    let code = match run(env::args_os().collect()) {
+    let argv: Vec<OsString> = env::args_os().collect();
+    // GNU: `progname = argv[0] ? argv[0] : "emacsclient"`
+    // (lib-src/emacsclient.c:1995); find_tty failures print it verbatim.
+    let prog = argv
+        .first()
+        .and_then(|arg| arg.to_str())
+        .unwrap_or("neomacsclient")
+        .to_string();
+    let code = match run(argv) {
         Ok(()) => 0,
-        Err(err) => {
-            eprintln!("*ERROR*: {err}");
+        Err(ClientError::GnuFatal(message)) => {
+            eprintln!("{prog}: {message}");
+            1
+        }
+        Err(ClientError::Message(message)) => {
+            eprintln!("*ERROR*: {message}");
             1
         }
     };
     process::exit(code);
 }
 
-fn run(argv: Vec<OsString>) -> Result<(), String> {
+fn run(argv: Vec<OsString>) -> Result<(), ClientError> {
     let prog = argv
         .first()
         .and_then(|arg| arg.to_str())
@@ -180,9 +239,9 @@ fn run(argv: Vec<OsString>) -> Result<(), String> {
     let options = parse_options(&prog, argv.into_iter().skip(1))?;
 
     if !(options.eval || options.frame.creates_frame() || !options.args.is_empty()) {
-        return Err(format!(
+        return Err(ClientError::Message(format!(
             "{prog}: file name or argument required\nTry '{prog} --help' for more information"
-        ));
+        )));
     }
 
     run_client(&prog, options)
@@ -346,7 +405,7 @@ Options:
     );
 }
 
-fn run_client(prog: &str, options: Options) -> Result<(), String> {
+fn run_client(prog: &str, options: Options) -> Result<(), ClientError> {
     if let Some(server_file) = options
         .server_file
         .clone()
@@ -362,14 +421,14 @@ fn run_client(prog: &str, options: Options) -> Result<(), String> {
 
     #[cfg(not(unix))]
     {
-        Err(format!(
+        Err(ClientError::Message(format!(
             "{prog}: local socket mode is unsupported on this platform; use --server-file"
-        ))
+        )))
     }
 }
 
 #[cfg(unix)]
-fn run_unix_client(prog: &str, options: Options) -> Result<(), String> {
+fn run_unix_client(prog: &str, options: Options) -> Result<(), ClientError> {
     let socket = resolve_socket_path(&options)?;
     let mut stream = if options.alternate_editor.as_deref() == Some("") {
         let name = options
@@ -385,7 +444,8 @@ fn run_unix_client(prog: &str, options: Options) -> Result<(), String> {
                     prog,
                     &options,
                     &format!("can't connect to {}: {err}", socket.display()),
-                );
+                )
+                .map_err(ClientError::Message);
             }
         }
     };
@@ -416,10 +476,10 @@ fn run_unix_client(prog: &str, options: Options) -> Result<(), String> {
                 })?)?);
         }
         if let Some(lifecycle) = &lifecycle {
-            lifecycle.write_request(plan.request.as_bytes())?;
+            lifecycle.write_request(&plan.request)?;
         } else {
             stream
-                .write_all(plan.request.as_bytes())
+                .write_all(&plan.request)
                 .map_err(|err| format!("failed to send request to server: {err}"))?;
         }
         match read_responses(
@@ -437,10 +497,10 @@ fn run_unix_client(prog: &str, options: Options) -> Result<(), String> {
     }
 }
 
-fn run_tcp_client(prog: &str, options: Options, server_file: &str) -> Result<(), String> {
+fn run_tcp_client(prog: &str, options: Options, server_file: &str) -> Result<(), ClientError> {
     let config = match read_tcp_server_config(server_file) {
         Ok(config) => config,
-        Err(err) => return fail_or_alternate(prog, &options, &err),
+        Err(err) => return fail_or_alternate(prog, &options, &err).map_err(ClientError::Message),
     };
     let mut stream = match TcpStream::connect((&*config.host, config.port)) {
         Ok(stream) => stream,
@@ -449,7 +509,8 @@ fn run_tcp_client(prog: &str, options: Options, server_file: &str) -> Result<(),
                 prog,
                 &options,
                 &format!("can't connect to {}:{}: {err}", config.host, config.port),
-            );
+            )
+            .map_err(ClientError::Message);
         }
     };
     stream
@@ -466,9 +527,9 @@ fn run_tcp_client(prog: &str, options: Options, server_file: &str) -> Result<(),
             display.as_deref(),
             TtyIdentity::from_stdout(),
         )?;
-        let mut request = String::new();
+        let mut request: Vec<u8> = Vec::new();
         push_arg_command(&mut request, "-auth", &config.auth_key);
-        request.push_str(&plan.request);
+        request.extend_from_slice(&plan.request);
         #[cfg(unix)]
         let lifecycle = plan
             .tty
@@ -484,15 +545,15 @@ fn run_tcp_client(prog: &str, options: Options, server_file: &str) -> Result<(),
         let lifecycle: Option<TtyLifecycle> = None;
         #[cfg(unix)]
         if let Some(lifecycle) = &lifecycle {
-            lifecycle.write_request(request.as_bytes())?;
+            lifecycle.write_request(&request)?;
         } else {
             stream
-                .write_all(request.as_bytes())
+                .write_all(&request)
                 .map_err(|err| format!("failed to send request to server: {err}"))?;
         }
         #[cfg(not(unix))]
         stream
-            .write_all(request.as_bytes())
+            .write_all(&request)
             .map_err(|err| format!("failed to send request to server: {err}"))?;
         match read_responses(
             &mut stream,
@@ -652,7 +713,10 @@ fn resolve_attempt(
 /// attached.
 #[derive(Debug)]
 struct RequestPlan {
-    request: String,
+    /// The protocol request, byte-exact: GNU's `quote_argument` works on
+    /// bytes (`lib-src/emacsclient.c:874-896`), so a non-UTF-8 tty device
+    /// name must not be lossily converted or aborted.
+    request: Vec<u8>,
     tty: Option<TtyIdentity>,
 }
 
@@ -665,9 +729,9 @@ fn build_request(
     options: &Options,
     attempt: &AttemptPlan,
     display: Option<&str>,
-    tty_identity: Result<TtyIdentity, String>,
-) -> Result<RequestPlan, String> {
-    let mut request = String::new();
+    tty_identity: Result<TtyIdentity, TtyIdentityError>,
+) -> Result<RequestPlan, ClientError> {
+    let mut request: Vec<u8> = Vec::new();
     let cwd = env::current_dir().map_err(|err| format!("cannot get current directory: {err}"))?;
     let mut cwd = cwd.to_string_lossy().into_owned();
     if !cwd.ends_with('/') {
@@ -679,7 +743,12 @@ fn build_request(
         match tty_identity {
             Ok(identity) => Some(identity),
             Err(_) if transport != FrameTransport::Tty => None,
-            Err(error) => return Err(error),
+            Err(TtyIdentityError::GnuFatal(message)) => {
+                return Err(ClientError::GnuFatal(message.to_string()));
+            }
+            Err(TtyIdentityError::Message(message)) => {
+                return Err(ClientError::Message(message));
+            }
         }
     } else {
         None
@@ -696,10 +765,10 @@ fn build_request(
 
     push_command(&mut request, "-dir");
     if let Some(prefix) = &options.tramp_prefix {
-        request.push_str(&quote_argument(prefix));
+        request.extend_from_slice(&quote_argument(prefix));
     }
-    request.push_str(&quote_argument(&cwd));
-    request.push(' ');
+    request.extend_from_slice(&quote_argument(&cwd));
+    request.push(b' ');
 
     if nowait {
         push_flag(&mut request, "-nowait");
@@ -720,10 +789,10 @@ fn build_request(
     }
     if let Some(tty) = &tty {
         push_command(&mut request, "-tty");
-        request.push_str(&quote_argument(&tty.device));
-        request.push(' ');
-        request.push_str(&quote_argument(&tty.terminal_type));
-        request.push(' ');
+        request.extend_from_slice(&quote_os_argument(&tty.device));
+        request.push(b' ');
+        request.extend_from_slice(&quote_os_argument(&tty.terminal_type));
+        request.push(b' ');
     }
     // GNU sends this only for a graphical request (`create_frame && !tty`,
     // emacsclient.c:2131-2132); a display-less `-c` was already resolved to a
@@ -755,15 +824,15 @@ fn build_request(
                 if let Some(prefix) = &options.tramp_prefix
                     && Path::new(arg).is_absolute()
                 {
-                    request.push_str(&quote_argument(prefix));
+                    request.extend_from_slice(&quote_argument(prefix));
                 }
-                request.push_str(&quote_argument(arg));
-                request.push(' ');
+                request.extend_from_slice(&quote_argument(arg));
+                request.push(b' ');
             }
         }
     }
 
-    request.push('\n');
+    request.push(b'\n');
     Ok(RequestPlan { request, tty })
 }
 
@@ -788,20 +857,20 @@ fn effective_display(options: &Options) -> Option<String> {
     None
 }
 
-fn push_flag(request: &mut String, flag: &str) {
-    request.push_str(flag);
-    request.push(' ');
+fn push_flag(request: &mut Vec<u8>, flag: &str) {
+    request.extend_from_slice(flag.as_bytes());
+    request.push(b' ');
 }
 
-fn push_command(request: &mut String, command: &str) {
-    request.push_str(command);
-    request.push(' ');
+fn push_command(request: &mut Vec<u8>, command: &str) {
+    request.extend_from_slice(command.as_bytes());
+    request.push(b' ');
 }
 
-fn push_arg_command(request: &mut String, command: &str, arg: &str) {
+fn push_arg_command(request: &mut Vec<u8>, command: &str, arg: &str) {
     push_command(request, command);
-    request.push_str(&quote_argument(arg));
-    request.push(' ');
+    request.extend_from_slice(&quote_argument(arg));
+    request.push(b' ');
 }
 
 fn is_position_arg(arg: &str) -> bool {
@@ -811,20 +880,40 @@ fn is_position_arg(arg: &str) -> bool {
     !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit() || c == ':')
 }
 
-fn quote_argument(arg: &str) -> String {
-    let mut quoted = String::with_capacity(arg.len() * 2);
-    if arg.starts_with('-') {
-        quoted.push('&');
+/// GNU `quote_argument_len` (lib-src/emacsclient.c:874-896): byte-exact.
+fn quote_bytes(bytes: &[u8]) -> Vec<u8> {
+    let mut quoted = Vec::with_capacity(bytes.len() * 2);
+    if bytes.first() == Some(&b'-') {
+        quoted.push(b'&');
     }
-    for ch in arg.chars() {
-        match ch {
-            ' ' => quoted.push_str("&_"),
-            '\n' => quoted.push_str("&n"),
-            '&' => quoted.push_str("&&"),
-            _ => quoted.push(ch),
+    for &byte in bytes {
+        match byte {
+            b' ' => quoted.extend_from_slice(b"&_"),
+            b'\n' => quoted.extend_from_slice(b"&n"),
+            b'&' => {
+                quoted.push(b'&');
+                quoted.push(b'&');
+            }
+            _ => quoted.push(byte),
         }
     }
     quoted
+}
+
+fn quote_argument(arg: &str) -> Vec<u8> {
+    quote_bytes(arg.as_bytes())
+}
+
+fn quote_os_argument(arg: &std::ffi::OsStr) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        quote_bytes(arg.as_bytes())
+    }
+    #[cfg(not(unix))]
+    {
+        quote_argument(&arg.to_string_lossy())
+    }
 }
 
 fn unquote_argument(arg: &str) -> String {
