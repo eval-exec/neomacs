@@ -127,9 +127,10 @@ fn nmjit_n4_unary_noop_and_unwind_have_total_teardown() {
     fixture(PlainSymbolBacking::Unprojected, |_, _, _| {});
     let outcome = std::panic::catch_unwind(|| {
         fixture(PlainSymbolBacking::Unprojected, |run, callback, symbols| {
-            let mut expected = run.private_nil_root().unwrap();
+            let mut expected =
+                neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
             run.sym_function_into(&symbols[0], &mut expected).unwrap();
-            let argument = run.private_nil_root().unwrap();
+            let argument = neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
             let mut activation = FunctionActivation::new(run).unwrap();
             assert_eq!(
                 run.sym_unary_call_begin(&callback, &expected, &argument, &mut activation),
@@ -149,10 +150,12 @@ fn nmjit_n4_unary_roots_old_selection_and_revalidates_replacement() {
         PlainSymbolBacking::Projected,
     ] {
         fixture(backing, |run, callback, symbols| {
-            let mut expected = run.private_nil_root().unwrap();
-            let mut replacement = run.private_nil_root().unwrap();
-            let argument = run.private_nil_root().unwrap();
-            let mut result = run.private_nil_root().unwrap();
+            let mut expected =
+                neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
+            let mut replacement =
+                neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
+            let argument = neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
+            let mut result = neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
             run.sym_function_into(&symbols[0], &mut expected).unwrap();
             run.sym_value_into(&symbols[1], &mut replacement).unwrap();
             let mut activation = FunctionActivation::new(run).unwrap();
@@ -217,9 +220,9 @@ fn nmjit_n4_unary_roots_old_selection_and_revalidates_replacement() {
 #[test]
 fn nmjit_n4_unary_refuses_stale_homes_capabilities_and_managed_argument() {
     fixture(PlainSymbolBacking::Unprojected, |run, callback, symbols| {
-        let mut expected = run.private_nil_root().unwrap();
+        let mut expected = neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
         run.sym_function_into(&symbols[0], &mut expected).unwrap();
-        let argument = run.private_nil_root().unwrap();
+        let argument = neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
         let mut activation = FunctionActivation::new(run).unwrap();
         assert_eq!(
             run.sym_unary_call_begin(&callback, &expected, &expected, &mut activation),
@@ -235,7 +238,7 @@ fn nmjit_n4_unary_refuses_stale_homes_capabilities_and_managed_argument() {
         );
         assert_eq!(activation.selected_epoch(), None);
         run.clear_root_slots().unwrap();
-        let fresh = run.private_nil_root().unwrap();
+        let fresh = neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
         let mut new_activation = FunctionActivation::new(run).unwrap();
         assert_eq!(
             run.sym_unary_call_begin(&callback, &expected, &fresh, &mut new_activation),
@@ -291,9 +294,9 @@ fn nmjit_n4_unary_preparation_refuses_special_and_marker_parameters() {
 #[test]
 fn nmjit_n4_unary_busy_refusal_preserves_roots_and_activation() {
     fixture(PlainSymbolBacking::Unprojected, |run, callback, symbols| {
-        let mut expected = run.private_nil_root().unwrap();
+        let mut expected = neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
         run.sym_function_into(&symbols[0], &mut expected).unwrap();
-        let argument = run.private_nil_root().unwrap();
+        let argument = neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
         let mut activation = FunctionActivation::new(run).unwrap();
         let writer = run
             .occupy_symbol_word_for_test(SymbolWordOccupancy::Writer)

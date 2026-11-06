@@ -512,6 +512,19 @@ pub fn owner_root_slot_with_index_for_test<'era>(
     root.with_index_for_test(index)
 }
 
+/// Value-FENCE row (C5 mint, LEAD 10:4xZ SHAPE (B)): reserve one NIL census
+/// home on the live owner. The original `RunAccess::private_nil_root` stays
+/// `pub(crate)`; this delegate is its only cross-crate route, so the
+/// ExecutionTestHomes adapter hosted in eval can mint its operand home.
+pub fn nil_root_for_test<'era>(
+    run: &mut crate::tagged::gc::mutator_registration::RunAccess<'_, 'era>,
+) -> Result<
+    crate::tagged::gc::mutator_registration::OwnerRootSlot<'era>,
+    crate::tagged::gc::RegistrationError,
+> {
+    run.private_nil_root()
+}
+
 /// Value-FENCE row (N2 counter reset): zero the position-conversion scan-step
 /// counter for the moved eval/corpus fixtures. The counter itself stays a
 /// thread-local in `emacs_char`; this typed reset is the only cross-crate

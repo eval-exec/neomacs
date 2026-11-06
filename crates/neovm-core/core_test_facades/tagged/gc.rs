@@ -27,6 +27,11 @@ pub mod mark_sweep;
 #[path = "gc/mutator_registration.rs"]
 pub mod mutator_registration;
 
+/// SHAPE (B) LEAD 10:4xZ: the adapter now lives in eval's
+/// `test_support::execution_fixtures`; core re-exports it so the re-homed
+/// execution tests keep their `crate::tagged::gc::ExecutionTestHomes` shape.
+pub use neovm_eval::test_support::execution_fixtures::ExecutionTestHomes;
+
 // Public-path restoration for the relocated core_tests files.
 pub use neovm_value::tagged::header::CHAR_TABLE_TOP_SLOTS;
 pub use neovm_value::tagged::header::VecLikeHeader;

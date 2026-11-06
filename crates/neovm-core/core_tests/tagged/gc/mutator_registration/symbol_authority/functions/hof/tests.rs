@@ -198,10 +198,12 @@ fn nmjit_n4_hof_guard_noop_and_unwind_finish_cleanly() {
             HofOperation::Mapcar,
             PlainSymbolBacking::Unprojected,
             |run, mapper, callback, inputs| {
-                let mut expected = run.private_nil_root().unwrap();
+                let mut expected =
+                    neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
                 run.sym_function_into(&inputs.callback, &mut expected)
                     .unwrap();
-                let argument = run.private_nil_root().unwrap();
+                let argument =
+                    neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
                 let mut activation = FunctionActivation::new(run).unwrap();
                 assert_eq!(
                     run.sym_hof_call_begin(
@@ -229,16 +231,20 @@ fn nmjit_n4_hof_guard_roots_old_callback_then_observes_replacement() {
         ] {
             fixture(operation, backing, |run, mapper, callback, inputs| {
                 assert_eq!(mapper.operation(), operation);
-                let mut expected = run.private_nil_root().unwrap();
+                let mut expected =
+                    neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
                 run.sym_function_into(&inputs.callback, &mut expected)
                     .unwrap();
-                let mut replacement = run.private_nil_root().unwrap();
+                let mut replacement =
+                    neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
                 run.sym_value_into(&inputs.replacement, &mut replacement)
                     .unwrap();
-                let mut twin = run.private_nil_root().unwrap();
+                let mut twin =
+                    neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
                 run.sym_value_into(&inputs.twin, &mut twin).unwrap();
-                let argument = run.private_nil_root().unwrap();
-                let mut dst = run.private_nil_root().unwrap();
+                let argument =
+                    neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
+                let mut dst = neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
                 let mut activation = FunctionActivation::new(run).unwrap();
                 assert_eq!(
                     run.sym_hof_call_begin(&mapper, &callback, &twin, &argument, &mut activation),
@@ -299,14 +305,16 @@ fn nmjit_n4_hof_guard_refuses_redefined_and_unbound_mapper() {
         HofOperation::Mapcar,
         PlainSymbolBacking::Unprojected,
         |run, mapper, callback, inputs| {
-            let mut expected = run.private_nil_root().unwrap();
+            let mut expected =
+                neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
             run.sym_function_into(&inputs.callback, &mut expected)
                 .unwrap();
-            let mut mapper_body = run.private_nil_root().unwrap();
+            let mut mapper_body =
+                neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
             run.sym_value_into(&inputs.mapper_replacement, &mut mapper_body)
                 .unwrap();
-            let argument = run.private_nil_root().unwrap();
-            let mut dst = run.private_nil_root().unwrap();
+            let argument = neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
+            let mut dst = neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
             let mut activation = FunctionActivation::new(run).unwrap();
             assert_eq!(
                 run.sym_hof_call_begin(&mapper, &callback, &expected, &argument, &mut activation),
@@ -337,10 +345,11 @@ fn nmjit_n4_hof_guard_refuses_stale_homes_and_mapper_receipts() {
         HofOperation::Mapc,
         PlainSymbolBacking::Unprojected,
         |run, mapper, callback, inputs| {
-            let mut expected = run.private_nil_root().unwrap();
+            let mut expected =
+                neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
             run.sym_function_into(&inputs.callback, &mut expected)
                 .unwrap();
-            let argument = run.private_nil_root().unwrap();
+            let argument = neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
             let mut activation = FunctionActivation::new(run).unwrap();
             let mut stale = mapper;
             stale.key.era = NonZeroU64::new(mapper.key.era.get() + 1).unwrap();
@@ -352,7 +361,7 @@ fn nmjit_n4_hof_guard_refuses_stale_homes_and_mapper_receipts() {
             );
             assert_eq!(activation.selected_epoch(), None);
             run.clear_root_slots().unwrap();
-            let fresh = run.private_nil_root().unwrap();
+            let fresh = neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
             let mut fresh_activation = FunctionActivation::new(run).unwrap();
             assert_eq!(
                 run.sym_hof_call_begin(
@@ -377,10 +386,11 @@ fn nmjit_n4_hof_guard_native_registration_invalidates_receipt() {
         HofOperation::Mapcar,
         PlainSymbolBacking::Unprojected,
         |run, mapper, callback, inputs| {
-            let mut expected = run.private_nil_root().unwrap();
+            let mut expected =
+                neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
             run.sym_function_into(&inputs.callback, &mut expected)
                 .unwrap();
-            let argument = run.private_nil_root().unwrap();
+            let argument = neovm_value::test_support::authority::nil_root_for_test(run).unwrap();
             let mut activation = FunctionActivation::new(run).unwrap();
             assert_eq!(
                 run.sym_hof_call_begin(&mapper, &callback, &expected, &argument, &mut activation),

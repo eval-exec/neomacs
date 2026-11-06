@@ -30,31 +30,6 @@ pub(crate) enum FixtureReceipt {
     TelemetryRefused,
 }
 
-/// Test-only adapter; the production root-bank leaves remain parent-private.
-pub(crate) struct ExecutionTestHomes;
-impl ExecutionTestHomes {
-    /// Test-only observation through the existing GC-owned root adapter. No
-    /// raw managed word is exported by a production activation interface.
-    pub(crate) fn word(home: &OwnerRootSlot<'_>, run: &RunAccess<'_, '_>) -> usize {
-        home.word_for_test(run)
-    }
-
-    pub(crate) fn read(home: &OwnerRootSlot<'_>, run: &RunAccess<'_, '_>) -> ImmediateResult {
-        ImmediateResult::from_word(home.word_for_test(run))
-            .expect("scalar result home is immediate")
-    }
-
-    pub(crate) fn is_cons(home: &OwnerRootSlot<'_>, run: &RunAccess<'_, '_>) -> bool {
-        unsafe { TaggedValue::from_bits(home.word_for_test(run)) }.is_cons()
-    }
-
-    pub(crate) fn nil<'era>(
-        run: &mut RunAccess<'_, 'era>,
-    ) -> Result<OwnerRootSlot<'era>, RegistrationError> {
-        run.private_nil_root()
-    }
-}
-
 pub(crate) fn fixture(
     body: impl for<'era, 'owner> FnOnce(
         &ParallelExecutionAdmission<'era>,
@@ -377,6 +352,9 @@ fn nmjit_n4_activation_borrows_publication_until_return() {
                 assert!(observed.table().slots().get() > 0);
             })
             .unwrap();
-        assert_eq!(ExecutionTestHomes::read(home, run), ImmediateResult::Nil);
+        assert_eq!(
+            super::test_support_data::read_cell_home(home, run),
+            ImmediateResult::Nil
+        );
     });
 }

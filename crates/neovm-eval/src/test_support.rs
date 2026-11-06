@@ -8,6 +8,10 @@
 //! a LOWER crate's fence, B2). Nothing here may be called from product code
 //! or from another crate's ungated `src/`.
 
+/// Hosted execution-fixture helpers (SHAPE (B), LEAD 10:4xZ): the
+/// Context-free execution home adapter, built only from value primitives.
+pub mod execution_fixtures;
+
 /// TA2 authority fence. Exactly the signed AUTHORITY-ITEMS rows live here.
 pub mod authority {
     /// P1-CLASSES-ALL-CRATES FENCE: reset the symbol writer thread-locals.

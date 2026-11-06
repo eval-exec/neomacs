@@ -9,6 +9,10 @@ mod hof;
 mod read;
 #[cfg(feature = "test-support")]
 pub mod read;
+#[cfg(all(any(test, feature = "test-support"), not(feature = "test-support")))]
+mod test_support_data;
+#[cfg(feature = "test-support")]
+pub mod test_support_data;
 use super::construction::Gen1Construction;
 use super::*;
 use crate::tagged::gc::mark_word::MarkWord;
@@ -180,7 +184,7 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use tests::{
-    CohortPhase, CohortSize, ExecutionTestDeadline, ExecutionTestHomes, ExecutionTestRetry,
+    CohortPhase, CohortSize, ExecutionTestDeadline, ExecutionTestRetry,
     FixtureReceipt as ExecutionFixtureReceipt, FixtureSeed as ExecutionTestSeed, HofTestInputs,
     PublicationFacts, PublicationInputs, execution_test_retry,
     prepared_cell_fixture as with_test_prepared_cell_execution,
