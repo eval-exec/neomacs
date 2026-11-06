@@ -19,11 +19,11 @@ fn align_real_owner_clocks(a: &mut Context, b: &mut Context) -> u64 {
 
 #[test]
 fn opt_sqrt_binding_equal_owner_clocks_still_read_cell_and_inplace_entry() {
-    let mut first = Context::new();
+    let mut first = Context::new(crate::test_utils::unit_runtime());
     let symbol = intern("sqrt");
     let symbol_bits = Value::from_sym_id(symbol).bits() as u64;
     let original = first.obarray.symbol_function_id(symbol).unwrap();
-    let mut second = Context::new();
+    let mut second = Context::new(crate::test_utils::unit_runtime());
     second
         .eval_str("(fset 'sqrt (lambda (x) (list 'changed x)))")
         .unwrap();
@@ -79,7 +79,7 @@ fn opt_sqrt_binding_equal_owner_clocks_still_read_cell_and_inplace_entry() {
 
 #[test]
 fn opt_sqrt_binding_shared_static_reader_declines_busy_writer_and_observes_rewrite() {
-    let mut writer = Context::new();
+    let mut writer = Context::new(crate::test_utils::unit_runtime());
     let symbol = intern("sqrt");
     let symbol_bits = Value::from_sym_id(symbol).bits() as u64;
     let original_bits = writer.obarray.symbol_function_id(symbol).unwrap().bits() as u64;
@@ -94,7 +94,7 @@ fn opt_sqrt_binding_shared_static_reader_declines_busy_writer_and_observes_rewri
     let (send, receive) = std::sync::mpsc::channel::<Probe>();
     let (reply, result) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
-        let mut reader = Context::new();
+        let mut reader = Context::new(crate::test_utils::unit_runtime());
         reader
             .obarray
             .set_symbol_function_id(symbol, Value::from_bits(original_bits as usize));

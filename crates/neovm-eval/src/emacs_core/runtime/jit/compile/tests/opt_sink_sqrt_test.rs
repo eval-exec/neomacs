@@ -172,7 +172,7 @@ fn outcome(value: Result<Value, Flow>) -> (String, String, Option<String>) {
 #[test]
 fn opt_sink_sqrt_native_payload_and_argument_replay_keep_fresh_identity_and_store() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let _ = ctx.debug_on_next_call_is_armed();
     // Root each runtime-evaluated setup result before the next Lisp call;
     // later direct value construction cannot trigger a Lisp safepoint.
@@ -263,7 +263,7 @@ fn opt_sink_sqrt_native_payload_and_argument_replay_keep_fresh_identity_and_stor
 #[test]
 fn opt_sink_sqrt_native_call_controls_and_rebinding_use_complete_original_frame() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let _ = ctx.debug_on_next_call_is_armed();
     let f = after_store();
     let cell = Value::cons(Value::fixnum(0), Value::NIL);
@@ -370,7 +370,7 @@ fn opt_sink_sqrt_native_call_controls_and_rebinding_use_complete_original_frame(
 #[test]
 fn opt_sink_sqrt_native_epoch_guard_is_fresh_after_an_earlier_callback() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let _ = ctx.debug_on_next_call_is_armed();
     let sym = neovm_value::intern::intern("sqrt");
     let original = ctx.obarray.symbol_function_id(sym).unwrap();
@@ -450,14 +450,14 @@ fn opt_sink_sqrt_native_equal_epoch_context_and_same_pointer_rewrite_replay_curr
     pub use crate::emacs_core::subr::{FixedMin1, SubrSpec};
     use neovm_value::symbol::FunctionEpochBump;
     let _settings = Settings::enter();
-    let mut owner = Context::new();
+    let mut owner = Context::new(crate::test_utils::unit_runtime());
     let _ = owner.debug_on_next_call_is_armed();
     // All source constants are stable immediate symbol words. Heap arguments
     // are made/rooted in the CURRENT owner below; no heap Value migrates.
     let f = after_store();
     let sym = intern("sqrt");
     let original = owner.obarray.symbol_function_id(sym).unwrap();
-    let mut other = Context::new();
+    let mut other = Context::new(crate::test_utils::unit_runtime());
     let _ = other.debug_on_next_call_is_armed();
     other
         .eval_str("(fset 'sqrt (lambda (x) (list 'changed x)))")

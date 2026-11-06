@@ -7,7 +7,7 @@ use fixture::*;
 #[test]
 fn opt_sink_numeric_sqrt_contagion_keeps_replay_and_uses_proven_float_paths() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let _ = ctx.debug_on_next_call_is_armed();
     let roots = Roots::enter();
     let f = program(

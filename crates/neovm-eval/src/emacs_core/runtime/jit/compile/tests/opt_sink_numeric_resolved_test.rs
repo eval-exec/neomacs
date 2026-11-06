@@ -22,7 +22,7 @@ fn float_ops(clif: &str, opcode: &str) -> usize {
 #[test]
 fn opt_sink_numeric_resolved_float_keeps_original_guards_and_frames_without_duplicate_dispatch() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::enter();
     let mut quality = Vec::new();
     for op in [Op::Add, Op::Sub, Op::Mul, Op::Div] {

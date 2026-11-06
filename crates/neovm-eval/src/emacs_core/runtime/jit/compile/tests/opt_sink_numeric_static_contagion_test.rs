@@ -7,7 +7,7 @@ use fixture::*;
 #[test]
 fn opt_sink_numeric_static_float_contagion_preserves_identity_and_integer_seed_paths() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::enter();
     let f = program(
         vec![

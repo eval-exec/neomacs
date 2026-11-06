@@ -47,7 +47,7 @@ fn capture(ctx: &Context, symbol: Value) -> super::sqrt_snapshot::SqrtCallWitnes
 #[test]
 fn opt_sqrt_snapshot_uses_actual_subr_entry_not_symbol_spelling_and_is_owned_scalar() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let sqrt = neovm_value::intern::intern("sqrt");
     let alias = neovm_value::intern::intern("t34-real-sqrt-alias");
     let original = ctx.obarray.symbol_function_id(sqrt).unwrap();

@@ -133,7 +133,7 @@ fn countdown() -> ByteCodeFunction {
 
 fn assert_successor_census(entry: NativeEntry) {
     let _mode = opt_mode_scope_for_test(OptMode::Legacy);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let _rooted = seed_root_stores();
     let f = countdown();
     let (leaf, counts) = lower(&f, entry);

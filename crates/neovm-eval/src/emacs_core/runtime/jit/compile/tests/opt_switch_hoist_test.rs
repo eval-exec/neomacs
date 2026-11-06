@@ -164,7 +164,7 @@ fn opt_switch_hoist_schedules_entry_and_every_poll_but_declines_reentry() {
 #[test]
 fn opt_switch_hoist_stale_entry_resumes_before_dispatch() {
     let _settings = SwitchSettings::enter();
-    let mut ctx = Context::new_minimal_vm_harness();
+    let mut ctx = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let f = source();
     let _roots = Roots::new(&f.constants);
     let ir = plan(&f);
@@ -192,7 +192,7 @@ fn opt_switch_hoist_stale_entry_resumes_before_dispatch() {
 #[test]
 fn opt_switch_hoist_service_poll_mutation_resumes_current_stack() {
     let _settings = SwitchSettings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = source();
     let _roots = Roots::new(&f.constants);
     let leaf = lower(&f, &plan(&f));
@@ -223,7 +223,7 @@ fn opt_switch_hoist_service_poll_mutation_resumes_current_stack() {
 #[test]
 fn opt_switch_hoist_osr_stale_entry_checks_the_interpreter_stack() {
     let _settings = SwitchSettings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = source();
     let _roots = Roots::new(&f.constants);
     let ir = plan_entry(&f, Some(1));
@@ -405,7 +405,7 @@ fn opt_switch_hoist_call_mutation_matches_gnu() {
 #[test]
 fn opt_switch_hoist_symbols_with_pos_miss_still_uses_lookup() {
     let _settings = SwitchSettings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let mut f = source();
     // Replace the key constant with an argument, keeping a rooted static table.
     f.ops[5] = Op::StackRef(2);
