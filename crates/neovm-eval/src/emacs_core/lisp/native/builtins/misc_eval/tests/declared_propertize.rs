@@ -4,7 +4,7 @@ use neovm_value::heap_types::{GnuDeclaredCharacterCount, LispString};
 #[test]
 fn propertize_preserves_supplied_character_count_and_source_bytes() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let property = Value::symbol("gdj-declared-property");
     for (bytes, count) in [
         ("bé".as_bytes(), 1),
