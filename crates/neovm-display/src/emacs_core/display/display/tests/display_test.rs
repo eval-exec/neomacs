@@ -1502,20 +1502,15 @@ fn display_queries_default_to_selected_frame_window_system_surface() {
         Value::fixnum(16_777_216)
     );
     assert_eq!(
-        neovm_eval::emacs_core::builtins::symbols::builtin_xw_display_color_p_ctx(
-            &eval,
-            vec![Value::NIL],
-        )
-        .unwrap(),
-        Value::T
+        eval.eval_str("(xw-display-color-p)").unwrap(),
+        Value::T,
+        "public Lisp entry: xw-display-color-p with no frame"
     );
     assert_eq!(
-        neovm_eval::emacs_core::builtins::symbols::builtin_xw_display_color_p_ctx(
-            &eval,
-            vec![frame],
-        )
-        .unwrap(),
-        Value::T
+        eval.eval_str("(xw-display-color-p (selected-frame))")
+            .unwrap(),
+        Value::T,
+        "public Lisp entry: xw-display-color-p with the live selected frame"
     );
     assert_eq!(
         builtin_display_planes(&mut eval, vec![]).unwrap(),
@@ -3407,11 +3402,9 @@ fn monitor_attributes_geometry_uses_frame_pixel_units() {
         height_mm: 0,
         name: Some("Retina".into()),
     }]);
-    let list = crate::emacs_core::display_entries::builtin_neomacs_display_monitor_attributes_list(
-        &mut eval,
-        vec![],
-    )
-    .unwrap();
+    let list = eval
+        .eval_str("(neomacs-display-monitor-attributes-list)")
+        .expect("public Lisp entry for the monitor attribute list");
     set_neomacs_monitor_info(vec![]);
     let expected = if cfg!(target_os = "macos") {
         "(geometry 1512 0 1512 982)"

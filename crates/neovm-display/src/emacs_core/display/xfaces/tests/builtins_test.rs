@@ -3292,11 +3292,8 @@ fn xw_color_primitives_follow_live_gui_frame_state() {
         ])
     );
     assert_eq!(
-        neovm_eval::emacs_core::builtins::symbols::builtin_xw_display_color_p_ctx(
-            &eval,
-            vec![Value::make_frame(frame_id.0)],
-        )
-        .expect("xw-display-color-p should evaluate"),
+        eval.eval_str("(xw-display-color-p (selected-frame))")
+            .expect("public Lisp entry: xw-display-color-p should evaluate"),
         Value::T
     );
 }

@@ -9428,8 +9428,12 @@ fn gnu_lisp_window_edges_use_logical_outer_and_presented_body_regions() {
         [(1, true, 173.0, 756.0), (2, false, 160.0, 743.0)]
     {
         let mut ev = runtime_startup_context();
-        let fid = ev.frames.selected_frame().expect("selected frame").id;
-        let wid = ev.frames.get(fid).expect("frame").selected_window;
+        let fid = ev
+            .frame_manager()
+            .selected_frame()
+            .expect("selected frame")
+            .id;
+        let wid = ev.frame_manager().get(fid).expect("frame").selected_window;
         let outer = neomacs_display_protocol::types::Rect::new(144.0, 32.0, 640.0, 480.0);
         let body = neomacs_display_protocol::types::Rect::new(
             body_left,
@@ -9443,83 +9447,83 @@ fn gnu_lisp_window_edges_use_logical_outer_and_presented_body_regions() {
             13.0,
             438.0,
         );
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         frame.set_window_system(Some(Value::symbol("neo")));
         frame.char_width = 8.0;
         frame.char_height = 16.0;
-        frame
-            .prepare_and_activate_display_presentation_for_test(
-                crate::window::geometry::PresentationId::new(presentation),
-                vec![crate::window::WindowDisplaySnapshot {
-                    point_rows: None,
-                    window_id: wid,
-                    cell_origin: crate::window::geometry::CellOrigin::new(18, 2),
-                    regions: crate::window::PresentedWindowRegions {
-                        outer,
-                        text_body: body,
-                        left_margin_columns: 1,
-                        right_margin_columns: 2,
-                        left_margin: Some(neomacs_display_protocol::types::Rect::new(
-                            165.0, 54.0, 8.0, 438.0,
-                        )),
-                        right_margin: Some(neomacs_display_protocol::types::Rect::new(
-                            body_right, 54.0, 16.0, 438.0,
-                        )),
-                        left_fringe: Some(neomacs_display_protocol::types::Rect::new(
-                            if scrollbar_left { 157.0 } else { 144.0 },
-                            54.0,
-                            8.0,
-                            438.0,
-                        )),
-                        right_fringe: Some(neomacs_display_protocol::types::Rect::new(
-                            body_right + 16.0,
-                            54.0,
-                            12.0,
-                            438.0,
-                        )),
-                        left_scroll_bar: scrollbar_left.then_some(scrollbar),
-                        right_scroll_bar: (!scrollbar_left).then_some(scrollbar),
-                        tab_line: Some(neomacs_display_protocol::types::Rect::new(
-                            144.0, 32.0, 640.0, 17.0,
-                        )),
-                        header_line: Some(neomacs_display_protocol::types::Rect::new(
-                            144.0, 49.0, 640.0, 5.0,
-                        )),
-                        mode_line: Some(neomacs_display_protocol::types::Rect::new(
-                            144.0, 492.0, 640.0, 20.0,
-                        )),
-                        right_divider: Some(neomacs_display_protocol::types::Rect::new(
-                            782.0, 32.0, 2.0, 480.0,
-                        )),
-                        bottom_divider: Some(neomacs_display_protocol::types::Rect::new(
-                            144.0, 510.0, 640.0, 2.0,
-                        )),
-                        ..Default::default()
-                    },
-                    regions_materialized: true,
-                    header_line_height: 99,
-                    tab_line_height: 99,
-                    mode_line_height: 99,
-                    text_area_left_offset: 999,
-                    points: vec![crate::window::DisplayPointSnapshot {
-                        role: crate::window::DisplayPointRole::Glyph,
-                        buffer_pos: neovm_edit::buffer::LispCharPos1::ONE,
-                        x: 72,
-                        y: 999,
-                        width: 7,
-                        height: 17,
-                        row: 99,
-                        col: 9,
-                    }],
-                    body_rows: vec![crate::window::PresentedBodyRowSnapshot {
-                        output_row: 99,
-                        body_row: 2,
-                        body_y: 34,
-                    }],
+        crate::test_support::authority::prepare_and_activate_display_presentation_for_test(
+            frame,
+            crate::window::geometry::PresentationId::new(presentation),
+            vec![crate::window::WindowDisplaySnapshot {
+                point_rows: None,
+                window_id: wid,
+                cell_origin: crate::window::geometry::CellOrigin::new(18, 2),
+                regions: crate::window::PresentedWindowRegions {
+                    outer,
+                    text_body: body,
+                    left_margin_columns: 1,
+                    right_margin_columns: 2,
+                    left_margin: Some(neomacs_display_protocol::types::Rect::new(
+                        165.0, 54.0, 8.0, 438.0,
+                    )),
+                    right_margin: Some(neomacs_display_protocol::types::Rect::new(
+                        body_right, 54.0, 16.0, 438.0,
+                    )),
+                    left_fringe: Some(neomacs_display_protocol::types::Rect::new(
+                        if scrollbar_left { 157.0 } else { 144.0 },
+                        54.0,
+                        8.0,
+                        438.0,
+                    )),
+                    right_fringe: Some(neomacs_display_protocol::types::Rect::new(
+                        body_right + 16.0,
+                        54.0,
+                        12.0,
+                        438.0,
+                    )),
+                    left_scroll_bar: scrollbar_left.then_some(scrollbar),
+                    right_scroll_bar: (!scrollbar_left).then_some(scrollbar),
+                    tab_line: Some(neomacs_display_protocol::types::Rect::new(
+                        144.0, 32.0, 640.0, 17.0,
+                    )),
+                    header_line: Some(neomacs_display_protocol::types::Rect::new(
+                        144.0, 49.0, 640.0, 5.0,
+                    )),
+                    mode_line: Some(neomacs_display_protocol::types::Rect::new(
+                        144.0, 492.0, 640.0, 20.0,
+                    )),
+                    right_divider: Some(neomacs_display_protocol::types::Rect::new(
+                        782.0, 32.0, 2.0, 480.0,
+                    )),
+                    bottom_divider: Some(neomacs_display_protocol::types::Rect::new(
+                        144.0, 510.0, 640.0, 2.0,
+                    )),
                     ..Default::default()
+                },
+                regions_materialized: true,
+                header_line_height: 99,
+                tab_line_height: 99,
+                mode_line_height: 99,
+                text_area_left_offset: 999,
+                points: vec![crate::window::DisplayPointSnapshot {
+                    role: crate::window::DisplayPointRole::Glyph,
+                    buffer_pos: neovm_edit::buffer::LispCharPos1::ONE,
+                    x: 72,
+                    y: 999,
+                    width: 7,
+                    height: 17,
+                    row: 99,
+                    col: 9,
                 }],
-            )
-            .expect("presented GUI geometry");
+                body_rows: vec![crate::window::PresentedBodyRowSnapshot {
+                    output_row: 99,
+                    body_row: 2,
+                    body_y: 34,
+                }],
+                ..Default::default()
+            }],
+        )
+        .expect("presented GUI geometry");
         let logical_window = frame.find_window_mut(wid).expect("live window");
         logical_window.set_bounds(crate::window::Rect::new(0.0, 0.0, 80.0, 24.0));
         logical_window.set_left_col(18);
@@ -11629,7 +11633,15 @@ fn category_word_wrap_symbol_reads_are_bounded_by_display_stops() {
             ev.obarray().reset_symbol_slot_read_count();
             ev.eval_str("(vertical-motion 1)").expect("advance one row");
             reads.push(ev.obarray().symbol_slot_read_count());
-            assert!(ev.buffers.current_buffer().unwrap().point_char_pos().get() > 1000);
+            assert!(
+                ev.edit
+                    .buffers
+                    .current_buffer()
+                    .unwrap()
+                    .point_char_pos()
+                    .get()
+                    > 1000
+            );
         }
         assert!(
             reads[1] <= reads[0] + 128,
