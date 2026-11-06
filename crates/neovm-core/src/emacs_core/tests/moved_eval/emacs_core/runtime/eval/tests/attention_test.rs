@@ -57,7 +57,7 @@ fn bytecode_varset(var: &str, value: Value) -> Value {
     f.ops = vec![Op::Constant(0), Op::VarSet(1), Op::Constant(0), Op::Return];
     f.constants = vec![value, Value::symbol(var)].into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
-    crate::emacs_core::bytecode::seal_hand_assembled_ops_for_test(&mut f);
+    neovm_eval::test_support::authority::seal_hand_assembled_ops_for_test(&mut f);
     Value::make_bytecode(f)
 }
 
