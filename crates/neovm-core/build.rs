@@ -68,9 +68,18 @@ fn main() {
     // its undefined imports against them. `-rdynamic` alone is insufficient under
     // the workspace linker (it doesn't promote these otherwise-unreferenced fns
     // to the dynamic table), so we additionally name each shim with
-    // `--export-dynamic-symbol`. `rustc-link-arg-tests` applies ONLY to test
-    // binaries — the lib + production binaries are untouched (production export is
-    // R2's job). Gated on the `jit` feature (the only config that emits AOT).
+    // `--export-dynamic-symbol`. Gated on the `jit` feature (the only config that
+    // emits AOT).
+    //
+    // Both carriers are emitted: `rustc-link-arg` (every linkable target of this
+    // package — for a library crate that is exactly its test/bench binaries, the
+    // lib itself never links, and production binaries live in other packages and
+    // carry their own R2 export) AND `rustc-link-arg-tests`. Measured with the
+    // P2 test-target combo on cargo 1.96.1 + `wild`: the `-tests` lines reach the
+    // build-script output but do NOT reach the lib-test link command, so a
+    // `dlopen`'d AOT `.so` fails with "undefined symbol: neovm_jit_backedge";
+    // `rustc-link-arg` does reach it (83 `neovm_jit_*` dynamic symbols after the
+    // fix, 0 before, all present in the static table).
     //
     // R2 CARRY-FORWARD (R2-B5): the PRODUCTION binary (neomacs-bin) that loads the
     // dump-time preload `.so` MUST replicate BOTH the `#[unsafe(no_mangle)] pub`
@@ -82,10 +91,12 @@ fn main() {
     if std::env::var_os("CARGO_FEATURE_JIT").is_some() {
         #[cfg(target_os = "linux")]
         {
+            println!("cargo:rustc-link-arg=-rdynamic");
             println!("cargo:rustc-link-arg-tests=-rdynamic");
             // NEOVM_JIT_SHIM_NAMES is `include!`-ed at module scope (above) from the
             // single-source shim_names.rs — same set aot.rs salts/exports.
             for shim in NEOVM_JIT_SHIM_NAMES {
+                println!("cargo:rustc-link-arg=-Wl,--export-dynamic-symbol={shim}");
                 println!("cargo:rustc-link-arg-tests=-Wl,--export-dynamic-symbol={shim}");
             }
         }
