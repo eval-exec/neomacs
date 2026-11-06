@@ -72,6 +72,7 @@ fn inserting_before_a_displayed_window_advances_its_position_caches() {
     let Window::Leaf {
         window_start,
         point,
+        old_point,
         ..
     } = window
     else {
@@ -86,6 +87,11 @@ fn inserting_before_a_displayed_window_advances_its_position_caches() {
         *point,
         LispCharPos1::from_one_based_usize(7),
         "window point cache must follow the edit (5 + 2 inserted characters)"
+    );
+    assert_eq!(
+        *old_point,
+        LispCharPos1::from_one_based_usize(7),
+        "window old-point cache must follow the edit too (5 + 2 inserted characters)"
     );
     assert_eq!(
         eval.eval_str("(buffer-string)").expect("buffer text"),
