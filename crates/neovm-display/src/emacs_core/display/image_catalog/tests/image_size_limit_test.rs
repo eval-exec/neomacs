@@ -7,7 +7,7 @@ use neovm_value::value::Value;
 /// A frame of the given logical pixel size with its physical scale, plus the
 /// obarray the variable lives in.
 fn frame_environment(width: u32, height: u32, device_scale: f64) -> Context {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffer_manager_mut().create_buffer("max-image-size");
     let frame_id = eval
         .frame_manager_mut()

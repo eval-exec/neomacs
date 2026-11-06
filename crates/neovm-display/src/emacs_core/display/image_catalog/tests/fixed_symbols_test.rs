@@ -3,7 +3,7 @@ use neovm_eval::emacs_core::eval::Context;
 use neovm_value::intern::{intern, intern_call_names, reset_intern_calls};
 
 fn context() -> (Context, crate::window::FrameId) {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffer_manager_mut().create_buffer("fixed-image-keys");
     let frame = eval
         .frame_manager_mut()

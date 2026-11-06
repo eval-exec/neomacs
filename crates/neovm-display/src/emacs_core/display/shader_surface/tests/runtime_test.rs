@@ -70,7 +70,7 @@ impl DisplayHost for RecordingSurfaceDisplayHost {
 
 fn surface_context() -> (Context, RecordingSurfaceDisplayHost) {
     let host = RecordingSurfaceDisplayHost::default();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.set_display_host(Box::new(host.clone()));
     (ctx, host)
 }

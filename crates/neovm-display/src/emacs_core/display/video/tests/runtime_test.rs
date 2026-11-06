@@ -117,7 +117,7 @@ impl DisplayHost for RecordingVideoDisplayHost {
 
 fn video_context() -> (Context, RecordingVideoDisplayHost) {
     let host = RecordingVideoDisplayHost::default();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.set_display_host(Box::new(host.clone()));
     (ctx, host)
 }
@@ -129,7 +129,7 @@ fn eval(ctx: &mut Context, source: &str) -> Value {
 #[test]
 fn advertised_video_session_functions_are_bound() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
 
     let available = ctx
         .eval_str(

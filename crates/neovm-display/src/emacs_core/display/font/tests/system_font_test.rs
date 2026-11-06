@@ -61,7 +61,7 @@ impl DisplayHost for DesktopFontHost {
 }
 
 fn desktop_context() -> Context {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     ensure_selected_gui_frame(&mut eval);
     eval.set_display_host(Box::new(DesktopFontHost(SystemFonts::new(
         SystemFontName::new("Ubuntu Mono 13".into()),
@@ -97,7 +97,7 @@ fn system_font_queries_distinguish_monospace_from_application_font() {
 
 #[test]
 fn system_font_queries_without_a_native_display_remain_nil() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     assert!(eval.eval_str("(font-get-system-font)").unwrap().is_nil());
     assert!(
         eval.eval_str("(font-get-system-normal-font)")

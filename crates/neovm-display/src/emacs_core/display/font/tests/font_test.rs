@@ -42,14 +42,14 @@ fn cached_font_name_spelling_preserves_bytes_and_drops_intervals() {
 }
 
 fn call_face_font(args: impl FnOnce() -> Vec<Value>) -> EvalResult {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let args = args();
     builtin_face_font(&mut eval, &args)
 }
 
 macro_rules! call_font_builtin {
     ($builtin:ident, $args:expr) => {{
-        let mut eval = Context::new();
+        let mut eval = Context::new(crate::test_utils::unit_runtime());
         let args = $args;
         $builtin(&mut eval, args)
     }};
@@ -98,7 +98,7 @@ fn buffer_char_pos_to_byte(buffer: &Buffer, char_pos: usize) -> usize {
 #[test]
 fn raw_context_does_not_prebind_x_color_aliases() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = Context::new(crate::test_utils::unit_runtime());
     for name in ["x-defined-colors", "x-color-defined-p", "x-color-values"] {
         assert!(
             eval.obarray.symbol_function(name).is_none(),
@@ -183,7 +183,7 @@ fn gnu_faces_el_defines_x_color_aliases() {
 #[test]
 fn context_prebinds_gnu_font_style_tables() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = Context::new(crate::test_utils::unit_runtime());
 
     let weight_table = eval
         .obarray
@@ -293,7 +293,7 @@ fn font_spec_spacing_symbols_normalize_to_gnu_codes() {
 #[test]
 fn gnu_font_style_tables_are_constant_symbols() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = Context::new(crate::test_utils::unit_runtime());
     for name in ["font-weight-table", "font-slant-table", "font-width-table"] {
         assert!(eval.obarray.is_constant(name), "{name} should be constant");
     }
@@ -338,7 +338,7 @@ fn font_c_pure_primitives_validate_and_project_font_values() {
     );
     assert_eq!(
         font_has_char_p(
-            &mut Context::new(),
+            &mut Context::new(crate::test_utils::unit_runtime()),
             vec![font_spec, Value::fixnum('a' as i64)]
         )
         .expect("font-has-char-p"),
@@ -466,7 +466,7 @@ impl DisplayHost for ThinOnlyDisplayHost {
 
 #[test]
 fn named_font_info_opens_thin_only_family_without_weakening_find_font() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     ensure_selected_gui_frame(&mut eval);
     eval.set_display_host(Box::new(ThinOnlyDisplayHost(
         CapturingFindFontDisplayHost {
@@ -615,7 +615,7 @@ fn font_spec_basic() {
 fn font_info_opens_a_native_entity_without_a_file() {
     crate::test_utils::init_test_tracing();
     let request = Rc::new(RefCell::new(None));
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     ensure_selected_gui_frame(&mut eval);
     eval.set_display_host(Box::new(NativeFontEntityDisplayHost {
         request: Rc::clone(&request),
@@ -673,7 +673,7 @@ fn font_info_opens_a_native_entity_without_a_file() {
 fn find_font_eval_requests_exact_registry_match_from_display_host() {
     crate::test_utils::init_test_tracing();
     let last_request = Rc::new(RefCell::new(None));
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     ensure_selected_gui_frame(&mut eval);
     eval.set_display_host(Box::new(CapturingFindFontDisplayHost {
         last_request: Rc::clone(&last_request),
@@ -751,7 +751,7 @@ fn find_font_eval_requests_exact_registry_match_from_display_host() {
 fn find_font_eval_returns_gnu_canonical_ultra_light_weight_symbol() {
     crate::test_utils::init_test_tracing();
     let last_request = Rc::new(RefCell::new(None));
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     eval.set_display_host(Box::new(CapturingFindFontDisplayHost {
         last_request: Rc::clone(&last_request),
@@ -920,7 +920,7 @@ fn font_get_symbol_key() {
 #[test]
 fn font_get_keyword_with_colon_matches_keyword_storage_without_colon() {
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
+    let _eval = Context::new(crate::test_utils::unit_runtime());
     let mut face = RuntimeFace::new("default");
     face.family = Some(Value::string("Hack"));
     let font = build_font_object_with_pixel_size(&face, Some(27));
@@ -967,7 +967,7 @@ fn list_fonts_rejects_non_font_spec() {
 #[test]
 fn eval_list_fonts_accepts_live_frame_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
     let result = list_fonts(
         &mut eval,
@@ -1001,7 +1001,7 @@ fn find_font_rejects_non_font_spec() {
 #[test]
 fn eval_find_font_accepts_live_frame_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
     let result = find_font(
         &mut eval,
@@ -1043,7 +1043,7 @@ fn font_family_list_rejects_non_nil_frame_designator() {
 #[test]
 fn eval_font_family_list_accepts_live_frame_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
     let result = font_family_list(&mut eval, vec![Value::make_frame(frame_id)]).unwrap();
     assert!(result.is_nil());
@@ -1053,7 +1053,7 @@ fn eval_font_family_list_accepts_live_frame_designator() {
 fn font_family_list_returns_the_selected_frames_platform_families() {
     crate::test_utils::init_test_tracing();
     let requested_frame = Rc::new(RefCell::new(None));
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = ensure_selected_gui_frame(&mut eval);
     eval.set_display_host(Box::new(FontFamilyListDisplayHost {
         requested_frame: Rc::clone(&requested_frame),
@@ -1157,7 +1157,7 @@ fn close_font_requires_font_object() {
 #[test]
 fn close_font_accepts_opaque_font_object_and_checks_arity() {
     crate::test_utils::init_test_tracing();
-    let _eval = neovm_eval::emacs_core::eval::Context::new(); // sets up heap
+    let _eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime()); // sets up heap
     let font_obj = build_font_object(&RuntimeFace::new("default"));
     assert!(close_font(vec![font_obj]).unwrap().is_nil());
     assert!(close_font(vec![font_obj, Value::NIL]).unwrap().is_nil());
@@ -1169,7 +1169,7 @@ fn close_font_accepts_opaque_font_object_and_checks_arity() {
 #[test]
 fn font_at_eval_returns_nil_on_terminal_frame_after_position_validation() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
 
     eval.buffers
@@ -1194,7 +1194,7 @@ fn font_at_eval_returns_nil_on_terminal_frame_after_position_validation() {
 #[test]
 fn font_at_eval_reads_source_style_inline_face_keywords() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     ensure_selected_gui_frame(&mut eval);
     eval.set_display_host(Box::new(FontAtDisplayHost {
         matched: Some(resolved_font_match(
@@ -1264,7 +1264,7 @@ fn font_at_eval_reads_source_style_inline_face_keywords() {
 #[test]
 fn font_at_eval_passes_inline_face_weight_and_family_to_display_host() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     ensure_selected_gui_frame(&mut eval);
 
     let captured = Rc::new(RefCell::new(None));
@@ -1323,7 +1323,7 @@ fn font_at_eval_passes_inline_face_weight_and_family_to_display_host() {
 #[test]
 fn font_at_eval_passes_effective_inline_family_to_font_selection() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     ensure_selected_gui_frame(&mut eval);
     assert!(eval.set_face_attribute(
         "default",
@@ -1371,7 +1371,7 @@ fn font_at_eval_passes_effective_inline_family_to_font_selection() {
 #[test]
 fn font_at_eval_prefers_backend_selected_font_match_when_available() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     ensure_selected_gui_frame(&mut eval);
     eval.set_display_host(Box::new(FontAtDisplayHost {
         matched: Some(resolved_font_match(
@@ -1439,7 +1439,7 @@ fn internal_char_font_returns_font_object_and_glyph_code() {
     // uses it for the "display: by this font (glyph code)" line. The glyph code
     // is the font-driver glyph index the host reports for the character.
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     ensure_selected_gui_frame(&mut eval);
     eval.set_display_host(Box::new(FontAtDisplayHost {
         matched: Some(resolved_font_match(
@@ -1479,7 +1479,7 @@ fn internal_char_font_returns_font_object_and_glyph_code() {
 #[test]
 fn internal_char_font_uses_explicit_character_at_a_buffer_position() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     ensure_selected_gui_frame(&mut eval);
     eval.set_display_host(Box::new(FontAtDisplayHost {
         matched: Some(resolved_font_match(
@@ -1517,7 +1517,7 @@ fn internal_char_font_uses_explicit_character_at_a_buffer_position() {
 #[test]
 fn internal_char_font_returns_nil_when_current_buffer_is_not_displayed() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     ensure_selected_gui_frame(&mut eval);
     eval.set_display_host(Box::new(FontAtDisplayHost {
         matched: Some(resolved_font_match(
@@ -1569,7 +1569,7 @@ fn internal_char_font_returns_nil_when_current_buffer_is_not_displayed() {
 #[test]
 fn internal_char_font_returns_nil_when_the_driver_cannot_encode_the_character() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     ensure_selected_gui_frame(&mut eval);
     eval.set_display_host(Box::new(FontAtDisplayHost {
         matched: Some(resolved_font_match(
@@ -1602,7 +1602,7 @@ fn internal_char_font_returns_nil_when_the_driver_cannot_encode_the_character() 
 #[test]
 fn internal_char_font_preserves_the_full_emacs_character_domain_to_the_host() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     ensure_selected_gui_frame(&mut eval);
     let captured = Rc::new(RefCell::new(None));
     eval.set_display_host(Box::new(CapturingFontAtDisplayHost {
@@ -1636,7 +1636,7 @@ fn internal_char_font_preserves_the_full_emacs_character_domain_to_the_host() {
 #[test]
 fn font_info_eval_accepts_font_object_on_live_gui_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     {
         let frame = eval
@@ -1701,7 +1701,7 @@ fn font_info_eval_accepts_font_object_on_live_gui_frame() {
 #[test]
 fn query_font_uses_stored_metrics_when_file_probe_is_unavailable() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     {
         let frame = eval
@@ -1788,7 +1788,7 @@ fn query_font_uses_stored_metrics_when_file_probe_is_unavailable() {
 #[test]
 fn query_font_uses_opened_object_metrics_without_a_font_file() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = ensure_selected_gui_frame(&mut eval);
     {
         let frame = eval
@@ -1917,7 +1917,7 @@ fn opened_font_retains_exact_backend_identity_and_variations() {
 #[test]
 fn font_info_eval_reports_font_vector_file_slot_on_live_gui_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     {
         let frame = eval
@@ -1954,7 +1954,7 @@ fn font_info_eval_reports_font_vector_file_slot_on_live_gui_frame() {
 #[test]
 fn font_shape_gstring_rejects_invalid_shape_and_accepts_valid_opened_font() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let invalid = Value::vector(vec![Value::fixnum(0)]);
     let err = font_shape_gstring(&mut eval, vec![invalid, Value::NIL]).unwrap_err();
     assert!(
@@ -1998,7 +1998,7 @@ fn font_shape_gstring_fills_slots_through_the_installed_shaper() {
     // driver cannot shape. The stub returned nil unconditionally, which made
     // every font-shaped ligature composition fail.
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
 
     let font = build_font_object(&RuntimeFace::new("default"));
     let gstring = neovm_text::emacs_core::composite::composition_get_gstring(
@@ -2063,7 +2063,7 @@ fn font_shape_gstring_adjusts_zero_width_clusters() {
     // whose glyphs accumulate zero width gets its last glyph's ADJUSTMENT
     // set to [0 0 width+1] so the cursor can be placed on it.
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let font = build_font_object(&RuntimeFace::new("default"));
     let gstring = neovm_text::emacs_core::composite::composition_get_gstring(
         &mut eval,
@@ -2129,7 +2129,7 @@ fn font_shape_gstring_caches_by_header_and_returns_the_cached_gstring() {
     // a second font-shape-gstring call with the same header returns the
     // CACHED gstring (with its ID slot set), not a fresh shaping.
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let font = build_font_object(&RuntimeFace::new("default"));
     let build = |eval: &mut Context| {
         neovm_text::emacs_core::composite::composition_get_gstring(
@@ -2186,7 +2186,7 @@ fn font_shape_gstring_caches_by_header_and_returns_the_cached_gstring() {
 #[test]
 fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.gc_stress = false;
     // Establish the old generation before creating the cache-only young graph.
     eval.gc_collect_exact();
@@ -2325,7 +2325,7 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
 #[test]
 fn font_shape_gstring_grows_the_glyph_vector_when_the_shaper_needs_room() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let font = build_font_object(&RuntimeFace::new("default"));
     let gstring = neovm_text::emacs_core::composite::composition_get_gstring(
         &mut eval,
@@ -2476,7 +2476,7 @@ enum ShapeFailure {
 
 fn assert_font_shape_driver_survives(failure: ShapeFailure) {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let font = build_font_object(&RuntimeFace::new("default"));
     eval.font_shape_fn = Some(Box::new(move |_eval, gstring, _direction| {
         let header = gstring.as_vector_data().expect("gstring")[0];

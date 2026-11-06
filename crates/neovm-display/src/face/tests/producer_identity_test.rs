@@ -223,7 +223,7 @@ fn depth_refusal_precedes_noncanonical_face_name_fallback() {
 
 #[test]
 fn face_producer_resolution_preserves_lists_plists_depth_and_source_identity() {
-    let _context = neovm_eval::emacs_core::eval::Context::new();
+    let _context = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let roots = ScratchRoots::new();
     let mut table = FaceTable::new();
     let mut parent = foreground("cont9-face-parent", Color::rgb(12, 34, 56));
@@ -279,7 +279,7 @@ fn face_producer_resolution_preserves_lists_plists_depth_and_source_identity() {
 #[test]
 fn producer_constructor_preserves_symbol_accounting_tags_and_fallback() {
     use neovm_value::tagged::gc::MemoryUseCountSlot;
-    let _context = neovm_eval::emacs_core::eval::Context::new();
+    let _context = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     for value in [
         Value::symbol("cont9-account-ordinary"),
         Value::symbol(":cont9-account-keyword"),
@@ -329,7 +329,7 @@ fn public_face_producer_resolver_matches_existing_name_entry() {
 fn fixed_face_resolver_preserves_name_tags_and_symbol_accounting() {
     use neovm_value::intern::WellKnown;
     use neovm_value::tagged::gc::MemoryUseCountSlot;
-    let _context = neovm_eval::emacs_core::eval::Context::new();
+    let _context = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let mut table = FaceTable::new();
     for handle in [WellKnown::Default, WellKnown::ModeLine, WellKnown::Fringe] {
         let name = handle.name();
@@ -364,7 +364,8 @@ fn producer_constructor_observes_completed_cross_thread_unintern_reintern() {
     use neovm_value::tagged::gc::MemoryUseCountSlot;
     // This Context and its accounting stay on the reader thread. The worker
     // receives only a native SymId and static spelling, never heap/Context data.
-    let _reader_context = neovm_eval::emacs_core::eval::Context::new();
+    let _reader_context =
+        neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let name = "cont9-producer-cross-thread-reintern";
     let old_id = intern(name);
     let old_value = Value::from_sym_id(old_id);

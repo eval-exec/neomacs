@@ -3,7 +3,7 @@ use neovm_eval::emacs_core::eval::Context;
 
 #[test]
 fn image_identity_owns_binary_data_across_mutation() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let spec = eval
         .eval_str("(progn (setq image-payload (unibyte-string 255 0)) (setq image-spec (list 'image :type 'png :data image-payload)))")
         .unwrap();
@@ -28,7 +28,7 @@ fn image_identity_owns_binary_data_across_mutation() {
 
 #[test]
 fn image_identity_tracks_deep_list_and_vector_payloads() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     for wrapper in ["(list nested)", "(vector nested)"] {
         let setup = format!(
             "(progn (setq image-payload (list 1) nested image-payload n 0)
@@ -49,7 +49,7 @@ fn image_identity_tracks_deep_list_and_vector_payloads() {
 
 #[test]
 fn image_identity_ignores_acyclic_sharing_and_tracks_nested_cycles() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let shared = eval
         .eval_str("(progn (setq part (list 1 2)) (list 'image :metadata (vector part part)))")
         .unwrap();

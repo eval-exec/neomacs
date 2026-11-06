@@ -70,7 +70,7 @@ fn image_source_spellings_preserve_bytes_mode_and_decoder_input() {
 fn image_source_materializes_base_uri_without_lisp_properties() {
     use neovm_value::heap_types::LispString;
 
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.setup_thread_locals();
     let mut uri = LispString::from_utf8("/images/字/");
     let _ = uri.intervals_mut();
@@ -625,7 +625,7 @@ fn image_mask_p_not_image() {
 fn image_mask_p_resolves_image_and_reports_a_clipping_mask_on_gui_frame() {
     crate::test_utils::init_test_tracing();
     let requests = Arc::new(Mutex::new(Vec::new()));
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     eval.frames
         .get_mut(frame_id)
@@ -647,7 +647,7 @@ fn image_mask_p_resolves_image_and_reports_a_clipping_mask_on_gui_frame() {
 #[test]
 fn image_mask_p_does_not_confuse_continuous_alpha_with_a_clipping_mask() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     eval.frames
         .get_mut(frame_id)
@@ -930,7 +930,7 @@ fn image_flush_rejects_non_window_frame() {
 #[test]
 fn image_flush_accepts_selected_neo_window_system_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.create_buffer("*scratch*");
     let frame = eval.frames.create_frame("F1", 960, 640, buffer);
     eval.frames
@@ -952,7 +952,7 @@ fn image_flush_accepts_selected_neo_window_system_frame() {
 #[test]
 fn image_flush_lisp_call_accepts_selected_neo_window_system_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.create_buffer("*scratch*");
     let frame = eval.frames.create_frame("F1", 960, 640, buffer);
     eval.frames
@@ -972,7 +972,7 @@ fn image_flush_lisp_call_accepts_selected_neo_window_system_frame() {
 fn image_flush_invalidates_exact_spec_across_its_face_variants() {
     crate::test_utils::init_test_tracing();
     let invalidations = Arc::new(Mutex::new(Vec::new()));
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.create_buffer("*scratch*");
     let frame = eval.frames.create_frame("F1", 960, 640, buffer);
     eval.frames
@@ -1019,7 +1019,7 @@ fn image_flush_all_frames() {
 fn image_flush_all_frames_invalidates_spec_with_display_host() {
     crate::test_utils::init_test_tracing();
     let invalidations = Arc::new(Mutex::new(Vec::new()));
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.create_buffer("*scratch*");
     let frame = eval.frames.create_frame("F1", 960, 640, buffer);
     eval.frames
@@ -1146,7 +1146,7 @@ fn clear_image_cache_with_animation_cache_list() {
 fn clear_image_cache_nil_filter_clears_catalog_with_gui_host() {
     crate::test_utils::init_test_tracing();
     let clear_all_calls = Arc::new(Mutex::new(0usize));
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     eval.frames
         .get_mut(frame_id)
@@ -1168,7 +1168,7 @@ fn clear_image_cache_nil_filter_clears_catalog_with_gui_host() {
 fn clear_image_cache_filename_filter_invalidates_source() {
     crate::test_utils::init_test_tracing();
     let invalidations = Arc::new(Mutex::new(Vec::new()));
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_display_host(Box::new(RecordingImageDisplayHost {
         invalidations: Arc::clone(&invalidations),
         ..Default::default()
@@ -1188,7 +1188,7 @@ fn clear_image_cache_filename_filter_invalidates_source() {
 fn clear_image_cache_animation_filter_skips_image_clear() {
     crate::test_utils::init_test_tracing();
     let clear_all_calls = Arc::new(Mutex::new(0usize));
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_display_host(Box::new(RecordingImageDisplayHost {
         clear_all_calls: Arc::clone(&clear_all_calls),
         ..Default::default()
@@ -1203,7 +1203,7 @@ fn clear_image_cache_animation_filter_retires_only_its_sequence_source() {
     crate::test_utils::init_test_tracing();
     let image_invalidations = Arc::new(Mutex::new(Vec::new()));
     let animation_invalidations = Arc::new(Mutex::new(Vec::new()));
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_display_host(Box::new(RecordingImageDisplayHost {
         invalidations: Arc::clone(&image_invalidations),
         animation_invalidations: Arc::clone(&animation_invalidations),
@@ -1239,7 +1239,7 @@ fn image_cache_size_is_zero() {
 #[test]
 fn image_c_variables_match_gnu_defaults() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     assert_eq!(
         eval.eval_str(
             "(list (boundp 'image-cache-eviction-delay)
@@ -1348,7 +1348,7 @@ fn image_metadata_second_arg_validates_frame_designator() {
 #[test]
 fn image_metadata_returns_nil_on_gui_frame_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     eval.frames
         .get_mut(frame_id)
@@ -1370,7 +1370,7 @@ fn image_metadata_returns_nil_on_gui_frame_like_gnu() {
 #[test]
 fn image_metadata_converts_typed_animation_metadata_at_the_lisp_boundary() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     eval.frames
         .get_mut(frame_id)
@@ -1421,7 +1421,7 @@ fn image_metadata_preserves_gnu_default_animation_delay_marker() {
 #[test]
 fn neomacs_image_extent_returns_size_plist_on_gui_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     eval.frames
         .get_mut(frame_id)
@@ -1545,7 +1545,7 @@ fn image_transforms_p_reports_the_transforms_neomacs_implements() {
     // `cl-assert`: it accepts either imagemagick or native transforms, and
     // its own comment says imagemagick is NOT required when transforms exist.
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     eval.frames
         .get_mut(frame_id)
@@ -1567,7 +1567,7 @@ fn image_transforms_p_is_nil_without_a_window_system() {
     // transforms. telega.el relies on this — it skips the requirement entirely
     // when there is no graphical frame.
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
 
     let result = builtin_image_transforms_p(&mut eval, vec![Value::make_frame(frame_id)])
@@ -1583,7 +1583,7 @@ fn image_transforms_p_is_nil_without_a_window_system() {
 fn image_transforms_p_with_frame() {
     crate::test_utils::init_test_tracing();
     // `nil` means "the selected frame"; a TTY selected frame reports nothing.
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let result = builtin_image_transforms_p(&mut eval, vec![Value::NIL]);
     assert!(result.is_ok());
@@ -1593,7 +1593,7 @@ fn image_transforms_p_with_frame() {
 #[test]
 fn image_transforms_p_with_non_integer_or_small_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_image_transforms_p(&mut eval, vec![Value::fixnum(1)]);
     assert!(if matches!(
         result.kinded_ref(),
@@ -1612,7 +1612,7 @@ fn image_transforms_p_with_non_integer_or_small_frame() {
 #[test]
 fn image_transforms_p_too_many_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_image_transforms_p(&mut eval, vec![Value::NIL, Value::NIL]);
     assert!(result.is_err());
 }
@@ -1778,7 +1778,7 @@ fn round_trip_create_then_type() {
 #[test]
 fn image_types_bootstrap_list_matches_gnu_linux_order() {
     crate::test_utils::init_test_tracing();
-    let eval = neovm_eval::emacs_core::eval::Context::new();
+    let eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let image_types = eval
         .obarray()
         .symbol_value_copied("image-types")
@@ -1814,7 +1814,7 @@ fn round_trip_create_then_size() {
 fn image_size_uses_display_host_resolution_in_gui_context() {
     crate::test_utils::init_test_tracing();
     let requests = Arc::new(Mutex::new(Vec::new()));
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     eval.frames
         .get_mut(frame_id)
@@ -1854,7 +1854,7 @@ fn image_size_uses_display_host_resolution_in_gui_context() {
 #[test]
 fn image_size_pixels_t_converts_logical_layout_to_device_pixels() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     {
         let frame = eval.frames.get_mut(frame_id).expect("selected frame");
@@ -1896,7 +1896,7 @@ fn image_size_pixels_t_converts_logical_layout_to_device_pixels() {
 #[test]
 fn image_size_includes_margin_and_relief_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     eval.frames
         .get_mut(frame_id)
@@ -1926,7 +1926,7 @@ fn image_size_includes_margin_and_relief_like_gnu() {
 #[test]
 fn image_size_pixels_nil_returns_character_units_as_floats() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     {
         let frame = eval.frames.get_mut(frame_id).expect("selected frame");
@@ -2164,7 +2164,7 @@ fn messages_text(eval: &Context) -> String {
 /// the characters a reader would notice first.
 #[test]
 fn a_failed_image_reaches_messages_with_gnus_quoting() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     // This fixture tests GNU curve quoting, independently of the host locale.
     eval.obarray_mut()
         .set_symbol_value("text-quoting-style", Value::symbol("curve"));
@@ -2188,7 +2188,7 @@ fn a_failed_image_reaches_messages_with_gnus_quoting() {
 /// A drain drains: the same failure is not logged again by the next call.
 #[test]
 fn a_drained_failure_is_not_logged_twice() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     // This fixture tests GNU curve quoting, independently of the host locale.
     eval.obarray_mut()
         .set_symbol_value("text-quoting-style", Value::symbol("curve"));
@@ -2208,7 +2208,7 @@ fn a_drained_failure_is_not_logged_twice() {
 /// the diagnostic goes through the same `message_dolog` as any other message.
 #[test]
 fn a_nil_message_log_max_silences_image_diagnostics() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.obarray_mut()
         .set_symbol_value("message-log-max", Value::NIL);
     eval.set_display_host(Box::new(FailingImageDisplayHost::new(vec![

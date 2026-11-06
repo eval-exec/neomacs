@@ -168,7 +168,7 @@ fn box_style_codes_match_gnu_face_box_type() {
 
 #[test]
 fn face_plist_distinguishes_plain_boxes_from_flat_button() {
-    let mut context = neovm_eval::emacs_core::eval::Context::new();
+    let mut context = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     for (form, expected_style) in [
         ("t", BoxStyle::Simple),
         ("2", BoxStyle::Simple),
@@ -241,7 +241,7 @@ fn face_table_standard_faces() {
 #[test]
 fn face_table_pdump_uses_symbol_identity() {
     crate::test_utils::init_test_tracing();
-    let eval = neovm_eval::emacs_core::eval::Context::new();
+    let eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let dump = neovm_eval::emacs_core::pdump::convert::dump_evaluator(&eval);
     assert!(dump.face_table.faces.is_empty());
     assert!(!dump.face_table.face_ids.is_empty());
@@ -250,7 +250,7 @@ fn face_table_pdump_uses_symbol_identity() {
 #[test]
 fn face_table_pdump_preserves_lisp_owned_attrs() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let mut face = Face::new("pdump-face");
     face.family = Some(Value::symbol("unspecified"));
     face.foundry = Some(Value::string("OpenAI"));
@@ -301,7 +301,7 @@ fn face_table_pdump_preserves_lisp_owned_attrs() {
 #[test]
 fn face_table_pdump_keeps_inherit_as_symbols() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let mut face = Face::new("pdump-inherit-face");
     face.inherit = Some(Value::list(vec![
         Value::symbol("font-lock-keyword-face"),

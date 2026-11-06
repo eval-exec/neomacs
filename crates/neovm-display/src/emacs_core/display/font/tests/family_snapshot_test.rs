@@ -113,7 +113,7 @@ fn frozen_families_match_exact_name_bytes_with_ascii_case_folding_only() {
 #[test]
 fn real_family_setter_publishes_a_new_epoch_and_preserves_old_snapshot() {
     crate::test_utils::init_test_tracing();
-    let _eval = neovm_eval::emacs_core::eval::Context::new();
+    let _eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let before = crate::emacs_core::fontset::fontset_generation();
     crate::emacs_core::xfaces::builtin_internal_set_alternative_font_family_alist(vec![
         Value::list(vec![Value::list(vec![
