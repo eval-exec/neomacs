@@ -154,7 +154,7 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn dynamic_module_reset() {
-                absent_layer_unlinked("ABSENT-LAYER system::dynamic_module.reset");
+                absent_layer_panic("ABSENT-LAYER system::dynamic_module.reset");
             }
 
             pub(crate) fn dynamic_module_fingerprint(acc: &mut u64) {
