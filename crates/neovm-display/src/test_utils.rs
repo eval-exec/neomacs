@@ -1092,7 +1092,7 @@ mod unit_runtime {
         fn construction_reaches_no_panicking_absent_layer_slot() {
             let _ = take_absent_layer_hits_for_test();
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let mut context = crate::emacs_core::eval::Context::new(unit_runtime());
+                let mut context = neovm_eval::emacs_core::eval::Context::new(unit_runtime());
                 context
                     .eval_str("(+ 1 2)")
                     .map(|_| ())
