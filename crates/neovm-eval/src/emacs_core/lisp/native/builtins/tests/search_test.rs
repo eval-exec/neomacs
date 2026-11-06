@@ -7,7 +7,7 @@ use super::*;
 #[test]
 fn string_match_uses_predeclared_search_state_symbols() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let args = [Value::string("a"), Value::string("a")];
 
     eval.obarray_mut()

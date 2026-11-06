@@ -97,7 +97,7 @@ fn two_pairs() -> Value {
 #[test]
 fn compiled_hash_literal_ignores_size_metadata_like_gnu() {
     let _roots = TestRootScope::new();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let expected = include_str!("tsb_literal_size/metadata.expect");
     let sizes = [
         Value::fixnum(3),
@@ -125,7 +125,7 @@ fn compiled_hash_literal_ignores_size_metadata_like_gnu() {
 #[test]
 fn compiled_hash_literal_huge_size_does_not_control_allocation() {
     let _roots = TestRootScope::new();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let expected = include_str!("tsb_literal_size/huge.expect").trim();
     let table = converted_literal(
         &mut context,

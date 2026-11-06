@@ -8,7 +8,7 @@ use neovm_value::value::Value;
 fn make_byte_code_keeps_literal_shaped_constants_verbatim() {
     // A bare Context has no macros (no dotimes/unless), so the form sticks
     // to special forms and subrs.
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     // GNU 31.1 answers (t t t make-hash-table-from-literal) for this form.
     let result = ctx
         .eval_str(

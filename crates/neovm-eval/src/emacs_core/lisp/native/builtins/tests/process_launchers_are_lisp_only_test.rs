@@ -35,7 +35,7 @@ const LISP_ONLY_LAUNCHERS: &[(&str, &str)] = &[
 #[test]
 fn the_four_launchers_are_void_on_a_bare_evaluator_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     // Control: the primitive all four are built on IS `DEFUN'ed in GNU's
     // src/process.c:1767, so a bare evaluator must still answer for it.
     for primitive in ["make-process", "processp", "process-command"] {
@@ -275,7 +275,7 @@ fn no_rust_subr_is_registered_for_the_four_names() {
     crate::test_utils::init_test_tracing();
     // The global subr registry is populated by `init_builtins', which runs
     // when an evaluator is built; ask for one before reading the table.
-    let _eval = Context::new();
+    let _eval = Context::new(crate::test_utils::unit_runtime());
     for (name, _) in LISP_ONLY_LAUNCHERS {
         assert!(
             crate::emacs_core::eval::lookup_global_subr_entry(neovm_value::intern::intern(name))

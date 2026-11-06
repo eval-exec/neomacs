@@ -3,7 +3,7 @@ use neovm_value::value::Value;
 
 #[test]
 fn issue554_positioned_coding_arguments_honor_symbol_mode() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for form in [
         "(let ((symbols-with-pos-enabled t)) (coding-system-p (position-symbol 'utf-8-unix 0)))",
         "(let ((symbols-with-pos-enabled t)) (eq (check-coding-system (position-symbol 'utf-8-unix 0)) 'utf-8-unix))",
@@ -19,7 +19,7 @@ fn issue554_positioned_coding_arguments_honor_symbol_mode() {
 
 #[test]
 fn issue554_positioned_feature_membership_and_original_storage() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let result = ctx
         .eval_str(
             "(let ((features nil) (sp (position-symbol 'issue554-feature 0)))
@@ -39,7 +39,7 @@ fn issue554_positioned_feature_membership_and_original_storage() {
 
 #[test]
 fn issue554_intern_soft_preserves_position_and_exact_symbol_identity() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let result = ctx
         .eval_str(
             "(let* ((oa (obarray-make 2)) (s (intern \"issue554-intern\" oa))
@@ -59,7 +59,7 @@ fn issue554_intern_soft_preserves_position_and_exact_symbol_identity() {
 
 #[test]
 fn issue554_functionp_rejects_non_nil_autoload_type_in_both_modes() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let result = ctx
         .eval_str(
             "(progn (fset 'issue554-autoload-function

@@ -9,7 +9,7 @@ pub use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
 fn leaf_context() -> Context {
     crate::test_utils::init_test_tracing();
     set_var_cache_tiers_for_test(&VarCacheTier::ALL);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.obarray
         .set_symbol_value_id(intern("print-circle"), Value::NIL);
     ctx.obarray

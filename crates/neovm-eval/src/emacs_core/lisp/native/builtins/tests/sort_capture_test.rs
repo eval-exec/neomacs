@@ -7,7 +7,7 @@ use neovm_value::value::Value;
 #[test]
 fn sort_capture_resolves_builtin_alias_objects() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str("(defalias 'sort-capture-alias 'string-lessp)")
         .expect("install alias");
     let builtin = eval
@@ -52,7 +52,7 @@ fn sort_capture_redefined_or_advised_string_predicate_is_generic() {
 #[test]
 fn sort_capture_keeps_void_and_autoload_symbols() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str("(autoload 'sort-capture-autoload \"sort-capture-missing-file\")")
         .expect("install autoload");
     for name in ["sort-capture-void", "sort-capture-autoload"] {
@@ -68,7 +68,7 @@ fn sort_capture_keeps_void_and_autoload_symbols() {
 #[test]
 fn sort_capture_direct_numeric_subr_is_its_own_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let builtin = eval.obarray().symbol_function(">").expect("builtin cell");
     let Some(SortPredicate::Subr {
         designator, subr, ..
@@ -83,7 +83,7 @@ fn sort_capture_direct_numeric_subr_is_its_own_designator() {
 #[test]
 fn sort_capture_direct_numeric_lessp_takes_the_numeric_path() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let builtin = eval.obarray().symbol_function("<").expect("builtin cell");
     let Some(SortPredicate::NumericLessp { subr, .. }) = capture_sort_predicate(&mut eval, builtin)
     else {

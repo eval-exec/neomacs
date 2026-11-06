@@ -10,7 +10,7 @@ use crate::emacs_core::{Context, format_eval_result};
 /// result is printed.
 fn eval_after_churn(form: &str) -> String {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let src = format!(
         "(let ((result {form}) (i 0))
            (while (< i 256) (list i i i) (setq i (1+ i)))

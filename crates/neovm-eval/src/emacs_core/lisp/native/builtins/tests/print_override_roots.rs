@@ -4,7 +4,7 @@ use super::*;
 #[test]
 fn override_cursor_root_release_keeps_print_binding_until_outer_unwind() {
     crate::test_utils::init_test_tracing();
-    let mut context = super::super::eval::Context::new();
+    let mut context = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     let original = context.obarray.symbol_value_copied("print-length");
     let original_depth = context.specpdl.len();
     let mut scope = super::super::print::PrintEvaluationGuard::new(&mut context);

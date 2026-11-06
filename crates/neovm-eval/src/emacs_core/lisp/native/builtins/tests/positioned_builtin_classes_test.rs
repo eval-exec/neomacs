@@ -3,7 +3,7 @@
 use crate::emacs_core::{eval::Context, print::print_value};
 
 fn answer(source: &str) -> String {
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     print_value(&context.eval_str(source).expect("positioned builtin form"))
 }
 

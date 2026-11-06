@@ -27,7 +27,7 @@ const PROTOTYPE: &str = "(setq mci-proto (make-byte-code 0 \"\\300\\207\" \
 
 #[test]
 fn make_closure_receives_its_arguments_as_a_slice() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let entry = crate::emacs_core::eval::lookup_global_subr_entry(intern("make-closure"))
         .expect("make-closure is a builtin subr");
     assert!(
@@ -38,7 +38,7 @@ fn make_closure_receives_its_arguments_as_a_slice() {
 
 #[test]
 fn make_closure_is_reachable_through_funcall_apply_and_bytecode() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     eval(&mut ctx, PROTOTYPE);
     assert_eq!(
         eval(
@@ -125,7 +125,7 @@ fn data(v: Value) -> &'static ByteCodeFunction {
 
 #[test]
 fn make_closure_instance_patches_the_prefix_and_keeps_every_other_slot() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let proto = eval(
         &mut ctx,
         "(make-byte-code 0 \"\\300\\301\\302E\\207\" [V0 V1 mci-tail] 3 \
@@ -213,7 +213,7 @@ fn make_closure_instance_patches_the_prefix_and_keeps_every_other_slot() {
 
 #[test]
 fn make_closure_widening_the_prefix_is_monotone() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let proto = eval(&mut ctx, "(make-byte-code 0 \"\\300\\207\" [V0 V1 V2] 1)");
     make_closure(proto, &[Value::fixnum(1)]);
     #[cfg(feature = "jit")]
@@ -242,7 +242,7 @@ fn make_closure_widening_the_prefix_is_monotone() {
 
 #[test]
 fn make_closure_rejects_more_captures_than_constants() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     eval(
         &mut ctx,
         "(setq mci-small (make-byte-code 0 \"\\300\\207\" [V0] 1))",
@@ -260,7 +260,7 @@ fn make_closure_rejects_more_captures_than_constants() {
 /// instance gets owned storage and the mapping is never written.
 #[test]
 fn make_closure_copies_a_mapped_prototype_pool() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let image: &'static [Value] = Box::leak(
         vec![
             Value::symbol("V0"),
@@ -303,7 +303,7 @@ fn make_closure_copies_a_mapped_prototype_pool() {
 /// prefix) replaces the leading environment values instead.
 #[test]
 fn make_closure_on_an_environment_closure_rebinds_the_environment() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let env = eval(&mut ctx, "(list (cons 'mci-a 1) (cons 'mci-b 2))");
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: Vec::new(),
@@ -333,7 +333,7 @@ fn make_closure_on_an_environment_closure_rebinds_the_environment() {
 /// copying it, and `(aref INSTANCE 1)` still reads the prototype's bytes.
 #[test]
 fn make_closure_instances_share_the_prototype_bytes() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let proto = eval(
         &mut ctx,
         "(make-byte-code 0 \"\\300\\207\" [V0 mci-shared] 1)",
@@ -362,7 +362,7 @@ fn make_closure_instances_share_the_prototype_bytes() {
 /// builds the same instance as the in-place writer.
 #[test]
 fn make_closure_by_clone_and_in_place_build_the_same_instance() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let proto = eval(
         &mut ctx,
         "(make-byte-code 0 \"\\300\\301\\302E\\207\" [V0 V1 mci-tail] 3 \

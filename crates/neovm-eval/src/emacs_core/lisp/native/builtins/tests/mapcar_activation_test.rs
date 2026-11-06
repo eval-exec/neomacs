@@ -39,7 +39,7 @@ const CALLBACKS: [Callback; 5] = [
 
 fn context() -> Context {
     crate::test_utils::init_test_tracing();
-    Context::new()
+    Context::new(crate::test_utils::unit_runtime())
 }
 
 fn identity(_: &mut Context, item: Value) -> EvalResult {

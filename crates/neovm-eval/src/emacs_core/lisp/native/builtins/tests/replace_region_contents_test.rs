@@ -131,7 +131,7 @@ fn replace_region_contents_live_budget_preserves_interior_matches() {
 /// (`OK <printed>` / `ERR ...`), matching the other builtin tests' style.
 fn eval_one(source: &str) -> String {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     load_minimal_gnu_backquote_runtime(&mut eval);
     let results = eval.eval_str_each(source);
     let last = results.last().expect("at least one form");

@@ -23,7 +23,7 @@ fn map_resume_capture_observes_every_resumed_cell_and_preserves_result_prefix() 
     for collect in [false, true] {
         for split in 0..=len {
             for changed_index in 0..len {
-                let mut eval = Context::new();
+                let mut eval = Context::new(crate::test_utils::unit_runtime());
                 let roots = eval.save_vm_roots();
                 let sequence = Value::list((0..len as i64).map(Value::fixnum).collect());
                 eval.push_vm_frame_root(sequence);
@@ -84,7 +84,7 @@ fn map_resume_capture_nested_callbacks_keep_dependencies_and_absolute_indices() 
     crate::test_utils::init_test_tracing();
     let len = 4;
     for split in 0..=len {
-        let mut eval = Context::new();
+        let mut eval = Context::new(crate::test_utils::unit_runtime());
         let roots = eval.save_vm_roots();
         let sources: Vec<_> = (0..len as i64)
             .map(|index| Value::cons(Value::fixnum(11 + index), Value::NIL))

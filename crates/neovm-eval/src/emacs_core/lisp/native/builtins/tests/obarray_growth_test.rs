@@ -33,7 +33,7 @@ fn intern_into(eval: &mut Context, obarray: Value, name: &str) {
 #[test]
 fn a_custom_obarray_grows_on_its_maintained_count() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     // Start small so the sweep crosses several doublings inside one test.
     let obarray = Value::obarray(16);
 
@@ -87,7 +87,7 @@ fn a_custom_obarray_grows_on_its_maintained_count() {
 #[test]
 fn clearing_a_custom_obarray_resets_the_growth_count() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let obarray = Value::obarray(16);
     for i in 0..200 {
         intern_into(&mut eval, obarray, &format!("sym-{i}"));

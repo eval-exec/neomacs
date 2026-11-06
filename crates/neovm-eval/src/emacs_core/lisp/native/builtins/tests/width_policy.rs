@@ -27,7 +27,7 @@ fn gdm_width_policy_default_table_preserves_unicode_ranges() {
 #[test]
 fn gdm_width_policy_ascii_is_not_overridden_by_width_table() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str("(setq char-width-table (make-char-table nil 999))")
         .unwrap();
     let policy = CharacterWidthPolicy::from_context(&ctx);

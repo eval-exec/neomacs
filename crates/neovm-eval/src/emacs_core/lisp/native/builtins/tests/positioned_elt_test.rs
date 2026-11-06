@@ -24,7 +24,7 @@ fn compressed_table(context: &mut Context) -> Value {
 
 #[test]
 fn positioned_elt_public_and_bytecode_access_use_context_policy() {
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     for enabled in [false, true] {
         context.symbols_with_pos_enabled = enabled;
         // Fresh tables avoid GNU's in-place decompression crossing modes.
@@ -44,7 +44,7 @@ fn positioned_elt_public_and_bytecode_access_use_context_policy() {
 
 #[test]
 fn elt_sequence_validation_precedes_index_validation() {
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let answer = context
         .eval_str(
             r#"

@@ -29,7 +29,7 @@ struct MappingOutcome {
 /// normal stop if mutation shortened the list. Prefix execution deliberately
 /// uses GNU's source order independently of the resumable loop.
 fn list_snapshot(split: usize, mutation: Mutation, collect: bool, stress: bool) -> MappingOutcome {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.gc_stress = stress;
     let roots = eval.save_vm_roots();
     let sequence = Value::list((0..6).map(Value::fixnum).collect());
@@ -160,7 +160,7 @@ fn outcome(result: Result<Value, Flow>) -> String {
 fn map_resume_initial_dotted_and_circular_lists_fail_before_any_callback() {
     for circular in [false, true] {
         for mapcar in [false, true] {
-            let mut eval = Context::new();
+            let mut eval = Context::new(crate::test_utils::unit_runtime());
             let roots = eval.save_vm_roots();
             eval.eval_str("(setq map-resume-call-count 0)").unwrap();
             let callback = eval
@@ -195,7 +195,7 @@ fn map_resume_initial_dotted_and_circular_lists_fail_before_any_callback() {
 #[test]
 fn map_resume_at_every_indexed_sequence_index_preserves_result_prefix() {
     for source in ["[1 2 3 4]", "\"aλ😀\"", "(bool-vector t nil t nil)", "nil"] {
-        let mut eval = Context::new();
+        let mut eval = Context::new(crate::test_utils::unit_runtime());
         let roots = eval.save_vm_roots();
         let sequence = eval.eval_str(source).unwrap();
         eval.push_vm_frame_root(sequence);

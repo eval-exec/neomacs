@@ -4,7 +4,7 @@ use super::*;
 #[test]
 fn print_binding_selection_finish_keeps_binding_for_outer_unwind() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let origin = ctx.buffers.current_buffer_id().unwrap();
     let target = ctx.buffers.create_buffer("print-binding-target");
     let name = intern("print-binding-scope-test-value");
@@ -27,7 +27,7 @@ fn print_binding_selection_finish_keeps_binding_for_outer_unwind() {
 #[test]
 fn print_binding_selection_finish_restores_buffer_on_lisp_error() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let origin = ctx.buffers.current_buffer_id().unwrap();
     let target = ctx.buffers.create_buffer("print-binding-error-target");
     let mut scope = PrintBindingBufferGuard::new(&mut ctx);
@@ -40,7 +40,7 @@ fn print_binding_selection_finish_restores_buffer_on_lisp_error() {
 #[test]
 fn print_binding_selection_panic_restores_buffer_without_seeding_case_table() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let origin = ctx.buffers.current_buffer_id().unwrap();
     let target = ctx.buffers.create_buffer("print-binding-panic-target");
     let table_symbol = intern("neovm--standard-case-table-object");
@@ -70,7 +70,7 @@ fn print_target_escape_cached_forwarded_bind_survives_selection_restore() {
         for marker in [false, true] {
             crate::test_utils::init_test_tracing();
             set_var_cache_tiers_for_test(&VarCacheTier::ALL);
-            let mut ctx = crate::emacs_core::eval::Context::new();
+            let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
             let origin = ctx.buffers.current_buffer_id().unwrap();
             let target_buffer = ctx.buffers.create_buffer("cached-print-target");
             ctx.buffers
@@ -143,7 +143,7 @@ fn print_target_escape_watched_refusal_preserves_binding_and_buffer_cleanup() {
     }
     crate::test_utils::init_test_tracing();
     set_var_cache_tiers_for_test(&VarCacheTier::ALL);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let origin = ctx.buffers.current_buffer_id().unwrap();
     let target_buffer = ctx.buffers.create_buffer("watched-print-target");
     let other = ctx.buffers.create_buffer("watched-print-other");

@@ -45,7 +45,7 @@ fn assert_matches_reference(eval: &Context, label: &str) {
 #[test]
 fn counting_sort_reproduces_the_comparison_bucket_order() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     assert_matches_reference(&eval, "startup obarray");
 
     // Interning bumps the membership epoch, so the order is rebuilt: the two
@@ -70,7 +70,7 @@ fn counting_sort_reproduces_the_comparison_bucket_order() {
 #[test]
 fn a_symbol_interned_after_an_enumeration_joins_the_next_one() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let before = global_obarray_symbol_ids_in_bucket_order(eval.obarray(), Value::NIL);
     let probe = neovm_value::intern::intern("obarray-order-late-probe");
     assert!(!before.contains(&probe), "probe is not a member yet");

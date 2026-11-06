@@ -89,7 +89,7 @@ fn string_ordering_preserves_gnu_mixed_encoding_order() {
 #[test]
 fn string_ordering_accepts_raw_unibyte_symbol_names_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = eval
         .eval_str(
             r#"(let* ((name (unibyte-string 255))
@@ -123,7 +123,7 @@ fn string_ordering_accepts_raw_unibyte_symbol_names_like_gnu() {
 #[test]
 fn format_percent_s_takes_a_symbols_properties_from_its_name_string() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let rendered = eval
         .eval_str(
             r#"(prin1-to-string
@@ -180,7 +180,7 @@ fn substring_can_return_raw_non_utf8_unibyte_bytes() {
 fn substring_copies_text_properties_through_gnu_add_properties_order() {
     crate::test_utils::init_test_tracing();
 
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = eval
         .eval_str(
             r#"(let* ((s (propertize "abcdef" 'face 'bold 'tag 'source))
@@ -258,7 +258,7 @@ fn concat_preserves_multibyte_text_properties_as_char_intervals() {
 fn concat_applies_source_plists_in_gnu_add_properties_order() {
     crate::test_utils::init_test_tracing();
 
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = eval
         .eval_str(
             r#"(let* ((source (propertize "a" 'face 'bold 'tag 'source))
@@ -374,7 +374,7 @@ fn format_preserves_multibyte_text_properties_as_char_intervals() {
     );
     neovm_value::value::set_string_text_properties_table_for_value(source, table);
 
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_format_wrapper_strict_slice(&mut ctx, &[Value::string("%4s"), source])
         .expect("format should preserve string properties");
     let props = neovm_value::value::get_string_text_properties_table_for_value(result)
@@ -408,7 +408,7 @@ fn format_preserves_multibyte_text_properties_as_char_intervals() {
 #[test]
 fn format_without_directives_returns_the_format_string_unchanged_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
 
     let preserved = ctx
         .eval_str(
@@ -467,7 +467,7 @@ fn format_reverses_percent_s_text_property_plist_order_like_gnu_add_properties()
     );
     neovm_value::value::set_string_text_properties_table_for_value(source, table);
 
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_format_wrapper_strict_slice(&mut ctx, &[Value::string("%s ok"), source])
         .expect("format should preserve string properties");
     let props = neovm_value::value::get_string_text_properties_table_for_value(result)
@@ -507,7 +507,7 @@ fn format_exact_percent_s_reuses_the_string_argument_like_gnu() {
     );
     neovm_value::value::set_string_text_properties_table_for_value(source, table);
 
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let formatted =
         builtin_format_wrapper_strict_slice(&mut ctx, &[Value::string("%s"), source]).unwrap();
     let message = builtin_format_message_slice(&mut ctx, &[Value::string("%s"), source]).unwrap();
@@ -520,7 +520,7 @@ fn format_exact_percent_s_reuses_the_string_argument_like_gnu() {
 fn format_percent_s_prints_interpreted_closure_slots_without_string_quotes() {
     crate::test_utils::init_test_tracing();
 
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = ctx
         .eval_str(
             r##"(list
@@ -545,7 +545,7 @@ fn format_percent_s_prints_interpreted_closure_slots_without_string_quotes() {
 fn format_percent_s_promotes_result_when_printer_outputs_non_ascii_text() {
     crate::test_utils::init_test_tracing();
 
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_format_wrapper_strict_slice(
         &mut ctx,
         &[
@@ -570,7 +570,7 @@ fn format_percent_c_matches_gnu_non_ascii_multibyte_width_and_precision() {
     crate::test_utils::init_test_tracing();
 
     fn run_format(fmt: &str, arg: Value) -> LispString {
-        let mut ctx = crate::emacs_core::eval::Context::new();
+        let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
         let result = builtin_format_wrapper_strict_slice(&mut ctx, &[Value::string(fmt), arg])
             .expect("format should evaluate");
         result
@@ -620,7 +620,7 @@ fn format_percent_c_matches_gnu_non_ascii_multibyte_width_and_precision() {
 fn format_string_width_and_precision_use_gnu_display_width() {
     crate::test_utils::init_test_tracing();
 
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let wide_padded =
         builtin_format_wrapper_strict_slice(&mut ctx, &[Value::string("%3s"), Value::string("界")])
             .expect("format should evaluate");
@@ -642,7 +642,7 @@ fn format_string_width_and_precision_use_gnu_display_width() {
 fn format_percent_g_uses_gnu_fixed_precision_for_negative_exponents() {
     crate::test_utils::init_test_tracing();
 
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_format_wrapper_strict_slice(
         &mut ctx,
         &[
@@ -663,7 +663,7 @@ fn format_rejects_uppercase_float_conversions() {
     // (`float_conversion` in editfns.c); uppercase E/G (like F/A) are invalid
     // and must signal `(error "Invalid format operation %X")`.
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
 
     fn invalid_format_message(ctx: &mut crate::emacs_core::eval::Context, fmt: &str) -> String {
         let err = builtin_format_wrapper_strict_slice(
@@ -864,7 +864,7 @@ fn prin1_unibyte_string_into_unibyte_buffer_prints_raw_bytes() {
 #[test]
 fn format_maps_format_string_properties_across_conversion_fields_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut ev = crate::emacs_core::eval::Context::new();
+    let mut ev = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let cases: &[(&str, &str)] = &[
         // xref's first pass: build the width-specific line format.
         (

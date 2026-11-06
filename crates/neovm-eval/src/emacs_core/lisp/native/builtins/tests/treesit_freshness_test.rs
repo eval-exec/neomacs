@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) fn eval_with_json_parser(text: &str) -> (super::super::eval::Context, Value) {
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     eval.buffers
         .current_buffer_mut()
         .expect("current buffer")

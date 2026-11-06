@@ -10,7 +10,7 @@ use neovm_value::value::Value;
 #[test]
 fn terpri_buffer_line_state_tracks_destination_point_and_narrowed_minimum() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let destination = context.buffers.create_buffer("terpri-state-destination");
     context.buffers.get_mut(destination).unwrap().insert("é\nb");
     let target = Value::make_buffer(destination);
@@ -40,7 +40,7 @@ fn terpri_buffer_line_state_tracks_destination_point_and_narrowed_minimum() {
 #[test]
 fn terpri_marker_line_state_uses_marker_without_moving_buffer_point() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let destination = context.buffers.create_buffer("terpri-state-marker");
     context.buffers.get_mut(destination).unwrap().insert("é\nb");
     let marker = make_registered_buffer_marker(
@@ -79,7 +79,7 @@ fn terpri_marker_line_state_uses_marker_without_moving_buffer_point() {
 #[test]
 fn terpri_marker_validation_precedes_beginning_of_line_shortcut() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let detached = make_marker_value(None, None, false);
     let destination = context.buffers.create_buffer("terpri-state-invalid-marker");
     context.buffers.get_mut(destination).unwrap().insert("é\nb");

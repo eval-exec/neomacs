@@ -2,7 +2,7 @@ use crate::emacs_core::{eval::Context, print::print_value};
 
 fn answer(form: &str) -> String {
     print_value(
-        &Context::new()
+        &Context::new(crate::test_utils::unit_runtime())
             .eval_str(form)
             .expect("positioned final boundary"),
     )
