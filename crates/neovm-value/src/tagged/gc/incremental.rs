@@ -2513,9 +2513,12 @@ impl TaggedHeap {
         )
     }
 
-    /// TEST-ONLY mapped-image ownership probe: true when the value's storage
-    /// lives inside the loaded dump image span (image-resident objects).
-    #[cfg(test)]
+    /// VIS row (A4 hand-off, peer 00:24Z): copied mapped-image ownership probe
+    /// for the eval gc_forced_first_cycle oracle - true when the value's
+    /// storage lives inside the loaded dump image span (image-resident
+    /// objects). The image span fields stay private; only the bool is copied.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn mapped_image_owns_for_test(&self, value: TaggedValue) -> bool {
         self.owner_is_mapped(value)
     }
