@@ -3378,12 +3378,18 @@ fn monitor_attributes_geometry_uses_frame_pixel_units() {
     assert!(printed.contains(expected), "{printed}");
 }
 
+fn printed_monitor_attributes(eval: &mut crate::emacs_core::Context, args: Vec<Value>) -> String {
+    let list =
+        crate::emacs_core::builtins::builtin_neomacs_display_monitor_attributes_list(eval, args);
+    crate::emacs_core::print::print_value(&list.expect("monitor attributes"))
+}
+
 #[test]
 fn monitor_attributes_report_scale_factor_only_for_wayland_frames() {
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::builtins::{NeomacsMonitorInfo, set_neomacs_monitor_info};
     let mut eval = crate::emacs_core::Context::new();
-    let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+    let selected = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     set_neomacs_monitor_info(vec![NeomacsMonitorInfo {
         x: 0,
         y: 0,
@@ -3394,24 +3400,27 @@ fn monitor_attributes_report_scale_factor_only_for_wayland_frames() {
         height_mm: 0,
         name: None,
     }]);
-    let printed = |eval: &mut crate::emacs_core::Context| {
-        let list = crate::emacs_core::builtins::builtin_neomacs_display_monitor_attributes_list(
-            eval,
-            vec![],
-        )
-        .unwrap();
-        crate::emacs_core::print::print_value(&list)
-    };
     // GNU's NS and X builds omit it; only PGTK reports it.
-    let without = printed(&mut eval);
+    let without = printed_monitor_attributes(&mut eval, vec![]);
+    // The selected frame stays non-graphical (an emacsclient -t frame); a
+    // Wayland frame elsewhere still makes the frontend's monitors PGTK-shaped.
+    let scratch = eval.buffers.create_buffer("*scratch*");
+    let wayland = eval.frames.create_frame("wayland", 800, 600, scratch);
     eval.frames
-        .get_mut(frame_id)
-        .expect("selected frame")
+        .get_mut(wayland)
+        .expect("Wayland frame")
         .set_display_identity(crate::window::FrameDisplayIdentity::wayland("wayland-0"));
-    let with = printed(&mut eval);
+    eval.frames.select_frame(selected);
+    let with = printed_monitor_attributes(&mut eval, vec![]);
+    let with_frame_arg = printed_monitor_attributes(&mut eval, vec![Value::make_frame(wayland.0)]);
     set_neomacs_monitor_info(vec![]);
     assert!(!without.contains("scale-factor"), "{without}");
-    assert!(with.contains("(scale-factor . 2.0)"), "{with}");
+    for printed in [&with, &with_frame_arg] {
+        // GNU's order: mm-size, scale-factor, frames.
+        let scale = printed.find("(scale-factor . 2.0)").expect(printed);
+        assert!(printed.find("(mm-size").unwrap() < scale, "{printed}");
+        assert!(scale < printed.find("(frames").unwrap(), "{printed}");
+    }
 }
 
 #[test]
