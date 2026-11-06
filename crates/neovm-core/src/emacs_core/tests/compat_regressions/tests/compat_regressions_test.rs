@@ -895,11 +895,16 @@ fn dynamic_library_alist_is_gnu_bound_nil_variable() {
     assert_eq!(out, Value::list(vec![Value::T, Value::NIL, Value::T]));
 }
 
+// These drive the GNU-visible Lisp primitives (`inotify-*`, registered by
+// file_notify/subrs.rs), not eval's freed Rust helpers.  The Lisp entries are
+// the only cross-crate route the file-notification tests need, so the test
+// support visibility on the internal helpers can stay retired.
 #[test]
 #[cfg(target_os = "linux")]
 fn inotify_valid_p_returns_nil() {
     crate::test_utils::init_test_tracing();
-    let out = crate::emacs_core::builtins::inotify_valid_p(vec![Value::fixnum(0)]).unwrap();
+    let mut eval = crate::test_utils::new_context();
+    let out = eval.eval_str("(inotify-valid-p 0)").unwrap();
     assert_eq!(out, Value::NIL);
 }
 
@@ -908,28 +913,26 @@ fn inotify_valid_p_returns_nil() {
 fn inotify_watch_lifecycle() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let watch = crate::emacs_core::builtins::inotify_add_watch(
-        &mut eval,
-        vec![Value::string("."), Value::NIL, Value::symbol("ignore")],
-    )
-    .unwrap();
-    let active = crate::emacs_core::builtins::inotify_valid_p(vec![watch]).unwrap();
-    assert_eq!(active, Value::T);
-    let removed = crate::emacs_core::builtins::inotify_rm_watch(vec![watch]).unwrap();
-    assert_eq!(removed, Value::T);
-    let inactive = crate::emacs_core::builtins::inotify_valid_p(vec![watch]).unwrap();
-    assert_eq!(inactive, Value::NIL);
+    let out = eval
+        .eval_str(
+            "(let ((watch (inotify-add-watch \".\" nil 'ignore)))
+               (list (inotify-valid-p watch)
+                     (inotify-rm-watch watch)
+                     (inotify-valid-p watch)))",
+        )
+        .unwrap();
+    assert_eq!(out, Value::list(vec![Value::T, Value::T, Value::NIL]));
 }
 
 #[test]
 #[cfg(target_os = "linux")]
 fn inotify_rm_watch_invalid_descriptor_signals() {
     crate::test_utils::init_test_tracing();
-    let err = crate::emacs_core::builtins::inotify_rm_watch(vec![Value::fixnum(1)]).unwrap_err();
-    match err.into_kind() {
-        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "file-notify-error"),
-        other => panic!("expected signal, got {other:?}"),
-    }
+    let mut eval = crate::test_utils::new_context();
+    let err = eval
+        .eval_str("(condition-case err (inotify-rm-watch 1) (error (car err)))")
+        .unwrap();
+    assert_eq!(err, Value::symbol("file-notify-error"));
 }
 
 #[test]
@@ -1080,15 +1083,10 @@ fn unlock_file_requires_string_argument() {
 fn inotify_add_watch_requires_string_path_argument() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let err = crate::emacs_core::builtins::inotify_add_watch(
-        &mut eval,
-        vec![Value::NIL, Value::NIL, Value::NIL],
-    )
-    .unwrap_err();
-    match err.into_kind() {
-        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
-        other => panic!("expected signal, got {other:?}"),
-    }
+    let err = eval
+        .eval_str("(condition-case err (inotify-add-watch nil nil nil) (error (car err)))")
+        .unwrap();
+    assert_eq!(err, Value::symbol("wrong-type-argument"));
 }
 
 #[test]
