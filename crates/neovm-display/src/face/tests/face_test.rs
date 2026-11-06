@@ -314,7 +314,7 @@ fn face_table_pdump_keeps_inherit_as_symbols() {
         .face_table
         .face_ids
         .iter()
-        .find(|(sym_id, _)| sym_id.0 == neovm_value::intern::intern("pdump-inherit-face").0)
+        .find(|(sym_id, _)| sym_id.0 == neovm_value::intern::intern("pdump-inherit-face").to_raw())
         .map(|(_, face)| face)
         .expect("dumped pdump-inherit-face");
 

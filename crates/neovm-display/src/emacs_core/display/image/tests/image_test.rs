@@ -931,7 +931,7 @@ fn image_flush_rejects_non_window_frame() {
 fn image_flush_accepts_selected_neo_window_system_frame() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let buffer = eval.buffers.create_buffer("*scratch*");
+    let buffer = eval.edit.buffers.create_buffer("*scratch*");
     let frame = eval.frames.create_frame("F1", 960, 640, buffer);
     eval.frames
         .get_mut(frame)
@@ -953,7 +953,7 @@ fn image_flush_accepts_selected_neo_window_system_frame() {
 fn image_flush_lisp_call_accepts_selected_neo_window_system_frame() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let buffer = eval.buffers.create_buffer("*scratch*");
+    let buffer = eval.edit.buffers.create_buffer("*scratch*");
     let frame = eval.frames.create_frame("F1", 960, 640, buffer);
     eval.frames
         .get_mut(frame)
@@ -973,7 +973,7 @@ fn image_flush_invalidates_exact_spec_across_its_face_variants() {
     crate::test_utils::init_test_tracing();
     let invalidations = Arc::new(Mutex::new(Vec::new()));
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let buffer = eval.buffers.create_buffer("*scratch*");
+    let buffer = eval.edit.buffers.create_buffer("*scratch*");
     let frame = eval.frames.create_frame("F1", 960, 640, buffer);
     eval.frames
         .get_mut(frame)
@@ -1020,7 +1020,7 @@ fn image_flush_all_frames_invalidates_spec_with_display_host() {
     crate::test_utils::init_test_tracing();
     let invalidations = Arc::new(Mutex::new(Vec::new()));
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let buffer = eval.buffers.create_buffer("*scratch*");
+    let buffer = eval.edit.buffers.create_buffer("*scratch*");
     let frame = eval.frames.create_frame("F1", 960, 640, buffer);
     eval.frames
         .get_mut(frame)
@@ -2145,10 +2145,12 @@ impl ImageCatalog for FailingImageDisplayHost {
 }
 
 fn messages_text(eval: &Context) -> String {
-    eval.buffers
+    eval.edit
+        .buffers
         .find_buffer_by_name("*Messages*")
         .map(|id| {
-            eval.buffers
+            eval.edit
+                .buffers
                 .get(id)
                 .map(|buffer| buffer.buffer_string())
                 .unwrap_or_default()

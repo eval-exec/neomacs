@@ -16,7 +16,7 @@ use std::sync::Arc;
 fn tty_posn_split_without_local_output_reads_the_accepted_frame_pool() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer = eval.buffers.current_buffer().expect("buffer").id;
+    let buffer = eval.edit.buffers.current_buffer().expect("buffer").id;
     let frame_id = eval.frames.create_frame("posn-pool-split", 12, 8, buffer);
     let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
     {
@@ -97,7 +97,7 @@ fn tty_posn_split_without_local_output_reads_the_accepted_frame_pool() {
     );
     // Lisp changes live source and topology before the new leaf produces any
     // redisplay output. Accepted numeric cells must survive both transitions.
-    eval.buffers.get_mut(buffer).unwrap().insert("abcd\n");
+    eval.edit.buffers.get_mut(buffer).unwrap().insert("abcd\n");
     let child = eval
         .frames
         .split_window(

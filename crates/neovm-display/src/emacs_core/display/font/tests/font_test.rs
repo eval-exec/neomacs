@@ -1172,7 +1172,8 @@ fn font_at_eval_returns_nil_on_terminal_frame_after_position_validation() {
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
 
-    eval.buffers
+    eval.edit
+        .buffers
         .current_buffer_mut()
         .expect("current buffer for terminal font-at test")
         .insert("abc");
@@ -1217,6 +1218,7 @@ fn font_at_eval_reads_source_style_inline_face_keywords() {
     }));
 
     let buffer = eval
+        .edit
         .buffers
         .current_buffer_mut()
         .expect("current buffer for inline face font-at test");
@@ -1273,6 +1275,7 @@ fn font_at_eval_passes_inline_face_weight_and_family_to_display_host() {
     }));
 
     let buffer = eval
+        .edit
         .buffers
         .current_buffer_mut()
         .expect("current buffer for captured font-at test");
@@ -1337,6 +1340,7 @@ fn font_at_eval_passes_effective_inline_family_to_font_selection() {
     }));
 
     let buffer = eval
+        .edit
         .buffers
         .current_buffer_mut()
         .expect("current buffer for realized fontset font-at test");
@@ -1394,6 +1398,7 @@ fn font_at_eval_prefers_backend_selected_font_match_when_available() {
     }));
 
     let buffer = eval
+        .edit
         .buffers
         .current_buffer_mut()
         .expect("current buffer for backend font-at test");
@@ -1461,6 +1466,7 @@ fn internal_char_font_returns_font_object_and_glyph_code() {
         ..Default::default()
     }));
     let buffer = eval
+        .edit
         .buffers
         .current_buffer_mut()
         .expect("current buffer for internal-char-font test");
@@ -1500,7 +1506,8 @@ fn internal_char_font_uses_explicit_character_at_a_buffer_position() {
         )),
         ..Default::default()
     }));
-    eval.buffers
+    eval.edit
+        .buffers
         .current_buffer_mut()
         .expect("current buffer")
         .insert("abc");
@@ -1538,9 +1545,13 @@ fn internal_char_font_returns_nil_when_current_buffer_is_not_displayed() {
         )),
         ..Default::default()
     }));
-    let hidden = eval.buffers.create_buffer(" *internal-char-font-hidden*");
-    eval.buffers.set_current(hidden);
-    eval.buffers
+    let hidden = eval
+        .edit
+        .buffers
+        .create_buffer(" *internal-char-font-hidden*");
+    eval.edit.buffers.set_current(hidden);
+    eval.edit
+        .buffers
         .current_buffer_mut()
         .expect("hidden current buffer")
         .insert("好");
@@ -1667,7 +1678,8 @@ fn font_info_eval_accepts_font_object_on_live_gui_frame() {
         )),
         ..Default::default()
     }));
-    eval.buffers
+    eval.edit
+        .buffers
         .current_buffer_mut()
         .expect("current buffer")
         .insert("好");
@@ -1738,7 +1750,8 @@ fn query_font_uses_stored_metrics_when_file_probe_is_unavailable() {
         metrics: None,
         capability: None,
     }));
-    eval.buffers
+    eval.edit
+        .buffers
         .current_buffer_mut()
         .expect("current buffer")
         .insert("a好b");
@@ -1827,7 +1840,8 @@ fn query_font_uses_opened_object_metrics_without_a_font_file() {
         }),
         capability: None,
     }));
-    eval.buffers
+    eval.edit
+        .buffers
         .current_buffer_mut()
         .expect("current buffer")
         .insert("好");

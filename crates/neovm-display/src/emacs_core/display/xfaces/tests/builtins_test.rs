@@ -281,6 +281,7 @@ fn font_at_eval_returns_font_object_for_multibyte_buffer_face() {
     .unwrap();
 
     let buffer = eval
+        .edit
         .buffers
         .current_buffer_mut()
         .expect("current buffer for font-at buffer test");

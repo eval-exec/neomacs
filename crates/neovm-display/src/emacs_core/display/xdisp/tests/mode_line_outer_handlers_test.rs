@@ -14,7 +14,11 @@ fn mode_line_outer_binding_errors_block_outer_handlers_and_debugger() {
     for phase in ["let", "unlet"] {
         let mut eval = Context::new(crate::test_utils::unit_runtime());
         eval.set_variable("noninteractive", Value::NIL);
-        let bid = eval.buffers.current_buffer_id().expect("current buffer");
+        let bid = eval
+            .edit
+            .buffers
+            .current_buffer_id()
+            .expect("current buffer");
         eval.frames.create_frame("fx2-outer-handlers", 80, 24, bid);
         eval.eval_str(&format!(
             r#"

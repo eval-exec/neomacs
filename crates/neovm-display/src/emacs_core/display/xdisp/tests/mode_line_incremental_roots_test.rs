@@ -58,7 +58,7 @@ fn gc_mode_line_split_accumulator_roots_restore_on_throw() {
         neovm_eval::emacs_core::eval::VariableView::new(&eval.obarray, &eval.owner),
         &[],
         &eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         &eval.processes,
         &[format],
         |_, _| {

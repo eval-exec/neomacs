@@ -28,7 +28,7 @@ fn resumed_tty_invalidates_idle_redisplay() {
             256,
         ),
     ));
-    let buffer = eval.buffers.current_buffer_id().unwrap();
+    let buffer = eval.edit.buffers.current_buffer_id().unwrap();
     eval.frames
         .create_frame("resume-idle-tty", 640, 384, buffer);
     let log = Rc::new(RefCell::new(Vec::new()));
@@ -39,7 +39,8 @@ fn resumed_tty_invalidates_idle_redisplay() {
     let observed = Rc::clone(&layouts);
     eval.redisplay_fn = Some(Box::new(move |eval| {
         observed.set(observed.get() + 1);
-        eval.buffers
+        eval.edit
+            .buffers
             .current_buffer()
             .unwrap()
             .reset_unchanged_region();

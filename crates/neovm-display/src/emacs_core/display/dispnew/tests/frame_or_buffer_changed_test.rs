@@ -57,29 +57,32 @@ fn user_variable_tracks_buffer_lifecycle() {
 
     check(&mut eval, &mut results);
     check(&mut eval, &mut results);
-    let visible = eval.buffers.create_buffer("neb-unit-visible");
+    let visible = eval.edit.buffers.create_buffer("neb-unit-visible");
     check(&mut eval, &mut results);
     check(&mut eval, &mut results);
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(visible)
         .expect("visible buffer")
         .insert("x");
     check(&mut eval, &mut results);
     check(&mut eval, &mut results);
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(visible)
         .expect("visible buffer")
         .set_read_only_value(true);
     check(&mut eval, &mut results);
     check(&mut eval, &mut results);
-    let hidden = eval.buffers.create_buffer(" *neb-unit-hidden*");
+    let hidden = eval.edit.buffers.create_buffer(" *neb-unit-hidden*");
     check(&mut eval, &mut results);
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(hidden)
         .expect("hidden buffer")
         .insert("h");
     check(&mut eval, &mut results);
-    eval.buffers.kill_buffer(visible);
+    eval.edit.buffers.kill_buffer(visible);
     check(&mut eval, &mut results);
     check(&mut eval, &mut results);
     builtin_set_2(&mut eval, var, Value::fixnum(5)).unwrap();
@@ -124,8 +127,8 @@ fn state_vector_records_frames_then_visible_buffers_then_lambda() {
     assert_eq!(slots[1].bits(), frame.name_value().bits());
 
     let mut index = 2;
-    for buffer_id in eval.buffers.buffer_list() {
-        let buffer = eval.buffers.get(buffer_id).expect("live buffer");
+    for buffer_id in eval.edit.buffers.buffer_list() {
+        let buffer = eval.edit.buffers.get(buffer_id).expect("live buffer");
         if !visible_buffer_name(buffer) {
             continue;
         }
@@ -164,7 +167,7 @@ fn unchanged_state_keeps_the_same_vector_object() {
     let _frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let var = Value::symbol("neb-unit-reuse");
     builtin_set_2(&mut eval, var, Value::NIL).unwrap();
-    let buffer = eval.buffers.create_buffer("neb-unit-reuse-buffer");
+    let buffer = eval.edit.buffers.create_buffer("neb-unit-reuse-buffer");
     assert_eq!(
         builtin_frame_or_buffer_changed_p(&mut eval, vec![var]).unwrap(),
         Value::T
@@ -172,7 +175,8 @@ fn unchanged_state_keeps_the_same_vector_object() {
     let before = builtin_symbol_value_1(&mut eval, var).unwrap();
     assert!(before.as_vector_data().is_some());
 
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(buffer)
         .expect("reuse buffer")
         .insert("x");
@@ -286,7 +290,7 @@ fn variable_watchers_run_only_when_the_vector_is_reallocated() {
     // A change that fits the retained vector is rewritten in place; GNU never
     // touches the symbol, so the watcher must stay quiet.
     builtin_set_2(&mut eval, counter, Value::fixnum(0)).unwrap();
-    let visible = eval.buffers.create_buffer("neb-unit-watched-buffer");
+    let visible = eval.edit.buffers.create_buffer("neb-unit-watched-buffer");
     assert_eq!(
         builtin_frame_or_buffer_changed_p(&mut eval, vec![var]).unwrap(),
         Value::T

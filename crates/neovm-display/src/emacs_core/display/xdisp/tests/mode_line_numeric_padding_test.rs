@@ -188,7 +188,7 @@ fn numeric_padding_gaps_keep_same_identity_and_survive_precision() {
 
 fn render_numeric_format(setup: &str) -> (Context, ModeLineDisplayOutput) {
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.current_buffer_id().expect("buffer");
+    let buffer_id = eval.edit.buffers.current_buffer_id().expect("buffer");
     let frame_id = eval
         .frames
         .create_frame("numeric-padding-string-boundary", 800, 600, buffer_id);

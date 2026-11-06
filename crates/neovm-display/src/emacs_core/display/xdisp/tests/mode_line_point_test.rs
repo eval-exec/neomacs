@@ -15,7 +15,11 @@ fn mode_line_display_point_tracks_eval_moves_and_restrictions() {
              (goto-char (point-min)))"#,
     )
     .expect("point fixture");
-    let buffer = eval.buffers.current_buffer_id().expect("current buffer");
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     let frame = eval.frames.create_frame("point-percent", 120, 40, buffer);
     assert!(eval.frames.select_frame(frame));
     let format = eval

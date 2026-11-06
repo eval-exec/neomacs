@@ -13,8 +13,8 @@ fn assert_point_only_warm_query_reuse(setup: &str, reuse_after_move: bool) {
     use crate::window::{WindowLayoutQuery, WindowLayoutQueryOutcome, WindowLayoutQueryScope};
 
     let mut eval = interactive_context();
-    let buffer = eval.buffers.current_buffer().unwrap().id;
-    eval.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
+    let buffer = eval.edit.buffers.current_buffer().unwrap().id;
+    eval.edit.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
     let frame = eval
         .frames
         .create_frame("point-only-row-query", 160, 96, buffer);
@@ -44,7 +44,7 @@ fn assert_point_only_warm_query_reuse(setup: &str, reuse_after_move: bool) {
 
     // Deliberately give the current buffer the opposite admission conditions.
     // The gate must inspect the queried window's buffer, not this buffer.
-    let other_buffer = eval.buffers.create_buffer("*point-query-other*");
+    let other_buffer = eval.edit.buffers.create_buffer("*point-query-other*");
     eval.set_current_buffer_unrecorded(other_buffer).unwrap();
     let other_value = if reuse_after_move {
         Value::T
@@ -57,7 +57,8 @@ fn assert_point_only_warm_query_reuse(setup: &str, reuse_after_move: bool) {
         "header-line-format",
         "tab-line-format",
     ] {
-        eval.buffers
+        eval.edit
+            .buffers
             .set_buffer_local_property(other_buffer, name, other_value)
             .unwrap();
     }
@@ -86,7 +87,7 @@ fn assert_point_only_warm_query_reuse(setup: &str, reuse_after_move: bool) {
             end_buffer_pos: Some(LispCharPos1::new(4)),
             ..Default::default()
         }],
-        buffer_modiff: Some(eval.buffers.get(buffer).unwrap().modified_tick()),
+        buffer_modiff: Some(eval.edit.buffers.get(buffer).unwrap().modified_tick()),
         layout_freshness: Some(freshness.clone()),
         ..Default::default()
     };
@@ -142,7 +143,8 @@ fn assert_point_only_warm_query_reuse(setup: &str, reuse_after_move: bool) {
     );
     assert_eq!(calls.get(), 0, "exact-fresh rows must not query: {setup}");
 
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(buffer)
         .unwrap()
         .goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(3));
@@ -176,7 +178,7 @@ fn assert_point_only_warm_query_reuse(setup: &str, reuse_after_move: bool) {
     );
     assert_eq!(query(&mut eval).is_nil(), !reuse_after_move, "{setup}");
     assert_eq!(calls.get(), usize::from(!reuse_after_move), "{setup}");
-    assert_eq!(eval.buffers.current_buffer_id(), Some(other_buffer));
+    assert_eq!(eval.edit.buffers.current_buffer_id(), Some(other_buffer));
 }
 
 #[test]

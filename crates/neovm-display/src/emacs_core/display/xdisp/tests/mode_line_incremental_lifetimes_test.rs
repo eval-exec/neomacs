@@ -46,7 +46,7 @@ fn assert_live_interval_plists(eval: &Context, value: Value) {
 
 fn display_setup(setup: &str) -> (Context, ModeLineDisplayOutput) {
     let mut eval = context();
-    let buffer_id = eval.buffers.current_buffer_id().expect("buffer");
+    let buffer_id = eval.edit.buffers.current_buffer_id().expect("buffer");
     let frame_id = eval
         .frames
         .create_frame("incremental-lifetimes", 800, 600, buffer_id);
@@ -240,7 +240,7 @@ fn mode_line_incremental_split_fresh_format_survives_nested_context_gc() {
     // Context without aliasing fields borrowed by the compatibility callback.
     // Every Value still belongs to that same active heap and mutator thread.
     let obarray = eval.obarray.clone();
-    let mut buffers = eval.buffers.clone();
+    let mut buffers = eval.edit.buffers.clone();
     let frames = crate::window::FrameManager::new();
     let processes = crate::emacs_core::process::ProcessManager::new();
     let before = save_scratch_gc_roots();
@@ -334,7 +334,7 @@ fn mode_line_incremental_split_panic_releases_accumulator_owners() {
             neovm_eval::emacs_core::eval::VariableView::new(&eval.obarray, &eval.owner),
             &[],
             &eval.frames,
-            &mut eval.buffers,
+            &mut eval.edit.buffers,
             &eval.processes,
             &[format],
             |_, _| {

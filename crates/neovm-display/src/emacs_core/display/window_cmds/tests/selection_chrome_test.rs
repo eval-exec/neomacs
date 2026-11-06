@@ -13,7 +13,11 @@ fn fixture() -> (
     WindowId,
 ) {
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let buffer = eval.buffers.current_buffer_id().expect("fixture buffer");
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("fixture buffer");
     let frame = eval
         .frames
         .create_frame("selection-chrome", 120, 40, buffer);

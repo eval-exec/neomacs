@@ -728,8 +728,8 @@ fn make_terminal_frame_is_eval_backed_frame_creation() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let scratch = eval.buffers.create_buffer("*scratch*");
-    eval.buffers.set_current(scratch);
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(scratch);
     super::pure::mark_selected_terminal_usable_for_test(&eval);
 
     let frame = crate::emacs_core::frame::builtin_make_terminal_frame(&mut eval, vec![Value::NIL])
@@ -752,8 +752,8 @@ fn make_terminal_frame_opens_and_owns_an_explicit_secondary_tty() {
     ));
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("noninteractive", Value::NIL);
-    let scratch = eval.buffers.create_buffer("*scratch*");
-    eval.buffers.set_current(scratch);
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(scratch);
     let requests = Rc::new(RefCell::new(Vec::new()));
     let lifecycle = Rc::new(RefCell::new(Vec::new()));
     eval.set_tty_frame_host_factory(Box::new(RecordingTtyFrameHostFactory {
@@ -841,8 +841,8 @@ fn make_terminal_frame_arms_deferred_redisplay_only_after_the_host_opens() {
         .unwrap(),
     ));
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let scratch = eval.buffers.create_buffer("*scratch*");
-    eval.buffers.set_current(scratch);
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(scratch);
     let runs = Rc::new(Cell::new(0));
     eval.set_tty_frame_host_factory(Box::new(DeferredRedisplayFactory {
         runs: Rc::clone(&runs),
@@ -878,8 +878,8 @@ fn explicit_secondary_tty_survives_context_reactivation_without_handle_query() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let scratch = eval.buffers.create_buffer("*scratch*");
-    eval.buffers.set_current(scratch);
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(scratch);
     eval.set_tty_frame_host_factory(Box::new(RecordingTtyFrameHostFactory {
         requests: Rc::new(RefCell::new(Vec::new())),
         lifecycle: Rc::new(RefCell::new(Vec::new())),
@@ -917,8 +917,8 @@ fn make_terminal_frame_without_a_device_reuses_the_selected_secondary_terminal()
         .unwrap(),
     ));
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let scratch = eval.buffers.create_buffer("*scratch*");
-    eval.buffers.set_current(scratch);
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(scratch);
     let requests = Rc::new(RefCell::new(Vec::new()));
     eval.set_tty_frame_host_factory(Box::new(RecordingTtyFrameHostFactory {
         requests: Rc::clone(&requests),
@@ -958,8 +958,8 @@ fn make_terminal_frame_reuses_an_active_tty_already_open_on_the_named_device() {
         .unwrap(),
     ));
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let scratch = eval.buffers.create_buffer("*scratch*");
-    eval.buffers.set_current(scratch);
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(scratch);
     let requests = Rc::new(RefCell::new(Vec::new()));
     eval.set_tty_frame_host_factory(Box::new(RecordingTtyFrameHostFactory {
         requests: Rc::clone(&requests),
@@ -1004,11 +1004,11 @@ fn make_terminal_frame_rolls_back_the_provisional_frame_when_tty_open_fails() {
         .unwrap(),
     ));
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let scratch = eval.buffers.create_buffer("*scratch*");
-    eval.buffers.set_current(scratch);
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(scratch);
     let original_frame = crate::emacs_core::window_cmds::make_frame_plain(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         vec![Value::NIL],
     )
     .expect("initial frame");

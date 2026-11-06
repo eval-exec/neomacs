@@ -163,7 +163,11 @@ fn frame_zero_realizes_integer_font_size_for_each_live_frame() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let selected_frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     let other_frame = eval.frames.create_frame("other", 800, 600, buffer_id);
     for frame_id in [selected_frame, other_frame] {
         eval.frame_manager_mut()

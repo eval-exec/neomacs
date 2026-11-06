@@ -257,12 +257,18 @@ fn output_trace(setup: &str, case: PropertyReadCase) -> OutputTrace {
     crate::test_utils::init_test_tracing();
     let _guard = BorrowGuard::enter(case);
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frames
         .create_frame("property-borrow", 800, 600, buffer_id);
     let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(buffer_id)
         .expect("buffer")
         .insert("first\nsecond\n");
@@ -324,6 +330,7 @@ fn output_trace(setup: &str, case: PropertyReadCase) -> OutputTrace {
                 .expect("eval counter"),
         );
         let point = eval
+            .edit
             .buffers
             .get(buffer_id)
             .expect("buffer")

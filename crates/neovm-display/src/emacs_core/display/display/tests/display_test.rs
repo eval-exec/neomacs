@@ -4110,7 +4110,7 @@ fn display_supports_face_attributes_p_arity_and_nil_result() {
 fn display_supports_face_attributes_p_uses_live_gui_font_capabilities() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let scratch = eval.buffers.create_buffer("*scratch*");
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
     let frame_id = eval
         .frames
         .create_frame("gui-face-support", 800, 600, scratch);
@@ -4133,7 +4133,7 @@ fn display_supports_face_attributes_p_uses_live_gui_font_capabilities() {
 fn display_supports_face_attributes_p_ignores_fresh_handles_for_the_same_font() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let scratch = eval.buffers.create_buffer("*scratch*");
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
     let frame_id = eval
         .frames
         .create_frame("gui-face-support-same-font", 800, 600, scratch);
@@ -4159,7 +4159,7 @@ fn display_supports_face_attributes_p_ignores_fresh_handles_for_the_same_font() 
 fn display_supports_face_attributes_p_reports_gui_wave_underline() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let scratch = eval.buffers.create_buffer("*scratch*");
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
     let frame_id = eval
         .frames
         .create_frame("gui-face-support-wave-underline", 800, 600, scratch);
@@ -4185,7 +4185,7 @@ fn display_supports_face_attributes_p_reports_gui_wave_underline() {
 fn display_supports_face_attributes_p_requires_every_gui_attribute_to_be_supported() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let scratch = eval.buffers.create_buffer("*scratch*");
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
     let frame_id = eval
         .frames
         .create_frame("gui-face-support-mixed-request", 800, 600, scratch);
@@ -4217,7 +4217,7 @@ fn display_supports_face_attributes_p_rejects_gui_attribute_equal_to_default() {
     default_face.extend = Some(true);
     eval.face_table_mut().define("default", default_face);
 
-    let scratch = eval.buffers.create_buffer("*scratch*");
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
     let frame_id = eval
         .frames
         .create_frame("gui-face-support-default-equality", 800, 600, scratch);
@@ -4240,7 +4240,7 @@ fn display_supports_face_attributes_p_rejects_gui_attribute_equal_to_default() {
 fn display_supports_face_attributes_p_uses_graphical_host_capabilities() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let scratch = eval.buffers.create_buffer("*scratch*");
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
     let frame_id = eval
         .frames
         .create_frame("gui-face-support-no-decorations", 800, 600, scratch);
@@ -4276,7 +4276,7 @@ fn display_supports_face_attributes_p_accepts_disabling_nondefault_gui_decoratio
     });
     eval.face_table_mut().define("default", default_face);
 
-    let scratch = eval.buffers.create_buffer("*scratch*");
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
     let frame_id =
         eval.frames
             .create_frame("gui-face-support-disable-decoration", 800, 600, scratch);
@@ -4298,7 +4298,7 @@ fn display_supports_face_attributes_p_accepts_disabling_nondefault_gui_decoratio
 #[test]
 fn x_popup_menu_interactive_keymap_returns_selected_event() {
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let scratch = eval.buffers.create_buffer("*scratch*");
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
     let frame_id = eval.frames.create_frame("popup-owner", 800, 600, scratch);
     eval.frames.select_frame(frame_id);
     let tx = crate::host_input::HostInputPublisher::install(&mut eval);
@@ -4474,7 +4474,7 @@ fn tty_menu_help_tracker_distinguishes_no_publication_from_a_clear() {
 #[test]
 fn x_popup_dialog_interactive_returns_selected_value() {
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let scratch = eval.buffers.create_buffer("*scratch*");
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
     let frame_id = eval.frames.create_frame("dialog-owner", 800, 600, scratch);
     eval.frames.select_frame(frame_id);
     let tx = crate::host_input::HostInputPublisher::install(&mut eval);
@@ -4530,7 +4530,7 @@ fn x_popup_menu_interactive_keymap_collapses_submenu_on_tty() {
     // for a TTY frame and ballooned panes like Help -> Describe past the
     // screen height.
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let scratch = eval.buffers.create_buffer("*scratch*");
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
     let frame_id = eval.frames.create_frame("popup-owner", 800, 600, scratch);
     eval.frames.select_frame(frame_id);
     assert!(
@@ -4779,7 +4779,7 @@ fn x_popup_menu_interactive_cancel_returns_nil() {
 #[test]
 fn x_popup_menu_interactive_menu_bar_position_anchors_below_menu_bar() {
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let scratch = eval.buffers.create_buffer("*scratch*");
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
     let frame_id = eval.frames.create_frame("popup-owner", 800, 600, scratch);
     eval.frames
         .get_mut(frame_id)
@@ -4841,7 +4841,7 @@ fn x_popup_menu_interactive_menu_bar_position_anchors_below_menu_bar() {
 #[test]
 fn x_popup_menu_interactive_menu_bar_position_uses_pending_native_anchor() {
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let scratch = eval.buffers.create_buffer("*scratch*");
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
     let frame_id = eval.frames.create_frame("popup-owner", 800, 600, scratch);
     eval.frames
         .get_mut(frame_id)
@@ -4982,7 +4982,7 @@ fn x_popup_menu_interactive_menu_bar_right_returns_next_menu_position() {
 #[test]
 fn x_popup_menu_preserves_heading_click_queued_before_old_cancellation() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let buffer = eval.buffers.create_buffer("*menu-switch*");
+    let buffer = eval.edit.buffers.create_buffer("*menu-switch*");
     let frame = eval.frames.create_frame("menu-owner", 800, 600, buffer);
     eval.frames.select_frame(frame);
     eval.eval_str("(progn (setq global-map (make-sparse-keymap)) (use-global-map global-map) (define-key global-map [menu-bar mouse-1] 'ignore))").unwrap();

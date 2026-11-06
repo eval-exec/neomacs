@@ -5,8 +5,8 @@ use neovm_value::value::Value;
 
 fn context_with_hidden_gui_peer(primary_window_system: Option<&str>) -> Context {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let scratch = eval.buffers.create_buffer("*scratch*");
-    eval.buffers.set_current(scratch);
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(scratch);
     let primary = eval.frames.create_frame("target", 800, 600, scratch);
     let frame = eval.frames.get_mut(primary).expect("target frame");
     frame.set_window_system(primary_window_system.map(Value::symbol));
@@ -86,8 +86,8 @@ fn last_graphical_frame_deletion_retains_connection_for_replacement_frame() {
         ),
     );
     ensure_terminal_runtime_owner(1, "initial_terminal", TerminalRuntimeConfig::inactive());
-    let scratch = eval.buffers.create_buffer("*scratch*");
-    eval.buffers.set_current(scratch);
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(scratch);
     let terminal_frame =
         eval.frames
             .create_frame_on_terminal("initial terminal", 1, 80, 25, scratch);

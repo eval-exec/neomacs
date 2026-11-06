@@ -16,7 +16,11 @@ fn mode_line_outer_binding_signals_preserve_non_error_conditions_and_scopes() {
             let mut eval = Context::new(crate::test_utils::unit_runtime());
             eval.set_variable("noninteractive", Value::NIL);
             eval.set_variable("inhibit-quit", Value::NIL);
-            let bid = eval.buffers.current_buffer_id().expect("current buffer");
+            let bid = eval
+                .edit
+                .buffers
+                .current_buffer_id()
+                .expect("current buffer");
             eval.frames.create_frame("fx2-outer-signal", 80, 24, bid);
             eval.eval_str(
                 "(put 'fx2-derived-quit 'error-conditions '(fx2-derived-quit quit))
@@ -66,7 +70,7 @@ fn mode_line_outer_binding_signals_preserve_non_error_conditions_and_scopes() {
             ));
             assert_eq!(eval.specpdl.len(), specpdl, "{operation} {condition}");
             assert_eq!(save_scratch_gc_roots(), roots, "{operation} {condition}");
-            assert_eq!(eval.buffers.current_buffer_id(), Some(bid));
+            assert_eq!(eval.edit.buffers.current_buffer_id(), Some(bid));
             assert_eq!(
                 eval.frames.selected_frame().unwrap().selected_window,
                 selected

@@ -80,7 +80,7 @@ fn mode_line_split_callback_follows_replaced_live_tail() {
         neovm_eval::emacs_core::eval::VariableView::new(&eval.obarray, &eval.owner),
         &[],
         &eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         &eval.processes,
         &[format, Value::fixnum(0)],
         |_, _| {
@@ -227,7 +227,7 @@ fn split_checkpoint_survives_collection(generational: bool) {
     // Separate manager copies let the callback collect through Context without
     // aliasing the state references borrowed by the split walker.
     let obarray = eval.obarray.clone();
-    let buffers = eval.buffers.clone();
+    let buffers = eval.edit.buffers.clone();
     let processes = crate::emacs_core::process::ProcessManager::new();
     let pctx = ModeLinePercentContext::default();
     let before_roots = save_scratch_gc_roots();

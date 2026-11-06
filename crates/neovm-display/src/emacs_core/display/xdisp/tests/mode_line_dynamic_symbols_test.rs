@@ -22,8 +22,11 @@ fn context() -> Context {
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.gc_stress = false;
     ctx.tagged_heap.set_gc_threshold(usize::MAX);
-    let buffer = ctx.buffers.create_buffer("*ttykey-k5-dynamic-symbols*");
-    ctx.buffers.set_current(buffer);
+    let buffer = ctx
+        .edit
+        .buffers
+        .create_buffer("*ttykey-k5-dynamic-symbols*");
+    ctx.edit.buffers.set_current(buffer);
     ctx
 }
 
@@ -67,7 +70,7 @@ fn render_into(
             assert!(!format_mode_line_recursive_in_state(
                 ctx.variables(),
                 &[],
-                &ctx.buffers,
+                &ctx.edit.buffers,
                 &ctx.processes,
                 pctx,
                 &format,
@@ -81,7 +84,7 @@ fn render_into(
             format_mode_line_recursive_in_state_with_eval_rooted(
                 ctx.variables(),
                 &[],
-                &ctx.buffers,
+                &ctx.edit.buffers,
                 &ctx.processes,
                 pctx,
                 &format,
@@ -148,8 +151,8 @@ fn p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth_child() {
         // Only the process registry grows here. The World remains at its old
         // extent until C5's real transaction must add chunk/side-table pairs.
         let mut gap = intern_uninterned("p3sym-c5-held-pass-gap");
-        let target = (u64::from(gap.0) / 4096 + 2) * 4096 + 17;
-        while u64::from(gap.0) + 1 < target {
+        let target = (u64::from(gap.to_raw()) / 4096 + 2) * 4096 + 17;
+        while u64::from(gap.to_raw()) + 1 < target {
             gap = intern_uninterned("p3sym-c5-held-pass-gap");
         }
         let pass_epoch = pctx.dynamic_symbols.borrow().epoch;
@@ -179,7 +182,7 @@ fn p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth_child() {
         );
         assert_eq!(held.0, old_id);
         assert_eq!(
-            held.value(ctx.variables(), &ctx.buffers)
+            held.value(ctx.variables(), &ctx.edit.buffers)
                 .and_then(|value| value.as_utf8_str()),
             Some("A")
         );
@@ -264,7 +267,7 @@ fn mode_line_dynamic_symbols_intern_once_then_warm_all_walkers() {
     let name = "ttykey-k5-dynamic-all-walkers";
     ctx.set_variable(name, Value::string("X"));
     // Initialize the independent buffer-slot guard before testing identities.
-    mode_line_symbol_value_in_state(ctx.variables(), &[], &ctx.buffers, name);
+    mode_line_symbol_value_in_state(ctx.variables(), &[], &ctx.edit.buffers, name);
     let symbol = Value::from_sym_id(intern(name));
     assert_eq!(symbol.as_bare_symbol_name(), Some(name));
     let conditional = Value::list(vec![symbol, Value::string("T"), Value::string("F")]);
@@ -363,30 +366,30 @@ fn mode_line_dynamic_symbols_read_live_local_default_and_alias_values() {
     let name = "ttykey-k5-dynamic-default";
     let query = pctx.resolve_dynamic_symbol(name);
     assert_eq!(
-        query.value(ctx.variables(), &ctx.buffers),
+        query.value(ctx.variables(), &ctx.edit.buffers),
         Some(Value::fixnum(11))
     );
-    let buffer = ctx.buffers.current_buffer_id().expect("buffer");
+    let buffer = ctx.edit.buffers.current_buffer_id().expect("buffer");
     ctx.set_buffer_local_binding_by_id(buffer, intern(name), Value::fixnum(33))
         .expect("local binding");
     assert_eq!(
         pctx.resolve_dynamic_symbol(name)
-            .value(ctx.variables(), &ctx.buffers),
+            .value(ctx.variables(), &ctx.edit.buffers),
         Some(Value::fixnum(33))
     );
     let alias = "ttykey-k5-dynamic-alias";
     let before = pctx
         .resolve_dynamic_symbol(alias)
-        .value(ctx.variables(), &ctx.buffers);
+        .value(ctx.variables(), &ctx.edit.buffers);
     assert_eq!(
         before,
-        mode_line_symbol_value_in_state(ctx.variables(), &[], &ctx.buffers, alias)
+        mode_line_symbol_value_in_state(ctx.variables(), &[], &ctx.edit.buffers, alias)
     );
     ctx.eval_str("(defvaralias 'ttykey-k5-dynamic-alias 'ttykey-k5-dynamic-other)")
         .expect("retarget alias");
     assert_eq!(
         pctx.resolve_dynamic_symbol(alias)
-            .value(ctx.variables(), &ctx.buffers),
+            .value(ctx.variables(), &ctx.edit.buffers),
         Some(Value::fixnum(22))
     );
 }
@@ -402,7 +405,7 @@ fn mode_line_dynamic_symbols_read_live_projected_owner_bindings() {
     let pctx = ModeLinePercentContext::default();
     assert_eq!(
         pctx.resolve_dynamic_symbol(name)
-            .value(ctx.variables(), &ctx.buffers),
+            .value(ctx.variables(), &ctx.edit.buffers),
         Some(Value::fixnum(41))
     );
     let depth = ctx.specpdl.len();
@@ -410,12 +413,12 @@ fn mode_line_dynamic_symbols_read_live_projected_owner_bindings() {
         .expect("owner binding");
     let value = pctx
         .resolve_dynamic_symbol(name)
-        .value(ctx.variables(), &ctx.buffers);
+        .value(ctx.variables(), &ctx.edit.buffers);
     ctx.unbind_to(depth);
     assert_eq!(value, Some(Value::fixnum(42)));
     assert_eq!(
         pctx.resolve_dynamic_symbol(name)
-            .value(ctx.variables(), &ctx.buffers),
+            .value(ctx.variables(), &ctx.edit.buffers),
         Some(Value::fixnum(41))
     );
 }
@@ -464,7 +467,7 @@ fn mode_line_dynamic_symbols_split_callback_keeps_live_value_reads() {
     format_mode_line_recursive_in_state_with_eval_rooted(
         ctx.variables(),
         &[],
-        &ctx.buffers,
+        &ctx.edit.buffers,
         &ctx.processes,
         &pctx,
         &format,
@@ -529,7 +532,7 @@ fn mode_line_dynamic_symbols_restore_invalidates_only_pass_identities() {
     ctx.obarray.set_symbol_value_id(new, Value::fixnum(52));
     assert_eq!(
         pctx.resolve_dynamic_symbol(name)
-            .value(ctx.variables(), &ctx.buffers),
+            .value(ctx.variables(), &ctx.edit.buffers),
         Some(Value::fixnum(52))
     );
     assert_eq!(pctx.resolve_dynamic_symbol(name).0, new);
@@ -677,10 +680,10 @@ fn mode_line_dynamic_symbols_plain_void_and_alias_void_match_owner_fallback() {
     ] {
         let actual = pctx
             .resolve_dynamic_symbol(name)
-            .value(ctx.variables(), &ctx.buffers);
+            .value(ctx.variables(), &ctx.edit.buffers);
         assert_eq!(
             actual,
-            mode_line_symbol_value_in_state(ctx.variables(), &[], &ctx.buffers, name)
+            mode_line_symbol_value_in_state(ctx.variables(), &[], &ctx.edit.buffers, name)
         );
         assert!(
             actual.is_none(),

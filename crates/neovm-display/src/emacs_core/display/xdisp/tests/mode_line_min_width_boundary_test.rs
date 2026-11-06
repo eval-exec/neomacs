@@ -44,13 +44,15 @@ fn compare_fresh_gnu_row(kind: &str) {
     let _policy = PaddingPolicyGuard::set(true);
     let mut eval = interactive_context();
     utf8_locale_terminal(&mut eval);
-    let buffer_id = eval.buffers.current_buffer_id().expect("buffer");
+    let buffer_id = eval.edit.buffers.current_buffer_id().expect("buffer");
     let frame_id = eval.frames.create_frame("D5-F", 800, 600, buffer_id);
     let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
-    eval.buffers
+    eval.edit
+        .buffers
         .set_buffer_local_property(buffer_id, "mode-name", Value::string("MODE"))
         .expect("set mode name");
-    eval.buffers
+    eval.edit
+        .buffers
         .set_buffer_local_property(
             buffer_id,
             "buffer-file-coding-system",

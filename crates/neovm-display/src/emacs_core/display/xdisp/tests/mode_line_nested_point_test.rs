@@ -18,19 +18,19 @@ fn point_context() -> Context {
              (goto-char (point-min)))"#,
     )
     .expect("point fixture");
-    let buffer = eval.buffers.current_buffer_id().unwrap();
+    let buffer = eval.edit.buffers.current_buffer_id().unwrap();
     let frame = eval.frames.create_frame("nested-point", 120, 40, buffer);
     assert!(eval.frames.select_frame(frame));
     let window = eval.frames.selected_frame().unwrap().selected_window;
     eval.set_variable("d16-point-window", Value::make_window(window.0));
-    let foreign = eval.buffers.create_buffer("d16-point-foreign");
-    assert!(eval.buffers.switch_current_unrecorded(foreign));
+    let foreign = eval.edit.buffers.create_buffer("d16-point-foreign");
+    assert!(eval.edit.buffers.switch_current_unrecorded(foreign));
     eval.eval_str(
         r#"(progn (insert "foreign\nsecond\n")
                   (goto-char (point-min)) (forward-line 1))"#,
     )
     .expect("foreign point fixture");
-    assert!(eval.buffers.switch_current_unrecorded(buffer));
+    assert!(eval.edit.buffers.switch_current_unrecorded(buffer));
     eval.set_variable("d16-point-foreign", Value::make_buffer(foreign));
     eval
 }
@@ -68,7 +68,7 @@ fn mode_line_nested_point_counter_matches_observed_gnu() {
         ),
     ] {
         let mut eval = point_context();
-        let original_buffer = eval.buffers.current_buffer_id();
+        let original_buffer = eval.edit.buffers.current_buffer_id();
         let original_window = eval.frames.selected_frame().unwrap().selected_window;
         let roots = save_scratch_gc_roots();
         let specpdl = eval.specpdl.len();
@@ -86,7 +86,11 @@ fn mode_line_nested_point_counter_matches_observed_gnu() {
         );
         let result = eval.eval_str(&expression).expect(name);
         assert_eq!(result.as_utf8_str(), Some(expected), "{name}");
-        assert_eq!(eval.buffers.current_buffer_id(), original_buffer, "{name}");
+        assert_eq!(
+            eval.edit.buffers.current_buffer_id(),
+            original_buffer,
+            "{name}"
+        );
         assert_eq!(
             eval.frames.selected_frame().unwrap().selected_window,
             original_window,
@@ -127,7 +131,7 @@ fn mode_line_narrow_first_widen_matches_observed_gnu() {
 #[test]
 fn mode_line_clip_witness_survives_round_trip_until_accepted_ack() {
     let mut eval = point_context();
-    let buffer = eval.buffers.current_buffer_mut().unwrap();
+    let buffer = eval.edit.buffers.current_buffer_mut().unwrap();
     buffer.reset_unchanged_region();
     assert!(!buffer.mode_line_clip_changed());
     buffer.widen();
@@ -156,25 +160,47 @@ fn mode_line_clip_witness_survives_round_trip_until_accepted_ack() {
 #[test]
 fn mode_line_clip_witness_is_separate_for_shared_indirect_text() {
     let mut eval = point_context();
-    let base = eval.buffers.current_buffer_id().unwrap();
+    let base = eval.edit.buffers.current_buffer_id().unwrap();
     let indirect = eval
+        .edit
         .buffers
         .create_indirect_buffer(base, "point-indirect", false)
         .expect("indirect buffer sharing text");
     for id in [base, indirect] {
-        eval.buffers.get(id).unwrap().reset_unchanged_region();
+        eval.edit.buffers.get(id).unwrap().reset_unchanged_region();
     }
-    let buffer = eval.buffers.get_mut(base).unwrap();
+    let buffer = eval.edit.buffers.get_mut(base).unwrap();
     let start = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(6));
     buffer.narrow_to_emacs_byte_range(EmacsByteRange::new(
         start,
         buffer.point_max_emacs_byte_pos(),
     ));
-    assert!(eval.buffers.get(base).unwrap().mode_line_clip_changed());
-    assert!(!eval.buffers.get(indirect).unwrap().mode_line_clip_changed());
-    eval.buffers.get(indirect).unwrap().reset_unchanged_region();
     assert!(
-        eval.buffers.get(base).unwrap().mode_line_clip_changed(),
+        eval.edit
+            .buffers
+            .get(base)
+            .unwrap()
+            .mode_line_clip_changed()
+    );
+    assert!(
+        !eval
+            .edit
+            .buffers
+            .get(indirect)
+            .unwrap()
+            .mode_line_clip_changed()
+    );
+    eval.edit
+        .buffers
+        .get(indirect)
+        .unwrap()
+        .reset_unchanged_region();
+    assert!(
+        eval.edit
+            .buffers
+            .get(base)
+            .unwrap()
+            .mode_line_clip_changed(),
         "another buffer's accepted display cannot acknowledge this restriction"
     );
 }

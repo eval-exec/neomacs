@@ -123,7 +123,7 @@ fn definition_root_lease_is_reused_until_source_retirement_and_keeps_old_sources
 fn face_change_walks_only_frames_whose_realizations_stay_valid() {
     let mut context = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let selected = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut context);
-    let buffer = context.buffers.create_buffer("*face-change-other*");
+    let buffer = context.edit.buffers.create_buffer("*face-change-other*");
     let other = context.frames.create_frame("other", 80, 25, buffer);
 
     assert!(!super::other_frames_keep_realizations(
@@ -467,7 +467,7 @@ fn face_frame_class_uses_live_terminal_output_kind() {
     let _restore = Restore;
     pure::reset_terminal_runtime();
     let initial = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut context);
-    let buffer = context.buffers.current_buffer_id().unwrap();
+    let buffer = context.edit.buffers.current_buffer_id().unwrap();
     let bare = context.frames.create_frame("bare-frame", 80, 25, buffer);
     assert!(!context.frames.get(bare).unwrap().initial);
     assert_eq!(

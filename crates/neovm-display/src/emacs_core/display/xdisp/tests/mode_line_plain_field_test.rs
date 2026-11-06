@@ -119,10 +119,16 @@ fn output_trace(
     crate::test_utils::init_test_tracing();
     let _guard = PlainFieldGuard::set(path, properties);
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval.frames.create_frame("plain-field", 800, 600, buffer_id);
     let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(buffer_id)
         .expect("buffer")
         .insert("first\nsecond\n");
@@ -180,6 +186,7 @@ fn output_trace(
         .and_then(Value::as_fixnum)
         .expect("eval counter");
     let point = eval
+        .edit
         .buffers
         .get(buffer_id)
         .expect("buffer")

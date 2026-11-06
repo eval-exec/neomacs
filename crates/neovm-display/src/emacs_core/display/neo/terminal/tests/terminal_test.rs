@@ -174,7 +174,11 @@ fn public_terminal_builtins_route_typed_requests_through_the_display_host() {
 fn window_terminal_target_carries_the_current_buffer_identity() {
     let host = RecordingTerminalDisplayHost::default();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let owner = eval.buffers.current_buffer_id().expect("current buffer");
+    let owner = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     eval.set_display_host(Box::new(host.clone()));
 
     eval.eval_str("(neomacs-terminal-create 80 24 0 \"/bin/sh\")")

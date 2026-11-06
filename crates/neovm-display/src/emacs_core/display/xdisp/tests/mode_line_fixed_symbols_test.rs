@@ -5,16 +5,16 @@ use strum::IntoEnumIterator;
 
 fn context() -> Context {
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
-    let buffer = ctx.buffers.create_buffer("*ttykey-k4-mode-fixed*");
-    ctx.buffers.set_current(buffer);
+    let buffer = ctx.edit.buffers.create_buffer("*ttykey-k4-mode-fixed*");
+    ctx.edit.buffers.set_current(buffer);
     ctx
 }
 
 fn compare(ctx: &Context, key: ModeLineSymbol, name: &str) -> Option<Value> {
-    let fixed = mode_line_fixed_symbol_value_in_state(ctx.variables(), &ctx.buffers, key);
+    let fixed = mode_line_fixed_symbol_value_in_state(ctx.variables(), &ctx.edit.buffers, key);
     assert_eq!(
         fixed,
-        mode_line_symbol_value_in_state(ctx.variables(), &[], &ctx.buffers, name),
+        mode_line_symbol_value_in_state(ctx.variables(), &[], &ctx.edit.buffers, name),
         "fixed and generic lookup must observe identical state for {name}"
     );
     fixed
@@ -40,7 +40,11 @@ fn mode_line_fixed_reads_match_default_and_local_name_reads() {
         ),
     ] {
         compare(&ctx, key, name);
-        let buffer = ctx.buffers.current_buffer_id().expect("current buffer");
+        let buffer = ctx
+            .edit
+            .buffers
+            .current_buffer_id()
+            .expect("current buffer");
         ctx.set_buffer_local_binding_by_id(buffer, key.id(), Value::string(local))
             .expect("install local");
         assert_eq!(
@@ -84,12 +88,12 @@ fn mode_line_dynamic_name_lookup_keeps_its_named_intern_path() {
     // Initialize the buffer-slot guard's independent one-time identity before
     // counting the unchanged general helper's steady-state name lookups.
     assert_eq!(
-        mode_line_symbol_value_in_state(ctx.variables(), &[], &ctx.buffers, name),
+        mode_line_symbol_value_in_state(ctx.variables(), &[], &ctx.edit.buffers, name),
         Some(Value::fixnum(17))
     );
     reset_intern_calls();
     assert_eq!(
-        mode_line_symbol_value_in_state(ctx.variables(), &[], &ctx.buffers, name),
+        mode_line_symbol_value_in_state(ctx.variables(), &[], &ctx.edit.buffers, name),
         Some(Value::fixnum(17))
     );
     assert_eq!(intern_call_names(), vec![name.to_owned(), name.to_owned()]);
@@ -117,18 +121,18 @@ fn mode_line_fixed_warm_reads_skip_named_intern() {
         key.id();
     }
     for key in [ModeLineSymbol::ModeName, ModeLineSymbol::DefaultDirectory] {
-        mode_line_fixed_symbol_value_in_state(ctx.variables(), &ctx.buffers, key);
+        mode_line_fixed_symbol_value_in_state(ctx.variables(), &ctx.edit.buffers, key);
     }
     reset_intern_calls();
     for _ in 0..20 {
         mode_line_fixed_symbol_value_in_state(
             ctx.variables(),
-            &ctx.buffers,
+            &ctx.edit.buffers,
             ModeLineSymbol::ModeName,
         );
         mode_line_fixed_symbol_value_in_state(
             ctx.variables(),
-            &ctx.buffers,
+            &ctx.edit.buffers,
             ModeLineSymbol::DefaultDirectory,
         );
     }

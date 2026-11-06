@@ -5,7 +5,7 @@ fn fontification_without_callback_reports_native_inspection() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str("(insert \"x\") (setq fontification-functions nil)")
         .unwrap();
-    let buffer = eval.buffers.current_buffer_id().unwrap();
+    let buffer = eval.edit.buffers.current_buffer_id().unwrap();
     let outcome = ensure_fontified_for_redisplay(&mut eval, buffer, 0, 1).unwrap();
     assert_eq!(outcome, RedisplayFontificationOutcome::Unchanged);
     assert!(!outcome.entered_callbacks());
@@ -16,7 +16,7 @@ fn nonmarking_and_signaling_fontifiers_remain_lisp_boundaries() {
     for signal in [false, true] {
         let mut eval = Context::new(crate::test_utils::unit_runtime());
         eval.eval_str(&format!("(insert \"x\") (setq fontification-test-calls nil fontification-functions (list (lambda (p) (setq fontification-test-calls (cons p fontification-test-calls) truncate-lines t) {})))", if signal {"(error \"fontify failure\")"} else {"nil"})).unwrap();
-        let buffer = eval.buffers.current_buffer_id().unwrap();
+        let buffer = eval.edit.buffers.current_buffer_id().unwrap();
         let outcome = ensure_fontified_for_redisplay(&mut eval, buffer, 0, 1).unwrap();
         assert_eq!(outcome, RedisplayFontificationOutcome::CallbacksUnchanged);
         assert!(outcome.entered_callbacks());

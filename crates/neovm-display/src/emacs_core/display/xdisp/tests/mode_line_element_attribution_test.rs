@@ -11,7 +11,11 @@ fn context() -> Context {
     eval.gc_stress = false;
     eval.tagged_heap.set_gc_threshold(usize::MAX);
     eval.set_variable("noninteractive", Value::NIL);
-    let buffer = eval.buffers.current_buffer_id().expect("current buffer");
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     let frame = eval
         .frames
         .create_frame("element-attribution", 800, 600, buffer);
