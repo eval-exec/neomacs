@@ -13,6 +13,8 @@ use super::opcode::Op;
 use neovm_value::value::LambdaParams;
 use neovm_value::value::{Value, ValueKind};
 
+#[cfg(test)]
+pub(crate) use neovm_value::tagged::bytecode::chunk::bytecode_function_clone_count_for_test;
 pub use neovm_value::tagged::bytecode::chunk::{
     ByteCodeFunction, ByteCodeStructuralPart, GnuByteOffsetMapEntry,
 };
@@ -20,9 +22,7 @@ pub(crate) use neovm_value::tagged::bytecode::chunk::{
     DecodedGnuCode, IterativeArgRange, LazyGnuCode, fresh_bytecode_source_id,
 };
 #[cfg(test)]
-pub(crate) use neovm_value::tagged::bytecode::chunk::{
-    bytecode_function_clone_count_for_test, reset_bytecode_function_clone_count_for_test,
-};
+pub(crate) use neovm_value::test_support::authority::reset_bytecode_function_clone_count_for_test;
 
 static EAGER_GNU_BYTECODE: OnceLock<bool> = OnceLock::new();
 

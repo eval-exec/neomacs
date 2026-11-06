@@ -274,7 +274,6 @@ pub struct ByteCodeFunction {
 static BYTECODE_FUNCTION_CLONE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(any(test, feature = "test-support"))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn reset_bytecode_function_clone_count_for_test() {
     BYTECODE_FUNCTION_CLONE_COUNT.store(0, Ordering::Relaxed);
 }
