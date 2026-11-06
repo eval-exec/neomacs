@@ -262,6 +262,13 @@ name = "main_thread_stack"
 path = "tests/main_thread_stack.rs"
 harness = false
 
+# Fast-track regression for the eval-split self-recursion in
+# EditHost::sync_window_positions: a buffer edit must refresh the window
+# position caches instead of overflowing the stack.
+[[test]]
+name = "sync_window_positions_regression"
+path = "tests/sync_window_positions_regression.rs"
+
 [[bench]]
 name = "buffer_text_backends"
 harness = false
