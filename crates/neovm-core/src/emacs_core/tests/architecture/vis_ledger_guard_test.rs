@@ -5768,15 +5768,22 @@ pub struct Tuple(pub u8);
         }
     }
 
-    fn bootstrap_snapshot_rows() -> Vec<(&'static str, &'static str, &'static str)> {
+    /// Snapshot rows: name, layer, cfg, production default (T4).
+    ///
+    /// The default is `marker` for Lisp_Object variables: the binder binds an
+    /// uninterned ABSENT-LAYER marker symbol, and its identity belongs to the
+    /// binding site, not to production. Forwarded typed variables carry
+    /// `int:<n>`, the binder's own production default, because a typed slot
+    /// refuses a Lisp_Object write (T4; peer ruling 05:2xZ (3)).
+    fn bootstrap_snapshot_rows() -> Vec<(&'static str, &'static str, &'static str, &'static str)> {
         let mut rows = Vec::new();
         for (index, line) in UPPER_BOOTSTRAP_VARS_SNAPSHOT.lines().enumerate() {
             if index == 0 || line.trim().is_empty() {
                 continue;
             }
             let fields: Vec<&str> = line.split('\t').collect();
-            assert_eq!(fields.len(), 3, "bootstrap snapshot row shape: {line:?}");
-            rows.push((fields[0], fields[1], fields[2]));
+            assert_eq!(fields.len(), 4, "bootstrap snapshot row shape: {line:?}");
+            rows.push((fields[0], fields[1], fields[2], fields[3]));
         }
         rows
     }
@@ -5844,10 +5851,14 @@ pub struct Tuple(pub u8);
         bind(&mut obarray);
         let after = bound_names(&obarray);
         let actual: BTreeSet<String> = after.difference(&before).cloned().collect();
-        let expected: BTreeSet<String> = bootstrap_snapshot_rows()
+        let expected_rows: Vec<(&'static str, &'static str)> = bootstrap_snapshot_rows()
             .into_iter()
-            .filter(|(_, row_layer, cfg)| *row_layer == layer && snapshot_cfg_active(cfg))
-            .map(|(name, _, _)| name.to_owned())
+            .filter(|(_, row_layer, cfg, _)| *row_layer == layer && snapshot_cfg_active(cfg))
+            .map(|(name, _, _, default)| (name, default))
+            .collect();
+        let expected: BTreeSet<String> = expected_rows
+            .iter()
+            .map(|(name, _)| (*name).to_owned())
             .collect();
         assert_eq!(
             actual, expected,
@@ -5858,6 +5869,36 @@ pub struct Tuple(pub u8);
                 obarray.is_special(name),
                 "the {layer} bootstrap binder must make `{name}` special"
             );
+        }
+        // T4 typed defaults (peer ruling 05:2xZ (3), LEAD 06:4xZ (b)): a
+        // forwarded typed variable's snapshot row carries `int:<n>`, and the
+        // real binder must bind exactly that production value. `marker` rows
+        // are checked only for boundness and specialness above (their
+        // uninterned marker symbol belongs to the binding site).
+        for (name, default) in &expected_rows {
+            let (name, default) = (*name, *default);
+            match default.strip_prefix("int:") {
+                Some(raw) => {
+                    let want: i64 = raw.parse().unwrap_or_else(|_| {
+                        panic!("snapshot `{name}` default `{default}` is not `int:<i64>`")
+                    });
+                    let got = obarray
+                        .canonical_value_by_name(
+                            neovm_value::symbol::CanonicalAccess::BOOTSTRAP,
+                            name,
+                        )
+                        .unwrap_or_else(|| panic!("the {layer} binder did not bind `{name}`"));
+                    assert_eq!(
+                        got,
+                        neovm_value::value::Value::fixnum(want),
+                        "the {layer} binder must bind `{name}` to its production default {want}"
+                    );
+                }
+                None => assert_eq!(
+                    default, "marker",
+                    "snapshot `{name}` default must be `marker` or `int:<i64>`, got `{default}`"
+                ),
+            }
         }
     }
 
@@ -5871,7 +5912,7 @@ pub struct Tuple(pub u8);
         // order. Calling the four binders in this same order (below) pins
         // the module sequence; within-module order comes from the generator.
         let mut blocks: Vec<&str> = Vec::new();
-        for (_, layer, _) in bootstrap_snapshot_rows() {
+        for (_, layer, _, _) in bootstrap_snapshot_rows() {
             if blocks.last() != Some(&layer) {
                 blocks.push(layer);
             }
@@ -5886,21 +5927,43 @@ pub struct Tuple(pub u8);
         // binder covers would otherwise go unchecked, and the count check
         // rejects a duplicate row that set equality would hide.
         let rows = bootstrap_snapshot_rows();
-        for (_, layer, _) in &rows {
+        for (_, layer, _, _) in &rows {
             assert!(
                 ["fileio", "process", "dbusbind", "xfaces"].contains(layer),
                 "bootstrap snapshot row in an uncovered layer `{layer}`"
             );
         }
+        // T4 (peer ruling 05:2xZ (3)): exactly the four forwarded typed
+        // variables carry a production default; every other row is a
+        // Lisp_Object marker. Pin the four so the value comparison below
+        // cannot go vacuously green if the snapshot loses its `int:` rows.
+        // GNU 31.1: process.c read_process_output_max=65536 and
+        // process_error_pause_time=1, gnutls.c global_gnutls_log_level=0,
+        // xfaces.c face_near_same_color_threshold=30000.
+        let typed: Vec<(&str, &str)> = rows
+            .iter()
+            .filter(|(_, _, cfg, default)| snapshot_cfg_active(cfg) && default.starts_with("int:"))
+            .map(|(name, _, _, default)| (*name, *default))
+            .collect();
+        assert_eq!(
+            typed,
+            [
+                ("read-process-output-max", "int:65536"),
+                ("process-error-pause-time", "int:1"),
+                ("gnutls-log-level", "int:0"),
+                ("face-near-same-color-threshold", "int:30000"),
+            ],
+            "the four forwarded typed bootstrap vars must carry their production defaults"
+        );
         let active: BTreeSet<&str> = rows
             .iter()
-            .filter(|(_, _, cfg)| snapshot_cfg_active(cfg))
-            .map(|(name, _, _)| *name)
+            .filter(|(_, _, cfg, _)| snapshot_cfg_active(cfg))
+            .map(|(name, _, _, _)| *name)
             .collect();
         let mut sliced: BTreeSet<&str> = BTreeSet::new();
         let mut slice_count = 0usize;
         for layer in ["fileio", "process", "dbusbind", "xfaces"] {
-            for (name, row_layer, cfg) in &rows {
+            for (name, row_layer, cfg, _) in &rows {
                 if *row_layer == layer && snapshot_cfg_active(cfg) {
                     sliced.insert(*name);
                     slice_count += 1;
