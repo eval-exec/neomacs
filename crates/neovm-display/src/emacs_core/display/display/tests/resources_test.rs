@@ -5,7 +5,7 @@ struct ResourceHost(Arc<Mutex<Vec<GuiResourceQuery>>>);
 
 #[test]
 fn frame_font_selection_prefers_explicit_then_default_alist_then_resource() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("initial-window-system", Value::symbol("neo"));
     let queries = Arc::new(Mutex::new(Vec::new()));
     eval.set_display_host(Box::new(ResourceHost(queries.clone())));
@@ -52,7 +52,7 @@ impl DisplayHost for ResourceHost {
 
 #[test]
 fn resource_lookup_uses_dynamic_keys_and_normalizes_empty_native_values() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("initial-window-system", Value::symbol("neo"));
     let queries = Arc::new(Mutex::new(Vec::new()));
     eval.set_display_host(Box::new(ResourceHost(queries.clone())));
@@ -77,7 +77,7 @@ fn resource_lookup_uses_dynamic_keys_and_normalizes_empty_native_values() {
 
 #[test]
 fn resource_lookup_validates_optional_pairs_before_querying_host() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("initial-window-system", Value::symbol("neo"));
     let queries = Arc::new(Mutex::new(Vec::new()));
     eval.set_display_host(Box::new(ResourceHost(queries.clone())));
@@ -102,7 +102,7 @@ fn resource_lookup_validates_optional_pairs_before_querying_host() {
 
 #[test]
 fn resource_name_normalization_updates_the_visible_buffer_local_binding() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("initial-window-system", Value::symbol("neo"));
     assert_eq!(
         eval.eval_str(

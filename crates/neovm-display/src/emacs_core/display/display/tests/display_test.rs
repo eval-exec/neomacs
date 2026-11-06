@@ -265,7 +265,7 @@ fn clear_terminal_parameters() {
 #[test]
 fn raw_context_does_not_prebind_x_selection_aliases() {
     crate::test_utils::init_test_tracing();
-    let eval = neovm_eval::emacs_core::eval::Context::new();
+    let eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     for name in [
         "x-select-text",
         "x-selection-value",
@@ -283,7 +283,7 @@ fn raw_context_does_not_prebind_x_selection_aliases() {
 #[test]
 fn gui_clipboard_errors_are_visible_instead_of_returning_cached_text() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     eval.eval_str(r#"(neomacs-clipboard-set "stale")"#)
         .expect("headless clipboard cache should remain available");
     eval.set_display_host(Box::new(FailingClipboardDisplayHost));
@@ -316,7 +316,8 @@ fn primary_selection_owner_reports_every_typed_host_state_to_lisp() {
         (SelectionOwner::None, "none"),
         (SelectionOwner::Unknown, "unknown"),
     ] {
-        let mut eval = neovm_eval::emacs_core::eval::Context::new();
+        let mut eval =
+            neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
         eval.set_display_host(Box::new(SelectionOwnerDisplayHost(owner)));
         assert_eq!(
             eval.eval_str("(neomacs-primary-selection-owner)")
@@ -329,7 +330,7 @@ fn primary_selection_owner_reports_every_typed_host_state_to_lisp() {
 #[test]
 fn headless_primary_selection_ownership_tracks_even_an_empty_value() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
 
     assert_eq!(
         eval.eval_str("(neomacs-primary-selection-owner)")
@@ -391,7 +392,7 @@ fn gnu_select_el_defines_x_selection_aliases() {
 #[test]
 fn x_window_system_active_falls_back_to_window_system_when_initial_is_nil() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("initial-window-system", Value::NIL);
     eval.set_variable("window-system", Value::symbol(gui_window_system_symbol()));
 
@@ -403,7 +404,7 @@ fn x_window_system_active_falls_back_to_window_system_when_initial_is_nil() {
 fn terminal_parameter_exposes_oracle_defaults() {
     crate::test_utils::init_test_tracing();
     clear_terminal_parameters();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     // normal-erase-is-backspace has NO default: GNU leaves it unset until
     // normal-erase-is-backspace-setup-frame stores 0/1 during command-line,
     // and a fabricated 0 vetoed that decision (DIVERGENCES.md entry 67).
@@ -431,7 +432,7 @@ fn terminal_parameter_exposes_oracle_defaults() {
 fn terminal_parameter_round_trips() {
     crate::test_utils::init_test_tracing();
     clear_terminal_parameters();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let set_result = builtin_set_terminal_parameter(
         &mut eval,
         vec![Value::NIL, Value::symbol("neovm-param"), Value::fixnum(42)],
@@ -449,7 +450,7 @@ fn terminal_parameter_round_trips() {
 fn set_terminal_parameter_returns_previous_default_values() {
     crate::test_utils::init_test_tracing();
     clear_terminal_parameters();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     // No fabricated default for normal-erase-is-backspace: the previous
     // value of a never-set parameter is nil, as in GNU (entry 67).
     let previous_normal = builtin_set_terminal_parameter(
@@ -479,7 +480,7 @@ fn set_terminal_parameter_returns_previous_default_values() {
 fn terminal_parameter_distinct_keys_do_not_alias() {
     crate::test_utils::init_test_tracing();
     clear_terminal_parameters();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     builtin_set_terminal_parameter(
         &mut eval,
         vec![Value::NIL, Value::symbol("k1"), Value::fixnum(1)],
@@ -503,7 +504,7 @@ fn terminal_parameter_distinct_keys_do_not_alias() {
 fn terminal_parameter_rejects_non_symbol_key() {
     crate::test_utils::init_test_tracing();
     clear_terminal_parameters();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_terminal_parameter(&mut eval, vec![Value::NIL, Value::string("k")]);
     assert!(result.is_err());
 }
@@ -512,7 +513,7 @@ fn terminal_parameter_rejects_non_symbol_key() {
 fn set_terminal_parameter_ignores_non_symbol_key() {
     crate::test_utils::init_test_tracing();
     clear_terminal_parameters();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let set_result = builtin_set_terminal_parameter(
         &mut eval,
         vec![Value::NIL, Value::string("k"), Value::fixnum(9)],
@@ -536,7 +537,7 @@ fn set_terminal_parameter_ignores_non_symbol_key() {
 fn set_terminal_parameter_returns_previous_for_repeat_non_symbol_key() {
     crate::test_utils::init_test_tracing();
     clear_terminal_parameters();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let first = builtin_set_terminal_parameter(
         &mut eval,
         vec![Value::NIL, Value::fixnum(1), Value::fixnum(9)],
@@ -556,7 +557,7 @@ fn set_terminal_parameter_returns_previous_for_repeat_non_symbol_key() {
 fn terminal_parameter_rejects_non_terminal_designator() {
     crate::test_utils::init_test_tracing();
     clear_terminal_parameters();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_terminal_parameter(&mut eval, vec![Value::fixnum(1), Value::symbol("k")]);
     assert!(result.is_err());
 }
@@ -565,7 +566,7 @@ fn terminal_parameter_rejects_non_terminal_designator() {
 fn terminal_parameters_lists_mutated_symbol_entries() {
     crate::test_utils::init_test_tracing();
     clear_terminal_parameters();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let _ = builtin_set_terminal_parameter(
         &mut eval,
         vec![Value::NIL, Value::symbol("k1"), Value::fixnum(1)],
@@ -608,7 +609,7 @@ fn terminal_parameters_lists_mutated_symbol_entries() {
 fn set_terminal_parameter_rejects_non_terminal_designator() {
     crate::test_utils::init_test_tracing();
     clear_terminal_parameters();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_set_terminal_parameter(
         &mut eval,
         vec![Value::fixnum(1), Value::symbol("k"), Value::fixnum(1)],
@@ -620,7 +621,7 @@ fn set_terminal_parameter_rejects_non_terminal_designator() {
 fn eval_terminal_parameter_accepts_live_frame_designator() {
     crate::test_utils::init_test_tracing();
     clear_terminal_parameters();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
     builtin_set_terminal_parameter(
         &mut eval,
@@ -645,7 +646,7 @@ fn eval_terminal_parameter_accepts_live_frame_designator() {
 #[test]
 fn terminal_live_p_reflects_designator_shape() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let live_nil = builtin_terminal_live_p(&mut eval, &vec![Value::NIL]).unwrap();
     let live_handle = builtin_terminal_live_p(&mut eval, &vec![terminal_handle_value()]).unwrap();
     let live_string =
@@ -660,7 +661,7 @@ fn terminal_live_p_reflects_designator_shape() {
 #[test]
 fn eval_terminal_live_p_accepts_live_frame_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
     let live = builtin_terminal_live_p(&mut eval, &vec![Value::make_frame(frame_id)]).unwrap();
     assert_eq!(live, Value::T);
@@ -672,7 +673,7 @@ fn eval_terminal_live_p_accepts_live_frame_designator() {
 #[test]
 fn terminal_name_rejects_invalid_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_terminal_name(&mut eval, vec![Value::fixnum(1)]);
     assert!(result.is_err());
 }
@@ -680,7 +681,7 @@ fn terminal_name_rejects_invalid_designator() {
 #[test]
 fn eval_terminal_name_accepts_live_frame_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
     let result = builtin_terminal_name(&mut eval, vec![Value::make_frame(frame_id)]).unwrap();
     assert_eq!(result, Value::string("initial_terminal"));
@@ -689,7 +690,7 @@ fn eval_terminal_name_accepts_live_frame_designator() {
 #[test]
 fn frame_terminal_rejects_non_frame_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_frame_terminal(&mut eval, vec![Value::string("not-a-frame")]);
     assert!(result.is_err());
 }
@@ -699,7 +700,7 @@ fn frame_terminal_rejects_non_frame_arg_like_gnu() {
     crate::test_utils::init_test_tracing();
     // GNU `frame-terminal` only accepts nil or a live frame; integer
     // arguments signal `wrong-type-argument frame-live-p`. Mirror that.
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_frame_terminal(&mut eval, vec![Value::fixnum(1)]);
     match result.kinded() {
         Err(neovm_value::error::FlowKind::Signal(sig)) => {
@@ -713,7 +714,7 @@ fn frame_terminal_rejects_non_frame_arg_like_gnu() {
 #[test]
 fn frame_terminal_returns_live_terminal_handle() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let handle = builtin_frame_terminal(&mut eval, vec![Value::NIL]).unwrap();
     let live = builtin_terminal_live_p(&mut eval, &vec![handle]).unwrap();
     assert_eq!(live, Value::T);
@@ -723,7 +724,7 @@ fn frame_terminal_returns_live_terminal_handle() {
 #[test]
 fn selected_terminal_returns_live_terminal_handle() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let handle = builtin_selected_terminal(vec![]).unwrap();
     let live = builtin_terminal_live_p(&mut eval, &vec![handle]).unwrap();
     assert_eq!(live, Value::T);
@@ -733,7 +734,7 @@ fn selected_terminal_returns_live_terminal_handle() {
 fn frame_terminal_and_terminal_list_are_terminal_objects() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::terminal::pure::reset_terminal_thread_locals();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
 
     let terminal = builtin_frame_terminal(&mut eval, vec![Value::NIL]).unwrap();
     let terminals = builtin_terminal_list(vec![]).unwrap();
@@ -754,7 +755,7 @@ fn selected_terminal_arity() {
 #[test]
 fn eval_frame_terminal_accepts_live_frame_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
     let handle = builtin_frame_terminal(&mut eval, vec![Value::make_frame(frame_id)]).unwrap();
     let live = builtin_terminal_live_p(&mut eval, &vec![handle]).unwrap();
@@ -764,7 +765,7 @@ fn eval_frame_terminal_accepts_live_frame_designator() {
 #[test]
 fn redraw_frame_rejects_non_frame_designator() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = neovm_eval::emacs_core::eval::Context::new();
+    let mut ctx = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_redraw_frame(&mut ctx, vec![Value::string("not-a-frame")]);
     assert!(result.is_err());
 }
@@ -772,7 +773,7 @@ fn redraw_frame_rejects_non_frame_designator() {
 #[test]
 fn eval_redraw_frame_accepts_live_frame_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
     let result = builtin_redraw_frame(&mut eval, vec![Value::make_frame(frame_id)]).unwrap();
     assert!(result.is_nil());
@@ -781,7 +782,7 @@ fn eval_redraw_frame_accepts_live_frame_designator() {
 #[test]
 fn frame_edges_string_designator_uses_unquoted_live_frame_error_message() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_frame_edges(&mut eval, vec![Value::string("x")]);
     match result.kinded() {
         Err(FlowKind::Signal(sig)) => {
@@ -795,7 +796,7 @@ fn frame_edges_string_designator_uses_unquoted_live_frame_error_message() {
 #[test]
 fn eval_frame_edges_numeric_designator_reports_numeric_message() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_frame_edges(&mut eval, vec![Value::fixnum(999_999)]);
     match result.kinded() {
         Err(FlowKind::Signal(sig)) => {
@@ -809,7 +810,7 @@ fn eval_frame_edges_numeric_designator_reports_numeric_message() {
 #[test]
 fn eval_frame_edges_live_window_designator_includes_buffer_context() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let _ = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let window =
         crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, &vec![]).unwrap();
@@ -851,7 +852,7 @@ fn open_termscript_uses_batch_tty_error_payload() {
 #[test]
 fn send_string_to_terminal_rejects_invalid_terminal_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result =
         builtin_send_string_to_terminal(&mut eval, vec![Value::string(""), Value::fixnum(1)]);
     assert!(result.is_err());
@@ -860,7 +861,7 @@ fn send_string_to_terminal_rejects_invalid_terminal_designator() {
 #[test]
 fn send_string_to_terminal_accepts_live_terminal_handle() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let handle = terminal_handle_value();
     let result =
         builtin_send_string_to_terminal(&mut eval, vec![Value::string(""), handle]).unwrap();
@@ -870,7 +871,7 @@ fn send_string_to_terminal_accepts_live_terminal_handle() {
 #[test]
 fn eval_send_string_to_terminal_accepts_live_frame_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
     let result = builtin_send_string_to_terminal(
         &mut eval,
@@ -884,7 +885,7 @@ fn eval_send_string_to_terminal_accepts_live_frame_designator() {
 fn internal_show_cursor_tracks_visibility_state() {
     crate::test_utils::init_test_tracing();
     reset_dispnew_thread_locals();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let default_visible = builtin_internal_show_cursor_p(&mut eval, vec![]).unwrap();
     assert_eq!(default_visible, Value::T);
 
@@ -900,7 +901,7 @@ fn internal_show_cursor_tracks_visibility_state() {
 #[test]
 fn internal_show_cursor_rejects_non_window_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_internal_show_cursor(&mut eval, vec![Value::fixnum(1), Value::NIL]);
     assert!(result.is_err());
 }
@@ -908,7 +909,7 @@ fn internal_show_cursor_rejects_non_window_designator() {
 #[test]
 fn eval_internal_show_cursor_accepts_live_window_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let _ = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let window =
         crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, &vec![]).unwrap();
@@ -919,7 +920,7 @@ fn eval_internal_show_cursor_accepts_live_window_designator() {
 #[test]
 fn eval_internal_show_cursor_p_accepts_live_window_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let _ = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let window =
         crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, &vec![]).unwrap();
@@ -931,7 +932,7 @@ fn eval_internal_show_cursor_p_accepts_live_window_designator() {
 fn eval_internal_show_cursor_tracks_per_window_state() {
     crate::test_utils::init_test_tracing();
     reset_dispnew_thread_locals();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let _ = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let selected =
         crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, &vec![]).unwrap();
@@ -993,7 +994,7 @@ fn eval_internal_show_cursor_tracks_per_window_state() {
 #[test]
 fn tty_queries_reject_invalid_terminal_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let tty_type = builtin_tty_type(&mut eval, vec![Value::fixnum(1)]);
     let tty_top_frame = builtin_tty_top_frame(&mut eval, vec![Value::fixnum(1)]);
     let controlling = builtin_controlling_tty_p(&mut eval, vec![Value::fixnum(1)]);
@@ -1005,7 +1006,7 @@ fn tty_queries_reject_invalid_terminal_designator() {
 #[test]
 fn eval_tty_queries_accept_live_frame_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
     assert!(
         builtin_tty_type(&mut eval, vec![Value::make_frame(frame_id)])
@@ -1027,7 +1028,7 @@ fn eval_tty_queries_accept_live_frame_designator() {
 #[test]
 fn suspend_tty_signals_non_text_terminal_error() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     for args in [vec![], vec![Value::NIL], vec![terminal_handle_value()]] {
         let result = builtin_suspend_tty(&mut eval, args);
         match result.kinded() {
@@ -1048,7 +1049,7 @@ fn suspend_tty_signals_non_text_terminal_error() {
 #[test]
 fn eval_suspend_resume_accept_live_frame_and_signal_non_text_terminal_error() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
     let suspend = builtin_suspend_tty(&mut eval, vec![Value::make_frame(frame_id)]);
     let resume = builtin_resume_tty(&mut eval, vec![Value::make_frame(frame_id)]);
@@ -1059,7 +1060,7 @@ fn eval_suspend_resume_accept_live_frame_and_signal_non_text_terminal_error() {
 #[test]
 fn resume_tty_signals_non_text_terminal_error() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     for args in [vec![], vec![Value::NIL], vec![terminal_handle_value()]] {
         let result = builtin_resume_tty(&mut eval, args);
         match result.kinded() {
@@ -1080,7 +1081,7 @@ fn resume_tty_signals_non_text_terminal_error() {
 #[test]
 fn x_open_connection_requires_string_display_arg() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let bad = builtin_x_open_connection(&mut eval, vec![Value::NIL]);
     assert!(bad.is_err());
 }
@@ -1088,7 +1089,7 @@ fn x_open_connection_requires_string_display_arg() {
 #[test]
 fn x_open_connection_eval_accepts_x_host_startup() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("initial-window-system", Value::symbol("x"));
     assert!(
         builtin_x_open_connection(&mut eval, vec![Value::NIL])
@@ -1100,7 +1101,7 @@ fn x_open_connection_eval_accepts_x_host_startup() {
 #[test]
 fn x_window_system_resource_queries_return_nil() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("initial-window-system", Value::symbol("x"));
 
     assert!(
@@ -1121,7 +1122,7 @@ fn x_window_system_resource_queries_return_nil() {
 #[test]
 fn x_open_connection_arity_errors() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let x_open_none = builtin_x_open_connection(&mut eval, vec![]);
     let x_open_four = builtin_x_open_connection(
         &mut eval,
@@ -1151,7 +1152,7 @@ fn x_open_connection_arity_errors() {
 #[test]
 fn x_close_connection_argument_shape_errors() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let x_nil = builtin_x_close_connection(&mut eval, vec![Value::NIL]);
     let x_int = builtin_x_close_connection(&mut eval, vec![Value::fixnum(1)]);
     let x_str = builtin_x_close_connection(&mut eval, vec![Value::string("")]);
@@ -1197,7 +1198,7 @@ fn x_close_connection_argument_shape_errors() {
 #[test]
 fn eval_x_close_connection_live_frame_uses_window_system_error() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
 
     let result = builtin_x_close_connection(&mut eval, vec![Value::make_frame(frame_id)]);
@@ -1303,7 +1304,7 @@ fn window_system_kind_domain_matches_gnu_and_neomacs_symbols() {
 #[test]
 fn x_display_pixel_size_errors_match_batch_shapes() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let width_none = builtin_x_display_pixel_width(&mut eval, vec![]);
     let width_int = builtin_x_display_pixel_width(&mut eval, vec![Value::fixnum(1)]);
     let width_str = builtin_x_display_pixel_width(&mut eval, vec![Value::string("")]);
@@ -1343,7 +1344,7 @@ fn x_display_pixel_size_errors_match_batch_shapes() {
 #[test]
 fn x_missing_optional_display_queries_match_batch_no_x_shapes() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let term = terminal_handle_value();
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
 
@@ -1426,7 +1427,7 @@ fn x_missing_optional_display_queries_match_batch_no_x_shapes() {
 #[test]
 fn x_gui_display_queries_accept_nil_and_live_frames_when_x_is_active() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let frame = Value::make_frame(frame_id.0);
     eval.set_variable("initial-window-system", Value::NIL);
@@ -1473,7 +1474,7 @@ fn x_gui_display_queries_accept_nil_and_live_frames_when_x_is_active() {
 #[test]
 fn display_queries_default_to_selected_frame_window_system_surface() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let frame = Value::make_frame(frame_id.0);
 
@@ -1537,7 +1538,7 @@ fn display_queries_default_to_selected_frame_window_system_surface() {
 #[test]
 fn x_display_set_last_user_time_batch_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
 
     match builtin_x_display_set_last_user_time(&mut eval, vec![Value::NIL]).kinded() {
         Err(FlowKind::Signal(sig)) => {
@@ -1629,7 +1630,7 @@ fn x_display_set_last_user_time_batch_semantics() {
 #[test]
 fn x_display_set_last_user_time_eval_uses_user_time_designator_payloads() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let term = terminal_handle_value();
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
 
@@ -1773,7 +1774,7 @@ fn x_geometry_fonts_and_resource_batch_semantics() {
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
 
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
 
     match builtin_x_list_fonts(&mut eval, vec![Value::NIL]).kinded() {
         Err(FlowKind::Signal(sig)) => {
@@ -2181,7 +2182,7 @@ fn x_popup_dialog_and_menu_batch_semantics() {
     crate::test_utils::init_test_tracing();
     // One Context for the whole test: constructing a Context resets the
     // tagged heap, so every Value below must be allocated after it exists.
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let term = terminal_handle_value();
 
     match builtin_x_popup_dialog_batch(vec![Value::NIL, Value::NIL]).kinded() {
@@ -2612,7 +2613,7 @@ fn x_popup_dialog_and_menu_batch_semantics() {
 #[test]
 fn x_popup_menu_accepts_current_mouse_position_sentinel_in_batch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = eval
         .eval_str(r#"(x-popup-menu t '("Title" ("Pane" ("Item" . value))))"#)
         .expect("documented current-mouse POSITION should be accepted");
@@ -2646,7 +2647,7 @@ fn x_popup_menu_accepts_current_mouse_position_sentinel_in_batch() {
 #[test]
 fn x_popup_menu_position_window_slot_accepts_a_frame_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let menu = r#"'("Title" ("Pane" ("item" . 1)))"#;
     let probe = |eval: &mut Context, position: &str| -> String {
         let form = format!(
@@ -2715,7 +2716,7 @@ fn x_popup_menu_position_window_slot_accepts_a_frame_like_gnu() {
 #[test]
 fn x_popup_menu_accepts_keymap_menus_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let probe = |eval: &mut Context, position: &str, menu: &str| -> String {
         let form = format!(
             r#"(let ((map (make-sparse-keymap "Index")))
@@ -3181,7 +3182,8 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 
-    let mut focus_eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut focus_eval =
+        neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let focus_frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut focus_eval);
     for args in [
         vec![Value::NIL],
@@ -3344,7 +3346,7 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
 #[test]
 fn eval_x_display_queries_accept_live_frame_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
 
     let width = builtin_x_display_pixel_width(&mut eval, vec![Value::make_frame(frame_id)]);
@@ -3357,7 +3359,7 @@ fn eval_x_display_queries_accept_live_frame_designator() {
 fn graphical_display_dimensions_use_monitor_extent() {
     crate::test_utils::init_test_tracing();
     use neovm_eval::emacs_core::builtins::{NeomacsMonitorInfo, set_neomacs_monitor_info};
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let fid = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     eval.frames
         .get_mut(fid)
@@ -3393,7 +3395,7 @@ fn graphical_display_dimensions_use_monitor_extent() {
 fn monitor_attributes_geometry_uses_frame_pixel_units() {
     crate::test_utils::init_test_tracing();
     use neovm_eval::emacs_core::builtins::{NeomacsMonitorInfo, set_neomacs_monitor_info};
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     set_neomacs_monitor_info(vec![NeomacsMonitorInfo {
         x: 3024,
@@ -3468,7 +3470,7 @@ fn monitor_attributes_report_scale_factor_only_for_wayland_frames() {
 #[test]
 fn graphical_display_without_monitor_snapshot_does_not_invent_dimensions() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     eval.frames
         .get_mut(frame_id)
@@ -3485,7 +3487,7 @@ fn graphical_display_without_monitor_snapshot_does_not_invent_dimensions() {
 #[test]
 fn eval_x_display_mm_queries_accept_selected_gui_display() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     eval.frames
         .get_mut(frame_id)
@@ -3509,7 +3511,7 @@ fn eval_x_display_mm_queries_accept_selected_gui_display() {
 #[test]
 fn x_focus_frame_accepts_live_neomacs_gui_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     eval.frames
         .get_mut(frame_id)
@@ -3529,7 +3531,7 @@ fn x_focus_frame_accepts_live_neomacs_gui_frame() {
 #[test]
 fn x_focus_frame_rejects_live_tty_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     eval.frames
         .get_mut(frame_id)
@@ -3552,7 +3554,7 @@ fn x_focus_frame_rejects_live_tty_frame() {
 #[test]
 fn eval_monitor_attributes_include_bootstrapped_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let list = builtin_display_monitor_attributes_list(&mut eval, vec![]).unwrap();
     let monitors = list_to_vec(&list).expect("monitor list");
     let attrs = list_to_vec(monitors.first().expect("first monitor")).expect("monitor attrs");
@@ -3586,7 +3588,7 @@ fn eval_monitor_attributes_include_bootstrapped_frame() {
 #[test]
 fn eval_monitor_queries_accept_live_frame_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
 
     let list =
@@ -3604,7 +3606,7 @@ fn eval_monitor_queries_accept_live_frame_designator() {
 #[test]
 fn eval_monitor_queries_accept_frame_handle_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let list = builtin_display_monitor_attributes_list(&mut eval, vec![]).unwrap();
     let monitors = list_to_vec(&list).expect("monitor list");
     let attrs = list_to_vec(monitors.first().expect("first monitor")).expect("monitor attrs");
@@ -3635,7 +3637,7 @@ fn eval_monitor_queries_accept_frame_handle_designator() {
 #[test]
 fn eval_display_queries_accept_live_frame_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
 
     assert!(
@@ -3719,7 +3721,7 @@ fn eval_display_queries_accept_live_frame_designator() {
 #[test]
 fn window_system_prefers_selected_frame_then_global_fallback() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
 
     assert_eq!(
         builtin_window_system(&mut eval, vec![]).unwrap(),
@@ -3777,7 +3779,7 @@ fn window_system_prefers_selected_frame_then_global_fallback() {
 #[test]
 fn display_graphic_p_uses_global_window_system_without_live_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("initial-window-system", Value::symbol("neo"));
 
     assert_eq!(
@@ -3793,7 +3795,7 @@ fn display_graphic_p_uses_global_window_system_without_live_frame() {
 #[test]
 fn eval_display_queries_reject_invalid_frame_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let _ = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let result = builtin_display_pixel_width(&mut eval, vec![Value::fixnum(999_999)]);
     assert!(result.is_err());
@@ -3812,7 +3814,7 @@ fn eval_display_queries_string_designator_reports_missing_display() {
         }
     }
 
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     assert_missing_display(builtin_display_graphic_p(
         &mut eval,
         vec![Value::string("x")],
@@ -3872,7 +3874,7 @@ fn eval_display_queries_string_designator_reports_missing_display() {
 #[test]
 fn eval_display_monitor_errors_render_window_designators() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let _ = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let window =
         crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, &vec![]).unwrap();
@@ -3907,7 +3909,7 @@ fn eval_display_monitor_errors_render_window_designators() {
 #[test]
 fn get_device_terminal_formatter_keeps_integer_literals() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let _ = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let window =
         crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, &vec![]).unwrap();
@@ -3923,7 +3925,7 @@ fn get_device_terminal_formatter_keeps_integer_literals() {
 #[test]
 fn display_images_p_shapes_and_errors() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     assert!(
         builtin_display_images_p(&mut eval, vec![])
             .unwrap()
@@ -3960,7 +3962,7 @@ fn display_images_p_shapes_and_errors() {
 #[test]
 fn display_save_under_and_display_selections_p_shapes_and_errors() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
 
     assert_eq!(
         builtin_display_save_under(&mut eval, vec![]).unwrap(),
@@ -4017,7 +4019,7 @@ fn display_save_under_and_display_selections_p_shapes_and_errors() {
 #[test]
 fn display_optional_capability_queries_match_color_shapes() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
 
     for query in [
         builtin_display_grayscale_p
@@ -4074,7 +4076,7 @@ fn display_optional_capability_queries_match_color_shapes() {
 #[test]
 fn display_supports_face_attributes_p_arity_and_nil_result() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let attrs = Value::list(vec![Value::symbol(":weight"), Value::symbol("bold")]);
     assert!(
         builtin_display_supports_face_attributes_p(&mut eval, vec![attrs])
@@ -4107,7 +4109,7 @@ fn display_supports_face_attributes_p_arity_and_nil_result() {
 #[test]
 fn display_supports_face_attributes_p_uses_live_gui_font_capabilities() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.buffers.create_buffer("*scratch*");
     let frame_id = eval
         .frames
@@ -4130,7 +4132,7 @@ fn display_supports_face_attributes_p_uses_live_gui_font_capabilities() {
 #[test]
 fn display_supports_face_attributes_p_ignores_fresh_handles_for_the_same_font() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.buffers.create_buffer("*scratch*");
     let frame_id = eval
         .frames
@@ -4156,7 +4158,7 @@ fn display_supports_face_attributes_p_ignores_fresh_handles_for_the_same_font() 
 #[test]
 fn display_supports_face_attributes_p_reports_gui_wave_underline() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.buffers.create_buffer("*scratch*");
     let frame_id = eval
         .frames
@@ -4182,7 +4184,7 @@ fn display_supports_face_attributes_p_reports_gui_wave_underline() {
 #[test]
 fn display_supports_face_attributes_p_requires_every_gui_attribute_to_be_supported() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.buffers.create_buffer("*scratch*");
     let frame_id = eval
         .frames
@@ -4210,7 +4212,7 @@ fn display_supports_face_attributes_p_requires_every_gui_attribute_to_be_support
 #[test]
 fn display_supports_face_attributes_p_rejects_gui_attribute_equal_to_default() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let mut default_face = eval.face_table().resolve("default");
     default_face.extend = Some(true);
     eval.face_table_mut().define("default", default_face);
@@ -4237,7 +4239,7 @@ fn display_supports_face_attributes_p_rejects_gui_attribute_equal_to_default() {
 #[test]
 fn display_supports_face_attributes_p_uses_graphical_host_capabilities() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.buffers.create_buffer("*scratch*");
     let frame_id = eval
         .frames
@@ -4265,7 +4267,7 @@ fn display_supports_face_attributes_p_uses_graphical_host_capabilities() {
 #[test]
 fn display_supports_face_attributes_p_accepts_disabling_nondefault_gui_decoration() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let mut default_face = eval.face_table().resolve("default");
     default_face.underline = crate::face::FaceDecoration::Enabled(crate::face::Underline {
         style: crate::face::UnderlineStyle::Line,
@@ -4295,7 +4297,7 @@ fn display_supports_face_attributes_p_accepts_disabling_nondefault_gui_decoratio
 
 #[test]
 fn x_popup_menu_interactive_keymap_returns_selected_event() {
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.buffers.create_buffer("*scratch*");
     let frame_id = eval.frames.create_frame("popup-owner", 800, 600, scratch);
     eval.frames.select_frame(frame_id);
@@ -4341,7 +4343,7 @@ fn x_popup_menu_interactive_keymap_returns_selected_event() {
 
 #[test]
 fn old_style_menu_help_keeps_the_real_submenu_definition() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let submenu = neovm_eval::emacs_core::eval::keymap_lookup::make_sparse_list_keymap();
     let definition = Value::cons(
         Value::string("Parent"),
@@ -4372,7 +4374,7 @@ fn old_style_menu_help_keeps_the_real_submenu_definition() {
 /// help pointer; it does not retract the help that was published.
 #[test]
 fn x_popup_menu_publishes_selected_item_help_and_keeps_it_after_teardown() {
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let tx = crate::host_input::HostInputPublisher::install(&mut eval);
 
     eval.set_display_host(Box::new(RecordingPopupHost::default()));
@@ -4471,7 +4473,7 @@ fn tty_menu_help_tracker_distinguishes_no_publication_from_a_clear() {
 
 #[test]
 fn x_popup_dialog_interactive_returns_selected_value() {
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.buffers.create_buffer("*scratch*");
     let frame_id = eval.frames.create_frame("dialog-owner", 800, 600, scratch);
     eval.frames.select_frame(frame_id);
@@ -4527,7 +4529,7 @@ fn x_popup_menu_interactive_keymap_collapses_submenu_on_tty() {
     // toolkit behavior (children flattened into the same pane), which is wrong
     // for a TTY frame and ballooned panes like Help -> Describe past the
     // screen height.
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.buffers.create_buffer("*scratch*");
     let frame_id = eval.frames.create_frame("popup-owner", 800, 600, scratch);
     eval.frames.select_frame(frame_id);
@@ -4586,7 +4588,7 @@ fn x_popup_menu_interactive_keymap_collapses_submenu_on_tty() {
 
 #[test]
 fn x_popup_menu_interactive_submenu_selection_returns_full_event_path() {
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     // On a window-system (GUI) frame the toolkit renders nested submenu panes,
     // so GNU recurses into the submenu (`single_keymap_panes`, the
     // `#if USE_X_TOOLKIT || ...` branch in src/menu.c:422-433) and the child
@@ -4641,7 +4643,7 @@ fn x_popup_menu_interactive_submenu_selection_returns_full_event_path() {
 
 #[test]
 fn x_popup_menu_interactive_ignores_tty_mouse_navigation() {
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let tx = crate::host_input::HostInputPublisher::install(&mut eval);
 
     eval.set_display_host(Box::new(RecordingPopupHost::default()));
@@ -4695,7 +4697,7 @@ fn x_popup_menu_interactive_ignores_tty_mouse_navigation() {
 
 #[test]
 fn x_popup_menu_interactive_keyboard_select_roots_selected_event() {
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let tx = crate::host_input::HostInputPublisher::install(&mut eval);
 
     eval.set_display_host(Box::new(RecordingPopupHost::default()));
@@ -4744,7 +4746,7 @@ fn x_popup_menu_interactive_keyboard_select_roots_selected_event() {
 
 #[test]
 fn x_popup_menu_interactive_cancel_returns_nil() {
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let tx = crate::host_input::HostInputPublisher::install(&mut eval);
 
     eval.set_display_host(Box::new(RecordingPopupHost::default()));
@@ -4776,7 +4778,7 @@ fn x_popup_menu_interactive_cancel_returns_nil() {
 
 #[test]
 fn x_popup_menu_interactive_menu_bar_position_anchors_below_menu_bar() {
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.buffers.create_buffer("*scratch*");
     let frame_id = eval.frames.create_frame("popup-owner", 800, 600, scratch);
     eval.frames
@@ -4838,7 +4840,7 @@ fn x_popup_menu_interactive_menu_bar_position_anchors_below_menu_bar() {
 
 #[test]
 fn x_popup_menu_interactive_menu_bar_position_uses_pending_native_anchor() {
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.buffers.create_buffer("*scratch*");
     let frame_id = eval.frames.create_frame("popup-owner", 800, 600, scratch);
     eval.frames
@@ -4908,7 +4910,7 @@ fn x_popup_menu_interactive_menu_bar_position_uses_pending_native_anchor() {
 
 #[test]
 fn x_popup_menu_interactive_menu_bar_right_returns_next_menu_position() {
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let tx = crate::host_input::HostInputPublisher::install(&mut eval);
 
     eval.set_display_host(Box::new(RecordingPopupHost::default()));
@@ -4979,7 +4981,7 @@ fn x_popup_menu_interactive_menu_bar_right_returns_next_menu_position() {
 
 #[test]
 fn x_popup_menu_preserves_heading_click_queued_before_old_cancellation() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.create_buffer("*menu-switch*");
     let frame = eval.frames.create_frame("menu-owner", 800, 600, buffer);
     eval.frames.select_frame(frame);
@@ -5051,7 +5053,7 @@ fn x_popup_menu_preserves_heading_click_queued_before_old_cancellation() {
 fn tty_frame_uses_terminal_capabilities_even_with_a_frontend_host() {
     use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
 
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     // A terminal frame must exist, as it always does in a real session.
     let buffer = eval
         .buffer_manager()

@@ -4,7 +4,7 @@ use super::*;
 
 #[test]
 fn gui_menu_symbolic_keymap_preserves_submenu_indicator() {
-    let mut eval = neovm_eval::emacs_core::eval::Context::new();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let menu = eval
         .eval_str(
             r#"

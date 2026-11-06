@@ -56,7 +56,7 @@ fn help_callback_cannot_stamp_stale_help_with_a_new_generation() {
 }
 
 fn gui() -> (Context, Arc<Mutex<TooltipProbe>>) {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     eval.frames
         .get_mut(frame)
@@ -117,7 +117,7 @@ fn unsupported_absolute_placement_and_invalid_timeout_do_not_reach_the_host() {
 
 #[test]
 fn terminal_tooltips_keep_the_window_system_error() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = eval
         .eval_str("(condition-case err (x-show-tip \"Help\") (error (car (cdr err))))")
         .unwrap();
