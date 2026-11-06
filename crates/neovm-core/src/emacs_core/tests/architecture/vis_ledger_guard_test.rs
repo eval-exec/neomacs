@@ -3408,6 +3408,16 @@ mod tests {
         let error =
             authority_public_paths_violation(dir.path(), &rows).expect_err("different type");
         assert!(error.contains("does not declare"), "{error}");
+        // Case 5: a FREE pub fn that merely shares the method's name does not
+        // declare `Owner::method` (peer 00:36:00Z follow-up; the leaf-alone
+        // arms are disabled for owner-pinned rows).
+        std::fs::write(
+            value_src.join("test_support/authority.rs"),
+            "pub struct Owner;\npub fn method() {}\n",
+        )
+        .expect("free fn");
+        let error = authority_public_paths_violation(dir.path(), &rows).expect_err("free fn");
+        assert!(error.contains("does not declare"), "{error}");
     }
 
     #[test]
@@ -4708,38 +4718,58 @@ fn auth_declares_public(file: &Path, leaf: &str, impl_owner: Option<&str>) -> Re
     let ast = syn::parse_file(&text)
         .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", file.display()))?;
     fn items_declare(items: &[syn::Item], leaf: &str, impl_owner: Option<&str>) -> bool {
+        // A row whose item names an owner (`Owner::method`) is a method row:
+        // only an inherent `pub fn method` on that owner (the impl arm below)
+        // or the separate alias route may declare it. A free fn/struct/const
+        // or a `pub use` leaf that merely shares the method's name is NOT the
+        // signed path (peer 00:36:00Z follow-up; predates c6314a9304).
+        let leaf_arms = impl_owner.is_none();
         items.iter().any(|item| {
             let public = match item {
                 syn::Item::Fn(item) => {
-                    item.sig.ident == leaf && matches!(item.vis, syn::Visibility::Public(_))
+                    leaf_arms
+                        && item.sig.ident == leaf
+                        && matches!(item.vis, syn::Visibility::Public(_))
                 }
                 syn::Item::Type(item) => {
-                    item.ident == leaf && matches!(item.vis, syn::Visibility::Public(_))
+                    leaf_arms
+                        && item.ident == leaf
+                        && matches!(item.vis, syn::Visibility::Public(_))
                 }
                 syn::Item::Struct(item) => {
-                    item.ident == leaf && matches!(item.vis, syn::Visibility::Public(_))
+                    leaf_arms
+                        && item.ident == leaf
+                        && matches!(item.vis, syn::Visibility::Public(_))
                 }
                 syn::Item::Enum(item) => {
-                    item.ident == leaf && matches!(item.vis, syn::Visibility::Public(_))
+                    leaf_arms
+                        && item.ident == leaf
+                        && matches!(item.vis, syn::Visibility::Public(_))
                 }
                 // Trait methods carry no `pub` keyword; a method of a public
                 // trait is a public path (the display fence's shape).
                 syn::Item::Trait(item) => {
-                    matches!(item.vis, syn::Visibility::Public(_))
+                    leaf_arms
+                        && matches!(item.vis, syn::Visibility::Public(_))
                         && item.items.iter().any(|member| {
                             matches!(member, syn::TraitItem::Fn(function) if function.sig.ident == leaf)
                         })
                 }
                 syn::Item::Const(item) => {
-                    item.ident == leaf && matches!(item.vis, syn::Visibility::Public(_))
+                    leaf_arms
+                        && item.ident == leaf
+                        && matches!(item.vis, syn::Visibility::Public(_))
                 }
                 syn::Item::Static(item) => {
-                    item.ident == leaf && matches!(item.vis, syn::Visibility::Public(_))
+                    leaf_arms
+                        && item.ident == leaf
+                        && matches!(item.vis, syn::Visibility::Public(_))
                 }
                 syn::Item::Use(item) => {
                     let mut leaves = Vec::new();
                     auth_use_leaves(&item.tree, &mut Vec::new(), &mut leaves);
-                    matches!(item.vis, syn::Visibility::Public(_))
+                    leaf_arms
+                        && matches!(item.vis, syn::Visibility::Public(_))
                         && leaves.iter().any(|(path, alias, glob)| {
                             !glob
                                 && (alias.as_deref() == Some(leaf)
