@@ -70,6 +70,7 @@ pub use neovm_display::emacs_core::display_host;
 // display_prop TD); the historical emacs_core path stays as a re-export for
 // the display engine and window input code above eval.
 pub use crate::emacs_core::eval::data::display_spec;
+pub use neovm_display::emacs_core::display_subrs;
 pub use neovm_display::emacs_core::display_when;
 pub use neovm_display::emacs_core::dispnew;
 pub use neovm_display::emacs_core::effect_profile;

@@ -6,6 +6,9 @@ pub mod chrome_dirty;
 pub mod display;
 #[path = "display/display_host/mod.rs"]
 pub mod display_host;
+#[doc(hidden)]
+#[path = "display/display_subrs/mod.rs"]
+pub mod display_subrs;
 #[path = "display/display_when/mod.rs"]
 pub mod display_when;
 #[path = "display/dispnew/mod.rs"]
