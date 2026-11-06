@@ -269,6 +269,13 @@ harness = false
 name = "sync_window_positions_regression"
 path = "tests/sync_window_positions_regression.rs"
 
+# Warn-delta P2 oracle: minibuffer exit restores the previous mini-window
+# buffer/start/point under the GNU redisplay-hooks policy (GNU minibuf.c
+# minibuffer_unwind / read_minibuf_unwind).
+[[test]]
+name = "warn_delta_minibuffer_restore"
+path = "tests/warn_delta_minibuffer_restore.rs"
+
 [[bench]]
 name = "buffer_text_backends"
 harness = false
