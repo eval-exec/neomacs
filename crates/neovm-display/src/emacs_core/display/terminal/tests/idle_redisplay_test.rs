@@ -2,6 +2,7 @@
 //! presentation even if no text or window state changed while suspended.
 
 use super::*;
+use crate::window::DisplayFrameManagerExt;
 use std::cell::Cell;
 
 /// Owns test-only terminal and redisplay state on the current test thread;

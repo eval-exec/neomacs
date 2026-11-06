@@ -1,4 +1,5 @@
 use super::*;
+use crate::window::DisplayFrameManagerExt;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_value::intern::{intern, intern_call_names, reset_intern_calls};
 

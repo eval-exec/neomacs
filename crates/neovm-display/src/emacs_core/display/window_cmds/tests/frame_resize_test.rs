@@ -1,4 +1,5 @@
 use super::*;
+use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
 
 #[test]
 fn overlapping_native_observations_keep_the_latest_requested_grid_for_font_changes() {

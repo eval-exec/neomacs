@@ -2,11 +2,14 @@ use crate::emacs_core::window_cmds::{FrameDomain, SplitWindowSide, WindowDomain}
 use crate::face::{FontSlant, FontWeight, FontWidth};
 use crate::test_utils::{runtime_startup_context, runtime_startup_eval_all};
 use crate::window::DisplayFrameTestExt;
+use crate::window::display::WindowDisplayContextExt;
+use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
 use crate::window::{FrameFullscreen, FrameParam};
 use neovm_edit::buffer::{EmacsBytePos, LispCharPos1};
 use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::emacs_core::eval::DisplayHost;
 use neovm_eval::emacs_core::eval::GuiFrameHostRequest;
+use neovm_eval::emacs_core::eval::data::minibuffer_entry::MinibufferManagerExt;
 use neovm_eval::emacs_core::eval::{FontPxProbeResult, GuiFrameHostSize, ResolvedFrameFont};
 use neovm_eval::emacs_core::print::format_eval_result;
 use neovm_value::error::FlowResultExt as _;

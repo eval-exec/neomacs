@@ -54,6 +54,7 @@ mod posn_boundary_anchor_test;
 #[cfg(test)]
 #[path = "posn_frame_pool_test.rs"]
 mod posn_frame_pool_test;
+use crate::window::DisplayWindowExt;
 use posn_extent_fixture_test::{PosnExtentFixtureGuard, install_accepted_tty_fixture_rows};
 
 fn interactive_context() -> Context {

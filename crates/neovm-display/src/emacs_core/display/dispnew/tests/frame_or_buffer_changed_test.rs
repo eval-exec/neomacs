@@ -1,4 +1,5 @@
 use super::{FrameBufferState, builtin_frame_or_buffer_changed_p};
+use crate::window::DisplayFrameExt;
 use neovm_eval::emacs_core::advice::builtin_add_variable_watcher;
 use neovm_eval::emacs_core::builtins::symbols::{
     builtin_fset, builtin_set_2, builtin_symbol_value_1,

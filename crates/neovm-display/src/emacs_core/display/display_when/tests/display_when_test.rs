@@ -117,6 +117,7 @@ fn with_display_buffer_current_selects_the_buffer_and_restores_the_callers() {
 
 #[test]
 fn sites_are_evaluated_once_per_site_with_the_buffer_current_and_survive_gc() {
+    use crate::emacs_core::display::display_when::DisplayWhenContextExt;
     use crate::emacs_core::display_when::{DisplayWhenSite, DisplayWhenSiteKey};
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let original = eval.edit.buffers.current_buffer_id().expect("buffer");

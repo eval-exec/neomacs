@@ -1,4 +1,5 @@
 use super::*;
+use crate::window::display::WindowDisplayContextExt;
 use neovm_eval::emacs_core::eval::Context;
 use std::borrow::Cow;
 

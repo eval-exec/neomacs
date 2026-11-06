@@ -1,6 +1,7 @@
 //! GNU's `max-image-size` (`src/image.c:13037`) as this port reads it.
 
 use super::{ImageScalePolicy, ImageSizeLimit, image_scale_environment, image_size_limit};
+use crate::window::DisplayFrameManagerExt;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_value::value::Value;
 

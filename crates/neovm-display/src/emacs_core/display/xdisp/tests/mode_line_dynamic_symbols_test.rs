@@ -158,14 +158,16 @@ fn p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth_child() {
         let pass_epoch = pctx.dynamic_symbols.borrow().epoch;
         // No VariableView, RefCell borrow, string Value or Context view enters
         // this closure. Held identity/pass/output are accessed only on return.
-        let receipt = ctx
-            .admit_owned_proof_parallel(|projection| {
+        let receipt = neovm_eval::test_support::authority::admit_owned_proof_parallel_for_test(
+            &mut ctx,
+            |projection| {
                 let receipt = projection.era().c5_intern_growth_for_test(holders);
                 let (collector, keeper) = projection.finish().expect("C5 pass clean era finish");
                 (collector, keeper, receipt)
-            })
-            .expect("C5 pass owned admission")
-            .expect("C5 pass history after normal serial recovery");
+            },
+        )
+        .expect("C5 pass owned admission")
+        .expect("C5 pass history after normal serial recovery");
         assert!(ctx.obarray_view().admission_matches_canonical());
         assert!(receipt.after.chunks >= receipt.before.chunks + 2);
         assert_eq!(receipt.after.chunks, receipt.after.sides);

@@ -1,4 +1,5 @@
 //! Redisplay scheduling omits only the effective fontification hook identity.
+use crate::window::display::WindowDisplayContextExt;
 use crate::window::{BufferLayoutInputState, FontificationHookIdentity};
 use neovm_edit::buffer::BufferId;
 use neovm_eval::emacs_core::eval::Context;

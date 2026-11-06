@@ -1,4 +1,5 @@
 use super::pure::*;
+use crate::window::DisplayFrameManagerExt;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_value::error::{FlowKind, FlowResultExt as _};
 use neovm_value::value::Value;

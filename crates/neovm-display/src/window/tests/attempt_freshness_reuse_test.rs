@@ -1,4 +1,7 @@
 //! Request-local buffer capture reuse preserves owned freshness inputs.
+use crate::emacs_core::display::display_when::DisplayWhenContextExt;
+use crate::window::DisplayFrameManagerExt;
+use crate::window::display::WindowDisplayContextExt;
 use crate::window::{FrameId, WindowId};
 use neovm_edit::buffer::BufferId;
 use neovm_eval::emacs_core::eval::Context;

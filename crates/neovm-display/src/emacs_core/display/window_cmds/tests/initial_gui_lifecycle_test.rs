@@ -1,5 +1,6 @@
 use super::*;
 use crate::emacs_core::display_host::InitialGuiFrameDefaults;
+use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
 use crate::window::{FrameDisplayIdentity, FrameId, FrameVisibility};
 use neomacs_display_protocol::{GraphicalBackend, GraphicalDisplayIdentity};
 

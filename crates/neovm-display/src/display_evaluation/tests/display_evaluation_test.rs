@@ -1,3 +1,5 @@
+use crate::display_evaluation::DisplayEvaluationContextExt;
+use crate::window::DisplayFrameManagerExt;
 use neovm_eval::emacs_core::eval::Context;
 
 #[test]

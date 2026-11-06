@@ -97,6 +97,7 @@ fn window_end_state_preserves_one_atomic_record_across_invalidation() {
 #[test]
 fn prepared_presentation_publishes_one_atomic_window_redisplay_output() {
     use super::geometry::PresentationId;
+    use crate::window::display::WindowDisplayContextExt;
 
     let mut frames = FrameManager::new();
     let frame_id = frames.create_frame("atomic-window-output", 800, 600, BufferId(1));
