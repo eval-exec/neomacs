@@ -15,7 +15,7 @@ use neovm_value::value::Value;
 #[test]
 fn bootstrap_error_outlives_the_failed_evaluator_heap() {
     let owned = {
-        let eval = Context::new();
+        let eval = Context::new(crate::test_utils::unit_runtime());
         // A signal payload with a heap string: the exact shape that forced
         // callers to render before teardown.
         let error = EvalError::signal(
