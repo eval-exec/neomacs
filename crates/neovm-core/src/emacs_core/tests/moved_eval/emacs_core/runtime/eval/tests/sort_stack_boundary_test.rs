@@ -310,8 +310,11 @@ fn published_native_sort_calls_restore_frames_on_success_and_signal() {
                         // sort, including a signal-hook collection at finish.
                         // This fresh Context owns them until it is dropped.
                         let subr = match captured {
-                            CapturedSortPredicate::Native { subr } => subr,
-                            CapturedSortPredicate::Other => {
+                            CapturedSortPredicate::NumericLessp { subr }
+                            | CapturedSortPredicate::StringLessp { subr } => subr,
+                            CapturedSortPredicate::ValueLt
+                            | CapturedSortPredicate::Generic { .. }
+                            | CapturedSortPredicate::Subr { .. } => {
                                 panic!("fixture must capture a native body")
                             }
                         };

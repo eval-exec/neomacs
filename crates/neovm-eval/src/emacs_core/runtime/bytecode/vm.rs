@@ -10179,45 +10179,49 @@ impl<'a> crate::emacs_core::builtins::symbols::MacroexpandRuntime for Vm<'a> {
     }
 }
 
-impl crate::emacs_core::builtins::higher_order::SortRuntime for Vm<'_> {
+impl crate::emacs_core::builtins::higher_order::SortRoots for Vm<'_> {
     type RootScope = crate::emacs_core::builtins::higher_order::SortRootScope;
     type RootSlot = crate::emacs_core::builtins::higher_order::SortRootSlot;
     type RootBatch = Vec<Self::RootSlot>;
 
     fn set_sort_slot(&mut self, slot: &Self::RootSlot, value: Value) {
-        crate::emacs_core::builtins::higher_order::SortRuntime::set_sort_slot(
-            self.ctx, slot, value,
-        );
+        crate::emacs_core::builtins::higher_order::SortRoots::set_sort_slot(self.ctx, slot, value);
     }
 
     fn save_sort_roots(&self) -> Self::RootScope {
-        crate::emacs_core::builtins::higher_order::SortRuntime::save_sort_roots(self.ctx)
+        crate::emacs_core::builtins::higher_order::SortRoots::save_sort_roots(self.ctx)
     }
 
     fn restore_sort_roots(&mut self, scope: Self::RootScope) {
-        crate::emacs_core::builtins::higher_order::SortRuntime::restore_sort_roots(self.ctx, scope);
+        crate::emacs_core::builtins::higher_order::SortRoots::restore_sort_roots(self.ctx, scope);
     }
 
     fn root_sort_slot(&mut self, value: Value) -> Self::RootSlot {
-        crate::emacs_core::builtins::higher_order::SortRuntime::root_sort_slot(self.ctx, value)
+        crate::emacs_core::builtins::higher_order::SortRoots::root_sort_slot(self.ctx, value)
     }
 
     fn clear_sort_slot(&mut self, slot: &Self::RootSlot) {
-        crate::emacs_core::builtins::higher_order::SortRuntime::clear_sort_slot(self.ctx, slot);
+        crate::emacs_core::builtins::higher_order::SortRoots::clear_sort_slot(self.ctx, slot);
     }
 
     #[inline]
     fn root_sort_batch(&mut self, values: impl Iterator<Item = Value>) -> Self::RootBatch {
-        crate::emacs_core::builtins::higher_order::SortRuntime::root_sort_batch(self.ctx, values)
+        crate::emacs_core::builtins::higher_order::SortRoots::root_sort_batch(self.ctx, values)
     }
 
     #[inline]
     fn clear_sort_batch(&mut self, batch: &Self::RootBatch, range: std::ops::Range<usize>) {
-        crate::emacs_core::builtins::higher_order::SortRuntime::clear_sort_batch(
+        crate::emacs_core::builtins::higher_order::SortRoots::clear_sort_batch(
             self.ctx, batch, range,
         )
     }
 
+    fn root_sort_value(&mut self, value: Value) {
+        self.push_dynamic_vm_root(value);
+    }
+}
+
+impl crate::emacs_core::builtins::higher_order::SortRuntime for Vm<'_> {
     fn call_sort_function1(&mut self, function: Value, arg: Value) -> Result<Value, Flow> {
         self.with_vm_root_scope(|vm| {
             vm.push_dynamic_vm_root(arg);
@@ -10236,10 +10240,6 @@ impl crate::emacs_core::builtins::higher_order::SortRuntime for Vm<'_> {
             vm.push_dynamic_vm_root(arg1);
             vm.call_function2(function, arg0, arg1)
         })
-    }
-
-    fn root_sort_value(&mut self, value: Value) {
-        self.push_dynamic_vm_root(value);
     }
 
     fn compare_sort_keys(

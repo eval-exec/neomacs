@@ -8,6 +8,11 @@ use smallvec::SmallVec;
 mod sort;
 mod sort_buffered;
 use sort::{SortStorage, VectorSortStorage, gnu_style_sort_items};
+// TEST-SUPPORT-VIS (peer 12:57Z (a)): the owned-instance sort rooting
+// types stay private in production; the cross-crate test-support build
+// re-exports them for the re-homed root-domain oracle.
+#[cfg(feature = "test-support")]
+pub use sort::{SortRootGuard, ValueRooting};
 
 type MapResultVec = SmallVec<[Value; 8]>;
 
@@ -882,15 +887,23 @@ pub(crate) struct NativeSortCall {
 
 /// A saved specpdl boundary belonging to this mutator's sort. Restoration
 /// consumes the handle; it cannot be copied or sent to another mutator.
+///
+/// TEST-SUPPORT-VIS: the trait's associated type must be as public as the
+/// widened trait; the handle stays opaque (private fields, `!Send`/`!Sync`).
 #[derive(Debug)]
 #[must_use = "restore the sort's roots at the end of their scope"]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct SortRootScope {
     state: crate::emacs_core::eval::SpecpdlRootScopeState,
     _owner: std::marker::PhantomData<*const ()>,
 }
 
 /// A specpdl slot in the owning mutator, distinct from a buffered arena index.
+///
+/// TEST-SUPPORT-VIS: the trait's associated type must be as public as the
+/// widened trait; the handle stays opaque (private fields, `!Send`/`!Sync`).
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct SortRootSlot {
     slot: crate::emacs_core::eval::SpecpdlRootSlot,
     _owner: std::marker::PhantomData<*const ()>,
@@ -904,22 +917,21 @@ const _: () = assert!(
 const _: () =
     assert!(size_of::<SortRootSlot>() == size_of::<crate::emacs_core::eval::SpecpdlRootSlot>());
 
-/// One mutator's sorting runtime. Root handles are backend-specific: buffered
-/// arena indices cannot be passed to the specpdl backend, or vice versa.
-pub(crate) trait SortRuntime: sort_runtime_sealed::Sealed {
+/// One mutator's sorting-root domain. Root handles are backend-specific:
+/// buffered arena indices cannot be passed to the specpdl backend, or vice
+/// versa.
+///
+/// TEST-SUPPORT-VIS (peer HOLD 16:26Z r2, refinement of ruling (a)): ONLY the
+/// rooting domain is published. The seal module stays private, so cross-crate
+/// tests can call these methods on a test-owned Context but can never
+/// implement the trait. Every method acts only on the receiver (its own root
+/// storage); none writes TLS, a static or process-global state. The predicate
+/// and callback methods stay on the crate-private [`SortRuntime`].
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) trait SortRoots: sort_runtime_sealed::Sealed {
     type RootScope: std::fmt::Debug;
     type RootSlot: std::fmt::Debug;
     type RootBatch: Default + std::fmt::Debug;
-    fn resolve_sort_key(&mut self, key: Value) -> Value {
-        key
-    }
-    fn call_sort_function1(&mut self, function: Value, arg: Value) -> Result<Value, Flow>;
-    fn call_sort_function2(
-        &mut self,
-        function: Value,
-        arg0: Value,
-        arg1: Value,
-    ) -> Result<Value, Flow>;
     fn root_sort_value(&mut self, value: Value);
     fn save_sort_roots(&self) -> Self::RootScope;
     fn restore_sort_roots(&mut self, scope: Self::RootScope);
@@ -930,6 +942,21 @@ pub(crate) trait SortRuntime: sort_runtime_sealed::Sealed {
     fn root_sort_batch(&mut self, values: impl Iterator<Item = Value>) -> Self::RootBatch;
     /// Clear only consumed temporaries, retaining GNU's remaining-value roots.
     fn clear_sort_batch(&mut self, batch: &Self::RootBatch, range: std::ops::Range<usize>);
+}
+
+/// One mutator's sorting runtime: the rooting domain plus the predicate and
+/// callback methods. Stays crate-private in every build.
+pub(crate) trait SortRuntime: SortRoots {
+    fn resolve_sort_key(&mut self, key: Value) -> Value {
+        key
+    }
+    fn call_sort_function1(&mut self, function: Value, arg: Value) -> Result<Value, Flow>;
+    fn call_sort_function2(
+        &mut self,
+        function: Value,
+        arg0: Value,
+        arg1: Value,
+    ) -> Result<Value, Flow>;
     /// Resolve the predicate once, before the first comparison.
     fn resolve_sort_predicate(&mut self, predicate: Value) -> SortPredicate {
         if predicate.is_nil() {
@@ -980,7 +1007,7 @@ mod sort_runtime_sealed {
 impl sort_runtime_sealed::Sealed for super::eval::Context {}
 impl sort_runtime_sealed::Sealed for crate::emacs_core::bytecode::Vm<'_> {}
 
-impl SortRuntime for super::eval::Context {
+impl SortRoots for super::eval::Context {
     type RootScope = SortRootScope;
     type RootSlot = SortRootSlot;
     type RootBatch = Vec<Self::RootSlot>;
@@ -1016,6 +1043,12 @@ impl SortRuntime for super::eval::Context {
             self.clear_sort_slot(slot);
         }
     }
+    fn root_sort_value(&mut self, value: Value) {
+        self.push_specpdl_root(value);
+    }
+}
+
+impl SortRuntime for super::eval::Context {
     fn resolve_sort_key(&mut self, key: Value) -> Value {
         resolve_sort_function(self, key)
     }
@@ -1035,10 +1068,6 @@ impl SortRuntime for super::eval::Context {
         args.push(arg0);
         args.push(arg1);
         self.apply(function, args)
-    }
-
-    fn root_sort_value(&mut self, value: Value) {
-        self.push_specpdl_root(value);
     }
 
     fn resolve_sort_predicate(&mut self, predicate: Value) -> SortPredicate {
@@ -1395,26 +1424,37 @@ pub(crate) fn stable_sort_values_with<R: SortRuntime>(
 }
 
 /// Copied classification of a resolved sort predicate for cross-crate tests.
-/// Carries only the rooted subr `Value`; the private capture proof stays here.
+/// Carries only rooted `Value`s; the private capture proof stays here.
 #[cfg(any(test, feature = "test-support"))]
 pub enum CapturedSortPredicate {
-    Native { subr: Value },
-    Other,
+    /// No predicate: GNU `value<` ordering.
+    ValueLt,
+    /// Ordinary funcall dispatch on this callable.
+    Generic { function: Value },
+    /// A builtin subr that is not one of the recognized ordering primitives.
+    Subr { designator: Value, subr: Value },
+    /// A direct numeric `<` builtin.
+    NumericLessp { subr: Value },
+    /// A direct `string-lessp` builtin.
+    StringLessp { subr: Value },
 }
 
-/// Test-support route for the re-homed published-sort fixtures: resolve the
-/// predicate through the product's own [`SortRuntime`] implementation, then
-/// collapse the private predicate type to copied data.
+/// Test-support route for the re-homed published-sort and captured-predicate
+/// fixtures: resolve the predicate through the product's own [`SortRuntime`]
+/// implementation, then collapse the private predicate type to copied data.
 #[cfg(any(test, feature = "test-support"))]
 pub fn resolve_sort_predicate_for_test(
     eval: &mut super::eval::Context,
     predicate: Value,
 ) -> CapturedSortPredicate {
     match <super::eval::Context as SortRuntime>::resolve_sort_predicate(eval, predicate) {
-        SortPredicate::NumericLessp { subr, .. } | SortPredicate::StringLessp { subr, .. } => {
-            CapturedSortPredicate::Native { subr }
-        }
-        _ => CapturedSortPredicate::Other,
+        SortPredicate::ValueLt => CapturedSortPredicate::ValueLt,
+        SortPredicate::Generic(function) => CapturedSortPredicate::Generic { function },
+        SortPredicate::Subr {
+            designator, subr, ..
+        } => CapturedSortPredicate::Subr { designator, subr },
+        SortPredicate::NumericLessp { subr, .. } => CapturedSortPredicate::NumericLessp { subr },
+        SortPredicate::StringLessp { subr, .. } => CapturedSortPredicate::StringLessp { subr },
     }
 }
 

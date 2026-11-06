@@ -1,21 +1,28 @@
 //! Resolver engagement tests. Lisp behavior is pinned by GNU-refreshed forms in
 //! `neovm-oracle-tests/src/sort/captured_predicate.rs` under the VM and default JIT.
-use super::higher_order::{SortPredicate, capture_sort_predicate};
-use crate::emacs_core::eval::Context;
+//!
+//! P1 F1 re-home of eval's builtins/tests/sort_capture_test.rs. Test names and
+//! assertions are unchanged; only the imports moved to the signed test-support
+//! facade (the private predicate/proof types stay in eval), the resolver is
+//! driven through the product's `resolve_sort_predicate_for_test` route, and
+//! `Context::new(unit_runtime())` became core's `new_context()` facade.
+use neovm_eval::emacs_core::builtins::higher_order_test_support::{
+    CapturedSortPredicate, resolve_sort_predicate_for_test,
+};
 use neovm_value::value::Value;
 
 #[test]
 fn sort_capture_resolves_builtin_alias_objects() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str("(defalias 'sort-capture-alias 'string-lessp)")
         .expect("install alias");
     let builtin = eval
         .obarray()
         .symbol_function("string-lessp")
         .expect("builtin cell");
-    let captured = capture_sort_predicate(&mut eval, Value::symbol("sort-capture-alias"));
-    let Some(SortPredicate::StringLessp { subr, .. }) = captured else {
+    let captured = resolve_sort_predicate_for_test(&mut eval, Value::symbol("sort-capture-alias"));
+    let CapturedSortPredicate::StringLessp { subr } = captured else {
         panic!("the resolved builtin implementation must engage string ordering");
     };
     assert_eq!(subr, builtin);
@@ -36,8 +43,8 @@ fn sort_capture_redefined_or_advised_string_predicate_is_generic() {
         .obarray()
         .symbol_function("sort-capture-custom")
         .expect("advised callable");
-    let captured = capture_sort_predicate(&mut eval, Value::symbol("sort-capture-custom"));
-    let Some(SortPredicate::Generic(function)) = captured else {
+    let captured = resolve_sort_predicate_for_test(&mut eval, Value::symbol("sort-capture-custom"));
+    let CapturedSortPredicate::Generic { function } = captured else {
         panic!("an advised callable must retain ordinary funcall");
     };
     assert_eq!(function, callable);
@@ -52,12 +59,13 @@ fn sort_capture_redefined_or_advised_string_predicate_is_generic() {
 #[test]
 fn sort_capture_keeps_void_and_autoload_symbols() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str("(autoload 'sort-capture-autoload \"sort-capture-missing-file\")")
         .expect("install autoload");
     for name in ["sort-capture-void", "sort-capture-autoload"] {
         let symbol = Value::symbol(name);
-        let Some(SortPredicate::Generic(function)) = capture_sort_predicate(&mut eval, symbol)
+        let CapturedSortPredicate::Generic { function } =
+            resolve_sort_predicate_for_test(&mut eval, symbol)
         else {
             panic!("void/autoload must preserve symbol dispatch");
         };
@@ -68,11 +76,10 @@ fn sort_capture_keeps_void_and_autoload_symbols() {
 #[test]
 fn sort_capture_direct_numeric_subr_is_its_own_designator() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let builtin = eval.obarray().symbol_function(">").expect("builtin cell");
-    let Some(SortPredicate::Subr {
-        designator, subr, ..
-    }) = capture_sort_predicate(&mut eval, builtin)
+    let CapturedSortPredicate::Subr { designator, subr } =
+        resolve_sort_predicate_for_test(&mut eval, builtin)
     else {
         panic!("a direct builtin object must engage subr dispatch");
     };
@@ -83,9 +90,10 @@ fn sort_capture_direct_numeric_subr_is_its_own_designator() {
 #[test]
 fn sort_capture_direct_numeric_lessp_takes_the_numeric_path() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let builtin = eval.obarray().symbol_function("<").expect("builtin cell");
-    let Some(SortPredicate::NumericLessp { subr, .. }) = capture_sort_predicate(&mut eval, builtin)
+    let CapturedSortPredicate::NumericLessp { subr } =
+        resolve_sort_predicate_for_test(&mut eval, builtin)
     else {
         panic!("a direct `<` builtin object must engage the numeric comparison path");
     };

@@ -253,6 +253,17 @@ mod emacs_core_lisp_native_builtins_tests_search_frontend_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/native/builtins/tests/width_policy.rs"]
 mod emacs_core_lisp_native_builtins_tests_width_policy_rs;
+// P1 EVAL wave F1 (peer class ruling 12:57Z (a)/(b)): the sort root-domain
+// oracle and the captured-predicate resolver oracle re-homed from eval.
+// Pre-split gates at c957557a40: sort.rs:12-14 `#[cfg(test)]` and
+// builtins/mod.rs:710-712 `#[cfg(test)]`, so both are plain cfg(test) here
+// (both ran in every pre-split test build, no-default included).
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/gd_e_sort_root_domains_test.rs"]
+mod emacs_core_lisp_native_builtins_tests_gd_e_sort_root_domains_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/sort_capture_test.rs"]
+mod emacs_core_lisp_native_builtins_tests_sort_capture_test_rs;
 // P1 EVAL wave F1: debug-on-call arming oracle re-homed from eval
 // (booted Context through core test_utils; body byte-identical apart from
 // imports and the unit-runtime constructor).

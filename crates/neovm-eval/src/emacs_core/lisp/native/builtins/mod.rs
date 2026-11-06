@@ -500,6 +500,11 @@ pub mod higher_order_test_support {
     pub use super::higher_order::{
         CapturedSortPredicate, builtin_sort_slice, resolve_sort_predicate_for_test,
     };
+    // Owned-instance rooting surface for the re-homed root-domain oracle
+    // (peer 12:57Z (a)): the cross-crate build only; eval's own test build
+    // keeps the production pub(super) visibility.
+    #[cfg(feature = "test-support")]
+    pub use super::higher_order::{SortRootGuard, SortRoots, ValueRooting};
 }
 #[doc(hidden)]
 pub use hooks::*;
@@ -736,9 +741,6 @@ mod assoc_callbacks_test;
 #[cfg(test)]
 #[path = "tests/predicate_walk_gc_test.rs"]
 mod predicate_walk_gc_test;
-#[cfg(test)]
-#[path = "tests/sort_capture_test.rs"]
-mod sort_capture_test;
 
 // -----------------------------------------------------------------------
 // Wrapper functions for builtins that need tracing or non-standard access

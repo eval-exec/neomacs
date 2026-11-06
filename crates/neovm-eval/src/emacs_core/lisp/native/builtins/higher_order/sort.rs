@@ -2,15 +2,12 @@
 //! Lisp vector, retaining no slice borrow across Lisp callbacks.
 #![deny(clippy::undocumented_unsafe_blocks)]
 #![deny(clippy::wildcard_enum_match_arm)]
-use super::{Flow, SortDirection, SortItem, SortPredicate, SortRuntime, Value};
+use super::{Flow, SortDirection, SortItem, SortPredicate, SortRoots, SortRuntime, Value};
 use std::ops::Range;
-
-#[cfg(test)]
-#[path = "../tests/gd_e_sort_root_domains_test.rs"]
-mod gd_e_sort_root_domains_tests;
 
 /// Whether a comparator can expose temporary values to Lisp/GC.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) enum ValueRooting {
     Unneeded,
     Required,
@@ -31,12 +28,13 @@ impl ValueRooting {
 /// The borrowed runtime prevents a scope from being restored in another runtime.
 #[derive(Debug)]
 #[must_use = "keep the root guard alive while comparisons can collect"]
-pub(super) struct SortRootGuard<'a, R: SortRuntime> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(super) struct SortRootGuard<'a, R: SortRoots> {
     runtime: &'a mut R,
     scope: Option<R::RootScope>,
 }
 
-impl<'a, R: SortRuntime> SortRootGuard<'a, R> {
+impl<'a, R: SortRoots> SortRootGuard<'a, R> {
     #[inline]
     #[doc(hidden)]
     pub fn new(runtime: &'a mut R, rooting: ValueRooting) -> Self {
@@ -54,7 +52,7 @@ impl<'a, R: SortRuntime> SortRootGuard<'a, R> {
     }
 }
 
-impl<R: SortRuntime> Drop for SortRootGuard<'_, R> {
+impl<R: SortRoots> Drop for SortRootGuard<'_, R> {
     #[inline]
     fn drop(&mut self) {
         if let Some(scope) = self.scope.take() {

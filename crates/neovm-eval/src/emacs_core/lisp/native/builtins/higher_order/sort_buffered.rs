@@ -7,7 +7,7 @@ use super::sort::{
     SortReadStorage, SortRootGuard, SortStorage, TemporaryRootRetention, TemporaryStorage,
     ValueRooting, gnu_style_sort_items,
 };
-use super::{Flow, SortDirection, SortItem, SortPredicate, SortRuntime, Value};
+use super::{Flow, SortDirection, SortItem, SortPredicate, SortRoots, SortRuntime, Value};
 use std::marker::PhantomData;
 use std::ops::Range;
 
@@ -190,11 +190,11 @@ impl SortStorage<BufferedRootSlot> for Storage {
     }
 }
 #[derive(Debug)]
-struct Runtime<'a, R: SortRuntime> {
+struct Runtime<'a, R: SortRoots> {
     inner: &'a mut R,
     state: *mut State,
 }
-impl<R: SortRuntime> super::sort_runtime_sealed::Sealed for Runtime<'_, R> {}
+impl<R: SortRoots> super::sort_runtime_sealed::Sealed for Runtime<'_, R> {}
 
 impl<R: SortRuntime> Runtime<'_, R> {
     /// # Safety
@@ -260,7 +260,7 @@ impl<R: SortRuntime> Runtime<'_, R> {
         result
     }
 }
-impl<R: SortRuntime> SortRuntime for Runtime<'_, R> {
+impl<R: SortRoots> SortRoots for Runtime<'_, R> {
     type RootScope = BufferedRootScope;
     type RootSlot = BufferedRootSlot;
     type RootBatch = BufferedRootBatch;
@@ -341,6 +341,9 @@ impl<R: SortRuntime> SortRuntime for Runtime<'_, R> {
                 .fill(Value::NIL);
         }
     }
+}
+
+impl<R: SortRuntime> SortRuntime for Runtime<'_, R> {
     fn call_sort_function1(&mut self, function: Value, arg: Value) -> Result<Value, Flow> {
         self.call_published(move |runtime| runtime.call_sort_function1(function, arg))
     }
