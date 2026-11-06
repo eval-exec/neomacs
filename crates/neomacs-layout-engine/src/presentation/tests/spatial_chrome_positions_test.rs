@@ -3,6 +3,7 @@
 
 use super::{ChromePositionSource, set_chrome_position_source_for_test};
 use neovm_core::emacs_core::{Context, Value};
+use neovm_core::window::DisplayFrameManagerExt;
 
 fn positions_both_ways(
     state: &neomacs_display_protocol::glyph_matrix::FrameDisplayState,

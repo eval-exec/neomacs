@@ -1,5 +1,6 @@
 use super::*;
 use neovm_core::buffer::EmacsByteRange;
+use neovm_core::window::DisplayFrameManagerExt;
 
 fn read(eval: &mut Context, src: &str) -> Value {
     eval.eval_str(&format!("'{src}")).expect("read")
@@ -33,7 +34,10 @@ fn holds_takes_nil_and_t_literally_and_falls_back_to_structural() {
 #[test]
 fn one_form_on_two_spans_answers_per_span_and_a_run_serves_its_interior() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
+    let buf_id = eval
+        .buffer_manager_mut()
+        .current_buffer_id()
+        .expect("buffer");
     eval.eval_str("(setq dw-seen nil)").expect("reset");
     // One property object on both spans, as a mode applying one spec to
     // many regions does; the FORM reads its GNU binding.
@@ -43,7 +47,7 @@ fn one_form_on_two_spans_answers_per_span_and_a_run_serves_its_interior() {
         )
         .expect("spec");
     {
-        let buffer = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buffer = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
         buffer.insert("line 0\nline 1\nline 2\nline 3\nline 4\nORIGINAL text here\nline 6\n");
         for (from, to) in [(0, 6), (35, 43)] {
             let start = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(from));
@@ -107,7 +111,10 @@ fn one_form_on_two_spans_answers_per_span_and_a_run_serves_its_interior() {
 #[test]
 fn a_string_site_answers_by_string_and_index() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
+    let buf_id = eval
+        .buffer_manager_mut()
+        .current_buffer_id()
+        .expect("buffer");
     let prefix = eval
         .eval_str(
             "(concat (propertize \"ab\" 'display '(when (= position 0) space :align-to 4))
@@ -115,7 +122,7 @@ fn a_string_site_answers_by_string_and_index() {
         )
         .expect("prefix");
     {
-        let buffer = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buffer = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
         buffer.insert("hello\n");
         let start = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(0));
         let end = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(5));
@@ -195,9 +202,12 @@ fn prefix_when_form(string: Value) -> Value {
 #[test]
 fn absent_preflight_keys_become_visible_after_property_assignment() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
+    let buf_id = eval
+        .buffer_manager_mut()
+        .current_buffer_id()
+        .expect("buffer");
     {
-        let buffer = eval.buffers.get_mut(buf_id).unwrap();
+        let buffer = eval.buffer_manager_mut().get_mut(buf_id).unwrap();
         buffer.insert("αβγδεζηθ\n");
         for pos in 0..8 {
             buffer.text_props_put_property_in_emacs_byte_range(
@@ -212,7 +222,7 @@ fn absent_preflight_keys_become_visible_after_property_assignment() {
     }
     for name in ["display", "line-prefix", "wrap-prefix"] {
         assert_eq!(
-            eval.buffers
+            eval.buffer_manager_mut()
                 .get(buf_id)
                 .unwrap()
                 .text_props_property_name_presence(Value::symbol(name)),
@@ -221,7 +231,7 @@ fn absent_preflight_keys_become_visible_after_property_assignment() {
     }
     assert!(
         collect_when_form_sites(
-            eval.buffers.get(buf_id).unwrap(),
+            eval.buffer_manager_mut().get(buf_id).unwrap(),
             None,
             CharPos0::new(0),
             CharPos0::new(9),
@@ -235,7 +245,7 @@ fn absent_preflight_keys_become_visible_after_property_assignment() {
         .eval_str("(propertize \"P\" 'display '(when (= 2 2) . \"Q\"))")
         .expect("nested prefix display");
     {
-        let buffer = eval.buffers.get_mut(buf_id).unwrap();
+        let buffer = eval.buffer_manager_mut().get_mut(buf_id).unwrap();
         let range = EmacsByteRange::new(
             buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(2)),
             buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(4)),
@@ -253,7 +263,7 @@ fn absent_preflight_keys_become_visible_after_property_assignment() {
         }
     }
     let sites = collect_when_form_sites(
-        eval.buffers.get(buf_id).unwrap(),
+        eval.buffer_manager_mut().get(buf_id).unwrap(),
         None,
         CharPos0::new(0),
         CharPos0::new(9),
@@ -266,7 +276,10 @@ fn absent_preflight_keys_become_visible_after_property_assignment() {
 #[test]
 fn absent_buffer_keys_keep_overlay_default_and_local_prefix_string_forms() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
+    let buf_id = eval
+        .buffer_manager_mut()
+        .current_buffer_id()
+        .expect("buffer");
     eval.eval_str("(insert \"abcdefgh\\n\")").unwrap();
     let prefix = eval
         .eval_str("(propertize \"P\" 'display '(when (= 3 3) . \"Q\"))")
@@ -285,7 +298,7 @@ fn absent_buffer_keys_keep_overlay_default_and_local_prefix_string_forms() {
         .unwrap();
     eval.eval_str("(set (make-local-variable 'line-prefix) ttykey-prefix)")
         .unwrap();
-    let buffer = eval.buffers.get(buf_id).unwrap();
+    let buffer = eval.buffer_manager_mut().get(buf_id).unwrap();
     for name in ["display", "line-prefix", "wrap-prefix"] {
         assert_eq!(
             buffer.text_props_property_name_presence(Value::symbol(name)),
@@ -302,7 +315,10 @@ fn absent_buffer_keys_keep_overlay_default_and_local_prefix_string_forms() {
 #[test]
 fn window_span_forms_are_evaluated_from_text_props_overlays_and_prefix_vars() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
+    let buf_id = eval
+        .buffer_manager_mut()
+        .current_buffer_id()
+        .expect("buffer");
     // A `display` spec list on the text, dashboard-style: the two clauses
     // disagree, and only evaluation can tell them apart.
     let text_display = read(
@@ -315,7 +331,7 @@ fn window_span_forms_are_evaluated_from_text_props_overlays_and_prefix_vars() {
         .eval_str("(propertize \" \" 'display '(when (and (stringp object) (= position 0) (= buffer-position 1)) space :align-to 5))")
         .expect("prefix");
     {
-        let buffer = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buffer = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
         buffer.insert("hello world\n");
         let start = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(0));
         let mid = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(5));
@@ -385,10 +401,13 @@ fn a_disable_eval_wrapper_makes_its_when_forms_fail_like_gnu() {
     // (src/xdisp.c:6139-6140), so a true FORM under `(disable-eval …)` still
     // disables the spec.
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
+    let buf_id = eval
+        .buffer_manager_mut()
+        .current_buffer_id()
+        .expect("buffer");
     let disabled = read(&mut eval, "(disable-eval (when (= 1 1) . \"HIDDEN\"))");
     {
-        let buffer = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buffer = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
         buffer.insert("abc\n");
         let start = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(0));
         let end = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(2));
@@ -490,14 +509,17 @@ fn forms_are_evaluated_with_the_window_buffer_current() {
     // GNU selects the window's buffer before the iterator runs
     // (src/xdisp.c:20533-20535); a FORM reading a buffer-local sees it.
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let original = eval.buffers.current_buffer_id().expect("buffer");
-    let other = eval.buffers.create_buffer("other");
+    let original = eval
+        .buffer_manager_mut()
+        .current_buffer_id()
+        .expect("buffer");
+    let other = eval.buffer_manager_mut().create_buffer("other");
     let spec = read(
         &mut eval,
         "((when (string-equal (buffer-name) \"other\") space :align-to 3))",
     );
     {
-        let buffer = eval.buffers.get_mut(other).expect("buffer");
+        let buffer = eval.buffer_manager_mut().get_mut(other).expect("buffer");
         buffer.insert("xyz\n");
         let start = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(0));
         let end = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(1));
@@ -520,7 +542,7 @@ fn forms_are_evaluated_with_the_window_buffer_current() {
         DisplayWhenVerdict::Holds
     );
     assert_eq!(
-        eval.buffers.current_buffer_id(),
+        eval.buffer_manager_mut().current_buffer_id(),
         Some(original),
         "caller's buffer restored"
     );
@@ -532,8 +554,11 @@ fn an_after_string_binds_buffer_position_to_the_overlay_end() {
     // (xdisp.c:7172-7173) and binds `buffer-position` to that position
     // (xdisp.c:5919-5923); a before-string is bound to the start.
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
-    eval.buffers
+    let buf_id = eval
+        .buffer_manager_mut()
+        .current_buffer_id()
+        .expect("buffer");
+    eval.buffer_manager_mut()
         .get_mut(buf_id)
         .expect("buffer")
         .insert("abcdefgh\n");
@@ -571,8 +596,11 @@ fn an_after_string_binds_buffer_position_to_the_overlay_end() {
 fn an_overlay_scoped_to_another_window_is_not_scanned() {
     // GNU: "Skip this overlay if it doesn't apply to IT->w" (xdisp.c:7153-7156).
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
-    eval.buffers
+    let buf_id = eval
+        .buffer_manager_mut()
+        .current_buffer_id()
+        .expect("buffer");
+    eval.buffer_manager_mut()
         .get_mut(buf_id)
         .expect("buffer")
         .insert("abcdefgh\n");
@@ -628,8 +656,11 @@ fn a_hidden_overlay_shows_its_after_string_at_the_start_the_walk_reaches() {
     // indistinguishable" (xdisp.c:7158-7175): the after-string loads at the
     // start, so `buffer-position` is the start there.
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
-    eval.buffers
+    let buf_id = eval
+        .buffer_manager_mut()
+        .current_buffer_id()
+        .expect("buffer");
+    eval.buffer_manager_mut()
         .get_mut(buf_id)
         .expect("buffer")
         .insert("abcdefgh\n");
@@ -663,8 +694,11 @@ fn an_after_string_ending_at_the_window_start_is_scanned_and_one_beyond_the_span
     // start still shows its after-string on the first row; one ending past the
     // span is never reached by this walk.
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
-    eval.buffers
+    let buf_id = eval
+        .buffer_manager_mut()
+        .current_buffer_id()
+        .expect("buffer");
+    eval.buffer_manager_mut()
         .get_mut(buf_id)
         .expect("buffer")
         .insert("abcdefghij\n");
@@ -711,8 +745,11 @@ fn overlay_strings_anchored_at_point_max_are_evaluated_when_the_span_reaches_it(
     // anchor path (GNU `reseat` -> `handle_stop` at ZV, xdisp.c:8046-8052),
     // so their forms must be evaluated too.
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
-    eval.buffers
+    let buf_id = eval
+        .buffer_manager_mut()
+        .current_buffer_id()
+        .expect("buffer");
+    eval.buffer_manager_mut()
         .get_mut(buf_id)
         .expect("buffer")
         .insert("abc\n");
@@ -729,7 +766,7 @@ fn overlay_strings_anchored_at_point_max_are_evaluated_when_the_span_reaches_it(
     let empty_before = strings.cons_car();
     let ending_after = strings.cons_cdr().cons_car();
     let point_max = eval
-        .buffers
+        .buffer_manager_mut()
         .get(buf_id)
         .expect("buffer")
         .layout_point_max_char_pos();
@@ -759,8 +796,11 @@ fn an_empty_overlay_supplies_no_display_property() {
     // or before the position (textprop.c:652-653): an empty overlay's
     // `display` never applies, so its form is not evaluated.
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
-    eval.buffers
+    let buf_id = eval
+        .buffer_manager_mut()
+        .current_buffer_id()
+        .expect("buffer");
+    eval.buffer_manager_mut()
         .get_mut(buf_id)
         .expect("buffer")
         .insert("abcdef\n");
@@ -788,9 +828,12 @@ fn an_empty_overlay_supplies_no_display_property() {
 /// A buffer whose only `when` site lies past the span the scan covers:
 /// `line 0` then the site on `ORIGINAL` at GNU position 36 (char 35).
 fn buffer_with_a_site_past_the_scan(eval: &mut Context, form: &str) -> (BufferId, Value) {
-    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
+    let buf_id = eval
+        .buffer_manager_mut()
+        .current_buffer_id()
+        .expect("buffer");
     let property = read(eval, &format!("(when {form} . \"LATE\")"));
-    let buffer = eval.buffers.get_mut(buf_id).expect("buffer");
+    let buffer = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
     buffer.insert("line 0\nline 1\nline 2\nline 3\nline 4\nORIGINAL text here\n");
     let start = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(35));
     let end = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(43));

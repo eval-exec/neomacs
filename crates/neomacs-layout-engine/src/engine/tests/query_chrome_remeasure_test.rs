@@ -289,7 +289,7 @@ fn chrome_position_queries_do_not_reenter_chrome_or_signal_layout_busy() {
             assert_eq!(crate::display_status_line::header_line_eval_count(), 1);
         } else {
             let format = eval
-                .buffers
+                .buffer_manager_mut()
                 .get(buffer)
                 .expect("buffer")
                 .buffer_local_value("header-line-format")

@@ -5,6 +5,7 @@ use super::super::{
     ChromeRowInputs, DisplayRowFallbackMetrics, DisplayTabPolicy, ImageScaleEnvironment, Rect,
     ResolvedFace, WindowChromeKind,
 };
+use neovm_core::window::DisplayFrameManagerExt;
 
 fn inputs() -> ChromeRowInputs {
     ChromeRowInputs {

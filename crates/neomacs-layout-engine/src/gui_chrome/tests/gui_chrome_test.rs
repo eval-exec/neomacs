@@ -2,9 +2,8 @@ use super::*;
 use neomacs_display_protocol::frame_chrome::ChromeAction;
 use neomacs_display_protocol::types::Color;
 use neovm_core::emacs_core::Context;
-use neovm_core::emacs_core::load::{
-    apply_runtime_startup_state, create_bootstrap_evaluator_cached_with_features,
-};
+use neovm_core::emacs_core::load::apply_runtime_startup_state;
+use neovm_core::emacs_core::load_boot::create_bootstrap_evaluator_cached_with_features;
 use neovm_core::heap_types::LispString;
 
 #[test]

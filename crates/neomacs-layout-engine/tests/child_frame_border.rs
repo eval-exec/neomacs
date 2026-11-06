@@ -1,6 +1,8 @@
 use neomacs_display_protocol::types::Color;
 use neomacs_layout_engine::engine::{FrameLayoutAttempt, LayoutEngine};
 use neovm_core::emacs_core::{Context, Value};
+use neovm_core::window::DisplayFrameExt;
+use neovm_core::window::DisplayFrameManagerExt;
 use neovm_core::window::FrameParam;
 
 #[test]

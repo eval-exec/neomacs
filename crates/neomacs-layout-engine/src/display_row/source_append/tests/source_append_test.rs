@@ -140,6 +140,7 @@ use neovm_core::emacs_core::image_catalog::{
 use neovm_core::emacs_core::value::StringTextPropertyRun;
 use neovm_core::emacs_core::{Context, Value};
 use neovm_core::face::FaceTable;
+use neovm_core::window::DisplayFrameManagerExt;
 use std::sync::{Arc, Mutex};
 
 fn text_row_output_render_state<'a>(

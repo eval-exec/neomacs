@@ -147,7 +147,7 @@ fn text_written_into_the_idle_minibuffer_is_shown() {
     let _still = StillGuard::on();
     let (mut eval, frame_id, _buf, _window) = incr_editing_frame("body\n", 800, 600);
     let minibuffer = eval
-        .buffers
+        .buffer_manager_mut()
         .find_buffer_by_name(" *Minibuf-0*")
         .expect("minibuffer buffer");
     let mut engine = crate::font::metrics::test_catalog::layout_engine();

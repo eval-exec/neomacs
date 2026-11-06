@@ -5,6 +5,8 @@ use super::super::{LayoutEngine, LayoutPurpose};
 use super::*;
 use neovm_core::emacs_core::{Context, Value};
 use neovm_core::heap_types::LispString;
+use neovm_core::window::DisplayFrameExt;
+use neovm_core::window::DisplayFrameManagerExt;
 use neovm_core::window::WindowLayoutQueryScope;
 
 fn canonical_rows(content: &str, presentation: bool) -> (WindowDisplaySnapshot, LispCharPos1, i64) {

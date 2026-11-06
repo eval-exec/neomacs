@@ -54,6 +54,7 @@ use neomacs_display_protocol::types::{Color, Rect};
 use neomacs_display_protocol::{Glyph, GlyphArea, GlyphProvenance, GlyphType};
 use neovm_core::buffer::{BufferId, CharPos0, EmacsBytePos, LispCharPos1};
 use neovm_core::emacs_core::Context;
+use neovm_core::window::DisplayFrameManagerExt;
 
 fn assert_char_glyph(glyph: &Glyph, ch: char, face_id: FaceId) {
     assert_eq!(glyph.glyph_type, GlyphType::Char { ch });

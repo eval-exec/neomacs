@@ -2,6 +2,7 @@
 //! must produce their own witnesses; no cached-query hit or synthetic seal.
 use super::*;
 use crate::engine::{RowsQueryAdmission, RowsQueryPolicy};
+use neovm_core::emacs_core::xfaces::realization::XfacesRealizationContextExt;
 use neovm_core::emacs_core::{
     display_host::{DisplayHost, InertRowsHostAuthority},
     eval::GuiFrameHostRequest,

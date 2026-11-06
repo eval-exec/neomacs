@@ -207,13 +207,13 @@ use neovm_core::emacs_core::image_catalog::{
     AxisSize, ImageCatalog, ImageLookup, ImageResolveRequest, ImageSizeLimit, ImageSizeSpec,
     PendingImage, ReadyImage,
 };
-use neovm_core::emacs_core::load::{
-    apply_runtime_startup_state, create_bootstrap_evaluator_cached_with_features,
-};
+use neovm_core::emacs_core::load::apply_runtime_startup_state;
+use neovm_core::emacs_core::load_boot::create_bootstrap_evaluator_cached_with_features;
 use neovm_core::emacs_core::value::{StringTextPropertyRun, list_to_vec};
 use neovm_core::emacs_core::{Context, Value};
 use neovm_core::face::FaceTable;
 use neovm_core::heap_types::LispString;
+use neovm_core::window::geometry::DisplayGeometryExt;
 use neovm_core::window::{
     DisplayPointSnapshot, DisplayRowSnapshot, WindowCursorSnapshot, WindowDisplaySnapshot,
     WindowVisibleBufferSpan,
@@ -3547,9 +3547,9 @@ fn measure_incremental_relayout(
 /// and the layout row statistics these tests assert.
 fn bind_minibuffer_buffer(eval: &mut Context, frame_id: neovm_core::window::FrameId) {
     let minibuffer = eval
-        .buffers
+        .buffer_manager_mut()
         .find_buffer_by_name(" *Minibuf-0*")
-        .unwrap_or_else(|| eval.buffers.create_buffer(" *Minibuf-0*"));
+        .unwrap_or_else(|| eval.buffer_manager_mut().create_buffer(" *Minibuf-0*"));
     if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id)
         && let Some(leaf) = frame.minibuffer_leaf.as_mut()
     {

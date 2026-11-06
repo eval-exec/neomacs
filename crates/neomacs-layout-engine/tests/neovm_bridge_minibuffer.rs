@@ -1,5 +1,6 @@
 use neomacs_layout_engine::neovm_bridge::collect_layout_params;
 use neovm_core::emacs_core::Context;
+use neovm_core::window::DisplayFrameManagerExt;
 
 #[test]
 fn collect_layout_params_marks_minibuffer_only_root() {

@@ -1,5 +1,6 @@
 use super::*;
 use neovm_core::emacs_core::Context;
+use neovm_core::window::DisplayFrameManagerExt;
 use std::borrow::Cow;
 
 #[test]

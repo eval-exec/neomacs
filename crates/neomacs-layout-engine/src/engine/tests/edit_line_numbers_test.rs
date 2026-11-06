@@ -176,7 +176,7 @@ fn newline_edits(mode: &str, count: usize) {
     let frame = ctx
         .frame_manager_mut()
         .create_frame("gutter-cpu", 1024, 768, buffer);
-    let mini = ctx.buffers.create_buffer(" *Minibuf-0*");
+    let mini = ctx.buffer_manager_mut().create_buffer(" *Minibuf-0*");
     ctx.frame_manager_mut()
         .get_mut(frame)
         .unwrap()

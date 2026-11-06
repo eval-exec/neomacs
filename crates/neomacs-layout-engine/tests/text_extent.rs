@@ -1,5 +1,6 @@
 //! Offscreen source projection through the public row-query API.
 use neomacs_layout_engine::WindowLayoutQueryEngine;
+use neovm_core::window::DisplayFrameManagerExt;
 use neovm_core::{
     buffer::LispCharPos1,
     emacs_core::{Context, Value},
