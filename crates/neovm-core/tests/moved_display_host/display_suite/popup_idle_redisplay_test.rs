@@ -60,7 +60,7 @@ enum PopupExit {
 
 fn assert_tty_popup_teardown_repaints(exit: PopupExit) {
     let _idle_skip = IdleSkipOn::new();
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let buffer = eval.edit.buffers.current_buffer_id().unwrap();
     let frame = eval
         .frame_manager_mut()

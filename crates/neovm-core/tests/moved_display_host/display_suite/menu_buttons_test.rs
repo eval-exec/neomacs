@@ -5,7 +5,7 @@ use neomacs_display_protocol::menu::{MenuCheckState, MenuIndicator};
 
 #[test]
 fn gui_menu_publication_distinguishes_toggle_on_from_off() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let menu =
         r#"'(keymap (option menu-item "Option" ignore :button (:toggle . menu-option-state)))"#;
     eval.eval_str("(setq menu-option-state nil)").unwrap();
@@ -22,7 +22,7 @@ fn gui_menu_publication_distinguishes_toggle_on_from_off() {
 
 #[test]
 fn gui_menu_radio_state_is_resolved_again_on_reopening() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let menu =
         r#"'(keymap (option menu-item "Radio" ignore :button (:radio . menu-option-state)))"#;
     eval.eval_str("(setq menu-option-state nil)").unwrap();

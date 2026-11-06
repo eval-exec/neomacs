@@ -9,6 +9,256 @@
 
 pub use neovm_value::test_utils::*;
 
+/// Display-host recording fixture shared by display window-command tests and
+/// the re-homed core host tests (P1 B1): one home, reachable under
+/// test-support from above.
+pub mod window_cmds_host {
+
+    use crate::face::{FontSlant, FontWeight, FontWidth};
+    use crate::window::FrameFullscreen;
+    use neovm_eval::emacs_core::eval::DisplayHost;
+    use neovm_eval::emacs_core::eval::GuiFrameHostRequest;
+    use neovm_eval::emacs_core::eval::{FontPxProbeResult, GuiFrameHostSize, ResolvedFrameFont};
+    use neovm_value::value::Value;
+    use std::cell::Cell;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[derive(Clone, Default)]
+    pub struct RecordingDisplayHost {
+        pub alpha_operations: Rc<RefCell<Vec<(crate::window::FrameId, [f32; 2], f32)>>>,
+        pub fail_alpha_sync: bool,
+        pub fail_focus_sync: Rc<Cell<bool>>,
+        pub alpha_limits: Rc<RefCell<Vec<f32>>>,
+        pub realized: Rc<RefCell<Vec<GuiFrameHostRequest>>>,
+        pub resized: Rc<RefCell<Vec<GuiFrameHostRequest>>>,
+        pub destroyed_gui_frames: Rc<RefCell<Vec<crate::window::FrameId>>>,
+        pub shown_child_frames: Rc<RefCell<Vec<crate::window::FrameId>>>,
+        pub removed_child_frames: Rc<RefCell<Vec<crate::window::FrameId>>>,
+        pub fullscreen_changes: Rc<RefCell<Vec<(crate::window::FrameId, FrameFullscreen)>>>,
+        pub visibility_changes:
+            Rc<RefCell<Vec<(crate::window::FrameId, crate::window::FrameVisibility)>>>,
+        pub geometry_hints:
+            Rc<RefCell<Vec<(crate::window::FrameId, crate::window::GuiFrameGeometryHints)>>>,
+        pub primary_size: Option<GuiFrameHostSize>,
+        pub resolved_frame_font: Option<ResolvedFrameFont>,
+        pub initial_gui_defaults: Option<crate::emacs_core::display_host::InitialGuiFrameDefaults>,
+        pub finished: Rc<RefCell<Vec<GuiFrameHostRequest>>>,
+        pub positions: Rc<RefCell<Vec<(crate::window::FrameId, i32, i32)>>>,
+    }
+
+    impl RecordingDisplayHost {
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        pub fn with_primary_size(width: u32, height: u32) -> Self {
+            Self {
+                primary_size: Some(GuiFrameHostSize { width, height }),
+                ..Self::default()
+            }
+        }
+
+        pub fn with_resolved_frame_font(resolved_frame_font: ResolvedFrameFont) -> Self {
+            Self {
+                resolved_frame_font: Some(resolved_frame_font),
+                ..Self::default()
+            }
+        }
+    }
+
+    impl DisplayHost for RecordingDisplayHost {
+        fn prepare_initial_gui_frame(
+            &mut self,
+        ) -> Result<Option<crate::emacs_core::display_host::InitialGuiFrameDefaults>, String>
+        {
+            Ok(self.initial_gui_defaults.clone())
+        }
+
+        fn finish_gui_frame_creation(
+            &mut self,
+            request: GuiFrameHostRequest,
+        ) -> Result<(), String> {
+            self.finished.borrow_mut().push(request);
+            Ok(())
+        }
+        fn set_gui_frame_alpha_lower_limit(&mut self, limit: f32) {
+            self.alpha_limits.borrow_mut().push(limit);
+        }
+        fn set_gui_frame_alpha(
+            &mut self,
+            frame: crate::window::FrameId,
+            pair: [f32; 2],
+            limit: f32,
+        ) -> Result<(), String> {
+            self.alpha_operations
+                .borrow_mut()
+                .push((frame, pair, limit));
+            if self.fail_alpha_sync {
+                return Err("opacity channel closed".into());
+            }
+            Ok(())
+        }
+        fn set_gui_frame_focus_redirects(
+            &mut self,
+            _redirects: Vec<(crate::window::FrameId, Option<crate::window::FrameId>)>,
+        ) -> Result<(), String> {
+            if self.fail_focus_sync.get() {
+                return Err("focus channel closed".into());
+            }
+            Ok(())
+        }
+        fn realize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String> {
+            self.realized.borrow_mut().push(request);
+            Ok(())
+        }
+
+        fn resize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String> {
+            self.resized.borrow_mut().push(request);
+            Ok(())
+        }
+
+        fn set_gui_frame_position(
+            &mut self,
+            frame_id: crate::window::FrameId,
+            x: i32,
+            y: i32,
+        ) -> Result<(), String> {
+            self.positions.borrow_mut().push((frame_id, x, y));
+            Ok(())
+        }
+
+        fn set_gui_frame_fullscreen(
+            &mut self,
+            frame_id: crate::window::FrameId,
+            fullscreen: FrameFullscreen,
+        ) -> Result<(), String> {
+            self.fullscreen_changes
+                .borrow_mut()
+                .push((frame_id, fullscreen));
+            Ok(())
+        }
+
+        fn set_gui_frame_visibility(
+            &mut self,
+            frame_id: crate::window::FrameId,
+            visibility: crate::window::FrameVisibility,
+        ) -> Result<(), String> {
+            self.visibility_changes
+                .borrow_mut()
+                .push((frame_id, visibility));
+            Ok(())
+        }
+
+        fn set_gui_frame_geometry_hints(
+            &mut self,
+            frame_id: crate::window::FrameId,
+            geometry_hints: crate::window::GuiFrameGeometryHints,
+        ) -> Result<(), String> {
+            self.geometry_hints
+                .borrow_mut()
+                .push((frame_id, geometry_hints));
+            Ok(())
+        }
+
+        fn current_primary_window_size(&self) -> Option<GuiFrameHostSize> {
+            self.primary_size
+        }
+
+        fn opening_gui_frame_pending(&self) -> bool {
+            self.realized.borrow().is_empty()
+        }
+
+        fn destroy_gui_frame(&mut self, frame_id: crate::window::FrameId) -> Result<(), String> {
+            self.destroyed_gui_frames.borrow_mut().push(frame_id);
+            Ok(())
+        }
+
+        fn show_gui_child_frame(&mut self, frame_id: crate::window::FrameId) -> Result<(), String> {
+            self.shown_child_frames.borrow_mut().push(frame_id);
+            Ok(())
+        }
+
+        fn remove_gui_child_frame(
+            &mut self,
+            frame_id: crate::window::FrameId,
+        ) -> Result<(), String> {
+            self.removed_child_frames.borrow_mut().push(frame_id);
+            Ok(())
+        }
+
+        fn resolve_frame_font(
+            &mut self,
+            _frame_id: crate::window::FrameId,
+            _request: crate::emacs_core::display_host::FrameFontRequest,
+        ) -> Result<Option<ResolvedFrameFont>, String> {
+            Ok(self.resolved_frame_font.clone())
+        }
+    }
+
+    pub fn resolved_frame_font(
+        family: &str,
+        postscript_name: &str,
+        height_tenths: i32,
+        metrics: FontPxProbeResult,
+    ) -> ResolvedFrameFont {
+        ResolvedFrameFont {
+            font: neovm_eval::emacs_core::eval::test_resolved_opened_font(
+                family,
+                None,
+                None,
+                FontWeight::NORMAL,
+                FontSlant::Normal,
+                FontWidth::Normal,
+                Some(postscript_name),
+                metrics,
+                None,
+            ),
+            height_tenths,
+        }
+    }
+
+    pub fn remapped_mono_font_metrics() -> ResolvedFrameFont {
+        resolved_frame_font(
+            "Remapped Mono",
+            "RemappedMono-Regular",
+            240,
+            FontPxProbeResult {
+                pixel_size: 28,
+                height: 32,
+                ascent: 24,
+                descent: 8,
+                max_width: 16,
+                space_width: 16,
+                average_width: 16,
+            },
+        )
+    }
+
+    pub fn due_gnu_timer(callback: Value, args: Value) -> Value {
+        let when = SystemTime::now()
+            .checked_sub(Duration::from_millis(10))
+            .expect("timer deadline should fit in system time")
+            .duration_since(UNIX_EPOCH)
+            .expect("timer deadline should be after unix epoch");
+        let secs = when.as_secs() as i64;
+
+        Value::vector(vec![
+            Value::NIL,
+            Value::fixnum(secs >> 16),
+            Value::fixnum(secs & 0xFFFF),
+            Value::fixnum(when.subsec_micros() as i64),
+            Value::NIL,
+            callback,
+            args,
+            Value::NIL,
+            Value::fixnum(0),
+            Value::NIL,
+        ])
+    }
+}
+
 /// The display crate's cfg(test) unit runtime (H5a/T5, display D1-D5).
 ///
 /// Display links value/edit/text/eval only: it has no neovm-system and no

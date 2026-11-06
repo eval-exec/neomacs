@@ -4,7 +4,7 @@ use neovm_value::error::FlowRef;
 
 #[test]
 fn gui_menu_deep_acyclic_menu_is_complete_or_reports_resource_exhaustion() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let fixture = |levels| {
         format!(
             "(let ((map '(keymap (leaf menu-item \"Leaf\" ignore))) (level 0))
@@ -34,7 +34,7 @@ fn gui_menu_deep_acyclic_menu_is_complete_or_reports_resource_exhaustion() {
 
 #[test]
 fn gui_menu_cycle_is_reported_instead_of_silently_truncating() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let result = publish(
         &mut eval,
         r#"(let ((map (make-sparse-keymap)))
@@ -81,7 +81,7 @@ fn gui_menu_canonicalization_uses_gnu_safe_callback_guard() {
 
 #[test]
 fn gui_menu_disabled_submenu_does_not_prepare_its_children() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let items = publish(
         &mut eval,
         r#"'(keymap
@@ -97,7 +97,7 @@ fn gui_menu_disabled_submenu_does_not_prepare_its_children() {
 #[test]
 fn gui_menu_roots_button_form_even_when_a_later_property_detaches_it() {
     use neomacs_display_protocol::menu::{MenuCheckState, MenuIndicator};
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let items = publish(
         &mut eval,
         r#"(progn
@@ -116,7 +116,7 @@ fn gui_menu_roots_button_form_even_when_a_later_property_detaches_it() {
 
 #[test]
 fn gui_menu_enable_override_is_sampled_in_property_order() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let items = publish(
         &mut eval,
         r#"'(keymap (option menu-item "Option" ignore
@@ -180,7 +180,7 @@ fn gui_menu_preparation_roots_bindings_across_property_gc() {
 
 #[test]
 fn gui_menu_legacy_cache_does_not_hide_the_real_command() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let items = publish(
         &mut eval,
         r#"(progn
@@ -213,7 +213,7 @@ fn gui_menu_inherited_submenu_merges_children() {
 
 #[test]
 fn gui_menu_accepts_a_symbolic_root_keymap() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let items = publish(
         &mut eval,
         r#"(progn
@@ -227,7 +227,7 @@ fn gui_menu_accepts_a_symbolic_root_keymap() {
 
 #[test]
 fn gui_menu_native_result_cannot_activate_a_submenu_header() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     eval.frame_manager_mut()
         .get_mut(frame)
@@ -265,7 +265,7 @@ fn gui_menu_native_result_cannot_activate_a_submenu_header() {
 #[test]
 fn gui_menu_label_does_not_evaluate_command_only_button_state() {
     use neomacs_display_protocol::menu::MenuIndicator;
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let items = publish(
         &mut eval,
         r#"'(keymap
@@ -321,7 +321,7 @@ fn gui_default_file_edit_options_menus_publish_gnu_decorations() {
 
 #[test]
 fn gui_menu_shortcut_can_name_another_command_with_affixes() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let items = publish(
         &mut eval,
         r#"(progn
@@ -337,7 +337,7 @@ fn gui_menu_shortcut_can_name_another_command_with_affixes() {
 
 #[test]
 fn gui_menu_inherits_parent_items_without_duplicate_overrides() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let items = publish(
         &mut eval,
         r#"(let ((parent (make-sparse-keymap)) (child (make-sparse-keymap)))
@@ -359,7 +359,7 @@ fn gui_menu_inherits_parent_items_without_duplicate_overrides() {
 
 #[test]
 fn gui_menu_legacy_enable_and_user_override_match_gnu() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let source = r#"(progn (put 'legacy-command 'menu-enable '(eq nil t))
         '(keymap (legacy "Legacy" . legacy-command)))"#;
     assert!(!publish(&mut eval, source).unwrap()[0].enabled());
@@ -392,7 +392,7 @@ fn gui_menu_function_shortcut_runs_once_during_preparation() {
 
 #[test]
 fn gui_menu_key_sequence_hint_is_verified_against_current_bindings() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(let ((map (make-sparse-keymap)))
         (define-key map [1] 'menu-save)
@@ -409,7 +409,7 @@ fn gui_menu_key_sequence_hint_is_verified_against_current_bindings() {
 
 #[test]
 fn gui_menu_disabled_native_result_does_not_dispatch() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let tx = crate::host_input::HostInputPublisher::install(&mut eval);
 
     eval.set_display_host(Box::new(RecordingPopupHost::default()));
@@ -439,7 +439,7 @@ fn gui_menu_disabled_native_result_does_not_dispatch() {
 
 #[test]
 fn gui_menu_only_gnu_separator_names_are_recognized() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let items = publish(
         &mut eval,
         r#"'(keymap
@@ -454,7 +454,7 @@ fn gui_menu_only_gnu_separator_names_are_recognized() {
 
 #[test]
 fn gui_menu_keymap_separator_is_not_a_disabled_text_row() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let items = publish(
         &mut eval,
         r#"'(keymap
@@ -470,7 +470,7 @@ fn gui_menu_keymap_separator_is_not_a_disabled_text_row() {
 
 #[test]
 fn gui_menu_filter_can_build_a_submenu() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let items = publish(
         &mut eval,
         r#"'(keymap
@@ -487,7 +487,7 @@ fn gui_menu_filter_can_build_a_submenu() {
 #[test]
 fn gui_menu_enable_predicate_preserves_disabled_checked_item() {
     use neomacs_display_protocol::menu::{MenuCheckState, MenuIndicator};
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let items = publish(
         &mut eval,
         r#"'(keymap
@@ -504,7 +504,7 @@ fn gui_menu_enable_predicate_preserves_disabled_checked_item() {
 #[test]
 fn gui_menu_property_errors_are_nil_but_quit_escapes() {
     use neomacs_display_protocol::menu::{MenuCheckState, MenuIndicator};
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let items = publish(
         &mut eval,
         r#"'(keymap
@@ -533,7 +533,7 @@ fn gui_menu_property_errors_are_nil_but_quit_escapes() {
 
 #[test]
 fn gui_menu_visibility_skips_label_and_submenu_evaluation() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let items = publish(
         &mut eval,
         r#"(progn
@@ -555,7 +555,7 @@ fn gui_menu_visibility_skips_label_and_submenu_evaluation() {
 
 #[test]
 fn gui_menu_computed_label_is_published() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let items = publish(
         &mut eval,
         r#"'(keymap
@@ -568,7 +568,7 @@ fn gui_menu_computed_label_is_published() {
 
 #[test]
 fn gui_menu_shortcut_uses_current_command_binding() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let items = publish(
         &mut eval,
         r#"(progn
