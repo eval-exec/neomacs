@@ -1613,6 +1613,101 @@ fn cfg_split_widening_sites(workspace: &Path) -> Result<Vec<(String, String)>, S
     Ok(sites)
 }
 
+/// FEATURE-ONLY PUB SURFACE (peer 00:26:50Z follow-up; the third widening
+/// shape).
+///
+/// A plain `pub` item whose cfg keeps it out of the production build AND out
+/// of the crate's own `cfg(test)` build exists only in the cross-crate
+/// `test-support` build, e.g.
+/// `#[cfg(feature = "test-support")] pub struct RcCensus`. None of the other
+/// arms can see it: there is no `visibility::make(pub)` attribute, there is
+/// no production cfg-split twin, and TS-COVERAGE only scans the
+/// `test_support` trees. Such an item is cross-crate test-support surface by
+/// construction, so the forward check requires it to be named by a row (a
+/// TEST-SUPPORT-VIS row at its defining file, or an AUTHORITY fence row)
+/// exactly like the other widening sites.
+///
+/// `cfg(any(test, feature = "test-support"))` items are deliberately NOT
+/// this arm: they also exist in the crate's own test build. The wider class
+/// of test-gated `pub` items reachable under the feature is reported
+/// separately; this arm is the shape that can only ever be cross-crate API.
+fn feature_only_pub_sites(workspace: &Path) -> Result<Vec<(String, String)>, String> {
+    let mut sites = Vec::new();
+    for crate_dir in VIS_CRATES {
+        let src = workspace.join("crates").join(crate_dir).join("src");
+        let mut files = Vec::new();
+        walk_files(&src, &mut files)?;
+        for path in files {
+            if path.extension().is_none_or(|extension| extension != "rs") || is_test_path(&path) {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(workspace)
+                .map_err(|_| format!("{} is outside the workspace", path.display()))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let source = read(&path)?;
+            let parsed =
+                syn::parse_file(&source).map_err(|error| format!("{relative}: {error}"))?;
+            collect_feature_only_pub_sites(&parsed.items, &relative, &mut sites);
+        }
+    }
+    sites.sort();
+    sites.dedup();
+    Ok(sites)
+}
+
+fn collect_feature_only_pub_sites(
+    items: &[syn::Item],
+    file: &str,
+    out: &mut Vec<(String, String)>,
+) {
+    for item in items {
+        let (vis, attrs, name) = match item {
+            syn::Item::Fn(item) => (&item.vis, &item.attrs, item.sig.ident.to_string()),
+            syn::Item::Struct(item) => (&item.vis, &item.attrs, item.ident.to_string()),
+            syn::Item::Enum(item) => (&item.vis, &item.attrs, item.ident.to_string()),
+            syn::Item::Union(item) => (&item.vis, &item.attrs, item.ident.to_string()),
+            syn::Item::Trait(item) => (&item.vis, &item.attrs, item.ident.to_string()),
+            syn::Item::Type(item) => (&item.vis, &item.attrs, item.ident.to_string()),
+            syn::Item::Const(item) => (&item.vis, &item.attrs, item.ident.to_string()),
+            syn::Item::Static(item) => (&item.vis, &item.attrs, item.ident.to_string()),
+            syn::Item::Mod(module) => {
+                if let Some((_, inner)) = &module.content {
+                    collect_feature_only_pub_sites(inner, file, out);
+                }
+                continue;
+            }
+            _ => continue,
+        };
+        if matches!(vis, syn::Visibility::Public(_)) && feature_only_gated(attrs) {
+            out.push((file.to_owned(), name));
+        }
+    }
+}
+
+/// True when a cfg set makes an item present in the cross-crate build
+/// (`test = false`, `feature = "test-support"`) and absent in the crate's own
+/// test build (`test = true`, the feature off). Unknown predicates never
+/// match; the arm stays fail-closed for the shapes it can decide.
+fn feature_only_gated(attrs: &[syn::Attribute]) -> bool {
+    let cfgs: Vec<syn::Meta> = attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("cfg"))
+        .filter_map(|attr| attr.parse_args::<syn::Meta>().ok())
+        .collect();
+    if cfgs.is_empty() {
+        return false;
+    }
+    let present_cross = cfgs
+        .iter()
+        .all(|meta| cfg_truth_with(meta, false, true) == CfgTruth::True);
+    let absent_own_test = cfgs
+        .iter()
+        .any(|meta| cfg_truth_with(meta, true, false) == CfgTruth::False);
+    present_cross && absent_own_test
+}
+
 fn record_cfg_split(
     declarations: &mut BTreeMap<(String, String), Vec<(bool, bool)>>,
     kind: &str,
@@ -2134,6 +2229,7 @@ fn check_visibility_coverage(workspace: &Path, ledgers: &[VisRow]) -> Result<(),
     }
     let mut sites = visibility_make_sites(workspace)?;
     sites.extend(cfg_split_widening_sites(workspace)?);
+    sites.extend(feature_only_pub_sites(workspace)?);
     sites.sort();
     sites.dedup();
     for (file, item) in sites {
@@ -3341,6 +3437,75 @@ mod tests {
             .expect_err("both routes");
         assert!(error.contains("BOTH"), "{error}");
         test_support_reverse_coverage_violation(dir.path(), &[], &auth).expect("rowed fence");
+    }
+
+    #[test]
+    fn feature_only_pub_surface_mutation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("crates/neovm-edit/src");
+        std::fs::create_dir_all(&src).expect("src");
+        let lib = src.join("lib.rs");
+        let relative = "crates/neovm-edit/src/lib.rs".to_owned();
+        // A plain-pub item that exists only in the cross-crate test-support
+        // build is a widening site: absent in production and absent in the
+        // crate's own cfg(test) build.
+        std::fs::write(
+            &lib,
+            "#[cfg(feature = \"test-support\")]\npub struct Surface;\n",
+        )
+        .expect("feature-only");
+        assert_eq!(
+            feature_only_pub_sites(dir.path()).expect("sites"),
+            vec![(relative.clone(), "Surface".to_owned())]
+        );
+        // The crate's own test build also sees a cfg(any(test, feature))
+        // item, so it is not this shape (the wider test-gated class is
+        // reported separately).
+        std::fs::write(
+            &lib,
+            "#[cfg(any(test, feature = \"test-support\"))]\npub struct Shared;\n",
+        )
+        .expect("shared");
+        assert!(
+            feature_only_pub_sites(dir.path())
+                .expect("sites")
+                .is_empty()
+        );
+        // cfg(test) alone is absent from the cross-crate build.
+        std::fs::write(&lib, "#[cfg(test)]\npub struct OwnTestOnly;\n").expect("test-only");
+        assert!(
+            feature_only_pub_sites(dir.path())
+                .expect("sites")
+                .is_empty()
+        );
+        // A production item is not test-support surface.
+        std::fs::write(&lib, "pub struct Production;\n").expect("production");
+        assert!(
+            feature_only_pub_sites(dir.path())
+                .expect("sites")
+                .is_empty()
+        );
+        // Only a plain `pub` is cross-crate surface.
+        std::fs::write(
+            &lib,
+            "#[cfg(feature = \"test-support\")]\npub(crate) struct Restricted;\n",
+        )
+        .expect("restricted");
+        assert!(
+            feature_only_pub_sites(dir.path())
+                .expect("sites")
+                .is_empty()
+        );
+        // An inline module is walked; the item inside it is the site.
+        std::fs::write(
+            &lib,
+            "pub mod nested {\n    #[cfg(feature = \"test-support\")]\n    pub enum Inner { A }\n}\n",
+        )
+        .expect("inline module");
+        assert_eq!(
+            feature_only_pub_sites(dir.path()).expect("sites"),
+            vec![(relative, "Inner".to_owned())]
+        );
     }
 
     #[test]
