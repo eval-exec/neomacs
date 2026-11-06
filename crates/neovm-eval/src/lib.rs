@@ -24,6 +24,14 @@ pub mod test_utils;
 #[path = "../build_support/upper_snapshots.rs"]
 pub(crate) mod upper_snapshots_build_support;
 
+// The canonical production registration plan generator is shared with
+// `cargo xtask canonical-subr-plan`; eval's cfg(test) plan-consistency test
+// calls it so the checked-in TSVs cannot drift from the live sources.
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../build_support/canonical_subr_plan.rs"]
+pub(crate) mod canonical_subr_plan_build_support;
+
 // GNU seeds emacs-version from configure.ac's PACKAGE_VERSION; version.el
 // derives its numeric components from that same value. The evaluator seeds
 // the bare variable, so the constants live here (stage-4 W5/E13); the core

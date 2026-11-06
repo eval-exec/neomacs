@@ -493,3 +493,256 @@ mod host_cfg_regressions {
         assert_eq!(rows, DBUS_COUPLED_VARIABLES);
     }
 }
+
+/// Structural guard for the canonical production registration plan.
+///
+/// The first assertion pins both artifacts to what the committed generator
+/// derives from the live core manifest and batch sources. The rest re-derives
+/// the plan's invariants from the checked-in text on its own, so a corrupted
+/// or hand-edited artifact cannot pass merely because the generator was not
+/// rerun.
+#[cfg(test)]
+mod plan_consistency {
+    use crate::canonical_subr_plan_build_support as generator;
+
+    const NAMES: &str = include_str!("canonical_subr_names.tsv");
+    const PLAN: &str = include_str!("canonical_subr_step_plan.tsv");
+    const SNAPSHOT: &str = include_str!("upper_subrs.snapshot.tsv");
+
+    struct NameRow {
+        name: String,
+        min: u16,
+        max: Option<u16>,
+        layer: String,
+        cfg: String,
+    }
+
+    struct Step {
+        kind: String,
+        id: String,
+        layer: String,
+        first: usize,
+        count: usize,
+        marker: String,
+    }
+
+    fn parse_names(text: &str) -> Vec<NameRow> {
+        let mut lines = text.lines();
+        assert_eq!(
+            lines.next(),
+            Some("name\tmin\tmax\tlayer\tcfg"),
+            "canonical_subr_names.tsv header"
+        );
+        lines
+            .map(|line| {
+                let fields: Vec<&str> = line.split('\t').collect();
+                assert_eq!(fields.len(), 5, "malformed names row: {line}");
+                NameRow {
+                    name: fields[0].to_owned(),
+                    min: fields[1].parse().expect("names min"),
+                    max: if fields[2] == "-" {
+                        None
+                    } else {
+                        Some(fields[2].parse().expect("names max"))
+                    },
+                    layer: fields[3].to_owned(),
+                    cfg: fields[4].to_owned(),
+                }
+            })
+            .collect()
+    }
+
+    fn parse_plan(text: &str) -> Vec<Step> {
+        let mut lines = text.lines();
+        assert_eq!(
+            lines.next(),
+            Some("step\tkind\tid\tlayer\tfirst\tcount\tmarker"),
+            "canonical_subr_step_plan.tsv header"
+        );
+        lines
+            .enumerate()
+            .map(|(index, line)| {
+                let fields: Vec<&str> = line.split('\t').collect();
+                assert_eq!(fields.len(), 7, "malformed plan row: {line}");
+                assert_eq!(
+                    fields[0].parse::<usize>().expect("step number"),
+                    index + 1,
+                    "plan step numbers are not consecutive"
+                );
+                Step {
+                    kind: fields[1].to_owned(),
+                    id: fields[2].to_owned(),
+                    layer: fields[3].to_owned(),
+                    first: fields[4].parse().expect("step first"),
+                    count: fields[5].parse().expect("step count"),
+                    marker: fields[6].to_owned(),
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_canonical_plan_matches_the_sources_and_is_a_covering_partition() {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let (names_rendered, plan_rendered) =
+            generator::rendered(&repo_root).expect("canonical plan generator");
+        assert_eq!(
+            names_rendered, NAMES,
+            "canonical_subr_names.tsv is stale; run `cargo xtask canonical-subr-plan`"
+        );
+        assert_eq!(
+            plan_rendered, PLAN,
+            "canonical_subr_step_plan.tsv is stale; run `cargo xtask canonical-subr-plan`"
+        );
+
+        let names = parse_names(NAMES);
+        let steps = parse_plan(PLAN);
+        assert!(names.len() > 1_000, "canonical plan lost most of its names");
+
+        let mut seen = std::collections::BTreeSet::new();
+        for row in &names {
+            assert!(
+                seen.insert(row.name.as_str()),
+                "duplicate canonical name {:?}",
+                row.name
+            );
+            assert!(
+                !row.max.is_some_and(|max| max < row.min),
+                "{}: max {:?} is below min {}",
+                row.name,
+                row.max,
+                row.min
+            );
+            assert!(
+                crate::host_cfg::HostCfgClass::from_label(&row.cfg).is_some(),
+                "{}: unknown cfg label {:?}",
+                row.name,
+                row.cfg
+            );
+        }
+
+        // Steps partition the names table in order, and each step's rows all
+        // carry the step's layer.
+        let mut next = 1usize;
+        let mut ids = std::collections::BTreeSet::new();
+        for step in &steps {
+            assert!(
+                ids.insert(step.id.as_str()),
+                "duplicate step id {:?}",
+                step.id
+            );
+            assert_eq!(
+                step.first, next,
+                "step {} is not contiguous with its predecessor",
+                step.id
+            );
+            assert!(
+                step.first + step.count <= names.len() + 1,
+                "step {} runs past the names table",
+                step.id
+            );
+            for row in &names[step.first - 1..step.first - 1 + step.count] {
+                assert_eq!(
+                    row.layer, step.layer,
+                    "step {} covers a row from layer {:?}",
+                    step.id, row.layer
+                );
+            }
+            next += step.count;
+        }
+        assert_eq!(next, names.len() + 1, "plan does not cover every name row");
+
+        // The eval-owned pieces occur once each, in production order; only
+        // the event-properties step is empty, and it carries the marker.
+        let eval_ids: Vec<&str> = steps
+            .iter()
+            .filter(|step| step.kind == "eval_call")
+            .map(|step| step.id.as_str())
+            .collect();
+        assert_eq!(
+            eval_ids,
+            [
+                "eval.lcms",
+                "eval.data",
+                "eval.ordinary",
+                "eval.fboundp",
+                "eval.file_notify",
+                "eval.event_properties",
+                "eval.public",
+            ]
+        );
+        for step in steps.iter().filter(|step| step.kind == "eval_call") {
+            if step.id == "eval.event_properties" {
+                assert_eq!(step.count, 0, "event-properties must register no subr");
+                assert_eq!(step.marker, "init_event_symbol_properties");
+            } else {
+                assert!(step.count > 0, "empty eval step {}", step.id);
+                assert_eq!(step.marker, "-", "unexpected marker on {}", step.id);
+            }
+        }
+
+        // Display ids are descriptive and stable (the origin batch keys or
+        // the run's first subr), never positional, so inserting an unrelated
+        // plan row cannot renumber the display variants. The other segments
+        // only carry non-eval, non-display layers.
+        let mut display_runs = 0usize;
+        for step in &steps {
+            assert!(
+                matches!(
+                    step.kind.as_str(),
+                    "eval_call" | "display_segment" | "upper_segment"
+                ),
+                "unknown step kind {:?}",
+                step.kind
+            );
+            if step.kind == "display_segment" {
+                display_runs += 1;
+                assert!(
+                    !step.id.is_empty()
+                        && step
+                            .id
+                            .chars()
+                            .all(|character| character.is_ascii_alphanumeric() || character == '_'),
+                    "display id {:?} is not identifier-like",
+                    step.id
+                );
+                assert!(
+                    !step.id.as_bytes()[0].is_ascii_digit(),
+                    "display id {:?} starts with a digit",
+                    step.id
+                );
+                assert!(
+                    !(step.id.starts_with("display.run")
+                        && step.id["display.run".len()..]
+                            .chars()
+                            .all(|character| character.is_ascii_digit())),
+                    "positional display-run id {:?}; derive a descriptive id",
+                    step.id
+                );
+            } else if step.kind == "upper_segment" {
+                assert_ne!(step.layer, "display");
+                assert_ne!(step.layer, "eval");
+            }
+        }
+        assert!(display_runs > 0, "no display segments in the plan");
+
+        // The plan's upper subsequence is exactly the H3 snapshot's names;
+        // the H3 test pins the snapshot to the compiled registration table.
+        let mut plan_upper: Vec<&str> = names
+            .iter()
+            .filter(|row| row.layer != "eval")
+            .map(|row| row.name.as_str())
+            .collect();
+        let mut snapshot: Vec<&str> = SNAPSHOT
+            .lines()
+            .skip(1)
+            .map(|line| line.split('\t').next().expect("snapshot name"))
+            .collect();
+        plan_upper.sort_unstable();
+        snapshot.sort_unstable();
+        assert_eq!(
+            plan_upper, snapshot,
+            "the plan's upper names differ from the H3 snapshot"
+        );
+    }
+}

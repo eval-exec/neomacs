@@ -1,3 +1,4 @@
+mod canonical_subr_plan_command;
 mod compile_wave;
 mod dependency_coherence;
 mod gc_stress;
@@ -453,6 +454,13 @@ fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Re
     ) {
         args.next();
         return upper_snapshots_command::run(&repo_root, args);
+    }
+    if matches!(
+        args.peek().and_then(|arg| arg.to_str()),
+        Some("canonical-subr-plan")
+    ) {
+        args.next();
+        return canonical_subr_plan_command::run(&repo_root, args);
     }
     if matches!(
         args.peek().and_then(|arg| arg.to_str()),
