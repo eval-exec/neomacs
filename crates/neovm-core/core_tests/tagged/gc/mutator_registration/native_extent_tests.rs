@@ -152,8 +152,9 @@ fn admitted(body: impl FnOnce(&ParallelHeapEra, &SharedRoot, &SharedRoot)) {
     // SAFETY: nil and a fixnum are immediates of this Context's heap.
     let nil = unsafe { SharedRoot::new(&context.tagged_heap(), TaggedValue::NIL) };
     let one = unsafe { SharedRoot::new(&context.tagged_heap(), TaggedValue::fixnum(1)) };
-    context
-        .admit_owned_proof_parallel(|projection| {
+    neovm_eval::test_support::authority::admit_owned_proof_parallel_for_test(
+        &mut context,
+        |projection| {
             {
                 let era = projection.era();
                 era.start_cons_storage()
@@ -164,8 +165,9 @@ fn admitted(body: impl FnOnce(&ParallelHeapEra, &SharedRoot, &SharedRoot)) {
                 .finish()
                 .unwrap_or_else(|error| panic!("finish: {error:?}"));
             (collector, keeper, ())
-        })
-        .unwrap_or_else(|error| panic!("admit: {error:?}"));
+        },
+    )
+    .unwrap_or_else(|error| panic!("admit: {error:?}"));
 }
 
 /// What the keeper learns when an owner is inside (or entering) an extent.
