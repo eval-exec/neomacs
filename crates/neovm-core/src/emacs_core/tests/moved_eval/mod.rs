@@ -180,9 +180,10 @@ mod emacs_core_lisp_native_builtins_tests_keymaps_full_tests_rs;
 #[cfg(all(test, feature = "jit"))]
 #[path = "emacs_core/runtime/jit/tests/car_cdr_split_full_test.rs"]
 mod emacs_core_runtime_jit_tests_car_cdr_split_full_test_rs;
-#[cfg(test)]
+#[cfg(all(test, feature = "jit"))]
 #[path = "emacs_core/runtime/jit/tests/hof_credit_test.rs"]
 mod emacs_core_runtime_jit_tests_hof_credit_test_rs;
+#[cfg(all(test, feature = "jit"))]
 #[path = "emacs_core/runtime/jit/tests/switch_dispatch_test.rs"]
 mod emacs_core_runtime_jit_tests_switch_dispatch_test_rs;
 
@@ -191,10 +192,10 @@ mod emacs_core_runtime_eval_tests_cconv_memo_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/tests/gc_forced_first_cycle_test.rs"]
 mod emacs_core_runtime_eval_tests_gc_forced_first_cycle_test_rs;
-#[cfg(test)]
+#[cfg(all(test, feature = "jit"))]
 #[path = "emacs_core/runtime/jit/tests/spec_frames_test.rs"]
 mod emacs_core_runtime_jit_tests_spec_frames_test_rs;
-#[cfg(test)]
+#[cfg(all(test, feature = "jit"))]
 #[path = "emacs_core/runtime/jit/tests/spec_rest_calls_test.rs"]
 mod emacs_core_runtime_jit_tests_spec_rest_calls_test_rs;
 #[cfg(test)]
