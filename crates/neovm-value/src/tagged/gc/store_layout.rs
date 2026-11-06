@@ -1,6 +1,12 @@
 //! Frozen shipping layout, measured from the ac489d4f74 fat artifact.
-//! Typed store blocks extend the tail; no older field may move.
-#[cfg(all(target_arch = "x86_64", target_pointer_width = "64", not(test)))]
+//! Typed store blocks extend the tail; no older field may move. The
+//! test/test-support builds carry the instrumented `mapped_veclike_traces`
+//! word, so this shipping table is checked only when that word is absent.
+#[cfg(all(
+    target_arch = "x86_64",
+    target_pointer_width = "64",
+    not(any(test, feature = "test-support"))
+))]
 const _: () = {
     use super::*;
     use std::mem::offset_of;

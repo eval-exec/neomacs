@@ -255,13 +255,18 @@ impl TaggedHeap {
     }
 }
 
-// The normal x86-64 shipping type has no cfg(test) mapped_veclike_traces word.
+// The normal x86-64 shipping type has no test/test-support mapped_veclike_traces
+// word (the field exists only under cfg(any(test, feature = "test-support"))).
 // Main 2e4c571469 supplies the hot-field baseline; the appended 40-byte
 // compiled observation protocol and the 8-byte card-table base (ABI 51)
 // extend only the heap's tail. These assertions
 // reject silent hot-layout drift during ordinary compilation, independently
 // of the runtime knob. The complete staged DWARF table remains the final gate.
-#[cfg(all(target_arch = "x86_64", target_pointer_width = "64", not(test)))]
+#[cfg(all(
+    target_arch = "x86_64",
+    target_pointer_width = "64",
+    not(any(test, feature = "test-support"))
+))]
 const _: () = {
     use std::mem::{align_of, offset_of, size_of};
     assert!(

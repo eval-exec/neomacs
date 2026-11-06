@@ -819,8 +819,9 @@ pub struct TaggedHeap {
     /// retain independent history, snapshot and per-mutator log lifetimes.
     census: Option<Box<GenCensus>>,
     /// TEST-ONLY: mapped veclike traces this heap ran (the first-cycle seed
-    /// and the mark's mapped arm).
-    #[cfg(test)]
+    /// and the mark's mapped arm). Present only in test/test-support builds
+    /// (the shipping layout assertion in cold_gc.rs excludes both).
+    #[cfg(any(test, feature = "test-support"))]
     mapped_veclike_traces: usize,
     /// When true, `gc_threshold` was explicitly overridden by tests or host
     /// code and should not be recomputed from Lisp-visible GC variables.
@@ -1108,7 +1109,7 @@ impl TaggedHeap {
             staged_mapped_cons_scan: None,
             staged_mapped_veclikes: None,
             image_premarked: false,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             mapped_veclike_traces: 0,
             overlay_serial: crate::heap_types::OverlaySerialCounter::new(),
             dirty_owner_bits: FxHashSet::default(),

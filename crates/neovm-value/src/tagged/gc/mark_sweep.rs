@@ -746,7 +746,7 @@ impl TaggedHeap {
             .map(|o| o.header)
             .collect();
         for ptr in veclike {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             {
                 self.mapped_veclike_traces += 1;
             }

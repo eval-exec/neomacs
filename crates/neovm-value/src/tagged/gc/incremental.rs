@@ -749,7 +749,7 @@ impl TaggedHeap {
                 || !self.owns_live_veclike_object(ptr as *const u8)
             {
                 if self.mark_mapped_veclike(ptr) {
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-support"))]
                     {
                         self.mapped_veclike_traces += 1;
                     }
@@ -2506,7 +2506,8 @@ impl TaggedHeap {
     }
 
     /// TEST-ONLY: mapped veclike traces so far, and the mapped veclike count.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn mapped_veclike_traces_for_test(&self) -> (usize, usize) {
         (
             self.mapped_veclike_traces,
