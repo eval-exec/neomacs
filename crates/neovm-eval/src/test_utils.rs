@@ -1071,3 +1071,65 @@ mod event_properties_regression {
         );
     }
 }
+/// T7 construction census (LEAD 06:4xZ): a plain `Context::new` under the
+/// eval unit runtime must reach only absent-by-construction UNLINKED slots.
+/// A Refused hit is the PANIC path, which aborts construction and would make
+/// every constructor-switched BASIC test unusable at P2; this test is the
+/// executed fence for the census. The smoke forms are eval-layer paths only:
+/// upper-layer subr stand-ins in `UPPER_SUBRS` panic by design and are out of
+/// scope here.
+#[cfg(test)]
+mod unit_runtime_construction_census {
+    use crate::emacs_core::eval::Context;
+
+    type Hit = (
+        super::unit_runtime::absent_layer_slots::AbsentLayerHit,
+        &'static str,
+    );
+
+    fn refused_markers(hits: Vec<Hit>) -> Vec<&'static str> {
+        hits.into_iter()
+            .filter(|(kind, _)| {
+                *kind == super::unit_runtime::absent_layer_slots::AbsentLayerHit::Refused
+            })
+            .map(|(_, marker)| marker)
+            .collect()
+    }
+
+    #[test]
+    fn unit_runtime_construction_reaches_only_unlinked_slots() {
+        let hooks = super::unit_runtime();
+        // Minting the hook proof is not construction; clear anything it
+        // records so the census starts at Context::new.
+        super::unit_runtime::absent_layer_slots::take_absent_layer_hits_for_test();
+        let mut context = Context::new(hooks);
+        let construction = refused_markers(
+            super::unit_runtime::absent_layer_slots::take_absent_layer_hits_for_test(),
+        );
+        assert!(
+            construction.is_empty(),
+            "unit-runtime construction reached PANIC/Refused absent-layer slot(s): {construction:?}"
+        );
+        for form in [
+            "(+ 1 2)",
+            "(fboundp 'car)",
+            "(symbol-name 'x)",
+            "(let ((x 1)) x)",
+            "(let ((f (lambda (x) (+ x 1)))) (funcall f 7))",
+            "(if t 'yes 'no)",
+        ] {
+            let value = context.eval_str(form).expect(form);
+            assert!(
+                value.is_truthy(),
+                "BASIC smoke form `{form}` returned false"
+            );
+        }
+        let smoke = refused_markers(
+            super::unit_runtime::absent_layer_slots::take_absent_layer_hits_for_test(),
+        );
+        assert!(
+            smoke.is_empty(),
+            "BASIC smoke paths reached PANIC/Refused absent-layer slot(s): {smoke:?}"
+        );
+    }
+}

@@ -424,7 +424,7 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn terminal_install_registry_handle(handle: &TerminalRegistryHandle) {
-                absent_layer_panic("ABSENT-LAYER display::terminal.install_registry_handle");
+                absent_layer_unlinked("ABSENT-LAYER display::terminal.install_registry_handle");
             }
 
             pub(crate) fn terminal_install_owner_registry_handle(handle: &TerminalRegistryHandle) {
@@ -444,7 +444,7 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn fontset_reset() {
-                absent_layer_panic("ABSENT-LAYER display::fontset.reset");
+                absent_layer_unlinked("ABSENT-LAYER display::fontset.reset");
             }
 
             pub(crate) fn fontset_snapshot() -> FontsetRegistrySnapshot {
@@ -544,7 +544,7 @@ macro_rules! eval_absent_layer_slots {
             }
 
             pub(crate) fn xfaces_install_registry_handle(handle: &FontRegistryHandle) {
-                absent_layer_panic("ABSENT-LAYER display::xfaces.install_registry_handle");
+                absent_layer_unlinked("ABSENT-LAYER display::xfaces.install_registry_handle");
             }
 
             pub(crate) fn timefns_reset() {
