@@ -11,12 +11,14 @@
 use crate::tagged::gc::mutator_registration::era_fixtures::prepare_keeper_backing;
 use neovm_eval::test_support::authority::try_with_test_symbol_backing_init_era;
 use neovm_value::tagged::gc::{
-    Gen1Admission, Gen1AdmissionError, OwnerRootSlot, ParallelExecutionAdmission, ParallelHeapEra,
-    PlainSymbolBacking, RegistrationError, RunAccess, SymbolHandle,
+    Gen1Admission, Gen1AdmissionError, ImmediateResult, ImmediateResultError, OwnerRootSlot,
+    ParallelExecutionAdmission, ParallelHeapEra, PlainSymbolBacking, RegistrationError, RunAccess,
+    SymbolHandle,
 };
-use neovm_value::tagged::value::TaggedValue;
+use neovm_value::tagged::value::{Fixnum, TaggedValue};
 use neovm_value::test_support::authority::{
-    Deadline, Retry, nil_root_for_test, rendezvous, retry_owned, take_legacy_roots_for_test,
+    Deadline, Retry, nil_root_for_test, publication_table_identity_for_test, rendezvous,
+    retry_owned, table_shape_for_test, take_legacy_roots_for_test,
 };
 use std::ops::ControlFlow;
 
@@ -202,4 +204,176 @@ pub(crate) fn prepared_cell_fixture<P>(
             FixtureReceipt::TelemetryRefused
         }
     }
+}
+
+/// The no-seed scalar fixture the activation tests use.
+fn fixture(
+    body: impl for<'era, 'owner> FnOnce(
+        &ParallelExecutionAdmission<'era>,
+        &mut RunAccess<'owner, 'era>,
+        &OwnerRootSlot<'era>,
+    ),
+) -> FixtureReceipt {
+    prepared_fixture(
+        |_| (),
+        |(), admission, run, destination| {
+            body(admission, run, destination);
+        },
+    )
+}
+
+/// Scalar execution fixture with a caller-supplied admission preparation.
+pub(crate) fn prepared_fixture<P>(
+    prepare: impl FnOnce(&Gen1Admission<'_>) -> P,
+    body: impl for<'era, 'owner> FnOnce(
+        &P,
+        &ParallelExecutionAdmission<'era>,
+        &mut RunAccess<'owner, 'era>,
+        &OwnerRootSlot<'era>,
+    ),
+) -> FixtureReceipt {
+    prepared_cell_fixture(
+        PlainSymbolBacking::Unprojected,
+        FixtureSeed::Scalar,
+        prepare,
+        |prepared, admission, run, destination, _symbol| {
+            body(prepared, admission, run, destination);
+        },
+    )
+}
+
+#[test]
+fn nmjit_n4_activation_noop_has_total_teardown() {
+    fixture(|admission, run, destination| {
+        admission
+            .with_activation(run, destination, |activation| {
+                let (slots, _, _) = table_shape_for_test(activation);
+                assert!(slots > 0);
+            })
+            .unwrap();
+        assert_eq!(destination.word_for_test(run), TaggedValue::NIL.bits());
+    });
+}
+
+#[test]
+fn nmjit_n4_activation_commits_only_checked_immediates() {
+    fixture(|admission, run, destination| {
+        for result in [
+            ImmediateResult::Nil,
+            ImmediateResult::True,
+            ImmediateResult::Fixnum(Fixnum::try_from(73).unwrap()),
+            ImmediateResult::Fixnum(Fixnum::try_from(-97).unwrap()),
+        ] {
+            admission
+                .with_activation(run, destination, |activation| {
+                    let (_, _, chunk_count) = table_shape_for_test(activation);
+                    assert!(chunk_count > 0);
+                    activation.store_immediate(result)
+                })
+                .unwrap()
+                .unwrap();
+            assert_eq!(destination.word_for_test(run), result.word());
+        }
+    });
+}
+
+#[test]
+fn nmjit_n4_activation_refuses_stale_home_before_body() {
+    fixture(|admission, run, destination| {
+        run.clear_root_slots().unwrap();
+        let fresh = nil_root_for_test(run).unwrap();
+        let result = admission.with_activation(run, destination, |_activation| -> () {
+            panic!("stale result entered activation body")
+        });
+        assert_eq!(result, Err(RegistrationError::StaleRegistration));
+        assert_eq!(fresh.word_for_test(run), TaggedValue::NIL.bits());
+    });
+}
+
+#[test]
+fn nmjit_n4_activation_unwind_keeps_run_and_root_usable() {
+    fixture(|admission, run, destination| {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            admission
+                .with_activation(run, destination, |activation| -> () {
+                    activation.store_immediate(ImmediateResult::True).unwrap();
+                    panic!("controlled activation callback exit");
+                })
+                .unwrap();
+        }));
+        assert!(result.is_err());
+        assert_eq!(destination.word_for_test(run), TaggedValue::T.bits());
+        admission
+            .with_activation(run, destination, |activation| {
+                activation.store_immediate(ImmediateResult::Nil)
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(destination.word_for_test(run), TaggedValue::NIL.bits());
+    });
+}
+
+#[test]
+fn nmjit_n4_immediate_native_result_decode_is_total() {
+    for value in [
+        TaggedValue::NIL,
+        TaggedValue::T,
+        TaggedValue::fixnum(TaggedValue::MOST_NEGATIVE_FIXNUM),
+        TaggedValue::fixnum(TaggedValue::MOST_POSITIVE_FIXNUM),
+    ] {
+        assert_eq!(
+            ImmediateResult::from_word(value.bits()).unwrap().word(),
+            value.bits()
+        );
+    }
+    for bits in [TaggedValue::UNBOUND.bits(), 1, 3, 5, 7, usize::MAX] {
+        assert_eq!(
+            ImmediateResult::from_word(bits),
+            Err(ImmediateResultError::NotImmediate)
+        );
+    }
+    assert!(Fixnum::try_from(i64::MAX).is_err());
+    assert!(Fixnum::try_from(i64::MIN).is_err());
+}
+
+#[test]
+fn nmjit_n4_execution_production_only_source_guard_test() {
+    let wrappers = include_str!(
+        "../../../../../../neovm-value/src/tagged/gc/mutator_registration/wrappers.rs"
+    );
+    // The proof wrapper's test gate spelling is the split-era
+    // `cfg(any(test, feature = "test-support"))`; the assertion below still
+    // separates the production era impl from the test-only proof wrapper.
+    let (production, proof) = wrappers
+        .split_once("#[cfg(any(test, feature = \"test-support\"))]\nimpl<'heap, K: EraKeeper> ProofEra<'heap, K>")
+        .expect("distinct wrapper definitions");
+    assert!(production.contains("impl<'heap, K: EraKeeper> ParallelHeapEra<'heap, K>"));
+    assert!(production.contains("pub fn execution_admission"));
+    assert!(!proof.contains("fn execution_admission"));
+    let execution = include_str!(
+        "../../../../../../neovm-value/src/tagged/gc/mutator_registration/execution.rs"
+    );
+    assert!(!execution.contains("crate::emacs_core"));
+    assert!(!execution.contains("generational_enabled"));
+    assert!(!execution.contains("std::env"));
+    assert!(execution.contains("_production: &Gen1Construction"));
+}
+
+#[test]
+fn nmjit_n4_activation_borrows_publication_until_return() {
+    fixture(|admission, run, home| {
+        admission
+            .with_activation(run, home, |activation| {
+                let (published, checked) = publication_table_identity_for_test(activation);
+                let (slots, _, _) = table_shape_for_test(activation);
+                assert_eq!(published, checked);
+                assert!(slots > 0);
+            })
+            .unwrap();
+        assert_eq!(
+            ImmediateResult::from_word(home.word_for_test(run))
+                .expect("scalar result home is immediate"),
+            ImmediateResult::Nil
+        );
+    });
 }

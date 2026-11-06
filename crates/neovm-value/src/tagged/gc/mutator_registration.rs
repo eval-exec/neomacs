@@ -36,13 +36,6 @@ pub use execution::{
     CellRead, CellReadError, ExecutionActivation, HofError, HofScratch, HofSingleton,
     ImmediateResult, ImmediateResultError,
 };
-#[cfg(test)]
-pub(crate) use execution::{
-    CohortPhase, CohortSize, ExecutionFixtureReceipt, ExecutionTestDeadline, ExecutionTestRetry,
-    ExecutionTestSeed, HofTestInputs, PublicationFacts, PublicationInputs, execution_test_retry,
-    with_test_prepared_cell_execution, with_test_prepared_execution, with_test_prepared_hof_cohort,
-    with_test_prepared_hof_execution, with_test_prepared_publication_cohort,
-};
 mod wrappers;
 #[cfg(test)]
 use crate::emacs_core::eval::world::{

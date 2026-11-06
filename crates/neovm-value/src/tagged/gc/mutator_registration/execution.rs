@@ -179,17 +179,9 @@ static_assertions::assert_not_impl_any!(ParallelExecutionAdmission<'static>: Clo
 static_assertions::assert_not_impl_any!(ExecutionActivation<'static, 'static, 'static>: Send, Sync, Clone, Copy);
 static_assertions::assert_impl_all!(ImmediateResult: Send, Sync, Copy);
 
+// Slim parent for the restored cohort/hof fixture files (LEAD 21:5xZ). The
+// execution fixture helper and its tests now live only in core's re-homed
+// execution/tests.rs; this module keeps the non-duplicated cohort/hof
+// fixtures, which remain the single home their eval consumers will use.
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-pub(crate) use tests::{
-    CohortPhase, CohortSize, ExecutionTestDeadline, ExecutionTestRetry,
-    FixtureReceipt as ExecutionFixtureReceipt, FixtureSeed as ExecutionTestSeed, HofTestInputs,
-    PublicationFacts, PublicationInputs, execution_test_retry,
-    prepared_cell_fixture as with_test_prepared_cell_execution,
-    prepared_fixture as with_test_prepared_execution,
-    prepared_hof_cohort as with_test_prepared_hof_cohort,
-    prepared_hof_fixture as with_test_prepared_hof_execution,
-    prepared_publication_cohort as with_test_prepared_publication_cohort,
-};

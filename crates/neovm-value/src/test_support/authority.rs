@@ -195,6 +195,22 @@ pub type ProofEra<'heap, K> = crate::tagged::gc::ProofEra<'heap, K>;
 /// `tagged::gc::GenericProofEraFinishFailure`.
 pub type ProofEraFinishFailure<'heap, K> = crate::tagged::gc::ProofEraFinishFailure<'heap, K>;
 
+/// FENCE observer (copied identity): the published table's address as seen
+/// through the activation's publication view and through its own table view.
+/// Equal addresses prove both borrows name the same published table; the
+/// views, the descriptor type and the backing table stay internal.
+pub fn publication_table_identity_for_test(
+    activation: &crate::tagged::gc::mutator_registration::ExecutionActivation<'_, '_, '_>,
+) -> (usize, usize) {
+    let publication = activation.publication();
+    let observed = publication.load();
+    let checked = activation.table_view();
+    (
+        observed.table() as *const _ as usize,
+        checked.table() as *const _ as usize,
+    )
+}
+
 /// FENCE observer (copied read): the published symbol table's shape for the
 /// re-homed cell test's slot-metadata assertions. Returns plain scalars
 /// `(slots, chunk_slots, chunk_count)`; the view, its descriptor type and the
