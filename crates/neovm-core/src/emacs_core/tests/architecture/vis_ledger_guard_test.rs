@@ -50,6 +50,7 @@ const VIS_CRATES: &[&str] = &[
 const KINDS: &[&str] = &[
     "fn",
     "method",
+    "macro",
     "struct",
     "enum",
     "union",
@@ -1494,6 +1495,35 @@ fn parse_ledger(path: &Path, text: &str) -> Result<Vec<VisRow>, String> {
     Ok(rows)
 }
 
+/// A `macro` row names the CRATE-ROOT export of a `#[macro_export]` macro
+/// (lead-integ 01:3xZ condition): `#[macro_export]` exports the macro at the
+/// crate root, so a module-prefixed item such as
+/// `emacs_core::eval::eval_absent_layer_slots` is not a real path and must be
+/// red. The defining file must also actually contain
+/// `#[macro_export] macro_rules! <leaf>`.
+fn macro_row_violation(row: &VisRow, source: &str) -> Result<(), String> {
+    let leaf = row.item.rsplit("::").next().unwrap_or(&row.item);
+    if row.item.contains("::") {
+        return Err(format!(
+            "{} {} macro: a macro row must name the crate-root export (no module prefix; #[macro_export] exports at the root), got `{}`",
+            row.crate_dir, row.item, row.item
+        ));
+    }
+    if !source.contains("#[macro_export]") {
+        return Err(format!(
+            "{} {leaf} macro: the defining file has no #[macro_export]; a module-scoped macro is not a crate-root export",
+            row.crate_dir
+        ));
+    }
+    if !source.contains(&format!("macro_rules! {leaf}")) {
+        return Err(format!(
+            "{} {leaf} macro: the defining file has no `macro_rules! {leaf}`",
+            row.crate_dir
+        ));
+    }
+    Ok(())
+}
+
 fn check_row(
     workspace: &Path,
     row: &VisRow,
@@ -1545,6 +1575,9 @@ fn check_row(
         return Err(format!(
             "{what}: `{leaf}` does not occur in the defining file"
         ));
+    }
+    if row.kind == "macro" {
+        macro_row_violation(row, &source)?;
     }
     // Type-qualified rows (fields, methods, associated functions) must name
     // a type that the defining file actually declares. Lowercase segments are
@@ -3516,6 +3549,30 @@ mod tests {
             feature_only_pub_sites(dir.path()).expect("sites"),
             vec![(relative, "Inner".to_owned())]
         );
+    }
+
+    #[test]
+    fn macro_row_mutations() {
+        let source = "#[macro_export]\nmacro_rules! eval_absent_layer_slots { () => {} }\n";
+        let row = |item: &str| VisRow {
+            crate_dir: "neovm-eval".to_owned(),
+            item: item.to_owned(),
+            kind: "macro".to_owned(),
+            file: "crates/neovm-eval/src/emacs_core/runtime/eval/absent_layer.rs".to_owned(),
+            tests: Vec::new(),
+        };
+        macro_row_violation(&row("eval_absent_layer_slots"), source).expect("crate-root macro row");
+        let error = macro_row_violation(&row("emacs_core::eval::eval_absent_layer_slots"), source)
+            .expect_err("module-prefixed macro row");
+        assert!(error.contains("crate-root"), "{error}");
+        let no_export = "macro_rules! eval_absent_layer_slots { () => {} }\n";
+        let error = macro_row_violation(&row("eval_absent_layer_slots"), no_export)
+            .expect_err("macro without #[macro_export]");
+        assert!(error.contains("#[macro_export]"), "{error}");
+        let other_macro = "#[macro_export]\nmacro_rules! other { () => {} }\n";
+        let error = macro_row_violation(&row("eval_absent_layer_slots"), other_macro)
+            .expect_err("file lacks the named macro");
+        assert!(error.contains("macro_rules!"), "{error}");
     }
 
     #[test]
