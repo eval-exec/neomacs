@@ -185,10 +185,6 @@ typed_subr! {
 #[path = "tests/strings_test.rs"]
 mod tests;
 
-#[cfg(test)]
-#[path = "tests/width_policy.rs"]
-mod width_policy_tests;
-
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_substring(args: Vec<Value>) -> EvalResult {
     builtin_substring_slice(&args)

@@ -27,12 +27,12 @@ fn gdm_width_policy_default_table_preserves_unicode_ranges() {
 #[test]
 fn gdm_width_policy_ascii_is_not_overridden_by_width_table() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new(crate::test_utils::unit_runtime());
+    let mut ctx = crate::test_utils::new_context();
     ctx.eval_str("(setq char-width-table (make-char-table nil 999))")
         .unwrap();
     let policy = CharacterWidthPolicy::from_context(&ctx);
-    assert_eq!(policy.character_width(b'a' as u32), 1);
-    assert_eq!(policy.character_width(0xe9), 999);
+    assert_eq!(policy.width(b'a' as u32), 1);
+    assert_eq!(policy.width(0xe9), 999);
 }
 
 #[test]

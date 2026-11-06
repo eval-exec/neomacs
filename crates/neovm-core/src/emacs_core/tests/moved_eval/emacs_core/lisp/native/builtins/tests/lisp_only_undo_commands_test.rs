@@ -21,8 +21,8 @@
 //! statement that the C one is still here.
 
 use crate::emacs_core::eval::Context;
-use crate::emacs_core::eval::lookup_global_subr_entry;
 use crate::test_utils::{runtime_startup_eval_all, runtime_startup_eval_one};
+use neovm_eval::test_support::authority::lookup_global_subr_entry;
 use neovm_value::intern::intern;
 
 /// GNU has no C version of these, so a bare evaluator -- which is GNU before
@@ -41,7 +41,7 @@ const C_UNDO_PRIMITIVES: &[&str] = &[
 #[test]
 fn the_two_undo_commands_are_void_on_a_bare_evaluator_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
 
     for primitive in C_UNDO_PRIMITIVES {
         let result = eval.eval_str(&format!("(fboundp '{primitive})"));
@@ -69,7 +69,7 @@ fn no_rust_subr_is_registered_for_the_two_undo_commands() {
     crate::test_utils::init_test_tracing();
     // The global subr registry is populated by `init_builtins`, which runs
     // when an evaluator is built; ask for one before reading the table.
-    let _eval = Context::new(crate::test_utils::unit_runtime());
+    let _eval = crate::test_utils::new_context();
     for name in LISP_ONLY_UNDO_COMMANDS {
         assert!(
             lookup_global_subr_entry(intern(name)).is_none(),

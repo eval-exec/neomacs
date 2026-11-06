@@ -54,7 +54,7 @@
 //! written out by hand for one area; this one is that check with the name
 //! list replaced by a scan, so a name nobody thought to list still trips it.
 
-use crate::emacs_core::eval::lookup_global_subr_entry;
+use neovm_eval::test_support::authority::lookup_global_subr_entry;
 use neovm_value::intern::intern;
 use neovm_value::value::{ValueKind, VecLikeType};
 
@@ -145,7 +145,7 @@ fn rust_subrs_shadowed_by_preloaded_lisp_match_the_reviewed_list() {
 
     let eval = crate::test_utils::runtime_startup_context();
     let mut names: Vec<String> = eval
-        .obarray
+        .obarray()
         .all_symbols()
         .into_iter()
         .map(str::to_string)
@@ -160,7 +160,7 @@ fn rust_subrs_shadowed_by_preloaded_lisp_match_the_reviewed_list() {
             continue;
         }
         // ...but the loaded runtime's function cell is no longer that subr.
-        let Some(cell) = eval.obarray.symbol_function(&name) else {
+        let Some(cell) = eval.obarray().symbol_function(&name) else {
             continue;
         };
         if !matches!(
@@ -282,7 +282,7 @@ fn rust_subrs_shadowed_by_preloaded_lisp_match_the_reviewed_list() {
     // COMMAND is lisp/simple.el:7614 and is gone, but the VARIABLE is
     // DEFVAR_LISP at src/buffer.c:5835 and must still be bound.
     assert!(
-        eval.obarray
+        eval.obarray()
             .symbol_value_copied("transient-mark-mode")
             .is_some(),
         "transient-mark-mode the VARIABLE is DEFVAR_LISP in GNU \

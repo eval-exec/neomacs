@@ -4227,21 +4227,28 @@ pub fn builtin_replace_match(eval: &mut super::eval::Context, args: Vec<Value>) 
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/search_frontend_test.rs"]
-mod search_frontend_tests;
-
-#[cfg(test)]
 #[path = "search/tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
-    /// Test hook: calls a U2.8 front-end fast path answered.
+    /// Test hook: calls a U2.8 front-end fast path answered.  Passive
+    /// instrumentation (a counter read by tests only); re-gated so the
+    /// re-homed core test can observe it.  OBSERVE-ONLY.
     pub(crate) static FRONTEND_FAST_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[inline(always)]
 fn note_frontend_fast_call() {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     FRONTEND_FAST_CALLS.with(|calls| calls.set(calls.get() + 1));
+}
+
+/// Copied fast-path call count for the re-homed search front-end oracle.
+/// Passive instrumentation: the counter never changes results or control
+/// flow (OBSERVE-ONLY); the TLS cell itself stays private.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn frontend_fast_calls_for_test() -> usize {
+    FRONTEND_FAST_CALLS.with(std::cell::Cell::get)
 }

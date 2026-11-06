@@ -3,8 +3,9 @@
 //! patterns that do and do not read syntax, bounds on both sides, counts,
 //! NOERROR modes, `case-fold-search`, `inhibit-changing-match-data`, and
 //! `syntax-propertize` states that force the general path.
-use crate::emacs_core::eval::set_builtin_frontend_for_test;
 use crate::test_utils::runtime_startup_context;
+use neovm_eval::emacs_core::builtins::search::frontend_fast_calls_for_test;
+use neovm_value::builtin_frontend::set_builtin_frontend_for_test;
 use neovm_value::value::Value;
 
 /// Every search and its observable aftermath, as one list per call.
@@ -147,9 +148,9 @@ fn run_form(form: &str, frontend: bool) -> Vec<String> {
 fn fast_buffer_searches_answer_like_the_general_path() {
     crate::test_utils::init_test_tracing();
     let general = run_matrix(false);
-    let before = super::FRONTEND_FAST_CALLS.with(|calls| calls.get());
+    let before = frontend_fast_calls_for_test();
     let fast = run_matrix(true);
-    let fast_calls = super::FRONTEND_FAST_CALLS.with(|calls| calls.get()) - before;
+    let fast_calls = frontend_fast_calls_for_test() - before;
     assert_eq!(general.len(), fast.len());
     assert!(general.len() > 5_000, "{} rows", general.len());
     for (index, (general, fast)) in general.iter().zip(&fast).enumerate() {
@@ -170,9 +171,9 @@ fn fast_buffer_searches_answer_like_the_general_path() {
 fn fast_looking_at_answers_like_the_general_path() {
     crate::test_utils::init_test_tracing();
     let general = run_form(LOOKING_AT_MATRIX, false);
-    let before = super::FRONTEND_FAST_CALLS.with(|calls| calls.get());
+    let before = frontend_fast_calls_for_test();
     let fast = run_form(LOOKING_AT_MATRIX, true);
-    let fast_calls = super::FRONTEND_FAST_CALLS.with(|calls| calls.get()) - before;
+    let fast_calls = frontend_fast_calls_for_test() - before;
     assert_eq!(general.len(), fast.len());
     assert!(general.len() > 3_000, "{} rows", general.len());
     for (index, (general, fast)) in general.iter().zip(&fast).enumerate() {
@@ -190,9 +191,9 @@ fn fast_looking_at_answers_like_the_general_path() {
 fn fast_string_match_answers_like_the_general_path() {
     crate::test_utils::init_test_tracing();
     let general = run_form(STRING_MATCH_MATRIX, false);
-    let before = super::FRONTEND_FAST_CALLS.with(|calls| calls.get());
+    let before = frontend_fast_calls_for_test();
     let fast = run_form(STRING_MATCH_MATRIX, true);
-    let fast_calls = super::FRONTEND_FAST_CALLS.with(|calls| calls.get()) - before;
+    let fast_calls = frontend_fast_calls_for_test() - before;
     assert_eq!(general.len(), fast.len());
     assert!(general.len() > 10_000, "{} rows", general.len());
     for (index, (general, fast)) in general.iter().zip(&fast).enumerate() {
@@ -277,9 +278,9 @@ fn the_knob_turns_the_fast_path_off() {
                     (list (re-search-forward "b" nil t) (re-search-backward "a" nil t)))"#;
     for (frontend, expected_calls) in [(false, 0), (true, 2)] {
         set_builtin_frontend_for_test(Some(frontend));
-        let before = super::FRONTEND_FAST_CALLS.with(|calls| calls.get());
+        let before = frontend_fast_calls_for_test();
         let result = eval.eval_str(form).expect("searches evaluate");
-        let calls = super::FRONTEND_FAST_CALLS.with(|calls| calls.get()) - before;
+        let calls = frontend_fast_calls_for_test() - before;
         set_builtin_frontend_for_test(None);
         assert_eq!(crate::emacs_core::print::print_value(&result), "(3 1)");
         assert_eq!(calls, expected_calls, "frontend {frontend}");

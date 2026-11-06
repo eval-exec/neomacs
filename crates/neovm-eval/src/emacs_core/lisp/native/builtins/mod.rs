@@ -738,30 +738,6 @@ mod predicate_walk_gc_test;
 #[path = "tests/sort_capture_test.rs"]
 mod sort_capture_test;
 
-#[cfg(test)]
-#[path = "tests/lisp_only_predicates_and_aliases_test.rs"]
-mod lisp_only_predicates_and_aliases_test;
-
-#[cfg(test)]
-#[path = "tests/lisp_only_undo_commands_test.rs"]
-mod lisp_only_undo_commands_test;
-
-#[cfg(test)]
-#[path = "tests/process_launchers_are_lisp_only_test.rs"]
-mod process_launchers_are_lisp_only_test;
-
-#[cfg(test)]
-#[path = "tests/lisp_only_misc_names_test.rs"]
-mod lisp_only_misc_names_test;
-
-#[cfg(test)]
-#[path = "tests/lisp_only_window_frame_names_test.rs"]
-mod lisp_only_window_frame_names_test;
-
-#[cfg(test)]
-#[path = "tests/rust_subrs_shadowed_by_lisp_test.rs"]
-mod rust_subrs_shadowed_by_lisp_test;
-
 // -----------------------------------------------------------------------
 // Wrapper functions for builtins that need tracing or non-standard access
 // -----------------------------------------------------------------------
@@ -1266,10 +1242,6 @@ pub fn neovm_internal_panic(_eval: &mut super::eval::Context, args: Vec<Value>) 
         .unwrap_or_else(|| "neovm--internal-panic".to_string());
     panic!("{message}");
 }
-
-#[cfg(test)]
-#[path = "tests/gdl_format_test.rs"]
-mod gdl_format;
 
 #[cfg(test)]
 #[path = "tests/positioned_symbol_test.rs"]

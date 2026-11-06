@@ -222,3 +222,34 @@ mod emacs_core_runtime_pdump_tests_pdump_mmap_image_readers_full_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/pdump/tests/pdump_section_inventory_full_test.rs"]
 mod emacs_core_runtime_pdump_tests_pdump_section_inventory_full_test_rs;
+
+// Builtins/printer boot-oracle re-homes of the P1 EVAL wave F1 batch 3.
+// File names, test names and assertions byte-identical; imports and the
+// UPDATE_EXPECT fixture paths moved.
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/gdl_format_test.rs"]
+mod emacs_core_lisp_native_builtins_tests_gdl_format_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/lisp_only_misc_names_test.rs"]
+mod emacs_core_lisp_native_builtins_tests_lisp_only_misc_names_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/lisp_only_predicates_and_aliases_test.rs"]
+mod emacs_core_lisp_native_builtins_tests_lisp_only_predicates_and_aliases_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/lisp_only_undo_commands_test.rs"]
+mod emacs_core_lisp_native_builtins_tests_lisp_only_undo_commands_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/lisp_only_window_frame_names_test.rs"]
+mod emacs_core_lisp_native_builtins_tests_lisp_only_window_frame_names_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/process_launchers_are_lisp_only_test.rs"]
+mod emacs_core_lisp_native_builtins_tests_process_launchers_are_lisp_only_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/rust_subrs_shadowed_by_lisp_test.rs"]
+mod emacs_core_lisp_native_builtins_tests_rust_subrs_shadowed_by_lisp_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/search_frontend_test.rs"]
+mod emacs_core_lisp_native_builtins_tests_search_frontend_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/width_policy.rs"]
+mod emacs_core_lisp_native_builtins_tests_width_policy_rs;
