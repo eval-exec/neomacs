@@ -3,7 +3,7 @@ use crate::emacs_core::eval::Context;
 
 #[test]
 fn gc_tls_ownership_regex_reentry_keeps_evicted_compiled_translation_alive() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str(
         r#"(progn
             (setq parse-sexp-lookup-properties t
