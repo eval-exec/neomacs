@@ -189,9 +189,6 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
     out
 }
 
-/// MIME line length used by GNU's base64 line-breaking (fns.c).
-const MIME_LINE_LENGTH: usize = 76;
-
 /// Flatten the internal bytes of base64-encoding input into the raw data
 /// bytes to be encoded, mirroring GNU `base64_encode_1` (fns.c): when the
 /// source is multibyte, each character is decoded; ASCII passes through, an

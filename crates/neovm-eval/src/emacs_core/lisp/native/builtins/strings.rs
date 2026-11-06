@@ -185,6 +185,11 @@ typed_subr! {
 #[path = "tests/strings_test.rs"]
 mod tests;
 
+/// Argument-vector adapter for the one-home substring core.  Test-only:
+/// the production callers hold their arguments on the stack and call
+/// `builtin_substring_slice`; the moved core builtins test imports this
+/// adapter (VIS-EVAL row `builtins::strings::builtin_substring`).
+#[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_substring(args: Vec<Value>) -> EvalResult {
     builtin_substring_slice(&args)

@@ -45,6 +45,7 @@ impl NotificationLatch {
         self.control.get().map(|attachment| &attachment.wake)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn install_control(&self, wake: Arc<ControlWake>) -> Result<(), Arc<ControlWake>> {
         self.control
             .set(Arc::new(ControlAttachment {

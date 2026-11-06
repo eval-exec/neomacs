@@ -42,7 +42,9 @@ use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock, Weak};
 
-use super::{CallFeedback, FeedbackVec, NumericFeedback, Runtime, RuntimeState};
+#[cfg(any(test, feature = "test-support"))]
+use super::{CallFeedback, FeedbackVec};
+use super::{NumericFeedback, Runtime, RuntimeState};
 use crate::emacs_core::bytecode::Op;
 use neovm_value::intern::SymId;
 use neovm_value::value::Value;
@@ -197,10 +199,13 @@ fn feedback_mode_from_env() -> FeedbackMode {
 /// Upper extension trait for the moved feedback types.
 pub(crate) trait SourceFeedbackExt {
     /// No feedback yet (nothing allocated).
+    #[cfg(any(test, feature = "test-support"))]
     fn new() -> Self;
     /// Record callee `sym` at call site `pc` (the legacy lattice).
+    #[cfg(any(test, feature = "test-support"))]
     fn record_call(&self, pc: usize, ops_len: usize, sym: SymId);
     /// The legacy call lattice at `pc`.
+    #[cfg(any(test, feature = "test-support"))]
     fn call_at(&self, pc: usize) -> CallFeedback;
     /// Join `seen` into arithmetic site `pc`; whether the slot moved.
     fn record_numeric(&self, pc: usize, ops_len: usize, seen: NumericFeedback) -> bool;
@@ -213,18 +218,21 @@ pub(crate) trait SourceFeedbackExt {
 impl SourceFeedbackExt for SourceFeedback {
     /// No feedback yet (nothing allocated).
     #[inline]
+    #[cfg(any(test, feature = "test-support"))]
     fn new() -> Self {
         Self::default()
     }
 
     /// Record callee `sym` at call site `pc` (the legacy lattice).
     #[inline]
+    #[cfg(any(test, feature = "test-support"))]
     fn record_call(&self, pc: usize, ops_len: usize, sym: SymId) {
         self.ops().record_call(pc, ops_len, sym);
     }
 
     /// The legacy call lattice at `pc`.
     #[inline]
+    #[cfg(any(test, feature = "test-support"))]
     fn call_at(&self, pc: usize) -> CallFeedback {
         self.ops().call_at(pc)
     }

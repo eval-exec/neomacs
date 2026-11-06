@@ -506,21 +506,3 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/iterative_admission_test.rs"]
 mod iterative_admission_test;
-
-/// Test-support identity observer for the tiering runtime (K1 fence-ask
-/// item 8). The returned address is a copied scalar; no `&jit::Runtime`
-/// reference escapes (the interior-mutability rule).
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) trait ByteCodeRuntimeIdentity {
-    /// The tiering Runtime's address, for identity comparisons.
-    #[cfg(feature = "jit")]
-    fn jit_runtime_identity_for_test(&self) -> usize;
-}
-
-#[cfg(feature = "jit")]
-impl ByteCodeRuntimeIdentity for ByteCodeFunction {
-    #[inline(always)]
-    fn jit_runtime_identity_for_test(&self) -> usize {
-        std::ptr::from_ref(ByteCodeFunctionExt::jit_runtime(self)) as usize
-    }
-}

@@ -621,6 +621,7 @@ pub(crate) use subr_abi::SubrEntry;
 
 impl RedisplaySignature {
     /// Copied frame half of the signature (C4; plain metadata type).
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
     pub(crate) fn frame_for_test(&self) -> Option<RedisplayFrameSignature> {
         self.frame.clone()
@@ -629,12 +630,14 @@ impl RedisplaySignature {
 
 impl RedisplayBufferSignature {
     /// Copied buffer-layout modified tick for the re-homed redisplay tests.
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
     pub(crate) fn layout_modified_tick_for_test(&self) -> i64 {
         self.layout.modified_tick
     }
 
     /// Copied overlay modified tick (C4).
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
     pub(crate) fn layout_overlay_modified_tick_for_test(&self) -> i64 {
         self.layout.overlay_modified_tick
@@ -5166,12 +5169,14 @@ impl Context {
     }
 
     /// Copied observer for the re-homed eval tests (P1 CLASSES C4: reads).
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
     pub(crate) fn vm_root_frames_len_for_test(&self) -> usize {
         self.vm_root_frames.len()
     }
 
     /// Copied first root of the newest VM root frame (never a frame borrow).
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
     pub(crate) fn vm_root_frames_last_first_root_for_test(&self) -> Option<Value> {
         self.vm_root_frames
@@ -5180,42 +5185,49 @@ impl Context {
     }
 
     /// Copied last VM root frame's root count (C4/N4: never a frame borrow).
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
     pub(crate) fn vm_root_frames_last_roots_len_for_test(&self) -> Option<usize> {
         self.vm_root_frames.last().map(|frame| frame.roots.len())
     }
 
     /// Copied eval-depth limit observer (C4).
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
     pub(crate) fn max_depth_for_test(&self) -> usize {
         self.max_depth
     }
 
     /// Copied display-variable change counter observer (C4/N2).
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
     pub(crate) fn display_var_change_count_for_test(&self) -> u64 {
         self.display_var_change_count
     }
 
     /// Copied internal interpreter environment symbol (C4).
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
     pub(crate) fn internal_interpreter_environment_symbol_for_test(&self) -> SymId {
         self.internal_interpreter_environment_symbol
     }
 
     /// Copied variable-watcher membership predicate (C4/N2: the set stays private).
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
     pub(crate) fn variable_watched_for_test(&self, sym: SymId) -> bool {
         self.active_variable_watchers.contains(&sym)
     }
 
     /// Copied GC runtime memory-full predicate (C4/N2: the cache stays private).
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
     pub(crate) fn gc_runtime_memory_full_for_test(&self) -> bool {
         self.gc_runtime_settings_cache.memory_full.is_full()
     }
 
     /// Copied unwind-cleanup depth observer (C4).
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
     pub(crate) fn unwind_cleanup_depth_for_test(&self) -> usize {
         self.unwind_cleanup_depth
@@ -6100,23 +6112,27 @@ impl Context {
 
     #[inline]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn bookmarks(&self) -> &BookmarkManager {
         &self.bookmarks
     }
 
     #[inline]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn bookmarks_mut(&mut self) -> &mut BookmarkManager {
         &mut self.bookmarks
     }
 
     #[inline]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn treesit(&self) -> &neovm_text::emacs_core::treesit::TreeSitterManager {
         &self.treesit
     }
 
     #[inline]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn treesit_mut(
         &mut self,
     ) -> &mut neovm_text::emacs_core::treesit::TreeSitterManager {
@@ -6125,24 +6141,28 @@ impl Context {
 
     #[inline]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn modes(&self) -> &ModeRegistry {
         &self.modes
     }
 
     #[inline]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn modes_mut(&mut self) -> &mut ModeRegistry {
         &mut self.modes
     }
 
     #[inline]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn rectangle(&self) -> &RectangleState {
         &self.rectangle
     }
 
     #[inline]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn rectangle_mut(&mut self) -> &mut RectangleState {
         &mut self.rectangle
     }

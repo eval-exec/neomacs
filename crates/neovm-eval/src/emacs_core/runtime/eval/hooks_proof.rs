@@ -207,31 +207,44 @@ static HOOKS_INSTALLED: OnceLock<()> = OnceLock::new();
 /// after the last publication succeeds; a conflicting set returns the typed
 /// refusal before any proof exists. Re-running with the same set publishes
 /// each slot as `AlreadyInstalled` and still returns the proof.
+/// Both publication statuses are success at this entry: `Installed` is the
+/// first boot, `AlreadyInstalled` is the documented idempotent re-run.  Bind
+/// and match explicitly instead of discarding the must-use status.
+fn accept_hook_status(status: HookInstallStatus) {
+    match status {
+        HookInstallStatus::Installed | HookInstallStatus::AlreadyInstalled => {}
+    }
+}
+
 #[doc(hidden)]
 pub fn install_eval_hooks(
     set: &'static EvalHookSet,
 ) -> Result<EvalHooksInstalled, HookInstallError> {
     // 1. Lifecycle: the GC-root-enumerating dynamic-module slot, the
     //    pdump-reconstruct resets and the boot entries publish first.
-    lifecycle::install_lifecycle_hooks(set.lifecycle)?;
+    accept_hook_status(lifecycle::install_lifecycle_hooks(set.lifecycle)?);
     // 2. Process and input wait/OS-signal slots.
-    process_hooks::install_process_hooks(set.process)?;
-    input_hooks::install_input_hooks(set.input)?;
+    accept_hook_status(process_hooks::install_process_hooks(set.process)?);
+    accept_hook_status(input_hooks::install_input_hooks(set.input)?);
     // 3. Command-layer cold tables.
-    call_interactively::install_call_interactively_hooks(set.call_interactively)?;
-    case_tables::install_case_table_hooks(set.case_tables)?;
-    buffer_kill::install_buffer_kill_hooks(set.buffer_kill)?;
-    kmacro_hooks::install_kmacro_hooks(set.kmacro)?;
+    accept_hook_status(call_interactively::install_call_interactively_hooks(
+        set.call_interactively,
+    )?);
+    accept_hook_status(case_tables::install_case_table_hooks(set.case_tables)?);
+    accept_hook_status(buffer_kill::install_buffer_kill_hooks(set.buffer_kill)?);
+    accept_hook_status(kmacro_hooks::install_kmacro_hooks(set.kmacro)?);
     // 4. Display policy queries.
-    display_query_hooks::install_display_query_hooks(set.display_query)?;
+    accept_hook_status(display_query_hooks::install_display_query_hooks(
+        set.display_query,
+    )?);
     // 5. Hot-path timing pair (also carries its enable answer).
-    perf::install_perf_hooks(set.perf_enabled, set.perf)?;
+    accept_hook_status(perf::install_perf_hooks(set.perf_enabled, set.perf)?);
     // 6. Process-global feature tables, then the runtime upcall tables (S3):
     //    published last; none enumerates GC roots or participates in pdump
     //    reconstruction. The sqlite slot answers with the typed publication
     //    status, so a conflicting finalizer table reaches the caller instead
     //    of failing a release-mode assertion (peer follow-up F1).
-    (set.sqlite)()?;
+    accept_hook_status((set.sqlite)()?);
     publish(&WAIT_SERVICE, set.wait)?;
     publish(&TIMER_SERVICE, set.timer)?;
     publish(&FRONTEND_SERVICE, set.frontend)?;
@@ -281,7 +294,13 @@ pub(crate) fn register_core_subrs(ctx: &mut Context) {
 
 /// The file-notify host queries; a missing table is a typed refusal at the
 /// call site (the only runtime accessor here, because watch-add has a Lisp
-/// error path).
+/// error path).  Only the macOS/Windows backends (and the Linux cfg(test)
+/// mirrors of them) call this accessor.
+#[cfg(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(test, target_os = "linux")
+))]
 pub(crate) fn file_notify_host_queries() -> Option<&'static FileNotifyHostQueries> {
     FILE_NOTIFY_QUERIES.get().copied()
 }

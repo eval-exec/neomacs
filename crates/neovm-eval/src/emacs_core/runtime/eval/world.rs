@@ -895,6 +895,29 @@ macro_rules! obarray_method_proxies {
             )*
         }
     };
+    // Like `public_access`, but the method is not exposed on the owning
+    // `ObarrayViewMut` capability (its only writers hold the write access or
+    // the confined view).  Keeps the adapter surface exactly the used one.
+    ($phase:ident; no_view_mut; $( $(#[$attr:meta])* $visibility:vis fn $name:ident(
+        $($arg:ident: $ty:ty),* $(,)?
+    ) $(-> $result:ty)?; )*) => {
+        obarray_method_proxies! {
+            $phase; view_only;
+            $(
+                $(#[$attr])*
+                $visibility fn $name($($arg: $ty),*) $(-> $result)?;
+            )*
+        }
+        impl ObarrayWriteAccess<'_> {
+            $(
+                $(#[$attr])*
+                #[inline(always)]
+                $visibility fn $name(&mut self, $($arg: $ty),*) $(-> $result)? {
+                    self.view.$name($($arg),*)
+                }
+            )*
+        }
+    };
 }
 
 obarray_method_proxies! {
@@ -1042,14 +1065,18 @@ obarray_method_proxies! {
     function; public_access;
     pub fn set_symbol_function(name: &str, function: Value);
     pub fn set_symbol_function_id(id: SymId, function: Value);
-    pub(crate) fn set_symbol_function_id_for(id: SymId,
-            function: Value,
-            why: FunctionEpochBump,
-        );
     pub fn fmakunbound(name: &str);
     pub fn fmakunbound_id(id: SymId);
     pub fn clear_function_silent(name: &str);
     pub fn clear_function_silent_id(id: SymId);
+}
+
+obarray_method_proxies! {
+    function; no_view_mut;
+    pub(crate) fn set_symbol_function_id_for(id: SymId,
+            function: Value,
+            why: FunctionEpochBump,
+        );
 }
 
 /// Pure Context-bound owner-header read; no manager reference spans Lisp.

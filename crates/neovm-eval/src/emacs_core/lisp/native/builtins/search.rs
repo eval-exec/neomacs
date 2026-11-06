@@ -24,9 +24,6 @@ use strum::IntoStaticStr;
 enum SearchStateVariable {
     CaseFoldSearch,
     InhibitChangingMatchData,
-    CharScriptTable,
-    WordCombiningCategories,
-    WordSeparatingCategories,
     CaseSymbolsAsWords,
 }
 
@@ -38,9 +35,6 @@ impl SearchStateVariable {
 
         static CASE_FOLD_SEARCH: OnceLock<SymId> = OnceLock::new();
         static INHIBIT_CHANGING_MATCH_DATA: OnceLock<SymId> = OnceLock::new();
-        static CHAR_SCRIPT_TABLE: OnceLock<SymId> = OnceLock::new();
-        static WORD_COMBINING_CATEGORIES: OnceLock<SymId> = OnceLock::new();
-        static WORD_SEPARATING_CATEGORIES: OnceLock<SymId> = OnceLock::new();
         static CASE_SYMBOLS_AS_WORDS: OnceLock<SymId> = OnceLock::new();
 
         let name: &'static str = self.into();
@@ -48,13 +42,6 @@ impl SearchStateVariable {
             Self::CaseFoldSearch => *CASE_FOLD_SEARCH.get_or_init(|| intern(name)),
             Self::InhibitChangingMatchData => {
                 *INHIBIT_CHANGING_MATCH_DATA.get_or_init(|| intern(name))
-            }
-            Self::CharScriptTable => *CHAR_SCRIPT_TABLE.get_or_init(|| intern(name)),
-            Self::WordCombiningCategories => {
-                *WORD_COMBINING_CATEGORIES.get_or_init(|| intern(name))
-            }
-            Self::WordSeparatingCategories => {
-                *WORD_SEPARATING_CATEGORIES.get_or_init(|| intern(name))
             }
             Self::CaseSymbolsAsWords => *CASE_SYMBOLS_AS_WORDS.get_or_init(|| intern(name)),
         }

@@ -136,7 +136,9 @@ impl<'heap> WorldProofEraExt<'heap>
 ///
 /// The era type is value-layer data and each entry invokes this World's
 /// canonical `Baton` walker, so the two entry points stay upper as an
-/// extension trait on the moved type.
+/// extension trait on the moved type.  Test-only: the entry is exercised by
+/// the re-homed root/threading oracles, not by the product build.
+#[cfg(test)]
 pub(crate) trait ParallelHeapEraWorldCollectExt {
     fn collect_stopped(
         &self,
@@ -150,6 +152,7 @@ pub(crate) trait ParallelHeapEraWorldCollectExt {
 
 // Each concrete entry invokes the EXISTING canonical World walker. No second
 // child schema, cached census, stored callback or virtual dispatch is added.
+#[cfg(test)]
 macro_rules! world_collection {
     ($era:ident) => {
         impl<'heap> ParallelHeapEraWorldCollectExt for $era<'heap> {
@@ -176,6 +179,7 @@ macro_rules! world_collection {
         }
     };
 }
+#[cfg(test)]
 world_collection!(WorldEra);
 #[cfg(test)]
 world_collection!(WorldProofEra);

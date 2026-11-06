@@ -80,6 +80,9 @@ fn allocate_vector_elements(
 /// Ordinary array access carries one pointer-sized source without reading it.
 #[derive(Clone, Copy)]
 pub(crate) enum ArraySymbolSource<'a> {
+    /// Test-only origin: the caller resolves symbols through the canonical
+    /// bare obarray policy (the product callers carry the Context).
+    #[cfg(any(test, feature = "test-support"))]
     Bare,
     Context(&'a super::eval::Context),
 }
@@ -87,6 +90,7 @@ pub(crate) enum ArraySymbolSource<'a> {
 impl std::fmt::Debug for ArraySymbolSource<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
+            #[cfg(any(test, feature = "test-support"))]
             Self::Bare => "Bare",
             Self::Context(_) => "Context",
         })
@@ -118,6 +122,7 @@ pub(crate) trait ArraySymbolPolicy {
 impl ArraySymbolPolicy for ArraySymbolSource<'_> {
     fn mode(self) -> SymbolMode {
         match self {
+            #[cfg(any(test, feature = "test-support"))]
             Self::Bare => SymbolMode::Bare,
             Self::Context(context) => context.symbol_mode(),
         }

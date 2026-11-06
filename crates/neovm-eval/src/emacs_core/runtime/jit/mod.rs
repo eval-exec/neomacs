@@ -163,6 +163,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::emacs_core::jit::feedback::SourceFeedbackExt;
+#[cfg(any(test, feature = "test-support"))]
 use neovm_value::intern::SymId;
 
 /// Cranelift codegen backend (Phase 3+). Only compiled with the `jit` feature,
@@ -300,6 +301,7 @@ pub enum Plan {
 // ---------------------------------------------------------------------------
 
 /// Upper extension trait for the moved feedback types.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) trait CallFeedbackExt {
     /// Pack into one `u64` for lock-free atomic storage. Low 2 bits tag the
     /// variant; a `SymId`'s `u32` rides in the upper bits.
@@ -307,6 +309,7 @@ pub(crate) trait CallFeedbackExt {
     fn unpack(bits: u64) -> Self;
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl CallFeedbackExt for CallFeedback {
     /// Pack into one `u64` for lock-free atomic storage. Low 2 bits tag the
     /// variant; a `SymId`'s `u32` rides in the upper bits.
@@ -474,6 +477,7 @@ pub(crate) trait FeedbackVecExt {
     /// Record an observed callee `sym` at call-site `pc` (instruction index);
     /// `ops_len` is the function's instruction count, for lazy sizing. Drives
     /// the `Uninit -> Monomorphic -> Megamorphic` lattice.
+    #[cfg(any(test, feature = "test-support"))]
     fn record_call(&self, pc: usize, ops_len: usize, sym: SymId);
     /// Record the operand types observed at arithmetic site `pc`. Called only
     /// from the opcodes' non-fixnum arm, so the fixnum fast path pays nothing.
@@ -483,6 +487,7 @@ pub(crate) trait FeedbackVecExt {
     /// Operand-type feedback at arithmetic site `pc`.
     fn numeric_at(&self, pc: usize) -> NumericFeedback;
     /// Feedback at call-site `pc` (or `Uninit` if unallocated / out of range).
+    #[cfg(any(test, feature = "test-support"))]
     fn call_at(&self, pc: usize) -> CallFeedback;
 }
 
@@ -499,6 +504,7 @@ impl FeedbackVecExt for FeedbackVec {
     /// `ops_len` is the function's instruction count, for lazy sizing. Drives
     /// the `Uninit -> Monomorphic -> Megamorphic` lattice.
     #[inline]
+    #[cfg(any(test, feature = "test-support"))]
     fn record_call(&self, pc: usize, ops_len: usize, sym: SymId) {
         let slots = self.slots(ops_len);
         let Some(slot) = slots.get(pc) else { return };
@@ -545,6 +551,7 @@ impl FeedbackVecExt for FeedbackVec {
 
     /// Feedback at call-site `pc` (or `Uninit` if unallocated / out of range).
     #[inline]
+    #[cfg(any(test, feature = "test-support"))]
     fn call_at(&self, pc: usize) -> CallFeedback {
         match self.slots_ref().get() {
             None => CallFeedback::Uninit,
@@ -1017,6 +1024,7 @@ pub(crate) trait RuntimeStateTieringExt {
     /// call sites use this; the unsized `dispatch` is the flat rule (tests,
     /// tiny bodies).
     fn dispatch_sized(&self, ops_len: usize) -> Plan;
+    #[cfg(any(test, feature = "test-support"))]
     fn dispatch(&self) -> Plan;
     /// This function's compiled-cache id, assigning a fresh process-unique one
     /// on first call (idempotent under races). Used only by [`cache`].
@@ -1051,6 +1059,7 @@ pub(crate) trait RuntimeStateTieringExt {
     /// (256 iterations ≈ one call) is discoverable from the `Runtime` API.
     ///
     /// [`note_loop_work`]: Self::note_loop_work
+    #[cfg(any(test, feature = "test-support"))]
     const LOOP_BACKEDGES_PER_WRAP: u32;
     /// Credit loop work toward tier-up: called from the interpreter's
     /// backward-branch quit-counter wrap (`bytecode/vm.rs`), i.e. once per
@@ -1095,8 +1104,10 @@ pub(crate) trait RuntimeStateTieringExt {
     fn set_cold_for_test(&self);
     /// Record an observed callee `sym` at the call site at instruction `pc`
     /// (`ops_len` = the function's instruction count, for lazy sizing).
+    #[cfg(any(test, feature = "test-support"))]
     fn record_call(&self, pc: usize, ops_len: usize, sym: SymId);
     /// Call-site feedback observed at instruction `pc`.
+    #[cfg(any(test, feature = "test-support"))]
     fn call_feedback(&self, pc: usize) -> CallFeedback;
     /// Record the operand types seen at the arithmetic site at instruction
     /// `pc` — see [`NumericFeedback`]. Returns whether the site's slot moved.
@@ -1418,6 +1429,7 @@ impl RuntimeStateTieringExt for RuntimeState {
     }
 
     #[inline]
+    #[cfg(any(test, feature = "test-support"))]
     fn dispatch(&self) -> Plan {
         // Runtime kill switch (NEOVM_JIT=0): never tier up — pure interpreter,
         // no recompile. The early return also skips the heat bump, so a disabled
@@ -1530,6 +1542,7 @@ impl RuntimeStateTieringExt for RuntimeState {
     /// (256 iterations ≈ one call) is discoverable from the `Runtime` API.
     ///
     /// [`note_loop_work`]: Self::note_loop_work
+    #[cfg(any(test, feature = "test-support"))]
     const LOOP_BACKEDGES_PER_WRAP: u32 = 256;
 
     /// Credit loop work toward tier-up: called from the interpreter's
@@ -1625,12 +1638,14 @@ impl RuntimeStateTieringExt for RuntimeState {
     /// Record an observed callee `sym` at the call site at instruction `pc`
     /// (`ops_len` = the function's instruction count, for lazy sizing).
     #[inline]
+    #[cfg(any(test, feature = "test-support"))]
     fn record_call(&self, pc: usize, ops_len: usize, sym: SymId) {
         self.feedback().record_call(pc, ops_len, sym);
     }
 
     /// Call-site feedback observed at instruction `pc`.
     #[inline]
+    #[cfg(any(test, feature = "test-support"))]
     fn call_feedback(&self, pc: usize) -> CallFeedback {
         self.feedback().call_at(pc)
     }
