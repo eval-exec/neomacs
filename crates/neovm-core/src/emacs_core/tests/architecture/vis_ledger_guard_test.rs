@@ -4873,29 +4873,47 @@ fn auth_expected(row: &AuthRow) -> String {
     }
 }
 
-/// The two signed fence definition files and their fence module path,
+/// The AUTHORITY public-path model for one fence crate.
+enum AuthFence {
+    /// A signed `test_support::authority` module: rows may name it, and the
+    /// module is scanned for second routes.
+    Module {
+        file: &'static str,
+        segments: &'static [&'static str],
+    },
+    /// A crate with no signed fence module. Every AUTHORITY row is an
+    /// original-path row (LEAD 02:2xZ / peer 02:19Z): the signed fence_path is
+    /// the item's own public module path, so the row is validated against that
+    /// module and there is no fence to scan for a second route.
+    OriginalPathOnly,
+}
+
+/// The signed fence definition file and module path for a fence crate,
 /// relative to the crate root (the eval authority module is inline).
-fn auth_fence_file(crate_name: &str) -> Option<(&'static str, &'static [&'static str])> {
+fn auth_fence_file(crate_name: &str) -> Option<AuthFence> {
     match crate_name {
-        "neovm-value" => Some((
-            "crates/neovm-value/src/test_support/authority.rs",
-            &["test_support", "authority"],
-        )),
-        "neovm-eval" => Some((
-            "crates/neovm-eval/src/test_support.rs",
-            &["test_support", "authority"],
-        )),
-        "neovm-edit" => Some((
-            "crates/neovm-edit/src/test_support/authority.rs",
-            &["test_support", "authority"],
-        )),
+        "neovm-value" => Some(AuthFence::Module {
+            file: "crates/neovm-value/src/test_support/authority.rs",
+            segments: &["test_support", "authority"],
+        }),
+        "neovm-eval" => Some(AuthFence::Module {
+            file: "crates/neovm-eval/src/test_support.rs",
+            segments: &["test_support", "authority"],
+        }),
+        "neovm-edit" => Some(AuthFence::Module {
+            file: "crates/neovm-edit/src/test_support/authority.rs",
+            segments: &["test_support", "authority"],
+        }),
         // The display fence is its signed test_support::authority module
         // (peer 19:36Z follow-up): the three DisplayFrameExt test fixtures
         // route through delegates there.
-        "neovm-display" => Some((
-            "crates/neovm-display/src/test_support/authority.rs",
-            &["test_support", "authority"],
-        )),
+        "neovm-display" => Some(AuthFence::Module {
+            file: "crates/neovm-display/src/test_support/authority.rs",
+            segments: &["test_support", "authority"],
+        }),
+        // NO signed test_support::authority module: TS-UNROWED original-path
+        // rows only (LEAD 02:2xZ owns arm; peer signed the system families).
+        "neovm-system" => Some(AuthFence::OriginalPathOnly),
         _ => None,
     }
 }
@@ -5078,18 +5096,14 @@ fn auth_test_support_widened(attrs: &[syn::Attribute]) -> bool {
 
 /// True when the file (at any inline depth) declares or re-exports `leaf`
 /// publicly. The fence file is the one place where the item must be public.
-fn auth_declares_public(file: &Path, leaf: &str, impl_owner: Option<&str>) -> Result<bool, String> {
-    let text = read(file)?;
-    let ast = syn::parse_file(&text)
-        .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", file.display()))?;
-    fn items_declare(items: &[syn::Item], leaf: &str, impl_owner: Option<&str>) -> bool {
-        // A row whose item names an owner (`Owner::method`) is a method row:
-        // only an inherent `pub fn method` on that owner (the impl arm below)
-        // or the separate alias route may declare it. A free fn/struct/const
-        // or a `pub use` leaf that merely shares the method's name is NOT the
-        // signed path (peer 00:36:00Z follow-up; predates c6314a9304).
-        let leaf_arms = impl_owner.is_none();
-        items.iter().any(|item| {
+fn auth_items_declare_public(items: &[syn::Item], leaf: &str, impl_owner: Option<&str>) -> bool {
+    // A row whose item names an owner (`Owner::method`) is a method row:
+    // only an inherent `pub fn method` on that owner (the impl arm below)
+    // or the separate alias route may declare it. A free fn/struct/const
+    // or a `pub use` leaf that merely shares the method's name is NOT the
+    // signed path (peer 00:36:00Z follow-up; predates c6314a9304).
+    let leaf_arms = impl_owner.is_none();
+    items.iter().any(|item| {
             let public = match item {
                 syn::Item::Fn(item) => {
                     leaf_arms
@@ -5146,7 +5160,9 @@ fn auth_declares_public(file: &Path, leaf: &str, impl_owner: Option<&str>) -> Re
                         && module
                             .content
                             .as_ref()
-                            .is_some_and(|(_, inner)| items_declare(inner, leaf, impl_owner))
+                            .is_some_and(|(_, inner)| {
+                                auth_items_declare_public(inner, leaf, impl_owner)
+                            })
                 }
                 // Inherent-impl methods on the fence type are a public path
                 // only when the method is `pub` AND the impl's self type is
@@ -5176,8 +5192,73 @@ fn auth_declares_public(file: &Path, leaf: &str, impl_owner: Option<&str>) -> Re
             };
             public
         })
+}
+
+fn auth_declares_public(file: &Path, leaf: &str, impl_owner: Option<&str>) -> Result<bool, String> {
+    let text = read(file)?;
+    let ast = syn::parse_file(&text)
+        .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", file.display()))?;
+    Ok(auth_items_declare_public(&ast.items, leaf, impl_owner))
+}
+
+/// Resolve a crate-relative module path for the original-path branch. File
+/// modules come from `map`; any remaining segments are inline `mod`
+/// declarations inside that file (e.g. `pub mod test_support { ... }` in a
+/// production module), which have no separate source file.
+fn auth_original_module<'a>(
+    map: &'a BTreeMap<PathBuf, (Vec<String>, bool)>,
+    segments: &'a [String],
+) -> Option<(&'a PathBuf, bool, &'a [String])> {
+    for prefix_len in (0..=segments.len()).rev() {
+        if let Some((file, public)) = auth_module_entry(map, &segments[..prefix_len]) {
+            return Some((file, public, &segments[prefix_len..]));
+        }
     }
-    Ok(items_declare(&ast.items, leaf, impl_owner))
+    None
+}
+
+/// `(chain_public, declares_public)` for an inline module tail under `file`:
+/// each remaining segment must be a cfg-active public (or test-support
+/// widened) inline `mod`, and the innermost module's own items must declare
+/// `owner` publicly.
+fn auth_inline_module_declares_public(
+    file: &Path,
+    tail: &[String],
+    owner: &str,
+) -> Result<(bool, bool), String> {
+    if tail.is_empty() {
+        return Ok((true, auth_declares_public(file, owner, None)?));
+    }
+    let text = read(file)?;
+    let ast = syn::parse_file(&text)
+        .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", file.display()))?;
+    fn descend(items: &[syn::Item], tail: &[String], owner: &str) -> (bool, bool) {
+        let Some((name, rest)) = tail.split_first() else {
+            return (true, false);
+        };
+        for item in items {
+            let syn::Item::Mod(module) = item else {
+                continue;
+            };
+            if module.ident != name || auth_cfg_inactive(&module.attrs) {
+                continue;
+            }
+            let public = matches!(module.vis, syn::Visibility::Public(_))
+                || auth_test_support_widened(&module.attrs);
+            if !public {
+                return (false, false);
+            }
+            let Some((_, inner)) = &module.content else {
+                return (false, false);
+            };
+            if rest.is_empty() {
+                return (true, auth_items_declare_public(inner, owner, None));
+            }
+            return descend(inner, rest, owner);
+        }
+        (false, false)
+    }
+    Ok(descend(&ast.items, tail, owner))
 }
 
 /// Resolve a Rust path written in `from_module` to (module segments, item
@@ -5456,17 +5537,21 @@ fn auth_public_use_violation(
 ) -> Result<(), String> {
     let fences: BTreeMap<String, (Vec<String>, PathBuf)> = rows
         .iter()
-        .map(|row| {
-            let (file, module) = auth_fence_file(&row.crate_name).unwrap_or_else(|| {
-                panic!("AUTHORITY_PATHS unknown fence crate {}", row.crate_name)
-            });
-            (
-                row.crate_name.clone(),
-                (
-                    module.iter().map(|segment| segment.to_string()).collect(),
-                    workspace.join(file),
-                ),
-            )
+        .filter_map(|row| {
+            match auth_fence_file(&row.crate_name)
+                .unwrap_or_else(|| panic!("AUTHORITY_PATHS unknown fence crate {}", row.crate_name))
+            {
+                AuthFence::Module { file, segments } => Some((
+                    row.crate_name.clone(),
+                    (
+                        segments.iter().map(|segment| segment.to_string()).collect(),
+                        workspace.join(file),
+                    ),
+                )),
+                // Original-path-only crates have no fence to protect; the
+                // defining-module second-route check is done per row above.
+                AuthFence::OriginalPathOnly => None,
+            }
         })
         .collect();
     for crate_name in [
@@ -5779,7 +5864,7 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
         .map(|row| row.crate_name.clone())
         .collect::<BTreeSet<_>>()
     {
-        let (fence_file, _) = auth_fence_file(&crate_name)
+        let fence_style = auth_fence_file(&crate_name)
             .unwrap_or_else(|| panic!("AUTHORITY_PATHS unknown fence crate {crate_name}"));
         let lib = workspace
             .join("crates")
@@ -5788,10 +5873,18 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
             .join("lib.rs");
         let mut map = BTreeMap::new();
         auth_collect_modules(&lib, Vec::new(), true, &mut map)?;
-        let fence = workspace
-            .join(fence_file)
-            .canonicalize()
-            .map_err(|error| format!("AUTHORITY_PATHS {fence_file}: {error}"))?;
+        let (fence, module): (Option<PathBuf>, Vec<String>) = match &fence_style {
+            AuthFence::Module { file, segments } => (
+                Some(
+                    workspace
+                        .join(file)
+                        .canonicalize()
+                        .map_err(|error| format!("AUTHORITY_PATHS {file}: {error}"))?,
+                ),
+                segments.iter().map(|segment| segment.to_string()).collect(),
+            ),
+            AuthFence::OriginalPathOnly => (None, Vec::new()),
+        };
         for row in rows.iter().filter(|row| row.crate_name == crate_name) {
             let expected = auth_expected(row);
             let leaf = auth_leaf(&row.item);
@@ -5810,15 +5903,22 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
                 .split("::")
                 .map(str::to_string)
                 .collect();
-            let (_, module) = auth_fence_file(&crate_name).unwrap();
-            let module: Vec<String> = module.iter().map(|segment| segment.to_string()).collect();
-            let in_fence = rest.len() > module.len() && rest[..module.len()] == module[..];
+            let in_fence = match &fence_style {
+                AuthFence::Module { .. } => {
+                    rest.len() > module.len() && rest[..module.len()] == module[..]
+                }
+                AuthFence::OriginalPathOnly => false,
+            };
+            let mut signed_module_file: Option<PathBuf> = None;
             if in_fence {
+                let fence = fence
+                    .as_ref()
+                    .expect("AUTHORITY_PATHS an in-fence row has a fence file");
                 let fence_public = map
                     .iter()
                     .find(|(_, (segments, _))| *segments == module)
                     .map(|(_, (_, public))| *public)
-                    .or_else(|| map.get(&fence).map(|(_, public)| *public))
+                    .or_else(|| map.get(fence).map(|(_, public)| *public))
                     .unwrap_or(false);
                 if !fence_public {
                     return Err(format!(
@@ -5839,10 +5939,10 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
                                 .is_some_and(|first| first.is_ascii_uppercase())
                         })
                 };
-                if !auth_declares_public(&fence, leaf, fence_owner)?
+                if !auth_declares_public(fence, leaf, fence_owner)?
                     && !auth_alias_method_is_fenced(
                         &workspace,
-                        &fence,
+                        fence,
                         &module,
                         &map,
                         &row.defining_file,
@@ -5879,24 +5979,28 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
                         format!("AUTHORITY_PATHS {expected}: the signed path is too short")
                     })?;
                 let module_segments = &rest[..prefix_len];
-                let Some((module_file, module_public)) = auth_module_entry(&map, module_segments)
+                let Some((module_file, file_public, inline_tail)) =
+                    auth_original_module(&map, module_segments)
                 else {
                     return Err(format!(
                         "AUTHORITY_PATHS {expected}: no source module for {}",
                         module_segments.join("::")
                     ));
                 };
-                if !module_public {
+                let (inline_public, declares_public) =
+                    auth_inline_module_declares_public(module_file, inline_tail, owner)?;
+                if !file_public || !inline_public {
                     return Err(format!(
                         "AUTHORITY_PATHS {expected}: the module chain is not publicly reachable"
                     ));
                 }
-                if !auth_declares_public(module_file, owner, None)? {
+                if !declares_public {
                     return Err(format!(
                         "AUTHORITY_PATHS {expected}: {} does not publicly expose {owner:?}",
                         module_file.display()
                     ));
                 }
+                signed_module_file = Some(module_file.clone());
                 if method_row
                     && !auth_file_pub_inherent_method(
                         &workspace.join(&row.defining_file),
@@ -5908,19 +6012,24 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
                         "AUTHORITY_PATHS {expected}: the defining file does not expose {owner}::{leaf} as a pub inherent method"
                     ));
                 }
-                if auth_declares_public(&fence, leaf, None)?
-                    || (method_row && auth_declares_public(&fence, owner, None)?)
-                {
-                    return Err(format!(
-                        "AUTHORITY_PATHS {expected}: the authority fence also exposes the item, so the signed path is not exclusive"
-                    ));
+                if let Some(fence) = &fence {
+                    if auth_declares_public(fence, leaf, None)?
+                        || (method_row && auth_declares_public(fence, owner, None)?)
+                    {
+                        return Err(format!(
+                            "AUTHORITY_PATHS {expected}: the authority fence also exposes the item, so the signed path is not exclusive"
+                        ));
+                    }
                 }
             }
             let defining = workspace
                 .join(&row.defining_file)
                 .canonicalize()
                 .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", row.defining_file))?;
-            if defining != fence {
+            let defining_is_signed_module = signed_module_file
+                .as_ref()
+                .is_some_and(|module_file| defining == *module_file);
+            if !defining_is_signed_module && fence.as_ref().is_none_or(|fence| defining != *fence) {
                 if let Some((segments, true)) = map.get(&defining) {
                     if auth_declares_public(&defining, leaf, None)? {
                         let mut original = crate_name.replace('-', "_");
@@ -6079,6 +6188,97 @@ fn authority_public_paths_mutations() {
     .expect("lib");
     std::fs::write(value_src.join("original.rs"), "pub(crate) fn mark() {}\n").expect("original");
     assert!(authority_public_paths_violation(dir.path(), &rows).is_ok());
+}
+
+/// LEAD 02:2xZ / peer 02:19Z: a crate with no signed `test_support::authority`
+/// module (neovm-system) validates AUTHORITY rows as ORIGINAL-PATH rows at
+/// their own module path. One green fixture plus three mutations pin the arm:
+/// the signed module must declare the leaf publicly, its module chain must be
+/// publicly reachable in the test-support build view, and the defining module
+/// must not be publicly reachable at a DIFFERENT path than the signed one.
+#[test]
+fn authority_original_path_only_fenceless_mutations() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sys_src = dir.path().join("crates/neovm-system/src");
+    std::fs::create_dir_all(&sys_src).expect("system src");
+    std::fs::write(
+        sys_src.join("lib.rs"),
+        "pub mod fileio;\npub mod original;\n",
+    )
+    .expect("lib");
+    std::fs::write(sys_src.join("fileio.rs"), "pub fn decode_for_test() {}\n").expect("fileio");
+    std::fs::write(sys_src.join("original.rs"), "pub fn decode_for_test() {}\n").expect("original");
+    let rows = vec![AuthRow {
+        crate_name: "neovm-system".to_owned(),
+        item: "fileio::decode_for_test".to_owned(),
+        defining_file: "crates/neovm-system/src/fileio.rs".to_owned(),
+        fence_path: "neovm_system::fileio".to_owned(),
+    }];
+    assert!(authority_public_paths_violation(dir.path(), &rows).is_ok());
+
+    // Mutation 1: the signed module does not declare the leaf publicly.
+    std::fs::write(sys_src.join("fileio.rs"), "fn decode_for_test() {}\n").expect("fileio");
+    let error = authority_public_paths_violation(dir.path(), &rows)
+        .expect_err("private leaf in the signed module");
+    assert!(error.contains("does not publicly expose"), "{error}");
+    std::fs::write(sys_src.join("fileio.rs"), "pub fn decode_for_test() {}\n").expect("fileio");
+
+    // Mutation 2: the module chain is not publicly reachable in the
+    // test-support build view.
+    std::fs::write(
+        sys_src.join("lib.rs"),
+        "pub(crate) mod fileio;\npub mod original;\n",
+    )
+    .expect("lib");
+    let error =
+        authority_public_paths_violation(dir.path(), &rows).expect_err("private module chain");
+    assert!(
+        error.contains("module chain is not publicly reachable"),
+        "{error}"
+    );
+    std::fs::write(
+        sys_src.join("lib.rs"),
+        "pub mod fileio;\npub mod original;\n",
+    )
+    .expect("lib");
+
+    // Mutation 3: the defining module is publicly reachable at a DIFFERENT
+    // path than the signed one (a second route).
+    let second_route = vec![AuthRow {
+        crate_name: "neovm-system".to_owned(),
+        item: "fileio::decode_for_test".to_owned(),
+        defining_file: "crates/neovm-system/src/original.rs".to_owned(),
+        fence_path: "neovm_system::fileio".to_owned(),
+    }];
+    let error = authority_public_paths_violation(dir.path(), &second_route)
+        .expect_err("defining module at a second path");
+    assert!(error.contains("also publicly reachable at"), "{error}");
+
+    // Inline tail: `pub mod test_support { ... }` in a production module has
+    // no separate source file; the arm resolves it inside the defining file.
+    std::fs::write(
+        sys_src.join("fileio.rs"),
+        "pub mod test_support { pub fn inline_for_test() {} }\n",
+    )
+    .expect("fileio");
+    let inline_rows = vec![AuthRow {
+        crate_name: "neovm-system".to_owned(),
+        item: "fileio::test_support::inline_for_test".to_owned(),
+        defining_file: "crates/neovm-system/src/fileio.rs".to_owned(),
+        fence_path: "neovm_system::fileio::test_support".to_owned(),
+    }];
+    assert!(authority_public_paths_violation(dir.path(), &inline_rows).is_ok());
+    std::fs::write(
+        sys_src.join("fileio.rs"),
+        "pub(crate) mod test_support { pub fn inline_for_test() {} }\n",
+    )
+    .expect("fileio");
+    let error = authority_public_paths_violation(dir.path(), &inline_rows)
+        .expect_err("private inline module chain");
+    assert!(
+        error.contains("module chain is not publicly reachable"),
+        "{error}"
+    );
 }
 
 /// Peer 15:4xZ pre-P2 condition: a test-support mod-row route must not become
