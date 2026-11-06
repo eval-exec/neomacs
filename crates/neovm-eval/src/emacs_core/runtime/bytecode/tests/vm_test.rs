@@ -58,7 +58,12 @@ fn with_vm_eval_state<R>(
     lexical: bool,
     f: impl FnOnce(Result<Value, EvalError>, &Context) -> R,
 ) -> R {
-    with_vm_eval_in_context(Context::new_vm_runtime_harness(), src, lexical, f)
+    with_vm_eval_in_context(
+        Context::new_vm_runtime_harness(crate::test_utils::unit_runtime()),
+        src,
+        lexical,
+        f,
+    )
 }
 
 fn with_vm_eval_full_context_state<R>(
@@ -66,7 +71,12 @@ fn with_vm_eval_full_context_state<R>(
     lexical: bool,
     f: impl FnOnce(Result<Value, EvalError>, &Context) -> R,
 ) -> R {
-    with_vm_eval_in_context(Context::new(), src, lexical, f)
+    with_vm_eval_in_context(
+        Context::new(crate::test_utils::unit_runtime()),
+        src,
+        lexical,
+        f,
+    )
 }
 
 fn with_vm_eval_bootstrap_context_state<R>(
