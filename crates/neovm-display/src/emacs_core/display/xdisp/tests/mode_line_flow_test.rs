@@ -11,7 +11,7 @@ fn context() -> Context {
         unsafe { std::env::set_var("NEOVM_MODE_LINE_FLOW", "1") };
     }
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("noninteractive", Value::NIL);
     eval
 }

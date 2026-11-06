@@ -9,7 +9,7 @@ use neovm_eval::emacs_core::eval::save_scratch_gc_roots;
 
 fn point_context() -> Context {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("noninteractive", Value::NIL);
     eval.eval_str(
         r#"(progn

@@ -4,7 +4,7 @@ use neovm_value::intern::{intern_call_names, intern_calls, reset_intern_calls};
 use strum::IntoEnumIterator;
 
 fn context() -> Context {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let buffer = ctx.buffers.create_buffer("*ttykey-k4-mode-fixed*");
     ctx.buffers.set_current(buffer);
     ctx

@@ -12,7 +12,7 @@ fn mode_line_outer_binding_errors_block_outer_handlers_and_debugger() {
     crate::test_utils::init_test_tracing();
     let mut observations = Vec::new();
     for phase in ["let", "unlet"] {
-        let mut eval = Context::new();
+        let mut eval = Context::new(crate::test_utils::unit_runtime());
         eval.set_variable("noninteractive", Value::NIL);
         let bid = eval.buffers.current_buffer_id().expect("current buffer");
         eval.frames.create_frame("fx2-outer-handlers", 80, 24, bid);

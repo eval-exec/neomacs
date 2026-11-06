@@ -16,7 +16,7 @@ use super::*;
 use neovm_eval::emacs_core::eval::Context;
 
 fn interactive() -> Context {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("noninteractive", Value::NIL);
     eval
 }

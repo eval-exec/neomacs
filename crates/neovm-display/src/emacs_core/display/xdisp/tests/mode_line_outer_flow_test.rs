@@ -13,7 +13,7 @@ fn mode_line_outer_binding_signals_preserve_non_error_conditions_and_scopes() {
     let mut observed = Vec::new();
     for operation in ["let", "unlet"] {
         for condition in ["quit", "fx2-derived-quit", "fx2-non-error", "error"] {
-            let mut eval = Context::new();
+            let mut eval = Context::new(crate::test_utils::unit_runtime());
             eval.set_variable("noninteractive", Value::NIL);
             eval.set_variable("inhibit-quit", Value::NIL);
             let bid = eval.buffers.current_buffer_id().expect("current buffer");

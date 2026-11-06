@@ -7,7 +7,7 @@ use neovm_eval::emacs_core::eval::save_scratch_gc_roots;
 
 fn context() -> Context {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.gc_stress = false;
     eval.tagged_heap.set_gc_threshold(usize::MAX);
     eval.set_variable("noninteractive", Value::NIL);

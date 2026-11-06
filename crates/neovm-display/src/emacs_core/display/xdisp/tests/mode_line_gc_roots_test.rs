@@ -78,7 +78,7 @@ fn assert_accumulated_property_survives(
         );
     }
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.gc_stress = false;
     eval.tagged_heap.set_gc_threshold(usize::MAX);
     eval.set_variable("noninteractive", Value::NIL);

@@ -19,7 +19,7 @@ enum Walker {
 }
 
 fn context() -> Context {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.gc_stress = false;
     ctx.tagged_heap.set_gc_threshold(usize::MAX);
     let buffer = ctx.buffers.create_buffer("*ttykey-k5-dynamic-symbols*");

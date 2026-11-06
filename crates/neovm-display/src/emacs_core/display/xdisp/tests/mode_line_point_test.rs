@@ -6,7 +6,7 @@ use neovm_eval::emacs_core::eval::Context;
 #[test]
 fn mode_line_display_point_tracks_eval_moves_and_restrictions() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("noninteractive", Value::NIL);
     eval.eval_str(
         r#"(progn
