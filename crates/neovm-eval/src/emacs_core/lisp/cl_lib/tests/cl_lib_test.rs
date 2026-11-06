@@ -691,7 +691,7 @@ fn seq_min_max_test() {
 #[test]
 fn seq_reduce_with_eval() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     let func = Value::subr(intern("+"));
     let seq = Value::list(vec![Value::fixnum(10), Value::fixnum(20)]);
     let result = builtin_seq_reduce(&mut evaluator, vec![func, seq, Value::fixnum(0)]).unwrap();
@@ -701,7 +701,7 @@ fn seq_reduce_with_eval() {
 #[test]
 fn seq_count_with_eval() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     let func = Value::subr(intern("numberp"));
     let seq = Value::list(vec![Value::fixnum(1), Value::string("a"), Value::fixnum(2)]);
     let result = builtin_seq_count(&mut evaluator, vec![func, seq]).unwrap();
@@ -711,7 +711,7 @@ fn seq_count_with_eval() {
 #[test]
 fn cl_position_with_eval() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     let seq = Value::list(vec![
         Value::symbol("a"),
         Value::symbol("b"),
@@ -724,7 +724,7 @@ fn cl_position_with_eval() {
 #[test]
 fn cl_position_wrong_arity() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     assert!(builtin_cl_position(&mut evaluator, vec![Value::symbol("a")]).is_err());
 }
 
@@ -780,7 +780,7 @@ fn cl_count_some_every_bootstrap() {
 #[test]
 fn cl_notany_with_eval() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     let func = Value::subr(intern("numberp"));
     let seq = Value::list(vec![Value::string("x"), Value::string("y")]);
     let result = builtin_cl_notany(&mut evaluator, vec![func, seq]).unwrap();
@@ -790,7 +790,7 @@ fn cl_notany_with_eval() {
 #[test]
 fn cl_notevery_with_eval() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     let func = Value::subr(intern("numberp"));
     let seq = Value::list(vec![Value::fixnum(1), Value::string("x")]);
     let result = builtin_cl_notevery(&mut evaluator, vec![func, seq]).unwrap();
@@ -805,7 +805,7 @@ fn cl_gensym_default_prefix() {
         ValueKind::Symbol(id) => {
             let name = resolve_sym(id);
             assert!(name.starts_with('G'));
-            let eval = super::super::eval::Context::new();
+            let eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
             assert!(eval.obarray().intern_soft(name).is_none());
             let canonical = intern(name);
             assert_ne!(id, canonical);
@@ -823,7 +823,7 @@ fn cl_gensym_custom_prefix() {
         ValueKind::Symbol(id) => {
             let name = resolve_sym(id);
             assert!(name.starts_with("vm-gensym-"));
-            let eval = super::super::eval::Context::new();
+            let eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
             assert!(eval.obarray().intern_soft(name).is_none());
         }
         other => panic!("expected symbol, got {other:?}"),
@@ -838,7 +838,7 @@ fn cl_gensym_integer_uses_explicit_suffix_without_interning() {
         ValueKind::Symbol(id) => {
             let name = resolve_sym(id);
             assert_eq!(name, "G9");
-            let eval = super::super::eval::Context::new();
+            let eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
             assert!(eval.obarray().intern_soft(name).is_none());
         }
         other => panic!("expected symbol, got {other:?}"),
@@ -894,7 +894,7 @@ fn cl_find_wrong_arity() {
 #[test]
 fn cl_find_if_with_eval() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_cl_find_if(
         &mut evaluator,
         vec![
@@ -909,7 +909,7 @@ fn cl_find_if_with_eval() {
 #[test]
 fn cl_find_if_wrong_arity() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     assert!(builtin_cl_find_if(&mut evaluator, vec![Value::subr(intern("numberp"))]).is_err());
 }
 
@@ -1085,7 +1085,7 @@ fn cl_substitute_wrong_arity() {
 #[test]
 fn cl_sort_with_eval() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     let seq = Value::list(vec![Value::fixnum(3), Value::fixnum(1), Value::fixnum(2)]);
     let result = builtin_cl_sort(&mut evaluator, vec![seq, Value::subr(intern("<"))]).unwrap();
     assert_eq!(
@@ -1097,7 +1097,7 @@ fn cl_sort_with_eval() {
 #[test]
 fn cl_stable_sort_with_eval() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     let seq = Value::list(vec![Value::fixnum(3), Value::fixnum(1), Value::fixnum(2)]);
     let result =
         builtin_cl_stable_sort(&mut evaluator, vec![seq, Value::subr(intern("<"))]).unwrap();
@@ -1110,7 +1110,7 @@ fn cl_stable_sort_with_eval() {
 #[test]
 fn cl_remove_if_with_eval() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_cl_remove_if(
         &mut evaluator,
         vec![
@@ -1125,7 +1125,7 @@ fn cl_remove_if_with_eval() {
 #[test]
 fn cl_remove_if_not_with_eval() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_cl_remove_if_not(
         &mut evaluator,
         vec![
@@ -1161,7 +1161,7 @@ fn cl_map_result_type_domain_matches_gnu_sequence_symbols() {
 #[test]
 fn cl_map_list_with_eval() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_cl_map(
         &mut evaluator,
         vec![
@@ -1180,7 +1180,7 @@ fn cl_map_list_with_eval() {
 #[test]
 fn cl_map_string_with_eval() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     let result = builtin_cl_map(
         &mut evaluator,
         vec![
@@ -1196,7 +1196,7 @@ fn cl_map_string_with_eval() {
 #[test]
 fn cl_map_unsupported_type() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     assert!(
         builtin_cl_map(
             &mut evaluator,
