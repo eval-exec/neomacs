@@ -55,7 +55,7 @@ fn osr_raw_zero_is_truthy_for_plain_and_else_pop_branches() {
         let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
         let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
         assert!(uniform_raw_osr_slots(&cfg, &facts, Some(1))[0]);
-        let mut ctx = Context::new();
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
         let snapshot = [Value::make_int(0)];
         ctx.bc_buf.extend_from_slice(&snapshot);
         assert_eq!(
@@ -92,7 +92,7 @@ fn osr_raw_condition_is_popped_before_normalizing_a_reused_temporary_slot() {
     let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
     let raw = uniform_raw_osr_slots(&cfg, &facts, Some(1));
     assert!(raw[0] && raw[1]);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let snapshot = [Value::make_int(0)];
     ctx.bc_buf.extend_from_slice(&snapshot);
     assert_eq!(
@@ -105,7 +105,7 @@ fn osr_raw_condition_is_popped_before_normalizing_a_reused_temporary_slot() {
 fn osr_raw_switch_backedges_root_heap_payloads_and_preserve_quit_cadence() {
     use crate::emacs_core::eval::{bytecode_branch_poll_count, reset_bytecode_branch_poll_count};
     use neovm_value::value::HashTableTest;
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let table = Value::hash_table(HashTableTest::Eq);
     let _ = table.with_hash_table_mut(|ht| {
         for (key, target) in [(0, 2), (1, 4)] {
@@ -195,7 +195,7 @@ fn osr_raw_switch_backedges_root_heap_payloads_and_preserve_quit_cadence() {
 #[test]
 fn osr_raw_overflow_retags_the_snapshot_and_resumes_without_replaying_effects() {
     use crate::emacs_core::bytecode::vm::Vm;
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str("(setq osr-raw-effects 0)").unwrap();
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: vec![],
@@ -273,7 +273,7 @@ fn osr_raw_varref_preserves_loop_slots_on_inline_and_fallback_reads() {
     // (`NEOVM_JIT_INLINE_VARS=read` would read the buffer-local one inline
     // too).
     force_inline_vars_for_test(Some(InlineVarsKnob::OFF));
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str(
         "(progn (defvar raw-osr-read 7)
                 (defvaralias 'raw-osr-read-alias 'raw-osr-read)
@@ -348,7 +348,7 @@ fn osr_raw_varref_preserves_loop_slots_on_inline_and_fallback_reads() {
 #[test]
 fn osr_raw_varref_type_change_retags_live_slots_for_precise_resume() {
     use crate::emacs_core::bytecode::vm::Vm;
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str("(defvar raw-osr-float-read 0.5)").unwrap();
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: vec![],

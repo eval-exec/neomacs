@@ -30,7 +30,7 @@ fn run(ctx: &mut Context, f: &ByteCodeFunction, pc: usize, stack: &[Value]) -> N
 
 #[test]
 fn osr_poll_conditional_edges_preserve_cadence_and_quit() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for (on_nil, else_pop) in [(false, false), (true, false), (false, true), (true, true)] {
         let mut ops = vec![];
         if else_pop {
@@ -86,7 +86,7 @@ fn osr_poll_conditional_edges_preserve_cadence_and_quit() {
 
 #[test]
 fn osr_poll_shares_one_counter_across_alternating_backedges() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = loop_function(
         1,
         vec![Value::make_int(0), Value::make_int(2)],
@@ -120,7 +120,7 @@ fn osr_poll_shares_one_counter_across_alternating_backedges() {
 
 #[test]
 fn osr_poll_shares_one_counter_across_nested_headers() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = loop_function(
         1,
         vec![Value::make_int(0), Value::make_int(3)],
@@ -156,7 +156,7 @@ fn osr_poll_shares_one_counter_across_nested_headers() {
 
 #[test]
 fn osr_poll_switch_siblings_preserve_cadence_and_native_list_roots() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let table = Value::hash_table(HashTableTest::Eq);
     let _ = table.with_hash_table_mut(|ht| {
         for (key, target) in [(0, 0), (1, 2)] {
@@ -215,7 +215,7 @@ fn osr_poll_switch_siblings_preserve_cadence_and_native_list_roots() {
 
 #[test]
 fn osr_poll_unconditional_edge_keeps_native_list_alive_across_gc() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = loop_function(
         1,
         vec![Value::make_int(0)],
@@ -258,7 +258,7 @@ fn osr_poll_unconditional_edge_keeps_native_list_alive_across_gc() {
 
 #[test]
 fn osr_poll_overflow_after_poll_keeps_current_iteration_for_deopt() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = loop_function(
         2,
         vec![Value::make_int(0)],

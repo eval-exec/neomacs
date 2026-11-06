@@ -68,7 +68,7 @@ fn spec_fast_path_engages_for_one_two_and_three_arguments() {
     // An engagement test: pinned off under the force harness, whose whole
     // point is that no call takes the fast path.
     force_slow_spec_for_test(Some(false));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     for nargs in 1..=3usize {
         let name = format!("neo-spec-gate-g{nargs}");
         let g = Value::symbol(&name);
@@ -170,7 +170,7 @@ fn two_argument_spec_calls_preserve_order_and_heap_identity() {
     let _backend =
         crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
     let _compiler = CompilerPolicy::enter();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let _roots = FixtureRoots(crate::emacs_core::eval::save_scratch_gc_roots());
     let left_heap = Value::make_string("same contents, distinct objects");
     crate::emacs_core::eval::push_scratch_gc_root(left_heap);
@@ -280,7 +280,7 @@ fn two_argument_spec_calls_preserve_order_and_heap_identity() {
 fn a_quit_set_by_compiled_code_stops_the_next_spec_call_before_its_frame() {
     crate::test_utils::init_test_tracing();
     force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str("(setq neo-spec-gate-ran 0)").unwrap();
     // (lambda (x) (setq neo-spec-gate-ran (1+ neo-spec-gate-ran)) (if x x x))
     let g_body = lambda(
@@ -359,7 +359,7 @@ fn a_quit_set_by_compiled_code_stops_the_next_spec_call_before_its_frame() {
 #[test]
 fn force_slow_spec_bit_matches_knob() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let knob = jit_force_slow_spec();
     assert_eq!(
         !ev.attention_word_clear(AttentionMask::SUBR_ARMING),
@@ -434,7 +434,7 @@ fn subr_spec_armed_hot_split_matches_reference() {
     ] {
         for overrides in [false, true] {
             for force in [false, true] {
-                let mut ev = Context::new();
+                let mut ev = Context::new(crate::test_utils::unit_runtime());
                 let sym = intern("neo-spec-gate-subr");
                 let car = ev.obarray.symbol_function_id(intern("car")).expect("car");
                 let cdr = ev.obarray.symbol_function_id(intern("cdr")).expect("cdr");
@@ -488,7 +488,7 @@ fn subr_spec_armed_hot_split_matches_reference() {
 fn a_subr_spec_site_under_compiler_overrides_takes_the_generic_call() {
     crate::test_utils::init_test_tracing();
     force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     // (lambda (x) (symbol-name x))
     let mut f = ByteCodeFunction::new(LambdaParams {
@@ -552,7 +552,7 @@ fn debug_on_next_call_set_by_compiled_code_enters_the_debugger_at_the_next_spec_
     crate::test_utils::init_test_tracing();
     force_profit_gate_for_test(false);
     force_slow_spec_for_test(Some(false));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str(
         "(progn (defvar neo-debug-log nil)
                 (setq debugger (lambda (&rest args) (setq neo-debug-log (cons args neo-debug-log)) nil)))",

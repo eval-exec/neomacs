@@ -74,7 +74,7 @@ fn opt_lower_global_ssa_loop_matches_tier0_and_reports_opt() {
     let f = count_loop();
     let leaf = lower(&f, None);
     assert_eq!(leaf.selected_tier(), SelectedTier::Opt);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     for n in [0, 1, 10, 10000] {
         let args = [Value::make_int(n)];
         let expected = Vm::from_context(&mut ev)
@@ -103,7 +103,7 @@ fn opt_lower_diamond_and_else_pop_preserve_global_values() {
         1,
     );
     let leaf = lower(&f, None);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     for arg in [Value::NIL, Value::make_int(11)] {
         let expected = Vm::from_context(&mut ev).execute(&f, vec![arg]).unwrap();
         assert_eq!(
@@ -129,7 +129,7 @@ fn opt_lower_force_deopt_captures_exact_stack_after_heap_effect() {
         2,
     );
     let leaf = lower(&f, None);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let pair = Value::cons(Value::make_int(1), Value::NIL);
     let arg = Value::symbol("opt-bad-number");
     let NativeRun::DeoptAt(frame) = leaf.call(&mut ev as *mut Context as *mut u8, &[pair, arg])
@@ -166,7 +166,7 @@ fn opt_lower_osr_prunes_prologue_and_checks_untouched_snapshot() {
     let f = count_loop();
     let leaf = lower(&f, Some(1));
     assert_eq!(leaf.selected_tier(), SelectedTier::Opt);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let args = [
         Value::make_int(10000).bits() as i64,
         Value::make_int(42).bits() as i64,
@@ -285,7 +285,7 @@ fn opt_tier2_seam_keeps_rooted_t1_fallback_and_reverts() {
     let value = Value::make_bytecode(f);
     crate::emacs_core::eval::push_scratch_gc_root(value);
     let f = value.get_bytecode_data().unwrap();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let run = |ctx: &mut Context| {
         assert_eq!(
             // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.

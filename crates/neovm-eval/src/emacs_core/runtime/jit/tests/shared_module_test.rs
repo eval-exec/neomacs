@@ -105,7 +105,7 @@ fn page_of(addr: *const u8) -> usize {
 fn setup(persistent: bool) -> Context {
     force_deopt_for_test(false);
     shared::force_persistent_module_for_test(persistent);
-    Context::new()
+    Context::new(crate::test_utils::unit_runtime())
 }
 
 /// By default a leaf compiles into the persistent module and keeps nothing

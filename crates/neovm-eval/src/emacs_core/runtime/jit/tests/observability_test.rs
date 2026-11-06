@@ -79,7 +79,7 @@ fn jit_obs_tier_up_seam_deopt_is_counted_on_the_cached_leaf() {
     // Counting only: deopt reoptimization would retire the deopting leaf
     // (tested in `jit::reopt`), and these rows read the live one.
     reopt_off();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     // (lambda (x) (+ x 1))
     let f = function(
@@ -112,7 +112,7 @@ fn jit_obs_tier_up_seam_deopt_is_counted_on_the_cached_leaf() {
 #[test]
 fn jit_obs_force_deopt_counts_every_call() {
     force_deopt_for_test(true);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let f = function(
         vec![Op::StackRef(0), Op::Constant(0), Op::Add, Op::Return],
@@ -165,7 +165,7 @@ fn jit_obs_direct_path_deopt_counted_once() {
     // (tested in `jit::reopt`), and these rows read the live one.
     reopt_off();
     force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // A multi-block callee, so the MIR inliner leaves the call in place:
     // (lambda (n) (if n (1- n) 0))
     let step = install(
@@ -231,7 +231,7 @@ fn jit_obs_signal_exit_counted() {
     // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
     crate::emacs_core::jit::compile::force_deopt_for_test(false);
     force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     // Framed: (car 5) through the call shim.
     let framed = lower_nullary_leaf(
@@ -283,7 +283,7 @@ fn jit_obs_spec_revalidation_counts_rearm_and_rebind() {
     crate::emacs_core::jit::compile::force_deopt_for_test(false);
     use crate::emacs_core::jit::stats::epoch::{EpochCounters, SpecRevalidation};
     force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let step = install(
         &mut ev,
         "jit-obs-rearm-step",
@@ -358,7 +358,7 @@ fn jit_obs_inline_eviction_counted() {
     // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
     crate::emacs_core::jit::compile::force_deopt_for_test(false);
     use crate::emacs_core::jit::stats::epoch::EpochCounters;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     // C = (lambda (x) (* x x)); F = (lambda (a) (C a)) inlines C.
     let c_sym = install(
@@ -408,7 +408,7 @@ fn jit_obs_label_names_symbol_callee() {
     crate::emacs_core::jit::compile::force_deopt_for_test(false);
     use crate::emacs_core::jit::stats::perf_map::last_entry_name_for_test;
     force_naming(true);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // (defun jit-obs-named (x) (+ x 1)), already hot.
     let named = install(
         &mut ev,
@@ -559,7 +559,7 @@ fn jit_obs_entry_counter_counts_every_path() {
     crate::emacs_core::jit::compile::force_deopt_for_test(false);
     force_profit_gate_for_test(false);
     force_entry_count(true);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // Seam: (lambda (x) (+ x 1)) through try_run_compiled.
     let f = function(
         vec![Op::StackRef(0), Op::Constant(0), Op::Add, Op::Return],

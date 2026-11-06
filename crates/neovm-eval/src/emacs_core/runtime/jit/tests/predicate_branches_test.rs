@@ -76,7 +76,7 @@ fn predicate_branches_preserve_comparison_polarity_and_retained_values() {
 
 #[test]
 fn predicate_branches_keep_unknown_nonboolean_truthiness() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let values = [
         Value::NIL,
         Value::T,
@@ -119,7 +119,7 @@ fn predicate_branches_keep_unknown_nonboolean_truthiness() {
 
 #[test]
 fn predicate_branches_merge_predicates_with_unknown_values() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let constants = [Value::make_int(111), Value::make_int(222)];
     for (on_nil, else_pop) in [(false, false), (true, false), (false, true), (true, true)] {
         let mut ops = vec![
@@ -170,7 +170,7 @@ fn predicate_branches_merge_predicates_with_unknown_values() {
 
 #[test]
 fn predicate_branches_resume_type_deopt_without_repeating_effects() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for (on_nil, else_pop) in [(false, false), (true, false), (false, true), (true, true)] {
         let mut f = ByteCodeFunction::new(LambdaParams {
             required: vec![intern("a"), intern("b")],
@@ -248,7 +248,7 @@ fn predicate_branches_resume_type_deopt_without_repeating_effects() {
 
 #[test]
 fn predicate_branches_preserve_type_predicates_and_composite_conditions() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     // Expected Lisp truth values: null, consp, stringp, listp.
     let cases = [
         (Value::NIL, [true, false, false, true]),

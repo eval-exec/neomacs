@@ -20,7 +20,7 @@ impl Drop for HeldPending {
 #[test]
 fn recovery_retains_owned_and_flagged_indexed_args_until_unbind() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.gc_collect_exact();
     ev.bc_buf.extend([Value::make_int(11), Value::make_int(13)]);
     let _stable = ev.push_backtrace_frame_from_bc_stack(Value::symbol("stable-span"), 0, 2);
@@ -101,7 +101,7 @@ fn held_pending_callee_keeps_cleanup_backtrace_args_after_recovery() {
     // All Lisp state stays on this fresh mutator; only join's unit crosses
     // the thread boundary. Worker holds release on panic as well as success.
     std::thread::spawn(|| {
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         ev.gc_collect_exact();
         let _backend = compile::opt_mode_scope_for_test(compile::OptMode::Legacy);
         bg::force_mode_for_test(Some(bg::BgMode::Threaded));

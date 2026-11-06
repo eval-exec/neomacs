@@ -20,7 +20,7 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
 
 #[test]
 fn mir_named_reads_follow_buffer_state_and_ignore_function_redefinition() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let point = intern("point");
     let f = function(
         vec![Op::CallBuiltinSym(point, 0), Op::Add1, Op::Return],
@@ -56,7 +56,7 @@ fn mir_named_calls_signal_with_the_same_payload_as_the_interpreter() {
         ("match-beginning", vec![Value::NIL]),
         ("car", vec![Value::make_int(7)]),
     ] {
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         let mut ops: Vec<_> = (0..args.len()).map(|i| Op::Constant(i as u16)).collect();
         ops.extend([
             Op::CallBuiltinSym(intern(name), args.len() as u8),
@@ -84,7 +84,7 @@ fn mir_named_read_loop_observes_gc_hook_changes() {
     let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
         crate::emacs_core::jit::compile::OptMode::Legacy,
     );
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str(
         "(insert \"abcd\") (goto-char 1) (setq post-gc-hook (list (lambda () (goto-char 4))))",
     )
@@ -121,7 +121,7 @@ fn mir_named_read_loop_observes_gc_hook_changes() {
 #[test]
 fn named_call_effects_keep_fast_reads_separate_from_fallbacks() {
     use super::calls::Effects;
-    let _ev = Context::new();
+    let _ev = Context::new(crate::test_utils::unit_runtime());
     let read = named_builtin_call(&Op::CallBuiltinSym(intern("point"), 0)).unwrap();
     assert!(read.fast_effects.contains(Effects::READ_BUFFER));
     assert!(read.fast_effects.is_read_only());
@@ -169,7 +169,7 @@ fn named_call_effects_keep_fast_reads_separate_from_fallbacks() {
 #[test]
 fn parse_partial_sexp_call_effects_include_lisp_and_gc() {
     use super::calls::Effects;
-    let _ev = Context::new();
+    let _ev = Context::new(crate::test_utils::unit_runtime());
     let call = named_builtin_call(&Op::CallBuiltinSym(intern("parse-partial-sexp"), 6))
         .expect("parse-partial-sexp is a named builtin");
     for effects in [call.fast_effects, call.effects] {

@@ -57,7 +57,7 @@ fn binding_sum(nested: bool) -> ByteCodeFunction {
 
 #[test]
 fn osr_binding_transfer_preserves_nested_binds_and_outer_native_segment() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str("(setq osr-bound 17 osr-outer 23)").unwrap();
     let outer_base = ctx.specpdl.len();
     ctx.try_specbind(intern("osr-outer"), Value::make_int(29))
@@ -100,7 +100,7 @@ fn osr_binding_transfer_preserves_nested_binds_and_outer_native_segment() {
 
 #[test]
 fn osr_binding_entry_rejects_wrong_snapshot_without_mutating_either_stack() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str("(setq osr-bound 17 osr-outer 23)").unwrap();
     let outer_base = ctx.specpdl.len();
     ctx.try_specbind(intern("osr-outer"), Value::make_int(29))
@@ -215,7 +215,7 @@ fn osr_binding_deopt_adopts_new_inner_binding_without_replaying_effects() {
         f.seal_hand_assembled_ops();
         f
     };
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str("(setq osr-outer 23)").unwrap();
     let outer_base = ctx.specpdl.len();
     ctx.try_specbind(intern("osr-outer"), Value::make_int(29))
@@ -260,7 +260,7 @@ fn osr_binding_deopt_adopts_new_inner_binding_without_replaying_effects() {
 fn osr_binding_unlet_watchers_collect_and_preserve_cleanup_exit_semantics() {
     for mode in ["collect", "signal", "throw"] {
         for osr in [false, true] {
-            let mut ctx = Context::new();
+            let mut ctx = Context::new(crate::test_utils::unit_runtime());
             ctx.eval_str(&format!(
                 r#"(progn
                 (setq osr-bound 17 osr-watch-log nil osr-watch-mode '{mode})
@@ -345,7 +345,7 @@ fn osr_binding_unlet_watchers_collect_and_preserve_cleanup_exit_semantics() {
 fn osr_binding_frame_exit_unwinds_inherited_and_new_binds_for_each_outcome() {
     for exit in ["return", "signal", "throw"] {
         for osr in [false, true] {
-            let mut ctx = Context::new();
+            let mut ctx = Context::new(crate::test_utils::unit_runtime());
             ctx.eval_str("(setq osr-bound 17 osr-outer 23)").unwrap();
             let outer_base = ctx.specpdl.len();
             ctx.try_specbind(intern("osr-outer"), Value::make_int(29))
@@ -418,7 +418,7 @@ fn osr_binding_frame_exit_unwinds_inherited_and_new_binds_for_each_outcome() {
 
 #[test]
 fn osr_binding_transfer_from_iterative_child_preserves_callers_binding() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str("(setq osr-bound 17 osr-outer 23)").unwrap();
     let child = Value::make_bytecode(binding_sum(true));
     child

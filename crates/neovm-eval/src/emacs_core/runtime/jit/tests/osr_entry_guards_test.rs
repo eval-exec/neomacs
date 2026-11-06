@@ -64,7 +64,7 @@ fn install_bindings(ctx: &mut Context) -> (usize, usize) {
 
 #[test]
 fn osr_entry_guard_checks_each_snapshot_before_effects_and_keeps_unknown_heap_slots() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let (outer, borrowed) = install_bindings(&mut ctx);
     let spec_depth = ctx.specpdl.len();
     let f = effect_before_numeric_loop();
@@ -131,7 +131,7 @@ fn osr_entry_guard_checks_each_snapshot_before_effects_and_keeps_unknown_heap_sl
 #[test]
 fn osr_entry_guard_keeps_heap_operands_through_native_and_resumed_watched_store_gc() {
     for guard_fails in [true, false] {
-        let mut ctx = Context::new();
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
         let (outer, borrowed) = install_bindings(&mut ctx);
         ctx.eval_str(
             "(progn
@@ -222,7 +222,7 @@ fn osr_entry_guard_keeps_heap_operands_through_native_and_resumed_watched_store_
 #[test]
 fn osr_entry_guard_does_not_infer_a_type_from_a_patched_constant_prefix() {
     for patched in [false, true] {
-        let mut ctx = Context::new();
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
         let (outer, borrowed) = install_bindings(&mut ctx);
         let f = effect_before_numeric_loop();
         if patched {

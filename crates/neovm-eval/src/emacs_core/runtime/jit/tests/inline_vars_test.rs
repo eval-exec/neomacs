@@ -217,7 +217,7 @@ fn observe(ev: &mut Context, var: &str) -> String {
 fn fixture() -> Context {
     use crate::emacs_core::defvar_bool::ByteBooleanVars;
     use neovm_value::forward::alloc_objfwd;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     crate::emacs_core::jit::cache::clear();
     // A fresh context's bind stack has no capacity yet; an inline bind never
     // grows it (its first push is the shim's), and a session's first `let`

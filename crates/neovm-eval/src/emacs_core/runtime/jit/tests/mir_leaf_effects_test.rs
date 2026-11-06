@@ -46,7 +46,7 @@ fn compile(ev: &Context, f: &ByteCodeFunction, effects: bool, leaf: LeafKnob) ->
 /// are not.
 #[test]
 fn opcode_site_effects_follow_the_lowering() {
-    let _ev = Context::new();
+    let _ev = Context::new(crate::test_utils::unit_runtime());
     let forbidden = Effects::MAY_GC
         .with(Effects::MAY_REENTER)
         .with(Effects::MAY_DEOPT);
@@ -150,7 +150,7 @@ fn a_leaf_call_admits_a_loop_into_the_mir_tier() {
     let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
         crate::emacs_core::jit::compile::OptMode::Legacy,
     );
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     let f = nth_loop();
     let list = ev.eval_str("(list 1 2 3)").expect("list");
@@ -211,7 +211,7 @@ fn a_leaf_call_keeps_raw_values_raw() {
     let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
         crate::emacs_core::jit::compile::OptMode::Legacy,
     );
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context as *mut u8;
     let f = function(
         vec![

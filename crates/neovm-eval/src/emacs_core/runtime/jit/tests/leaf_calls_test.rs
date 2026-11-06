@@ -123,7 +123,7 @@ const OPERANDS: &[&str] = &[
 /// interpreter's arm: the same value or signal, and the trampoline ran.
 #[test]
 fn opcode_leaf_sites_match_the_interpreter() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str("(put 'leaf-sym 'a 'prop-a)").expect("plist");
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let list = eval
@@ -163,7 +163,7 @@ fn opcode_leaf_sites_match_the_interpreter() {
 /// same answers, and no trampoline runs.
 #[test]
 fn knob_off_keeps_the_table_shims() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let f = opcode_fn(Op::Nth, 2);
     let leaf = compile_with_knob(&f, LeafKnob::OFF);
@@ -193,7 +193,7 @@ fn knob_off_keeps_the_table_shims() {
 /// `NEOVM_JIT_LEAF_ONLY` restricts leaf sites to the named leaves.
 #[test]
 fn leaf_only_filter_restricts_the_sites() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     force_leaf_only_for_test(Some(&["length"]));
     let nth = compile_with_knob(&opcode_fn(Op::Nth, 2), LeafKnob::ALL);
@@ -254,7 +254,7 @@ fn leaf_knob_parses() {
 /// reachable from its opcode.
 #[test]
 fn trampolines_call_their_spec_bodies() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str("(put 'leaf-sym 'a 'prop-a)").expect("plist");
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let list = eval
@@ -402,7 +402,7 @@ fn trampolines_call_their_spec_bodies() {
 ///     (lambda (n l) (condition-case err (nth n l) (error (list 'caught err))))
 #[test]
 fn leaf_signals_are_caught_by_a_leaf_local_handler() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     for (op, nargs) in [(Op::Nth, 2u32), (Op::Length, 1), (Op::Get, 2)] {
         let mut ops = vec![Op::PushConditionCase(0)];
@@ -444,7 +444,7 @@ fn leaf_signals_are_caught_by_a_leaf_local_handler() {
 ///     (lambda (n l) (let ((h (cons 1 2))) (condition-case nil (nth n l) (error h))))
 #[test]
 fn leaf_site_signal_edge_keeps_the_residual_alive() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let mut ops = vec![
         Op::Constant(0),          // [n l 1]
@@ -559,7 +559,7 @@ fn leaf_guard_miss(id: LeafId) -> u64 {
 /// PREDICATE), which the reference protocol answers.
 #[test]
 fn bcall_leaf_sites_match_the_protocol_call() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str(
         "(progn
            (define-hash-table-test 'leaf-site-test
@@ -665,7 +665,7 @@ fn install_frame_probe(ev: &mut Context, target: &str) {
 /// as the interpreter shows it. The specpdl is balanced afterwards.
 #[test]
 fn a_leaf_signal_runs_under_the_builtins_frame() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     install_frame_probe(&mut ev, "gethash");
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
     for nargs in [2usize, 3] {
@@ -696,7 +696,7 @@ fn a_leaf_signal_runs_under_the_builtins_frame() {
 /// reference protocol calls the new definition; restoring re-arms.
 #[test]
 fn a_redefined_builtin_runs_from_a_leaf_site() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
     let f = bcall_fn("gethash", 2);
     let leaf = compile_bcall_with_knob(&ev, &f, bcall_knob());
@@ -731,7 +731,7 @@ fn a_redefined_builtin_runs_from_a_leaf_site() {
 #[test]
 fn the_bcall_guard_declines_every_observable_protocol_step() {
     use super::leaf_abi::neovm_leaf_bcall_gethash as tramp;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let table = ev
         .eval_str("(let ((h (make-hash-table))) (puthash 1 'one h) h)")
         .expect("table");
@@ -813,7 +813,7 @@ fn the_bcall_guard_declines_every_observable_protocol_step() {
 ///     (lambda (k h) (let ((r (cons 1 2))) (condition-case nil (gethash k h) (error r))))
 #[test]
 fn a_bcall_leaf_signal_edge_keeps_the_residual_alive() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
     let mut ops = vec![
         Op::Constant(0),          // [k h 1]
@@ -870,7 +870,7 @@ fn a_bcall_leaf_signal_edge_keeps_the_residual_alive() {
 /// leaf (and nothing else changes: `vars` alone leaves `nth` on its shim).
 #[test]
 fn the_vars_part_gates_the_variable_leaves() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str("(defvar leaf-vars-probe 'probed)")
         .expect("defvar");
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
@@ -927,7 +927,7 @@ fn the_vars_part_gates_the_variable_leaves() {
 /// from a buffer with its own bindings and one without.
 #[test]
 fn buffer_local_value_bcall_sites_match_the_protocol_call() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str(
         "(progn
            (defvar leaf-plain 'plain)
@@ -1002,7 +1002,7 @@ fn buffer_local_value_bcall_sites_match_the_protocol_call() {
 /// bounce. Each case evaluates its arguments afresh (`delq` unlinks).
 #[test]
 fn batch_bcall_sites_match_the_protocol_call() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str("(defvar leaf-batch-bound 1)").expect("defvar");
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
     /// `(builtin, leaf, nargs, argument sources)`.
@@ -1109,7 +1109,7 @@ fn ev_list(ev: &mut Context, source: &str) -> Vec<Value> {
 /// With the `bcall` part off, the same site takes the protocol shim.
 #[test]
 fn bcall_knob_off_keeps_the_protocol_shim() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
     let f = bcall_fn("gethash", 2);
     let leaf = compile_bcall_with_knob(
@@ -1138,7 +1138,7 @@ fn bcall_knob_off_keeps_the_protocol_shim() {
 /// debug builds, and the words survive the calls.
 #[test]
 fn subr_site_slots_keep_their_binding_words() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
     let f = bcall_fn("gethash", 2);
     let leaf = compile_bcall_with_knob(&ev, &f, bcall_knob());

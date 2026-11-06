@@ -50,7 +50,7 @@ fn two_calls(tail: bool) -> ByteCodeFunction {
 fn a_tail_call_stores_no_residual_and_other_calls_still_do() {
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
     force_tail_unrooted_for_test(Some(true));
-    let ev = Context::new();
+    let ev = Context::new(crate::test_utils::unit_runtime());
     let before = tail_calls_unrooted();
     let leaf =
         compile_bytecode_function_with(&two_calls(true), Some(&ev.obarray)).expect("compiles");

@@ -34,7 +34,7 @@ fn mir_call_retains_native_callee_slots_and_revalidates_redefinition() {
         crate::emacs_core::jit::compile::OptMode::Legacy,
     );
     force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // A multi-block callee is not eligible for the small MIR inliner.
     let sym = install(
         &mut ev,
@@ -118,7 +118,7 @@ fn mir_call_predicate_and_bytecode_fallbacks_preserve_live_heap_roots() {
         crate::emacs_core::jit::compile::OptMode::Legacy,
     );
     force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str("(fset 'mir-call-recordp (symbol-function 'recordp))")
         .unwrap();
     let collect = install(
@@ -189,7 +189,7 @@ fn mir_call_loop_observes_subr_redefinition_from_a_gc_hook() {
     let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
         crate::emacs_core::jit::compile::OptMode::Legacy,
     );
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str(
         "(insert \"abc\") (goto-char 2)
         (fset 'mir-call-point (symbol-function 'point))",
@@ -237,7 +237,7 @@ fn mir_call_precise_exit_does_not_repeat_the_callee_side_effect() {
     let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
         crate::emacs_core::jit::compile::OptMode::Legacy,
     );
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str("(setq mir-call-v 0 mir-call-count 0)
         (add-variable-watcher 'mir-call-v (lambda (&rest _) (setq mir-call-count (1+ mir-call-count))))").unwrap();
     let callee = install(
@@ -290,7 +290,7 @@ fn mir_call_observability_matches_the_interpreter() {
     ] {
         let mut observations = Vec::new();
         for native in [false, true] {
-            let mut ev = Context::new();
+            let mut ev = Context::new(crate::test_utils::unit_runtime());
             ev.eval_str("(insert \"abc\") (goto-char 2)
                 (fset 'mir-call-state-point (symbol-function 'point))
                 (setq mir-call-debug-count 0

@@ -51,7 +51,7 @@ fn interp(ev: &mut Context, f: &ByteCodeFunction, args: Vec<Value>) -> String {
 #[test]
 fn a_fused_body_runs_as_the_call_did() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let cases: Vec<(&str, ByteCodeFunction)> = vec![
         // (lambda (x) (1+ x))
         (
@@ -140,7 +140,7 @@ fn an_inlined_call_runs_and_deopts_as_the_interpreter_does() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
     crate::emacs_core::jit::inline::force_inline_for_test(Some(true));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // (lambda (x) (if (> x 10) (- x 10) x))
     let callee = lexical_fn(
         1,
@@ -249,7 +249,7 @@ fn a_deopt_after_a_spliced_region_resumes_the_original_body() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
     crate::emacs_core::jit::inline::force_inline_for_test(Some(true));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let (caller, _callee_value) = caller_with_a_guard_after_the_call();
     let interp_only = caller.clone();
     let caller_value = Value::make_bytecode(caller);
@@ -304,7 +304,7 @@ fn a_spliced_region_rechecks_the_callee_it_speculated_on() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
     crate::emacs_core::jit::inline::force_inline_for_test(Some(true));
-    let ev = Context::new();
+    let ev = Context::new(crate::test_utils::unit_runtime());
     // (lambda (x) x): no arithmetic, no car/cdr — nothing that guards.
     let callee = lexical_fn(1, vec![Op::StackRef(0), Op::Return], vec![]);
     callee.jit_runtime().set_hot_for_test();
@@ -353,7 +353,7 @@ fn a_spliced_region_rechecks_the_callee_it_speculated_on() {
 fn an_inadmissible_shape_is_left_as_a_call() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::inline::force_inline_for_test(Some(true));
-    let _ev = Context::new();
+    let _ev = Context::new(crate::test_utils::unit_runtime());
     let fuse_with = |callee_ops: Vec<Op>, caller_extra: Vec<Op>| {
         let callee = lexical_fn(1, callee_ops, vec![]);
         callee.jit_runtime().set_hot_for_test();
@@ -416,7 +416,7 @@ fn an_inadmissible_shape_is_left_as_a_call() {
 #[test]
 fn a_splice_that_would_overflow_the_constant_pool_is_left_as_a_call() {
     crate::test_utils::init_test_tracing();
-    let _ev = Context::new();
+    let _ev = Context::new(crate::test_utils::unit_runtime());
     let callee = lexical_fn(
         1,
         vec![Op::StackRef(0), Op::Constant(2), Op::Add, Op::Return],
@@ -467,7 +467,7 @@ fn a_caller_handler_catches_in_the_original_body_after_a_deopt() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
     crate::emacs_core::jit::inline::force_inline_for_test(Some(true));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // (lambda (x) (1+ x))
     let callee = lexical_fn(1, vec![Op::StackRef(0), Op::Add1, Op::Return], vec![]);
     callee.jit_runtime().set_hot_for_test();
@@ -553,7 +553,7 @@ fn a_caller_handler_catches_in_the_original_body_after_a_deopt() {
 fn classic_fuser_capture_ignores_unused_vector_constant() {
     use neovm_value::tagged::collection_reads::capture;
 
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let unused = Value::vector(vec![Value::NIL]);
     ev.bc_buf.push(unused);
     let constants = vec![Value::symbol("fuser-preflight-symbol-only"), unused];
@@ -604,7 +604,7 @@ fn classic_fuser_no_call_switch_still_hydrates_parked_table() {
     }
 
     for reachability in SwitchReachability::iter() {
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         let table = Value::hash_table(HashTableTest::Eq);
         ev.bc_buf.push(table);
         let key = Value::make_int(7);

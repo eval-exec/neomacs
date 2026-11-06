@@ -87,7 +87,7 @@ fn inline_v2_knob_modes_are_default_off() {
 #[test]
 fn inline_v2_side_tables_preserve_the_legacy_splice() {
     let _knobs = Knobs::enter(Inline2Mode::All);
-    let _ev = Context::new();
+    let _ev = Context::new(crate::test_utils::unit_runtime());
     let f = caller(lexical(
         1,
         vec![
@@ -139,7 +139,7 @@ fn inline_v2_refuses_legacy_mir_and_resumes_inner_chain() {
             ..Default::default()
         },
     );
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let f = caller(lexical(
         1,
         vec![Op::StackRef(0), Op::Add1, Op::Return],
@@ -178,7 +178,7 @@ fn inline_v2_refuses_legacy_mir_and_resumes_inner_chain() {
 #[test]
 fn inline_v2_off_clif_matches_the_legacy_fuser_corpus() {
     let _knobs = Knobs::enter(Inline2Mode::Off);
-    let ev = Context::new();
+    let ev = Context::new(crate::test_utils::unit_runtime());
     let corpus = [
         lexical(1, vec![Op::StackRef(0), Op::Add1, Op::Return], vec![]),
         lexical(

@@ -52,7 +52,7 @@ fn mir_inline_identity_rechecks_after_a_variable_watcher() {
     let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
         crate::emacs_core::jit::compile::OptMode::Legacy,
     );
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str(
         "(setq mir-inline-v 0 mir-inline-effects 0)
         (add-variable-watcher 'mir-inline-v (lambda (&rest _)
@@ -110,7 +110,7 @@ fn mir_inline_identity_honors_debug_override_quit_and_depth() {
         "throw-on-input",
         "max-lisp-eval-depth",
     ] {
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         let id = Value::symbol("mir-inline-flags-id");
         let callee = function(vec![Op::StackRef(0), Op::Return], vec![], 1);
         ev.obarray.set_symbol_function_id(
@@ -173,7 +173,7 @@ fn mir_inline_identity_deopts_on_each_asynchronous_source() {
     );
     use crate::emacs_core::eval::{ASYNC_ATTENTION, AsyncSource, QuitRequest};
     for source in ["profiler-tick", "os-signal", "quit-request"] {
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         let id = Value::symbol("mir-inline-async-id");
         let callee = function(vec![Op::StackRef(0), Op::Return], vec![], 1);
         ev.obarray.set_symbol_function_id(
@@ -239,7 +239,7 @@ fn mir_inline_guard_reconstructs_a_virtual_argument() {
     let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
         crate::emacs_core::jit::compile::OptMode::Legacy,
     );
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str(
         "(setq mir-inline-pair-v 0 mir-inline-pair-effects 0)
         (add-variable-watcher 'mir-inline-pair-v (lambda (&rest _)
@@ -303,7 +303,7 @@ fn mir_inline_keeps_a_callees_non_fixnum_feedback_on_the_native_call_path() {
         (NumericFeedback::Other, false),
         (NumericFeedback::FixnumOnly, true),
     ] {
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         let sym = Value::symbol("mir-inline-float-step");
         let callee = function(
             vec![

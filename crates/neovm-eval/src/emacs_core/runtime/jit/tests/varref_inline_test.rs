@@ -67,7 +67,7 @@ fn eval_ok(eval: &mut Context, src: &str) {
 
 #[test]
 fn every_symbol_shape_reads_as_the_interpreter_reads_it() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     eval_ok(
         &mut eval,
@@ -135,7 +135,7 @@ fn every_symbol_shape_reads_as_the_interpreter_reads_it() {
 /// obarray grew by several chunks still reads its symbol's cell.
 #[test]
 fn reads_survive_obarray_growth_and_absent_symbols() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let absent = Value::from_sym_id(neovm_value::intern::intern("vri-interned-globally-only"));
     let f = reader(absent);
@@ -174,7 +174,7 @@ fn reads_survive_obarray_growth_and_absent_symbols() {
 /// `(lambda () (condition-case err vri-void (void-variable (list 'caught err))))`
 #[test]
 fn a_void_variable_reaches_a_leaf_local_handler() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     eval_ok(&mut eval, "(defvar vri-void)");
     let f = body(
@@ -214,7 +214,7 @@ fn a_void_variable_reaches_a_leaf_local_handler() {
 #[test]
 fn a_later_call_site_roots_what_only_the_varref_shim_stored() {
     super::force_profit_gate_for_test(false);
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     eval_ok(
         &mut eval,
@@ -256,7 +256,7 @@ fn a_later_call_site_roots_what_only_the_varref_shim_stored() {
 
 #[test]
 fn raw_varref_preserves_integer_values_across_inline_and_fallback_reads() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval_ok(
         &mut eval,
         "(progn (defvar raw-vri-plain 7)
@@ -303,7 +303,7 @@ fn raw_varref_preserves_integer_values_across_inline_and_fallback_reads() {
 
 #[test]
 fn raw_varref_signal_handler_receives_tagged_residual_values() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval_ok(&mut eval, "(defvar raw-vri-void)");
     let mut f = body(
         vec![
@@ -343,7 +343,7 @@ fn raw_varref_signal_handler_receives_tagged_residual_values() {
 #[test]
 fn raw_varref_keeps_heap_roots_live_at_a_later_collecting_call() {
     super::force_profit_gate_for_test(false);
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval_ok(
         &mut eval,
         "(progn (defvar raw-vri-gc 3)
@@ -393,7 +393,7 @@ fn raw_varref_keeps_heap_roots_live_at_a_later_collecting_call() {
 
 #[test]
 fn reused_alias_reader_observes_retargeting_and_contextual_values() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval_ok(
         &mut eval,
         "(progn (defvar vri-alias-first 42)
@@ -473,7 +473,7 @@ fn reused_alias_reader_observes_retargeting_and_contextual_values() {
 
 #[test]
 fn aliases_of_buffer_identities_keep_original_name_context() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval_ok(
         &mut eval,
         "(progn (defvar vri-identity-target 7)
@@ -514,7 +514,7 @@ fn aliases_of_buffer_identities_keep_original_name_context() {
 
 #[test]
 fn reused_local_reader_observes_cache_misses_writes_and_unbinding() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval_ok(
         &mut eval,
         "(progn (set-buffer (get-buffer-create \" *vri-cache-a*\"))

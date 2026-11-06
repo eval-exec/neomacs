@@ -215,7 +215,7 @@ const GNU_ASSQ: [[[i8; 8]; 6]; 2] = [
 /// the shim's answer and the builtin's answer must both be GNU's.
 #[test]
 fn shim_answers_gnus_positioned_symbol_matrix() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     for op in [false, true] {
         let expected = if op { &GNU_ASSQ } else { &GNU_MEMQ };
@@ -254,7 +254,7 @@ fn shim_answers_gnus_positioned_symbol_matrix() {
 /// fast walk. `ARRAY_SHIM_SLOW_CALLS` counts the shim's builtin fallbacks.
 #[test]
 fn swp_walk_refuses_only_the_unbounded_shapes() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     eval.symbols_with_pos_enabled = true;
     // target, list, builtin fallback -- `memq` matches list cells, `assq`
@@ -379,7 +379,7 @@ fn swp_walk_refuses_only_the_unbounded_shapes() {
 /// it is off. Both intrinsic modes and both leaf knobs.
 #[test]
 fn compiled_sites_reach_the_shims_fast_walk_under_positions() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let short = eval.eval_str("'(x y z)").expect("short");
     let alist = eval.eval_str("'((x . 1) (y . 2))").expect("alist");
@@ -473,7 +473,7 @@ fn compiled_sites_reach_the_shims_fast_walk_under_positions() {
 /// rule.
 #[test]
 fn observed_walks_answer_like_unobserved_ones() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let cases: &[(&str, &str)] = &[
         ("'alpha", "(list 'qa 'alpha 'qb)"),
@@ -520,7 +520,7 @@ fn observed_walks_answer_like_unobserved_ones() {
 /// The direct shim answers agree with the interpreter's opcode arm as well.
 #[test]
 fn shim_answers_match_the_opcode_arm() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     for op in [false, true] {
         let f = search_fn(if op { Op::Assq } else { Op::Memq });
@@ -553,7 +553,7 @@ fn shim_answers_match_the_opcode_arm() {
 #[test]
 fn memq_continuation_answers_like_the_full_scan() {
     use crate::emacs_core::builtins::{builtin_memq_values, builtin_memq_values_from};
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     // `LIST_SHIM_FAST_STEPS` is the dispatch module's constant (64, asserted
     // by `swp_walk_refuses_only_the_unbounded_shapes`' 63/64 cases).
     const FAST_STEPS: usize = 64;

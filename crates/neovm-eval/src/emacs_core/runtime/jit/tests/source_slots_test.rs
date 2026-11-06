@@ -154,7 +154,7 @@ fn declined() -> u64 {
 #[test]
 fn instances_of_the_recorded_source_call_through_the_slot() {
     on(true);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let proto = adder(1);
     arm(&mut ev, &proto);
     let caller = funcall_caller();
@@ -191,7 +191,7 @@ fn instances_of_the_recorded_source_call_through_the_slot() {
 #[test]
 fn other_callees_miss_to_the_generic_call() {
     on(true);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let proto = adder(1);
     arm(&mut ev, &proto);
     let caller = funcall_caller();
@@ -241,7 +241,7 @@ fn declined_calls_answer_like_the_generic_call() {
     };
     // Knob off: the reference answers.
     off();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let proto = adder(1);
     arm(&mut ev, &proto);
     let caller = funcall_caller();
@@ -283,7 +283,7 @@ fn a_wrong_argument_count_signals_like_the_generic_call() {
         )
     };
     off();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let proto = adder(1);
     arm(&mut ev, &proto);
     let plain = caller0();
@@ -303,7 +303,7 @@ fn a_wrong_argument_count_signals_like_the_generic_call() {
 #[test]
 fn only_a_monomorphic_source_gets_a_slot() {
     on(true);
-    let ev = Context::new();
+    let ev = Context::new(crate::test_utils::unit_runtime());
     let caller = funcall_caller();
     record(&caller, 2, Value::make_bytecode(adder(1)));
     record(&caller, 2, Value::make_bytecode(adder(2)));
@@ -330,7 +330,7 @@ fn source_slot(leaf: &CompiledLeaf) -> &SpecSlot {
 fn with_direct_calls_instances_enter_the_leaf_from_the_site() {
     on(true);
     force_direct_call_for_test(Some(true));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let proto = adder(1);
     arm(&mut ev, &proto);
     let caller = funcall_caller();
@@ -398,7 +398,7 @@ fn with_direct_calls_instances_enter_the_leaf_from_the_site() {
 fn with_direct_calls_an_inexact_callee_keeps_the_shim() {
     on(true);
     force_direct_call_for_test(Some(true));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // (lambda (x &optional y) x): the site passes one argument.
     let proto = {
         let mut f = ByteCodeFunction::new(LambdaParams {
@@ -438,7 +438,7 @@ fn with_direct_calls_an_inexact_callee_keeps_the_shim() {
 fn the_slot_remembers_its_leaf_and_re_arms_on_a_new_epoch() {
     on(true);
     force_direct_call_for_test(Some(false));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let proto = adder(1);
     arm(&mut ev, &proto);
     let caller = funcall_caller();

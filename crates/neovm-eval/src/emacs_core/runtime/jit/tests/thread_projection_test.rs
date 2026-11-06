@@ -35,7 +35,7 @@ const SHAPES: &[(&str, &str)] = &[
 
 fn fixture() -> Context {
     use crate::emacs_core::defvar_bool::ByteBooleanVars;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     crate::emacs_core::jit::cache::clear();
     ev.obarray.intern("tpj-obj");
     ev.obarray

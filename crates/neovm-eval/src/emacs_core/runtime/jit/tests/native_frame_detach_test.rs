@@ -136,7 +136,7 @@ fn contained_panic_detaches_native_frames_before_the_caller_exits() {
     force_profit_gate_for_test(false);
     for nargs in [0usize, 2, 3] {
         for framed in [false, true] {
-            let mut ev = Context::new();
+            let mut ev = Context::new(crate::test_utils::unit_runtime());
             ev.gc_collect_exact();
             let ctx_ptr = &mut ev as *mut Context as *mut u8;
             let name = format!("neo-detach-callee-{nargs}-{framed}");
@@ -256,7 +256,7 @@ fn a_leaked_cleanup_after_a_contained_panic_reads_only_detached_frames() {
     crate::test_utils::init_test_tracing();
     force_profit_gate_for_test(false);
     for nargs in [2usize, 3] {
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         // A first collection outside native code moves the JIT cache onto
         // this Context's heap (the stress collections below run under native
         // leaves, where the cache must not be cleared).
@@ -329,7 +329,7 @@ fn a_leaked_cleanup_after_a_contained_panic_reads_only_detached_frames() {
 #[test]
 fn a_panic_unwinding_through_a_native_pusher_detaches_its_frame() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
     let func = Value::symbol("neo-detach-unwound");
     fn shim(ctx: *mut u8, func: Value, args_ptr: *const i64, nargs: usize) -> i64 {
@@ -366,7 +366,7 @@ fn apply_native_callee_frame_owns_its_spread_arguments() {
     use crate::emacs_core::bytecode::vm::{APPLY_CALLEE_FRAME_BORROWS, APPLY_NATIVE_CALLS};
     crate::test_utils::init_test_tracing();
     force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     for nargs in [2usize, 3, 5] {
         let f = function(nargs, vec![Op::List(nargs as u16), Op::Return], vec![]);
         f.jit_runtime().set_hot_for_test();

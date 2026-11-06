@@ -183,7 +183,7 @@ fn copy_tree(v: Value) -> Value {
 /// symbols-with-pos check, an immediate key taken for a heap one.
 #[test]
 fn inline_dispatch_answers_like_the_lookup_for_every_table_shape() {
-    let mut ctx = Context::new_minimal_vm_harness();
+    let mut ctx = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let (a, b, c) = (sym("a"), sym("b"), sym("c"));
     let many: Vec<Value> = (0..12).map(|n| sym(&format!("jit-swi-{n}"))).collect();
     let fixnums = |ns: &[i64]| -> Vec<Value> { ns.iter().map(|&n| Value::fixnum(n)).collect() };
@@ -317,7 +317,7 @@ fn inline_dispatch_answers_like_the_lookup_for_every_table_shape() {
 /// the body but no key targeted it) still raises the stale-table signal.
 #[test]
 fn a_changed_table_is_answered_by_the_shim() {
-    let mut ctx = Context::new_minimal_vm_harness();
+    let mut ctx = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ctx as *mut Context as *mut u8;
     let (a, b, c) = (sym("a"), sym("b"), sym("c"));
     let eq = HashTableTest::Eq;
@@ -377,7 +377,7 @@ fn a_changed_table_is_answered_by_the_shim() {
 /// under eq, at every level under equal. With it off, the same values miss.
 #[test]
 fn an_inline_miss_asks_the_shim_under_symbols_with_pos() {
-    let mut ctx = Context::new_minimal_vm_harness();
+    let mut ctx = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let (a, b) = (sym("a"), sym("b"));
     let pa = ctx.tagged_heap.alloc_symbol_with_pos(a, Value::fixnum(3));
     let pb = ctx.tagged_heap.alloc_symbol_with_pos(b, Value::fixnum(5));
@@ -411,7 +411,7 @@ fn an_inline_miss_asks_the_shim_under_symbols_with_pos() {
 /// every switch to the shim alone, answering the same.
 #[test]
 fn the_knob_off_keeps_the_shim_alone() {
-    let mut ctx = Context::new_minimal_vm_harness();
+    let mut ctx = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let (a, b) = (sym("a"), sym("b"));
     let table = jump_table(HashTableTest::Equal, &[(list(&[a, b]), 0), (a, 1)]);
     force_inline_switch_for_test(Some(false));
@@ -434,7 +434,7 @@ fn a_weak_table_keeps_the_shim() {
     let before = inline_switch_sites_for_test();
     let leaf = dispatch_leaf(table, 1);
     assert_eq!(inline_switch_sites_for_test(), before);
-    let mut ctx = Context::new_minimal_vm_harness();
+    let mut ctx = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     assert_eq!(
         leaf.call(&mut ctx as *mut Context as *mut u8, &[a]),
         NativeRun::Ok(Value::fixnum(0).bits())

@@ -43,7 +43,7 @@ fn function(ops: Vec<Op>, constants: Vec<Value>) -> Value {
     Value::make_bytecode(f)
 }
 fn fixture(prefix: &str) -> (Context, [SymId; 2], [Value; 2], [Value; 2], Value) {
-    let mut ctx = Context::new_minimal_vm_harness();
+    let mut ctx = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     // Established native-only fixture cleanup, before test roots/definitions.
     ctx.set_variable("window-dead-windows-table", Value::NIL);
     ctx.gc_collect_exact();

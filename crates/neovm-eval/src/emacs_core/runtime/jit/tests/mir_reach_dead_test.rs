@@ -98,7 +98,7 @@ fn jit_mir_reach_dead_tiers_a_named_let_body_to_mir() {
     );
     force_deopt_for_test(false);
     observe_stats();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let f = named_let();
 
     force_mir_reach_for_test(Some(MirReach::OFF));
@@ -137,7 +137,7 @@ fn jit_mir_reach_dead_named_let_under_forced_deopt() {
     );
     force_deopt_for_test(true);
     force_mir_reach_for_test(Some(DEAD));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let f = named_let();
     let leaf = compile_bytecode_function_with(&f, None).expect("compiles");
     assert_eq!(leaf.tier().name(), "mir");

@@ -160,7 +160,7 @@ fn knob_off_emits_no_intrinsic() {
 /// closures and non-sequences -- to the call.
 #[test]
 fn length_intrinsic_matches_blength() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
     // (source, answered inline)
     let cases: &[(&str, bool)] = &[
@@ -232,7 +232,7 @@ fn constant_index_fn(op: Op, k: Value) -> ByteCodeFunction {
 /// nothing) over list shapes, natively against the opcode arm.
 #[test]
 fn constant_index_intrinsics_match_their_opcode_arms() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
     let lists = operands(
         &mut ev,
@@ -306,7 +306,7 @@ fn a_dynamic_index_emits_no_intrinsic() {
 /// reach the call.
 #[test]
 fn list_search_intrinsics_match_their_opcode_arms() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
     let keys = operands(
         &mut ev,
@@ -391,7 +391,7 @@ fn list_search_intrinsics_match_their_opcode_arms() {
 /// call. Either way the answer is `Bmember`'s.
 #[test]
 fn member_with_a_constant_key() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
     let lists = operands(&mut ev, &["'(a \"s\" 1.5 7 k)", "'(1 2)", "nil"]);
     let keys = operands(&mut ev, &["\"s\"", "1.5", "'k", "7"]);
@@ -430,7 +430,7 @@ fn member_with_a_constant_key() {
 /// symbols with position and non-symbols reach the call.
 #[test]
 fn symbol_value_intrinsic_matches_bsymbol_value() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str(
         "(progn
            (defvar leaf-iv-plain 'plain)
@@ -493,7 +493,7 @@ fn symbol_value_intrinsic_matches_bsymbol_value() {
 /// non-symbol emits nothing.
 #[test]
 fn symbol_value_of_a_constant() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str("(defvar leaf-iv-const 'const-value)")
         .expect("defvar");
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
@@ -536,7 +536,7 @@ fn symbol_value_of_a_constant() {
 /// a plain variable.
 #[test]
 fn varref_keeps_its_inline_read() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str("(defvar leaf-iv-ref 'ref-value)")
         .expect("defvar");
     let ctx_ptr = &mut ev as *mut Context as *mut u8;

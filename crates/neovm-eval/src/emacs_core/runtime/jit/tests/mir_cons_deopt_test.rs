@@ -21,7 +21,7 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
 
 #[test]
 fn mir_cons_precise_frames_preserve_aliases_and_completed_effects() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str("(setq mir-rebuild-v 0 mir-rebuild-count 0) (add-variable-watcher 'mir-rebuild-v (lambda (&rest _) (setq mir-rebuild-count (1+ mir-rebuild-count))))").unwrap();
     let f = function(
         vec![
@@ -127,7 +127,7 @@ fn mir_singleton_block_local_loop_allocation_count() {
 }
 
 fn assert_block_local_loop_allocation_count(singleton: bool) {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let mut ops = vec![
         Op::Constant(0),
         Op::StackRef(1),
@@ -164,7 +164,7 @@ fn assert_block_local_loop_allocation_count(singleton: bool) {
 
 #[test]
 fn mir_singleton_precise_frames_preserve_aliases_and_completed_effects() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str("(setq mir-list-v 0 mir-list-count 0) (add-variable-watcher 'mir-list-v (lambda (&rest _) (setq mir-list-count (1+ mir-list-count))))").unwrap();
     let f = function(
         vec![
@@ -227,7 +227,7 @@ fn mir_singleton_precise_frames_preserve_aliases_and_completed_effects() {
 
 #[test]
 fn mir_singleton_escaping_lists_preserve_freshness_elements_and_mutation() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let element = ev.eval_str("(list \"payload\")").unwrap();
     let f = function(vec![Op::StackRef(0), Op::List(1), Op::Return], vec![], 1);
     let m = mir::build_mir(&f.ops, &f.constants, None, 1).unwrap();
@@ -272,7 +272,7 @@ fn mir_singleton_escaping_lists_preserve_freshness_elements_and_mutation() {
 
 #[test]
 fn mir_empty_list_preserves_the_residual_stack() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let element = ev.eval_str("\"payload\"").unwrap();
     for (ops, expected) in [
         (vec![Op::List(0), Op::Return], Value::NIL),
@@ -290,7 +290,7 @@ fn mir_empty_list_preserves_the_residual_stack() {
 
 #[test]
 fn mir_singleton_precise_frame_preserves_a_heap_element() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str("(setq mir-list-heap-v 0)").unwrap();
     let f = function(
         vec![
