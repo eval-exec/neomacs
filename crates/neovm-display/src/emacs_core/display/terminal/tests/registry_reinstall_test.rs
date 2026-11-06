@@ -54,7 +54,7 @@ fn assert_deleted_terminal(ctx: &mut Context, deleted: Value) {
 fn deleted_terminal_stays_dead_after_context_reactivation() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let deleted =
         ensure_terminal_runtime_owner(1, "secondary-terminal", TerminalRuntimeConfig::inactive());
     let key = Value::symbol("terminal-reinstall-live-parameter");
@@ -64,7 +64,7 @@ fn deleted_terminal_stays_dead_after_context_reactivation() {
     builtin_delete_terminal(&mut ctx, vec![deleted]).expect("delete the secondary terminal");
     neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
 
-    let _other = Context::new();
+    let _other = Context::new(crate::test_utils::unit_runtime());
     ctx.setup_thread_locals();
     assert_deleted_terminal(&mut ctx, deleted);
     assert_eq!(
@@ -83,12 +83,12 @@ fn deleted_terminal_stays_dead_after_context_reactivation() {
 fn deleted_terminal_stays_dead_after_another_contexts_pdump_restore() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut original = Context::new();
+    let mut original = Context::new(crate::test_utils::unit_runtime());
     let deleted =
         ensure_terminal_runtime_owner(1, "secondary-terminal", TerminalRuntimeConfig::inactive());
     builtin_delete_terminal(&mut original, vec![deleted]).expect("delete secondary terminal");
 
-    let mut other = Context::new();
+    let mut other = Context::new(crate::test_utils::unit_runtime());
     let restored = clone_active_evaluator(&mut other).expect("restore another Context's pdump");
     original.setup_thread_locals();
     assert_deleted_terminal(&mut original, deleted);
@@ -100,7 +100,7 @@ fn deleted_terminal_stays_dead_after_another_contexts_pdump_restore() {
 fn deleted_initial_terminal_stays_dead_after_native_manager_reset() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let deleted = terminal_handle_value();
     builtin_delete_terminal(&mut ctx, vec![deleted, Value::T])
         .expect("force deletion of the initial terminal");
@@ -124,7 +124,7 @@ fn deleted_initial_terminal_stays_dead_after_native_manager_reset() {
 fn terminal_creation_order_survives_native_manager_rebuild_and_reactivation() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     // GNU prepends native terminals, then Fterminal_list conses them again:
     // Lisp sees oldest first, whereas the keyboard poll walks newest first.
     // Nonmonotonic ids also distinguish creation order from numeric sorting.
@@ -149,7 +149,7 @@ fn terminal_creation_order_survives_native_manager_rebuild_and_reactivation() {
         assert_eq!(live_terminal_ids_in_keyboard_poll_order(), poll_order);
     }
     neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
-    let _other = Context::new();
+    let _other = Context::new(crate::test_utils::unit_runtime());
     ctx.setup_thread_locals();
     assert_eq!(terminal_list_ids(), creation_order);
     assert_eq!(live_terminal_ids_in_keyboard_poll_order(), poll_order);
@@ -161,7 +161,7 @@ fn terminal_creation_order_survives_native_manager_rebuild_and_reactivation() {
 fn owner_reactivation_reconciles_peer_registry_changes() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let handle = current_terminal_registry_handle();
     // Simulate changes made to the shared registry while this owner's native
     // manager is parked: an added terminal, then a deletion and another add.

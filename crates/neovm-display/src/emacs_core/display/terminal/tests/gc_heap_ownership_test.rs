@@ -4,8 +4,8 @@ use super::*;
 /// A terminal cached by the second one is not a root of the first heap.
 #[test]
 fn terminal_gc_roots_exclude_another_live_heap() {
-    let collecting = Context::new();
-    let other = Context::new();
+    let collecting = Context::new(crate::test_utils::unit_runtime());
+    let other = Context::new(crate::test_utils::unit_runtime());
 
     let mut roots = Vec::new();
     collect_terminal_gc_roots(&mut roots, collecting.tagged_heap.identity());
@@ -25,7 +25,7 @@ fn terminal_gc_roots_exclude_another_live_heap() {
 /// them, even while the evaluator that supplied the old handle is alive.
 #[test]
 fn terminal_gc_handle_refreshes_when_the_active_heap_changes() {
-    let mut first = Context::new();
+    let mut first = Context::new(crate::test_utils::unit_runtime());
     let lifecycle = Rc::new(RefCell::new(Vec::new()));
     configure_terminal_runtime(TerminalRuntimeConfig::interactive(
         Some("xterm-256color".to_string()),
@@ -36,7 +36,7 @@ fn terminal_gc_handle_refreshes_when_the_active_heap_changes() {
     set_terminal_host(Box::new(RecordingTerminalHost {
         log: Rc::clone(&lifecycle),
     }));
-    let _other = Context::new();
+    let _other = Context::new(crate::test_utils::unit_runtime());
     first.setup_thread_locals();
 
     let handle = builtin_selected_terminal(vec![]).expect("selected terminal");
@@ -54,14 +54,14 @@ fn terminal_gc_handle_refreshes_when_the_active_heap_changes() {
 #[test]
 fn terminal_gc_parameters_are_cleared_after_their_heap_is_dropped() {
     {
-        let mut first = Context::new();
+        let mut first = Context::new(crate::test_utils::unit_runtime());
         let key = Value::symbol("terminal-gc-owned-parameter");
         let payload = Value::vector(vec![Value::fixnum(42)]);
         builtin_set_terminal_parameter(&mut first, vec![Value::NIL, key, payload])
             .expect("set terminal parameter");
     }
 
-    let mut next = Context::new();
+    let mut next = Context::new(crate::test_utils::unit_runtime());
     let key = Value::symbol("terminal-gc-owned-parameter");
     assert!(
         builtin_terminal_parameter(&mut next, vec![Value::NIL, key])

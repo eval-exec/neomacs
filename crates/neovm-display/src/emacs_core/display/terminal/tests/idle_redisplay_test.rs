@@ -21,7 +21,7 @@ fn resumed_tty_invalidates_idle_redisplay() {
     reset_terminal_thread_locals();
     crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(Some(true));
     let _fixture = TerminalIdleFixture;
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     configure_terminal_runtime(TerminalRuntimeConfig::interactive(
         Some("xterm-256color".to_owned()),
         neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(

@@ -97,7 +97,7 @@ impl DisplayHost for RecordingTerminalDisplayHost {
 fn public_terminal_builtins_route_typed_requests_through_the_display_host() {
     crate::test_utils::init_test_tracing();
     let host = RecordingTerminalDisplayHost::default();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_display_host(Box::new(host.clone()));
 
     let result = eval
@@ -173,7 +173,7 @@ fn public_terminal_builtins_route_typed_requests_through_the_display_host() {
 #[test]
 fn window_terminal_target_carries_the_current_buffer_identity() {
     let host = RecordingTerminalDisplayHost::default();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let owner = eval.buffers.current_buffer_id().expect("current buffer");
     eval.set_display_host(Box::new(host.clone()));
 
@@ -194,7 +194,7 @@ fn window_terminal_target_carries_the_current_buffer_identity() {
 fn invalid_lisp_terminal_values_never_reach_the_display_host() {
     crate::test_utils::init_test_tracing();
     let host = RecordingTerminalDisplayHost::default();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_display_host(Box::new(host.clone()));
 
     for form in [
@@ -220,7 +220,7 @@ fn invalid_lisp_terminal_values_never_reach_the_display_host() {
     assert!(TerminalFloatPlacement::new(0.0, 0.0, -0.1).is_none());
     assert!(TerminalFloatPlacement::new(0.0, 0.0, 1.1).is_none());
 
-    let mut no_host = Context::new();
+    let mut no_host = Context::new(crate::test_utils::unit_runtime());
     let result = no_host
         .eval_str("(condition-case err (neomacs-terminal-create 80 24 0) (error (car err)))")
         .expect("missing-host condition-case result");

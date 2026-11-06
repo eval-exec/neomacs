@@ -3,7 +3,7 @@ use neovm_eval::emacs_core::eval::Context;
 
 #[test]
 fn gc_tls_ownership_terminal_values_survive_owner_collection_and_reactivation() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let handle = terminal_handle_value();
     let key = Value::symbol("terminal-gc-moved-parameter");
     let child = Value::string("terminal payload belongs to its Context");
@@ -12,7 +12,7 @@ fn gc_tls_ownership_terminal_values_survive_owner_collection_and_reactivation() 
     let expected = [handle.bits(), payload.bits(), child.bits()];
     neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
 
-    let _other = Context::new();
+    let _other = Context::new(crate::test_utils::unit_runtime());
     ctx.setup_thread_locals();
     // Do not access terminal TLS before collecting: its original Values
     // must be retained by the owning Context, rather than another local view.
@@ -53,7 +53,7 @@ fn gc_tls_ownership_terminal_values_survive_owner_collection_and_reactivation() 
 
 #[test]
 fn gc_tls_ownership_terminal_handle_reset_keeps_same_heap_parameters() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let key = Value::symbol("terminal-gc-reset-parameter");
     let payload = Value::vector(vec![Value::fixnum(42)]);
     builtin_set_terminal_parameter(&mut ctx, vec![Value::NIL, key, payload]).unwrap();

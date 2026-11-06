@@ -107,7 +107,7 @@ impl TerminalHost for FailingDeleteTerminalHost {
 fn terminal_name_returns_string() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_terminal_name(&mut eval, vec![]).unwrap();
     assert_eq!(result, Value::string(TERMINAL_NAME));
 }
@@ -116,7 +116,7 @@ fn terminal_name_returns_string() {
 fn terminal_name_accepts_nil() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_terminal_name(&mut eval, vec![Value::NIL]).unwrap();
     assert_eq!(result, Value::string(TERMINAL_NAME));
 }
@@ -125,7 +125,7 @@ fn terminal_name_accepts_nil() {
 fn terminal_list_returns_singleton_list() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_terminal_list(vec![]).unwrap();
     let items = neovm_value::value::list_to_vec(&result).unwrap();
     assert_eq!(items.len(), 1);
@@ -137,7 +137,7 @@ fn terminal_list_returns_singleton_list() {
 fn terminal_live_p_nil_is_live() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     assert_eq!(
         builtin_terminal_live_p(&mut eval, &vec![Value::NIL]).unwrap(),
         Value::T
@@ -148,7 +148,7 @@ fn terminal_live_p_nil_is_live() {
 fn terminal_live_p_reports_frame_terminal_type_not_selected_global_type() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffer_manager_mut().create_buffer("*scratch*");
     let gui_frame = eval.frame_manager_mut().create_frame("F1", 80, 25, buffer);
     eval.frame_manager_mut()
@@ -186,7 +186,7 @@ fn terminal_live_p_reports_frame_terminal_type_not_selected_global_type() {
 fn terminal_live_p_int_is_not_live() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let result = builtin_terminal_live_p(&mut eval, &vec![Value::fixnum(42)]).unwrap();
     assert!(result.is_nil());
 }
@@ -195,7 +195,7 @@ fn terminal_live_p_int_is_not_live() {
 fn terminal_parameter_roundtrip() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let prev = builtin_set_terminal_parameter(
         &mut eval,
         vec![Value::NIL, Value::symbol("test-param"), Value::fixnum(99)],
@@ -212,7 +212,7 @@ fn terminal_parameter_roundtrip() {
 fn terminal_parameter_defaults() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     // GNU has no terminal-parameter defaults; normal-erase-is-backspace in
     // particular must start nil so the (unless (terminal-parameter ...))
     // guard in normal-erase-is-backspace-setup-frame lets the real decision
@@ -230,7 +230,7 @@ fn terminal_parameter_defaults() {
 fn tty_type_returns_nil() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     assert!(builtin_tty_type(&mut eval, vec![]).unwrap().is_nil());
 }
 
@@ -245,7 +245,7 @@ fn tty_runtime_can_report_terminal_type_and_color_capability() {
         ),
     ));
 
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     assert_eq!(
         builtin_tty_type(&mut eval, vec![]).unwrap(),
         Value::string("xterm-256color")
@@ -273,7 +273,7 @@ fn tty_runtime_can_name_the_live_tty_terminal() {
             .with_name("/dev/tty"),
     );
 
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     assert_eq!(
         builtin_terminal_name(&mut eval, vec![]).unwrap(),
         Value::string("/dev/tty")
@@ -288,7 +288,7 @@ fn graphical_terminal_adopts_its_display_name() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
     reset_terminal_runtime();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     assert_eq!(
         builtin_terminal_name(&mut eval, vec![]).unwrap(),
         Value::string("initial_terminal")
@@ -325,7 +325,7 @@ fn anonymous_graphical_terminals_are_not_the_initial_terminal() {
         configure_terminal_runtime(TerminalRuntimeConfig::window_system(
             GraphicalDisplayIdentity::anonymous_connection(backend),
         ));
-        let mut eval = Context::new();
+        let mut eval = Context::new(crate::test_utils::unit_runtime());
         assert_eq!(
             builtin_terminal_name(&mut eval, vec![]).unwrap(),
             Value::string(label)
@@ -351,7 +351,7 @@ fn frame_initial_p_separates_the_display_terminal_from_the_startup_terminal() {
         )
         .unwrap(),
     ));
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     // After the Context, which re-mints terminal handles.
     let startup_terminal =
         ensure_terminal_runtime_owner(1, "startup_terminal", TerminalRuntimeConfig::inactive());
@@ -364,7 +364,7 @@ fn frame_initial_p_separates_the_display_terminal_from_the_startup_terminal() {
 fn tty_display_color_cells_returns_zero() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     assert_eq!(
         builtin_tty_display_color_cells(&mut eval, vec![]).unwrap(),
         Value::fixnum(0)
@@ -382,7 +382,7 @@ fn tty_top_frame_tracks_selected_frame_when_tty_runtime_is_active() {
         ),
     ));
 
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.buffer_manager_mut().create_buffer("*scratch*");
     let frame_id = eval.frame_manager_mut().create_frame("F1", 80, 25, scratch);
 
@@ -396,7 +396,7 @@ fn tty_top_frame_tracks_selected_frame_when_tty_runtime_is_active() {
 fn suspend_tty_signals_error() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     match builtin_suspend_tty(&mut eval, vec![]).kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
@@ -409,7 +409,7 @@ fn suspend_tty_signals_error() {
 fn resume_tty_signals_error() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     match builtin_resume_tty(&mut eval, vec![]).kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
@@ -422,7 +422,7 @@ fn resume_tty_signals_error() {
 fn suspend_tty_runs_hook_and_invokes_terminal_host() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     configure_terminal_runtime(TerminalRuntimeConfig::interactive(
         Some("xterm-256color".to_string()),
         neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(
@@ -454,7 +454,7 @@ fn suspend_tty_runs_hook_and_invokes_terminal_host() {
 fn resume_tty_runs_hook_after_terminal_host_resume() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     configure_terminal_runtime(TerminalRuntimeConfig::interactive(
         Some("xterm-256color".to_string()),
         neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(
@@ -487,7 +487,7 @@ fn resume_tty_runs_hook_after_terminal_host_resume() {
 fn delete_terminal_nil_signals_sole_terminal_error() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     match builtin_delete_terminal(&mut eval, vec![]).kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
@@ -506,7 +506,7 @@ fn delete_terminal_nil_signals_sole_terminal_error() {
 fn delete_terminal_force_marks_terminal_dead_and_clears_terminal_list() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let handle = terminal_handle_value();
 
     assert_eq!(
@@ -532,7 +532,7 @@ fn delete_terminal_force_marks_terminal_dead_and_clears_terminal_list() {
 fn delete_terminal_force_runs_hook_and_deletes_frames_on_terminal() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.buffer_manager_mut().create_buffer("*scratch*");
     let _ = eval
         .frame_manager_mut()
@@ -566,7 +566,7 @@ fn delete_terminal_force_runs_hook_and_deletes_frames_on_terminal() {
 fn delete_terminal_force_defers_frame_hooks_until_pending_safe_funcalls_flush() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.buffer_manager_mut().create_buffer("*scratch*");
     let _keep =
         eval.frame_manager_mut()
@@ -634,7 +634,7 @@ fn delete_terminal_force_invokes_terminal_host_delete_hook() {
         log: Rc::clone(&log),
     }));
 
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     assert_eq!(
         builtin_delete_terminal(&mut eval, vec![Value::NIL, Value::T]).unwrap(),
         Value::NIL
@@ -646,7 +646,7 @@ fn delete_terminal_force_invokes_terminal_host_delete_hook() {
 fn delete_terminal_noelisp_bypasses_sole_terminal_check_and_defers_hooks() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.buffer_manager_mut().create_buffer("*scratch*");
     eval.buffer_manager_mut().set_current(scratch);
     let _frame =
@@ -710,7 +710,7 @@ fn delete_terminal_noelisp_ignores_host_delete_failures() {
     ));
     set_terminal_host(Box::new(FailingDeleteTerminalHost));
 
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     assert_eq!(
         delete_terminal_noelisp_owned(&mut eval, TERMINAL_ID).unwrap(),
         Value::NIL
@@ -727,7 +727,7 @@ fn delete_terminal_noelisp_ignores_host_delete_failures() {
 fn make_terminal_frame_is_eval_backed_frame_creation() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.buffers.create_buffer("*scratch*");
     eval.buffers.set_current(scratch);
     super::pure::mark_selected_terminal_usable_for_test(&eval);
@@ -750,7 +750,7 @@ fn make_terminal_frame_opens_and_owns_an_explicit_secondary_tty() {
         )
         .unwrap(),
     ));
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("noninteractive", Value::NIL);
     let scratch = eval.buffers.create_buffer("*scratch*");
     eval.buffers.set_current(scratch);
@@ -840,7 +840,7 @@ fn make_terminal_frame_arms_deferred_redisplay_only_after_the_host_opens() {
         )
         .unwrap(),
     ));
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.buffers.create_buffer("*scratch*");
     eval.buffers.set_current(scratch);
     let runs = Rc::new(Cell::new(0));
@@ -877,7 +877,7 @@ fn explicit_secondary_tty_survives_context_reactivation_without_handle_query() {
     }
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.buffers.create_buffer("*scratch*");
     eval.buffers.set_current(scratch);
     eval.set_tty_frame_host_factory(Box::new(RecordingTtyFrameHostFactory {
@@ -916,7 +916,7 @@ fn make_terminal_frame_without_a_device_reuses_the_selected_secondary_terminal()
         )
         .unwrap(),
     ));
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.buffers.create_buffer("*scratch*");
     eval.buffers.set_current(scratch);
     let requests = Rc::new(RefCell::new(Vec::new()));
@@ -957,7 +957,7 @@ fn make_terminal_frame_reuses_an_active_tty_already_open_on_the_named_device() {
         )
         .unwrap(),
     ));
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.buffers.create_buffer("*scratch*");
     eval.buffers.set_current(scratch);
     let requests = Rc::new(RefCell::new(Vec::new()));
@@ -1003,7 +1003,7 @@ fn make_terminal_frame_rolls_back_the_provisional_frame_when_tty_open_fails() {
         )
         .unwrap(),
     ));
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let scratch = eval.buffers.create_buffer("*scratch*");
     eval.buffers.set_current(scratch);
     let original_frame = crate::emacs_core::window_cmds::make_frame_plain(
@@ -1051,7 +1051,7 @@ fn make_terminal_frame_rolls_back_the_provisional_frame_when_tty_open_fails() {
 fn selected_terminal_returns_live_handle() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let handle = builtin_selected_terminal(vec![]).unwrap();
     let live = builtin_terminal_live_p(&mut eval, &vec![handle]).unwrap();
     assert_eq!(live, Value::T);
@@ -1061,7 +1061,7 @@ fn selected_terminal_returns_live_handle() {
 fn frame_terminal_returns_live_handle() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let handle = builtin_frame_terminal(&mut eval, vec![Value::NIL]).unwrap();
     let live = builtin_terminal_live_p(&mut eval, &vec![handle]).unwrap();
     assert_eq!(live, Value::T);
@@ -1095,7 +1095,7 @@ fn frame_terminal_returns_live_handle() {
 fn frame_initial_p_answers_t_for_the_bootstrap_terminal() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let terminal = builtin_frame_terminal(&mut eval, vec![Value::NIL]).unwrap();
     assert_eq!(frame_initial_p(&mut eval, terminal), Ok(Value::T));
 }
@@ -1114,7 +1114,7 @@ fn frame_initial_p_answers_nil_for_a_live_tty_terminal() {
         TerminalRuntimeConfig::interactive(Some("alacritty".to_string()), neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(256))
             .with_name("/dev/tty"),
     );
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let terminal = builtin_frame_terminal(&mut eval, vec![Value::NIL]).unwrap();
     assert_eq!(frame_initial_p(&mut eval, terminal), Ok(Value::NIL));
 }
@@ -1125,7 +1125,7 @@ fn frame_initial_p_answers_nil_for_a_live_tty_terminal() {
 fn frame_initial_p_answers_nil_for_a_non_designator() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     for junk in [
         Value::string("junk"),
         Value::symbol("sym"),
@@ -1145,7 +1145,7 @@ fn frame_initial_p_answers_nil_for_a_non_designator() {
 fn frame_initial_p_answers_nil_for_a_deleted_terminal() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     // After the Context, which re-mints terminal handles.
     let secondary =
         ensure_terminal_runtime_owner(1, "secondary", TerminalRuntimeConfig::inactive());
@@ -1159,7 +1159,7 @@ fn frame_initial_p_answers_nil_for_a_deleted_terminal() {
 fn frame_initial_p_still_answers_for_frames() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffer_manager_mut().create_buffer("*scratch*");
     let real = eval.frame_manager_mut().create_frame("F1", 80, 25, buffer);
     assert_eq!(
