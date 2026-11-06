@@ -882,8 +882,18 @@ enum InputMethodEvent {
     Translated(Value),
 }
 
+/// GNU `read_key_sequence`'s `fix_current_buffer` distinction: the command
+/// loop follows the selected window, while Lisp key readers retain the caller's
+/// current buffer even when another buffer is displayed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KeySequenceBufferSelection {
+    CurrentBuffer,
+    SelectedWindow,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ReadKeySequenceOptions {
+    pub buffer_selection: KeySequenceBufferSelection,
     pub prompt: Value,
     pub dont_downcase_last: bool,
     pub can_return_switch_frame: bool,
@@ -977,6 +987,14 @@ pub(crate) enum CommandKeySequenceEnd {
 }
 
 impl ReadKeySequenceOptions {
+    pub(crate) fn for_command_loop() -> Self {
+        Self {
+            buffer_selection: KeySequenceBufferSelection::SelectedWindow,
+            can_return_switch_frame: true,
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn new(
         prompt: Value,
         continue_echo: bool,
@@ -984,6 +1002,7 @@ impl ReadKeySequenceOptions {
         can_return_switch_frame: bool,
     ) -> Self {
         Self {
+            buffer_selection: KeySequenceBufferSelection::CurrentBuffer,
             prompt,
             dont_downcase_last,
             can_return_switch_frame,
@@ -995,6 +1014,7 @@ impl ReadKeySequenceOptions {
 impl Default for ReadKeySequenceOptions {
     fn default() -> Self {
         Self {
+            buffer_selection: KeySequenceBufferSelection::CurrentBuffer,
             prompt: Value::NIL,
             dont_downcase_last: false,
             can_return_switch_frame: false,
@@ -4953,6 +4973,22 @@ impl crate::emacs_core::eval::Context {
                     }
                 }
 
+                // Timers/process filters can display another buffer during
+                // the input wait while restoring the previously current one.
+                // GNU reconciles it at the first event, before consulting maps
+                // (keyboard.c, `if (NILP (first_event))`). Do not do this for
+                // Lisp-facing reads or after a mouse event selected its buffer.
+                if options.buffer_selection == KeySequenceBufferSelection::SelectedWindow
+                    && self
+                        .command_loop
+                        .keyboard
+                        .kboard
+                        .current_key_sequence
+                        .raw_events()
+                        .is_empty()
+                {
+                    self.sync_current_buffer_to_selected_window();
+                }
                 self.command_loop
                     .keyboard
                     .push_key_sequence_input_event(emacs_event);
