@@ -20786,7 +20786,7 @@ fn jit_bench_call_heavy_fontlock_reweight() {
     // Clones SHARE tiering state (jit::Runtime); give the cold copy its own so
     // the pin does not reach the hot copy.
     let mut cold = bc.clone();
-    cold.runtime = Some(crate::emacs_core::jit::Runtime::new());
+    cold.set_jit_runtime_for_test(Some(crate::emacs_core::jit::Runtime::new()));
     jit_mark_cold_for_test(&cold);
     let cold_val = Value::make_bytecode(cold);
 
@@ -20901,7 +20901,7 @@ fn jit_bench_spec_call_dispatch_upper_bound() {
     // Clones SHARE tiering state (jit::Runtime); give the cold copy its own so
     // the pin does not reach the hot copy.
     let mut cold = bc.clone();
-    cold.runtime = Some(crate::emacs_core::jit::Runtime::new());
+    cold.set_jit_runtime_for_test(Some(crate::emacs_core::jit::Runtime::new()));
     jit_mark_cold_for_test(&cold);
     let cold_val = Value::make_bytecode(cold);
 

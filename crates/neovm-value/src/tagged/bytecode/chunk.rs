@@ -256,10 +256,8 @@ pub struct ByteCodeFunction {
     /// process-independent bit pattern an `Arc`-backed handle has. Every
     /// executable function carries `Some`; read through
     /// [`Self::jit_runtime`], never the field.
-    #[cfg(all(feature = "jit", not(feature = "test-support")))]
+    #[cfg(feature = "jit")]
     pub(crate) runtime: Option<Runtime>,
-    #[cfg(all(feature = "jit", feature = "test-support"))]
-    pub runtime: Option<Runtime>,
     /// Present for GNU-backed functions whose validated decoded IR has been
     /// released until first execution. One pointer (an `Arc`), so ordinary
     /// bytecode objects continue to fit the existing 384-byte arena slot —
@@ -728,6 +726,15 @@ impl ByteCodeFunction {
     #[doc(hidden)]
     pub fn runtime(&self) -> &Option<Runtime> {
         &self.runtime
+    }
+    /// Test-support setter for the tiering handle on a bytecode function the
+    /// test owns: the moved eval bench gives a local clone its own `Runtime`
+    /// so a hot/cold pin does not reach the sibling copy.  The field stays
+    /// `pub(crate)` with no A-prime; this method is the test-support route.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_jit_runtime_for_test(&mut self, runtime: Option<Runtime>) {
+        self.runtime = runtime;
     }
     /// Copied identity of the SHARED JIT runtime state for the value
     /// arena-reuse test. Identity only; never rebuild a pointer from it.
