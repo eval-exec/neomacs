@@ -1499,8 +1499,12 @@ fn parse_ledger(path: &Path, text: &str) -> Result<Vec<VisRow>, String> {
 /// (lead-integ 01:3xZ condition): `#[macro_export]` exports the macro at the
 /// crate root, so a module-prefixed item such as
 /// `emacs_core::eval::eval_absent_layer_slots` is not a real path and must be
-/// red. The defining file must also actually contain
-/// `#[macro_export] macro_rules! <leaf>`.
+/// red. The defining file must also actually contain a `macro_rules! <leaf>`
+/// item carrying its own `#[macro_export]` attribute. Both facts are read
+/// from the parsed item, not from the file text: a mention of `#[macro_export]`
+/// or of the macro name in a comment or a string literal does not satisfy the
+/// row, and a different exported macro in the same file does not cover a
+/// non-exported one.
 fn macro_row_violation(row: &VisRow, source: &str) -> Result<(), String> {
     let leaf = row.item.rsplit("::").next().unwrap_or(&row.item);
     if row.item.contains("::") {
@@ -1509,15 +1513,29 @@ fn macro_row_violation(row: &VisRow, source: &str) -> Result<(), String> {
             row.crate_dir, row.item, row.item
         ));
     }
-    if !source.contains("#[macro_export]") {
+    let parsed = syn::parse_file(source)
+        .map_err(|error| format!("{} {leaf} macro: {error}", row.crate_dir))?;
+    let definition = parsed.items.iter().find_map(|item| match item {
+        syn::Item::Macro(item_macro)
+            if item_macro.ident.as_ref().is_some_and(|ident| ident == leaf) =>
+        {
+            Some(item_macro)
+        }
+        _ => None,
+    });
+    let Some(definition) = definition else {
         return Err(format!(
-            "{} {leaf} macro: the defining file has no #[macro_export]; a module-scoped macro is not a crate-root export",
+            "{} {leaf} macro: the defining file has no `macro_rules! {leaf}` item",
             row.crate_dir
         ));
-    }
-    if !source.contains(&format!("macro_rules! {leaf}")) {
+    };
+    if !definition
+        .attrs
+        .iter()
+        .any(|attr| attr.path().is_ident("macro_export"))
+    {
         return Err(format!(
-            "{} {leaf} macro: the defining file has no `macro_rules! {leaf}`",
+            "{} {leaf} macro: `macro_rules! {leaf}` has no #[macro_export] of its own; a module-scoped macro is not a crate-root export",
             row.crate_dir
         ));
     }
@@ -3801,6 +3819,22 @@ mod tests {
         let error = macro_row_violation(&row("eval_absent_layer_slots"), other_macro)
             .expect_err("file lacks the named macro");
         assert!(error.contains("macro_rules!"), "{error}");
+        // Peer 01:5xZ fifth case: the checks read the parsed item, so a
+        // mention in a comment or a string must not satisfy the row.
+        let comment_mention = "// #[macro_export] macro_rules! eval_absent_layer_slots\nmacro_rules! eval_absent_layer_slots { () => {} }\n";
+        let error = macro_row_violation(&row("eval_absent_layer_slots"), comment_mention)
+            .expect_err("comment mention");
+        assert!(error.contains("no #[macro_export] of its own"), "{error}");
+        let string_mention = "pub const S: &str = \"#[macro_export] macro_rules! eval_absent_layer_slots\";\nmacro_rules! eval_absent_layer_slots { () => {} }\n";
+        let error = macro_row_violation(&row("eval_absent_layer_slots"), string_mention)
+            .expect_err("string mention");
+        assert!(error.contains("no #[macro_export] of its own"), "{error}");
+        // A different exported macro in the same file does not cover a
+        // non-exported one.
+        let exported_other = "#[macro_export]\nmacro_rules! other { () => {} }\nmacro_rules! eval_absent_layer_slots { () => {} }\n";
+        let error = macro_row_violation(&row("eval_absent_layer_slots"), exported_other)
+            .expect_err("another exported macro in the file");
+        assert!(error.contains("no #[macro_export] of its own"), "{error}");
     }
 
     #[test]
