@@ -134,7 +134,7 @@ fn tier2_hof_profiler_accepts_dynamic_subrs_and_closes_its_window() {
     let _scope = BuildScope::enter(CompileTier::T1, source.jit_runtime());
     let mut obs = LeafObs::new(false);
     obs.t2 = cells_for_build();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let mapc = intern("mapc");
     let subr = ctx.obarray.symbol_function_id(mapc).expect("native mapc");
     let sequence = Value::list(vec![Value::NIL; 128]);

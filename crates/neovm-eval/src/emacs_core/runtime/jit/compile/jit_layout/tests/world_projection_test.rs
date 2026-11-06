@@ -28,7 +28,7 @@ fn admission_words(context: &Context) -> (u64, usize) {
 #[test]
 fn world_projection_goldens_follow_canonical_writer_retirement() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new_minimal_vm_harness();
+    let mut context = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let before = admission_words(&context).0;
     context
         .obarray_mut()
@@ -57,7 +57,7 @@ fn world_projection_goldens_follow_canonical_writer_retirement() {
 #[test]
 fn world_projection_goldens_construct_replacement_before_admission() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new_minimal_vm_harness();
+    let mut context = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     context
         .obarray_mut()
         .set_symbol_function("projection-golden-replaced", Value::fixnum(23));
@@ -66,7 +66,7 @@ fn world_projection_goldens_construct_replacement_before_admission() {
 
     // A fresh minimal constructor chooses its raw manager before World sealing.
     // An admitted view exposes no safe mutable manager/replacement operation.
-    let mut replacement = Context::new_minimal_vm_harness();
+    let mut replacement = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     assert!(
         replacement
             .obarray()

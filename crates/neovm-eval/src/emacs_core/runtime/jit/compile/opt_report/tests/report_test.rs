@@ -175,7 +175,7 @@ fn num(record: &BTreeMap<String, String>, key: &str) -> u64 {
 #[test]
 fn opt_report_clif_parity_keeps_native_observation_and_source_heat_unchanged() {
     let _settings = Settings::enter();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     for observe in [
         ObserveOverride::default(),
         ObserveOverride {
@@ -240,7 +240,7 @@ fn opt_report_clif_parity_keeps_native_observation_and_source_heat_unchanged() {
 fn opt_report_counts_normal_osr_refusal_and_transient_native_construction() {
     let _settings = Settings::enter();
     let _cache = CacheScope::enter();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let file = FileScope::new();
     let _scope = Scope::enter(Some(file.0.clone()));
     let source = loop_body(0);
@@ -297,7 +297,7 @@ fn opt_report_counts_normal_osr_refusal_and_transient_native_construction() {
 #[test]
 fn opt_report_row_budget_preserves_all_refused_attempts() {
     let _settings = Settings::enter();
-    let context = Context::new();
+    let context = Context::new(crate::test_utils::unit_runtime());
     force_opt_for_test(Some(OptMode::Opt), Some(OptAdmit::default()));
     let file = FileScope::new();
     let _scope = Scope::enter(Some(file.0.clone()));
@@ -342,7 +342,7 @@ fn opt_report_row_budget_preserves_all_refused_attempts() {
 #[test]
 fn opt_report_seal_rejects_inflight_and_postseal_compilation() {
     let _settings = Settings::enter();
-    let context = Context::new();
+    let context = Context::new(crate::test_utils::unit_runtime());
     let inflight_file = FileScope::new();
     {
         let scope = Scope::enter(Some(inflight_file.0.clone()));
@@ -396,7 +396,7 @@ fn opt_report_postseal_io_failure_aborts_owned_capture() {
     const FILE: &str = "NEOVM_OPT_REPORT_ABORT_FIXTURE_FILE";
     if std::env::var_os(CHILD).is_some() {
         let _settings = Settings::enter();
-        let context = Context::new();
+        let context = Context::new(crate::test_utils::unit_runtime());
         let file = FileScope(PathBuf::from(std::env::var_os(FILE).unwrap()));
         let _scope = Scope::enter(Some(file.0.clone()));
         drop(compile(&loop_body(0)));

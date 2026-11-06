@@ -75,7 +75,7 @@ fn opt_profit_primitive_loops_numeric_osr_runs_opt_and_deopts_at_entry() {
     let _settings = Settings::enter();
     force_opt_profit_for_test(Some(OptProfitMode::PrimitiveLoops));
     force_opt_osr_entry_for_test(Some(true));
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let f = count_loop(0);
     let snapshot = [Value::make_int(2000), Value::make_int(42)];
     context.bc_buf.extend_from_slice(&snapshot);

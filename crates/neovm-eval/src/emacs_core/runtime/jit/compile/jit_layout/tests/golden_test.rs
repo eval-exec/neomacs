@@ -163,7 +163,7 @@ fn entry_words(entry: &SpecBinding) -> [u64; ENTRY_WORDS] {
 
 #[test]
 fn vec_offsets_read_the_specpdl_and_bind_stack_through_reallocation() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let spec = specpdl_vec_offsets().expect("the specpdl Vec probe succeeds");
     let binds = jit_bind_stack_vec_offsets().expect("the bind-stack Vec probe succeeds");
     let base = std::ptr::from_ref(&ev).cast::<u8>();
@@ -199,7 +199,7 @@ fn the_generic_vec_probe_agrees_with_the_buffer_walk_probe() {
 
 #[test]
 fn the_context_words_are_the_fields_they_name() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.depth = 0x1234;
     ev.max_depth = 0x5678;
     let base = std::ptr::from_ref(&ev).cast::<u8>();
@@ -236,7 +236,7 @@ fn the_context_words_are_the_fields_they_name() {
 #[test]
 fn backtrace_templates_match_the_shim_and_decode_in_rust() {
     let layout = backtrace_layout().expect("the fixed backtrace records are supported");
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let function = Value::symbol("neovm--jl-f");
     for nargs in 0..=6usize {
         let args: Vec<i64> = (0..nargs)
@@ -295,7 +295,7 @@ fn backtrace_templates_match_the_shim_and_decode_in_rust() {
 #[test]
 fn a_flagged_frame_does_not_match_its_template() {
     let layout = backtrace_layout().expect("fixed backtrace records");
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let args: Vec<i64> = (0..3).map(|i| Value::fixnum(i).bits() as i64).collect();
     for nargs in [1usize, 2, 3] {
         let (template, small) = layout.frame_for(nargs);
@@ -390,7 +390,7 @@ fn binding_record_images_preserve_unbound_values_and_optional_buffers() {
 
 #[test]
 fn the_symbol_function_cell_is_the_word_compiled_code_reads() {
-    let ev = Context::new();
+    let ev = Context::new(crate::test_utils::unit_runtime());
     let sym = neovm_value::intern::intern("car");
     let cell = ev.obarray.get_by_id(sym).expect("car is interned");
     let base = std::ptr::from_ref(cell).cast::<u8>();
@@ -496,7 +496,7 @@ fn heap_words_are_where_compiled_code_reads_them() {
 #[test]
 fn variable_words_are_where_compiled_code_reads_them() {
     use neovm_value::intern::intern;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.eval_str(
         "(progn (defvar neovm--jl-plain 42)
                 (defvar neovm--jl-loc 1)

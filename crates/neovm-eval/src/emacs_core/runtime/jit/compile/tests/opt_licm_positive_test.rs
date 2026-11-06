@@ -226,7 +226,7 @@ fn opt_licm_native_anticipated_header_guard_replays_full_entry_after_store() {
     assert_eq!(before.blocks[header.index()].pc, 3);
     let baseline_plan = selected_reps(before.clone());
     let baseline = lower(&source, &baseline_plan);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     plain_no_gc(&mut ctx);
     ctx.eval_str("(setq opt-licm-watch-count 0) (add-variable-watcher 'opt-licm-side (lambda (&rest _) (setq opt-licm-watch-count (1+ opt-licm-watch-count))))").unwrap();
     for n in [0, 1, 255, 510] {
@@ -459,7 +459,7 @@ fn opt_licm_native_scalar_hoist_preserves_compiler_only_cons_across_255_510_gc()
         ],
         1,
     );
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     plain_no_gc(&mut ctx);
     let cell_control = function(
         vec![Op::Constant(0), Op::Constant(1), Op::Cons, Op::Return],

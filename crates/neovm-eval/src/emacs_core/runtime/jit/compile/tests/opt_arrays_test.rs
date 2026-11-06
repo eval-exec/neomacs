@@ -262,7 +262,7 @@ fn resumed(ctx: &mut Context, f: &ByteCodeFunction, exit: &DeoptResume) -> Resul
 #[test]
 fn opt_range_native_actual_vector_record_arefs_elide_current_bounds_and_keep_errors() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let vector = Value::vector(vec![Value::fixnum(13), Value::fixnum(23)]);
     let record = Value::make_record(vec![Value::symbol("record-tag"), Value::fixnum(29)]);
     let _roots = Roots::new(&[vector, record]);
@@ -498,7 +498,7 @@ impl Program {
 #[test]
 fn opt_range_native_array_alias_call_and_join_keep_current_owner_checks() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     // Real bytecode callback mutates alias slot0; no invented resizing API.
     let callback = Value::make_bytecode(function(
         vec![
@@ -619,7 +619,7 @@ fn opt_range_native_array_alias_call_and_join_keep_current_owner_checks() {
 #[test]
 fn opt_range_native_unknown_string_and_patched_arrays_decline_speculation() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let vector = Value::vector(vec![Value::fixnum(13)]);
     let string = Value::string("x");
     let _roots = Roots::new(&[vector, string]);
@@ -670,7 +670,7 @@ fn opt_range_native_unknown_string_and_patched_arrays_decline_speculation() {
 #[test]
 fn opt_range_native_array_singleton_shape_guard_preserves_exact_word_identity() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let expected_array = Value::vector(vec![Value::fixnum(13)]);
     let distinct_array = Value::vector(vec![Value::fixnum(23)]);
     let _roots = Roots::new(&[expected_array, distinct_array]);

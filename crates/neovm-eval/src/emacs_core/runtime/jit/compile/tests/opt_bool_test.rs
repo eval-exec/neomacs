@@ -210,7 +210,7 @@ fn opt_bool_native_compare_reaches_branch_without_tagged_projection() {
         clif[0]
     );
     let leaf = leaf.unwrap();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for args in [
         [Value::fixnum(1), Value::fixnum(2)],
         [Value::fixnum(2), Value::fixnum(1)],
@@ -258,7 +258,7 @@ fn opt_bool_native_closed_diamond_uses_i8_phi_and_returns_t_nil() {
         clif[0]
     );
     let leaf = leaf.unwrap();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for selector in [Value::NIL, Value::T] {
         for pair in [
             [Value::fixnum(1), Value::fixnum(2)],
@@ -309,7 +309,7 @@ fn opt_bool_native_loop_phi_keeps_normalized_flags_and_poll_cadence() {
         "seeded cyclic Bool phi must promote"
     );
     let leaf = lower(&source, &enabled);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for n in [0, 1, 2, 3, 254, 255, 256, 510] {
         let args = [Value::fixnum(n), Value::fixnum(7), Value::fixnum(7)];
         reset_bytecode_branch_poll_count();
@@ -354,7 +354,7 @@ fn opt_bool_native_unknown_phi_keeps_arbitrary_lisp_identity() {
             .any(|value| enabled.values[value.index()].rep == ir::Rep::Tagged)
     );
     let leaf = lower(&source, &enabled);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let inputs = [
         Value::fixnum(0),
         Value::make_float(-0.0),
@@ -382,7 +382,7 @@ fn opt_bool_native_unknown_phi_keeps_arbitrary_lisp_identity() {
 #[test]
 fn opt_bool_native_else_pop_preserves_zero_float_and_heap_identity() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let fallback = Value::cons(Value::symbol("fallback"), Value::NIL);
     let inputs = [
         Value::NIL,
@@ -549,7 +549,7 @@ fn opt_bool_native_select_accepts_local_and_incoming_flags_both_arm_orders() {
         vec![],
         2,
     );
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for local_value in [false, true] {
         for local_on_true in [false, true] {
             let plan = select_plan(local_value, local_on_true);
@@ -574,7 +574,7 @@ fn opt_bool_native_mixed_tagged_select_materializes_only_boolean_arm() {
         vec![],
         2,
     );
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let payload = Value::cons(Value::fixnum(7), Value::NIL);
     let _roots = Roots::new(&[payload]);
     for boolean_on_true in [false, true] {
@@ -662,7 +662,7 @@ fn opt_bool_native_mixed_tagged_select_materializes_only_boolean_arm() {
 #[test]
 fn opt_bool_native_predicates_and_eq_keep_dynamic_positioned_symbol_semantics() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let bare = Value::symbol("opt-bool-positioned");
     let positioned = ctx
         .eval_str("(position-symbol 'opt-bool-positioned 7)")
@@ -767,7 +767,7 @@ fn opt_bool_native_return_call_and_store_escape_as_gnu_t_nil() {
             > 0
     );
     let leaf = lower(&source, &enabled);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str("(setq opt-bool-escape nil)").unwrap();
     let cell = Value::cons(Value::symbol("old"), Value::NIL);
     let _roots = Roots::new(&[cell]);
@@ -841,7 +841,7 @@ fn cold_source(first: Op) -> ByteCodeFunction {
 #[test]
 fn opt_bool_native_cold_guard_materializes_complete_frame_after_visible_store() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str("(setq t34-o32-side nil)").unwrap();
     let payload = Value::cons(Value::symbol("heap-companion"), Value::NIL);
     let _roots = Roots::new(&[payload]);
@@ -1082,7 +1082,7 @@ fn opt_bool_native_gc_call_roots_heap_companion_without_external_root() {
             .iter()
             .any(|value| enabled.values[value.index()].rep == ir::Rep::Bool)
     );
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let expected = crate::emacs_core::print::print_value(&reference(&mut ctx, &enabled, &[]));
     let leaf = lower(&source, &enabled);
     let collections = ctx.tagged_heap.gc_collections();
@@ -1139,7 +1139,7 @@ fn opt_bool_native_poll_roots_heap_companion_without_external_root() {
         );
     }
     let leaf = lower(&source, &enabled);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for n in [255, 510] {
         let args = [Value::fixnum(n)];
         ctx.gc_stress = true;
@@ -1193,7 +1193,7 @@ fn opt_bool_native_quit_at_255_and_510_matches_tier0_flow_and_cadence() {
     let enabled = boolean_plan(&source);
     assert!(bool_phi_count(&enabled) > 0);
     let leaf = lower(&source, &enabled);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for n in [255, 510] {
         let args = [Value::fixnum(n)];
         ctx.set_quit_flag_value(Value::NIL);
@@ -1240,7 +1240,7 @@ fn opt_bool_native_first_predicate_preserves_tagged_heap_residual() {
     for mode in [FlonumMode::Resident, FlonumMode::Off] {
         force_flonum_mode_for_test(Some(mode));
         // Context comes first: symbol handles must belong to the active runtime.
-        let mut ctx = Context::new();
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
         let source = function(
             vec![
                 Op::Constant(0),

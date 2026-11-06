@@ -512,7 +512,7 @@ fn float_probe(sink: bool) -> (u64, u64) {
             .finish(),
     );
     let _settings = Settings::enter(sink);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::enter();
     let fixture = load_fixture(&mut ctx, &roots);
     for &(n, expected) in &oracle::FLOAT_ANSWERS {
@@ -619,7 +619,7 @@ fn nbody_probe(sink: bool) -> (u64, u64) {
             .finish(),
     );
     let _settings = Settings::enter(sink);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::enter();
     let fixture = load_fixture(&mut ctx, &roots);
     let dt = Value::make_float(0.01);
@@ -653,7 +653,7 @@ fn nbody_probe(sink: bool) -> (u64, u64) {
 #[test]
 fn opt_sink_allocation_fixture_load_preserves_frozen_gnu_graph_and_answers() {
     let _settings = Settings::enter(false);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::enter();
     let fixture = load_fixture(&mut ctx, &roots);
     for &(n, expected) in &oracle::FLOAT_ANSWERS {

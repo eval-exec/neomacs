@@ -93,7 +93,7 @@ fn snapshots() -> Vec<RegionFrameState> {
 /// aliases survive flattening, so the cold emitter can reconstruct once.
 #[test]
 fn chain_framestate_plans_nested_frames_and_shared_representations() {
-    let _ev = Context::new();
+    let _ev = Context::new(crate::test_utils::unit_runtime());
     let body = nested_body();
     let states = snapshots();
     let live = [
@@ -175,7 +175,7 @@ fn chain_framestate_plans_nested_frames_and_shared_representations() {
 /// are rejected before any code generator can spill a misleading chain.
 #[test]
 fn chain_framestate_refuses_invalid_or_observing_frame_states() {
-    let _ev = Context::new();
+    let _ev = Context::new(crate::test_utils::unit_runtime());
     let mut body = nested_body();
     let mut states = snapshots();
     let live = [value(0); 6];
@@ -238,7 +238,7 @@ fn chain_framestate_refuses_invalid_or_observing_frame_states() {
 /// format, with the inverse pc map rather than a fused instruction index.
 #[test]
 fn chain_framestate_maps_a_physical_only_site() {
-    let _ev = Context::new();
+    let _ev = Context::new(crate::test_utils::unit_runtime());
     let body = body();
     let plan = chain_framestate(
         &body,

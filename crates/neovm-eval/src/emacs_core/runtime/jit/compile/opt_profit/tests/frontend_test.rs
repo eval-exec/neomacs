@@ -111,7 +111,7 @@ fn opt_profit_selected_retier_matches_the_interpreter() {
     let _settings = Settings::enter();
     let f = count_loop(0);
     let leaf = compile(&f, CompileTier::Upgrade(T2Upgrade::Retier));
-    let mut context = super::super::Context::new();
+    let mut context = super::super::Context::new(crate::test_utils::unit_runtime());
     for n in [0, 1, 20, 1000] {
         let args = [super::super::Value::make_int(n)];
         let expected = super::super::Vm::from_context(&mut context)
@@ -216,7 +216,7 @@ fn opt_profit_osr_cache_matches_interpreter_and_legacy_entry_guards() {
     let _settings = Settings::enter();
     let reference = count_loop(0);
     reference.jit_runtime().set_cold_for_test();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let expected = Vm::from_context(&mut context)
         .execute(&reference, vec![Value::make_int(2000)])
         .unwrap();

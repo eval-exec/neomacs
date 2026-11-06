@@ -339,7 +339,7 @@ fn no_gc(ctx: &mut Context) {
 fn opt_sink_native_float_loop_alias_and_lag_identity() {
     let _settings = Settings::enter();
     let mut features = Vec::new();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::enter();
     load(&mut ctx, &roots);
     no_gc(&mut ctx);
@@ -426,7 +426,7 @@ fn opt_sink_native_float_loop_alias_and_lag_identity() {
 fn opt_sink_native_float_mixed_box_phi_and_partial_escape() {
     let _settings = Settings::enter();
     let mut features = Vec::new();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::enter();
     load(&mut ctx, &roots);
     no_gc(&mut ctx);
@@ -531,7 +531,7 @@ fn assert_gc_delta(ctx: &Context, before: (u64, usize), expected: u64) {
 fn opt_sink_native_float_alias_and_distinct_lag_survive_gc() {
     let _settings = Settings::enter();
     let mut features = Vec::new();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::enter();
     load(&mut ctx, &roots);
     no_gc(&mut ctx);
@@ -689,7 +689,7 @@ fn opt_sink_native_virtual_cons_list1_eliminated_or_escaped() {
     let _settings = Settings::enter();
     let mut features = Vec::new();
     let mut physical_deltas = Vec::new();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::enter();
     load(&mut ctx, &roots);
     no_gc(&mut ctx);
@@ -917,7 +917,7 @@ fn resumed(ctx: &mut Context, source_value: Value, resume: &DeoptResume) -> Resu
 #[test]
 fn opt_sink_native_virtual_full_frame_after_visible_store() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::enter();
     load(&mut ctx, &roots);
     no_gc(&mut ctx);
@@ -1148,7 +1148,7 @@ fn flow_observation(flow: &Flow) -> (SymId, Vec<String>, Option<String>) {
 fn opt_sink_native_virtual_poll_roots_and_quit_255_510() {
     let _settings = Settings::enter();
     let mut features = Vec::new();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::enter();
     no_gc(&mut ctx);
     let one = Value::make_float(1.0);

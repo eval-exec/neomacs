@@ -101,7 +101,7 @@ fn compile_first_sight(f: &ByteCodeFunction) -> super::super::CompiledLeaf {
 fn opt_profit_final_fused_size_uses_one_legacy_baseline_and_preserves_native_result() {
     let _settings = Settings::enter();
     let _scopes = FixtureScopes::enter();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     force_opt_early_for_test(Some(OptEarlyMode::On));
     force_opt_max_ops_for_test(Some(64));
     let f = expanding_loop();

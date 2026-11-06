@@ -54,7 +54,7 @@ fn nested() -> FusedBody {
 
 #[test]
 fn named_chain_entry_guard_resumes_parent_call_without_unborn_child() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let fused = nested();
     let state = RegionFrameState {
         region: 0,
@@ -99,7 +99,7 @@ fn named_chain_entry_guard_resumes_parent_call_without_unborn_child() {
 
 #[test]
 fn named_chain_entry_guard_preserves_materialized_parent_state() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let fused = nested();
     let state = RegionFrameState {
         region: 0,

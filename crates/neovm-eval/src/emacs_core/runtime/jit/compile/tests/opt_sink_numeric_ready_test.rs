@@ -7,7 +7,7 @@ use fixture::*;
 #[test]
 fn opt_sink_numeric_known_ready_and_borrowed_paths_keep_gnu_results_without_readiness_diamonds() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::enter();
     // A real immutable Float constant forces GNU contagion. The first Add
     // resolves an unknown borrowed argument; Mul consumes its ready result.

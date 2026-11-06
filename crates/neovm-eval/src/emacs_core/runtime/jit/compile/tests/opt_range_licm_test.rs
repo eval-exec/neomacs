@@ -150,7 +150,7 @@ fn draft_o35_explicit_rep(func: &mut ir::Func, rep: ir::Rep) {
 #[test]
 fn opt_range_native_full_domain_zero_and_unit_proofs() {
     let _settings = draft_o35_settings();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     // Frozen fix-min-zero/fix-max-one and exact ordinary arithmetic semantics.
     // These are full-domain proofs, not manually narrowed runtime arguments.
     for rep in [ir::Rep::TaggedFix, ir::Rep::RawInt] {
@@ -221,7 +221,7 @@ fn opt_range_native_full_domain_zero_and_unit_proofs() {
 #[test]
 fn opt_range_native_real_interval_guards_prove_add_sub_mul_endpoints() {
     let _settings = draft_o35_settings();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let interval =
         TypeSet::fixnum_range(crate::emacs_core::jit::opt::types::Range { lo: -8, hi: 8 });
     for rep in [ir::Rep::TaggedFix, ir::Rep::RawInt] {
@@ -311,7 +311,7 @@ fn draft_o35_sibling_source() -> ByteCodeFunction {
 #[test]
 fn opt_range_native_branch_sibling_proof_does_not_leak() {
     let _settings = draft_o35_settings();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = draft_o35_sibling_source();
     let before = draft_o35_prepared(&source);
     let original_arg = before
@@ -399,7 +399,7 @@ fn draft_o35_counter_source() -> ByteCodeFunction {
 #[test]
 fn opt_range_native_real_counter_keeps_accumulator_and_poll_cadence() {
     let _settings = draft_o35_settings();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = draft_o35_counter_source();
     let before = draft_o35_prepared(&source);
     let header = before.source_states[2].as_ref().unwrap().block;
@@ -461,7 +461,7 @@ fn opt_range_native_real_counter_keeps_accumulator_and_poll_cadence() {
 #[test]
 fn opt_range_native_cold_overflow_after_store_and_gc_keeps_full_frame() {
     let _settings = draft_o35_settings();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let payload = Value::cons(Value::symbol("heap-companion"), Value::NIL);
     let _roots = Roots::new(&[payload]);
     for rep in [ir::Rep::TaggedFix, ir::Rep::RawInt] {
@@ -547,7 +547,7 @@ fn opt_range_native_cold_overflow_after_store_and_gc_keeps_full_frame() {
 #[test]
 fn opt_range_native_force_deopt_replays_remaining_type_guard() {
     let _settings = draft_o35_settings();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = function(
         vec![Op::StackRef(0), Op::Constant(0), Op::Add, Op::Return],
         vec![Value::fixnum(0)],
@@ -697,7 +697,7 @@ fn draft_o35_cold_loop_source() -> (ByteCodeFunction, usize) {
 #[test]
 fn opt_licm_native_body_guards_preserve_zero_trip_and_late_effect() {
     let _settings = draft_o35_settings();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let payload = Value::list(vec![Value::symbol("heap-companion")]);
     let _roots = Roots::new(&[payload]);
     let (source, add_pc) = draft_o35_cold_loop_source();

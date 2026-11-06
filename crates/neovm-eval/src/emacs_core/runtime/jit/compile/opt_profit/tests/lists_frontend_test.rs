@@ -48,7 +48,7 @@ pub(super) fn list_loop() -> ByteCodeFunction {
 #[test]
 fn opt_profit_lists_numeric_t1_and_retier_keep_legacy_mir_and_clif() {
     let _settings = Settings::enter();
-    let _context = Context::new();
+    let _context = Context::new(crate::test_utils::unit_runtime());
     force_opt_profit_for_test(Some(OptProfitMode::Lists));
     force_opt_early_for_test(Some(OptEarlyMode::On));
     let f = count_loop(0);
@@ -69,7 +69,7 @@ fn opt_profit_lists_numeric_t1_and_retier_keep_legacy_mir_and_clif() {
 #[test]
 fn opt_profit_lists_early_uses_list_policy_and_existing_source_heat() {
     let _settings = Settings::enter();
-    let _context = Context::new();
+    let _context = Context::new(crate::test_utils::unit_runtime());
     force_opt_profit_for_test(Some(OptProfitMode::Lists));
     force_opt_early_for_test(Some(OptEarlyMode::Hot));
     let numeric = count_loop(0);
@@ -122,7 +122,7 @@ fn opt_profit_lists_early_uses_list_policy_and_existing_source_heat() {
 #[test]
 fn opt_profit_lists_selected_list_upgrade_preserves_result_and_mutation() {
     let _settings = Settings::enter();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     force_opt_profit_for_test(Some(OptProfitMode::Lists));
     let f = list_loop();
     let selected = compile(&f, CompileTier::Upgrade(T2Upgrade::Retier));
@@ -153,7 +153,7 @@ fn opt_profit_lists_selected_list_upgrade_preserves_result_and_mutation() {
 #[test]
 fn opt_profit_lists_legacy_selector_ignores_the_filter() {
     let _settings = Settings::enter();
-    let _context = Context::new();
+    let _context = Context::new(crate::test_utils::unit_runtime());
     force_opt_for_test(Some(OptMode::Legacy), Some(OptAdmit::ALL));
     let f = list_loop();
     force_opt_profit_for_test(Some(OptProfitMode::Off));

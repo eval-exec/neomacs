@@ -49,7 +49,7 @@ fn lexical(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
 
 #[test]
 fn successful_cfg_is_shared_across_mir_fuser_and_lower_view() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let ops = [Op::Constant(0), Op::Return];
     let constants = [Value::fixnum(9)];
     let body = CompileBody::from_legacy_parts(&ops, &constants, 0, None, 0);
@@ -87,7 +87,7 @@ fn successful_cfg_is_shared_across_mir_fuser_and_lower_view() {
 
 #[test]
 fn mir_refusal_preserves_successful_cfg_for_fuser_and_baseline() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let ops = [Op::Constant(0), Op::Return, Op::Constant(0), Op::Return];
     let constants = [Value::fixnum(9)];
     let body = CompileBody::from_legacy_parts(&ops, &constants, 0, None, 0);
@@ -149,7 +149,7 @@ fn cfg_errors_remain_uncached_and_preserve_legacy_lower_failure() {
 
 #[test]
 fn empty_and_unreachable_switches_are_fresh_even_without_targets() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let _roots = Roots::enter();
     let constants = [Value::fixnum(7), table()];
     let cases = [
@@ -196,7 +196,7 @@ fn empty_and_unreachable_switches_are_fresh_even_without_targets() {
 
 #[test]
 fn weak_switch_observes_changed_removed_and_invalid_targets_each_time() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let _roots = Roots::enter();
     let table = table();
     assert!(
@@ -241,7 +241,7 @@ fn weak_switch_observes_changed_removed_and_invalid_targets_each_time() {
 
 #[test]
 fn source_lease_preserves_gnu_byte_target_resolution_and_mir_error() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let _roots = Roots::enter();
     let table = table();
     put(table, Value::fixnum(8));
@@ -320,7 +320,7 @@ fn source_replacement_and_prefix_remask_never_import_an_existing_cell() {
 
 #[test]
 fn real_classic_fusion_gets_new_owner_and_matches_legacy_fuser() {
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let _roots = Roots::enter();
     let callee = lexical(vec![Op::Constant(0), Op::Return], vec![Value::fixnum(19)]);
     callee.jit_runtime().set_hot_for_test();

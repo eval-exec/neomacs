@@ -53,7 +53,7 @@ fn assert_signal(result: i64) {
 #[test]
 fn native_array_projection_capture_keeps_vector_record_and_bounds_dependencies() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for shape in [ArrayShape::Vector, ArrayShape::Record] {
         for index in [Value::fixnum(0), Value::fixnum(2), Value::fixnum(-1)] {
             let array = shape.make();
@@ -76,7 +76,7 @@ fn native_array_projection_capture_keeps_vector_record_and_bounds_dependencies()
 #[test]
 fn native_array_projection_capture_observes_wrong_headers_after_index_validation() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let wrong = Value::make_sub_char_table(1, 0, vec![Value::NIL]);
     let (result, reads) = capture(|| shim_aref(&mut ctx, wrong, Value::fixnum(0)));
     assert_signal(result);
@@ -100,7 +100,7 @@ fn native_array_projection_capture_observes_wrong_headers_after_index_validation
 #[test]
 fn native_array_projection_capture_preserves_nested_and_first_read_revisions() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let array = Value::vector(vec![Value::fixnum(42)]);
     let (_, outer) = capture(|| {
         let (result, inner) = capture(|| shim_aref(&mut ctx, array, Value::fixnum(0)));

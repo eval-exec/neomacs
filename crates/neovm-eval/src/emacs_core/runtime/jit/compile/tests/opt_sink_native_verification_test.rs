@@ -184,7 +184,7 @@ fn rejected(f: &ByteCodeFunction, poison: &ir::Func) -> VerifyError {
 fn opt_sink_native_final_validation_rejects_poison_and_checks_recipes_once() {
     let _settings = Settings::enter();
     let roots = Roots::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.gc_stress = false;
     ctx.set_gc_threshold(usize::MAX);
     ctx.obarray

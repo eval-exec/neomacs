@@ -175,7 +175,7 @@ fn opt_array_feedback_concurrent_kind_join_never_loses_other() {
 #[test]
 fn opt_array_native_t1_records_only_live_window_and_holds_source() {
     let _settings = Settings::enter(true);
-    let mut ctx = Context::new(); // before any heap operands or symbol handles
+    let mut ctx = Context::new(crate::test_utils::unit_runtime()); // before any heap operands or symbol handles
     let vector = Value::vector(vec![Value::fixnum(13)]);
     let record = Value::make_record(vec![Value::symbol("record-tag"), Value::fixnum(29)]);
     let string = Value::string("x");
@@ -221,7 +221,7 @@ fn opt_array_native_t1_records_only_live_window_and_holds_source() {
 #[test]
 fn opt_array_native_range_off_preserves_t1_clif_even_eager_shims() {
     let _settings = Settings::enter(false);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let arg = Value::vector(vec![Value::fixnum(7)]);
     let _roots = Roots::new(&[arg]);
     let f = source();
@@ -260,7 +260,7 @@ fn opt_array_native_kind_transition_rearms_stable_version_but_samples_do_not() {
         window: 2,
         loop_credit: 64,
     }));
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let vector = Value::vector(vec![Value::fixnum(13)]);
     let record = Value::make_record(vec![Value::symbol("record-tag"), Value::fixnum(29)]);
     let _roots = Roots::new(&[vector, record]);
@@ -335,7 +335,7 @@ fn opt_array_native_kind_transition_rearms_stable_version_but_samples_do_not() {
 fn opt_array_native_observed_dynamic_arefs_upgrade_and_serve_normal_entries() {
     const CALLS: u64 = 400;
     let _settings = Settings::enter(true);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let arg = Value::vector(vec![Value::fixnum(13), Value::fixnum(23)]);
     let _roots = Roots::new(&[arg]);
     // A high then lower index in the same straight-line region has real BCE.
@@ -410,7 +410,7 @@ fn opt_array_native_observed_dynamic_arefs_upgrade_and_serve_normal_entries() {
 #[test]
 fn opt_array_snapshot_keeps_fused_caller_mapping_and_owned_worker_masks() {
     let _settings = Settings::enter(true);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let arg = Value::vector(vec![Value::fixnum(13)]);
     let callee = Value::make_bytecode(function(
         vec![Op::StackRef(0), Op::Add1, Op::Return],

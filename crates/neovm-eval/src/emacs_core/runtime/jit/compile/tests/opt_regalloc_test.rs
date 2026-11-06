@@ -197,7 +197,7 @@ fn assert_native_parity(ctx: &mut Context, f: &ByteCodeFunction, leaf: &Compiled
 #[test]
 fn opt_full_request_uses_full_allocator_for_actual_feedback_plan() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = joined_call();
     assert!(body_is_call_heavy(f.executable_ops(), &f.constants));
     let plan = actual_plan(&f);
@@ -225,7 +225,7 @@ fn opt_full_request_uses_full_allocator_for_actual_feedback_plan() {
 #[test]
 fn opt_full_request_keeps_fast_without_simultaneous_join_parameters() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let fixtures = [
         ("no join", no_join()),
         ("one parameter", single_parameter_join()),
@@ -268,7 +268,7 @@ fn opt_full_request_keeps_fast_without_simultaneous_join_parameters() {
 #[test]
 fn opt_full_request_keeps_fast_for_separate_single_parameter_joins() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = separate_single_parameter_joins();
     assert!(body_is_call_heavy(f.executable_ops(), &f.constants));
     let plan = actual_plan(&f);
@@ -299,7 +299,7 @@ fn opt_full_request_keeps_fast_for_separate_single_parameter_joins() {
 #[test]
 fn opt_auto_t1_and_off_requests_keep_the_existing_allocator() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = joined_call();
     let cases = [
         (
@@ -352,7 +352,7 @@ fn opt_auto_t1_and_off_requests_keep_the_existing_allocator() {
 #[test]
 fn opt_refused_plan_keeps_the_call_heavy_baseline_allocator() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let mut f = joined_call();
     let mut params = f.params.named().expect("named fixture parameters").clone();
     let optional = params.required.pop().unwrap();

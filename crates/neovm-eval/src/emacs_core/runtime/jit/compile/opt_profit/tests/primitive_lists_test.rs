@@ -54,7 +54,7 @@ impl Drop for FixtureScopes {
 #[test]
 fn opt_profit_primitive_lists_rejects_all_explicit_call_forms_even_if_dead_or_profitable() {
     let _settings = Settings::enter();
-    let _context = Context::new();
+    let _context = Context::new(crate::test_utils::unit_runtime());
     assert_eq!(
         OptProfitMode::parse(Some(" primitive-lists ")),
         OptProfitMode::PrimitiveLists
@@ -111,7 +111,7 @@ fn opt_profit_primitive_lists_rejects_all_explicit_call_forms_even_if_dead_or_pr
 #[test]
 fn opt_profit_primitive_lists_retains_list_span_size_and_original_numeric_mir() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     force_opt_profit_for_test(Some(OptProfitMode::PrimitiveLists));
     force_opt_early_for_test(Some(OptEarlyMode::Hot));
     let list = list_loop();
@@ -215,7 +215,7 @@ fn pair() -> Value {
 #[test]
 fn opt_profit_primitive_lists_original_call_survives_real_fusion_and_uses_one_legacy_frontend() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let _fixture = FixtureScopes::enter();
     force_opt_profit_for_test(Some(OptProfitMode::PrimitiveLists));
     force_opt_early_for_test(Some(OptEarlyMode::Hot));
@@ -284,7 +284,7 @@ fn opt_profit_primitive_lists_original_call_survives_real_fusion_and_uses_one_le
 #[test]
 fn opt_profit_primitive_lists_calling_osr_keeps_actual_baseline_and_list_mutation() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let _fixture = FixtureScopes::enter();
     force_opt_profit_for_test(Some(OptProfitMode::PrimitiveLists));
     force_opt_early_for_test(Some(OptEarlyMode::Hot));

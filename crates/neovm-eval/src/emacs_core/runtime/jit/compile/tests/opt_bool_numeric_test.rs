@@ -249,7 +249,7 @@ fn has_normalized_slow_result(clif: &str) -> bool {
 #[test]
 fn opt_bool_numeric_float_feedback_branches_match_tier0_extremes_and_nan() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let mut pairs = Vec::new();
     for (integer, float) in [
         (9_007_199_254_740_993, 9_007_199_254_740_992.0),
@@ -464,7 +464,7 @@ fn opt_bool_numeric_generic_feedback_normalizes_success_and_preserves_signal_aft
     assert!(!has_normalized_slow_result(
         &canonical.replace("icmp ne", "icmp eq")
     ));
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let _roots = Roots::new(&[]);
     ctx.eval_str("(setq t34-o32-side nil)").unwrap();
     let big = ctx.eval_str("(ash 1 80)").expect("GNU oracle bignum");

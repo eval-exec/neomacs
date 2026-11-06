@@ -397,7 +397,7 @@ fn binary(op: Op) -> ByteCodeFunction {
 #[test]
 fn opt_reps_native_checked_integer_boundaries_follow_typed_ir() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let lo = Value::MOST_NEGATIVE_FIXNUM;
     let hi = Value::MOST_POSITIVE_FIXNUM;
     for rep in [ir::Rep::TaggedFix, ir::Rep::RawInt] {
@@ -481,7 +481,7 @@ fn opt_reps_native_checked_integer_boundaries_follow_typed_ir() {
 #[test]
 fn opt_reps_native_fixcmp_crosses_branch_in_both_boolean_modes() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for boolean in [false, true] {
         force_opt_passes_for_test(Some(OptPasses {
             reps: true,
@@ -571,7 +571,7 @@ fn after_store_source(op: Op, step: i64, wrong_type: bool, collect: bool) -> Byt
 #[test]
 fn opt_reps_native_overflow_retags_aliases_and_replays_after_store() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let payload = Value::cons(Value::symbol("heap-companion"), Value::NIL);
     let _roots = Roots::new(&[payload]);
     for rep in [ir::Rep::TaggedFix, ir::Rep::RawInt] {
@@ -690,7 +690,7 @@ fn signal_summary(flow: &Flow) -> (SymId, Vec<String>, Option<String>) {
 #[test]
 fn opt_reps_native_type_failure_keeps_original_error_and_effects() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let payload = Value::cons(Value::symbol("heap-companion"), Value::NIL);
     let _roots = Roots::new(&[payload]);
     for rep in [ir::Rep::TaggedFix, ir::Rep::RawInt] {
@@ -804,7 +804,7 @@ fn raw_countdown(plan: &mut ir::Func) {
 #[test]
 fn opt_reps_native_raw_phi_transport_survives_gc_polls() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = function(
         vec![
             Op::Constant(0),
@@ -891,7 +891,7 @@ fn opt_reps_native_raw_phi_transport_survives_gc_polls() {
 #[test]
 fn opt_reps_native_static_fixnum_untag_uses_immediate_payload() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for number in [
         Value::MOST_NEGATIVE_FIXNUM,
         Value::MOST_POSITIVE_FIXNUM,

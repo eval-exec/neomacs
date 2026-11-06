@@ -64,7 +64,7 @@ fn pair() -> Value {
 fn opt_require_osr_normal_only_sources_keep_numeric_mir_and_list_legacy_clif() {
     let _settings = Settings::enter();
     let _require = opt_require_osr_scope_for_test(OptOsrRequirement::Required);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     force_opt_profit_for_test(Some(OptProfitMode::Lists));
     force_opt_early_for_test(Some(OptEarlyMode::Hot));
     for list in [false, true] {
@@ -122,7 +122,7 @@ fn opt_require_osr_ready_list_osr_then_normal_cache_selects_opt_and_runs_mutatio
     let _settings = Settings::enter();
     let _require = opt_require_osr_scope_for_test(OptOsrRequirement::Required);
     let _cache = CacheScope::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     force_opt_profit_for_test(Some(OptProfitMode::PrimitiveLists));
     force_opt_early_for_test(Some(OptEarlyMode::Hot));
     let source = list_loop();
@@ -200,7 +200,7 @@ fn opt_require_osr_numeric_header_cannot_qualify_separate_list_backedge() {
     let _settings = Settings::enter();
     let _require = opt_require_osr_scope_for_test(OptOsrRequirement::Required);
     let _cache = CacheScope::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     force_opt_profit_for_test(Some(OptProfitMode::Lists));
     force_opt_early_for_test(Some(OptEarlyMode::Hot));
     // Pin the real normal cache's current obarray through an unrelated numeric
@@ -261,7 +261,7 @@ fn opt_require_osr_numeric_header_cannot_qualify_separate_list_backedge() {
 #[test]
 fn opt_require_osr_off_keeps_old_selection_and_legacy_ignores_on() {
     let _settings = Settings::enter();
-    let ctx = Context::new();
+    let ctx = Context::new(crate::test_utils::unit_runtime());
     force_opt_profit_for_test(Some(OptProfitMode::Lists));
     force_opt_early_for_test(Some(OptEarlyMode::Hot));
     let source = list_loop();

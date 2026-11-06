@@ -159,7 +159,7 @@ fn opt_fold_select_mixed_local_and_incoming_bool_materializes_gnu_boolean() {
         vec![],
         2,
     );
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for local_value in [false, true] {
         for local_on_true in [false, true] {
             let plan = mixed_select(local_value, local_on_true);

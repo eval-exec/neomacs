@@ -8,7 +8,7 @@ use fixture::*;
 fn opt_sink_numeric_fresh_cold_materialization_keeps_exact_point_aliases_without_generic_cache_diamonds()
  {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::enter();
     let f = program(
         vec![

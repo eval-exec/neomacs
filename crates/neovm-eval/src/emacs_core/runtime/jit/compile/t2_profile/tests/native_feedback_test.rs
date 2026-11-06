@@ -100,7 +100,7 @@ fn tier2_native_use_observes_a_stable_window_transition_and_reopens() {
     // Entry-only must record too; native feedback is not a loop-credit knob.
     for loop_credit in [0, 64] {
         let _settings = Overrides::use_t1(2, loop_credit);
-        let mut ctx = Context::new();
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
         let a = callback(1, 0);
         let b = callback(2, 0);
         let c = callback(3, 0);
@@ -166,7 +166,7 @@ fn tier2_native_use_observes_a_stable_window_transition_and_reopens() {
 fn tier2_native_use_source_guard_miss_widens_the_stable_snapshot() {
     let _settings = Overrides::use_t1(2, 64);
     force_spec_sources_for_test(Some(true));
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let a = callback(1, 0);
     let b = callback(2, 0);
     let a_data = a.get_bytecode_data().expect("callback source");
@@ -222,7 +222,7 @@ fn tier2_native_use_source_guard_miss_widens_the_stable_snapshot() {
 #[test]
 fn tier2_native_use_apply_keeps_tail_spreading_and_leaf_window() {
     let _settings = Overrides::use_t1(100, 0);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let a = callback(7, 0);
     let b = callback(8, 0);
     // (lambda (f) (apply f nil)): Op::Apply spreads its final list argument.
@@ -251,7 +251,7 @@ fn tier2_native_use_apply_keeps_tail_spreading_and_leaf_window() {
 #[test]
 fn tier2_native_use_static_mapping_records_callback_in_its_leaf_window() {
     let _settings = Overrides::use_t1(100, 0);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let a = callback(1, 1);
     let b = callback(2, 1);
     let seq = Value::vector(vec![Value::NIL; 128]);
@@ -300,7 +300,7 @@ fn tier2_native_use_static_mapping_records_callback_in_its_leaf_window() {
 fn tier2_native_use_off_osr_and_upgrade_leave_native_recording_absent() {
     let _settings = Overrides::use_t1(100, 64);
     force_spec_sources_for_test(Some(true));
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let a = callback(1, 1);
     let b = callback(2, 1);
     let f = function(
@@ -394,7 +394,7 @@ fn tier2_native_use_fix_preserves_record_and_census_site_windows() {
     for mode in [FeedbackMode::Record, FeedbackMode::Census] {
         let _settings = Overrides::use_t1(100, 64);
         force_feedback_mode_for_test(Some(mode));
-        let mut ctx = Context::new();
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
         let a = callback(1, 0);
         let b = callback(2, 0);
         let c = callback(3, 0);
@@ -431,7 +431,7 @@ fn tier2_native_use_imports_helpers_only_with_actual_t1_emission() {
 
     let _settings = Overrides::use_t1(100, 0);
     super::super::shim_refs::force_lazy_shims_for_test(true);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let source = function(vec![Op::StackRef(0), Op::Call(0), Op::Return], vec![], 1);
     source
         .jit_runtime()

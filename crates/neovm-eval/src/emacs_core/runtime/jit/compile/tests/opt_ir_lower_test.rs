@@ -175,7 +175,7 @@ fn opt_ir_lower_proven_cons_read_keeps_exact_failed_guard_frame() {
         fold: true,
         ..OptPasses::default()
     }));
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for (op, direct) in [
         (Op::Car, ir::Opcode::LoadCar),
         (Op::Cdr, ir::Opcode::LoadCdr),
@@ -216,7 +216,7 @@ fn opt_ir_lower_typed_cons_read_roots_compiler_only_result_through_gc() {
         fold: true,
         ..OptPasses::default()
     }));
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     for (read, direct, mut ops) in [
         (
             Op::Car,
@@ -293,7 +293,7 @@ fn opt_ir_lower_bool_constant_materializes_gnu_t_nil_before_return() {
         fold: true,
         ..OptPasses::default()
     }));
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = function(vec![Op::True, Op::Return], vec![], 0);
     for flag in [false, true] {
         let mut changed = plan(&f);
@@ -369,7 +369,7 @@ fn raw_arithmetic_feeds_nil_test(clif: &str) -> bool {
 #[test]
 fn opt_ir_lower_numeric_truth_is_only_folded_with_bool_pass() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = function(
         vec![
             Op::StackRef(0),
@@ -449,7 +449,7 @@ fn opt_ir_lower_numeric_truth_is_only_folded_with_bool_pass() {
 #[test]
 fn opt_ir_lower_const_pool_index_controls_native_result() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = function(
         vec![Op::Constant(0), Op::Return],
         vec![Value::fixnum(7), Value::fixnum(41)],
@@ -471,7 +471,7 @@ fn opt_ir_lower_const_pool_index_controls_native_result() {
 #[test]
 fn opt_ir_lower_opaque_opcode_controls_native_arithmetic() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = binary(Op::Add);
     let mut changed = plan(&f);
     let index = opaque(&changed, &Op::Add);
@@ -490,7 +490,7 @@ fn opt_ir_lower_opaque_opcode_controls_native_arithmetic() {
 #[test]
 fn opt_ir_lower_opaque_operands_control_native_order() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = binary(Op::Sub);
     let mut changed = plan(&f);
     let index = opaque(&changed, &Op::Sub);
@@ -509,7 +509,7 @@ fn opt_ir_lower_opaque_operands_control_native_order() {
 #[test]
 fn opt_ir_lower_return_operand_controls_native_result() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = binary(Op::Add);
     let mut changed = plan(&f);
     let argument = changed
@@ -534,7 +534,7 @@ fn opt_ir_lower_return_operand_controls_native_result() {
 #[test]
 fn opt_ir_lower_branch_successors_control_native_selection() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = function(
         vec![
             Op::GotoIfNil(3),
@@ -673,7 +673,7 @@ fn opt_ir_lower_branch_successors_control_native_selection() {
 #[test]
 fn opt_ir_lower_guard_uses_its_frame_after_a_heap_effect() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = function(
         vec![
             Op::StackRef(1),
@@ -713,7 +713,7 @@ fn opt_ir_lower_guard_uses_its_frame_after_a_heap_effect() {
 #[test]
 fn opt_ir_lower_return_keeps_a_fresh_cons_live_through_gc() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = function(
         vec![
             Op::Constant(0),
@@ -756,7 +756,7 @@ fn opt_ir_lower_return_keeps_a_fresh_cons_live_through_gc() {
 #[test]
 fn opt_ir_lower_deopt_terminator_spills_its_exact_frame() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = binary(Op::Add);
     let mut changed = plan(&f);
     let frame = changed.source_states[3].as_ref().unwrap().frame;
@@ -891,7 +891,7 @@ fn opt_ir_lower_rejects_an_unimplemented_typed_opcode() {
 fn opt_ir_lower_compiler_only_cons_survives_call_gc() {
     let _settings = Settings::enter();
     let _tail_roots = TailRoots::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = function(
         vec![
             Op::Constant(0),
@@ -1035,7 +1035,7 @@ fn assert_terminal_poll_target(f: &ByteCodeFunction, plan: &ir::Func, clif: &str
 #[test]
 fn opt_ir_lower_terminal_poll_carries_refinements_and_phi_to_header() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = function(
         vec![
             Op::StackRef(1),
@@ -1100,7 +1100,7 @@ fn opt_ir_lower_terminal_poll_carries_refinements_and_phi_to_header() {
 #[test]
 fn opt_ir_lower_nonterminal_poll_keeps_following_operation() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = countdown();
     let mut changed = plan(&f);
     let block = changed
@@ -1159,7 +1159,7 @@ fn opt_ir_lower_nonterminal_poll_keeps_following_operation() {
 #[test]
 fn opt_ir_lower_polls_at_tier0_backedge_cadence() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = countdown();
     let original = plan(&f);
     assert!(
@@ -1189,7 +1189,7 @@ fn opt_ir_lower_polls_at_tier0_backedge_cadence() {
 #[test]
 fn opt_ir_lower_poll_quit_matches_tier0_flow() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = countdown();
     let leaf = lower(&f, &plan(&f));
     let args = [Value::fixnum(100_000)];
@@ -1223,7 +1223,7 @@ fn opt_ir_lower_poll_quit_matches_tier0_flow() {
 #[test]
 fn opt_ir_lower_compiler_only_cons_survives_poll_gc() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = function(
         vec![
             Op::Constant(0),

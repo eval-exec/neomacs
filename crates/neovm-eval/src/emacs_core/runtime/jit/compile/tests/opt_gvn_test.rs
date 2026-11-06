@@ -240,7 +240,7 @@ fn children() -> [Value; 3] {
 #[test]
 fn opt_gvn_native_repeated_cons_fields_preserve_heap_identity() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let [a, d, _] = children();
     let _roots = Roots::new(&[a, d]);
     // GNU repeated-cons: four reads and two identity comparisons, with a
@@ -297,7 +297,7 @@ fn store_source(cdr: bool) -> ByteCodeFunction {
 #[test]
 fn opt_gvn_native_retained_stores_forward_with_aliases_and_barrier() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let [a, d, x] = children();
     let _roots = Roots::new(&[a, d, x]);
     // Frozen store-car-same-base/store-cdr-same-base; the opposite field and
@@ -383,7 +383,7 @@ fn opt_gvn_native_retained_stores_forward_with_aliases_and_barrier() {
 #[test]
 fn opt_gvn_native_one_arm_write_kills_predecessor_load_at_join() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let [a, d, x] = children();
     let _roots = Roots::new(&[a, d, x]);
     // Frozen diamond-{car,cdr}-{t,nil}, on a known CONS allocation.
@@ -528,7 +528,7 @@ fn poll_source() -> ByteCodeFunction {
 #[test]
 fn opt_gvn_native_call_gc_and_poll_invalidate_mutable_fields() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let [a, d, x] = children();
     let _roots = Roots::new(&[a, d, x]);
     ctx.eval_str(
@@ -624,7 +624,7 @@ fn opt_gvn_native_call_gc_and_poll_invalidate_mutable_fields() {
 fn opt_gvn_native_eliminated_load_alias_roots_heap_only_across_gc() {
     let _settings = Settings::enter();
     force_tail_unrooted_for_test(Some(true));
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     // The inner child is created natively, not supplied or scratch-rooted.
     // Both source-stack reads are dropped before GC; only authoritative SSA
     // Return keeps the repeated load live. This is compiler-liveness evidence.
@@ -754,7 +754,7 @@ fn signal_text(flow: &Flow) -> (String, String) {
 #[test]
 fn opt_gvn_native_errors_nil_and_identity_keep_gnu_observations() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let [a, d, x] = children();
     let payload = Value::list(vec![Value::symbol("heap-companion")]);
     let _roots = Roots::new(&[a, d, x, payload]);
@@ -966,7 +966,7 @@ fn list_read_plan_for_native(source: &ByteCodeFunction) -> ir::Func {
 #[test]
 fn opt_gvn_native_typed_list_reads_preserve_nil_and_cons_identity() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let [a, d, _] = children();
     let _roots = Roots::new(&[a, d]);
     for cdr in [false, true] {
@@ -1042,7 +1042,7 @@ fn opt_gvn_native_typed_list_reads_preserve_nil_and_cons_identity() {
 #[test]
 fn opt_gvn_native_guarded_list_sources_reuse_without_prefix_change() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let [a, d, _] = children();
     let _roots = Roots::new(&[a, d]);
     let mut p = Program::new(1);
@@ -1089,7 +1089,7 @@ fn opt_gvn_native_guarded_list_sources_reuse_without_prefix_change() {
 #[test]
 fn opt_gvn_native_list_bridge_retains_setcar_and_reuses_other_field() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let [a, d, x] = children();
     let _roots = Roots::new(&[a, d, x]);
     // Real normal bubble shape: known CONS Cdr; LIST guard+Car on its tail;
@@ -1268,7 +1268,7 @@ fn coemit_resume(
 #[test]
 fn opt_gvn_native_adjacent_list_accessor_coemits_original_guard_and_clif() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let [a, d, x] = children();
     let payload = Value::list(vec![Value::symbol("heap-companion")]);
     let _roots = Roots::new(&[a, d, x, payload]);

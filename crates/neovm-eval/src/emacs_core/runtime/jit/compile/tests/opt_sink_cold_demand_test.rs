@@ -127,7 +127,7 @@ fn opt_sink_cold_direct_slot_demand_keeps_complete_alias_frame_without_constant_
     );
 
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::enter();
     let source = program(
         vec![

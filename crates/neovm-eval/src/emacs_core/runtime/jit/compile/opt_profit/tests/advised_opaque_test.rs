@@ -50,7 +50,7 @@ fn retained_aset_loop() -> ByteCodeFunction {
 #[test]
 fn opt_profit_primitive_lists_aset_original_source_outside_fragment_is_admitted() {
     let _settings = Settings::enter();
-    let _context = Context::new();
+    let _context = Context::new(crate::test_utils::unit_runtime());
     force_opt_profit_for_test(Some(OptProfitMode::PrimitiveLists));
     force_opt_max_ops_for_test(Some(48));
     let source = retained_aset_loop();
@@ -99,7 +99,7 @@ impl Drop for FuserScope {
 #[test]
 fn opt_profit_primitive_lists_aset_post_fusion_slice_is_admitted_but_original_call_is_not() {
     let _settings = Settings::enter();
-    let _context = Context::new();
+    let _context = Context::new(crate::test_utils::unit_runtime());
     let _fuser = FuserScope::enter();
     force_opt_profit_for_test(Some(OptProfitMode::PrimitiveLists));
     force_opt_max_ops_for_test(Some(48));
@@ -175,7 +175,7 @@ fn opt_profit_primitive_lists_aset_post_fusion_slice_is_admitted_but_original_ca
 #[test]
 fn opt_profit_primitive_lists_aset_dead_source_keeps_selected_frontier_and_other_modes() {
     let _settings = Settings::enter();
-    let _context = Context::new();
+    let _context = Context::new(crate::test_utils::unit_runtime());
     force_opt_max_ops_for_test(Some(48));
     force_opt_early_for_test(Some(OptEarlyMode::Hot));
     let list = list_loop();

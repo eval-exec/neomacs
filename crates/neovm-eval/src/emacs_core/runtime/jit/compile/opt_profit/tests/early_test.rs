@@ -80,7 +80,7 @@ fn opt_early_off_t1_is_clif_identical_to_legacy_mir() {
 #[test]
 fn opt_early_on_preserves_successful_numeric_mir() {
     let _settings = Settings::enter();
-    let _context = Context::new();
+    let _context = Context::new(crate::test_utils::unit_runtime());
     force_opt_early_for_test(Some(OptEarlyMode::On));
     force_opt_max_ops_for_test(Some(64));
     let f = count_loop(0);
@@ -107,7 +107,7 @@ fn opt_early_on_preserves_successful_numeric_mir() {
 #[test]
 fn opt_early_on_selects_cold_first_sight_heap_loop_but_requires_heat_at_dispatch() {
     let _settings = Settings::enter();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     force_opt_early_for_test(Some(OptEarlyMode::On));
     force_opt_max_ops_for_test(Some(64));
     let f = heap_loop();
@@ -137,7 +137,7 @@ fn opt_early_on_selects_cold_first_sight_heap_loop_but_requires_heat_at_dispatch
 #[test]
 fn opt_early_hot_declines_cold_first_sight_and_max_ops_preserves_baseline() {
     let _settings = Settings::enter();
-    let _context = Context::new();
+    let _context = Context::new(crate::test_utils::unit_runtime());
     let f = heap_loop();
     force_opt_early_for_test(Some(OptEarlyMode::Hot));
     assert_eq!(
@@ -155,7 +155,7 @@ fn opt_early_hot_declines_cold_first_sight_and_max_ops_preserves_baseline() {
 #[test]
 fn opt_early_refused_dynamic_variable_loop_keeps_legacy_fallback() {
     let _settings = Settings::enter();
-    let _context = Context::new();
+    let _context = Context::new(crate::test_utils::unit_runtime());
     force_opt_early_for_test(Some(OptEarlyMode::On));
     force_opt_max_ops_for_test(Some(64));
     force_opt_for_test(Some(OptMode::Opt), Some(OptAdmit::default()));

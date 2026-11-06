@@ -7,7 +7,7 @@ use fixture::*;
 #[test]
 fn opt_sink_numeric_infallible_ready_float_omits_only_unused_precise_exit() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = Roots::enter();
     // pc2 resolves original borrowed inputs. pc4 consumes that ready Float
     // twice. pc7 still resolves a NEW unknown borrowed input after two aliases

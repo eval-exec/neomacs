@@ -118,7 +118,7 @@ fn assert_native_parity(ctx: &mut Context, f: &ByteCodeFunction, leaf: &Compiled
 fn opt_t1_root_counts_do_not_inherit_the_preceding_leaf() {
     let _mode = opt_mode_scope_for_test(OptMode::Opt);
     let _passes = PassesOff::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let _rooted = seed_root_stores();
     let f = pure();
     let (leaf, clif) = lower(&f, None);
@@ -131,7 +131,7 @@ fn opt_t1_root_counts_do_not_inherit_the_preceding_leaf() {
 fn opt_success_root_counts_do_not_inherit_the_preceding_leaf() {
     let _mode = opt_mode_scope_for_test(OptMode::Opt);
     let _passes = PassesOff::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let _rooted = seed_root_stores();
     let f = pure();
     let (leaf, clif) = lower(
@@ -150,7 +150,7 @@ fn opt_success_root_counts_do_not_inherit_the_preceding_leaf() {
 fn opt_refused_root_counts_do_not_inherit_the_preceding_leaf() {
     let _mode = opt_mode_scope_for_test(OptMode::Opt);
     let _passes = PassesOff::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let _rooted = seed_root_stores();
     // The real opt operation budget rejects this valid pure body independently
     // of admission/pass knobs. The production adapter then emits the baseline.

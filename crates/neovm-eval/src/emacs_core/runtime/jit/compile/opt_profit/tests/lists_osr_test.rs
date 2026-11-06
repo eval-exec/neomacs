@@ -16,7 +16,7 @@ use crate::emacs_core::jit::compile::{
 #[test]
 fn opt_profit_lists_numeric_osr_retains_legacy_baseline_clif_and_result() {
     let _settings = Settings::enter();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     force_opt_profit_for_test(Some(OptProfitMode::Lists));
     let snapshot = [Value::make_int(2000), Value::make_int(42)];
     let mut clif = Vec::new();
@@ -45,7 +45,7 @@ fn opt_profit_lists_numeric_osr_retains_legacy_baseline_clif_and_result() {
 #[test]
 fn opt_profit_lists_list_osr_preserves_snapshot_guards_result_and_mutation() {
     let _settings = Settings::enter();
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     force_opt_profit_for_test(Some(OptProfitMode::Lists));
     let f = list_loop();
     let pair = Value::cons(Value::make_int(-1), Value::NIL);

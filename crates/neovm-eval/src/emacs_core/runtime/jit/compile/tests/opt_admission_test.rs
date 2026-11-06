@@ -87,7 +87,7 @@ fn native(ctx: &mut Context, leaf: &CompiledLeaf, f: &ByteCodeFunction, args: &[
 #[test]
 fn opt_admits_optional_and_rest_with_gnu_argument_seeding() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     // GNU bytecode.c pushes non-rest arguments, nil-pads missing optionals,
     // and allocates the extra arguments' list in the final parameter slot.
     let mut f = function(vec![Op::List(3), Op::Return], vec![], 3);
@@ -116,7 +116,7 @@ fn opt_admits_optional_and_rest_with_gnu_argument_seeding() {
 #[test]
 fn opt_admits_patched_prefix_for_two_instances_of_one_source() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let proto = function(
         vec![Op::StackRef(0), Op::Constant(0), Op::Add, Op::Return],
         vec![Value::make_int(1)],
@@ -137,7 +137,7 @@ fn opt_admits_patched_prefix_for_two_instances_of_one_source() {
 #[test]
 fn opt_admits_switch_with_raw_gnu_targets_and_equal_keys() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let symbol = Value::symbol("opt-native-switch-case");
     let list = Value::list(vec![symbol, Value::make_int(7)]);
     let table = Value::hash_table(HashTableTest::Equal);
@@ -195,7 +195,7 @@ fn opt_admits_switch_with_raw_gnu_targets_and_equal_keys() {
 #[test]
 fn opt_admits_float_sites_preserving_signed_zero_and_object_identity() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let floats = |ops: Vec<Op>, pcs: &[usize]| {
         let f = function(ops, vec![], 2);
         for &pc in pcs {
@@ -260,7 +260,7 @@ fn opt_admits_float_sites_preserving_signed_zero_and_object_identity() {
 #[test]
 fn opt_admits_loop_heap_writes_varrefs_and_generic_calls() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str("(setq opt-native-delta 3) (fset 'opt-native-step (lambda (x) x))")
         .unwrap();
     // v,pair,n,i. Each iteration reads/writes v[i], writes both pair fields,
@@ -340,7 +340,7 @@ fn opt_admits_loop_heap_writes_varrefs_and_generic_calls() {
 #[test]
 fn opt_admits_generic_gc_call_with_a_live_new_heap_value() {
     let _settings = Settings::enter();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = function(
         vec![
             Op::Constant(0),

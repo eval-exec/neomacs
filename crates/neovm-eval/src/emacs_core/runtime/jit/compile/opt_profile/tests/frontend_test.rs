@@ -112,7 +112,7 @@ fn normalized(records: Vec<String>) -> Vec<String> {
 fn opt_profile_lists20_keeps_numeric_mir_and_selects_hot_mutating_parameter_loop() {
     let _settings = Settings::enter();
     let _profile = scope_for_test(Profile::Lists20);
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let numeric = loop_body(false);
     let list = loop_body(true);
     numeric.jit_runtime().set_hot_for_test();
@@ -135,7 +135,7 @@ fn opt_profile_lists20_keeps_numeric_mir_and_selects_hot_mutating_parameter_loop
 #[test]
 fn opt_profile_explicit_legacy_escape_keeps_numeric_and_list_clif() {
     let _settings = Settings::enter();
-    let _context = Context::new();
+    let _context = Context::new(crate::test_utils::unit_runtime());
     let _legacy = opt_mode_scope_for_test(OptMode::Legacy);
     for list in [false, true] {
         let source = loop_body(list);
