@@ -124,10 +124,10 @@ fn check_function_reasons(ctx: &mut Context, ids: [SymId; 2]) {
     ] {
         let previous = ctx.obarray.function_epoch();
         let input = root(ctx, replacement);
-        let receipt = ctx.c4_function_era_for_test(ids, edit, input, |_| {});
+        let (receipt, epochs) = ctx.c4_function_era_for_test(ids, edit, input, |_| {});
         let distance = ctx.obarray.function_epoch() - previous;
         coherent(ctx, previous + expected_fset + expected_unbind);
-        let reasons = receipt.writer.epoch_bumps;
+        let reasons = epochs;
         assert_eq!(reasons.bumps_for(FunctionEpochBump::Fset), expected_fset);
         assert_eq!(
             reasons.bumps_for(FunctionEpochBump::Fmakunbound),
@@ -139,9 +139,9 @@ fn check_function_reasons(ctx: &mut Context, ids: [SymId; 2]) {
             distance,
             "every sealed epoch move labeled once"
         );
-        assert_eq!(receipt.before.facts[0].0, previous);
-        assert_eq!(receipt.writer.facts[0].0, previous + distance);
-        assert_eq!(receipt.after.facts[0].0, previous + distance);
+        assert_eq!(receipt.before().facts()[0].0, previous);
+        assert_eq!(receipt.writer().facts()[0].0, previous + distance);
+        assert_eq!(receipt.after().facts()[0].0, previous + distance);
         attributed += reasons.total();
         fset += expected_fset;
         unbind += expected_unbind;

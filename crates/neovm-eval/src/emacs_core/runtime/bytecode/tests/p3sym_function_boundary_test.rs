@@ -62,19 +62,19 @@ fn oracle() -> Vec<&'static str> {
     rows
 }
 fn assert_boundary(receipt: &FunctionEraReceipt, changed: Option<usize>) {
-    let clock = receipt.before.facts[0].0;
-    assert_eq!(receipt.before.facts[1].0, clock);
-    assert_eq!(receipt.writer.words, receipt.after.words);
-    assert_eq!(receipt.writer.facts, receipt.after.facts);
+    let clock = receipt.before().facts()[0].0;
+    assert_eq!(receipt.before().facts()[1].0, clock);
+    assert_eq!(receipt.writer().words(), receipt.after().words());
+    assert_eq!(receipt.writer().facts(), receipt.after().facts());
     for i in 0..2 {
-        let after = receipt.after.facts[i];
+        let after = receipt.after().facts()[i];
         assert_eq!(after.0, clock + u64::from(changed.is_some()));
         assert_eq!(
             after.1,
             if changed == Some(i) {
                 after.0
             } else {
-                receipt.before.facts[i].1
+                receipt.before().facts()[i].1
             }
         );
         assert_eq!(after.2, changed.is_some());
@@ -146,10 +146,10 @@ fn p3sym_c4_vm_and_named_cache_across_owned_era() {
             .get(ids[0], previous)
             .is_some();
         let input = root(&mut ctx, new);
-        let receipt = ctx.c4_function_era_for_test(ids, edit, input, |_| {});
+        let (receipt, _) = ctx.c4_function_era_for_test(ids, edit, input, |_| {});
         assert_boundary(&receipt, changed);
         assert_eq!(
-            receipt.writer_answer,
+            receipt.writer_answer(),
             match row {
                 1 => old.bits(),
                 4 => Value::from_sym_id(ids[0]).bits(),
@@ -190,7 +190,7 @@ fn p3sym_c4_vm_and_named_cache_across_owned_era() {
             1 => format!(
                 "({} {} {})",
                 crate::emacs_core::print_value(&Value::bool_val(
-                    receipt.writer_answer == old.bits()
+                    receipt.writer_answer() == old.bits()
                 )),
                 printed(first),
                 printed(ctx.apply0(Value::from_sym_id(ids[0])))

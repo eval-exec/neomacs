@@ -131,16 +131,16 @@ fn p3sym_c4_jit_calls_across_owned_era() {
         test_support::settle(&mut ctx);
         let clock = ctx.dispatch_projection().function_epoch();
         let source = input(&mut ctx, replacement);
-        let receipt = ctx.c4_function_era_for_test(ids, edit, source, |_| {});
+        let (receipt, _) = ctx.c4_function_era_for_test(ids, edit, source, |_| {});
         coherent(&ctx, clock + delta);
-        assert_eq!(receipt.before.facts[0].0, clock);
-        assert_eq!(receipt.after.facts[0].0, clock + delta);
+        assert_eq!(receipt.before().facts()[0].0, clock);
+        assert_eq!(receipt.after().facts()[0].0, clock + delta);
         let first = native(&mut ctx, callers[0]);
         let actual = match row {
             1 => format!(
                 "({} {} {})",
                 crate::emacs_core::print_value(&Value::bool_val(
-                    receipt.writer_answer == targets[0].bits()
+                    receipt.writer_answer() == targets[0].bits()
                 )),
                 printed(first.unwrap()),
                 direct(&mut ctx, Value::from_sym_id(ids[0]))
@@ -240,14 +240,14 @@ fn p3sym_c4_jit_inline_dependents_reconcile_at_stop() {
         let source = input(&mut ctx, replacement);
         // Only integer IDs/symbols and an output ledger enter the callback.
         // It queries existing keeper TLS metadata, with no Context or entry.
-        let receipt = ctx.c4_function_era_for_test(symbols, edit, source, |point| {
+        let (receipt, _) = ctx.c4_function_era_for_test(symbols, edit, source, |point| {
             let after = matches!(point, FunctionBoundaryPoint::AfterReconcile);
             observations.push((after, snapshot(ids, symbols)));
         });
         let delta = u64::from(row != 1);
         coherent(&ctx, clock + delta);
-        assert_eq!(receipt.before.facts[0].0, clock);
-        assert_eq!(receipt.after.facts[0].0, clock + delta);
+        assert_eq!(receipt.before().facts()[0].0, clock);
+        assert_eq!(receipt.after().facts()[0].0, clock + delta);
         assert_eq!(observations.len(), 2);
         assert_eq!(
             observations[0],
@@ -271,7 +271,7 @@ fn p3sym_c4_jit_inline_dependents_reconcile_at_stop() {
             1 => format!(
                 "({} {} {})",
                 crate::emacs_core::print_value(&Value::bool_val(
-                    receipt.writer_answer == targets[0].bits()
+                    receipt.writer_answer() == targets[0].bits()
                 )),
                 printed(first),
                 direct(&mut ctx, Value::from_sym_id(symbols[0]))

@@ -127,14 +127,14 @@ fn p3sym_c4_compiled_a_current_b_identity_across_owned_era() {
 
     test_support::settle(&mut b);
     let replacement = input(&mut b, b_replacement);
-    let receipt = b.c4_function_era_for_test(
+    let (receipt, _) = b.c4_function_era_for_test(
         ids,
         FunctionEraEdit::Replace { symbol: 0 },
         replacement,
         |_| {},
     );
-    assert_eq!(receipt.before.facts[0].0, clock);
-    assert_eq!(receipt.after.facts[0].0, clock + 1);
+    assert_eq!(receipt.before().facts()[0].0, clock);
+    assert_eq!(receipt.after().facts()[0].0, clock + 1);
     coherent(&b, clock + 1);
     let after_b = current_receiver(&mut b, &source, &leaf, ids[0]);
     assert_eq!(format!("({before_b} {after_b})"), oracle()[2]);
