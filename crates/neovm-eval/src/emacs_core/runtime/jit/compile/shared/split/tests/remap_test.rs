@@ -4,6 +4,7 @@
 use super::*;
 use crate::emacs_core::jit::compile::lowering::{RegallocChoice, jit_isa_for};
 use crate::emacs_core::jit::compile::shim_refs::{RtRefs, ShimGroups};
+use cranelift_codegen::entity::packed_option::ReservedValue;
 use cranelift_codegen::ir::{AbiParam, InstBuilder, Signature, UserFuncName, types};
 use cranelift_frontend::FunctionBuilder;
 use cranelift_jit::JITBuilder;
@@ -134,6 +135,37 @@ fn jit_bg_payload_names_imports_by_shim_and_remaps_by_name() {
     backend.define_function(fid, &mut ctx).expect("define");
     backend.finalize_definitions().expect("finalize");
     assert!(!backend.get_finalized_function(fid).is_null());
+}
+
+/// Regression (peer 15:14Z): a deferred leaf capture must return the
+/// entity crate's RESERVED `FuncId` sentinel.  Spelling it
+/// `FuncId::from_u32(u32::MAX)` trips cranelift-entity's
+/// `debug_assert!(x < u32::MAX)` and panicked every debug-assertions build
+/// that reached a deferred leaf.  Red before that fix, green after.
+#[test]
+fn deferred_capture_returns_the_reserved_func_id() {
+    let (mut module, shims) = module_with_padding(0);
+    let mut fbctx = FunctionBuilderContext::new();
+    let config = module.target_config();
+    let mut sig = Signature::new(config.default_call_conv);
+    sig.returns.push(AbiParam::new(types::I64));
+    let func = Function::with_name_signature(UserFuncName::user(0, 0), sig.clone());
+    let entry = LeafEntry {
+        name: "deferred-capture-regression",
+        linkage: Linkage::Local,
+        signature: &sig,
+    };
+    let mut sink = DeferredSink {
+        module: &mut module,
+        shims: &shims,
+        fbctx: &mut fbctx,
+        captured: None,
+    };
+    let id = sink.capture(entry, func, false);
+    assert!(
+        id.is_reserved_value(),
+        "deferred capture must return the RESERVED FuncId sentinel"
+    );
 }
 
 /// An import that names no declared shim ties the payload to its front's

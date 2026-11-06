@@ -22,6 +22,7 @@
 //! The CLIF, and so the machine code, is the same whichever path compiles
 //! it (the split tests pin that on the pipeline corpus).
 
+use cranelift_codegen::entity::packed_option::ReservedValue;
 use cranelift_codegen::ir::{Function, UserExternalName, UserExternalNameRef};
 use cranelift_frontend::FunctionBuilderContext;
 use cranelift_jit::JITModule;
@@ -144,6 +145,12 @@ pub(crate) struct DeferredSink<'a> {
 impl DeferredSink<'_> {
     /// Keep the finished function; nothing is declared or defined yet. The
     /// returned id is a placeholder no caller of a deferred build reads.
+    ///
+    /// It must be the entity crate's RESERVED sentinel
+    /// (`<FuncId as ReservedValue>::reserved_value()`): `FuncId::from_u32`
+    /// debug-asserts `x < u32::MAX` (cranelift-entity `entity_impl!`), so
+    /// spelling the sentinel as `from_u32(u32::MAX)` panicked every
+    /// debug-assertions build that reached a deferred leaf capture.
     #[doc(hidden)]
     pub fn capture(&mut self, entry: LeafEntry<'_>, func: Function, disasm: bool) -> FuncId {
         debug_assert!(self.captured.is_none(), "one leaf per build");
@@ -154,7 +161,7 @@ impl DeferredSink<'_> {
             linkage: entry.linkage,
             disasm,
         });
-        FuncId::from_u32(u32::MAX)
+        <FuncId as ReservedValue>::reserved_value()
     }
 }
 
