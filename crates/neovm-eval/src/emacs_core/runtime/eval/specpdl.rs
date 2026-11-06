@@ -1565,10 +1565,12 @@ impl Context {
         Ok(())
     }
 
-    /// Sim executes a new worker eagerly, although GNU's `make-thread`
-    /// does not switch. Preserve absent local entries across that artificial
-    /// switch: their later rewind must still see a local remade by the caller.
-    /// Real exchanges keep their normal missing-local retirement semantics.
+    /// Sim runs a created worker at a caller release point (`thread-yield` /
+    /// `thread-join`), inside the caller's evaluation. GNU's `make-thread`
+    /// itself does not switch (src/thread.c:924-925/:757+), so this run is the
+    /// simulation's artificial switch: preserve absent local entries across it
+    /// so their later rewind still sees a local remade by the caller. Real
+    /// exchanges keep their normal missing-local retirement semantics.
     #[cold]
     #[inline(never)]
     #[doc(hidden)]
@@ -1624,6 +1626,33 @@ impl Context {
         }
         roots.finish();
         result
+    }
+
+    /// Whether a simulated worker may suspend at this point and resume from
+    /// a saved form list.
+    ///
+    /// The simulated backend resumes a blocked worker by evaluating the rest
+    /// of its body. That cannot carry dynamic `let` bindings, cleanup
+    /// handlers, excursions, restrictions or load state across the switch:
+    /// the thread-switch path itself requires the active specpdl to unwind
+    /// first, and a `with-mutex` cleanup would then free the mutex the wait
+    /// already released. Call frames, temporary roots, the lexical
+    /// environment (the resumed continuation is rewrapped as a closure over
+    /// it) and no-op entries do not affect the continuation.
+    #[doc(hidden)]
+    pub fn sim_thread_wait_is_resumable(&self) -> bool {
+        self.specpdl.iter().all(|binding| {
+            matches!(
+                binding,
+                SpecBinding::LexicalEnv { .. }
+                    | SpecBinding::GcRoot { .. }
+                    | SpecBinding::Backtrace { .. }
+                    | SpecBinding::Backtrace1 { .. }
+                    | SpecBinding::Backtrace2 { .. }
+                    | SpecBinding::BacktraceNative { .. }
+                    | SpecBinding::Nop
+            )
+        })
     }
 
     #[doc(hidden)]

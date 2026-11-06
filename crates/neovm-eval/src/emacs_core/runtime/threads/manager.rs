@@ -164,8 +164,18 @@ impl ThreadManager {
 
     pub fn start_thread(&mut self, native: u64) {
         self.update_thread_native(native, |state| {
-            *state.phase_mut() = ThreadPhase::Active(RunState::Running)
+            *state.phase_mut() = ThreadPhase::Active(RunState::Running);
+            *state.executing_mut() = false;
         });
+    }
+
+    /// Mark whether this thread's body is on the simulation's OS stack.
+    ///
+    /// A release point reached from a running worker must not mistake
+    /// another already-running worker for a created one and re-enter it.
+    #[doc(hidden)]
+    pub fn set_thread_executing(&mut self, native: u64, executing: bool) {
+        self.update_thread_native(native, |state| *state.executing_mut() = executing);
     }
 
     pub fn discard_unstarted_thread(&mut self, native: u64) {
@@ -204,18 +214,30 @@ impl ThreadManager {
             return;
         };
         let signal = split_signal_binding_value(error);
+        // A thread inside its own typed wait is parked in GNU terms even
+        // though the simulation has not suspended its Lisp stack yet (its
+        // release point is running other threads): the wake must reach that
+        // wait and the thread must stay live until it raises the error.
+        let in_typed_wait = self
+            .thread_payload(value)
+            .is_some_and(|thread| thread.native().blocked_wait().is_some());
+        let waiting = phase == ThreadPhase::Active(RunState::Blocked) || in_typed_wait;
         self.update_thread_value(value, |children| {
             *children.last_error_mut() = Some(error);
             let (symbol, data) = signal.unwrap_or((Value::NIL, Value::NIL));
             *children.error_symbol_mut() = symbol;
             *children.error_data_mut() = data;
-            if phase == ThreadPhase::Active(RunState::Blocked) {
-                *children.event_object_mut() = Value::NIL;
-            }
         });
         self.update_thread_native_value(value, |state| {
+            // GNU `thread_signal_callback` (thread.c:974-982) broadcasts the
+            // wait the target is parked in. The target keeps `event_object`
+            // until its own wait code clears it; only the wake is recorded.
+            if waiting {
+                *state.woken_mut() = true;
+            }
             *state.phase_mut() = match phase {
                 ThreadPhase::Active(RunState::Blocked) => phase,
+                ThreadPhase::Active(RunState::Running) if in_typed_wait => phase,
                 ThreadPhase::New
                 | ThreadPhase::Active(RunState::Running)
                 | ThreadPhase::Completing(_) => ThreadPhase::Completing(ThreadOutcome::Signaled),
@@ -237,6 +259,13 @@ impl ThreadManager {
 
     pub fn pending_thread_signal(&self, native: u64) -> Option<Flow> {
         self.pending_thread_signal_for_value(self.live_value(native)?)
+    }
+
+    /// Whether `thread-signal` left an error for this thread to raise.
+    #[doc(hidden)]
+    pub fn has_pending_thread_signal(&self, native: u64) -> bool {
+        self.get_thread(native)
+            .is_some_and(|thread| !thread.children().error_symbol().is_nil())
     }
 
     #[doc(hidden)]
@@ -267,6 +296,29 @@ impl ThreadManager {
     #[doc(hidden)]
     pub fn thread_alive_for_value(&self, value: Value) -> bool {
         self.thread_payload(value).is_some_and(thread_is_live)
+    }
+
+    /// Whether this thread was created but has not run its function yet.
+    ///
+    /// GNU `Fmake_thread` (src/thread.c:885-947) links the thread and returns
+    /// while the creating thread still holds the global lock; `run_thread`
+    /// (src/thread.c:757+) executes only after `acquire_global_lock`. The
+    /// simulation runs that body at the caller's next release point instead of
+    /// during construction, so `New`/`Active(Running)` means "created, not run".
+    pub fn thread_is_pending_sim_run(&self, native: u64) -> bool {
+        self.get_thread(native).is_some_and(|thread| {
+            !thread.native().executing()
+                && matches!(
+                    thread.native().phase(),
+                    ThreadPhase::New | ThreadPhase::Active(RunState::Running)
+                )
+        })
+    }
+
+    /// The function object this thread will run, while it is still pending.
+    pub fn thread_function(&self, native: u64) -> Option<Value> {
+        self.get_thread(native)
+            .map(|thread| thread.children().function())
     }
 
     pub fn thread_name(&self, native: u64) -> Option<ThreadName> {
@@ -332,25 +384,133 @@ impl ThreadManager {
             *children.blocked_remaining_forms_mut() = remaining;
         });
         self.update_thread_native(native, |state| {
-            *state.phase_mut() = ThreadPhase::Active(RunState::Blocked)
+            *state.phase_mut() = ThreadPhase::Active(RunState::Blocked);
+            // A fresh wait has not fired yet. GNU's waiter is asleep in
+            // `sys_cond_wait` until a release/notify/signal wakes it.
+            *state.woken_mut() = false;
         });
     }
 
+    /// Record the typed operation a suspended wait resumes with.
+    #[doc(hidden)]
+    pub fn set_blocked_wait(&mut self, native: u64, wait: Option<BlockedWait>) -> bool {
+        self.update_thread_native(native, |state| *state.blocked_wait_mut() = wait)
+            .is_some()
+    }
+
+    #[doc(hidden)]
+    pub fn blocked_wait(&self, native: u64) -> Option<BlockedWait> {
+        self.get_thread(native)?.native().blocked_wait()
+    }
+
+    #[doc(hidden)]
+    pub fn thread_is_woken(&self, native: u64) -> bool {
+        self.get_thread(native)
+            .is_some_and(|thread| thread.native().woken())
+    }
+
+    /// Consume a wake that did not end the wait: another woken mutex waiter
+    /// took the mutex first, so GNU's lock loop re-waits on the mutex
+    /// condition (src/thread.c:228-241, :470).
+    #[doc(hidden)]
+    pub fn clear_thread_woken(&mut self, native: u64) {
+        self.update_thread_native(native, |state| *state.woken_mut() = false);
+    }
+
+    /// Whether this registration is currently waiting on OBJECT.
+    ///
+    /// A thread is waiting when GNU's `event_object` names OBJECT and the
+    /// thread is either suspended (a stored continuation) or inside its own
+    /// typed wait (a condition wait releases the global lock before the wait
+    /// is published as a continuation).
+    fn is_waiting_on(&self, id: u64, object: &Value) -> bool {
+        let Some(thread) = self.get_thread(id) else {
+            return false;
+        };
+        if !eq_value(&thread.children().event_object(), object) {
+            return false;
+        }
+        thread.native().phase() == ThreadPhase::Active(RunState::Blocked)
+            || thread.native().blocked_wait().is_some()
+    }
+
+    fn mark_woken(&mut self, id: u64) {
+        self.update_thread_native(id, |state| *state.woken_mut() = true);
+    }
+
+    /// Wake every thread waiting on BLOCKER. GNU `sys_cond_broadcast`:
+    /// mutex release (`lisp_mutex_unlock`, thread.c:259-263) and
+    /// `lisp_mutex_unlock_for_wait` (:276-288) use it, and a waiting
+    /// thread's `event_object` keeps rooting the wait object until the
+    /// waiter itself clears it (:346, :455, :465).
     pub fn wake_threads_blocked_on(&mut self, blocker: Value) {
-        for id in self.all_native_registrations() {
-            if self.get_thread(id).is_some_and(|thread| {
-                thread.native().phase() == ThreadPhase::Active(RunState::Blocked)
-                    && eq_value(&thread.children().event_object(), &blocker)
-            }) {
-                self.update_thread(id, |children| *children.event_object_mut() = Value::NIL);
+        let ids = self.all_native_registrations();
+        for id in ids {
+            if id != 0 && self.is_waiting_on(id, &blocker) {
+                self.mark_woken(id);
             }
         }
+        // The main thread runs its waits in place; its wake is clearing the
+        // wait object it published (GNU event_object stays until the waiter
+        // clears it too).
+        self.wake_main_waiting_on(blocker);
+    }
+
+    /// Wake at most one thread waiting on BLOCKER (GNU `sys_cond_signal`).
+    /// Selection is by registration order so the simulation is deterministic.
+    #[doc(hidden)]
+    pub fn wake_one_thread_blocked_on(&mut self, blocker: Value) -> bool {
+        let mut ids = self.all_native_registrations();
+        ids.sort_unstable();
+        for id in ids {
+            if id == 0 {
+                if self.main_waiting_on(&blocker) {
+                    return self.wake_main_waiting_on(blocker);
+                }
+                continue;
+            }
+            if self.is_waiting_on(id, &blocker) {
+                self.mark_woken(id);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Publish the object the main thread is waiting on while a blocking
+    /// builtin waits in place (GNU `event_object`).
+    #[doc(hidden)]
+    pub fn set_main_wait_object(&mut self, object: Value) -> bool {
+        self.set_thread_blocker(self.ids.main_thread().native_key(), object)
+    }
+
+    #[doc(hidden)]
+    pub fn clear_main_wait_object(&mut self) -> bool {
+        self.clear_thread_blocker(self.ids.main_thread().native_key())
+    }
+
+    #[doc(hidden)]
+    pub fn main_waiting_on(&self, object: &Value) -> bool {
+        self.thread_blocker(self.ids.main_thread().native_key())
+            .is_some_and(|blocker| eq_value(&blocker, object))
+    }
+
+    /// End the main thread's in-place wait when a notification or release
+    /// names its wait object.
+    #[doc(hidden)]
+    pub fn wake_main_waiting_on(&mut self, object: Value) -> bool {
+        if !self.main_waiting_on(&object) {
+            return false;
+        }
+        self.clear_main_wait_object()
     }
 
     pub fn thread_ready_to_resume(&self, native: u64) -> bool {
         self.get_thread(native).is_some_and(|thread| {
             thread.native().phase() == ThreadPhase::Active(RunState::Blocked)
-                && thread.children().event_object().is_nil()
+                && (thread.native().woken()
+                    || (thread.native().blocked_wait().is_none()
+                        && thread.children().event_object().is_nil()))
         })
     }
 
@@ -369,7 +529,7 @@ impl ThreadManager {
             .get_thread(native)
             .is_some_and(|thread| thread.native().phase() == ThreadPhase::Active(RunState::Blocked))
         {
-            self.update_thread(native, |children| *children.event_object_mut() = Value::NIL);
+            self.mark_woken(native);
         }
     }
 
@@ -387,10 +547,11 @@ impl ThreadManager {
     }
 
     pub fn blocked_remaining_forms_if_ready(&self, native: u64) -> Option<Value> {
-        let thread = self.get_thread(native)?;
-        (thread.native().phase() == ThreadPhase::Active(RunState::Blocked)
-            && thread.children().event_object().is_nil())
-        .then_some(thread.children().blocked_remaining_forms())
+        if !self.thread_ready_to_resume(native) {
+            return None;
+        }
+        self.get_thread(native)
+            .map(|thread| thread.children().blocked_remaining_forms())
     }
 
     pub fn last_error(&mut self, cleanup: bool) -> Value {

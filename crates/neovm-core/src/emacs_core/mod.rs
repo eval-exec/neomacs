@@ -383,6 +383,12 @@ mod gnu_defvar_special_test;
 #[path = "tests/gnu_surface/subr_test.rs"]
 mod gnu_subr_surface_test;
 #[cfg(test)]
+#[path = "tests/gnu_thread_live_p_test.rs"]
+mod gnu_thread_live_p_test;
+#[cfg(test)]
+#[path = "tests/gnu_thread_release_point_test.rs"]
+mod gnu_thread_release_point_test;
+#[cfg(test)]
 #[path = "tests/architecture/layout_test.rs"]
 mod layout_test;
 #[cfg(test)]

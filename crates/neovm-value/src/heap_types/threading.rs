@@ -300,6 +300,25 @@ impl StoredThreadEvent {
     }
 }
 
+/// What a suspended simulated thread must re-run before its saved
+/// continuation.
+///
+/// GNU keeps this information on the waiting thread's C stack: a contended
+/// `lisp_mutex_lock_for_thread` re-checks the mutex when it is woken
+/// (`src/thread.c:212-246`), and `condition_wait_callback` reacquires the
+/// condition's mutex with the lock count saved before the wait
+/// (`src/thread.c:446-476`). The simulated backend suspends the Lisp stack
+/// instead, so the same state is carried in the thread's native slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub enum BlockedWait {
+    /// Retry `mutex-lock` on the object recorded in `event_object`.
+    MutexLock,
+    /// Reacquire the mutex associated with the object in `event_object` at
+    /// this recursion count, then continue.
+    ConditionWait(RecursionDepth),
+}
+
 /// Scalar runtime state that carries no Lisp children or owned storage. Its
 /// mutable view cannot change heap identity or introduce an unbarriered edge.
 #[derive(Clone, Copy, Debug)]
@@ -308,6 +327,20 @@ pub struct ThreadNativeState {
     pub(crate) phase: ThreadPhase,
     pub(crate) join_observation: JoinObservation,
     pub(crate) current_buffer: Option<BufferId>,
+    /// The typed operation to re-run when a suspended wait is resumed.
+    pub(crate) blocked_wait: Option<BlockedWait>,
+    /// The wait condition fired (mutex released, condition notified, or an
+    /// injected signal). GNU's equivalent is the waiter waking from
+    /// `sys_cond_wait`; `event_object` stays set until the waiter itself
+    /// clears it, so this cannot be derived from that field.
+    pub(crate) woken: bool,
+    /// This carrier is currently executing on the simulation's OS stack.
+    ///
+    /// `ThreadPhase::Active(RunState::Running)` alone cannot distinguish a
+    /// worker that has been started but has not run from one whose body is
+    /// on the stack right now; a release point reached from a running
+    /// worker must not re-enter another running worker as "created".
+    pub(crate) executing: bool,
 }
 
 impl ThreadNativeState {
@@ -317,6 +350,9 @@ impl ThreadNativeState {
             phase,
             join_observation: JoinObservation::Unobserved,
             current_buffer,
+            blocked_wait: None,
+            woken: false,
+            executing: false,
         }
     }
 }
@@ -376,6 +412,9 @@ impl ThreadPayload {
             phase: _,
             join_observation: _,
             current_buffer: _,
+            blocked_wait: _,
+            woken: _,
+            executing: _,
         } = native;
         children.visit_children(visit);
     }
@@ -671,6 +710,17 @@ impl MutexPayload {
 }
 
 impl ThreadChildren {
+    /// The function object `make-thread` stored for this thread.
+    ///
+    /// GNU `Fmake_thread` keeps the function in the thread state
+    /// (`new_thread->function`, src/thread.c:897) and the worker runs it only
+    /// after it acquires the global lock, so the creating evaluator must be
+    /// able to hand it back at a release point.
+    #[inline]
+    #[doc(hidden)]
+    pub fn function(&self) -> TaggedValue {
+        self.function
+    }
     #[inline]
     #[doc(hidden)]
     pub fn blocked_remaining_forms(&self) -> TaggedValue {
@@ -783,6 +833,36 @@ impl ThreadNativeState {
     #[doc(hidden)]
     pub fn phase_mut(&mut self) -> &mut ThreadPhase {
         &mut self.phase
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn blocked_wait(&self) -> Option<BlockedWait> {
+        self.blocked_wait
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn blocked_wait_mut(&mut self) -> &mut Option<BlockedWait> {
+        &mut self.blocked_wait
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn woken(&self) -> bool {
+        self.woken
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn woken_mut(&mut self) -> &mut bool {
+        &mut self.woken
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn executing(&self) -> bool {
+        self.executing
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn executing_mut(&mut self) -> &mut bool {
+        &mut self.executing
     }
 }
 

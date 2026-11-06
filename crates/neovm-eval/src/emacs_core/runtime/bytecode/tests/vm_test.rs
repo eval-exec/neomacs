@@ -7748,7 +7748,23 @@ fn vm_thread_mutex_and_condition_builtins_use_shared_runtime() {
                     (wrong-type-argument (car err)))
                   (mutexp mx)
                   (equal (mutex-name mx) "vm-mutex")
-                  (null (mutex-lock mx))
+                  ;; GNU condition variables do not count notifications:
+                  ;; `condition-wait` blocks until another thread signals
+                  ;; COND (src/thread.c:446-501), so the same runtime needs a
+                  ;; notifier created just before the wait. It uses the
+                  ;; globals because a worker does not see the main thread's
+                  ;; dynamic `let` bindings (GNU Fmake_thread gives the worker
+                  ;; an empty specpdl, src/thread.c:913-919). Pinned GNU 31.1:
+                  ;; the whole row is `(t t t t t t t t error t t t t t
+                  ;; wrong-type-argument t t t t t t t t t)` 5/5.
+                  (let ((notifier (progn
+                                    (setq vm-p2-mx mx vm-p2-cv cv)
+                                    (make-thread (lambda ()
+                                                   (mutex-lock vm-p2-mx)
+                                                   (condition-notify vm-p2-cv)
+                                                   (mutex-unlock vm-p2-mx))
+                                                 "vm-notifier"))))
+                    (null (mutex-lock mx)))
                   (condition-variable-p cv)
                   (equal (condition-name cv) "vm-cond")
                   (eq (condition-mutex cv) mx)
@@ -7780,7 +7796,11 @@ fn vm_make_thread_runs_body_on_shared_runtime() {
                     (eq (thread-join worker) worker)
                     (eq (current-thread) main))))"#
         ),
-        "OK (t t t t t)"
+        // GNU 31.1 probe (build/bin/emacs): the creating thread holds the
+        // global lock, so the worker body has NOT run before the join
+        // (src/thread.c:924-925 links and returns; :757+ run_thread waits for
+        // acquire_global_lock). Probe returns (t t nil t t) 5/5.
+        "OK (t t nil t t)"
     );
 }
 
@@ -7836,7 +7856,11 @@ fn vm_make_thread_records_join_error_on_shared_runtime() {
                        (eq (car after) 'error)
                        (equal (cdr after) '(99)))))"#
         ),
-        "OK (t t t t)"
+        // GNU 31.1 probe: thread-last-error is still nil when read before the
+        // join release point (published=nil), and the worker's internal error
+        // is published by the time join returns (after=(error 99)); the join
+        // itself returns normally. Probe (t nil t t) 3/3.
+        "OK (t nil t t)"
     );
 }
 

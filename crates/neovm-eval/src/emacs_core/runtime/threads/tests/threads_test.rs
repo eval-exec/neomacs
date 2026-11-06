@@ -606,6 +606,10 @@ fn worker_default_toplevel_write_cannot_mutate_callers_suspended_binding() {
                         (make-thread
                          (lambda ()
                            (set-default-toplevel-value 'undo-limit "bad")))))
+                   ;; GNU runs the worker at a release point, not during
+                   ;; make-thread (src/thread.c:924-925/:757+). Join it so the
+                   ;; worker actually attempts the write; pinned probe: (5 nil).
+                   (thread-join worker)
                    (list undo-limit (thread-live-p worker))))"#,
         )
         .expect("worker failure remains local to the worker");
@@ -625,7 +629,9 @@ fn worker_signal_cannot_invoke_callers_handler_bind() {
                  (setq vm-thread-caller-handler-fired nil)
                  (handler-bind-1
                   (lambda ()
-                    (make-thread (lambda () (signal 'error '(worker))))
+                    (let ((worker
+                           (make-thread (lambda () (signal 'error '(worker))))))
+                      (thread-join worker))
                     vm-thread-caller-handler-fired)
                   '(error)
                   (lambda (_data)
@@ -642,8 +648,10 @@ fn worker_throw_cannot_target_callers_catch() {
     let result = eval
         .eval_str(
             r#"(catch 'vm-thread-caller-catch
-                 (make-thread
-                  (lambda () (throw 'vm-thread-caller-catch 'worker)))
+                 (let ((worker
+                        (make-thread
+                         (lambda () (throw 'vm-thread-caller-catch 'worker)))))
+                   (thread-join worker))
                  'caller)"#,
         )
         .expect("worker throw is recorded as the worker's uncaught throw");
@@ -657,7 +665,8 @@ fn parked_caller_specpdl_remains_gc_rooted_while_worker_runs() {
     let result = eval
         .eval_str(
             r#"(let ((vm-thread-parked-root (list 'kept)))
-                 (make-thread (lambda () (garbage-collect)))
+                 (let ((worker (make-thread (lambda () (garbage-collect)))))
+                   (thread-join worker))
                  vm-thread-parked-root)"#,
         )
         .expect("parked caller binding survives worker GC");
@@ -802,7 +811,7 @@ fn threads_feature_and_main_thread_binding_match_gnu() {
 }
 
 #[test]
-fn test_builtin_all_threads_excludes_finished_unjoined_worker() {
+fn test_builtin_all_threads_lists_created_worker_until_join() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let worker = builtin_make_thread(
@@ -819,16 +828,17 @@ fn test_builtin_all_threads_excludes_finished_unjoined_worker() {
     .unwrap();
     let result = builtin_all_threads(&mut eval, vec![]).unwrap();
     let list = neovm_value::value::list_to_vec(&result).unwrap();
-    // Sim has already executed this empty function to completion. GNU's
-    // thread_live_p (thread.c:74-76,1036-1045) and all-threads (:1153-1160)
-    // exclude an exited worker independently of join; run_thread unlinks it
-    // at :853-859. The old positive expectation encoded join-owned rooting.
-    // GNU31.1's unjoined exit-receipt probe returns (t nil nil): receipt,
-    // live-p, membership. This is an opposite exact assertion, not a skip.
-    assert!(!list.iter().any(|value| eq_value(value, &worker)));
+    // GNU `Fmake_thread` links the thread into `all_threads` and returns while
+    // the creator still holds the global lock (src/thread.c:885-947,
+    // link at :924-925); `run_thread` runs only after `acquire_global_lock`
+    // (:757+). So a created worker that has not run yet is live
+    // (`thread_live_p` :76/:1036-1045) and listed (`all-threads` :1146-1160).
+    // Pinned GNU 31.1 probes: before any release point `(t t)` 15/15; after
+    // `thread-join` (a release point) `(nil nil)` 2/2.
+    assert!(list.iter().any(|value| eq_value(value, &worker)));
     assert_eq!(
         builtin_thread_live_p(&mut eval, vec![worker]).unwrap(),
-        Value::NIL
+        Value::T
     );
     assert!(eval.tagged_heap.owns_heap_value_for_test(worker));
 
@@ -836,6 +846,49 @@ fn test_builtin_all_threads_excludes_finished_unjoined_worker() {
     let after_join = builtin_all_threads(&mut eval, vec![]).unwrap();
     let after_join = neovm_value::value::list_to_vec(&after_join).unwrap();
     assert!(!after_join.iter().any(|value| eq_value(value, &worker)));
+    assert_eq!(
+        builtin_thread_live_p(&mut eval, vec![worker]).unwrap(),
+        Value::NIL
+    );
+}
+
+/// GNU unlinks a thread that has run and exited even without a join: the
+/// worker frees its specpdl and leaves `all_threads` at src/thread.c:790-864
+/// (`:823`, unlink `:853-864`), and `all-threads` lists only live threads
+/// (`:1146-1160`). Release-point probe on the pinned GNU 31.1 build: after a
+/// blocking wait the created workers are gone (`live=1` 3/3); without a
+/// release they stay live (`live=4` 3/3, see the sibling created-window
+/// test). The simulation's release point is `thread-yield`.
+#[test]
+fn test_builtin_all_threads_excludes_finished_unjoined_worker() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let worker = builtin_make_thread(
+        &mut eval,
+        vec![Value::make_lambda(neovm_value::value::LambdaData {
+            params: neovm_value::value::LambdaParams::simple(vec![]),
+            body: vec![],
+            env: None,
+            docstring: None,
+            doc_form: None,
+            interactive: None,
+        })],
+    )
+    .unwrap();
+    // The created worker is live until the release point; there it runs,
+    // exits and is unlinked even though nobody joined it.
+    builtin_thread_yield(&mut eval, vec![]).unwrap();
+    let result = builtin_all_threads(&mut eval, vec![]).unwrap();
+    let list = neovm_value::value::list_to_vec(&result).unwrap();
+    assert!(
+        !list.iter().any(|value| eq_value(value, &worker)),
+        "a worker that ran and exited is unlinked even without join"
+    );
+    assert_eq!(
+        builtin_thread_live_p(&mut eval, vec![worker]).unwrap(),
+        Value::NIL
+    );
+    assert!(eval.tagged_heap.owns_heap_value_for_test(worker));
 }
 
 #[test]
@@ -1431,6 +1484,10 @@ fn test_builtin_condition_mutex_wrong_type_argument() {
     }
 }
 
+/// The name is historical (the simulated backend used to make
+/// `condition-wait` a no-op). GNU `condition-wait` blocks until another
+/// thread notifies the condition (src/thread.c:446-501), so the wait must
+/// run the notifier and return only after it fired.
 #[test]
 fn test_builtin_condition_wait_noop() {
     crate::test_utils::init_test_tracing();
@@ -1439,11 +1496,23 @@ fn test_builtin_condition_wait_noop() {
     let cv = builtin_make_condition_variable(&mut eval, vec![mx]).unwrap();
     let owner_error = builtin_condition_wait(&mut eval, vec![cv]);
     assert!(owner_error.is_err());
-    let lock = builtin_mutex_lock(&mut eval, vec![mx]);
-    assert!(lock.is_ok());
-    let result = builtin_condition_wait(&mut eval, vec![cv]);
-    assert!(result.is_ok());
-    assert!(result.unwrap().is_nil());
+    // The notifier is a created worker using globals: a worker does not see
+    // the main thread's dynamic bindings (GNU Fmake_thread, thread.c:913-919).
+    eval.set_variable("vm-cv-mutex", mx);
+    eval.set_variable("vm-cv-condition", cv);
+    eval.eval_str(
+        r#"(progn
+             (mutex-lock vm-cv-mutex)
+             (make-thread (lambda ()
+                            (mutex-lock vm-cv-mutex)
+                            (condition-notify vm-cv-condition)
+                            (mutex-unlock vm-cv-mutex)))
+             (prog1 (condition-wait vm-cv-condition)
+               (mutex-unlock vm-cv-mutex)))"#,
+    )
+    .expect("condition-wait runs the notifier at its release point");
+    let locked_again = builtin_mutex_lock(&mut eval, vec![mx]);
+    assert!(locked_again.is_ok());
     let unlock = builtin_mutex_unlock(&mut eval, vec![mx]);
     assert!(unlock.is_ok());
 }
@@ -2302,13 +2371,19 @@ fn p15_gc_unjoined_sim_completions_return_exactly_to_baseline() {
     assert_eq!(before, ThreadingObjectCount(1));
     assert_eq!(eval.threads.threads.len(), 1);
     let before_roots = p15_external_root_words(&eval);
+    // GNU keeps a created worker linked and live until a release point
+    // (src/thread.c:924-925 links, :757+ run_thread waits for the global
+    // lock): without one, `(length (all-threads))` stays 4 after three
+    // creations (pinned probe 3/3); a blocking wait releases it and the
+    // workers exit (sleep-for probe: live=1 3/3). The simulated release point
+    // is thread-yield, so the cycle yields and the completed carriers retire.
     for _ in 0..200 {
-        eval.eval_str("(progn (make-thread (lambda () nil)) nil)")
-            .expect("unjoined worker executes");
+        eval.eval_str("(progn (make-thread (lambda () nil)) (thread-yield) nil)")
+            .expect("unjoined worker executes at the release point");
         assert_eq!(
             eval.threads.threads.len(),
             1,
-            "completion must retire without join"
+            "completion must retire at the release point without join"
         );
     }
     eval.gc_collect_exact();

@@ -1788,6 +1788,11 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
             }
             neovm_eval::emacs_core::eval::SelectTurn::Block(wait_time) => wait_time,
         };
+        // The simulated backend has one OS thread, so the release
+        // `thread_select` performs (src/thread.c:613-643) is its only
+        // chance to run created workers and resume unblocked waiters.
+        // Green and no-thread cases are a single flag test inside.
+        self.sim_release_point(neovm_eval::emacs_core::threads::SimReleasePoint::Select)?;
         match self.wait_block(request, wait_time) {
             WaitBlock::Poll => Ok(WaitBlockActivity::poll()),
             WaitBlock::Poller(interest) => {
