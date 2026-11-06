@@ -700,10 +700,29 @@ pub fn new_context() -> Context {
 
 /// Create a cached runtime-startup evaluator for tests that need the full
 /// GNU bootstrap surface.
+///
+/// The returned evaluator must carry the BYTE-COMPILED loadup image: a
+/// source-only Lisp tree silently changes observable semantics (notably the
+/// `wrong-number-of-arguments` data, which follows the callee kind), so the
+/// precondition below fails loudly and names the fix instead of letting a
+/// batch oracle report a misleading divergence (peer 14:19Z condition 2).
 pub fn runtime_startup_context() -> Context {
-    match create_runtime_startup_evaluator_cached() {
+    let mut context = match create_runtime_startup_evaluator_cached() {
         Ok(context) => context,
         Err(error) => panic!("bootstrap: {}", format_bootstrap_error(&error)),
+    };
+    assert_preloaded_lisp_is_byte_compiled(&mut context);
+    context
+}
+
+/// A known preloaded defun must be a byte-code function, proving the Lisp
+/// tree was built (`cargo xtask fresh-build`), not merely present as source.
+fn assert_preloaded_lisp_is_byte_compiled(context: &mut Context) {
+    let byte_compiled = context
+        .eval_str("(byte-code-function-p (symbol-function 'minibuffer-window-active-p))")
+        .expect("preloaded Lisp probe evaluates");
+    if byte_compiled.is_nil() {
+        panic!("preloaded Lisp is not byte-compiled: run cargo xtask fresh-build");
     }
 }
 
