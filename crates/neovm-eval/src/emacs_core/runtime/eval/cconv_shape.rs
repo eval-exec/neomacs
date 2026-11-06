@@ -25,10 +25,12 @@
 use super::*;
 
 /// Most nodes a closure source may have and still be memoized.
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) const SHAPE_NODE_CAP: usize = 1 << 16;
 
 /// One pre-order token of a closure source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) enum ShapeTok {
     Cons,
     Nil,
@@ -45,6 +47,7 @@ pub(crate) enum ShapeTok {
 
 /// Why a closure source has no shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) enum ShapeRefusal {
     /// More than [`SHAPE_NODE_CAP`] nodes, or cyclic.
     TooLarge,
@@ -57,6 +60,7 @@ pub(crate) enum ShapeRefusal {
 
 /// The pre-order tokens of `(ARGS . BODY)`: ARGS first, then BODY.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) struct ClosureShape {
     pub(crate) toks: Box<[ShapeTok]>,
     /// Deepest car nesting: the analysis recurses on cars and iterates on
@@ -159,6 +163,7 @@ pub(crate) struct SymRole {
 
 /// Why a closure source's facts cannot be memoized.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) enum FactsRefusal {
     /// More than [`SHAPE_NODE_CAP`] nodes walked.
     TooLarge,
@@ -171,6 +176,7 @@ pub(crate) enum FactsRefusal {
 
 /// The symbols of `(ARGS . BODY)` (see the module docs).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) struct ClosureFacts {
     pub(crate) symbols: Vec<SymRole>,
 }
@@ -410,9 +416,46 @@ impl ClosureFacts {
 /// (cconv.el:931 and :962): the cars of its cons entries in order, and its
 /// bare symbol entries in order.  Duplicates are kept.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) struct EnvSummary {
     pub(crate) lex: SmallVec<[SymId; 8]>,
     pub(crate) dynamic: SmallVec<[SymId; 4]>,
+}
+
+impl ClosureShape {
+    /// The three closure-shape facts the moved oracle reads, copied out of
+    /// the private fields (N1: no field widening).
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn parts_for_test(&self) -> (&[ShapeTok], u32, bool) {
+        (
+            self.toks.as_ref(),
+            self.car_depth,
+            self.mentions_interactive,
+        )
+    }
+}
+
+impl ClosureFacts {
+    /// The distinct symbol roles as copied `(symbol, head)` pairs; `SymRole`
+    /// itself stays private.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn symbol_parts_for_test(&self) -> Vec<(SymId, bool)> {
+        self.symbols
+            .iter()
+            .map(|role| (role.id, role.head))
+            .collect()
+    }
+}
+
+impl EnvSummary {
+    /// The lexical and dynamic entry ids, copied out of the SmallVecs.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn parts_for_test(&self) -> (&[SymId], &[SymId]) {
+        (self.lex.as_slice(), self.dynamic.as_slice())
+    }
 }
 
 /// Most entries an environment may have and still be memoized.

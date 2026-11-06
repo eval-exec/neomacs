@@ -21,6 +21,7 @@ pub mod authority {
     use crate::emacs_core::eval::hooks_proof::EvalHooksInstalled;
     use crate::emacs_core::eval::world::Baton;
     use crate::emacs_core::eval::world::WorldView;
+    use crate::emacs_core::eval::{CconvMemoEvent, CconvMemoMode, TrustRefusal};
     use crate::host_effect::wake::{ControlNudgePublisher, ControlWake, HostSessionControl};
     use neovm_value::intern::SymId;
     use neovm_value::symbol::Obarray;
@@ -28,6 +29,7 @@ pub mod authority {
         AllStopped, FacadeEpochRetention, FacadeMarkExclusionError, FrozenLegacyRoots,
         PlainSymbolBacking, RegistrationError, RendezvousError,
     };
+    use neovm_value::value::Value;
     use std::sync::Arc;
 
     /// C1 FENCE (peer 22:11Z shape): the ONE cross-crate route for owned-proof
@@ -913,6 +915,67 @@ pub mod authority {
     #[cfg(feature = "jit")]
     pub fn force_slow_spec_for_test(on: Option<bool>) {
         crate::emacs_core::jit::compile::force_slow_spec_for_test(on);
+    }
+
+    /// P1 CCONV family N2: set the memo policy for one test context. The
+    /// memo state stays private; the fence is the only cross-crate write.
+    pub fn set_cconv_memo_mode_for_test(context: &mut Context, mode: CconvMemoMode) {
+        context.cconv_memo.set_mode(mode);
+    }
+
+    /// P1 CCONV family N2: enable or disable the fast untrimmed path.
+    pub fn set_cconv_memo_fast_for_test(context: &mut Context, fast: bool) {
+        context.cconv_memo.set_fast(fast);
+    }
+
+    /// P1 CCONV family N2: set the verify-mode strictness flag.
+    pub fn set_cconv_memo_strict_for_test(context: &mut Context, strict: bool) {
+        context.cconv_memo.set_strict(strict);
+    }
+
+    /// P1 CCONV family N2 reset: forget the trusted set so the next use
+    /// rebuilds it.
+    pub fn reset_cconv_trusted_for_test(context: &mut Context) {
+        context.cconv_memo.reset_trusted_for_test();
+    }
+
+    /// P1 CCONV family N2: request one complete collection at the start of
+    /// the next observed run.
+    pub fn collect_cconv_in_next_observed_run_for_test(context: &mut Context) {
+        context.cconv_memo.collect_in_next_observed_run_for_test();
+    }
+
+    /// P1 CCONV family N2: corrupt one recorded analysis so `verify` has
+    /// something to catch.
+    pub fn inject_wrong_cconv_analysis_for_test(context: &mut Context) -> bool {
+        context.cconv_memo.inject_wrong_analysis_for_test()
+    }
+
+    /// P1 CCONV family C4 read: one counter, copied out of the private memo.
+    pub fn cconv_memo_count_for_test(context: &Context, event: CconvMemoEvent) -> u64 {
+        context.cconv_memo.stats().count(event)
+    }
+
+    /// P1 CCONV family C4 read: the trusted-set refusal, copied. The caller
+    /// inspects the copy immediately; it is never stored across a GC.
+    pub fn cconv_trusted_refusal_for_test(context: &Context) -> Option<TrustRefusal> {
+        context.cconv_memo.trusted().refusal().cloned()
+    }
+
+    /// P1 CCONV family C4 read: the trusted cells copied as plain
+    /// `(symbol, value)` words. Callers must inspect the copies immediately
+    /// and never keep them across a GC (peer condition b).
+    pub fn cconv_trusted_cells_for_test(
+        context: &Context,
+    ) -> Vec<(neovm_value::intern::SymId, Value)> {
+        context.cconv_memo.trusted().trusted_cells().to_vec()
+    }
+
+    /// P1 CCONV family C4 read: the `(t)` empty-environment value, copied.
+    /// The caller inspects the copy immediately; it is never stored across a
+    /// GC (peer condition b).
+    pub fn cconv_trusted_empty_env_for_test(context: &Context) -> Value {
+        context.cconv_memo.trusted().empty_env()
     }
 }
 

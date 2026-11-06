@@ -120,6 +120,7 @@ use strum::{EnumCount, IntoEnumIterator};
 /// `NEOVM_CCONV_MEMO` names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) enum CconvMemoMode {
     /// Closure creation is untouched.
     Off = 0,
@@ -210,10 +211,9 @@ pub(crate) fn cconv_memo_mode_from_env() -> CconvMemoMode {
 // ---------------------------------------------------------------------------
 
 /// One thing that happened to one call of the filter.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, strum::EnumCount, strum::EnumIter, strum::IntoStaticStr,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumCount, strum::IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) enum CconvMemoEvent {
     /// `internal-make-interpreted-closure-function` was
     /// `cconv-make-interpreted-closure` and the environment was non-nil.
@@ -297,6 +297,58 @@ pub(crate) enum CconvMemoEvent {
     GcHooksDeferred,
 }
 
+impl CconvMemoEvent {
+    /// Every event in declaration order. `report` iterates this instead of
+    /// the removed `strum::EnumIter`, so the enum can be re-exported under
+    /// test-support without leaking a private generated iterator type.
+    #[doc(hidden)]
+    pub(crate) const ALL: [CconvMemoEvent; CconvMemoEvent::COUNT] = [
+        Self::Call,
+        Self::NoLexvars,
+        Self::DontTrim,
+        Self::FastServed,
+        Self::FastRefused,
+        Self::Trim,
+        Self::Untrusted,
+        Self::BypassDebug,
+        Self::BypassQuit,
+        Self::BypassCompileEnv,
+        Self::Hit,
+        Self::Served,
+        Self::VerifyMatch,
+        Self::VerifyMismatch,
+        Self::MissNoEntry,
+        Self::MissShape,
+        Self::MissFacts,
+        Self::MissDepth,
+        Self::Eligible,
+        Self::RefuseEnv,
+        Self::RefuseShape,
+        Self::RefuseInteractive,
+        Self::RefuseUnderscore,
+        Self::RefuseMacroHead,
+        Self::RefuseCompilerMacroHead,
+        Self::RunError,
+        Self::RunIdentity,
+        Self::RunRewritten,
+        Self::RunEffect,
+        Self::Recorded,
+        Self::RecordRefused,
+        Self::Cleared,
+        Self::GcHooksDeferred,
+    ];
+}
+
+// The report order is the declaration order; no duplicate or reorder can pass
+// the COUNT-length check.
+const _: () = {
+    let mut index = 0;
+    while index < CconvMemoEvent::COUNT {
+        assert!(CconvMemoEvent::ALL[index] as usize == index);
+        index += 1;
+    }
+};
+
 /// Counts per [`CconvMemoEvent`].
 #[derive(Clone, Debug)]
 pub(crate) struct CconvMemoStats {
@@ -328,7 +380,7 @@ impl CconvMemoStats {
     #[doc(hidden)]
     pub fn report(&self) -> String {
         let mut out = String::from("cconv-memo:");
-        for event in CconvMemoEvent::iter() {
+        for event in CconvMemoEvent::ALL {
             let n = self.count(event);
             if n != 0 {
                 let name: &'static str = event.into();
@@ -346,6 +398,7 @@ impl CconvMemoStats {
 /// The observable state a Lisp run could change without leaving a trace in
 /// its return value (see the module docs).  Compared, never interpreted.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) struct EffectSnapshot {
     loads: u64,
     outputs: u64,
@@ -444,7 +497,7 @@ pub(crate) struct CconvMemo {
     /// still to run.
     owed_gc_hooks: u32,
     /// Complete a collection at the start of the next observed run.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     collect_in_next_observed_run: bool,
 }
 
@@ -463,7 +516,7 @@ impl CconvMemo {
             outputs: 0,
             observing: 0,
             owed_gc_hooks: 0,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             collect_in_next_observed_run: false,
         }
     }
@@ -481,26 +534,26 @@ impl CconvMemo {
         self.mode != CconvMemoMode::Off || self.fast
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn set_mode(&mut self, mode: CconvMemoMode) {
         self.mode = mode;
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn set_fast(&mut self, fast: bool) {
         self.fast = fast;
     }
 
     /// Forget the trusted set, so the next use builds it again.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn reset_trusted_for_test(&mut self) {
         self.trusted = TrustedSet::default();
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn set_strict(&mut self, strict: bool) {
         self.strict = strict;
@@ -508,7 +561,7 @@ impl CconvMemo {
 
     /// Make the next observed run start with a complete collection, as if
     /// allocation had tripped one inside it.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn collect_in_next_observed_run_for_test(&mut self) {
         self.collect_in_next_observed_run = true;
@@ -516,7 +569,7 @@ impl CconvMemo {
 
     /// Corrupt one recorded analysis (drop its first captured variable), so
     /// `verify` has something to catch (T0.12).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn inject_wrong_analysis_for_test(&mut self) -> bool {
         for bucket in self.entries.values_mut() {
@@ -537,13 +590,13 @@ impl CconvMemo {
         self.entry_count = 0;
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn stats(&self) -> &CconvMemoStats {
         &self.stats
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn trusted(&self) -> &TrustedSet {
         &self.trusted
@@ -706,6 +759,7 @@ const ALIAS_HOP_CAP: usize = 100;
 /// What `macroexp--expand-all` would do with a form headed by a symbol, as
 /// far as the memo cares (see the module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) enum HeadVerdict {
     /// Not a macro, not an autoloaded macro, no compiler macro: the form is
     /// left as it is.
@@ -879,7 +933,7 @@ impl Context {
     }
 
     /// The statistics line (see the module docs).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn cconv_memo_report(&self) -> String {
         self.cconv_memo.stats.report()

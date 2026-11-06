@@ -29,6 +29,7 @@ use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 
 /// The Lisp functions a clean run can enter (macroexp.el, cconv.el and the
 /// small helpers they call).
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) const TRUSTED_LISP: &[&str] = &[
     "cconv-make-interpreted-closure",
     "macroexpand-all",
@@ -59,6 +60,7 @@ pub(crate) const TRUSTED_LISP: &[&str] = &[
 /// Why a callee named in the trusted constants is never entered by a run
 /// the memo records.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) enum ExclusionReason {
     /// Raises or debugs an error: a run that reaches it signals, and an
     /// erroring run is never recorded.
@@ -82,6 +84,7 @@ pub(crate) enum ExclusionReason {
 }
 
 /// Callees the trusted constants name that clean runs never enter.
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) const EXCLUDED_CALLEES: &[(&str, ExclusionReason)] = &[
     ("error", ExclusionReason::ErrorPath),
     ("debug", ExclusionReason::ErrorPath),
@@ -99,7 +102,8 @@ pub(crate) const EXCLUDED_CALLEES: &[(&str, ExclusionReason)] = &[
 
 /// How the memo accounts for a special variable the trusted code mentions.
 /// The audit table; the memo reads the key and bypass variables directly.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TrustedVariableRole {
     /// Part of the memo key (`lexical-binding`, buffer-local aware).
@@ -115,7 +119,8 @@ pub(crate) enum TrustedVariableRole {
 }
 
 /// Every special variable named in the trusted constants.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) const TRUSTED_VARIABLES: &[(&str, TrustedVariableRole)] = &[
     ("lexical-binding", TrustedVariableRole::Key),
     ("macroexpand-all-environment", TrustedVariableRole::Bypass),
@@ -147,6 +152,7 @@ pub(crate) const TRUSTED_VARIABLES: &[(&str, TrustedVariableRole)] = &[
 
 /// Why the trusted set could not be built.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) enum TrustRefusal {
     /// A trusted function is void or not byte-code (loaded from source,
     /// redefined, advised before the first use).
@@ -212,13 +218,13 @@ impl TrustedSet {
         self.empty_env
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn trusted_cells(&self) -> &[(SymId, Value)] {
         &self.cells
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn refusal(&self) -> Option<&TrustRefusal> {
         match &self.state {
