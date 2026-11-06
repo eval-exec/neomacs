@@ -350,7 +350,3 @@ impl Context {
         self.call_debugger(vec![Value::from_sym_id(exit_code_symbol()), value])
     }
 }
-
-#[cfg(test)]
-#[path = "tests/debug_on_call_test.rs"]
-mod tests;

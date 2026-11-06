@@ -10,13 +10,13 @@
 //! lists the debugger was called with, oldest first -- so `((t) (exit 1))`
 //! means "entry debugger with `Qt`, then exit debugger with the value 1".
 
-use super::super::eval::Context;
-use super::super::print::print_value;
+use crate::emacs_core::eval::Context;
+use crate::emacs_core::print::print_value;
 
 /// `debugger` is a recorder; every case reports
 /// `(RESULT LOG debug-on-next-call)`.
 fn recorder_context() -> Context {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(progn
              (defvar l172-log nil)
@@ -359,7 +359,7 @@ fn entering_the_debugger_stamps_internal_when_entered_debugger() {
 /// a `condition-case` in batch (`src/eval.c:1699-1703`), and it is what makes
 /// the guard the *only* thing that can stop the second entry.
 fn signal_debugger_context() -> Context {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(progn
              (defvar l183-n 0)
@@ -579,7 +579,7 @@ fn the_reentry_guard_gates_the_signal_debugger_only() {
 /// GNU and answered a stale `102` here.
 #[test]
 fn call_debugger_binds_gnus_four_variables() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(progn
              (defvar l183-seen nil)
@@ -687,7 +687,7 @@ fn a_byte_compiled_frame_flagged_by_backtrace_debug_still_calls_the_exit_debugge
 #[test]
 fn a_debug_on_exit_set_while_the_arguments_evaluate_survives_the_evald_store() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let value = eval
         .eval_str(
             r#"(progn
@@ -705,9 +705,9 @@ fn a_debug_on_exit_set_while_the_arguments_evaluate_survives_the_evald_store() {
 /// a live Context reads through the unresolved stand-in.
 #[test]
 fn debug_cell_resolved_after_activation() {
-    let fresh = Context::new(crate::test_utils::unit_runtime());
+    let fresh = crate::test_utils::new_context();
     let cell = fresh
-        .obarray
+        .obarray()
         .debug_on_next_call_bool_fwd_cached()
         .expect("Context::new resolves the cell");
     assert!(!cell.is_debug_on_next_call_stand_in());
@@ -715,7 +715,7 @@ fn debug_cell_resolved_after_activation() {
 
     let restored = crate::test_utils::runtime_startup_context();
     let cell = restored
-        .obarray
+        .obarray()
         .debug_on_next_call_bool_fwd_cached()
         .expect("the dump-restored Context resolves the cell");
     assert!(!cell.is_debug_on_next_call_stand_in());

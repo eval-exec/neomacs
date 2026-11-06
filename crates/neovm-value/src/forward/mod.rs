@@ -801,6 +801,7 @@ impl LispBoolFwd {
     /// `debug-on-next-call` pointer names before (or instead of) a real
     /// descriptor.
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn is_debug_on_next_call_stand_in(&self) -> bool {
         std::ptr::eq(self, &DEBUG_ON_NEXT_CALL_UNRESOLVED)
             || std::ptr::eq(self, &DEBUG_ON_NEXT_CALL_ABSENT)
