@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::authority::eval_fixture_program;
 
 #[test]
 fn self_kernel_gate_declines_call_heavy_fallbacks_and_keeps_arithmetic_recursion() {

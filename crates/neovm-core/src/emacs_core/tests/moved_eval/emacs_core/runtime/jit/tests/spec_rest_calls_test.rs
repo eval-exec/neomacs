@@ -1,19 +1,10 @@
-//! Speculated calls of `&rest` callees.
-//!
-//! A `&rest` callee -- every `cl-generic` dispatcher, `bindat-get-field` --
-//! takes the spec shim's fast path: its frame is built in the shim's buffer
-//! with the tail consed into the last slot, as the interpreter's `run_frame`
-//! (GNU `setup_frame`'s `Flist`, src/bytecode.c:545-546) builds it, while the backtrace frame
-//! records the call as made -- the SYMBOL with the call's own arguments, as
-//! GNU's `Bcall` records them (`record_in_backtrace (call_fun = TOP)`,
-//! src/bytecode.c:792-796).
-
-use super::*;
+//! Speculated calls of `&rest` callees, re-homed whole (jitcall BOOT-FULL
+//! batch 4); the origin module doc is retained below.
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
 
 fn shim_fast() -> u64 {
-    SPEC_SHIM_FAST_COUNT.load(Ordering::Relaxed)
+    neovm_eval::test_support::spec_shim_fast_count_for_test()
 }
 
 /// Every shape of a `&rest` frame: missing optionals, an empty tail, a
@@ -44,15 +35,16 @@ const REST_CALLS: &str = r#"(progn
 
 fn warmed() -> Context {
     crate::test_utils::init_test_tracing();
-    force_profit_gate_for_test(false);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     // An engagement test: the force harness's point is that no call takes
     // the fast path.
-    force_slow_spec_for_test(Some(false));
+    neovm_eval::test_support::authority::force_slow_spec_for_test(Some(false));
     let mut ev = crate::test_utils::runtime_startup_context();
     // Observe native rest frames rather than whether a backend happened to
     // finish during warming. Stage source-listed entries before the original
     // warm loop; neither that loop nor the later GC call is replayed.
-    eval_fixture_program(&mut ev, REST_CALLS).expect("defined and warmed");
+    neovm_eval::test_support::authority::eval_fixture_program(&mut ev, REST_CALLS)
+        .expect("defined and warmed");
     ev
 }
 
@@ -103,10 +95,10 @@ fn a_rest_callee_frame_records_the_symbol_and_the_calls_arguments() {
 #[test]
 fn a_rest_tail_survives_a_collection_in_the_callee() {
     crate::test_utils::init_test_tracing();
-    force_profit_gate_for_test(false);
-    force_slow_spec_for_test(Some(false));
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    neovm_eval::test_support::authority::force_slow_spec_for_test(Some(false));
     let mut ev = crate::test_utils::runtime_startup_context();
-    eval_fixture_program(
+    neovm_eval::test_support::authority::eval_fixture_program(
         &mut ev,
         r#"(progn
   (defvar neovm--rest-gc nil)

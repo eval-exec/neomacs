@@ -14,6 +14,7 @@
 //! retain their reference marshaling.
 
 use super::*;
+use crate::test_support::authority::eval_fixture_program;
 
 /// The modes a shaped scenario runs in, in [`shaped_differential`]'s order.
 const SHAPED_MODES: [(Mode, DirectShapesKnob); 4] = [

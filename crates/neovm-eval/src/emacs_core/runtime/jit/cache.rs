@@ -1754,7 +1754,7 @@ pub(crate) fn trace_redefined_pins(
 }
 
 /// The pinned functions (tests).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn redefined_pins_for_test() -> Vec<RedefinedPin> {
     REDEFINED_PINS.with(|pins| pins.borrow().clone())
 }
@@ -3736,7 +3736,7 @@ pub(crate) fn install_leaf_for_test(
 /// Prepare an entry through its real front/backend protocol without executing
 /// the body. Native-observation tests call this at explicit fixture boundaries;
 /// pending/cancellation tests use the production seam directly.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn prepare_entry_for_test(ctx: *mut Context, func: &ByteCodeFunction) {
     use std::time::Duration;
     sync_cache_to_current_heap();

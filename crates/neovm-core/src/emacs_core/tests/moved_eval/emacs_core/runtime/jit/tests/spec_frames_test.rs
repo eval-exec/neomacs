@@ -1,14 +1,6 @@
-//! Backtrace frames of speculated calls (design `p1-1-direct-native-calls`
-//! 0b, P1.0 S1.3 = U0.2): a compiled caller's call of a symbol records the
-//! SYMBOL, as GNU's `Bcall` does (`record_in_backtrace (call_fun = TOP)`,
-//! src/bytecode.c:792-796), not the byte-code object the symbol names -- so
-//! `mapbacktrace` and `backtrace-frame` see what the interpreter shows -- and
-//! the object stays alive while it runs even after its symbol is redefined
-//! (GNU's bytecode frame holds `fp->fun`, src/bytecode.c:518).
-
-use super::*;
+//! Backtrace frames of speculated calls, re-homed whole (jitcall BOOT-FULL
+//! batch 4); the origin module doc is retained below.
 use crate::emacs_core::eval::Context;
-use crate::emacs_core::jit::cache;
 use crate::emacs_core::print::print_value;
 
 /// A chain of compiled callers over every frame shape the speculated path
@@ -35,10 +27,10 @@ const CHAIN: &str = r#"(progn
 /// The innermost frames `neovm--fr-show` saw, and what `backtrace-frame`
 /// answered from inside it.
 fn observe(ev: &mut Context, call: &str) -> (String, String) {
-    let spec_calls = SPEC_CALL_COUNT.load(Ordering::Relaxed);
+    let spec_calls = neovm_eval::test_support::spec_call_count_for_test();
     let frames = ev.eval_str(call).expect("runs");
     assert!(
-        SPEC_CALL_COUNT.load(Ordering::Relaxed) > spec_calls,
+        neovm_eval::test_support::spec_call_count_for_test() > spec_calls,
         "the chain ran through speculated calls"
     );
     let seen = ev
@@ -51,9 +43,10 @@ fn observe(ev: &mut Context, call: &str) -> (String, String) {
 fn speculated_calls_record_the_called_symbol_in_their_frames() {
     crate::test_utils::init_test_tracing();
     // Native frame engagement, not the profitability threshold, is observed.
-    force_profit_gate_for_test(false);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     let mut ev = crate::test_utils::runtime_startup_context();
-    eval_fixture_program(&mut ev, CHAIN).expect("chain defined and warmed");
+    neovm_eval::test_support::authority::eval_fixture_program(&mut ev, CHAIN)
+        .expect("chain defined and warmed");
     let (seen, frames) = observe(&mut ev, "(neovm--fr-outer 'show 7)");
     assert_eq!(
         seen, "((neovm--fr-show nil) (neovm--fr-inner (show)) (neovm--fr-outer (show 7)))",
@@ -79,9 +72,9 @@ fn speculated_calls_record_the_called_symbol_in_their_frames() {
 #[test]
 fn a_running_function_outlives_its_redefinition_and_a_collection() {
     crate::test_utils::init_test_tracing();
-    force_profit_gate_for_test(false);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     let mut ev = crate::test_utils::runtime_startup_context();
-    eval_fixture_program(
+    neovm_eval::test_support::authority::eval_fixture_program(
         &mut ev,
         r#"(progn
   (defvar neovm--pin-tab (make-hash-table :test 'eq :weakness 'key))
@@ -105,12 +98,12 @@ fn a_running_function_outlives_its_redefinition_and_a_collection() {
     .expect("defined and warmed");
     ev.eval_str("(puthash (symbol-function 'neovm--pin-f) t neovm--pin-tab)")
         .expect("weakly held");
-    let spec_calls = SPEC_CALL_COUNT.load(Ordering::Relaxed);
+    let spec_calls = neovm_eval::test_support::spec_call_count_for_test();
     let result = ev
         .eval_str("(let ((neovm--pin-armed t)) (neovm--pin-g 3))")
         .expect("runs");
     assert!(
-        SPEC_CALL_COUNT.load(Ordering::Relaxed) > spec_calls,
+        neovm_eval::test_support::spec_call_count_for_test() > spec_calls,
         "the recursion ran through speculated calls"
     );
     assert_eq!(print_value(&result), "3", "the old definition finished");
@@ -121,7 +114,7 @@ fn a_running_function_outlives_its_redefinition_and_a_collection() {
         "the running definition survived the collection under it"
     );
     assert!(
-        !cache::redefined_pins_for_test().is_empty(),
+        neovm_eval::test_support::redefined_pins_present_for_test(),
         "the redefinition pinned the old definition"
     );
     let after = ev
@@ -133,7 +126,7 @@ fn a_running_function_outlives_its_redefinition_and_a_collection() {
         "with no frame left, the old definition is collectable"
     );
     assert!(
-        cache::redefined_pins_for_test().is_empty(),
+        !neovm_eval::test_support::redefined_pins_present_for_test(),
         "and its pin is gone"
     );
 }
@@ -146,9 +139,9 @@ fn a_running_function_outlives_its_redefinition_and_a_collection() {
 #[test]
 fn an_armed_call_the_leaf_declines_records_the_symbol_in_its_frame() {
     crate::test_utils::init_test_tracing();
-    force_profit_gate_for_test(false);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     let mut ev = crate::test_utils::runtime_startup_context();
-    eval_fixture_program(
+    neovm_eval::test_support::authority::eval_fixture_program(
         &mut ev,
         r#"(progn
   (defvar neovm--decl-seen nil)
@@ -160,7 +153,7 @@ fn an_armed_call_the_leaf_declines_records_the_symbol_in_its_frame() {
   (dotimes (i 6000) (neovm--decl-caller i nil)))"#,
     )
     .expect("defined and warmed");
-    let spec_calls = SPEC_CALL_COUNT.load(Ordering::Relaxed);
+    let spec_calls = neovm_eval::test_support::spec_call_count_for_test();
     let result = ev
         .eval_str(
             r#"(condition-case err
@@ -179,7 +172,7 @@ fn an_armed_call_the_leaf_declines_records_the_symbol_in_its_frame() {
         )
         .expect("runs");
     assert!(
-        SPEC_CALL_COUNT.load(Ordering::Relaxed) > spec_calls,
+        neovm_eval::test_support::spec_call_count_for_test() > spec_calls,
         "the call ran through the speculated site"
     );
     assert_eq!(print_value(&result), "wrong-number-of-arguments");

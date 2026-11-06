@@ -348,7 +348,7 @@ pub(crate) fn force_deopt_for_test(on: bool) {
 /// here.
 #[inline(always)]
 pub(crate) fn jit_force_slow_spec() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(on) = FORCE_SLOW_SPEC_TEST_OVERRIDE.with(|c| c.get()) {
         return on;
     }
@@ -369,7 +369,7 @@ pub(crate) fn jit_force_slow_spec() -> bool {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static FORCE_SLOW_SPEC_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
         const { std::cell::Cell::new(None) };
@@ -378,7 +378,7 @@ thread_local! {
 /// Force the every-spec-call-re-validates harness on/off (or back to the
 /// environment with `None`) for the current thread (tests only). A Context
 /// built before the switch must `refresh_attention_for_test` to see it.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_slow_spec_for_test(on: Option<bool>) {
     FORCE_SLOW_SPEC_TEST_OVERRIDE.with(|c| c.set(on));
 }
@@ -4373,8 +4373,6 @@ pub use switch_dispatch::inline_switch_sites_for_test;
 #[path = "tests/direct_call_test.rs"]
 mod direct_call_tests;
 #[cfg(test)]
-pub(crate) use direct_call_tests::{eval_fixture_program, eval_fixture_program_named};
-#[cfg(test)]
 #[path = "tests/direct_self_test.rs"]
 mod direct_self_tests;
 #[cfg(test)]
@@ -4415,14 +4413,8 @@ mod regalloc_small_tests;
 #[path = "tests/source_slots_test.rs"]
 mod source_slot_tests;
 #[cfg(test)]
-#[path = "tests/spec_frames_test.rs"]
-mod spec_frame_tests;
-#[cfg(test)]
 #[path = "tests/spec_gate_test.rs"]
 mod spec_gate_tests;
-#[cfg(test)]
-#[path = "tests/spec_rest_calls_test.rs"]
-mod spec_rest_call_tests;
 #[cfg(test)]
 #[path = "tests/stack_guard_test.rs"]
 mod stack_guard_tests;

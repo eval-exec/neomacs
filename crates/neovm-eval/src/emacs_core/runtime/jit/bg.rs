@@ -1309,7 +1309,7 @@ pub(crate) fn force_backend_panic_for_test() {
 
 /// Wait until no job is queued or running (tests); whether it got there
 /// within `timeout`.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn quiesce_for_test(timeout: std::time::Duration) -> bool {
     queue::pool().quiesce(timeout)
 }

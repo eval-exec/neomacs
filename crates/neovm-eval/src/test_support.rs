@@ -885,6 +885,35 @@ pub mod authority {
         let _restore = Restore;
         f()
     }
+    /// Re-homed jit fixture DRIVER: the ordered fixture protocol with early
+    /// per-form compilation. It evaluates forms and installs JIT cache
+    /// entries, so it is AUTHORITY rather than VIS; SAFE (`&mut Context`
+    /// proves ownership; the returned Value is standard).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn eval_fixture_program(
+        ev: &mut crate::emacs_core::eval::Context,
+        program: &str,
+    ) -> Result<neovm_value::value::Value, neovm_value::error::EvalError> {
+        super::jit_fixture::eval_fixture_program(ev, program)
+    }
+
+    /// Re-homed jit fixture DRIVER with an explicit prepared-function list;
+    /// same contract as [`eval_fixture_program`].
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn eval_fixture_program_named(
+        ev: &mut crate::emacs_core::eval::Context,
+        program: &str,
+        names: &[&str],
+    ) -> Result<neovm_value::value::Value, neovm_value::error::EvalError> {
+        super::jit_fixture::eval_fixture_program_named(ev, program, names)
+    }
+
+    /// Re-homed jit spec-pair batch: thread-local FORCE-SLOW-SPEC override
+    /// write (N2).
+    #[cfg(feature = "jit")]
+    pub fn force_slow_spec_for_test(on: Option<bool>) {
+        crate::emacs_core::jit::compile::force_slow_spec_for_test(on);
+    }
 }
 
 /// Re-homed jit switch_dispatch BOOT-FULL batch: copied inline-switch census.
@@ -977,6 +1006,157 @@ pub fn compiled_leaf_copy_for_test(
 pub fn jit_heat_for_test(function: &crate::emacs_core::bytecode::ByteCodeFunction) -> u32 {
     use crate::emacs_core::jit::RuntimeStateTieringExt as _;
     crate::emacs_core::bytecode::ByteCodeFunctionExt::jit_runtime(function).heat()
+}
+
+/// Re-homed jit spec-pair batch: copied inline-spec call census (u64).
+#[cfg(feature = "jit")]
+pub fn spec_call_count_for_test() -> u64 {
+    crate::emacs_core::jit::compile::SPEC_CALL_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Re-homed jit spec-pair batch: copied rest-shim fast-path census (u64).
+#[cfg(feature = "jit")]
+pub fn spec_shim_fast_count_for_test() -> u64 {
+    crate::emacs_core::jit::compile::SPEC_SHIM_FAST_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Re-homed jit spec-pair batch: copied redefinition-pin presence predicate
+/// (`!pins.is_empty()`, the same test predicate the origin used).
+#[cfg(feature = "jit")]
+pub fn redefined_pins_present_for_test() -> bool {
+    !crate::emacs_core::jit::cache::redefined_pins_for_test().is_empty()
+}
+
+/// Re-homed jit fixture body (V1 one-home; nine eval test files plus the
+/// moved spec pair use it). Crate-private: the only cross-crate route is the
+/// authority delegates above.
+#[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+mod jit_fixture {
+    use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+    use crate::emacs_core::eval::Context;
+    use neovm_value::intern::intern;
+    use neovm_value::value::Value;
+
+    /// Root parsed fixture forms and preparation operands on their owning
+    /// evaluator, including when a public error or assertion unwinds this
+    /// loader.
+    struct FixtureRoots<'a> {
+        ev: &'a mut Context,
+        scope: crate::emacs_core::eval::SpecpdlRootScopeState,
+    }
+
+    impl<'a> FixtureRoots<'a> {
+        fn new(ev: &'a mut Context) -> Self {
+            let scope = ev.save_specpdl_roots();
+            Self { ev, scope }
+        }
+    }
+
+    impl Drop for FixtureRoots<'_> {
+        fn drop(&mut self) {
+            self.ev.restore_specpdl_roots(self.scope);
+        }
+    }
+
+    /// Prepare only source-listed fixture functions and their immutable
+    /// bytecode constants. No caller/callee body executes here, and no
+    /// compilation mode is overridden. Loaded runtime functions are outside
+    /// this protocol.
+    fn prepare_fixture_functions(ev: &mut Context, names: &[&str]) {
+        let roots = FixtureRoots::new(ev);
+        let mut pending: Vec<_> = names
+            .iter()
+            .filter_map(|name| roots.ev.obarray.symbol_function_id(intern(name)))
+            .filter(|value| value.is_bytecode())
+            .collect();
+        for value in &pending {
+            roots.ev.push_specpdl_root(*value);
+        }
+        let mut seen = std::collections::HashSet::new();
+        while let Some(value) = pending.pop() {
+            if !seen.insert(value.bits()) {
+                continue;
+            }
+            let function = value.get_bytecode_data().expect("fixture bytecode");
+            for constant in function
+                .constants
+                .iter()
+                .copied()
+                .filter(|v| v.is_bytecode())
+            {
+                roots.ev.push_specpdl_root(constant);
+                pending.push(constant);
+            }
+            // SAFETY: the fixture owns `roots.ev` exclusively for this
+            // preparation and the cache entry stays on this thread.
+            crate::emacs_core::jit::cache::prepare_entry_for_test(
+                roots.ev as *mut Context,
+                function,
+            );
+        }
+    }
+
+    /// Test-only early compilation between existing top-level fixture forms.
+    /// In particular, code is installed before the ORIGINAL warm loops
+    /// execute; preparation never replays those loops or the later semantic
+    /// observation. Only an outer `progn` is expanded: lexical binding
+    /// wrappers stay intact.
+    pub(crate) fn eval_fixture_program(
+        ev: &mut Context,
+        program: &str,
+    ) -> Result<Value, neovm_value::error::EvalError> {
+        let names: std::collections::BTreeSet<_> = program
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+            .filter(|name| name.starts_with("neovm--"))
+            .collect();
+        eval_fixture_program_named(ev, program, &names.into_iter().collect::<Vec<_>>())
+    }
+
+    /// The same ordered protocol for a fixture with explicitly named
+    /// functions outside the `neovm--` namespace. Only those function cells
+    /// are prepared.
+    pub(crate) fn eval_fixture_program_named(
+        ev: &mut Context,
+        program: &str,
+        names: &[&str],
+    ) -> Result<Value, neovm_value::error::EvalError> {
+        ev.setup_thread_locals();
+        let forms = crate::emacs_core::value_reader::read_all(program, ev.variables()).map_err(
+            |error| {
+                neovm_value::error::EvalError::signal(
+                    intern("error"),
+                    vec![Value::string(format!("Read error: {}", error.message))],
+                    None,
+                )
+            },
+        )?;
+        let roots = FixtureRoots::new(ev);
+        for form in &forms {
+            roots.ev.push_specpdl_root(*form);
+        }
+        let mut ordered = Vec::new();
+        for form in forms {
+            if let Some(parts) = neovm_value::value::list_to_vec(&form)
+                && parts.first().and_then(|head| head.as_bare_symbol_name()) == Some("progn")
+            {
+                ordered.extend(parts.into_iter().skip(1));
+            } else {
+                ordered.push(form);
+            }
+        }
+        let last_root = roots.ev.push_specpdl_root_slot(Value::NIL);
+        let mut result = Value::NIL;
+        for form in ordered {
+            // The previous form's discarded result must not become a new GC
+            // root during the next effectful form (e.g. a weak-key collection).
+            roots.ev.set_specpdl_root_slot(&last_root, Value::NIL);
+            prepare_fixture_functions(roots.ev, names);
+            result = roots.ev.eval_form(form)?;
+            roots.ev.set_specpdl_root_slot(&last_root, result);
+        }
+        prepare_fixture_functions(roots.ev, names);
+        Ok(result)
+    }
 }
 
 /// Test-support `aset` over a caller-owned Bare argument slice (K1 fence-ask

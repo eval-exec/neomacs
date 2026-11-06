@@ -320,7 +320,7 @@ impl Pool {
 
     /// Wait until no job is queued or running, up to `timeout`; whether it
     /// got there (tests).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn quiesce(&self, timeout: std::time::Duration) -> bool {
         let deadline = Instant::now() + timeout;
