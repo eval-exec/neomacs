@@ -16,7 +16,7 @@ use super::super::print::print_value;
 /// `debugger` is a recorder; every case reports
 /// `(RESULT LOG debug-on-next-call)`.
 fn recorder_context() -> Context {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str(
         r#"(progn
              (defvar l172-log nil)
@@ -359,7 +359,7 @@ fn entering_the_debugger_stamps_internal_when_entered_debugger() {
 /// a `condition-case` in batch (`src/eval.c:1699-1703`), and it is what makes
 /// the guard the *only* thing that can stop the second entry.
 fn signal_debugger_context() -> Context {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str(
         r#"(progn
              (defvar l183-n 0)
@@ -579,7 +579,7 @@ fn the_reentry_guard_gates_the_signal_debugger_only() {
 /// GNU and answered a stale `102` here.
 #[test]
 fn call_debugger_binds_gnus_four_variables() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str(
         r#"(progn
              (defvar l183-seen nil)
@@ -687,7 +687,7 @@ fn a_byte_compiled_frame_flagged_by_backtrace_debug_still_calls_the_exit_debugge
 #[test]
 fn a_debug_on_exit_set_while_the_arguments_evaluate_survives_the_evald_store() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let value = eval
         .eval_str(
             r#"(progn
@@ -705,7 +705,7 @@ fn a_debug_on_exit_set_while_the_arguments_evaluate_survives_the_evald_store() {
 /// a live Context reads through the unresolved stand-in.
 #[test]
 fn debug_cell_resolved_after_activation() {
-    let fresh = Context::new();
+    let fresh = Context::new(crate::test_utils::unit_runtime());
     let cell = fresh
         .obarray
         .debug_on_next_call_bool_fwd_cached()
