@@ -58,6 +58,17 @@ sqlite = []
 # wkwebview host cfgs, so its build script must reach the same host view.
 dbus-vendored = []
 webview = []
+# The moved system-vocabulary table (system_vocab/c_features.rs) decides
+# whether this build advertises GNU's `dynamic-setting` and
+# `system-font-setting` features (src/xsettings.c:1409,1417).  The native
+# GSettings subscription lives in neomacs-display-runtime, which enables
+# neovm-core's feature; core and eval forward it here so the table evaluates
+# the same host view from the crate that now owns the source.  Without this
+# forwarding the runtime reported both features absent even though
+# loadup.el:305 needs `(featurep 'dynamic-setting)` to load
+# lisp/dynamic-setting.el, so a live desktop-font change updated the native
+# preference but never reached the frame.
+desktop-font-settings = []
 # Test-only read surface for core-owned tests of moved modules.  Under peer
 # ruling 02:2xZ (TEST-SUPPORT-VIS, B3) each item needed by a re-homed test
 # keeps its production visibility and gains

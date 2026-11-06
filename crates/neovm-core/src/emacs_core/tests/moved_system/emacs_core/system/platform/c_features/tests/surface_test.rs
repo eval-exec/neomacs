@@ -490,3 +490,22 @@ fn wkwebview_cfg_follows_the_webview_feature_on_macos() {
         "neomacs_have_wkwebview must be exactly `webview` feature AND macOS"
     );
 }
+
+/// The Linux display runtime links a native GSettings subscription, which is
+/// what GNU's `syms_of_xsettings` advertises as `dynamic-setting` and
+/// `system-font-setting` (src/xsettings.c:1409,1417).  The moved
+/// system-vocabulary table must reach that verdict from `neovm-value`; if it
+/// does not, `lisp/loadup.el:305` skips `lisp/dynamic-setting.el`, the
+/// `config-changed-event` handler stays unbound, and a live desktop-font
+/// change updates the native preference without ever reaching the frame (the
+/// neomacs-gui-tests live-font suite is the end-to-end counterpart).  This
+/// unit check fails at the feature-forwarding seam alone.
+#[cfg(all(target_os = "linux", feature = "desktop-font-settings"))]
+#[test]
+fn the_linked_desktop_font_subscription_is_advertised_to_lisp() {
+    crate::test_utils::init_test_tracing();
+    let result = runtime_startup_eval_one(
+        "(list (featurep 'dynamic-setting) (featurep 'system-font-setting))",
+    );
+    assert_eq!(result, "OK (t t)");
+}

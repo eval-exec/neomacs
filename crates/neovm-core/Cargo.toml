@@ -142,7 +142,10 @@ sound = ["neovm-display/sound"]
 webview = ["neovm-value/webview"]
 # The Linux display runtime enables this when it links its native GSettings
 # adapter. Bare evaluator builds must not advertise a native subscription.
-desktop-font-settings = ["neovm-eval/desktop-font-settings"]
+# The system-vocabulary table moved to neovm-value, so the same capability has
+# to reach that crate: its `dynamic-setting`/`system-font-setting` rows are
+# what loadup.el:305 consults before loading lisp/dynamic-setting.el.
+desktop-font-settings = ["neovm-eval/desktop-font-settings", "neovm-value/desktop-font-settings"]
 # Opt-in per-char validator for the display-motion stop cache (indent.rs
 # DisplayStopCache): re-runs every DisplayStopProp probe on each fast-path char
 # and asserts the cached stop skipped nothing. OFF by default (like GNU's

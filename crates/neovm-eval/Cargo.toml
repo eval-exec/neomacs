@@ -20,7 +20,10 @@ default = ["jit", "neovm-value/sqlite"]
 # forward downward so the whole lower graph is in the same test mode.
 test-support = ["neovm-value/test-support", "neovm-text/test-support", "neovm-edit/test-support", "dep:visibility"]
 contract-fixtures = []
-desktop-font-settings = []
+# The moved system-vocabulary table lives in neovm-value; forward the
+# capability down so an eval-only consumer advertises the same
+# `dynamic-setting`/`system-font-setting` rows as a core consumer.
+desktop-font-settings = ["neovm-value/desktop-font-settings"]
 gc-memory-telemetry = []
 jit = ["neovm-value/jit", "neovm-edit/jit", "neovm-text/jit"]
 perf-probes = []
