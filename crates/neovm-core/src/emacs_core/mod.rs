@@ -476,6 +476,10 @@ mod architecture_production_source_roots;
 mod architecture_vis_ledger_guard_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/workspace_dependency_features_guard_test.rs"]
+mod architecture_workspace_dependency_features_guard_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/value_ref_guard_test.rs"]
 mod architecture_value_ref_guard_test;
 
