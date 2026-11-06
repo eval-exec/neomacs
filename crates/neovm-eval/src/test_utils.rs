@@ -339,8 +339,80 @@ mod unit_runtime {
             install_eval_hooks(&SET).expect("the eval unit hook set publishes at first use")
         })
     }
+
+    /// Drift-gate views over the compiled registration tables (H3/H3b): the
+    /// checked-in snapshots and these tables must agree row for row.
+    pub(crate) fn upper_subrs_for_snapshot_test() -> Vec<(&'static str, u16, Option<u16>)> {
+        UPPER_SUBRS
+            .iter()
+            .map(|row| (row.0, row.1, row.2))
+            .collect()
+    }
+
+    pub(crate) fn upper_bootstrap_vars_for_snapshot_test() -> &'static [&'static str] {
+        UPPER_BOOTSTRAP_VAR_NAMES
+    }
 }
 
 #[cfg(test)]
 #[allow(unused_imports)]
 pub(crate) use unit_runtime::unit_runtime;
+
+/// Drift gate for the H3/H3b snapshots (peer r2 (d)): the checked-in TSVs,
+/// the generated registration source and the compiled tables must agree row
+/// for row. Same parser as `cargo xtask upper-snapshots`.
+#[cfg(test)]
+mod snapshot_consistency {
+    use crate::upper_snapshots_build_support as generator;
+
+    use super::unit_runtime::{
+        upper_bootstrap_vars_for_snapshot_test, upper_subrs_for_snapshot_test,
+    };
+
+    const SUBRS_SOURCE: &str = include_str!("upper_subrs.generated.rs");
+    const BOOTSTRAP_SOURCE: &str = include_str!("upper_bootstrap_vars.generated.rs");
+    const SUBRS_SNAPSHOT: &str = include_str!("upper_subrs.snapshot.tsv");
+    const BOOTSTRAP_SNAPSHOT: &str = include_str!("upper_bootstrap_vars.snapshot.tsv");
+
+    #[test]
+    fn the_snapshots_match_the_generated_source_and_the_compiled_tables() {
+        let rows = generator::parse_upper_subrs(SUBRS_SOURCE).expect("generated upper subrs");
+        assert_eq!(
+            generator::render_upper_subrs(&rows),
+            SUBRS_SNAPSHOT,
+            "upper_subrs.snapshot.tsv is stale; run `cargo xtask upper-snapshots`"
+        );
+        let bootstrap =
+            generator::parse_bootstrap_vars(BOOTSTRAP_SOURCE).expect("generated bootstrap vars");
+        assert_eq!(
+            generator::render_bootstrap_vars(&bootstrap),
+            BOOTSTRAP_SNAPSHOT,
+            "upper_bootstrap_vars.snapshot.tsv is stale; run `cargo xtask upper-snapshots`"
+        );
+
+        // The host-active slice of the snapshot is exactly the compiled
+        // registration table, in the same order.
+        let compiled = upper_subrs_for_snapshot_test();
+        let active: Vec<_> = rows
+            .iter()
+            .filter(|row| generator::cfg_active(&row.cfg))
+            .collect();
+        assert_eq!(active.len(), compiled.len());
+        for (row, compiled) in active.iter().zip(compiled.iter()) {
+            assert_eq!(
+                (row.name.as_str(), row.min, row.max),
+                (compiled.0, compiled.1, compiled.2),
+                "compiled registration order/arity diverges from the snapshot"
+            );
+        }
+        let active_names: Vec<&str> = bootstrap
+            .iter()
+            .filter(|row| generator::cfg_active(&row.cfg))
+            .map(|row| row.name.as_str())
+            .collect();
+        assert_eq!(
+            active_names.as_slice(),
+            upper_bootstrap_vars_for_snapshot_test()
+        );
+    }
+}

@@ -14,6 +14,13 @@ pub mod test_support;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_utils;
 
+/// Source-only H3/H3b snapshot generator, shared with
+/// `cargo xtask upper-snapshots` and used by the unit-runtime drift test.
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../build_support/upper_snapshots.rs"]
+pub(crate) mod upper_snapshots_build_support;
+
 // GNU seeds emacs-version from configure.ac's PACKAGE_VERSION; version.el
 // derives its numeric components from that same value. The evaluator seeds
 // the bare variable, so the constants live here (stage-4 W5/E13); the core

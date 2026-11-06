@@ -93,6 +93,15 @@ thread_local! {
     };
 }
 
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    /// `None` = disarmed: registrations are not recorded. The test arms it
+    /// with an empty vector and drains-and-disarms; there is no unbounded
+    /// side channel in an ordinary test run.
+    static REGISTERED_SUBR_TRACE: std::cell::RefCell<Option<Vec<(&'static str, u16, Option<u16>)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// Lisp-visible argument-count metadata for a native subroutine.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[doc(hidden)]
@@ -554,6 +563,34 @@ pub fn reset_installed_subr_batches() {
 #[doc(hidden)]
 pub fn take_installed_subr_batches() -> Vec<&'static str> {
     INSTALLED_SUBR_BATCHES.with(|installed| std::mem::take(&mut *installed.borrow_mut()))
+}
+
+/// Record one registration at the single choke point (H3): the canonical
+/// order+arity trace the core-side names+order test compares against the
+/// eval registrar plus the checked-in upper snapshot. A no-op while the
+/// trace is disarmed.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn record_registered_subr(name: &'static str, arity: SubrArity) {
+    REGISTERED_SUBR_TRACE.with(|trace| {
+        if let Some(trace) = trace.borrow_mut().as_mut() {
+            trace.push((name, arity.min(), arity.max()));
+        }
+    });
+}
+
+/// Arm the trace with an empty vector (from now on, registrations record).
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn reset_registered_subr_trace_for_test() {
+    REGISTERED_SUBR_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
+}
+
+/// Drain the trace and disarm it, returning what was recorded since the
+/// last reset. An unarmed trace yields an empty vector.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn take_registered_subr_trace_for_test() -> Vec<(&'static str, u16, Option<u16>)> {
+    REGISTERED_SUBR_TRACE.with(|trace| trace.borrow_mut().take().unwrap_or_default())
 }
 
 const fn is_subrs_source_file(path: &str) -> bool {

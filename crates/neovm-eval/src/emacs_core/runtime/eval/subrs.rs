@@ -2470,6 +2470,8 @@ impl Context {
     pub fn register_subr(&mut self, spec: SubrSpec) {
         crate::emacs_core::subr::record_no_eval_policy(spec.name(), spec.no_eval_policy());
         let arity = spec.arity();
+        #[cfg(any(test, feature = "test-support"))]
+        crate::emacs_core::subr::record_registered_subr(spec.name(), arity);
         self.install_subr(
             spec.name(),
             spec.function(),
