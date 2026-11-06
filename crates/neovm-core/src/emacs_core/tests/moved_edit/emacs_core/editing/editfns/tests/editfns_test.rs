@@ -26,8 +26,7 @@ use neovm_value::value::positions::CharLen;
 use neovm_edit::emacs_core::editfns::*;
 
 use crate::emacs_core::identity_commands::{
-    builtin_file_group_gid, builtin_file_user_uid, builtin_group_gid, builtin_group_real_gid,
-    builtin_user_real_uid, builtin_user_uid,
+    builtin_group_gid, builtin_group_real_gid, builtin_user_real_uid, builtin_user_uid,
 };
 
 use neovm_system::emacs_core::callproc::new_child_command_calls_for_test;
@@ -75,52 +74,20 @@ fn inhibited_buffer_changes_preserve_pending_mark_deactivation() {
 }
 
 #[test]
-fn file_user_uid_matches_user_uid() {
-    crate::test_utils::init_test_tracing();
-    let user_uid = builtin_user_uid(vec![]).expect("user-uid should succeed");
-    let file_user_uid = builtin_file_user_uid(vec![]).expect("file-user-uid should succeed");
-    assert_eq!(file_user_uid, user_uid);
-    assert!(file_user_uid.is_fixnum());
-}
-
-#[test]
-fn file_user_uid_arity_errors() {
-    crate::test_utils::init_test_tracing();
-    assert!(builtin_file_user_uid(vec![Value::NIL]).is_err());
-}
-
-#[test]
-fn file_group_gid_matches_group_gid() {
-    crate::test_utils::init_test_tracing();
-    let group_gid = builtin_group_gid(vec![]).expect("group-gid should succeed");
-    let file_group_gid = builtin_file_group_gid(vec![]).expect("file-group-gid should succeed");
-    assert_eq!(file_group_gid, group_gid);
-    assert!(file_group_gid.is_fixnum());
-}
-
-#[test]
 fn process_identity_queries_do_not_construct_child_commands() {
     crate::test_utils::init_test_tracing();
     reset_new_child_command_calls_for_test();
 
     builtin_user_uid(vec![]).expect("user-uid should succeed");
     builtin_user_real_uid(vec![]).expect("user-real-uid should succeed");
-    builtin_file_user_uid(vec![]).expect("file-user-uid should succeed");
     builtin_group_gid(vec![]).expect("group-gid should succeed");
     builtin_group_real_gid(vec![]).expect("group-real-gid should succeed");
-    builtin_file_group_gid(vec![]).expect("file-group-gid should succeed");
 
     assert_eq!(
         new_child_command_calls_for_test(),
         0,
         "credential queries are host syscalls, not subprocess operations"
     );
-}
-
-#[test]
-fn file_group_gid_arity_errors() {
-    crate::test_utils::init_test_tracing();
-    assert!(builtin_file_group_gid(vec![Value::NIL]).is_err());
 }
 
 #[test]

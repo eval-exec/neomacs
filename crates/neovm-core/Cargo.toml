@@ -276,6 +276,12 @@ path = "tests/sync_window_positions_regression.rs"
 name = "warn_delta_minibuffer_restore"
 path = "tests/warn_delta_minibuffer_restore.rs"
 
+# Warn-delta P2 row 4 oracles: file-user-uid / file-group-gid are GNU Lisp
+# functions (simple.el:4826/:4838), not subrs.
+[[test]]
+name = "warn_delta_identity"
+path = "tests/warn_delta_identity.rs"
+
 [[bench]]
 name = "buffer_text_backends"
 harness = false

@@ -16,13 +16,6 @@ pub(crate) fn builtin_user_uid(args: Vec<Value>) -> EvalResult {
     ))))
 }
 
-pub(crate) fn builtin_file_user_uid(args: Vec<Value>) -> EvalResult {
-    expect_args("file-user-uid", &args, 0)?;
-    Ok(Value::fixnum(i64::from(process_user_id(
-        CredentialScope::Effective,
-    ))))
-}
-
 /// `(user-real-uid)` — return real user ID.
 pub(crate) fn builtin_user_real_uid(args: Vec<Value>) -> EvalResult {
     expect_args("user-real-uid", &args, 0)?;
@@ -34,13 +27,6 @@ pub(crate) fn builtin_user_real_uid(args: Vec<Value>) -> EvalResult {
 /// `(group-gid)` — return the effective group ID.
 pub(crate) fn builtin_group_gid(args: Vec<Value>) -> EvalResult {
     expect_args("group-gid", &args, 0)?;
-    Ok(Value::fixnum(i64::from(process_group_id(
-        CredentialScope::Effective,
-    ))))
-}
-
-pub(crate) fn builtin_file_group_gid(args: Vec<Value>) -> EvalResult {
-    expect_args("file-group-gid", &args, 0)?;
     Ok(Value::fixnum(i64::from(process_group_id(
         CredentialScope::Effective,
     ))))

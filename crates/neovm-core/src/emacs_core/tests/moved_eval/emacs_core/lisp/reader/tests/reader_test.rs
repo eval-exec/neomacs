@@ -1,7 +1,9 @@
 use crate::emacs_core::eval::{Context, DisplayHost, GuiFrameHostRequest, PopupMenuRequest};
 use crate::emacs_core::keyboard::*;
 use crate::emacs_core::minibuffer::*;
-use crate::emacs_core::minibuffer::{activate_minibuffer_window, restore_minibuffer_window};
+use crate::emacs_core::minibuffer::{
+    activate_minibuffer_window, restore_minibuffer_window_in_state,
+};
 use crate::emacs_core::print_value;
 use crate::emacs_core::reader::*;
 use crate::host_input::HostInputPublisher;
@@ -2142,7 +2144,17 @@ fn activate_minibuffer_window_switches_displayed_buffer_and_restores_state() {
 
     let generation_while_active = ev.menu_bar_rebuild_generation();
 
-    restore_minibuffer_window(&mut ev, saved);
+    {
+        let (frames, buffers, minibuffer_selected_window, active_minibuffer_window) =
+            ev.frame_manager_buffers_and_minibuffer_selection_mut();
+        restore_minibuffer_window_in_state(
+            frames,
+            buffers,
+            minibuffer_selected_window,
+            active_minibuffer_window,
+            saved,
+        );
+    }
 
     let frame = ev
         .frame_manager()
@@ -2275,7 +2287,17 @@ fn expired_minibuffer_buffer_is_erased_before_restore() {
     .expect("activate minibuffer");
 
     erase_expired_minibuffer_buffer_in_state(&mut ev.edit.buffers, active_buffer);
-    restore_minibuffer_window(&mut ev, saved);
+    {
+        let (frames, buffers, minibuffer_selected_window, active_minibuffer_window) =
+            ev.frame_manager_buffers_and_minibuffer_selection_mut();
+        restore_minibuffer_window_in_state(
+            frames,
+            buffers,
+            minibuffer_selected_window,
+            active_minibuffer_window,
+            saved,
+        );
+    }
 
     let active_minibuffer = ev
         .buffer_manager()

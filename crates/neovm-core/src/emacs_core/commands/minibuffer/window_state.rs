@@ -497,23 +497,3 @@ pub(crate) fn run_minibuffer_mode_if_bound(
         Ok(Value::NIL)
     }
 }
-
-pub(crate) fn restore_minibuffer_window(
-    eval: &mut crate::emacs_core::eval::Context,
-    saved: ActiveMinibufferWindowState,
-) {
-    if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
-        super::redisplay::restore(eval, saved).apply(eval);
-        return;
-    }
-    let (frames, buffers, minibuffer_selected_window, active_minibuffer_window) =
-        eval.frame_manager_buffers_and_minibuffer_selection_mut();
-    let effect = restore_minibuffer_window_in_state(
-        frames,
-        buffers,
-        minibuffer_selected_window,
-        active_minibuffer_window,
-        saved,
-    );
-    effect.apply(eval);
-}

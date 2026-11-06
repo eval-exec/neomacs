@@ -139,17 +139,6 @@ pub(crate) fn publish_expired_buffer(
 
 #[cold]
 #[inline(never)]
-pub(super) fn restore(
-    eval: &mut crate::emacs_core::eval::Context,
-    saved: ActiveMinibufferWindowState,
-) -> MinibufferWindowRestoreEffect {
-    let effect = restore_buffer(eval, saved);
-    restore_selection(eval, saved);
-    effect
-}
-
-#[cold]
-#[inline(never)]
 fn restore_selection(
     eval: &mut crate::emacs_core::eval::Context,
     saved: ActiveMinibufferWindowState,
