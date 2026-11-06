@@ -6,7 +6,8 @@
 
 mod subrs;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use subrs::SUBRS;
 #[doc(hidden)]
 pub use subrs::register_subrs;

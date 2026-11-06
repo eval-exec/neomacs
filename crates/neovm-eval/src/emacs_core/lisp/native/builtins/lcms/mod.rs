@@ -8,7 +8,8 @@ use libloading::Library;
 use super::*;
 
 mod subrs;
-#[cfg(all(test, neomacs_have_lcms2))]
+#[cfg(all(any(test, feature = "test-support"), neomacs_have_lcms2))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use subrs::SUBRS;
 #[doc(hidden)]
 pub use subrs::register_subrs;

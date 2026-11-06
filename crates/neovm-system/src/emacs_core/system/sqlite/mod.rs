@@ -1099,7 +1099,8 @@ pub fn available_p(args: Vec<neovm_value::value::Value>) -> neovm_value::error::
 
 #[doc(hidden)]
 pub mod subrs;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use subrs::SUBRS;
 pub use subrs::register_subrs;
 

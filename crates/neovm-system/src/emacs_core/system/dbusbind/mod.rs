@@ -28,7 +28,8 @@ std::cfg_select! {
 }
 
 std::cfg_select! {
-    all(test, neomacs_have_dbus) => {
+    all(any(test, feature = "test-support"), neomacs_have_dbus) => {
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
         pub(crate) use subrs::SUBRS;
     }
     _ => {}

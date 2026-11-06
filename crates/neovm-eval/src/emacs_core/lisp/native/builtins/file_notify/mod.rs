@@ -44,7 +44,8 @@ std::cfg_select! {
     any(target_os = "linux", target_os = "macos", target_os = "windows") => {
         mod subrs;
 
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
         pub(crate) use self::subrs::SUBRS;
         #[doc(hidden)]
         pub use self::subrs::register_subrs;

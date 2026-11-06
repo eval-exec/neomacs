@@ -111,7 +111,8 @@ pub(crate) mod parallel_entry;
 pub mod parallel_exec;
 mod subr_layout;
 mod subrs;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use subrs::SUBRS;
 use subrs::{CallableHandler, EvaluatorHandler, SpecialFormHandler, evaluator_handler};
 #[doc(hidden)]
