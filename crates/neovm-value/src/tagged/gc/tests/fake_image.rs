@@ -25,6 +25,7 @@ pub struct FakeImage {
 impl FakeImage {
     /// A fresh image, leaked for the life of the process (image memory is
     /// never freed).
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn leak(mapped_storage: bool) -> &'static mut FakeImage {
         let image = Box::leak(Box::new(FakeImage {
             cons: [ConsCell {
@@ -53,6 +54,7 @@ impl FakeImage {
     }
 
     /// Register the image vector with `heap` and answer it.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn register_vector(&mut self, heap: &mut TaggedHeap) -> TaggedValue {
         let obj = &mut self.vector as *mut VectorObj;
         unsafe {

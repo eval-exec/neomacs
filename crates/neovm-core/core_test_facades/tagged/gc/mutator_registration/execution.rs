@@ -10,3 +10,12 @@ pub use neovm_value::tagged::gc::mutator_registration::execution::*;
 
 #[path = "execution/read.rs"]
 pub mod read;
+
+/// Public-path restoration for the relocated core test
+/// `execution/read/tests/cell_test.rs`: its historical
+/// `super::super::tests::{FixtureSeed, prepared_cell_fixture}` import names
+/// this module. The fixture body is re-homed into core's test tree (it was
+/// written against this crate's `crate::emacs_core`/`crate::test_utils`).
+#[cfg(test)]
+#[path = "../../../../core_tests/tagged/gc/mutator_registration/execution/tests.rs"]
+pub mod tests;

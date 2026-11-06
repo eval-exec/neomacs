@@ -141,7 +141,7 @@ fn collection_fixture_context() -> Context {
 /// Retain the original epoch and derive the original backing at the lower
 /// admission's existing preparation boundary, exactly as eval's production
 /// helper does. The keeper is always this World's own `Baton`.
-fn prepare_keeper_backing(
+pub(crate) fn prepare_keeper_backing(
     keeper: &Baton,
 ) -> Result<(FacadeEpochRetention, SymbolBacking), RegistrationError> {
     let epoch = baton_parallel_epoch_retention(keeper).map_err(|_| RegistrationError::Exhausted)?;

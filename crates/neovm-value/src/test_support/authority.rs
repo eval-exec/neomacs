@@ -195,6 +195,33 @@ pub type ProofEra<'heap, K> = crate::tagged::gc::ProofEra<'heap, K>;
 /// `tagged::gc::GenericProofEraFinishFailure`.
 pub type ProofEraFinishFailure<'heap, K> = crate::tagged::gc::ProofEraFinishFailure<'heap, K>;
 
+/// FENCE observer (copied read): the published symbol table's shape for the
+/// re-homed cell test's slot-metadata assertions. Returns plain scalars
+/// `(slots, chunk_slots, chunk_count)`; the view, its descriptor type and the
+/// backing table stay internal.
+pub fn table_shape_for_test(
+    activation: &crate::tagged::gc::mutator_registration::ExecutionActivation<'_, '_, '_>,
+) -> (usize, usize, usize) {
+    let view = activation.table_view();
+    let table = view.table();
+    (
+        table.slots().get(),
+        table.chunk_slots().get(),
+        table.chunk_count().get(),
+    )
+}
+
+/// FENCE (re-homed execution fixture): take the sealed legacy-root census out
+/// of a proof era before its explicit finish. The fixture re-admits the same
+/// World through `ParallelHeapEra::admit_rooted_with`, which requires the
+/// actual census; the `EraCore` field stays private and the original path has
+/// no A-prime.
+pub fn take_legacy_roots_for_test<'heap, K: crate::tagged::gc::EraKeeper>(
+    era: &mut ProofEra<'heap, K>,
+) -> Option<crate::tagged::gc::FrozenLegacyRoots> {
+    crate::tagged::gc::mutator_registration::test_fences::take_legacy_roots_for_test(era)
+}
+
 /// Fence-only symbol-authority word occupancy (peer 09:2xZ): the word itself
 /// never leaves value. Callers get a copied u64 reading or an RAII guard whose
 /// Drop restores quiescence; the reader/writer sentinel stays private.

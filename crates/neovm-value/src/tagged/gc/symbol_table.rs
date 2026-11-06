@@ -26,6 +26,7 @@ pub(crate) enum TableError {
 #[doc(hidden)]
 pub struct SymbolSlotIndex(usize);
 impl SymbolSlotIndex {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const fn new(index: usize) -> Self {
         Self(index)
     }

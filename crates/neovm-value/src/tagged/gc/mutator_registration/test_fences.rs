@@ -12,6 +12,18 @@ use super::Mutator;
 use super::rendezvous::{RendezvousError, ResumeGcImage};
 use crate::tagged::gc::ProofEra;
 
+/// FENCE: hand the sealed legacy-root census out of a proof era before its
+/// explicit finish. The re-homed execution fixture re-admits the same World
+/// through `ParallelHeapEra::admit_rooted_with`, which requires the ACTUAL
+/// census (finishing setup does not authorize fabricating a new one). The
+/// `EraCore` field stays private; the in-crate fixture is the only other
+/// consumer, and it already uses this exact take.
+pub fn take_legacy_roots_for_test<'heap, K: crate::tagged::gc::EraKeeper>(
+    era: &mut ProofEra<'heap, K>,
+) -> Option<crate::tagged::gc::FrozenLegacyRoots> {
+    era.core.legacy_roots.take()
+}
+
 /// Deliberate registry poisoning for the re-homed root-slot panic-path test:
 /// the test proves that an abandoned era is conservatively retained, so it
 /// injects the same poisoned state the production Drop path publishes. The

@@ -3042,9 +3042,16 @@ mod chunk_map_tests;
 #[path = "gc/tests/cons_alloc_test.rs"]
 mod cons_alloc_tests;
 /// A fake pdump image in one allocation (see the module doc for why one).
-#[cfg(test)]
+#[cfg(all(test, not(feature = "test-support")))]
 #[path = "gc/tests/fake_image.rs"]
 pub(crate) mod fake_image;
+/// Test-support arm of the same file module (file-module cfg split): the
+/// relocated core GC test `symbol_barrier_test.rs` registers a fake image
+/// through this module, so the declaration is public only in test-support
+/// builds. Production and ordinary value tests keep the private arm.
+#[cfg(feature = "test-support")]
+#[path = "gc/tests/fake_image.rs"]
+pub mod fake_image;
 #[cfg(test)]
 #[path = "gc/tests/generational_verifier_test.rs"]
 mod generational_verifier_tests;

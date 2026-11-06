@@ -1,5 +1,6 @@
 use super::super::tests::{FixtureSeed, prepared_cell_fixture};
 use super::*;
+use crate::tagged::gc::mutator_registration::{FunctionError, GlobalError};
 use crate::tagged::gc::{
     ExecutionTestHomes, ImmediateResult, PlainSymbolBacking, RegistrationError,
 };
@@ -17,7 +18,7 @@ fn each_backing(body: impl Fn(PlainSymbolBacking)) {
 #[test]
 fn nmjit_n4_cell_symbol_slot_is_checked_metadata() {
     let id = crate::emacs_core::intern::intern("p3sym-c2-global");
-    let expected = SymbolSlotIndex::new(usize::try_from(id.0).unwrap());
+    let expected = SymbolSlotIndex::new(usize::try_from(id.to_raw()).unwrap());
     let closed = std::cell::Cell::new(None);
     each_backing(|backing| {
         prepared_cell_fixture(
@@ -29,10 +30,10 @@ fn nmjit_n4_cell_symbol_slot_is_checked_metadata() {
                     .with_activation(run, home, |activation| {
                         let slot = activation.symbol_slot(symbol).unwrap();
                         assert_eq!(slot, expected);
-                        let view = activation.table_view();
-                        let table = view.table();
-                        assert!(slot.get() < table.slots().get());
-                        assert!(slot.get() / table.chunk_slots().get() < table.chunk_count().get());
+                        let (slots, chunk_slots, chunk_count) =
+                            neovm_value::test_support::authority::table_shape_for_test(activation);
+                        assert!(slot.get() < slots);
+                        assert!(slot.get() / chunk_slots < chunk_count);
                         if let Some(stale) = closed.get() {
                             assert!(matches!(
                                 activation.symbol_slot(&stale),
@@ -124,7 +125,9 @@ fn nmjit_n4_cell_read_managed_global_and_function_stay_in_owner_home() {
                     .unwrap()
                     .unwrap();
                 let definition = home.word_for_test(run);
-                assert!(TaggedValue::from_bits(definition).is_cons());
+                // SAFETY: the word is this live owner's resident home and is
+                // used only for its cons tag; nothing is retained here.
+                assert!(unsafe { TaggedValue::from_bits(definition) }.is_cons());
                 // The method returned and its reader lease is gone, but the
                 // canonical resident home already contains the managed definition.
                 let lease = run.symbol_mut(symbol).unwrap();
@@ -137,7 +140,9 @@ fn nmjit_n4_cell_read_managed_global_and_function_stay_in_owner_home() {
                     .unwrap()
                     .unwrap();
                 assert_eq!(home.word_for_test(run), definition);
-                assert!(TaggedValue::from_bits(home.word_for_test(run)).is_cons());
+                // SAFETY: as above: a live resident-home word read only for
+                // its cons tag.
+                assert!(unsafe { TaggedValue::from_bits(home.word_for_test(run)) }.is_cons());
             },
         );
     });
