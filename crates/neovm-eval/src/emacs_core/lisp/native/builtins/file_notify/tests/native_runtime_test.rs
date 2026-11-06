@@ -156,7 +156,7 @@ fn native_callback_can_remove_its_own_watch() {
     crate::test_utils::init_test_tracing();
     reset_file_notify_thread_locals();
     let directory = workspace_temp_dir();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let callback = install_self_removing_callback(&mut eval);
     let descriptor = add_self_removing_watch(&mut eval, directory.path(), callback);
     assert!(native_watch_is_valid(descriptor));
@@ -185,7 +185,7 @@ fn inotify_rename_delivers_an_ordered_cookie_pair() {
     let to = directory.path().join("rename-to.txt");
     std::fs::write(&from, "contents").expect("seed renamed file");
 
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let callback = eval
         .eval_str(
             r#"
@@ -244,7 +244,7 @@ fn kqueue_directory_rename_reports_both_relative_names() {
     let to = directory.path().join("rename-to.txt");
     std::fs::write(&from, "contents").expect("seed renamed file");
 
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let callback = eval
         .eval_str(
             r#"
@@ -297,7 +297,7 @@ fn windows_recursive_watch_delivers_an_ordered_rename_pair() {
     let to = nested.join("rename-to.txt");
     std::fs::write(&from, "contents").expect("seed renamed file");
 
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let callback = eval
         .eval_str(
             r#"
@@ -382,7 +382,7 @@ fn windows_file_watch_preserves_a_rename_to_a_different_name() {
     let to = directory.path().join("visited.txt~");
     std::fs::write(&from, "contents").expect("seed watched file");
 
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let callback = eval
         .eval_str(
             r#"
@@ -448,7 +448,7 @@ fn windows_callback_change_is_observed_by_an_already_rearmed_watch() {
     let file = directory.path().join("rearm-before-callback.txt");
     std::fs::write(&file, "first contents").expect("seed watched file");
 
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     eval.set_variable(
         "neovm-test-w32-rearm-file",
         Value::string(file.display().to_string()),
@@ -552,7 +552,7 @@ fn windows_attribute_watch_observes_set_file_modes() {
     let file = directory.path().join("mode-attribute.txt");
     std::fs::write(&file, "contents").expect("seed mode fixture");
 
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let variable = "neovm-test-w32-mode-events";
     let callback = install_windows_event_recorder(&mut eval, variable);
     let descriptor = add_windows_attribute_watch(&mut eval, &file, callback);
@@ -590,7 +590,7 @@ fn windows_attribute_watch_observes_readonly_clear_before_delete() {
     let file = directory.path().join("readonly-delete.txt");
     std::fs::write(&file, "contents").expect("seed delete fixture");
 
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let file_name = Value::string(file.display().to_string());
     crate::emacs_core::fileio::builtin_set_file_modes(
         &mut eval,
@@ -627,7 +627,7 @@ fn windows_deleted_directory_invalidates_watch_without_a_lisp_error() {
     let watched = root.path().join("watched");
     std::fs::create_dir(&watched).expect("create watched directory");
 
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let callback = eval
         .eval_str("(lambda (_event))")
         .expect("create Windows watch callback");

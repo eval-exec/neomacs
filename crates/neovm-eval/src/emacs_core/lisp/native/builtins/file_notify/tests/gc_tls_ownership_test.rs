@@ -21,12 +21,12 @@ fn register_watch() -> Value {
 #[test]
 fn gc_tls_ownership_file_notify_reset_discards_a_dropped_heap() {
     let old = {
-        let ctx = Context::new();
+        let ctx = Context::new(crate::test_utils::unit_runtime());
         let old = register_watch();
         assert!(roots_for(&ctx).iter().any(|root| root.bits() == old.bits()));
         old
     };
-    let mut next = Context::new();
+    let mut next = Context::new(crate::test_utils::unit_runtime());
     assert!(
         !roots_for(&next)
             .iter()
@@ -37,8 +37,8 @@ fn gc_tls_ownership_file_notify_reset_discards_a_dropped_heap() {
 
 #[test]
 fn gc_tls_ownership_file_notify_roots_exclude_another_live_heap() {
-    let mut first = Context::new();
-    let mut second = Context::new();
+    let mut first = Context::new(crate::test_utils::unit_runtime());
+    let mut second = Context::new(crate::test_utils::unit_runtime());
     let callback = register_watch();
     assert!(
         roots_for(&second)
@@ -60,9 +60,9 @@ fn gc_tls_ownership_file_notify_roots_exclude_another_live_heap() {
 
 #[test]
 fn gc_tls_ownership_file_notify_registrations_follow_context_swaps() {
-    let mut first = Context::new();
+    let mut first = Context::new(crate::test_utils::unit_runtime());
     let a = register_watch();
-    let mut second = Context::new();
+    let mut second = Context::new(crate::test_utils::unit_runtime());
     let b = register_watch();
     let callback = || {
         FILE_NOTIFY_STATE.with(|slot| {
