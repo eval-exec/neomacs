@@ -275,9 +275,20 @@ impl ScrollCoverage {
             };
             admission.retained.key.window_start = char_pos.get() as i64;
         }
+        // Small-font rows can reach the matrix's row limit before its pixel
+        // bottom. Match both bounds of the canonical viewport walk.
+        let capacity = admission
+            .retained
+            .matrix
+            .rows
+            .iter()
+            .skip(admission.row_base)
+            .filter(|row| !RetainedWindowMatrix::is_chrome_role(row.role))
+            .count();
         let mut height = 0.0;
         let visible = rows
             .iter()
+            .take(capacity)
             .take_while(|row| {
                 let take = height < regions.text_body.height;
                 if take {
@@ -289,9 +300,7 @@ impl ScrollCoverage {
         let fills_viewport = height >= regions.text_body.height;
         // A suffix can start in a visual continuation: it certifies scroll
         // coverage, not a fresh viewport starting at that buffer character.
-        let complete_viewport = !bridge
-            && (fills_viewport
-                || rows.len() == admission.retained.matrix.rows.len() - admission.row_base);
+        let complete_viewport = !bridge && (fills_viewport || visible == capacity);
         if !bridge {
             rows.truncate(visible);
         }

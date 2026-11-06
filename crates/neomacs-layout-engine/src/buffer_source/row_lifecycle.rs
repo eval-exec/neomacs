@@ -1961,13 +1961,19 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
         let mut source_render = source_render;
         let context = self.context;
 
-        let resolved_height = if self.line_height
-            != crate::display_item::DisplayLineHeightPolicy::Default
-            && source_render
-                .measurement_mode()
-                .uses_concrete_font_geometry()
-        {
-            let defaults = context.row_geometry_defaults;
+        // The frame default is a fallback, not a minimum for a small font.
+        // Share this decision with worker-prepared rows; ordinary default-font
+        // rows keep their accumulated geometry without scanning glyphs.
+        let defaults = context.row_geometry_defaults;
+        let face = context.active_face_state.metrics();
+        let resolved_height = if source_render
+            .measurement_mode()
+            .uses_concrete_font_geometry()
+            && crate::display_row::metrics::newline_requires_height_resolution(
+                self.line_height,
+                (face.row_height(), face.ascent()),
+                (defaults.height, defaults.ascent),
+            ) {
             let fallback =
                 crate::display_row::metrics::DisplayRowFallbackMetrics::from_default_face_extents(
                     context.default_char_width,
@@ -1975,7 +1981,6 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
                     defaults.ascent,
                 );
             let content = source_render.current_row_visible_content_metrics(face_ids, fallback);
-            let face = context.active_face_state.metrics();
             let metrics = crate::display_row::metrics::resolve_line_height(
                 self.line_height,
                 (content.height_px(), content.ascent_px()),

@@ -299,7 +299,7 @@ fn complete_row_program_uses_exact_captured_fonts_on_worker() {
         position = progress.end();
         slots.extend(progress.slots().iter().cloned());
         if let Some(newline) = newline {
-            DisplayRowLineEndFinalizer::new(
+            let _ = DisplayRowLineEndFinalizer::new(
                 newline,
                 FaceId::new(1),
                 geometry.width - position.x_px(),
