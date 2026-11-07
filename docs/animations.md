@@ -90,23 +90,30 @@ orientation, and direction are independent typed settings:
 ## Configuration
 
 ```elisp
-;; One typed, name-based profile configures effects and animation policy.
-(neomacs-effects-apply
- '((cursor-motion :enabled t :speed 15.0
-                  :style critically-damped-spring :duration 0.15
-                  :trail-size 0.7)
-   (buffer-transition :enabled t :duration 0.2
-                      :effect slide :easing ease-out-quad
-                      :axis auto :direction forward)
-   (scroll-transition :enabled t :duration 0.15
-                      :effect page-curl :easing spring)))
+;; Options reach the renderer through their :set function. setopt and
+;; Customize do that; a setq after neomacs-effects.el has loaded does not.
+(setopt neomacs-cursor-motion-enabled t
+        neomacs-cursor-motion-speed 15.0
+        neomacs-cursor-motion-style 'critically-damped-spring
+        neomacs-cursor-motion-duration 0.15
+        neomacs-cursor-motion-trail-size 0.7
+        neomacs-buffer-transition-enabled t
+        neomacs-buffer-transition-duration 0.2
+        neomacs-buffer-transition-effect 'slide
+        neomacs-buffer-transition-easing 'ease-out-quad
+        neomacs-buffer-transition-axis 'auto
+        neomacs-buffer-transition-direction 'forward
+        neomacs-scroll-transition-enabled t
+        neomacs-scroll-transition-duration 0.15
+        neomacs-scroll-transition-effect 'page-curl
+        neomacs-scroll-transition-easing 'spring)
 
-;; Incremental changes use the same names and properties.
-(neomacs-effect-set 'cursor-motion
-                    :speed 20.0 :style 'linear :duration 0.1)
-(neomacs-effect-set 'buffer-transition
-                    :effect 'page-curl
-                    :axis 'vertical :direction 'backward)
-(neomacs-effect-set 'scroll-transition
-                    :effect 'wobbly :easing 'ease-out-quad)
+(setopt neomacs-cursor-motion-speed 20.0
+        neomacs-cursor-motion-style 'linear
+        neomacs-cursor-motion-duration 0.1
+        neomacs-buffer-transition-effect 'page-curl
+        neomacs-buffer-transition-axis 'vertical
+        neomacs-buffer-transition-direction 'backward
+        neomacs-scroll-transition-effect 'wobbly
+        neomacs-scroll-transition-easing 'ease-out-quad)
 ```

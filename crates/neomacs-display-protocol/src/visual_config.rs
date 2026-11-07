@@ -93,7 +93,9 @@ impl Default for BufferTransitionConfig {
             // stock Emacs, the same choice ScrollTransitionConfig makes below.
             // Opt in at runtime with
             //   (setopt neomacs-buffer-transition-enabled t)
-            // or through Customize; a plain `setq' never reaches the renderer.
+            // or through Customize. A plain `setq' after `neomacs-effects.el'
+            // has loaded never reaches the renderer; a value set before that
+            // load is applied by the `defcustom'.
             // The effect/duration/easing below are the values used once it is
             // enabled.
             enabled: false,
@@ -120,7 +122,9 @@ impl Default for ScrollTransitionConfig {
             // Off by default: C-v/M-v (and other scrolls) update instantly,
             // matching stock Emacs. Opt in at runtime with
             //   (setopt neomacs-scroll-transition-enabled t)
-            // or through Customize; a plain `setq' never reaches the renderer.
+            // or through Customize. A plain `setq' after `neomacs-effects.el'
+            // has loaded never reaches the renderer; a value set before that
+            // load is applied by the `defcustom'.
             // The effect/duration/easing below are the values used once it is
             // enabled.
             enabled: false,
