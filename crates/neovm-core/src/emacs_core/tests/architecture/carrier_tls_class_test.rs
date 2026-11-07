@@ -8,7 +8,9 @@
 
 use std::path::Path;
 
-use super::architecture_production_source_roots::crates_dir as workspace_crates_dir;
+use super::architecture_production_source_roots::{
+    crates_dir as workspace_crates_dir, production_file,
+};
 
 #[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
@@ -113,6 +115,9 @@ const TLS_CLASSIFICATION: &[(&str, TlsClass)] = &[
     ("HANDLE", TlsClass::CarrierIntrinsic),
     ("HASH_TABLE_TEST_ALIASES", TlsClass::OwnerCarried),
     ("HEADER_LINE_EVAL_COUNT", TlsClass::MustReset),
+    // AbsentLayer H4 hit vector (eval absent_layer.rs): test-support
+    // instrumentation, holds hit labels only, no Lisp Values.
+    ("HITS", TlsClass::SourceOnly),
     ("HOTPATH_STATE", TlsClass::MustReset),
     ("ID", TlsClass::CarrierIntrinsic),
     ("IMM_POOL", TlsClass::MustReset),
@@ -122,6 +127,10 @@ const TLS_CLASSIFICATION: &[(&str, TlsClass)] = &[
     ("INLINE_EVICTIONS", TlsClass::MustReset),
     ("INLINE_HEAP_SITES", TlsClass::MustReset),
     ("INLINE_SUBR_TABLE", TlsClass::MustReset),
+    // macOS-only menu redirect (display-runtime macos_quit_redirect.rs):
+    // absent from the shipped Linux census and holds an ObjC target, not
+    // Lisp Values.
+    ("INSTALLED", TlsClass::SourceOnly),
     ("INTEGER_WIDTH", TlsClass::OwnerCarried),
     ("INTERN_STR_CACHE", TlsClass::CarrierIntrinsic),
     ("IN_FLIGHT_ROOTS", TlsClass::OwnerCarried),
@@ -190,6 +199,10 @@ const TLS_CLASSIFICATION: &[(&str, TlsClass)] = &[
     ("PRINT_OBJECT_STACK", TlsClass::MustReset),
     ("PROCESS_NAME_REGISTRY", TlsClass::CarrierIntrinsic),
     ("PROFILER", TlsClass::CarrierIntrinsic),
+    // macOS-only menu redirect target (display-runtime
+    // macos_quit_redirect.rs): absent from the shipped Linux census and holds
+    // a retained AppKit object, not Lisp Values.
+    ("QUIT_REDIRECT", TlsClass::SourceOnly),
     ("QUIT_REQUESTED_TLS", TlsClass::OwnerCarried),
     ("RECENT_CLEARED_CELLS", TlsClass::SourceOnly),
     ("RECENT_CLEARED_MASKS", TlsClass::SourceOnly),
@@ -268,6 +281,11 @@ const TLS_CLASSIFICATION: &[(&str, TlsClass)] = &[
     ("TERMINAL_LISP_STATE", TlsClass::OwnerCarried),
     ("TERMINAL_MANAGER", TlsClass::OwnerCarried),
     ("TEST_FALLBACK_TAGGED_HEAP", TlsClass::SourceOnly),
+    // Test-support heap graveyard (value test_support/authority.rs): the
+    // TestHeapScope route retires heaps at thread exit; feature-only, absent
+    // from the shipped census, and no per-job reset applies (heaps are not
+    // Lisp Values).
+    ("TEST_HEAP_GRAVEYARD", TlsClass::SourceOnly),
     ("TEXT", TlsClass::CarrierIntrinsic),
     ("THREAD", TlsClass::CarrierIntrinsic),
     ("THREAD_CACHE_EPOCH", TlsClass::CarrierIntrinsic),
@@ -512,12 +530,51 @@ const MUST_RESET_MODULE_COVERAGE: &[(&str, &str)] = &[
     ),
     ("neomacs-layout-engine/", "workspace:neomacs-layout-engine"),
     ("neomacs-terminfo/", "workspace:neomacs-terminfo"),
+    ("neovm-edit/src/emacs_core/editing/indent/mod.rs", "indent"),
+    ("neovm-eval/src/emacs_core/lisp/load/mod.rs", "load"),
+    ("neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs", "subr_leaf"),
+    ("neovm-eval/src/emacs_core/lisp/print/error_format.rs", "error_format"),
+    ("neovm-eval/src/emacs_core/lisp/print/mod.rs", "print"),
+    ("neovm-eval/src/emacs_core/runtime/jit/aot.rs", "jit_aot"),
+    ("neovm-eval/src/emacs_core/runtime/jit/bg.rs", "jit_bg"),
+    ("neovm-eval/src/emacs_core/runtime/jit/cache.rs", "jit_cache"),
+    ("neovm-eval/src/emacs_core/runtime/jit/compile.rs", "jit_compile"),
+    ("neovm-eval/src/emacs_core/runtime/jit/compile/", "jit_compile"),
+    ("neovm-eval/src/emacs_core/runtime/jit/inline.rs", "jit_inline"),
+    ("neovm-eval/src/emacs_core/runtime/jit/stats.rs", "jit_stats"),
+    ("neovm-eval/src/emacs_core/runtime/jit/stats/", "jit_stats"),
+    ("neovm-eval/src/emacs_core/runtime/jit/tier2.rs", "jit_tier2"),
+    ("neovm-eval/src/emacs_core/runtime/jit/tier2/", "jit_tier2"),
+    ("neovm-eval/src/emacs_core/runtime/eval/cconv_memo.rs", "eval"),
+    ("neovm-eval/src/emacs_core/runtime/eval/mod.rs", "eval"),
+    ("neovm-eval/src/emacs_core/runtime/eval/data/xdisp_column_spec.rs", "xdisp"),
+    ("neovm-eval/src/emacs_core/runtime/pdump/convert.rs", "pdump_convert"),
+    ("neovm-eval/src/emacs_core/runtime/pdump/runtime.rs", "pdump_runtime"),
+    ("neovm-system/src/emacs_core/system/dynamic_module/mod.rs", "dynamic_module"),
+    ("neovm-system/src/emacs_core/system/perf_trace/mod.rs", "perf_trace"),
+    ("neovm-text/src/emacs_core/text/charset/mod.rs", "charset_memo"),
+    ("neovm-text/src/emacs_core/text/regex/dfa.rs", "regex_emacs"),
+    ("neovm-text/src/emacs_core/text/regex/emacs.rs", "regex_emacs"),
+    ("neovm-text/src/emacs_core/text/regex/mod.rs", "regex"),
+    ("neovm-text/src/emacs_core/text/syntax/mod.rs", "syntax"),
+    ("neovm-text/src/emacs_core/text/syntax/parse_cache.rs", "parse_cache"),
+    ("neovm-value/src/tagged/collection_reads.rs", "collection_reads"),
+    ("neovm-value/src/tagged/gc/cold_gc.rs", "gc"),
+    ("neovm-value/src/tagged/value.rs", "value"),
+    ("neovm-value/src/symbol/", "symbol"),
+    ("neovm-value/src/intern/", "intern"),
 ];
 
 /// `MustReset` records the source scan cannot see (they come from the binary
 /// TLS census or a cfg-gated block the scan skips); each still needs an
 /// explicit reset-step claim.
-const MUST_RESET_EXTRA_COVERAGE: &[(&str, &str)] = &[("IMM_POOL", "jit_compile")];
+const MUST_RESET_EXTRA_COVERAGE: &[(&str, &str)] = &[
+    ("IMM_POOL", "jit_compile"),
+    // The record sits directly below a cfg(test)/test-support const, so the
+    // source scanner's test-only window skips its thread_local! block; the
+    // regex reset step clears it (regex/emacs.rs reset_carrier_tls).
+    ("CHAR_TABLE_ASCII_FOLD", "regex_emacs"),
+];
 
 /// Deferred reset steps whose records the name-keyed classification does not
 /// (and should not) call `MustReset`: each entry names a record the step's
@@ -1120,9 +1177,9 @@ fn reset_reachable_functions(
 #[test]
 fn every_must_reset_record_is_covered_by_a_real_carrier_reset() {
     let crates = crates_dir();
-    let carrier_tls = std::fs::read_to_string(
-        crates.join("neovm-core/src/emacs_core/runtime/eval/green/carrier_tls.rs"),
-    )
+    let carrier_tls = std::fs::read_to_string(production_file(
+        "emacs_core/runtime/eval/green/carrier_tls.rs",
+    ))
     .expect("read carrier_tls.rs");
     let main_rs = std::fs::read_to_string(crates.join("neomacs/src/main.rs"))
         .expect("read neomacs/src/main.rs");

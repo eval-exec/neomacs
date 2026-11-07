@@ -735,15 +735,40 @@ fn check_module_tree(root: &Path, state: SurfaceState) -> GuardResult<()> {
                             }
                         }
                         if attr.path().is_ident("cfg_attr") {
-                            // Choosing a path from just this host's cfg would
-                            // leave another configuration unscanned.
-                            return Err(GuardError::new(
-                                ErrorCode::ModulePath,
-                                format!(
-                                    "A2_MODULE_PATH: conditional module attributes require explicit resolution: {}",
-                                    module.ident
-                                ),
-                            ));
+                            // Choosing a PATH from just this host's cfg would
+                            // leave another configuration unscanned. Other
+                            // conditional attributes cannot change which file
+                            // the module loads (visibility::make(pub), allow,
+                            // doc, ...), and this walk visits the declared
+                            // module regardless of cfg, so they stay accepted.
+                            let args = attr
+                                .parse_args_with(
+                                    syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
+                                )
+                                .map_err(|e| {
+                                    GuardError::new(
+                                        ErrorCode::ModulePath,
+                                        format!("A2_MODULE_PATH: cfg_attr: {e}"),
+                                    )
+                                })?;
+                            let mut metas = args.into_iter();
+                            if metas.next().is_none() {
+                                return Err(GuardError::new(
+                                    ErrorCode::ModulePath,
+                                    "A2_MODULE_PATH: cfg_attr without a predicate",
+                                ));
+                            }
+                            if metas.any(|meta| {
+                                meta.path().is_ident("path") || meta.path().is_ident("cfg_attr")
+                            }) {
+                                return Err(GuardError::new(
+                                    ErrorCode::ModulePath,
+                                    format!(
+                                        "A2_MODULE_PATH: conditional module attributes require explicit resolution: {}",
+                                        module.ident
+                                    ),
+                                ));
+                            }
                         }
                     }
                     if let Some((_, children)) = &module.content {
@@ -1142,6 +1167,34 @@ fn architecture_a2_unknown_module_and_missing_source_are_failures() {
         check_module_tree(&root, SurfaceState::Absent)
             .expect_err("missing lib must fail")
             .is(ErrorCode::LibRead)
+    );
+}
+
+#[test]
+fn architecture_a2_visibility_cfg_attr_is_scanned_but_conditional_path_is_refused() {
+    let tree = tempfile::tempdir().expect("fixture directory");
+    let root = tree.path().join("lib.rs");
+    std::fs::write(&root, "mod holder;\n").expect("fixture root");
+    // A nested test_support module may be conditionally WIDENED: the walk
+    // still scans its content, and cfg_attr cannot change its source file.
+    std::fs::write(
+        tree.path().join("holder.rs"),
+        "#[cfg(any(test, feature = \"test-support\"))]\n#[cfg_attr(feature = \"test-support\", visibility::make(pub))]\nmod test_support { pub fn fixture() {} }\n",
+    )
+    .expect("visibility fixture");
+    check_module_tree(&root, SurfaceState::Absent)
+        .expect("conditional-visibility module must be scanned");
+    // A conditional PATH leaves another configuration unscanned: fail closed.
+    std::fs::write(
+        tree.path().join("holder.rs"),
+        "#[cfg_attr(unix, path = \"other.rs\")]\nmod swapped;\n",
+    )
+    .expect("path fixture");
+    std::fs::write(tree.path().join("other.rs"), "pub fn x() {}\n").expect("path target");
+    assert!(
+        check_module_tree(&root, SurfaceState::Absent)
+            .expect_err("conditional module path must fail closed")
+            .is(ErrorCode::ModulePath)
     );
 }
 

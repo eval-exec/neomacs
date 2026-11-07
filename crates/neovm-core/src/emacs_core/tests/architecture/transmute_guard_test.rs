@@ -186,6 +186,41 @@ fn macro_references(mut cursor: syn::buffer::Cursor<'_>, symbol: &str) -> usize 
     count
 }
 
+impl ProductionWalker {
+    /// An alias could hide subsequent conversions from a path-based count.
+    /// Keep unsafe conversions explicit and qualified instead. `public`
+    /// permits a same-name re-export but never a rename.
+    fn check_use_tree(&self, tree: &syn::UseTree, public: bool) {
+        match tree {
+            syn::UseTree::Path(path) => self.check_use_tree(&path.tree, public),
+            syn::UseTree::Name(name) => {
+                if !public {
+                    assert_ne!(
+                        name.ident.unraw(),
+                        self.symbol,
+                        "qualify {} paths",
+                        self.symbol
+                    );
+                }
+            }
+            syn::UseTree::Rename(rename) => {
+                assert_ne!(
+                    rename.ident.unraw(),
+                    self.symbol,
+                    "do not alias {}",
+                    self.symbol
+                );
+            }
+            syn::UseTree::Glob(_) => {}
+            syn::UseTree::Group(group) => {
+                for item in &group.items {
+                    self.check_use_tree(item, public);
+                }
+            }
+        }
+    }
+}
+
 impl<'ast> Visit<'ast> for ProductionWalker {
     fn visit_item(&mut self, item: &'ast Item) {
         if !test_only(item_attributes(item)) {
@@ -271,28 +306,16 @@ impl<'ast> Visit<'ast> for ProductionWalker {
         self.visit_path(&invocation.path);
     }
 
-    fn visit_use_tree(&mut self, tree: &'ast syn::UseTree) {
-        // An alias could hide subsequent conversions from a path-based count.
-        // Keep unsafe conversions explicit and qualified instead.
-        match tree {
-            syn::UseTree::Name(name) => {
-                assert_ne!(
-                    name.ident.unraw(),
-                    self.symbol,
-                    "qualify {} paths",
-                    self.symbol
-                )
-            }
-            syn::UseTree::Rename(rename) => {
-                assert_ne!(
-                    rename.ident.unraw(),
-                    self.symbol,
-                    "do not alias {}",
-                    self.symbol
-                )
-            }
-            _ => visit::visit_use_tree(self, tree),
-        }
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        // A PUBLIC `use name;` re-export is a facade definition of the
+        // existing public path (AUTHORITY_PATHS names it), not a call-site
+        // import that could hide a conversion: the signed cfg-gated
+        // `pub use gc_thread::set_tagged_heap;` beside the glob in value's
+        // tagged/gc.rs is exactly this shape. Private imports and every alias
+        // stay rejected: an alias could hide a later conversion from the
+        // path-based count.
+        let public = matches!(item.vis, syn::Visibility::Public(_));
+        self.check_use_tree(&item.tree, public);
     }
 }
 
@@ -473,6 +496,51 @@ fn transmute_guard_rejects_aliases_that_hide_conversions() {
     )
     .expect("write source fixture");
     production_sites(directory.path());
+}
+
+/// The public same-name re-export relaxation must not let a RENAME hide the
+/// installer: an aliased public re-export still reddens.
+#[test]
+#[should_panic(expected = "do not alias set_tagged_heap")]
+fn transmute_guard_rejects_a_public_rename_of_the_installer() {
+    let directory = tempfile::tempdir().expect("create source fixture");
+    std::fs::write(
+        directory.path().join("lib.rs"),
+        "mod gc_thread { pub fn set_tagged_heap() {} }\n\
+         pub use gc_thread::set_tagged_heap as renamed;\n",
+    )
+    .expect("write source fixture");
+    production_sites_for(directory.path(), "set_tagged_heap");
+}
+
+/// Only a PUBLIC use re-export is the facade shape; a private same-name
+/// import still reddens because it could hide a later conversion.
+#[test]
+#[should_panic(expected = "qualify set_tagged_heap paths")]
+fn transmute_guard_rejects_a_private_same_name_import() {
+    let directory = tempfile::tempdir().expect("create source fixture");
+    std::fs::write(
+        directory.path().join("lib.rs"),
+        "mod gc_thread { pub fn set_tagged_heap() {} }\n\
+         use gc_thread::set_tagged_heap;\n",
+    )
+    .expect("write source fixture");
+    production_sites_for(directory.path(), "set_tagged_heap");
+}
+
+/// The accepted shape itself: a public same-name re-export is a facade
+/// definition, not a call-site import.
+#[test]
+fn transmute_guard_accepts_a_public_same_name_reexport() {
+    let directory = tempfile::tempdir().expect("create source fixture");
+    std::fs::write(
+        directory.path().join("lib.rs"),
+        "mod gc_thread { pub fn set_tagged_heap() {} }\n\
+         pub use gc_thread::set_tagged_heap;\n",
+    )
+    .expect("write source fixture");
+    let sites = production_sites_for(directory.path(), "set_tagged_heap");
+    assert!(sites.values().all(|count| *count == 0), "{sites:?}");
 }
 
 #[test]

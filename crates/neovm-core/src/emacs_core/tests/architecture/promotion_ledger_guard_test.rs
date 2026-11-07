@@ -2785,8 +2785,7 @@ fn macro_tokens_mention_call(
 fn pc2_workspace_members(workspace: &Path) -> Result<Vec<PathBuf>, String> {
     let path = workspace.join("Cargo.toml");
     let text = read(&path)?;
-    let root: toml::Value = text
-        .parse()
+    let root: toml::Value = toml::from_str(&text)
         .map_err(|error| format!("B3_PC2_MANIFEST {}: {error}", path.display()))?;
     let members = root
         .get("workspace")
@@ -2801,8 +2800,7 @@ fn pc2_workspace_members(workspace: &Path) -> Result<Vec<PathBuf>, String> {
         let member_root = workspace.join(member);
         let manifest_path = member_root.join("Cargo.toml");
         let text = read(&manifest_path)?;
-        let manifest: toml::Value = text
-            .parse()
+        let manifest: toml::Value = toml::from_str(&text)
             .map_err(|error| format!("B3_PC2_MANIFEST {}: {error}", manifest_path.display()))?;
         if manifest.get("package").is_none() {
             continue;

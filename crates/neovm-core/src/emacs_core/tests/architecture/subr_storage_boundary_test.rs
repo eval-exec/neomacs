@@ -2,7 +2,7 @@
 use std::path::{Path, PathBuf};
 
 use super::architecture_production_source_roots::{
-    production_file, production_file_in, production_source_files,
+    production_dir_in, production_file, production_source_files,
 };
 fn sources(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -19,7 +19,7 @@ fn sources(root: &Path) -> Vec<PathBuf> {
 }
 #[test]
 fn subr_storage_has_no_upper_entry_type_or_module() {
-    for p in sources(&production_file_in("neovm-value", "tagged")) {
+    for p in sources(&production_dir_in("neovm-value", "tagged")) {
         let text = std::fs::read_to_string(&p).expect("source");
         assert!(
             !text.contains("SubrFn"),

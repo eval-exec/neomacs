@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use super::architecture_production_source_roots::production_source_root;
 
 const MANIFEST: &str = include_str!("moved_production_files.tsv");
-const EXPECTED_FILES: usize = 182;
+const EXPECTED_FILES: usize = 183;
 
 #[derive(Debug)]
 struct Violation {

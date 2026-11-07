@@ -113,10 +113,28 @@ fn moving_prefixes() -> &'static [String] {
 /// Mechanical moving-set membership for a workspace-relative source path
 /// (`<crate>/src/...`): a file belongs to the moving set when its crate is one
 /// of the extracted crates.
+///
+/// The synthetic unit tests below feed pre-move module-tree spellings
+/// (`tagged/bytecode/chunk.rs`, `emacs_core/runtime/value/new_module.rs`)
+/// rather than production keys. A production key always contains `/src/`;
+/// for those the crate prefix is the whole rule. For a bare module-tree
+/// spelling, membership is the shared move-manifest rule (bottom-peer
+/// top-level modules + G0 `emacs_core` members), which is what makes a T1
+/// destination path moving without editing this guard.
 fn is_moving_path(relative: &str) -> bool {
-    moving_prefixes()
+    if moving_prefixes()
         .iter()
         .any(|prefix| relative.starts_with(prefix))
+    {
+        return true;
+    }
+    if relative.contains("/src/") {
+        return false;
+    }
+    relative.split('/').any(|part| {
+        let stem = part.strip_suffix(".rs").unwrap_or(part);
+        moving_set::is_bottom_peer_name(stem) || moving_set::is_g0_member(stem)
+    })
 }
 
 fn base_ident(ty: &Type) -> Option<String> {

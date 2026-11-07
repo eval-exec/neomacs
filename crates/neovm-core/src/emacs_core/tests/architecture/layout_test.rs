@@ -14,7 +14,9 @@ const DOMAINS: &[&str] = &[
     "builtins",
     "commands",
     "composite",
-    "data",
+    // `data` is no longer a top-level domain: the data subr batch moved with
+    // its implementation to `neovm-eval/src/emacs_core/runtime/data`, and
+    // core's facade re-exports it through an inline `pub mod data` block.
     "display",
     "editing",
     "indent",
@@ -127,9 +129,9 @@ fn parsed_rust_file(path: &Path) -> syn::File {
 }
 
 fn is_test_source(relative: &Path) -> bool {
-    relative
-        .components()
-        .any(|component| component.as_os_str() == "tests")
+    relative.components().any(|component| {
+        component.as_os_str() == "tests" || component.as_os_str() == "core_test_facades"
+    })
 }
 
 fn cfg_meta_requires_test(meta: &Meta) -> bool {
@@ -368,6 +370,58 @@ fn root_domain_guard_reports_unrecognized_domain_directories() {
     assert_eq!(unexpected_root_domains(root.path()), ["misc"]);
 }
 
+/// The removal of `data` from DOMAINS reclassifies it: a root-level `data`
+/// directory with Rust sources is now an unrecognized domain (red), so the
+/// relaxation cannot silently accept the old placement.
+#[test]
+fn root_domain_guard_reports_the_old_data_placement() {
+    let root = tempfile::tempdir().expect("create emacs_core fixture");
+    for domain in DOMAINS {
+        std::fs::create_dir(root.path().join(domain)).expect("create expected domain");
+    }
+    std::fs::create_dir(root.path().join("data")).expect("create old data domain");
+    std::fs::write(root.path().join("data/subsystem.rs"), "// fixture")
+        .expect("create data source");
+    assert_eq!(unexpected_root_domains(root.path()), ["data"]);
+}
+
+/// The core_test_facades test-source relaxation must stay scoped: a test
+/// file outside `tests/`/`core_test_facades` is still a misplaced test, and
+/// the facades path is recognized as test source.
+#[test]
+fn out_of_line_test_guard_accepts_facades_and_rejects_other_paths() {
+    let facades = std::path::Path::new("core_test_facades/tagged/tests/tagged_test.rs");
+    assert!(is_test_source(facades));
+    let misplaced = std::path::Path::new("tagged/tagged_test.rs");
+    assert!(!is_test_source(misplaced));
+    let syntax = syn::parse_file("#[test] fn behavior() {}").expect("parse test");
+    assert!(has_misplaced_test_syntax(&syntax));
+}
+
+/// The ByteCodeObj allowlist widened by exactly one chokepoint (value/mod.rs);
+/// a planted mention outside every chokepoint is still counted (red).
+#[test]
+fn bytecode_obj_finder_still_counts_a_non_chokepoint_mention() {
+    use syn::visit::Visit;
+    struct IdentFinder {
+        hits: usize,
+    }
+    impl Visit<'_> for IdentFinder {
+        fn visit_ident(&mut self, ident: &syn::Ident) {
+            if ident == "ByteCodeObj" {
+                self.hits += 1;
+            }
+        }
+    }
+    let parsed = syn::parse_file(
+        "pub fn peek(value: &Value) -> Option<&ByteCodeObj> { value.bytecode() }",
+    )
+    .expect("parse planted source");
+    let mut finder = IdentFinder { hits: 0 };
+    finder.visit_file(&parsed);
+    assert_eq!(finder.hits, 1);
+}
+
 #[test]
 fn localized_subr_architecture_is_derived_from_the_compiled_catalog() {
     let catalog = crate::emacs_core::builtins::localized_subr_catalog();
@@ -439,6 +493,9 @@ fn bytecode_obj_is_only_named_by_its_chokepoints() {
         "tagged/gc/bytecode_arena_tests.rs",
         "tagged/mutate.rs",
         "tagged/tests.rs",
+        // The Value representation itself: the ByteCodeObj import and the
+        // bytecode_runtime_word field read are the chokepoint's own leg.
+        "value/mod.rs",
         "emacs_core/runtime/value/mod.rs",
         // The Value byte-code surface (get_bytecode_data and the projections
         // beside it) moved here with the representation it projects.

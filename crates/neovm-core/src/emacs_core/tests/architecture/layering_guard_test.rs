@@ -175,6 +175,14 @@ enum LowerRoot {
     /// other lower roots; its one reach below the evaluator is
     /// `neovm_value::tagged::gc`, and it names no emacs_core item.
     HeapRegistry,
+    /// The Lisp-command plist layer moved to the bottom `neovm-value` crate
+    /// with the stage-3 split (C10), beside its `symbol::plist_core`
+    /// primitives. A top-level lower root like the other bottom-peer modules.
+    Plist,
+    /// The string-byte observation cache re-homed to `neovm-value` with the
+    /// split. A bottom-peer top-level module like the other lower roots; it
+    /// names no evaluator item.
+    StringPosCache,
 }
 
 impl LowerRoot {
@@ -203,6 +211,8 @@ impl LowerRoot {
             "quit" => Self::Quit,
             "system_vocab" => Self::SystemVocab,
             "heap_registry" => Self::HeapRegistry,
+            "plist" => Self::Plist,
+            "string_pos_cache" => Self::StringPosCache,
             unknown => {
                 panic!("unknown top-level production module {unknown}; add a LowerRoot variant")
             }
@@ -234,6 +244,8 @@ impl LowerRoot {
             Self::Quit => "quit",
             Self::SystemVocab => "system_vocab",
             Self::HeapRegistry => "heap_registry",
+            Self::Plist => "plist",
+            Self::StringPosCache => "string_pos_cache",
         }
     }
 }
@@ -361,7 +373,11 @@ struct ModuleIndex {
     /// names one through `crate::` still targets the moving set.
     moving_crate_exports: BTreeMap<String, String>,
     crate_exports: BTreeMap<String, EcSub>,
-    ec_exports: BTreeMap<String, EcSub>,
+    /// `emacs_core/mod.rs` facade re-exports. The origin is usually a direct
+    /// submodule, but after the split the facade also re-exports extracted
+    /// crates (`pub use neovm_display::emacs_core::display;`), which are
+    /// workspace-sibling edges.
+    ec_exports: BTreeMap<String, Upper>,
 }
 
 // Expand nested imports and aliases for the facade maps. Reference counting
@@ -521,11 +537,11 @@ impl ProductionWalker {
                 return Classification::NotUpward;
             };
             let upper = if self.index.ec_modules.contains(name) {
-                EcSub::validated(name, &self.index.ec_modules)
+                Upper::Ec(EcSub::validated(name, &self.index.ec_modules))
             } else if let Some(origin) = self.index.ec_exports.get(name) {
                 origin.clone()
             } else if self.index.ec_root_items.contains(name) {
-                EcSub::root()
+                Upper::Ec(EcSub::root())
             } else {
                 panic!(
                     "{}:{}: unknown emacs_core submodule or re-export {name}",
@@ -535,12 +551,12 @@ impl ProductionWalker {
             };
             // A G0 emacs_core submodule moves with this source; references
             // between moving-set files stay inside the extracted crate.
-            if moving && is_g0_member(&upper.0) {
+            if moving && matches!(&upper, Upper::Ec(sub) if is_g0_member(&sub.0)) {
                 return Classification::NotUpward;
             }
             return Classification::Upward(Pair {
                 lower: source_root,
-                upper: Upper::Ec(upper),
+                upper,
             });
         }
         if let Some(origin) = self.index.crate_exports.get(name) {
@@ -657,11 +673,11 @@ impl ProductionWalker {
                 return Classification::NotUpward;
             };
             let upper = if self.index.ec_modules.contains(name) {
-                EcSub::validated(name, &self.index.ec_modules)
+                Upper::Ec(EcSub::validated(name, &self.index.ec_modules))
             } else if let Some(origin) = self.index.ec_exports.get(name) {
                 origin.clone()
             } else if self.index.ec_root_items.contains(name) {
-                EcSub::root()
+                Upper::Ec(EcSub::root())
             } else {
                 panic!(
                     "{}:{}: unknown emacs_core submodule or re-export {name}",
@@ -669,12 +685,12 @@ impl ProductionWalker {
                     span.start().line
                 )
             };
-            if is_g0_member(&upper.0) {
+            if matches!(&upper, Upper::Ec(sub) if is_g0_member(&sub.0)) {
                 return Classification::NotUpward;
             }
             return Classification::Upward(Pair {
                 lower: LowerRoot::G0,
-                upper: Upper::Ec(upper),
+                upper,
             });
         }
         if let Some(origin) = self.index.crate_exports.get(first) {
@@ -1101,13 +1117,29 @@ fn finalize_walker(
         if crate_qualified {
             path.remove(0);
         }
-        let map = if module.is_empty() {
+        if module.is_empty() {
             if path.first().is_none_or(|part| part != "emacs_core") {
                 continue;
             }
             path.remove(0);
-            &mut walker.index.crate_exports
+            assert_ne!(
+                name, "*",
+                "facade glob re-export must name its origins explicitly"
+            );
+            let origin = path.first().expect("facade re-export has an origin");
+            let origin = EcSub::validated(origin, &walker.index.ec_modules);
+            if let Some(previous) = walker
+                .index
+                .crate_exports
+                .insert(name.clone(), origin.clone())
+            {
+                assert_eq!(previous, origin, "ambiguous facade re-export {name}");
+            }
         } else {
+            assert_ne!(
+                name, "*",
+                "facade glob re-export must name its origins explicitly"
+            );
             if crate_qualified {
                 assert_eq!(
                     path.first().map(String::as_str),
@@ -1118,16 +1150,15 @@ fn finalize_walker(
             } else if path.first().is_some_and(|part| part == "self") {
                 path.remove(0);
             }
-            &mut walker.index.ec_exports
-        };
-        assert_ne!(
-            name, "*",
-            "facade glob re-export must name its origins explicitly"
-        );
-        let origin = path.first().expect("facade re-export has an origin");
-        let origin = EcSub::validated(origin, &walker.index.ec_modules);
-        if let Some(previous) = map.insert(name.clone(), origin.clone()) {
-            assert_eq!(previous, origin, "ambiguous facade re-export {name}");
+            let origin = path.first().expect("facade re-export has an origin");
+            let upper = if is_workspace_sibling(origin) {
+                Upper::Extern(origin.clone())
+            } else {
+                Upper::Ec(EcSub::validated(origin, &walker.index.ec_modules))
+            };
+            if let Some(previous) = walker.index.ec_exports.insert(name.clone(), upper.clone()) {
+                assert_eq!(previous, upper, "ambiguous facade re-export {name}");
+            }
         }
     }
     walker.phase = ScanPhase::References;

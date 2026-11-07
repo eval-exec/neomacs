@@ -261,6 +261,22 @@ pub(crate) fn production_file_in(crate_dir: &str, relative: &str) -> PathBuf {
     file
 }
 
+/// The production directory at `relative` below `crate_dir`'s `src/`.
+///
+/// Subtree scanners (the parallel-exec substrate, value's `tagged` module)
+/// name a directory whose files they walk. Requiring `is_dir` keeps the same
+/// fail-closed contract as [`production_file_in`]: a renamed or deleted
+/// directory fails loudly instead of scanning nothing.
+pub(crate) fn production_dir_in(crate_dir: &str, relative: &str) -> PathBuf {
+    let dir = production_source_root(crate_dir).src.join(relative);
+    assert!(
+        dir.is_dir(),
+        "{crate_dir}/src/{relative} is not a production directory ({})",
+        dir.display()
+    );
+    dir
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -179,6 +179,7 @@ fn owner_allows(path: &str, owner: NativeOwner) -> bool {
             // emulator views. Their shared name does not make either semantic
             // caller an owner. Only these exact owner families may borrow them.
             path == "neovm-core/src/emacs_core/display/terminal/pure.rs"
+                || path == "neovm-display/src/emacs_core/display/terminal/pure.rs"
                 || path == format!("{frontend}tty_frontend.rs")
                 || path == format!("{frontend}secondary_tty.rs")
                 || path == format!("{display}terminal/mod.rs")

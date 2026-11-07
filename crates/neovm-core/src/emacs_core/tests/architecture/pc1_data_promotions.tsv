@@ -5,7 +5,7 @@ AddressStride::get	const fn	crates/neovm-value/src/tagged/gc/symbol_table/abi.rs
 ArenaLayoutStats	struct	crates/neovm-value/src/tagged/gc/arena_pages.rs	pc1-d: DATA seal privacy ledger 17f6ac250b; caller lisp/native/builtins_extra/mod.rs; surface gc.rs pub use arena_pages::*	PC1-D
 CellRead	enum	crates/neovm-value/src/tagged/gc/mutator_registration/execution/read.rs	pc1-d: DATA seal privacy ledger 17f6ac250b; caller jit/parallel.rs	PC1-D
 CellReadError	enum	crates/neovm-value/src/tagged/gc/mutator_registration/execution/read.rs	pc1-d: DATA seal privacy ledger 17f6ac250b; caller jit/parallel.rs	PC1-D
-CondVarId	struct	crates/neovm-value/src/heap_types/threading.rs	pc1-d: DATA seal privacy ledger 17f6ac250b; caller runtime/threads/layout.rs	PC1-D
+CondVarId	struct	crates/neovm-value/src/heap_types/threading.rs	pc1-d: DATA seal privacy ledger 17f6ac250b; caller runtime/threads/layout.rs; defined by the native_id! macro	PC1-D
 FIXNUM_CHECK_MASK	const	crates/neovm-value/src/tagged/value.rs	pc1-d: DATA seal privacy ledger 17f6ac250b; callers bytecode/vm.rs jit/compile.rs	PC1-D
 FIXNUM_CHECK_VALUE	const	crates/neovm-value/src/tagged/value.rs	pc1-d: DATA seal privacy ledger 17f6ac250b; callers bytecode/vm.rs jit/opt/build.rs	PC1-D
 FIXNUM_SHIFT	const	crates/neovm-value/src/tagged/value.rs	pc1-d: DATA seal privacy ledger 17f6ac250b; callers bytecode/vm.rs jit/opt/passes/fold.rs	PC1-D
@@ -22,17 +22,17 @@ LeafActiveScope	struct	crates/neovm-value/src/symbol/leaf_activity.rs	pc1-d DATA
 LeafActiveScope::enter	method	crates/neovm-value/src/symbol/leaf_activity.rs	pc1-d DATA: signed leaf addendum; original body only raises leaf depth; upper crates/neovm-core/src/emacs_core/lisp/native/subr/leaf.rs:536 cfg(debug_assertions)	PC1-D
 LispVisibleSymbolName	enum	crates/neovm-value/src/intern/mod.rs	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/commands/minibuffer/mod.rs:1979:38	PC1-D
 LispVisibleSymbolName::text	method	crates/neovm-value/src/intern/mod.rs	pc1-d DATA: reviewed ledger emacs_core::intern::LispVisibleSymbolName::text; upper crates/neovm-core/src/emacs_core/lisp/native/builtins/from_value.rs:236; unchanged reborrow body	PC1-D
-MutexId	struct	crates/neovm-value/src/heap_types/threading.rs	pc1-d: DATA seal privacy ledger 17f6ac250b; caller runtime/threads/layout.rs	PC1-D
+MutexId	struct	crates/neovm-value/src/heap_types/threading.rs	pc1-d: DATA seal privacy ledger 17f6ac250b; caller runtime/threads/layout.rs; defined by the native_id! macro	PC1-D
 OBARRAY_FUNCTION_EPOCH_OFFSET	const	crates/neovm-value/src/symbol/mod.rs	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/aot.rs:224:41	PC1-D
 OrderedFilterMask	type	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs	pc1-d per peer ruling 15:49Z; tuple field private; callers buffer/overlay_index.rs:19	PC1-D
 OrderedFilterMask::ALL	const	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs	pc1-d per peer ruling 15:49Z member: exactly the consts/methods core uses	PC1-D
 OrderedFilterMask::EMPTY	const	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs	pc1-d per peer ruling 15:49Z member: exactly the consts/methods core uses	PC1-D
-OrderedFilterMask::contains	fn	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs	pc1-d per peer ruling 15:49Z member: exactly the consts/methods core uses	PC1-D
-OrderedFilterMask::intersects	fn	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs	pc1-d per peer ruling 15:49Z member: exactly the consts/methods core uses	PC1-D
-OrderedFilterMask::with_bit	fn	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs	pc1-d per peer ruling 15:49Z member: exactly the consts/methods core uses	PC1-D
+OrderedFilterMask::contains	method	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs	pc1-d per peer ruling 15:49Z member: exactly the consts/methods core uses	PC1-D
+OrderedFilterMask::intersects	method	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs	pc1-d per peer ruling 15:49Z member: exactly the consts/methods core uses	PC1-D
+OrderedFilterMask::with_bit	method	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs	pc1-d per peer ruling 15:49Z member: exactly the consts/methods core uses	PC1-D
 ProducerSymbolName	struct	crates/neovm-value/src/value/mod.rs	pc1-d DATA: approved351 ProducerSymbolName; upper caller crates/neovm-core/src/face.rs:15,2374; existing checks/bodies/fields unchanged	PC1-D
-ProducerSymbolName::from_value	fn	crates/neovm-value/src/value/mod.rs	pc1-d DATA: approved351 ProducerSymbolName::from_value; upper caller crates/neovm-core/src/face.rs:2374,2446; existing checks/bodies/fields unchanged	PC1-D
-ProducerSymbolName::spelling	fn	crates/neovm-value/src/value/mod.rs	pc1-d DATA: approved351 ProducerSymbolName::spelling; upper caller crates/neovm-core/src/face.rs:2394; existing checks/bodies/fields unchanged	PC1-D
+ProducerSymbolName::from_value	method	crates/neovm-value/src/value/mod.rs	pc1-d DATA: approved351 ProducerSymbolName::from_value; upper caller crates/neovm-core/src/face.rs:2374,2446; existing checks/bodies/fields unchanged	PC1-D
+ProducerSymbolName::spelling	method	crates/neovm-value/src/value/mod.rs	pc1-d DATA: approved351 ProducerSymbolName::spelling; upper caller crates/neovm-core/src/face.rs:2394; existing checks/bodies/fields unchanged	PC1-D
 PublicationView	type	crates/neovm-value/src/tagged/gc/symbol_table/publication.rs	pc1-d: DATA privacy row; callers jit/parallel.rs:7,61; load() stays pub(crate)	PC1-D
 SafeTailGuard	struct	crates/neovm-value/src/symbol/plist_core.rs	pc1-d DATA: signed plist addendum; private traversal fields, existing constructor/method bodies unchanged; upper crates/neovm-core/src/emacs_core/runtime/plist/mod.rs:15	PC1-D
 TABLE_ADDRESSES_OFFSET	const	crates/neovm-value/src/tagged/gc/symbol_table/abi.rs	pc1-d: DATA privacy row; caller jit/parallel/native.rs:367-372	PC1-D
@@ -42,7 +42,7 @@ TABLE_CHUNK_SLOTS_OFFSET	const	crates/neovm-value/src/tagged/gc/symbol_table/abi
 TABLE_SLOT_COUNT_OFFSET	const	crates/neovm-value/src/tagged/gc/symbol_table/abi.rs	pc1-d: DATA privacy row; caller jit/parallel/native.rs:367-372	PC1-D
 TAG_FLOAT	const	crates/neovm-value/src/tagged/value.rs	pc1-d: DATA seal privacy ledger 17f6ac250b; callers bytecode/vm.rs jit/compile.rs	PC1-D
 TailCycleCheck	struct	crates/neovm-value/src/symbol/plist_core.rs	pc1-d DATA: signed plist addendum; private traversal fields, existing constructor/method bodies unchanged; upper crates/neovm-core/src/emacs_core/runtime/plist/mod.rs:15	PC1-D
-ThreadId	struct	crates/neovm-value/src/heap_types/threading.rs	pc1-d: DATA seal privacy ledger 17f6ac250b; caller runtime/threads/layout.rs	PC1-D
+ThreadId	struct	crates/neovm-value/src/heap_types/threading.rs	pc1-d: DATA seal privacy ledger 17f6ac250b; caller runtime/threads/layout.rs; defined by the native_id! macro	PC1-D
 ThreadIds	struct	crates/neovm-value/src/heap_types/threading.rs	pc1-d: DATA seal privacy ledger 17f6ac250b; caller runtime/threads/layout.rs	PC1-D
 UserCondition	struct	crates/neovm-value/src/error/mod.rs	pc1-d DATA: signed error-errors audit; private SymId field retained	PC1-D
 alloc_owner_debugger_cell	fn	crates/neovm-value/src/forward/mod.rs	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/eval/admission.rs:414:46	PC1-D
@@ -60,7 +60,6 @@ concurrent_hash_mutation_active	fn	crates/neovm-value/src/tagged/gc/gc_thread.rs
 concurrent_mark_active	fn	crates/neovm-value/src/tagged/gc/gc_thread.rs	pc1-d: DATA seal privacy ledger 17f6ac250b; widened by pc11 generator glob-fix pass, re-cited to its DATA seal	PC1-D
 current_heap_generational_enabled	fn	crates/neovm-value/src/tagged/gc/gc_thread.rs	pc1-d: DATA seal privacy ledger 17f6ac250b; widened by pc11 generator glob-fix pass, re-cited to its DATA seal	PC1-D
 current_tagged_heap_identity	fn	crates/neovm-value/src/tagged/gc/gc_thread.rs	pc1-d: DATA seal privacy ledger 17f6ac250b; widened by pc11 generator glob-fix pass, re-cited to its DATA seal	PC1-D
-decode_declared_multibyte_char	use	crates/neovm-value/src/heap_types.rs:1537 + crates/neovm-value/src/emacs_char/mod.rs	pc1-d: DATA seal privacy ledger 17f6ac250b; callers lisp/print minibuffer builtins	PC1-D
 feed_concurrent_roots	fn	crates/neovm-value/src/tagged/gc/gc_thread.rs	pc1-d: DATA seal privacy ledger 17f6ac250b; widened by pc11 generator glob-fix pass, re-cited to its DATA seal	PC1-D
 finish_cons_store_in_store	unsafe fn	crates/neovm-value/src/tagged/mutate.rs	pc1-d: DATA seal privacy ledger 17f6ac250b; caller jit/compile/dispatch.rs	PC1-D
 finish_slot_store_in_store	unsafe fn	crates/neovm-value/src/tagged/mutate.rs	pc1-d: DATA seal privacy ledger 17f6ac250b; caller jit/compile/dispatch.rs	PC1-D
@@ -163,8 +162,8 @@ TailCycleCheck::tortoise	method	crates/neovm-value/src/symbol/plist_core.rs	pc1-
 TailCycleCheck::step	method	crates/neovm-value/src/symbol/plist_core.rs	pc1-d DATA: signed plist addendum; existing body/inline unchanged, private traversal state; upper crates/neovm-core/src/emacs_core/runtime/plist/mod.rs:15 and its command-layer traversal callers	PC1-D
 SafeTailGuard::new	method	crates/neovm-value/src/symbol/plist_core.rs	pc1-d DATA: signed plist addendum; existing body/inline unchanged, private traversal state; upper crates/neovm-core/src/emacs_core/runtime/plist/mod.rs:15 and its command-layer traversal callers	PC1-D
 SafeTailGuard::found_cycle_after_advance	method	crates/neovm-value/src/symbol/plist_core.rs	pc1-d DATA: signed plist addendum; existing body/inline unchanged, private traversal state; upper crates/neovm-core/src/emacs_core/runtime/plist/mod.rs:15 and its command-layer traversal callers	PC1-D
-IntervalDeletionQuery::new	fn	crates/neovm-value/src/heap_types/overlay_storage/mod.rs	pc1-d ctor per coordinator ruling 15:56:33Z; tuple field stays pub(crate); exact core sites overlay_index.rs:1119/1275 use ::new	PC1-D
-IntervalIntersectionQuery::new	fn	crates/neovm-value/src/heap_types/overlay_storage/mod.rs	pc1-d ctor per coordinator ruling 15:56:33Z; tuple field stays pub(crate); exact core sites overlay_index.rs:1119/1275 use ::new	PC1-D
+IntervalDeletionQuery::new	method	crates/neovm-value/src/heap_types/overlay_storage/mod.rs	pc1-d ctor per coordinator ruling 15:56:33Z; tuple field stays pub(crate); exact core sites overlay_index.rs:1119/1275 use ::new	PC1-D
+IntervalIntersectionQuery::new	method	crates/neovm-value/src/heap_types/overlay_storage/mod.rs	pc1-d ctor per coordinator ruling 15:56:33Z; tuple field stays pub(crate); exact core sites overlay_index.rs:1119/1275 use ::new	PC1-D
 LispString::JIT_SIZE_OFFSET	const	crates/neovm-value/src/heap_types.rs	PC1-D (A1 associated const); callers: crates/neovm-core/src/emacs_core/runtime/jit/compile/intrinsics.rs:381; crates/neovm-core/src/emacs_core/runtime/jit/compile/lowering.rs:1133; crates/neovm-core/src/emacs_core/runtime/jit/compile/lowering.rs:1280	PC1-D
 LispString::JIT_SIZE_BYTE_OFFSET	const	crates/neovm-value/src/heap_types.rs	PC1-D (A1 associated const); callers: crates/neovm-core/src/emacs_core/runtime/jit/compile/lowering.rs:1139; crates/neovm-core/src/emacs_core/runtime/jit/compile/lowering.rs:1286	PC1-D
 LispString::JIT_DATA_OFFSET	const	crates/neovm-value/src/heap_types.rs	PC1-D (A1 associated const); callers: crates/neovm-core/src/emacs_core/runtime/jit/compile/lowering.rs:1156; crates/neovm-core/src/emacs_core/runtime/jit/compile/lowering.rs:1342	PC1-D
@@ -181,20 +180,20 @@ OrderedShiftTree::filter_mask	method	crates/neovm-value/src/heap_types/overlay_s
 TaggedValue::try_char_table	method	crates/neovm-value/src/value/mod.rs	A7 approved (batch 2): canonical fallible allocator, PC1-D; exact callers in STOP-PC11MF-1.tsv/notify	PC1-D
 TaggedValue::try_hash_table_with_options	method	crates/neovm-value/src/value/mod.rs	A7 approved (batch 2): canonical fallible allocator, PC1-D; exact callers in STOP-PC11MF-1.tsv/notify	PC1-D
 TaggedValue::try_obarray	method	crates/neovm-value/src/value/mod.rs	A7 approved (batch 2): canonical fallible allocator, PC1-D; exact callers in STOP-PC11MF-1.tsv/notify	PC1-D
-IterativeArgRange::new	fn	crates/neovm-value/src/tagged/bytecode/chunk.rs	PC1-D (batch 2): inert admission range constructor	PC1-D
+IterativeArgRange::new	method	crates/neovm-value/src/tagged/bytecode/chunk.rs	PC1-D (batch 2): inert admission range constructor	PC1-D
 IterativeArgRange::accepts	field-accessor	crates/neovm-value/src/tagged/bytecode/chunk.rs	PC1-D (batch 2): read-only admission range test	PC1-D
 StackProof::switch_target	field-accessor	crates/neovm-value/src/tagged/bytecode/decode_data.rs	PC1-D (batch 2): read-only proof projection	PC1-D
 StackProof::proves_depth	field-accessor	crates/neovm-value/src/tagged/bytecode/decode_data.rs	PC1-D (batch 2): read-only proof projection	PC1-D
 StackProof::switch_depth	field-accessor	crates/neovm-value/src/tagged/bytecode/decode_data.rs	PC1-D (batch 2): read-only proof projection getter; core verified_switch_pc	PC1-D
-PropertyInterval::from_parts	fn	crates/neovm-value/src/crates/neovm-value/src/value/text_props.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
-ByteCodeFunction::from_parts	fn	crates/neovm-value/src/crates/neovm-value/src/tagged/bytecode/chunk.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
-DecodedGnuCode::new	fn	crates/neovm-value/src/crates/neovm-value/src/tagged/bytecode/chunk.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
-StackProof::from_parts	fn	crates/neovm-value/src/crates/neovm-value/src/tagged/bytecode/decode_data.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
-StackParamShape::new	fn	crates/neovm-value/src/crates/neovm-value/src/tagged/bytecode/function_slots.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
-FormalMarkers::new	fn	crates/neovm-value/src/crates/neovm-value/src/tagged/bytecode/function_slots.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
-BytecodeInteractiveProbe::new	fn	crates/neovm-value/src/crates/neovm-value/src/value/mod.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
-HashTestGcInhibitAccounting::new	fn	crates/neovm-value/src/crates/neovm-value/src/hashtab/mod.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
-OverlayData::new	fn	crates/neovm-value/src/crates/neovm-value/src/heap_types.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
-DumpedSymbolFlags::new	fn	crates/neovm-value/src/crates/neovm-value/src/symbol/cell.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
-ThreadChildren::new	fn	crates/neovm-value/src/crates/neovm-value/src/heap_types/threading.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
-MutexPayload::new	fn	crates/neovm-value/src/crates/neovm-value/src/heap_types/threading.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
+PropertyInterval::from_parts	method	crates/neovm-value/src/value/text_props.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
+ByteCodeFunction::from_parts	method	crates/neovm-value/src/tagged/bytecode/chunk.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
+DecodedGnuCode::new	method	crates/neovm-value/src/tagged/bytecode/chunk.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
+StackProof::from_parts	method	crates/neovm-value/src/tagged/bytecode/decode_data.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
+StackParamShape::new	method	crates/neovm-value/src/tagged/bytecode/function_slots.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
+FormalMarkers::new	method	crates/neovm-value/src/tagged/bytecode/function_slots.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
+BytecodeInteractiveProbe::new	method	crates/neovm-value/src/value/mod.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
+HashTestGcInhibitAccounting::new	method	crates/neovm-value/src/hashtab/mod.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
+OverlayData::new	method	crates/neovm-value/src/heap_types.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
+DumpedSymbolFlags::new	method	crates/neovm-value/src/symbol/cell.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
+ThreadChildren::new	method	crates/neovm-value/src/heap_types/threading.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D
+MutexPayload::new	method	crates/neovm-value/src/heap_types/threading.rs	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private	PC1-D

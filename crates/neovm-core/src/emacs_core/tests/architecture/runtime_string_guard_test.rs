@@ -49,7 +49,7 @@ fn migrated_string_subsystems_do_not_call_generic_runtime_string_adapter_directl
         "runtime/eval/mod.rs",
         "runtime/eval/tree_walk.rs",
         "commands/interactive/mod.rs",
-        "commands/keyboard/pure.rs",
+        "../../../neovm-value/src/keyboard_pure.rs",
         "commands/kmacro/mod.rs",
         "lisp/load/mod.rs",
         "lisp/lread/mod.rs",

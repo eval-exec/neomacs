@@ -38,7 +38,6 @@ emacs_core/runtime/symbol/parallel.rs	symbol/parallel.rs
 emacs_core/runtime/symbol/parallel/functions.rs	symbol/parallel/functions.rs
 emacs_core/runtime/symbol/parallel/intern.rs	symbol/parallel/intern.rs
 emacs_core/runtime/symbol/parallel/keeper.rs	symbol/parallel/keeper.rs
-emacs_core/runtime/symbol/parallel/parameters.rs	symbol/parallel/parameters.rs
 emacs_core/runtime/symbol/parallel/roots.rs	symbol/parallel/roots.rs
 emacs_core/runtime/symbol/parallel/table.rs	symbol/parallel/table.rs
 emacs_core/runtime/symbol/parallel/write.rs	symbol/parallel/write.rs
