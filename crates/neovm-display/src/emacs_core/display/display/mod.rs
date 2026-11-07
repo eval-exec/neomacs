@@ -15,6 +15,7 @@ use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::emacs_core::eval::PopupMenuEntry;
 use neovm_eval::emacs_core::eval::PopupMenuRequest;
 use neovm_eval::emacs_core::eval::VariableView;
+use neovm_value::display_vocab::WindowSystemKind;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
 pub(crate) use neovm_value::error::{expect_args, expect_args_range, expect_max_args};
@@ -36,41 +37,6 @@ pub use tooltip::{builtin_x_hide_tip_eval, builtin_x_show_tip_eval};
 pub fn reset_display_thread_locals() {
     super::terminal::pure::reset_terminal_thread_locals();
     super::dispnew::pure::reset_dispnew_thread_locals();
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, EnumString, IntoStaticStr)]
-#[strum(serialize_all = "kebab-case")]
-enum WindowSystemKind {
-    X,
-    W32,
-    Pc,
-    Ns,
-    Pgtk,
-    Haiku,
-    Android,
-    Neo,
-}
-
-impl WindowSystemKind {
-    fn from_symbol_name(name: &str) -> Option<Self> {
-        name.parse().ok()
-    }
-
-    fn from_symbol_value(value: Value) -> Option<Self> {
-        Self::from_symbol_name(value.as_bare_symbol_name()?)
-    }
-
-    fn is_neomacs_gui_compatible(self) -> bool {
-        matches!(self, Self::Neo | Self::X)
-    }
-
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    fn supports_selections(self) -> bool {
-        matches!(
-            self,
-            Self::X | Self::W32 | Self::Ns | Self::Pgtk | Self::Haiku | Self::Android | Self::Neo
-        )
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -375,7 +341,7 @@ pub fn gui_window_system_symbol() -> &'static str {
 
 #[doc(hidden)]
 pub fn gui_window_system_active_value(value: Value) -> bool {
-    WindowSystemKind::from_symbol_value(value)
+    WindowSystemKind::from_symbol_value(&value)
         .is_some_and(WindowSystemKind::is_neomacs_gui_compatible)
 }
 
@@ -866,7 +832,7 @@ pub(crate) fn builtin_display_selections_p(
     let window_system = display_window_system_symbol_eval(eval, args.first())?;
     Ok(Value::bool_val(
         window_system
-            .and_then(WindowSystemKind::from_symbol_value)
+            .and_then(|value| WindowSystemKind::from_symbol_value(&value))
             .is_some_and(WindowSystemKind::supports_selections),
     ))
 }

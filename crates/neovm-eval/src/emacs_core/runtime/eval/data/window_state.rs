@@ -20,6 +20,8 @@ use neovm_value::display_vocab::{
     RenderFrameVisibility, SourcePreloadWindowRetirementRefusal, SplitDirection,
     WindowHistoryState, WindowLayoutVariable,
 };
+#[cfg(any(test, feature = "test-support"))]
+use neovm_value::display_vocab::WindowSystemKind;
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::intern::SymId;
 use neovm_value::intern::resolve_sym;
@@ -3367,20 +3369,13 @@ pub struct Frame {
     /// parent for child frames.
     pub left_pos: i64,
     pub top_pos: i64,
-    /// Internal window-system kind, mirroring GNU Emacs frame state rather
-    /// than the mutable Lisp-visible frame parameter alist.
-    pub window_system: Option<Value>,
-    /// The Lisp-visible `window-system` parameter, cached beside the map entry.
+    /// The frame's output method: the internal kind the backend installed,
+    /// never the mutable Lisp-visible `window-system` frame parameter.
     ///
-    /// `effective_window_system` falls back to this parameter when no internal
-    /// kind is installed, and geometry/layout code calls it dozens of times
-    /// per command.  Reading the entry out of `parameters` on every call cost
-    /// 171 instructions (hash + symbol comparison) in the C-n profile; this
-    /// copy makes the accessor two field reads.  The parameter map is private
-    /// to this module and only [`Frame::set_parameter`] and
-    /// [`Frame::remove_parameter`] write it, so those two methods are the
-    /// complete set of writers that keep this copy current.
-    pub(crate) window_system_parameter: Option<Value>,
+    /// GNU's `Fwindow_system` derives its answer from the frame's output
+    /// method alone (src/frame.c:415-436); writing the Lisp parameter does
+    /// not change it. [`Frame::set_window_system`] is the only writer.
+    pub window_system: Option<Value>,
     /// Native display connection plus the X display inherited by child
     /// processes. These differ for a Wayland frame running alongside
     /// Xwayland, just as GNU's PGTK backend distinguishes its GDK display from
@@ -5416,23 +5411,18 @@ impl Frame {
             .unwrap_or_else(|| neovm_value::heap_types::LispString::from_utf8("Neomacs"))
     }
 
-    /// Return the effective window-system symbol for this frame.
+    /// Return the frame's output method symbol.
     ///
     /// GNU separates the backend output method (`FRAME_WINDOW_P`) from the
-    /// Lisp `window-system` frame parameter.  The internal kind wins; the
-    /// parameter is the fallback that lets frames no backend created (batch
-    /// fixtures, tests) act as window-system frames when Lisp says so.
-    /// [`Frame::window_system_parameter`] mirrors that one map entry so this
-    /// accessor -- called dozens of times per command by geometry queries,
-    /// layout inputs and redisplay signatures -- does not hash the parameter
-    /// alist on every call.
+    /// Lisp `window-system` frame parameter, and `Fwindow_system` reads only
+    /// the output method (src/frame.c:415-436). The internal kind installed
+    /// by [`Frame::set_window_system`] is therefore the sole source; a Lisp
+    /// `window-system` parameter write never turns a termcap frame into a
+    /// window-system frame. Frames no backend created use
+    /// [`Frame::install_backend_less_gui_kind`] (fixtures) to install a GUI
+    /// output method.
     pub fn effective_window_system(&self) -> Option<Value> {
-        self.window_system
-            .filter(|value| value.is_truthy())
-            .or_else(|| {
-                self.window_system_parameter
-                    .filter(|value| value.is_truthy())
-            })
+        self.window_system.filter(|value| value.is_truthy())
     }
 
     pub fn known_parameter(&self, key: FrameParam) -> Option<Value> {
@@ -5678,6 +5668,22 @@ impl Frame {
                 self.remove_parameter(FrameQueryParam::WindowSystem.symbol());
             }
         }
+    }
+
+    /// Fixture constructor for a frame no native backend created: install the
+    /// output method a backend would have set through
+    /// [`Frame::set_window_system`].
+    ///
+    /// GNU's Lisp `window-system` frame parameter never changes a frame's
+    /// output method (src/frame.c:415-436), so tests and batch fixtures that
+    /// model a GUI frame use this Rust-side path instead of writing the
+    /// parameter. Production frames get their kind from the backend; the
+    /// method is in-crate (`pub(crate)`) and widens to `pub` only in a
+    /// `test-support` build, the signed B3 class.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn install_backend_less_gui_kind(&mut self, kind: WindowSystemKind) {
+        self.set_window_system(Some(Value::symbol(kind.name())));
     }
 
     pub fn fixed_parameter(&self, key: FrameQueryParam) -> Option<Value> {
@@ -6652,7 +6658,6 @@ impl Frame {
             left_pos: 0,
             top_pos: 0,
             window_system: None,
-            window_system_parameter: None,
             display_identity: FrameDisplayIdentity::default(),
             // GNU terminal frames expose the terminal's default colors as
             // string sentinel values, not concrete RGB colors.  `term.c`
@@ -6739,21 +6744,16 @@ impl Frame {
             }
             _ => {}
         }
-        if key.as_bare_symbol_id() == Some(FrameQueryParam::WindowSystem.symbol_id()) {
-            self.window_system_parameter = Some(value);
-        }
         self.parameters.insert(key, value)
     }
 
     /// Remove one Lisp-visible frame parameter.
     ///
-    /// Removing `window-system` drops only the parameter fallback: an internal
-    /// kind installed by [`Frame::set_window_system`] stays in force, matching
-    /// GNU, where deleting the parameter cannot change `FRAME_WINDOW_P`.
+    /// Removing `window-system` is observationally inert for the frame's
+    /// output method: only [`Frame::set_window_system`] can change it, which
+    /// matches GNU, where deleting the parameter cannot change
+    /// `FRAME_WINDOW_P`.
     pub fn remove_parameter(&mut self, key: Value) -> Option<Value> {
-        if key.as_bare_symbol_id() == Some(FrameQueryParam::WindowSystem.symbol_id()) {
-            self.window_system_parameter = None;
-        }
         self.parameters.remove(&key)
     }
 

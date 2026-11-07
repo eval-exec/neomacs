@@ -132,6 +132,55 @@ impl FrameFullscreen {
     }
 }
 
+/// A frame's display output method, as GNU's `framep` vocabulary spells it.
+///
+/// This is the frame's INTERNAL output method: the backend installs it when
+/// the frame is created, and GNU's `Fwindow_system` derives its answer from
+/// it alone (src/frame.c:415-436). The Lisp `window-system` frame parameter
+/// is not an input. `Neo` is this runtime's GUI backend identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::IntoStaticStr)]
+#[strum(serialize_all = "kebab-case")]
+pub enum WindowSystemKind {
+    X,
+    W32,
+    Pc,
+    Ns,
+    Pgtk,
+    Haiku,
+    Android,
+    Neo,
+}
+
+impl WindowSystemKind {
+    /// Parse a display symbol name (`x`, `w32`, `neo`, ...).
+    pub fn from_symbol_name(name: &str) -> Option<Self> {
+        name.parse().ok()
+    }
+
+    /// Parse a bare Lisp symbol value.
+    pub fn from_symbol_value(value: &Value) -> Option<Self> {
+        Self::from_symbol_name(value.as_bare_symbol_name()?)
+    }
+
+    /// The symbol name of this output method.
+    pub fn name(self) -> &'static str {
+        self.into()
+    }
+
+    /// Whether this runtime's GUI path serves the method.
+    pub const fn is_neomacs_gui_compatible(self) -> bool {
+        matches!(self, Self::Neo | Self::X)
+    }
+
+    /// GNU's selection-capable window systems.
+    pub const fn supports_selections(self) -> bool {
+        matches!(
+            self,
+            Self::X | Self::W32 | Self::Ns | Self::Pgtk | Self::Haiku | Self::Android | Self::Neo
+        )
+    }
+}
+
 /// Whether hidden frames participate in a frame-tree query.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderFrameVisibility {
