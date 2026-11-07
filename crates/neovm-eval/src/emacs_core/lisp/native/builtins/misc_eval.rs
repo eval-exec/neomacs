@@ -624,7 +624,7 @@ pub(super) fn buffer_read_only_active(
     }
 
     if eval
-        .variable_value_by_name("inhibit-read-only")
+        .builtin_var_value_by_name("inhibit-read-only")
         .is_some_and(|value| value.is_truthy())
     {
         return false;
@@ -638,7 +638,7 @@ pub(super) fn buffer_read_only_active(
         return value.is_truthy();
     }
 
-    eval.variable_value_by_name("buffer-read-only")
+    eval.builtin_var_value_by_name("buffer-read-only")
         .is_some_and(|value| value.is_truthy())
 }
 
@@ -755,7 +755,7 @@ pub(crate) fn resolve_print_target_in_state(
     match printcharfun {
         Some(dest) if !dest.is_nil() => *dest,
         _ => ctx
-            .variable_value_by_name("standard-output")
+            .builtin_var_value_by_name("standard-output")
             .unwrap_or(Value::T),
     }
 }
@@ -1579,7 +1579,7 @@ fn prepare_prin1_string(
     bind_print_overrides(ctx, overrides)?;
     let escape_nonascii = intern("print-escape-nonascii");
     let needs_binding = !ctx
-        .variable_value(escape_nonascii)
+        .builtin_var_value(escape_nonascii)
         .is_some_and(|value| value.is_truthy());
 
     if let Some(proof) = CallbackFreePrintLeaf::validate(value, overrides) {

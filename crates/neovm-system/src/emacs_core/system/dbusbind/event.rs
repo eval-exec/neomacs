@@ -185,7 +185,7 @@ fn registered_entries(
     interface: Value,
     member: Value,
 ) -> Result<Vec<Value>, Flow> {
-    let Some(table) = ctx.variable_value_by_name("dbus-registered-objects-table") else {
+    let Some(table) = ctx.builtin_var_value_by_name("dbus-registered-objects-table") else {
         return Ok(Vec::new());
     };
     let kind = Value::keyword_by_name(if mtype == 1 { ":method" } else { ":signal" });
@@ -210,7 +210,7 @@ fn registered_entries(
 
 /// A registered monitor's handler: the first entry's HANDLER.
 fn monitor_handler(ctx: &mut Context, bus: Value) -> Result<Option<Value>, Flow> {
-    let Some(table) = ctx.variable_value_by_name("dbus-registered-objects-table") else {
+    let Some(table) = ctx.builtin_var_value_by_name("dbus-registered-objects-table") else {
         return Ok(None);
     };
     let key = Value::list(vec![Value::keyword_by_name(":monitor"), bus]);
@@ -226,7 +226,7 @@ fn monitor_handler(ctx: &mut Context, bus: Value) -> Result<Option<Value>, Flow>
 
 /// Take the `dbus-message-internal` handler registered for a reply serial.
 fn take_serial_handler(ctx: &mut Context, bus: Value, serial: u32) -> Result<Value, Flow> {
-    let Some(table) = ctx.variable_value_by_name("dbus-registered-objects-table") else {
+    let Some(table) = ctx.builtin_var_value_by_name("dbus-registered-objects-table") else {
         return Ok(Value::NIL);
     };
     let key = Value::list(vec![

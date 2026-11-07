@@ -2069,7 +2069,7 @@ impl crate::emacs_core::eval::Context {
 
     #[doc(hidden)]
     pub fn special_event_binding(&self, event: &Value) -> Option<Value> {
-        let special_event_map = self.variable_value(SPECIAL_EVENT_MAP.id())?;
+        let special_event_map = self.builtin_var_value(SPECIAL_EVENT_MAP.id())?;
         // GNU `read_char` calls `access_keymap` on the event head, so a
         // full lispy event like `(focus-in FRAME)` must match a keymap entry
         // stored under just `focus-in`.
@@ -5405,7 +5405,7 @@ impl crate::emacs_core::eval::Context {
         }
 
         let show_help_function = self
-            .variable_value_by_name("show-help-function")
+            .builtin_var_value_by_name("show-help-function")
             .unwrap_or(Value::NIL);
         if self.function_value_is_callable(&show_help_function) {
             let _ = self.funcall_general(show_help_function, vec![help])?;

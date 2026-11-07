@@ -615,7 +615,7 @@ pub fn builtin_user_login_name(ctx: &mut super::eval::Context, args: Vec<Value>)
     }
 
     if ctx
-        .variable_value_by_name("user-login-name")
+        .builtin_var_value_by_name("user-login-name")
         .is_none_or(|value| value.is_nil())
     {
         super::runtime_identity::install(ctx);
@@ -632,7 +632,7 @@ pub fn builtin_user_real_login_name(
 ) -> EvalResult {
     expect_args("user-real-login-name", &args, 0)?;
     if ctx
-        .variable_value_by_name("user-login-name")
+        .builtin_var_value_by_name("user-login-name")
         .is_none_or(|value| value.is_nil())
     {
         super::runtime_identity::install(ctx);

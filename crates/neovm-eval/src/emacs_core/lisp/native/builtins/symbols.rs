@@ -1836,7 +1836,7 @@ pub(crate) fn is_global_obarray_proxy(eval: &super::eval::Context, value: &Value
         static SYMBOL: std::sync::OnceLock<neovm_value::intern::SymId> = std::sync::OnceLock::new();
         *SYMBOL.get_or_init(|| neovm_value::intern::intern("neovm--obarray-object"))
     }
-    eval.variable_value(neovm_obarray_object_sym())
+    eval.builtin_var_value(neovm_obarray_object_sym())
         .is_some_and(|proxy| proxy == *value)
 }
 
@@ -1845,8 +1845,8 @@ fn current_lisp_obarray_value(eval: &super::eval::Context) -> Value {
     // it by name. The internal fallback name belongs to this port.
     static OBARRAY: WellKnown = WellKnown::Obarray;
     static NEOVM_OBARRAY_OBJECT: WellKnown = WellKnown::NeovmObarrayObject;
-    eval.variable_value(OBARRAY.id()).unwrap_or_else(|| {
-        eval.variable_value(NEOVM_OBARRAY_OBJECT.id())
+    eval.builtin_var_value(OBARRAY.id()).unwrap_or_else(|| {
+        eval.builtin_var_value(NEOVM_OBARRAY_OBJECT.id())
             .unwrap_or(Value::NIL)
     })
 }

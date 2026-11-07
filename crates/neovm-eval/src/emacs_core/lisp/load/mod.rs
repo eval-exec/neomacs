@@ -127,7 +127,7 @@ fn load_hist_file_name(
 ) -> LispString {
     let found_effective = load_found_effective(found);
     if !eval
-        .variable_value_by_name("purify-flag")
+        .builtin_var_value_by_name("purify-flag")
         .is_some_and(|value| value.is_truthy())
     {
         return found_effective;
@@ -162,7 +162,7 @@ fn load_hist_file_name(
 /// handles itself, so the two together cover every preloaded file.
 fn record_preloaded_file(eval: &mut super::eval::Context, requested: &LispString) {
     if !eval
-        .variable_value_by_name("purify-flag")
+        .builtin_var_value_by_name("purify-flag")
         .is_some_and(|value| value.is_truthy())
     {
         return;
@@ -175,7 +175,7 @@ fn record_preloaded_file(eval: &mut super::eval::Context, requested: &LispString
     // not something a `let` can shadow -- and the way `purify-flag` is read
     // just above.
     let list = eval
-        .variable_value_by_name("preloaded-file-list")
+        .builtin_var_value_by_name("preloaded-file-list")
         .unwrap_or(Value::NIL);
     eval.push_specpdl_root(list);
     let updated = Value::cons(entry, list);
@@ -1674,7 +1674,7 @@ pub(crate) fn get_eager_macroexpand_fn(eval: &super::eval::Context) -> Option<Va
     // Respect the Elisp `macroexp--pending-eager-loads` variable.
     // When it starts with `skip`, eager expansion is suppressed (mirrors
     // the check in `internal-macroexpand-for-load` in macroexp.el).
-    if let Some(val) = eval.variable_value_by_name("macroexp--pending-eager-loads")
+    if let Some(val) = eval.builtin_var_value_by_name("macroexp--pending-eager-loads")
         && val.is_cons()
         && val.cons_car().is_symbol_named("skip", symbol_mode)
     {
@@ -2141,7 +2141,7 @@ fn streaming_readevalloop_lisp_source(
             // default `read` symbol is observably identical and keeps the bootstrap
             // path off the Lisp call route.
             let read_hook = eval
-                .variable_value_by_name("load-read-function")
+                .builtin_var_value_by_name("load-read-function")
                 .filter(|hook| !hook.is_nil() && !hook.is_symbol_named("read", symbol_mode));
             let (form, next_pos) = match read_hook {
                 Some(hook) => {
@@ -3130,7 +3130,7 @@ fn build_load_history(eval: &mut super::eval::Context, filename: &LispString, en
     let current_load_list = eval.visible_variable_value_or_nil("current-load-list");
     eval.push_specpdl_root(current_load_list);
     let history = eval
-        .variable_value_by_name("load-history")
+        .builtin_var_value_by_name("load-history")
         .unwrap_or(Value::NIL);
     eval.push_specpdl_root(history);
     let filtered_history = if entire {
@@ -4720,7 +4720,7 @@ fn runtime_loaddefs_restore_state(project_root: &Path) -> Result<LoaddefsSurface
 pub(crate) fn loaded_source_paths(eval: &mut super::eval::Context) -> Vec<PathBuf> {
     {
         let history = eval
-            .variable_value_by_name("load-history")
+            .builtin_var_value_by_name("load-history")
             .unwrap_or(Value::NIL);
         let mut paths = std::collections::BTreeSet::new();
 
@@ -6027,7 +6027,7 @@ pub(crate) fn sync_runtime_interpreted_closure_filter(eval: &mut super::eval::Co
     let closure_filter_sym =
         neovm_value::intern::intern("internal-make-interpreted-closure-function");
     let cconv_sym = neovm_value::intern::intern("cconv-make-interpreted-closure");
-    let filter_fn = eval.variable_value(closure_filter_sym).and_then(|value| {
+    let filter_fn = eval.builtin_var_value(closure_filter_sym).and_then(|value| {
         if value.as_symbol_id(symbol_mode) == Some(cconv_sym) {
             eval.obarray().symbol_function_id(cconv_sym)
         } else {

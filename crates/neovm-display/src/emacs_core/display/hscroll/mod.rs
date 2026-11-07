@@ -362,7 +362,7 @@ fn leaf_hscroll(window: &Window) -> i64 {
 /// GNU `clip_to_bounds(0, hscroll_margin, 1000000)` of the `hscroll-margin`
 /// variable, in columns.
 fn hscroll_margin_cols(ctx: &Context) -> i64 {
-    ctx.variable_value(HSCROLL_MARGIN.id())
+    ctx.builtin_var_value(HSCROLL_MARGIN.id())
         .and_then(|v| v.as_int())
         .unwrap_or(5)
         .clamp(0, 1_000_000)
@@ -499,7 +499,7 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
                     && mode == AutoHscrollMode::CurrentLine,
                 line_truncated,
                 point_at_eol,
-                step: HscrollStep::decode(ctx.variable_value(HSCROLL_STEP.id()).as_ref()),
+                step: HscrollStep::decode(ctx.builtin_var_value(HSCROLL_STEP.id()).as_ref()),
             });
         }
     }

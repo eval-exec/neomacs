@@ -924,7 +924,7 @@ impl Context {
             next_buffer_id: self.edit.buffers.dump_next_id(),
             buffer_ticks,
             gensym_counter: self
-                .variable_value(gensym_counter_symbol())
+                .builtin_var_value(gensym_counter_symbol())
                 .map_or(0, |value| value.bits()),
             function_epoch: self.obarray.function_epoch(),
             obarray_len: self.obarray.len(),
@@ -1100,7 +1100,7 @@ impl Context {
                 .map(|n| n.max(100) as usize)
         };
         let mut limit = self.max_depth;
-        if let Some(global) = as_limit(self.variable_value(max_lisp_eval_depth_symbol())) {
+        if let Some(global) = as_limit(self.builtin_var_value(max_lisp_eval_depth_symbol())) {
             limit = limit.min(global);
         }
         if self.obarray.is_localized(max_lisp_eval_depth_symbol())

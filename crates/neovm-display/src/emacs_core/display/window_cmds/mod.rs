@@ -7586,7 +7586,7 @@ pub fn builtin_x_create_frame(
                 let enabled = explicit.parent_frame.is_none()
                     && explicit.minibuffer != Some(Value::symbol("only"))
                     && eval
-                        .variable_value(intern(mode))
+                        .builtin_var_value(intern(mode))
                         .is_some_and(|value| value.is_truthy());
                 Value::fixnum(i64::from(enabled))
             });

@@ -7473,7 +7473,7 @@ impl<'a> Vm<'a> {
         {
             return binding.as_value().unwrap_or(Value::NIL);
         }
-        if let Some(value) = self.ctx.variable_value_by_name(name) {
+        if let Some(value) = self.ctx.builtin_var_value_by_name(name) {
             return value;
         }
         if name == "nil" {

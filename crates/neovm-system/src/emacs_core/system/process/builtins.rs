@@ -612,21 +612,21 @@ pub fn builtin_print_preprocess(
 
     // GNU: does nothing if `print-circle' is nil.
     let print_circle = eval
-        .variable_value_by_name("print-circle")
+        .builtin_var_value_by_name("print-circle")
         .is_some_and(|v| v.is_truthy());
     if !print_circle {
         return Ok(Value::NIL);
     }
 
     let print_gensym = eval
-        .variable_value_by_name("print-gensym")
+        .builtin_var_value_by_name("print-gensym")
         .is_some_and(|v| v.is_truthy());
     let print_continuous_numbering = eval
-        .variable_value_by_name("print-continuous-numbering")
+        .builtin_var_value_by_name("print-continuous-numbering")
         .is_some_and(|v| v.is_truthy());
 
     // GNU: `if (!HASH_TABLE_P (Vprint_number_table)) Vprint_number_table = make-hash-table :test eq`.
-    let table_value = match eval.variable_value_by_name("print-number-table") {
+    let table_value = match eval.builtin_var_value_by_name("print-number-table") {
         Some(v) if v.is_hash_table() => v,
         _ => {
             let table = Value::hash_table(neovm_value::value::HashTableTest::Eq);

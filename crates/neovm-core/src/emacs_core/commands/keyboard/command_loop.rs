@@ -313,7 +313,7 @@ impl CommandLoopHost for Context {
 
     fn command_loop_top_level_1(&mut self) -> EvalResult {
         let top_level = self
-            .variable_value(TOP_LEVEL_SYMBOL.id())
+            .builtin_var_value(TOP_LEVEL_SYMBOL.id())
             .unwrap_or(Value::NIL);
 
         tracing::debug!("command_loop_top_level_1: top-level={}", top_level);
@@ -365,11 +365,11 @@ impl CommandLoopHost for Context {
                 self.report_command_error(data, "")?;
                 if cfg!(test) {
                     let last_phase = self
-                        .variable_value(NEOVM_STARTUP_LAST_PHASE.id())
+                        .builtin_var_value(NEOVM_STARTUP_LAST_PHASE.id())
                         .map(|value| crate::emacs_core::print_value_with_eval(self, &value))
                         .unwrap_or_else(|| "nil".to_string());
                     let last_call = self
-                        .variable_value(NEOVM_STARTUP_LAST_CALL.id())
+                        .builtin_var_value(NEOVM_STARTUP_LAST_CALL.id())
                         .map(|value| crate::emacs_core::print_value_with_eval(self, &value))
                         .unwrap_or_else(|| "nil".to_string());
                     eprintln!(
@@ -437,18 +437,18 @@ impl CommandLoopHost for Context {
         tracing::info!(
             "startup-state phase={} command-line-args={} command-line-args-left={} command-line-processed={} window-system={} initial-window-system={} current-buffer={} selected-frame={:?} frames={:?}",
             phase,
-            format_startup_value(self.variable_value_by_name("command-line-args").as_ref()),
+            format_startup_value(self.builtin_var_value_by_name("command-line-args").as_ref()),
             format_startup_value(
-                self.variable_value_by_name("command-line-args-left")
+                self.builtin_var_value_by_name("command-line-args-left")
                     .as_ref()
             ),
             format_startup_value(
-                self.variable_value_by_name("command-line-processed")
+                self.builtin_var_value_by_name("command-line-processed")
                     .as_ref()
             ),
-            format_startup_value(self.variable_value_by_name("window-system").as_ref()),
+            format_startup_value(self.builtin_var_value_by_name("window-system").as_ref()),
             format_startup_value(
-                self.variable_value_by_name("initial-window-system")
+                self.builtin_var_value_by_name("initial-window-system")
                     .as_ref()
             ),
             current_buffer,

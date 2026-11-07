@@ -407,20 +407,25 @@ pub fn builtin_find_buffer<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalR
         .iter()
         .rev()
         .find_map(|frame| frame.get(&name_id).cloned())
-        .or_else(|| host.variable_value_by_name(name))
+        // GNU find-buffer reads VARIABLE per CANDIDATE buffer
+        // (Fbuffer_local_value, src/buffer.c:1377ff): the buffer's own
+        // binding, else the variable's DEFAULT (Fdefault_value at
+        // buffer.c:1399/1408). That fallback is the explicitly-named
+        // default read: GNU Fdefault_value returns the default cell, which a
+        // dynamic `let` reaches when specbind stores in place (PLAINVAL /
+        // forwarded) or through LET_DEFAULT, but a buffer-local binding is
+        // not the default and must come from the candidate's own lookup.
+        .or_else(|| host.default_value(neovm_value::intern::intern(name)))
         .ok_or_else(|| signal(LispCondition::VoidVariable, vec![Value::symbol(name)]))?;
 
     let (edit, _) = host.edit_and_vars();
-    let mut scan_order = Vec::new();
-    let current_id = edit.buffers.current_buffer().map(|buf| buf.id);
-    if let Some(id) = current_id {
-        scan_order.push(id);
-    }
-    for id in edit.buffers.buffer_list() {
-        if Some(id) != current_id {
-            scan_order.push(id);
-        }
-    }
+    // GNU `Ffind_buffer` walks the live buffers in buffer-list order
+    // (`FOR_EACH_LIVE_BUFFER`, src/buffer.c:544-555). It does NOT start with
+    // the current buffer: when several buffers share the same effective value
+    // (a setq-local in one and the default elsewhere), the first buffer in
+    // buffer-list order wins, which is often *scratch* rather than the
+    // selected buffer.
+    let scan_order = edit.buffers.buffer_list();
 
     let key = Value::from_sym_id(name_id);
     for id in scan_order {

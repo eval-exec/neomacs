@@ -462,7 +462,7 @@ fn install_system_name(eval: &mut Context, name: String) {
     // Read as the running owner's variable: a refresh also runs after a
     // World admitted threads, when a raw canonical read answers nothing.
     let value = eval
-        .variable_value_by_name("system-name")
+        .builtin_var_value_by_name("system-name")
         .filter(|value| value.as_utf8_str() == Some(name.as_str()))
         .unwrap_or_else(|| Value::string(name));
     eval.set_variable("system-name", value);
@@ -472,7 +472,7 @@ fn install_system_name(eval: &mut Context, name: String) {
 
 fn refresh_system_name_from(eval: &mut Context, name: String) {
     let visible = eval
-        .variable_value_by_name("system-name")
+        .builtin_var_value_by_name("system-name")
         .unwrap_or(Value::NIL);
     if eq_value(&visible, &eval.cached_system_name) {
         install_system_name(eval, name);

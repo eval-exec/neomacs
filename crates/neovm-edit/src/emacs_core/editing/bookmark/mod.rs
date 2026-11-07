@@ -807,7 +807,8 @@ fn default_bookmark_file() -> LispString {
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn active_bookmark_default_file<H: crate::emacs_core::edit_host::EditHost>(host: &H) -> LispString {
-    if let Some(v) = host.variable_value_by_name("bookmark-default-file")
+    if let Some(v) =
+        host.forwarded_variable_value(neovm_value::intern::intern("bookmark-default-file"))
         && let Some(ls) = v.as_lisp_string()
     {
         return ls.clone();
@@ -819,7 +820,9 @@ fn active_bookmark_default_file<H: crate::emacs_core::edit_host::EditHost>(host:
 fn bookmark_timestamp_file<H: crate::emacs_core::edit_host::EditHost>(
     host: &H,
 ) -> Option<LispString> {
-    let value = host.variable_value_by_name("bookmark-bookmarks-timestamp")?;
+    let value = host.forwarded_variable_value(neovm_value::intern::intern(
+        "bookmark-bookmarks-timestamp",
+    ))?;
     if !value.is_cons() {
         return None;
     };

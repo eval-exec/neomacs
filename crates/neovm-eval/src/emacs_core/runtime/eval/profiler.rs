@@ -623,7 +623,7 @@ impl Context {
     #[doc(hidden)]
     pub fn profiler_settings(&self) -> (usize, usize) {
         let bounded_setting = |name: &str, default: usize, maximum: usize| {
-            self.variable_value_by_name(name)
+            self.builtin_var_value_by_name(name)
                 .and_then(|value| value.as_fixnum())
                 .map(|value| value.clamp(0, maximum as i64) as usize)
                 .unwrap_or(default)

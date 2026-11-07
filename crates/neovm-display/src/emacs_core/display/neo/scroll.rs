@@ -150,7 +150,7 @@ impl ScrollContextExt for Context {
             .obarray()
             .read_localized_in_buffer(symbol, buffer)
             .or_else(|| buffer.buffer_local_value_id(symbol))
-            .or_else(|| self.variable_value(symbol))
+            .or_else(|| self.builtin_var_value(symbol))
             .unwrap_or(Value::NIL);
         (!value.is_unbound()).then_some(value)
     }

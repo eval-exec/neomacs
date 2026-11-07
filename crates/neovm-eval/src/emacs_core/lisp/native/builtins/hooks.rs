@@ -327,7 +327,7 @@ pub fn builtin_featurep(eval: &mut super::eval::Context, args: Vec<Value>) -> Ev
     // does. (`features' is not special in GNU, so a lexical `let' of it
     // never reaches here.)
     let features = eval
-        .variable_value(features_symbol_id())
+        .builtin_var_value(features_symbol_id())
         .unwrap_or(Value::NIL);
     if super::cons_list::builtin_memq_values(feature, features, eval.symbols_with_pos_enabled)?
         .is_nil()

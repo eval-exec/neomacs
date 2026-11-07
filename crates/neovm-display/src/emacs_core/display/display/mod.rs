@@ -2138,7 +2138,7 @@ fn x_popup_menu_interactive_loop(
             // swallowing it would leave the runtime waiting for contents that
             // will never be requested. Keep its pending native anchor intact.
             let mut unread = ctx
-                .variable_value_by_name("unread-command-events")
+                .builtin_var_value_by_name("unread-command-events")
                 .unwrap_or(Value::NIL);
             for key in keys.iter().rev() {
                 unread = Value::cons(*key, unread);

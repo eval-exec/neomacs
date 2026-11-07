@@ -60,7 +60,7 @@ fn dynamic_or_global_symbol_value<H: crate::emacs_core::edit_host::EditHost>(
     host: &H,
     name: &str,
 ) -> Option<Value> {
-    host.variable_value_by_name(name)
+    host.forwarded_variable_value(neovm_value::intern::intern(name))
 }
 
 // ---------------------------------------------------------------------------

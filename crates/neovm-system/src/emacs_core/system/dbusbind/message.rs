@@ -146,7 +146,7 @@ pub(super) fn message_internal(ctx: &mut Context, args: Vec<Value>) -> Result<Va
         key.to_lisp(),
         Value::fixnum(serial as i64),
     ]);
-    if let Some(table) = ctx.variable_value_by_name("dbus-registered-objects-table") {
+    if let Some(table) = ctx.builtin_var_value_by_name("dbus-registered-objects-table") {
         neovm_eval::emacs_core::builtins::builtin_puthash(vec![key_lisp, handler, table])?;
     }
     Ok(key_lisp)

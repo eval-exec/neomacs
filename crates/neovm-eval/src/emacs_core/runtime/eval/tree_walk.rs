@@ -235,7 +235,7 @@ impl Context {
         // passes the cached limit -- which is every entry once Lisp raises
         // `max-lisp-eval-depth`, not the rare event the shape suggests.
         if self.depth > self.max_depth
-            && let Some(v) = self.variable_value(max_lisp_eval_depth_symbol())
+            && let Some(v) = self.builtin_var_value(max_lisp_eval_depth_symbol())
             && let Some(n) = v.as_fixnum()
         {
             let new_max = n.max(100) as usize;
@@ -281,7 +281,7 @@ impl Context {
                 .value_in_buffer_by_name(self.edit.buffers.current_buffer(), "max-lisp-eval-depth")
                 .and_then(|value| value.as_fixnum())
         } else {
-            self.variable_value(max_lisp_eval_depth_symbol())
+            self.builtin_var_value(max_lisp_eval_depth_symbol())
                 .and_then(|value| value.as_fixnum())
         };
         if current.is_some_and(|limit| limit < 100) {

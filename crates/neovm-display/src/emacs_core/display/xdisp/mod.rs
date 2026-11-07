@@ -7040,7 +7040,7 @@ fn bidi_buffer_var(
             return value;
         }
     }
-    ctx.variable_value_by_name(name).unwrap_or(Value::NIL)
+    ctx.builtin_var_value_by_name(name).unwrap_or(Value::NIL)
 }
 
 #[doc(hidden)]

@@ -238,7 +238,7 @@ impl EditHost for Context {
                     }
                 }
                 SymbolRedirect::Plainval => {
-                    return Context::variable_value(self, sym)
+                    return Context::builtin_var_value(self, sym)
                         .is_some_and(|v| !v.is_unbound() && v.is_truthy());
                 }
                 // The arm a booted session takes: the code-conversion work buffer
@@ -264,7 +264,7 @@ impl EditHost for Context {
                     {
                         return !value.is_unbound() && value.is_truthy();
                     }
-                    return Context::variable_value(self, sym)
+                    return Context::builtin_var_value(self, sym)
                         .is_some_and(|v| !v.is_unbound() && v.is_truthy());
                 }
                 SymbolRedirect::Varalias => {}

@@ -312,7 +312,7 @@ pub(crate) fn builtin_help_describe_vector(eval: &mut Context, args: Vec<Value>)
         // A range is only honest if every key in it is shadowed the same way, so
         // GNU truncates it at the first member that is not (bug#9293).
         let check_ranges = eval
-            .variable_value_by_name("describe-bindings-check-shadowing-in-ranges")
+            .builtin_var_value_by_name("describe-bindings-check-shadowing-in-ranges")
             .unwrap_or(Value::NIL);
         let skip_self_insert = check_ranges.as_symbol_name(symbol_mode)
             == Some("ignore-self-insert")
@@ -452,7 +452,7 @@ fn describe_buffer_binding_sections(
     let symbol_mode = eval.symbol_mode();
     let mut sections = Vec::new();
     let named_map = |name: &str| -> Option<Value> {
-        eval.variable_value_by_name(name)
+        eval.builtin_var_value_by_name(name)
             .filter(|map| !map.is_nil())
     };
 

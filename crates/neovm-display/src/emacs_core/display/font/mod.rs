@@ -2739,7 +2739,7 @@ fn face_remapping_value_for_buffer(
     // Buffer-local binding takes priority
     buffer
         .get_buffer_local("face-remapping-alist")
-        .or_else(|| eval.variable_value_by_name("face-remapping-alist"))
+        .or_else(|| eval.builtin_var_value_by_name("face-remapping-alist"))
         .unwrap_or(Value::NIL)
 }
 

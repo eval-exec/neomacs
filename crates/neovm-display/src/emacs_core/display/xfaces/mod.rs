@@ -223,7 +223,7 @@ pub(crate) fn ensure_face_new_frame_defaults_entry(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     face_name: &str,
 ) -> Option<Value> {
-    let table = eval.variable_value_by_name("face--new-frame-defaults")?;
+    let table = eval.builtin_var_value_by_name("face--new-frame-defaults")?;
     // The table is fully seeded once at bootstrap (`register_bootstrap_vars`)
     // and again at startup (`ensure_startup_compat_variables`). Re-seeding here
     // -- on every ensure/lookup -- rebuilt every face's cons + lface vector only
@@ -269,7 +269,7 @@ pub fn remove_face_new_frame_defaults_entry(
     eval: &neovm_eval::emacs_core::eval::Context,
     face_name: &str,
 ) {
-    let Some(table) = eval.variable_value_by_name("face--new-frame-defaults") else {
+    let Some(table) = eval.builtin_var_value_by_name("face--new-frame-defaults") else {
         return;
     };
     if table.is_hash_table() {
@@ -304,7 +304,7 @@ pub(crate) fn lookup_face_new_frame_defaults_vector(
     eval: &neovm_eval::emacs_core::eval::Context,
     key: Value,
 ) -> Option<Value> {
-    let table = eval.variable_value_by_name("face--new-frame-defaults")?;
+    let table = eval.builtin_var_value_by_name("face--new-frame-defaults")?;
     let entry = lookup_frame_face_hash_entry(table, key)?;
     if entry.is_cons() {
         Some(entry.cons_cdr())

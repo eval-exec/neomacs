@@ -1023,7 +1023,7 @@ impl KeyboardInputRuntime for super::eval::Context {
     }
 
     fn symbol_value_or_nil(&self, name: &str) -> Value {
-        self.variable_value_by_name(name).unwrap_or(Value::NIL)
+        self.builtin_var_value_by_name(name).unwrap_or(Value::NIL)
     }
 }
 

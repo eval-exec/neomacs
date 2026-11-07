@@ -1679,7 +1679,7 @@ impl Context {
     #[doc(hidden)]
     pub fn run_after_load_hooks_for_feature(&mut self, feature: Value) -> Result<(), Flow> {
         let after_load_alist = self
-            .variable_value_by_name("after-load-alist")
+            .builtin_var_value_by_name("after-load-alist")
             .unwrap_or(Value::NIL);
         if after_load_alist.is_nil() {
             return Ok(());

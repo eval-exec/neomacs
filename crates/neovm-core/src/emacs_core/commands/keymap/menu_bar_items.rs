@@ -51,7 +51,7 @@ pub(crate) fn menu_bar_top_level_items_for_frame(
         super::menu_bar_active_keymaps_for_frame_read_only(eval, frame_id)
     } else {
         let obey_overriding_local_maps = eval
-            .variable_value_by_name("overriding-local-map-menu-flag")
+            .builtin_var_value_by_name("overriding-local-map-menu-flag")
             .is_some_and(|value| value.is_truthy());
         let mut maps = super::current_active_maps_for_position_read_only(
             eval,
@@ -70,7 +70,7 @@ pub(crate) fn menu_bar_top_level_items_for_frame(
 }
 
 fn move_menu_bar_final_items(eval: &Context, items: &mut Vec<(Value, String)>) {
-    let Some(mut final_items) = eval.variable_value_by_name("menu-bar-final-items") else {
+    let Some(mut final_items) = eval.builtin_var_value_by_name("menu-bar-final-items") else {
         return;
     };
     while final_items.is_cons() {

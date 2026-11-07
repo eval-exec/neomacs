@@ -1623,7 +1623,7 @@ pub(crate) fn builtin_current_window_configuration(
     // managers; the clone step below only allocates markers and runs no Lisp,
     // so the value is the same one GNU reads at snapshot time.
     let persistent_parameters = eval
-        .variable_value_by_name("window-persistent-parameters")
+        .builtin_var_value_by_name("window-persistent-parameters")
         .unwrap_or(Value::NIL);
     let (frames, buffers) = eval.frame_manager_read_and_buffers_mut();
     if let Some(frame_state) = frames.get(frame_id) {

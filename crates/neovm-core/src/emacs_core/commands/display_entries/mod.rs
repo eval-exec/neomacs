@@ -175,7 +175,7 @@ fn maybe_transform_mouse_position(
     value: Value,
 ) -> EvalResult {
     let transform = eval
-        .variable_value_by_name("mouse-position-function")
+        .builtin_var_value_by_name("mouse-position-function")
         .unwrap_or(Value::NIL);
     if transform.is_truthy() {
         eval.apply(transform, vec![value])
@@ -855,9 +855,9 @@ pub(crate) fn builtin_internal_set_lisp_face_attribute_from_resource(
 pub(crate) fn builtin_new_fontset(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("new-fontset", &args, 2)?;
     let name = expect_string_lossy(&args[0])?;
-    let char_script_table = eval.variable_value_by_name("char-script-table");
-    let charset_script_alist = eval.variable_value_by_name("charset-script-alist");
-    let font_encoding_alist = eval.variable_value_by_name("font-encoding-alist");
+    let char_script_table = eval.builtin_var_value_by_name("char-script-table");
+    let charset_script_alist = eval.builtin_var_value_by_name("charset-script-alist");
+    let font_encoding_alist = eval.builtin_var_value_by_name("font-encoding-alist");
     let registered = crate::emacs_core::fontset::new_fontset(
         &name,
         &args[1],
@@ -873,9 +873,9 @@ pub(crate) fn builtin_set_fontset_font(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("set-fontset-font", &args, 3, 5)?;
-    let char_script_table = eval.variable_value_by_name("char-script-table");
-    let charset_script_alist = eval.variable_value_by_name("charset-script-alist");
-    let font_encoding_alist = eval.variable_value_by_name("font-encoding-alist");
+    let char_script_table = eval.builtin_var_value_by_name("char-script-table");
+    let charset_script_alist = eval.builtin_var_value_by_name("charset-script-alist");
+    let font_encoding_alist = eval.builtin_var_value_by_name("font-encoding-alist");
     crate::emacs_core::fontset::set_fontset_font(
         &args[0],
         &args[1],

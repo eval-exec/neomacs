@@ -13,7 +13,7 @@ use crate::emacs_core::value::Value;
 /// `eq` to PROP, read from the evaluator's visible variable value.
 fn char_code_property_cell(eval: &Context, prop: Value) -> Result<Value, Flow> {
     let alist = eval
-        .variable_value_by_name("char-code-property-alist")
+        .builtin_var_value_by_name("char-code-property-alist")
         .unwrap_or(Value::NIL);
     neovm_value::chartab::assq_cell_eq(prop, alist, eval.symbol_mode())
 }

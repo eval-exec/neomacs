@@ -38,7 +38,7 @@ pub(crate) fn report_frame_shader_failure(
     error: &str,
 ) -> Result<InternalEventEffects, neovm_value::error::Flow> {
     let hook = "neomacs-frame-shader-error-functions";
-    if eval.variable_value_by_name(hook).is_none() {
+    if eval.builtin_var_value_by_name(hook).is_none() {
         let message = format!("neomacs frame shader failed to build: {error}");
         eval.set_current_message(Some(neovm_value::heap_types::LispString::from_utf8(
             &message,

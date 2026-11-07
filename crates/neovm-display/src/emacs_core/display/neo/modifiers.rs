@@ -135,7 +135,7 @@ pub fn modifier_policy_from_vars(eval: &Context) -> Result<ModifierPolicy, Strin
         ..ModifierPolicyParts::default()
     };
     for (name, key) in POLICY_VARS {
-        let value = eval.variable_value_by_name(name).unwrap_or(Value::NIL);
+        let value = eval.builtin_var_value_by_name(name).unwrap_or(Value::NIL);
         let assignment = assignment_from_lisp(&value, key.is_right());
         match key {
             PhysicalModifierKey::LeftCommand => parts.command_left = into_explicit(assignment),

@@ -251,7 +251,7 @@ pub fn builtin_read_impl(
     expect_max_args("read", &args, 1)?;
 
     let stream = if args.is_empty() || args[0].is_nil() {
-        ctx.variable_value_by_name("standard-input")
+        ctx.builtin_var_value_by_name("standard-input")
             .unwrap_or(Value::NIL)
     } else {
         args[0]
@@ -861,7 +861,7 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
     // Check inhibit-interaction — GNU Emacs signals an error when any
     // interactive read is attempted while this variable is non-nil.
     if shared
-        .variable_value_by_name("inhibit-interaction")
+        .builtin_var_value_by_name("inhibit-interaction")
         .is_some_and(|v| v.is_truthy())
     {
         return Err(signal(
@@ -911,7 +911,7 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
             });
             restoration.record(shared);
 
-            let recursive_policy = if shared.variable_value_by_name("enable-recursive-minibuffers")
+            let recursive_policy = if shared.builtin_var_value_by_name("enable-recursive-minibuffers")
                 .is_some_and(|value| value.is_truthy())
             {
                 RecursiveMinibufferPolicy::Allow
@@ -933,7 +933,7 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
         &shared.edit.buffers,
         saved_buffer_id,
     );
-    let saved_current_prefix_arg = shared.variable_value_by_name("current-prefix-arg")
+    let saved_current_prefix_arg = shared.builtin_var_value_by_name("current-prefix-arg")
         .unwrap_or(Value::NIL);
     // GNU `read_minibuf` also saves `(this-command-keys-vector)` (minibuf.c:
     // 738-739) and `read_minibuf_unwind` restores it (minibuf.c:1144-1146) so
@@ -945,9 +945,9 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
     // idle-timer probe early.
     let saved_command_keys = shared.read_command_keys().to_vec();
     let saved_raw_command_keys = shared.read_raw_command_keys().to_vec();
-    let saved_minibuffer_history_variable = shared.variable_value_by_name("minibuffer-history-variable")
+    let saved_minibuffer_history_variable = shared.builtin_var_value_by_name("minibuffer-history-variable")
         .unwrap_or(Value::from_sym_id(intern("minibuffer-history")));
-    let saved_minibuffer_history_position = shared.variable_value_by_name("minibuffer-history-position")
+    let saved_minibuffer_history_position = shared.builtin_var_value_by_name("minibuffer-history-position")
         .unwrap_or(Value::NIL);
     let recursive_depth = shared.recursive_command_loop_depth();
 
@@ -1008,7 +1008,7 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
         ambient_directory,
     );
 
-    let prompt_properties = shared.variable_value_by_name("minibuffer-prompt-properties")
+    let prompt_properties = shared.builtin_var_value_by_name("minibuffer-prompt-properties")
         .unwrap_or(Value::NIL);
     let mini_source_before = crate::emacs_core::eval::gnu_redisplay_hooks_enabled().then(||
         shared.edit.buffers.get(minibuf_id).map(|buffer| (buffer.chars_modified_tick(), buffer.props_modified_tick()))
@@ -1065,7 +1065,7 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
     let minibuf_keymap = if !keymap_arg.is_nil() {
         keymap_arg
     } else {
-        shared.variable_value_by_name("minibuffer-local-map")
+        shared.builtin_var_value_by_name("minibuffer-local-map")
             .unwrap_or(Value::NIL)
     };
     let _ = shared.edit.buffers.set_current_local_map(minibuf_keymap);
@@ -1372,7 +1372,7 @@ fn yes_or_no_p_dialog_result(eval: &mut Context, args: &[Value]) -> Result<Optio
 }
 
 fn yes_or_no_p_use_short_answers(eval: &Context) -> bool {
-    eval.variable_value_by_name("use-short-answers")
+    eval.builtin_var_value_by_name("use-short-answers")
         .is_some_and(|v| v.is_truthy())
 }
 

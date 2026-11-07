@@ -211,7 +211,7 @@ impl Context {
     pub(crate) fn retire_empty_dead_windows_table(&mut self) -> bool {
         // The canonical variable read, not the evaluator: admission must not
         // run Lisp, and GNU stores this DEFVAR_LISP as one global value.
-        let Some(value) = self.variable_value_by_name("window-dead-windows-table") else {
+        let Some(value) = self.builtin_var_value_by_name("window-dead-windows-table") else {
             return false;
         };
         if !is_empty_weak_value_eql(value) {

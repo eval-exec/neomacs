@@ -713,7 +713,7 @@ impl Context {
             self.mark_user_test_gc_settings_volatile();
         }
         self.gc_runtime_settings_cache.gc_cons_threshold_bytes = self
-            .variable_value(syms.threshold())
+            .builtin_var_value(syms.threshold())
             .and_then(|value| {
                 value.as_fixnum().or_else(|| {
                     // GNU's gc-cons-threshold watcher accepts integers fitting
@@ -807,7 +807,7 @@ impl Context {
         self.store_variable(gcs_done_symbol(), Value::fixnum(self.gc_count as i64));
 
         let old_elapsed = self
-            .variable_value(gc_elapsed_symbol())
+            .builtin_var_value(gc_elapsed_symbol())
             .and_then(|value| value.as_number_f64())
             .unwrap_or(0.0);
         self.store_variable(

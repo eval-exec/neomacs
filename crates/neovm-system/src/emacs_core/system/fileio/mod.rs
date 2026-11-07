@@ -1831,7 +1831,7 @@ fn validate_file_truename_counter(counter: &Value) -> Result<(), Flow> {
 fn temporary_file_directory_for_eval(
     eval: &Context,
 ) -> Option<neovm_value::heap_types::LispString> {
-    let val = eval.variable_value_by_name("temporary-file-directory")?;
+    let val = eval.builtin_var_value_by_name("temporary-file-directory")?;
     val.as_lisp_string().cloned()
 }
 
@@ -2507,7 +2507,7 @@ fn raw_default_directory_value_for_eval(eval: &Context) -> Option<Value> {
 }
 
 fn invocation_directory_absolute_value_for_eval(eval: &Context) -> Option<Value> {
-    let value = eval.variable_value_by_name("invocation-directory")?;
+    let value = eval.builtin_var_value_by_name("invocation-directory")?;
     let filename = value.as_lisp_string()?;
     if lisp_file_name_absolute_system_p(filename) {
         Some(value)
@@ -7585,7 +7585,7 @@ pub fn builtin_do_auto_save(
     eval.safe_run_hook_if_bound(AUTO_SAVE_HOOK.id())?;
 
     let auto_save_visited = eval
-        .variable_value_by_name("auto-save-visited-file-name")
+        .builtin_var_value_by_name("auto-save-visited-file-name")
         .is_some_and(|v| v.is_truthy());
 
     // Collect buffer ids to process

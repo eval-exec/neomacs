@@ -280,7 +280,7 @@ fn map_color(
     .unwrap_or(0);
     if !name.is_empty()
         && eval
-            .variable_value_by_name("tty-defined-color-alist")
+            .builtin_var_value_by_name("tty-defined-color-alist")
             .is_some_and(|value| value.is_cons())
         && eval.obarray().fboundp("tty-color-alist")
     {

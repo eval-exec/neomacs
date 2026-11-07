@@ -431,7 +431,7 @@ impl Context {
             .selected_frame()
             .is_some_and(|frame| frame.initial)
             && self
-                .variable_value(CommandLoopSymbol::RedisplaySkipInitialFrame.id())
+                .builtin_var_value(CommandLoopSymbol::RedisplaySkipInitialFrame.id())
                 .is_some_and(|value| value.is_truthy()))
     }
 
@@ -730,7 +730,7 @@ impl Context {
         // (window.c:4116) specbinds this to t so any nested redisplay
         // triggered by a window-change hook is a no-op. Without this check
         // a hook that indirectly calls `redisplay` infinitely recurses.
-        let inhibit_redisplay = self.variable_value(CommandLoopSymbol::InhibitRedisplay.id());
+        let inhibit_redisplay = self.builtin_var_value(CommandLoopSymbol::InhibitRedisplay.id());
         if inhibit_redisplay.as_ref().is_some_and(|v| v.is_truthy())
             && (!force
                 || display_query_hooks::mode_line_flow_enabled()?
@@ -908,7 +908,7 @@ impl Context {
     /// each hook in `with-demoted-errors`).
     #[doc(hidden)]
     pub fn run_pre_redisplay_function(&mut self, windows: Value) {
-        let Some(function) = self.variable_value(CommandLoopSymbol::PreRedisplayFunction.id())
+        let Some(function) = self.builtin_var_value(CommandLoopSymbol::PreRedisplayFunction.id())
         else {
             return;
         };
@@ -937,7 +937,7 @@ impl Context {
     #[doc(hidden)]
     pub fn resize_minibuffer_only_frames(&mut self) {
         if !self
-            .variable_value(CommandLoopSymbol::ResizeMiniFrames.id())
+            .builtin_var_value(CommandLoopSymbol::ResizeMiniFrames.id())
             .is_some_and(|value| value.is_truthy())
         {
             return;
@@ -2330,7 +2330,7 @@ impl Context {
     #[doc(hidden)]
     pub fn debug_on_event_signal_name(&self) -> Option<String> {
         let symbol_mode = self.symbol_mode();
-        let value = self.variable_value(DEBUG_ON_EVENT.id())?;
+        let value = self.builtin_var_value(DEBUG_ON_EVENT.id())?;
         let name = value.as_symbol_lisp_string(symbol_mode)?;
         Some(neovm_value::emacs_char::to_utf8_lossy(name.as_bytes()))
     }
@@ -2443,7 +2443,7 @@ impl Context {
     #[doc(hidden)]
     pub fn input_pending_filter(&self) -> neovm_value::system_vocab::input::InputPendingFilter {
         let configured = self
-            .variable_value(INPUT_PENDING_FILTER_EVENTS.id())
+            .builtin_var_value(INPUT_PENDING_FILTER_EVENTS.id())
             .unwrap_or(Value::T)
             .is_truthy();
         neovm_value::system_vocab::input::InputPendingFilter::from_filter_events_variable(
@@ -2476,7 +2476,7 @@ impl Context {
         static WHILE_NO_INPUT_IGNORE_EVENTS: WellKnown = WellKnown::WhileNoInputIgnoreEvents;
         let symbol_mode = self.symbol_mode();
         let ignore_list = self
-            .variable_value(WHILE_NO_INPUT_IGNORE_EVENTS.id())
+            .builtin_var_value(WHILE_NO_INPUT_IGNORE_EVENTS.id())
             .unwrap_or(Value::NIL);
         neovm_value::value::list_to_vec(&ignore_list)
             .into_iter()

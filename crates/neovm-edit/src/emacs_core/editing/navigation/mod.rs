@@ -243,7 +243,7 @@ pub(crate) fn check_point_motion_hooks<H: EditHost>(
         return Ok(());
     }
     let inhibit = host
-        .variable_value(inhibit_point_motion_hooks_sym())
+        .forwarded_variable_value(inhibit_point_motion_hooks_sym())
         .unwrap_or(Value::NIL);
     if inhibit.is_truthy() {
         return Ok(());

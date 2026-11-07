@@ -563,7 +563,7 @@ pub fn builtin_daemon_initialized(ctx: &mut super::eval::Context, args: Vec<Valu
     expect_args("daemon-initialized", &args, 0)?;
     let error = |message: &str| signal("error", vec![Value::string(message)]);
     let after_init = ctx
-        .variable_value_by_name("after-init-time")
+        .builtin_var_value_by_name("after-init-time")
         .is_some_and(|value| value.is_truthy());
     let daemon = ctx
         .daemon

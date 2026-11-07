@@ -45,7 +45,7 @@ impl Context {
         let symbol_mode = self.symbol_mode();
         let saved_specpdl_len = self.specpdl.len();
         let old_dynvars = self
-            .variable_value(macroexp_dynvars_symbol())
+            .builtin_var_value(macroexp_dynvars_symbol())
             .unwrap_or(Value::NIL);
 
         let dynvars_root_index = self.specpdl.len();

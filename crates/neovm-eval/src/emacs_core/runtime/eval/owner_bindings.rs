@@ -1621,7 +1621,7 @@ impl Context {
                 continue;
             }
             if self.obarray.is_constant_id(base) {
-                let value = self.variable_value(base).unwrap_or(Value::UNBOUND);
+                let value = self.builtin_var_value(base).unwrap_or(Value::UNBOUND);
                 constants.push((binding.record, base, value));
                 affected.insert((record.index, record.channel));
                 continue;

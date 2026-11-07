@@ -4971,10 +4971,10 @@ impl Context {
     #[doc(hidden)]
     pub fn sync_keyboard_runtime_from_obarray(&mut self) {
         let input_decode_map = self
-            .variable_value_by_name("input-decode-map")
+            .builtin_var_value_by_name("input-decode-map")
             .unwrap_or(Value::NIL);
         let local_function_key_map = self
-            .variable_value_by_name("local-function-key-map")
+            .builtin_var_value_by_name("local-function-key-map")
             .unwrap_or(Value::NIL);
         self.command_loop
             .keyboard
@@ -5651,6 +5651,9 @@ impl Context {
     /// a forwarded slot var is always nil, so the resolver must read the default
     /// slot directly.
     pub fn buffer_default_value(&self, name: &str) -> Option<Value> {
+        // GNU default read: BVAR (&buffer_defaults, slot) for a slot-backed
+        // per-buffer variable (src/buffer.c:1116, 2289); for any other
+        // variable the obarray default cell is GNU's Fdefault_value.
         if let Some(info) = neovm_edit::buffer::buffer::lookup_buffer_slot(name) {
             return Some(self.edit.buffers.buffer_defaults[info.offset.index()]);
         }
@@ -5662,6 +5665,8 @@ impl Context {
     /// Identical two-level lookup, with the variable name resolved once per
     /// registry epoch instead of at every layout probe.
     pub fn buffer_default_value_fixed(&self, symbol: &WellKnown) -> Option<Value> {
+        // Same GNU default read as buffer_default_value: BVAR
+        // (&buffer_defaults, slot), src/buffer.c:1116, 2289.
         if let Some(info) = neovm_edit::buffer::buffer::lookup_buffer_slot(symbol.name()) {
             return Some(self.edit.buffers.buffer_defaults[info.offset.index()]);
         }

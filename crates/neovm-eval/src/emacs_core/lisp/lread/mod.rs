@@ -290,7 +290,7 @@ fn eval_buffer_filename_in_state(
 fn record_eval_buffer_load_history(eval: &mut super::eval::Context, filename: &LispString) {
     let entry = Value::cons(Value::heap_string(filename.clone()), Value::NIL);
     let history = eval
-        .variable_value_by_name("load-history")
+        .builtin_var_value_by_name("load-history")
         .unwrap_or(Value::NIL);
     let filtered_history = Value::list(
         list_to_vec(&history)
@@ -590,7 +590,7 @@ impl FormReader {
             return Self::Lisp(read_function);
         }
         match eval
-            .variable_value_by_name("load-read-function")
+            .builtin_var_value_by_name("load-read-function")
             .filter(|hook| !hook.is_nil() && !hook.is_symbol_named("read", symbol_mode))
         {
             Some(hook) => Self::Lisp(hook),

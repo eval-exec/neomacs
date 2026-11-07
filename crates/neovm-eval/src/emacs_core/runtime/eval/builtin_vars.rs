@@ -49,6 +49,16 @@ impl Context {
         self.special_variable_value_by_id(id)
     }
 
+    /// [`Self::builtin_var_value`] by name, interning it: GNU
+    /// `find_symbol_value` of the named variable, `None` when void. This is
+    /// the visible read for callers that hold a name instead of a pre-interned
+    /// id; hot paths should pre-intern and use the id form.
+    #[inline]
+    #[doc(hidden)]
+    pub fn builtin_var_value_by_name(&self, name: &str) -> Option<Value> {
+        self.builtin_var_value(neovm_value::intern::intern(name))
+    }
+
     #[inline(always)]
     #[doc(hidden)]
     pub fn builtin_var_value_cached(&self, id: SymId) -> Option<Value> {

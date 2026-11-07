@@ -148,7 +148,7 @@ fn push_onto_charset_list(
 ) {
     use crate::emacs_core::value::Value;
     let current = ctx
-        .variable_value_by_name("charset-list")
+        .builtin_var_value_by_name("charset-list")
         .unwrap_or(Value::NIL);
     // Unconditionally, as GNU does: defining the same alias twice leaves two
     // entries in its list, and nothing in a normal session defines a charset
