@@ -1135,29 +1135,35 @@ fn replace_match_expands_an_ampersand_as_the_subexp_like_gnu() {
     );
 }
 
-fn call_string_match(args: Vec<Value>) -> EvalResult {
+fn search_test_ctx<R>(f: impl FnOnce(&mut crate::emacs_core::eval::Context) -> R) -> R {
     SEARCH_TEST_CTX.with(|slot| {
-        let mut new_ctx = Box::new(crate::test_utils::new_context());
-        let result = builtin_string_match(&mut new_ctx, args);
-        *slot.borrow_mut() = Some(new_ctx);
-        result
+        let mut slot = slot.borrow_mut();
+        let ctx = slot.get_or_insert_with(|| {
+            neovm_value::thread_exit_leak::ThreadExitLeak::new(
+                crate::test_utils::new_context(),
+            )
+        });
+        f(ctx.get_mut())
     })
+}
+
+fn call_string_match(args: Vec<Value>) -> EvalResult {
+    search_test_ctx(|ctx| builtin_string_match(ctx, args))
 }
 
 fn call_replace_regexp_in_string(args: Vec<Value>) -> EvalResult {
-    SEARCH_TEST_CTX.with(|slot| {
-        let mut new_ctx = Box::new(crate::test_utils::new_context());
-        let result = builtin_replace_regexp_in_string(&mut new_ctx, args);
-        *slot.borrow_mut() = Some(new_ctx);
-        result
-    })
+    search_test_ctx(|ctx| builtin_replace_regexp_in_string(ctx, args))
 }
 
 fn call_looking_at_in_buffer(pattern: Value, buffer_text: &str) -> EvalResult {
-    SEARCH_TEST_CTX.with(|slot| {
-        let mut new_ctx = Box::new(crate::test_utils::new_context());
+    search_test_ctx(|ctx| {
+        // A fresh buffer per call preserves the old fresh-context fixture
+        // semantics while the thread's heap (and every earlier returned
+        // Value) stays alive.
+        let buffer_id = ctx.edit.buffers.create_buffer("search-looking-at");
+        let _ = ctx.edit.buffers.switch_current(buffer_id);
         {
-            let buf = new_ctx
+            let buf = ctx
                 .edit
                 .buffers
                 .current_buffer_mut()
@@ -1165,9 +1171,7 @@ fn call_looking_at_in_buffer(pattern: Value, buffer_text: &str) -> EvalResult {
             buf.insert(buffer_text);
             buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
         }
-        let result = builtin_looking_at(&mut new_ctx, vec![pattern]);
-        *slot.borrow_mut() = Some(new_ctx);
-        result
+        builtin_looking_at(ctx, vec![pattern])
     })
 }
 
@@ -1318,8 +1322,18 @@ pub(crate) fn builtin_replace_regexp_in_string(
 }
 
 thread_local! {
-    static SEARCH_TEST_CTX: RefCell<Option<Box<crate::emacs_core::eval::Context>>> =
-        const { RefCell::new(None) };
+    /// Held through the one typed thread-exit leak wrapper: a Context
+    /// dropped inside TLS destruction drops its World and TaggedHeap, whose
+    /// Collector::join emits a tracing event after tracing's own TLS may
+    /// already be destroyed.  Deliberate leak, bounded by one process per
+    /// nextest test.
+    static SEARCH_TEST_CTX: RefCell<
+        Option<
+            neovm_value::thread_exit_leak::ThreadExitLeak<
+                crate::emacs_core::eval::Context,
+            >,
+        >,
+    > = const { RefCell::new(None) };
 }
 
 /// Route symbol-value reads through the full GNU lookup path so

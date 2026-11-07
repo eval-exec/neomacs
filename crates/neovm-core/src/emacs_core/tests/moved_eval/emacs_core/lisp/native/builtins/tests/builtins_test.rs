@@ -102,9 +102,39 @@ fn decode_value_char_codes(v: &Value) -> Vec<u32> {
 }
 
 /// Backward-compat: decode char codes from an &str (for tests using as_str).
+///
+/// One thread-lifetime evaluator, as the pre-move helper had: a fresh
+/// Context per call frees the heap every earlier returned Value points
+/// into (a returned Value is a Copy tagged word with no borrow of its
+/// heap).  nextest runs each test in its own process, so the thread-local
+/// never leaks state across tests.
+///
+/// The Context is held through the one typed thread-exit leak wrapper: a
+/// Context dropped inside TLS destruction drops its World and TaggedHeap,
+/// whose Collector::join emits a tracing event after tracing's own TLS may
+/// already be destroyed (`cannot access a Thread Local Storage value
+/// during or after destruction`).  One process per nextest test bounds the
+/// leak.
+thread_local! {
+    static PURE_DISPATCH_TEST_CTX: std::cell::RefCell<
+        Option<
+            neovm_value::thread_exit_leak::ThreadExitLeak<
+                crate::emacs_core::eval::Context,
+            >,
+        >,
+    > = const { std::cell::RefCell::new(None) };
+}
+
 fn dispatch_builtin_pure(name: &str, args: Vec<Value>) -> Option<EvalResult> {
-    let mut ctx = crate::test_utils::new_context();
-    crate::emacs_core::builtins::dispatch_pure_builtin_for_test(&mut ctx, name, args)
+    PURE_DISPATCH_TEST_CTX.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let ctx = slot.get_or_insert_with(|| {
+            neovm_value::thread_exit_leak::ThreadExitLeak::new(
+                crate::test_utils::new_context(),
+            )
+        });
+        crate::emacs_core::builtins::dispatch_pure_builtin_for_test(ctx.get_mut(), name, args)
+    })
 }
 
 fn install_variable_watcher_probe(eval: &mut crate::emacs_core::eval::Context, callback: &str) {
