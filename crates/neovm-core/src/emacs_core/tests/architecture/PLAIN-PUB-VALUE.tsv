@@ -94,6 +94,7 @@ crates/neovm-value/src/display_vocab.rs	enum	enum SnapshotTarget
 crates/neovm-value/src/display_vocab.rs	enum	enum SourcePreloadWindowRetirementRefusal
 crates/neovm-value/src/display_vocab.rs	enum	enum SplitDirection
 crates/neovm-value/src/display_vocab.rs	enum	enum WindowLayoutVariable
+crates/neovm-value/src/display_vocab.rs	enum	enum WindowSystemKind
 crates/neovm-value/src/display_vocab.rs	field	GstringShapeCacheKey field chars
 crates/neovm-value/src/display_vocab.rs	field	GstringShapeCacheKey field family
 crates/neovm-value/src/display_vocab.rs	field	GstringShapeCacheKey field pixel_size_bits
@@ -168,6 +169,11 @@ crates/neovm-value/src/display_vocab.rs	fn	fn impl LFaceAttr::keyword
 crates/neovm-value/src/display_vocab.rs	fn	fn impl RenderFrameVisibility::includes_invisible
 crates/neovm-value/src/display_vocab.rs	fn	fn impl WindowLayoutVariable::name
 crates/neovm-value/src/display_vocab.rs	fn	fn impl WindowLayoutVariable::sym_id
+crates/neovm-value/src/display_vocab.rs	fn	fn impl WindowSystemKind::from_symbol_name
+crates/neovm-value/src/display_vocab.rs	fn	fn impl WindowSystemKind::from_symbol_value
+crates/neovm-value/src/display_vocab.rs	fn	fn impl WindowSystemKind::is_neomacs_gui_compatible
+crates/neovm-value/src/display_vocab.rs	fn	fn impl WindowSystemKind::name
+crates/neovm-value/src/display_vocab.rs	fn	fn impl WindowSystemKind::supports_selections
 crates/neovm-value/src/display_vocab.rs	fn	fn impl XwidgetScriptRequestId::get
 crates/neovm-value/src/display_vocab.rs	fn	fn impl XwidgetScriptRequestId::new
 crates/neovm-value/src/display_vocab.rs	fn	fn is_tagged_font_vector
