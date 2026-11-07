@@ -646,11 +646,33 @@ pub(crate) fn builtin_display_graphic_p(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let symbol_mode = eval.symbol_mode();
     expect_optional_display_designator_eval(eval, "display-graphic-p", &args)?;
-    Ok(Value::bool_val(
+    // GNU lisp/frame.el:2735-2743: display-graphic-p answers
+    //   (not (null (memq (framep-on-display DISPLAY)
+    //                    '(x w32 ns pgtk haiku android))))
+    // and nil/omitted DISPLAY means the selected frame's terminal
+    // (lisp/frame.el:1231-1239). The selected frame's OUTPUT METHOD decides;
+    // the deprecated `window-system` variable and the Lisp `window-system`
+    // frame parameter never do. `pc is deliberately absent from GNU's list;
+    // `neo is this runtime's GUI identity and is graphic.
+    let window_system = if args.first().is_none_or(|value| value.is_nil()) {
+        let frames = eval.frame_manager();
+        match frames.selected_frame() {
+            Some(frame) => frame.effective_window_system(),
+            // A cached GUI bootstrap has no frame yet (a state GNU cannot be
+            // in), so report the window system the runtime was built for.
+            None => dynamic_or_global_symbol_value_fixed(eval, WellKnown::InitialWindowSystem)
+                .filter(|value| !value.is_nil())
+                .or_else(|| dynamic_or_global_symbol_value_fixed(eval, WellKnown::WindowSystem))
+                .filter(|value| !value.is_nil()),
+        }
+    } else {
         display_window_system_symbol_eval(eval, args.first())?
-            .is_some_and(|value| value.is_symbol(symbol_mode)),
+    };
+    Ok(Value::bool_val(
+        window_system
+            .and_then(|value| WindowSystemKind::from_symbol_value(&value))
+            .is_some_and(|kind| !matches!(kind, WindowSystemKind::Pc)),
     ))
 }
 

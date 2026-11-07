@@ -3654,6 +3654,73 @@ fn window_system_ignores_the_frame_parameter_like_gnu() {
 }
 
 #[test]
+fn display_graphic_p_without_a_display_uses_the_selected_frames_output_method() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+    assert!(
+        eval.frame_manager()
+            .selected_frame()
+            .is_some_and(|frame| frame.effective_window_system().is_none()),
+        "the synthesized selected frame must model a termcap frame"
+    );
+
+    // GNU 31.1 lisp/frame.el:2735-2743: display-graphic-p is
+    // (not (null (memq (framep-on-display DISPLAY)
+    //                  '(x w32 ns pgtk haiku android))))
+    // and nil/omitted DISPLAY means the selected frame's terminal
+    // (lisp/frame.el:1231-1239). Oracle on the pinned a360712c9d build
+    // (batch/tty):
+    //   (:state t nil nil nil nil)  ; framep t, (display-graphic-p) nil,
+    //                               ; (display-graphic-p nil) nil
+    //   (:param-x nil nil nil x t)  ; the frame parameter does not change it
+    //   (:pc nil)                   ; `pc is NOT in GNU's graphic list
+    assert_eq!(
+        builtin_display_graphic_p(&mut eval, vec![]).unwrap(),
+        Value::NIL,
+        "a selected termcap frame is not a graphic display"
+    );
+    assert_eq!(
+        builtin_display_graphic_p(&mut eval, vec![Value::NIL]).unwrap(),
+        Value::NIL,
+        "an explicit nil DISPLAY means the same selected termcap frame"
+    );
+    eval.eval_str("(modify-frame-parameters nil '((window-system . x)))")
+        .unwrap();
+    assert_eq!(
+        builtin_display_graphic_p(&mut eval, vec![]).unwrap(),
+        Value::NIL,
+        "the Lisp window-system frame parameter must not make the display graphic"
+    );
+
+    // A backend-less GUI fixture flips the answer, and `pc is excluded
+    // exactly as GNU's list excludes it.
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("selected frame")
+        .install_backend_less_gui_kind(WindowSystemKind::X);
+    assert_eq!(
+        builtin_display_graphic_p(&mut eval, vec![]).unwrap(),
+        Value::T,
+        "a GUI output method is graphic"
+    );
+    assert_eq!(
+        builtin_display_graphic_p(&mut eval, vec![Value::make_frame(frame_id.0)]).unwrap(),
+        Value::T,
+        "an explicit GUI frame is graphic"
+    );
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("selected frame")
+        .install_backend_less_gui_kind(WindowSystemKind::Pc);
+    assert_eq!(
+        builtin_display_graphic_p(&mut eval, vec![]).unwrap(),
+        Value::NIL,
+        "GNU's display-graphic-p list excludes the pc output method"
+    );
+}
+
+#[test]
 fn display_graphic_p_uses_global_window_system_without_live_frame() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
