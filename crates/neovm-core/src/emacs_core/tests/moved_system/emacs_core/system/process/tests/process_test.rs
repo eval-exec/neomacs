@@ -16416,6 +16416,69 @@ fn the_status_notify_walk_and_the_tick_pair_are_engaged_on_the_workload() {
     eprintln!("PW208 engagement: walks={walks} stamped={stamped} visited={visited}");
 }
 
+/// The deterministic half of the status_notify engagement guarantee: a child
+/// exit discovered by the READINESS pass must reach Lisp through GNU's one
+/// publication path, `status_notify (NULL, wait_proc)` and its per-process
+/// tick-pair visit set (src/process.c:5554, :5854, :7892) - not through a
+/// per-process settlement that the visit set never sees.
+///
+/// The workload forces the ordering that made
+/// `the_status_notify_walk_and_the_tick_pair_are_engaged_on_the_workload`
+/// flake: the child writes, then stays alive until the filter feeds it, so
+/// the wait's pre-service harvest always finds it running; the filter then
+/// releases it and spins in PURE LISP (no wait, so nothing harvests it), so
+/// the readiness pass's post-output check is the code that discovers the
+/// exit.  Before the fix that path settled the status and marked the tick
+/// notified on its own, leaving `visited` at 0 (one binary, FAIL/PASS/PASS
+/// across runs); with the fix the change forms the visit set and is counted.
+///
+/// The product outcome is asserted too - the process is dead and its status
+/// published by the time `accept-process-output` returns - so the visit
+/// assertion cannot pass on a status that was never delivered.
+#[cfg(unix)]
+#[test]
+fn a_readiness_publication_of_a_child_exit_forms_the_status_notify_visit_set() {
+    crate::test_utils::init_test_tracing();
+    crate::emacs_core::os_signal::install();
+    let sh = find_bin("sh");
+    let before = crate::emacs_core::process::child_status::status_notify_totals();
+    let result = eval_one(&format!(
+        r#"(let ((p (make-process :name "pwvisit" :buffer nil :noquery t
+                                  :connection-type 'pipe
+                                  :command '("{sh}" "-c" "printf pw; read x; exit 0")
+                                  :filter (lambda (p _s)
+                                            ;; Release the child, then spin
+                                            ;; without entering any wait: the
+                                            ;; readiness pass's own post-read
+                                            ;; check is what must discover the
+                                            ;; exit.
+                                            (process-send-string p "x\n")
+                                            (let ((end (+ (float-time) 1.0)))
+                                              (while (< (float-time) end)))))))
+             (accept-process-output nil 5)
+             (list (process-live-p p) (process-status p)))"#
+    ));
+    assert_eq!(
+        result, "OK (nil exit)",
+        "the status must be published before accept-process-output returns"
+    );
+    let after = crate::emacs_core::process::child_status::status_notify_totals();
+    let walks = after.0 - before.0;
+    let stamped = after.1 - before.1;
+    let visited = after.2 - before.2;
+    assert!(
+        walks > 0,
+        "status_notify's walk never ran: walks={walks} stamped={stamped} visited={visited}"
+    );
+    assert!(
+        visited > 0,
+        "the readiness pass's child-exit publication bypassed GNU's tick-pair \
+         visit set: walks={walks} stamped={stamped} visited={visited}.  A status \
+         discovered in the wait must be published by status_notify's visit, not \
+         settled per process outside it."
+    );
+}
+
 /// GNU's `child_signal_notify` exists for exactly one reason, and GNU writes
 /// it out above `deleted_pid_list` (src/process.c:7539-7547):
 ///

@@ -8768,8 +8768,22 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                         ProcessOutputDrainDisposition::Terminal => {}
                     }
                 }
-                {
+                if publish_status_before_readable_output {
+                    // status_notify's own pass: this process was already in
+                    // the visit list computed by the caller, so run its body.
                     outcome.absorb(self.run_process_status_notification(pid, target_process)?);
+                } else {
+                    // A READINESS pass discovered the change (the pidfd woke
+                    // before the pipe became readable).  GNU has one
+                    // publication path for that too: the tick pair decides
+                    // membership in `status_notify`'s alist visit (:7892).
+                    // Settling it per process here was the third site of the
+                    // STATUS-NOTIFY-FLAKE race: a child whose exit was noticed
+                    // before its output stayed out of the visit set
+                    // (walks=80 stamped=0 visited=0 in the rare run).
+                    outcome.absorb(
+                        self.notify_processes_with_unnotified_status_change(target_process)?,
+                    );
                 }
                 continue;
             }
@@ -9046,7 +9060,26 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                     if defer_status_after_output {
                         continue;
                     }
-                    outcome.absorb(self.run_process_status_notification(pid, target_process)?);
+                    // GNU has ONE publication path for a status discovered
+                    // asynchronously: `status_notify (NULL, wait_proc)`
+                    // (src/process.c:5554, :5854), whose membership test is
+                    // the per-process tick pair (:7892).  Publishing this
+                    // change per process here settled the status and marked
+                    // its tick notified without ever forming that visit set,
+                    // so which of the two paths ran first decided whether
+                    // `status_notify` engaged at all -- the readiness path
+                    // won whenever the child exited after the wait's
+                    // pre-service harvest but before this read (the
+                    // STATUS-NOTIFY-FLAKE race; one binary, FAIL/PASS/PASS).
+                    // Route the change through the alist visit instead: the
+                    // tick recorded by `check_child_status_change` (GNU's
+                    // handler site, :7746) now decides membership, the
+                    // engagement counters see the visit, and the sentinel
+                    // still runs in this pass because the notification
+                    // drains and notifies synchronously.
+                    outcome.absorb(
+                        self.notify_processes_with_unnotified_status_change(target_process)?,
+                    );
                 }
 
                 continue;
@@ -9077,7 +9110,12 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                         ProcessOutputDrainDisposition::Terminal => {}
                     }
                 }
-                outcome.absorb(self.run_process_status_notification(pid, target_process)?);
+                // Same single GNU publication path as the output branch
+                // above: the tick movement made by `check_child_status_change`
+                // is published by `status_notify`'s visit set, never by a
+                // per-process settlement that the visit set cannot see.
+                outcome
+                    .absorb(self.notify_processes_with_unnotified_status_change(target_process)?);
             }
         }
 
