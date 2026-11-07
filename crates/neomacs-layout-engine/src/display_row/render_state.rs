@@ -1,5 +1,4 @@
 use crate::display_item::{DisplayLineHeightPolicy, DisplayRowBreak};
-#[cfg(test)]
 use crate::display_row::builder::DisplayRowVerticalMetrics;
 use crate::display_row::builder::{
     DisplayRowAppendProgress, DisplayRowAppendStatus, DisplayRowGlyphSlot, DisplayRowPosition,
@@ -264,6 +263,7 @@ pub(crate) enum DisplayRowRenderStop {
 }
 
 pub(crate) struct DisplayRowRenderIntoRowResult {
+    resolved_row_metrics: Option<DisplayRowVerticalMetrics>,
     progress: DisplayRowOutputProgress,
     source_slots: Vec<DisplayRowGlyphSlot>,
     faces: Vec<RealizedFrameFace>,
@@ -278,11 +278,25 @@ impl DisplayRowRenderIntoRowResult {
         stop: DisplayRowRenderStop,
     ) -> Self {
         Self {
+            resolved_row_metrics: None,
             progress,
             source_slots,
             faces,
             stop,
         }
+    }
+
+    /// Carry authoritative newline extents across the source-render boundary.
+    pub(crate) fn with_resolved_row_metrics(
+        mut self,
+        metrics: Option<DisplayRowVerticalMetrics>,
+    ) -> Self {
+        self.resolved_row_metrics = metrics;
+        self
+    }
+
+    pub(crate) fn resolved_row_metrics(&self) -> Option<DisplayRowVerticalMetrics> {
+        self.resolved_row_metrics
     }
 
     pub(crate) fn faces(&self) -> &[RealizedFrameFace] {
@@ -381,6 +395,7 @@ impl DisplayRowRenderBounds {
 }
 
 pub(crate) struct CurrentTextRowRenderOutcome {
+    resolved_row_metrics: Option<DisplayRowVerticalMetrics>,
     stop: DisplayRowRenderStop,
     source_slots: Vec<DisplayRowGlyphSlot>,
     end: DisplayRowPosition,
@@ -397,12 +412,22 @@ impl CurrentTextRowRenderOutcome {
         row_ascent_px: f32,
     ) -> Self {
         Self {
+            resolved_row_metrics: None,
             stop,
             source_slots,
             end,
             row_height_px,
             row_ascent_px,
         }
+    }
+
+    /// Preserve whether row extents replace, rather than only enlarge, geometry.
+    pub(crate) fn with_resolved_row_metrics(
+        mut self,
+        metrics: Option<DisplayRowVerticalMetrics>,
+    ) -> Self {
+        self.resolved_row_metrics = metrics;
+        self
     }
 
     pub(crate) fn stop(&self) -> DisplayRowRenderStop {
@@ -417,8 +442,11 @@ impl CurrentTextRowRenderOutcome {
         self.end
     }
 
+    /// Apply authoritative newline metrics even for the default height policy.
     pub(crate) fn include_vertical_metrics(&self, geometry: &mut DisplayRowGeometryState) {
-        if matches!(
+        if let Some(metrics) = self.resolved_row_metrics {
+            geometry.replace_current_row_metrics(metrics.height_px(), metrics.ascent_px());
+        } else if matches!(
             self.stop,
             DisplayRowRenderStop::RowBreak(row_break)
                 if row_break.line_height != DisplayLineHeightPolicy::Default

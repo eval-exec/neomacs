@@ -117,6 +117,7 @@ fn input_after_idle_timer_wakes_wait(read: InputRead) {
     );
 }
 
+/// Callback-driven display changes must affect the very first command key.
 #[test]
 fn command_loop_uses_selected_buffers_map_after_async_switch() {
     let _policy = legacy_redisplay_fixture_policy();
@@ -164,6 +165,7 @@ fn command_loop_uses_selected_buffers_map_after_async_switch() {
     );
 }
 
+/// Lisp key readers retain their caller's buffer despite asynchronous display.
 #[test]
 fn lisp_key_reader_preserves_current_buffer_after_async_display() {
     let _policy = legacy_redisplay_fixture_policy();

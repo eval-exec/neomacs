@@ -1941,6 +1941,8 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
         self
     }
 
+    /// Resolve source-newline font geometry and line-end effects before
+    /// advancing the row transition, including intercepted display newlines.
     pub(crate) fn render_and_apply<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServices>(
         self,
         source_walk: &mut BufferSourceWalk<'_, B>,

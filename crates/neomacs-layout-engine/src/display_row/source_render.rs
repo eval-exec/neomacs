@@ -730,6 +730,7 @@ impl<'face, 'emit, FS: crate::neovm_bridge::FaceServices>
 
 impl DisplayRowCurrentTextSourceStepResult {
     fn into_measure_outcome(self) -> CurrentTextRowRenderOutcome {
+        let resolved_row_metrics = self.result.resolved_row_metrics();
         let (progress, source_slots, _faces, stop) = self.result.into_current_row_parts();
         let end = display_row_output_end_position(progress);
         CurrentTextRowRenderOutcome::new(
@@ -739,6 +740,7 @@ impl DisplayRowCurrentTextSourceStepResult {
             self.row_height_px,
             self.row_ascent_px,
         )
+        .with_resolved_row_metrics(resolved_row_metrics)
     }
 }
 
@@ -970,6 +972,7 @@ impl<'a> TextRowOutputRenderState<'a> {
             row_height_px,
             row_ascent_px,
         } = result;
+        let resolved_row_metrics = result.resolved_row_metrics();
         let (progress, source_slots, faces, stop) = result.into_current_row_parts();
         let end = display_row_output_end_position(progress);
         self.output.install_rendered_fragment_assets(&faces);
@@ -977,6 +980,7 @@ impl<'a> TextRowOutputRenderState<'a> {
         self.output_emitter
             .emit_text_output_spans(self.evaluator, output, output_spans, end);
         CurrentTextRowRenderOutcome::new(stop, source_slots, end, row_height_px, row_ascent_px)
+            .with_resolved_row_metrics(resolved_row_metrics)
     }
 }
 

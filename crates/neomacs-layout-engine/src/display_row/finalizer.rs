@@ -80,6 +80,8 @@ impl DisplayRowLineEndFinalizer {
         self
     }
 
+    /// Resolve applicable line height and append newline/extension glyphs.
+    /// Return authoritative metrics only when height resolution ran.
     pub(crate) fn finalize(
         self,
         row: &mut GlyphRow,

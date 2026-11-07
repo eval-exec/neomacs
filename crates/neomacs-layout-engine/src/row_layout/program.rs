@@ -743,6 +743,8 @@ impl RowProgram {
         self.compute_visual_rows_inner(row_limit, cancelled, ResumedRunFonts::Worker(fonts))
     }
 
+    /// Execute captured operations within the row budget using resumed fonts.
+    /// Preserve source/newline geometry and propagate cancellation or layout errors.
     fn compute_visual_rows_inner(
         mut self,
         row_limit: usize,
