@@ -5,6 +5,7 @@
 
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
+use neomacs_display_protocol::GraphicalBackend;
 use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
 pub(crate) use neovm_eval::emacs_core::eval::data::terminal_state::{
     TerminalLispRegistry, TerminalRegistryHandle, collect_terminal_registry_gc_roots,
@@ -232,6 +233,11 @@ struct TerminalRecord {
     runtime: TerminalRuntime,
     /// GNU `struct terminal.type`.  See [`TerminalOutputMethod`].
     output_method: TerminalOutputMethod,
+    /// GNU's window-system type symbol for a graphical terminal (`x`, `ns`,
+    /// `w32`, `android`, `neo`); nil for initial/termcap terminals.
+    /// `Fterminal_live_p` (src/terminal.c:443-480) answers it even when the
+    /// terminal currently has no frame, which a frame-only derivation cannot.
+    window_system: Option<neovm_value::display_vocab::WindowSystemKind>,
     deleted: bool,
     host: Option<Box<dyn TerminalHost>>,
 }
@@ -245,6 +251,7 @@ impl TerminalRecord {
             // GNU's first terminal is `init_initial_terminal`'s, and every
             // record starts as that one until a display init re-describes it.
             output_method: TerminalOutputMethod::Initial,
+            window_system: None,
             deleted: false,
             host: None,
         }
@@ -358,6 +365,7 @@ impl TerminalManager {
         name: String,
         runtime: TerminalRuntime,
         output_method: TerminalOutputMethod,
+        window_system: Option<neovm_value::display_vocab::WindowSystemKind>,
     ) -> &mut TerminalRecord {
         if let Some(idx) = self.terminals.iter().position(|terminal| terminal.id == id) {
             let terminal = &mut self.terminals[idx];
@@ -365,6 +373,7 @@ impl TerminalManager {
             terminal.deleted = false;
             terminal.runtime = runtime;
             terminal.output_method = output_method;
+            terminal.window_system = window_system;
             return terminal;
         }
         self.terminals.push(TerminalRecord {
@@ -372,6 +381,7 @@ impl TerminalManager {
             name,
             runtime,
             output_method,
+            window_system,
             deleted: false,
             host: None,
         });
@@ -382,29 +392,54 @@ impl TerminalManager {
 /// Install all primary-terminal facts together; graphical configuration always
 /// replaces the bootstrap name along with the output method.
 pub fn configure_terminal_runtime(config: impl Into<TerminalRuntimeConfig>) {
-    let (name, output_method, runtime) = terminal_configuration_parts(config.into());
+    let (name, output_method, runtime, window_system) = terminal_configuration_parts(config.into());
     with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         let terminal = manager.ensure_initial_terminal();
         terminal.name = name;
         terminal.output_method = output_method;
         terminal.runtime = runtime;
+        terminal.window_system = window_system;
     });
+}
+
+/// GNU `struct terminal.type` for a graphical backend. The backend symbols
+/// Neo shares with GNU map to GNU's own type symbols; Neo's winit-only
+/// identities (Wayland and Web) answer the runtime's `neo` symbol, which
+/// `display-graphic-p`'s Lisp list treats as graphical.
+fn window_system_kind_for_backend(
+    backend: GraphicalBackend,
+) -> neovm_value::display_vocab::WindowSystemKind {
+    use neovm_value::display_vocab::WindowSystemKind;
+    match backend {
+        GraphicalBackend::X11 => WindowSystemKind::X,
+        GraphicalBackend::Cocoa => WindowSystemKind::Ns,
+        GraphicalBackend::Windows => WindowSystemKind::W32,
+        GraphicalBackend::Android => WindowSystemKind::Android,
+        GraphicalBackend::Wayland | GraphicalBackend::Web => WindowSystemKind::Neo,
+    }
 }
 
 fn terminal_configuration_parts(
     config: TerminalRuntimeConfig,
-) -> (String, TerminalOutputMethod, TerminalRuntime) {
+) -> (
+    String,
+    TerminalOutputMethod,
+    TerminalRuntime,
+    Option<neovm_value::display_vocab::WindowSystemKind>,
+) {
     match config {
         TerminalRuntimeConfig::Bootstrap => (
             TERMINAL_NAME.into(),
             TerminalOutputMethod::Initial,
             TerminalRuntime::inactive(),
+            None,
         ),
         TerminalRuntimeConfig::Graphical(identity) => (
             identity.terminal_name().into(),
             TerminalOutputMethod::WindowSystem,
             TerminalRuntime::inactive(),
+            Some(window_system_kind_for_backend(identity.backend())),
         ),
         TerminalRuntimeConfig::Tty(config) => {
             let runtime = TerminalRuntime {
@@ -419,6 +454,7 @@ fn terminal_configuration_parts(
                 config.name.unwrap_or_else(|| "/dev/tty".into()),
                 TerminalOutputMethod::Termcap,
                 runtime,
+                None,
             )
         }
     }
@@ -429,7 +465,8 @@ pub fn ensure_terminal_runtime_owner(
     name: impl Into<String>,
     config: impl Into<TerminalRuntimeConfig>,
 ) -> Value {
-    let (configured_name, output_method, runtime) = terminal_configuration_parts(config.into());
+    let (configured_name, output_method, runtime, window_system) =
+        terminal_configuration_parts(config.into());
     // Explicit owner names describe bootstrap/TTY records. A graphical owner
     // takes its validated connection identity, never an independent override.
     let name = match output_method {
@@ -438,9 +475,20 @@ pub fn ensure_terminal_runtime_owner(
     };
     with_terminal_manager(|slot| {
         slot.borrow_mut()
-            .ensure_terminal(id, name, runtime, output_method);
+            .ensure_terminal(id, name, runtime, output_method, window_system);
     });
     terminal_handle_for_id(id)
+}
+
+/// GNU's window-system type symbol for a live graphical terminal, independent
+/// of whether any frame is currently attached to it.
+fn terminal_window_system_kind(id: u64) -> Option<neovm_value::display_vocab::WindowSystemKind> {
+    with_terminal_manager(|slot| {
+        slot.borrow()
+            .get(id)
+            .filter(|terminal| terminal.is_live())
+            .and_then(|terminal| terminal.window_system)
+    })
 }
 
 pub(crate) fn next_terminal_id() -> u64 {
@@ -493,6 +541,7 @@ pub(crate) fn install_opened_tty(
             request.device.clone(),
             runtime,
             TerminalOutputMethod::Termcap,
+            None,
         );
         terminal.host = Some(opened.host);
     });
@@ -511,6 +560,7 @@ pub fn reset_terminal_runtime() {
         terminal.name = TERMINAL_NAME.to_string();
         terminal.output_method = TerminalOutputMethod::Initial;
         terminal.runtime = TerminalRuntime::inactive();
+        terminal.window_system = None;
     });
 }
 
@@ -1200,6 +1250,11 @@ pub fn builtin_terminal_live_p(
     // Return the window system type so framep-on-display works correctly.
     if let Some(window_system) = window_system {
         Ok(window_system)
+    } else if let Some(kind) = terminal_window_system_kind(terminal_id) {
+        // GNU src/terminal.c:443-480: the terminal's own type does not depend
+        // on its frames. A live graphical terminal with no frame answers its
+        // window-system symbol, not t.
+        Ok(Value::symbol(kind.name()))
     } else if terminal_has_frame || usable_tty {
         Ok(Value::T)
     } else if crate::emacs_core::display::x_window_system_active(eval) {

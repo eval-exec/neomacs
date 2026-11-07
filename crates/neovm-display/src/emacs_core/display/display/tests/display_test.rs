@@ -3795,6 +3795,50 @@ fn display_graphic_p_reads_the_terminal_type_for_a_terminal_designator() {
 }
 
 #[test]
+fn terminal_live_p_reports_a_frameless_gui_terminals_type() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::terminal::pure::{TerminalRuntimeConfig, ensure_terminal_runtime_owner};
+    use neomacs_display_protocol::{GraphicalBackend, GraphicalDisplayIdentity};
+
+    // GNU src/terminal.c:443-480 (Fterminal_live_p): a live display terminal
+    // answers its type from t->type regardless of how many frames it has --
+    // Qx for output_x_window, Qns, Qw32, Qandroid, ... . A GUI terminal with
+    // no frame on it must not degrade to t.
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    let x11 = ensure_terminal_runtime_owner(
+        0,
+        "x11_terminal",
+        TerminalRuntimeConfig::window_system(GraphicalDisplayIdentity::anonymous_connection(
+            GraphicalBackend::X11,
+        )),
+    );
+    assert_eq!(
+        builtin_terminal_live_p(&mut eval, &[x11]).unwrap(),
+        Value::symbol("x"),
+        "a frameless live X terminal answers the X type, like GNU Qx"
+    );
+    let wayland = ensure_terminal_runtime_owner(
+        1,
+        "wayland_terminal",
+        TerminalRuntimeConfig::window_system(GraphicalDisplayIdentity::anonymous_connection(
+            GraphicalBackend::Wayland,
+        )),
+    );
+    assert_eq!(
+        builtin_terminal_live_p(&mut eval, &[wayland]).unwrap(),
+        Value::symbol("neo"),
+        "Neo's own winit GUI identity is `neo` in the graphic list"
+    );
+    let initial =
+        ensure_terminal_runtime_owner(2, "initial_terminal", TerminalRuntimeConfig::inactive());
+    assert_eq!(
+        builtin_terminal_live_p(&mut eval, &[initial]).unwrap(),
+        Value::T,
+        "the initial termcap/termcap-like terminal still answers t"
+    );
+}
+
+#[test]
 fn display_graphic_p_uses_global_window_system_without_live_frame() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
