@@ -661,35 +661,12 @@ fn dispatch_builtin_stateless_placeholder(
     Some(Ok(value))
 }
 
-#[cfg(test)]
-pub(crate) fn dispatch_builtin_without_eval_state(
-    name: &str,
-    args: Vec<Value>,
-) -> Option<EvalResult> {
-    use crate::emacs_core::eval::Context;
-
-    thread_local! {
-        static CTX: std::cell::RefCell<Context> = std::cell::RefCell::new(Context::new());
-    }
-
-    CTX.with(|cell| {
-        let ctx = &mut *cell.borrow_mut();
-        let sym_id = intern(name);
-        let policy = no_eval_policy_for(sym_id);
-        if let Some(result) = dispatch_builtin_stateless_placeholder(policy, &args) {
-            return Some(result);
-        }
-        if policy == NoEvalPolicy::RequiresEvalState {
-            return None;
-        }
-        dispatch_builtin_by_id(ctx, sym_id, args)
-    })
-}
-
 /// Test-support: dispatch a pure/stateless builtin with a caller-supplied
-/// Context (the moved core tests construct one with the harness).  Same
-/// policy and dispatcher as `dispatch_builtin_without_eval_state`, which
-/// stays cfg(test)-only because it used a test-only Context constructor.
+/// Context (the moved core tests construct one thread-lifetime fixture per
+/// thread through the typed thread-exit leak wrapper).  The old cfg(test)
+/// `dispatch_builtin_without_eval_state` copy was dead and removed: it held
+/// an owning Context in a thread_local, which can only be dropped inside
+/// TLS destruction (peer ruling 11:5xZ G5).
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn dispatch_pure_builtin_for_test(
