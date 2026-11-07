@@ -65,6 +65,12 @@ const NON_EDITOR_PROGRAMS: &[&str] = &[
     "tput",
     "toe",
     "ps",
+    // Compression fixture input (`source_startup_silences_jka_compr`):
+    // produces the `.el.gz` under test, never spawns an editor.
+    "gzip",
+    // Cargo metadata queries in the architecture guards: the build tool,
+    // not an editor.
+    "cargo",
 ];
 
 /// A reviewed spawn whose program is a variable but is not an editor.
@@ -119,6 +125,11 @@ const EXCEPTIONS: &[Exception] = &[
         path_suffix: "neomacs-infra/src/config_env/common.rs",
         argument: "program",
         reason: "git fixture helper",
+    },
+    Exception {
+        path_suffix: "emacs_core/tests/architecture/split_test_support_manifest_test.rs",
+        argument: "env!(\"CARGO\")",
+        reason: "cargo metadata query for the manifest guard, not an editor",
     },
 ];
 

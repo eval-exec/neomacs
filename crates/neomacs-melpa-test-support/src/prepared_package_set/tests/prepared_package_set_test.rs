@@ -134,19 +134,34 @@ fn source_startup_silences_jka_compr_messages_for_compressed_libraries() {
         .expect("write startup file");
     let oracle = neomacs_test_oracle::gnu::gnu_oracle().executable_path();
     let home = root.path().join("home");
-    fs::create_dir_all(&home).expect("create home");
+    let tmp = root.path().join("tmp");
+    let runtime = root.path().join("runtime");
+    for directory in [&home, &tmp, &runtime] {
+        fs::create_dir_all(directory).expect("create canonical oracle roots");
+    }
 
-    let mut command = Command::new(oracle);
+    // The oracle is an editor: spawn it through the one canonical package
+    // environment instead of hand-applying HOME/TMPDIR/TZ to a raw Command
+    // (the spawn-architecture tripwire requires this builder).
+    let environment = neomacs_test_env::CanonicalEnvironment::package(
+        &home,
+        &tmp,
+        neomacs_test_env::PackagePaths {
+            scratch_root: root.path().to_path_buf(),
+            workspace_root: neomacs_infra::workspace_root(),
+            runtime_dir: runtime,
+            melpa_cache_root: root.path().to_path_buf(),
+        },
+    )
+    .expect("canonical package environment for the oracle probe");
+    let mut command = environment.command(&oracle);
     command
         .arg("--batch")
         .arg("--quick")
         .arg("--load")
         .arg(&startup)
         .arg("--eval")
-        .arg(r#"(progn (require 'rfc6068) (princ "NEOMACS-JKA-OK"))"#)
-        .env("HOME", &home)
-        .env("TMPDIR", &home)
-        .env("TZ", "UTC");
+        .arg(r#"(progn (require 'rfc6068) (princ "NEOMACS-JKA-OK"))"#);
     for (name, value) in prepared.process_environment() {
         command.env(name, value);
     }
