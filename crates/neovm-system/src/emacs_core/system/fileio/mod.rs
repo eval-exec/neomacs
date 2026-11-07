@@ -10,6 +10,12 @@ use neovm_value::error::{expect_args, expect_fixnum, expect_max_args, expect_min
 use std::collections::{HashMap, VecDeque};
 #[cfg(unix)]
 use std::ffi::CString;
+// The Apple ACL arms (`native_get_file_acl`) copy `acl_to_text`'s
+// NUL-terminated buffer with `CStr::from_ptr`; the import moved out of the
+// file when fileio was extracted, leaving the target_vendor = "apple" code
+// without the type on macOS.
+#[cfg(target_vendor = "apple")]
+use std::ffi::CStr;
 use std::fs;
 use std::io::{ErrorKind, Seek, SeekFrom, Write};
 #[cfg(unix)]
