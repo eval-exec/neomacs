@@ -89,3 +89,7 @@ mod terminal_frame_deletion_test;
 #[cfg(test)]
 #[path = "fontset_freshness_test.rs"]
 mod fontset_freshness_test;
+
+#[cfg(test)]
+#[path = "initial_gui_lifecycle_test.rs"]
+mod initial_gui_lifecycle_test;

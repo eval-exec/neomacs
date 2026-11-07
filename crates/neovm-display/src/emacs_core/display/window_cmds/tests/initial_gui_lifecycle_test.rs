@@ -237,40 +237,6 @@ fn raw_invisible_initial_frame_defers_finish_until_lisp_finalization() {
 }
 
 #[test]
-fn frame_creation_finish_observes_final_lisp_dimensions() {
-    let mut eval = terminal_startup_context();
-    let host = initial_host();
-    let finished = host.finished.clone();
-    eval.set_display_host(Box::new(host));
-    let value = eval
-        .eval_str("(x-create-frame '((name . \"Initial\") (visibility . nil)))")
-        .unwrap();
-    eval.set_variable("issue417-frame", value);
-    assert!(finished.borrow().is_empty());
-
-    eval.eval_str("(set-frame-size issue417-frame 81 27)")
-        .unwrap();
-    eval.eval_str("(frame-after-make-frame issue417-frame t)")
-        .unwrap();
-    let frame = eval
-        .frame_manager()
-        .get(FrameId(value.as_frame_id().unwrap()))
-        .unwrap();
-    let finished = finished.borrow();
-    assert_eq!(finished.len(), 1);
-    assert_eq!(finished[0].frame_id, frame.id);
-    assert_eq!(
-        (finished[0].width, finished[0].height),
-        (frame.width, frame.height)
-    );
-    assert_eq!(finished[0].geometry_hints, frame.gui_geometry_hints());
-    // Geometry completion must retain the original invisible request; it
-    // does not authorize the native backend to expose this logical frame.
-    assert_eq!(finished[0].visibility, FrameVisibility::Invisible);
-    assert!(finished[0].decorated);
-}
-
-#[test]
 fn initial_gui_default_face_starts_from_its_opened_font_before_lisp_finalization() {
     let mut eval = terminal_startup_context();
     eval.set_display_host(Box::new(initial_host()));
@@ -356,50 +322,4 @@ fn initial_default_face_keeps_opened_font_after_user_font_parameter_is_cleared()
         Value::T,
         "the opened font and its public metrics must survive Lisp finalization",
     );
-}
-
-fn check_old_selected_window_after_gui_startup() {
-    let mut eval = terminal_startup_context();
-    eval.set_variable("noninteractive", Value::NIL);
-    eval.set_display_host(Box::new(initial_host()));
-    // Supply the frontend callback so public redisplay enters its ordinary
-    // window-change pass. This test checks Lisp observations, not hook records.
-    eval.redisplay_fn = Some(Box::new(|_| {}));
-
-    let before = eval.eval_str(
-        r#"(progn
-           (setq startup-terminal-frame (selected-frame)
-                 startup-terminal-window (selected-window)
-                 startup-gui-frame (x-create-frame '((name . "Initial GUI"))))
-           (select-frame startup-gui-frame)
-           (delete-frame startup-terminal-frame)
-           (list (window-live-p startup-terminal-window)
-                 (eq (selected-window) startup-terminal-window)
-                 (eq (old-selected-window) startup-terminal-window)))"#,
-    );
-    assert_eq!(format_eval_result(&before), "OK (nil nil t)");
-
-    // GNU window.c:496-503 defines old-selected-window as the selection at the
-    // last window-change pass; window_change_record:3993 advances it. Creating
-    // the first graphical frame must not preserve the dead terminal forever.
-    eval.eval_str("(redisplay t)").expect("public redisplay");
-    assert_eq!(
-        format_eval_result(&eval.eval_str(
-            "(list (eq (old-selected-window) (selected-window))
-                   (window-live-p (old-selected-window)))",
-        )),
-        "OK (t t)"
-    );
-}
-
-#[test]
-fn old_selected_window_follows_gui_startup_after_redisplay_gnu() {
-    let _policy = neovm_eval::emacs_core::eval::RedisplayHookPolicyGuard::gnu();
-    check_old_selected_window_after_gui_startup();
-}
-
-#[test]
-fn old_selected_window_follows_gui_startup_after_redisplay_legacy() {
-    let _policy = neovm_eval::emacs_core::eval::RedisplayHookPolicyGuard::legacy();
-    check_old_selected_window_after_gui_startup();
 }
