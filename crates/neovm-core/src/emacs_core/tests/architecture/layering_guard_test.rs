@@ -560,7 +560,15 @@ impl ProductionWalker {
                 // crate path descends to that segment and a module the
                 // ratchet never tracked stays unmeasured.
                 if is_moving_crate(first) {
-                    let Some(module) = segments.get(1) else {
+                    let module = match segments.get(1).map(String::as_str) {
+                        // `neovm_eval::emacs_core::eval`: the extracted crates
+                        // keep their historical submodules under a crate-local
+                        // emacs_core facade.
+                        Some("emacs_core") => segments.get(2),
+                        Some(_) => segments.get(1),
+                        None => None,
+                    };
+                    let Some(module) = module else {
                         return Classification::NotUpward;
                     };
                     if is_g0_member(module)
@@ -1141,6 +1149,11 @@ fn moved_crate_seeds() -> Vec<(PathBuf, Vec<String>)> {
             seeds.push((entry, logical));
         }
     }
+    fn push_file(seeds: &mut Vec<(PathBuf, Vec<String>)>, path: PathBuf, name: &str) {
+        if path.is_file() {
+            seeds.push((path, vec![name.to_owned()]));
+        }
+    }
     let mut seeds = Vec::new();
     for root in production_source_roots() {
         let src = root.src;
@@ -1169,6 +1182,25 @@ fn moved_crate_seeds() -> Vec<(PathBuf, Vec<String>)> {
             "neovm-eval" => {
                 push(&mut seeds, &src, &[], "emacs_core");
                 push(&mut seeds, &src, &[], "host_effect");
+                // The stage-4/5 moves kept these historical top-level roots
+                // physically inside the evaluator's emacs_core tree; seed
+                // them under their historical names so their ceiling rows
+                // survive the move.
+                push_file(
+                    &mut seeds,
+                    src.join("emacs_core/runtime/eval/keyboard.rs"),
+                    "keyboard",
+                );
+                push_file(
+                    &mut seeds,
+                    src.join("emacs_core/runtime/eval/keyboard_input.rs"),
+                    "keyboard_input",
+                );
+                push_file(
+                    &mut seeds,
+                    src.join("emacs_core/runtime/eval/frontend_events.rs"),
+                    "frontend_events",
+                );
             }
             "neovm-display" => {
                 push(&mut seeds, &src, &[], "emacs_core");
@@ -1179,6 +1211,14 @@ fn moved_crate_seeds() -> Vec<(PathBuf, Vec<String>)> {
             }
             "neovm-system" => {
                 push(&mut seeds, &src, &[], "emacs_core");
+                // The publisher half of the historical host_input root lives
+                // in the system crate's emacs_core tree (core re-exports it
+                // as emacs_core::host_input).
+                push_file(
+                    &mut seeds,
+                    src.join("emacs_core/system/host_input.rs"),
+                    "host_input",
+                );
             }
             other => panic!("unclassified moving crate {other}"),
         }
