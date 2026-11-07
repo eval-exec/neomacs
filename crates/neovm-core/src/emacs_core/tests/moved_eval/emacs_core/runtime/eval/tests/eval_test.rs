@@ -20689,6 +20689,15 @@ fn aot_bench_compute_loop() {
 fn jit_bench_call_heavy_fontlock_reweight() {
     use crate::emacs_core::bytecode::opcode::Op;
     use crate::emacs_core::jit::compile;
+    // The moved core test build has no cfg(test), so eval's background-compile
+    // mode resolves from its affinity (auto -> Threaded on this host): the
+    // tier-up of the mark-hot call would run on a worker, the first call would
+    // interpret, and the fast-count engagement check below would read a false
+    // zero.  Scope the deterministic Sync split, as the other moved JIT
+    // oracles do; the assertion itself is unchanged.
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
     crate::test_utils::init_test_tracing();
     let mut ev = runtime_startup_context();
 

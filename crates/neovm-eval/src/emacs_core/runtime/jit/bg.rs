@@ -132,7 +132,12 @@ fn knob_count(name: &str, default: usize) -> usize {
 
 /// This process's (or, under a test override, this thread's) mode.
 pub(crate) fn mode() -> BgMode {
-    #[cfg(test)]
+    // The override read must be visible in the same builds that carry the
+    // override itself: tests re-homed into core run against a `test-support`
+    // dependency (no cfg(test)), and a `TestModeScope` they enter must take
+    // effect there too (e.g. the moved JIT benches scope the deterministic
+    // `sync` split).  Product builds never enable the feature.
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(mode) = MODE_TEST_OVERRIDE.with(Cell::get) {
         return mode;
     }

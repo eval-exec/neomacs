@@ -258,7 +258,11 @@ pub(crate) fn replace_profit_gate_for_test(policy: ProfitGateTestPolicy) -> Prof
 /// disables it, so the gate can be A/B-measured against the old behavior in a
 /// single build.
 pub(crate) fn jit_profit_gate_on() -> bool {
-    #[cfg(test)]
+    // Same rule as the override's own gate: tests re-homed above eval run
+    // against a `test-support` dependency (no cfg(test)), so the signed
+    // authority fence that sets this override must be honoured there too.
+    // Product builds never enable the feature.
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(o) = PROFIT_GATE_TEST_OVERRIDE.with(|c| c.get()) {
         return o;
     }
