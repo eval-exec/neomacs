@@ -11,11 +11,15 @@ pub(crate) enum DisplayRowRenderClipBehavior {
 }
 
 pub(crate) trait DisplayRowRenderPolicy {
+    /// Inspect an admitted face before consuming an item. Concrete-font
+    /// newline measurements are available here even when a policy intercepts
+    /// the break; logical-cell rendering never supplies font measurements.
     fn stop_before_item(
         &mut self,
         _item: &DisplayItem,
         _face_id: FaceId,
         _face: &ResolvedFace,
+        _newline_font_metrics: Option<super::metrics::DisplayRowMeasuredFaceMetrics>,
     ) -> bool {
         false
     }

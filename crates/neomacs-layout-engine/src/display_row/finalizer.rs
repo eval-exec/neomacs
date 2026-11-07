@@ -229,8 +229,10 @@ pub(crate) fn display_row_visible_content_metrics(
         );
         let ascent = ascent.max(0.0).min(height);
         let descent = (height - ascent).max(0.0);
-        max_ascent = max_ascent.max((ascent - glyph.vertical_offset_px).max(0.0));
-        max_descent = max_descent.max((descent + glyph.vertical_offset_px).max(0.0));
+        // GNU take_vertical_position_into_account enlarges only the side
+        // displaced by raise/lower; the opposite logical extent is retained.
+        max_ascent = max_ascent.max(ascent - glyph.vertical_offset_px.min(0.0));
+        max_descent = max_descent.max(descent + glyph.vertical_offset_px.max(0.0));
     }
     if saw_glyph {
         let height = (max_ascent + max_descent).max(1.0);

@@ -94,6 +94,28 @@ fn small_newline_face_does_not_shrink_terminal_rows() {
     assert_eq!(rows[2].height_px, rows[0].height_px);
 }
 
+/// Terminal display ignores graphical raise/lower even with content-only line height.
+#[test]
+fn shifted_text_does_not_resize_terminal_cells() {
+    for raise in [-0.5, 0.5] {
+        let (mut eval, frame, _buffer, window) = incr_editing_frame("AAA\n\nBBB\n", 800, 240);
+        eval.eval_str(&format!("(progn (put-text-property 1 4 'display '(raise {raise})) (put-text-property 4 5 'line-height t))")).unwrap();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
+        let FrameLayoutAttempt::Prepared(output) = engine.redisplay_frame_attempt(&mut eval, frame)
+        else {
+            panic!("terminal frame should prepare")
+        };
+        let rows = &output
+            .window_matrices
+            .iter()
+            .find(|entry| entry.window_id.get() == window.0 as i64)
+            .unwrap()
+            .matrix
+            .rows;
+        assert_eq!(rows[0].height_px, rows[1].height_px, "raise {raise}");
+    }
+}
+
 /// Overlay newlines use their own GUI font, but never shrink terminal cells.
 #[test]
 fn small_overlay_newline_uses_its_own_font_geometry() {
@@ -155,6 +177,350 @@ fn small_overlay_newline_uses_its_own_font_geometry() {
                     );
                 }
             }
+        }
+    }
+}
+
+/// Both smaller and larger empty newline fonts determine GUI row extents.
+#[test]
+fn tall_newline_grows_empty_buffer_and_string_rows() {
+    for source in ["buffer", "overlay", "replacement"] {
+        let (mut eval, frame, _, window) = incr_editing_frame("AAA\n\nBBB\n", 800, 240);
+        realize_test_gui_frame(&mut eval, frame);
+        let face = "'(:height 2.0 :inverse-video t :extend t)";
+        let setup = match source {
+            "buffer" => format!("(put-text-property 5 6 'face {face})"),
+            "overlay" => format!(
+                "(overlay-put (make-overlay 5 5) 'before-string (propertize \"\\n\" 'face {face}))"
+            ),
+            "replacement" => {
+                format!("(put-text-property 5 6 'display (propertize \"\\n\" 'face {face}))")
+            }
+            _ => unreachable!(),
+        };
+        eval.eval_str(&setup).unwrap();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
+        crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+        let FrameLayoutAttempt::Prepared(output) = engine.redisplay_frame_attempt(&mut eval, frame)
+        else {
+            panic!("tall newline frame should prepare");
+        };
+        let rows = &output
+            .window_matrices
+            .iter()
+            .find(|entry| entry.window_id.get() == window.0 as i64)
+            .unwrap()
+            .matrix
+            .rows;
+        assert!(
+            rows[1].height_px > rows[0].height_px * 1.5,
+            "{source} newline should grow an empty row: normal={}, newline={}",
+            rows[0].height_px,
+            rows[1].height_px
+        );
+        assert_eq!(rows[2].pixel_y - rows[1].pixel_y, rows[1].height_px);
+    }
+}
+
+/// Display-property newlines resolve their own font without shrinking mixed text or TTY cells.
+#[test]
+fn small_replacement_newline_uses_its_own_font_geometry() {
+    for graphical in [false, true] {
+        for extend in ["nil", "t"] {
+            for prefix in ["", "x"] {
+                let (mut eval, frame, _, window) = incr_editing_frame("AAA\n\nBBB\n", 800, 240);
+                if graphical {
+                    realize_test_gui_frame(&mut eval, frame);
+                }
+                eval.eval_str(&format!(
+                    "(put-text-property 5 6 'display (concat \"{prefix}\" (propertize \"\\n\" 'face '(:height 0.1 :inverse-video t :extend {extend}))))"
+                )).unwrap();
+                let mut engine = crate::font::metrics::test_catalog::layout_engine();
+                if graphical {
+                    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+                }
+                let FrameLayoutAttempt::Prepared(output) =
+                    engine.redisplay_frame_attempt(&mut eval, frame)
+                else {
+                    panic!("replacement frame should prepare");
+                };
+                let rows = &output
+                    .window_matrices
+                    .iter()
+                    .find(|entry| entry.window_id.get() == window.0 as i64)
+                    .unwrap()
+                    .matrix
+                    .rows;
+                if graphical && prefix.is_empty() {
+                    assert!(
+                        rows[1].height_px < rows[0].height_px / 2.0,
+                        "replacement newline should shrink: normal={}, newline={}",
+                        rows[0].height_px,
+                        rows[1].height_px
+                    );
+                } else {
+                    assert_eq!(rows[1].height_px, rows[0].height_px);
+                }
+                assert_eq!(rows[2].height_px, rows[0].height_px);
+                assert_eq!(rows[2].pixel_y - rows[1].pixel_y, rows[1].height_px);
+            }
+        }
+    }
+}
+
+/// Point-only replay must use the same full-row cursor bounds as fresh rendering.
+#[test]
+fn newline_cursor_replay_preserves_font_and_spacing_metrics() {
+    for (height, box_spec, hide_text) in [
+        ("0.1", "", false),
+        ("1.0", "", false),
+        ("2.0", "", false),
+        ("0.1", ":box 1", false),
+        ("0.1", "", true),
+    ] {
+        for spacing in [0, 5] {
+            for extend in ["nil", "t"] {
+                let (mut eval, frame, buffer, window) =
+                    incr_editing_frame("alpha\n\nbeta\n", 800, 240);
+                realize_test_gui_frame(&mut eval, frame);
+                eval.eval_str(&format!(
+                    "(put-text-property 7 8 'face '(:height {height} :extend {extend} {box_spec}))"
+                ))
+                .unwrap();
+                if hide_text {
+                    eval.eval_str("(put-text-property 8 10 'invisible t)")
+                        .unwrap();
+                }
+                eval.buffer_manager_mut()
+                    .get_mut(buffer)
+                    .unwrap()
+                    .set_buffer_local("line-spacing", Value::fixnum(spacing));
+                let mut engine = crate::font::metrics::test_catalog::layout_engine();
+                crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+                let FrameLayoutAttempt::Prepared(initial) =
+                    engine.redisplay_frame_attempt(&mut eval, frame)
+                else {
+                    panic!("initial frame should prepare");
+                };
+                let initial_rows: Vec<_> = initial
+                    .window_matrices
+                    .iter()
+                    .find(|entry| entry.window_id.get() == window.0 as i64)
+                    .unwrap()
+                    .matrix
+                    .rows
+                    .iter()
+                    .map(|row| (row.pixel_y, row.height_px, row.ascent_px))
+                    .collect();
+                for point in [7, 1, 8, 11, 13, 7] {
+                    eval.eval_str(&format!("(set-window-point (selected-window) {point})"))
+                        .unwrap();
+                    let FrameLayoutAttempt::Prepared(replayed) =
+                        engine.redisplay_frame_attempt(&mut eval, frame)
+                    else {
+                        panic!("replay should prepare");
+                    };
+                    assert_eq!(engine.last_layout_stats().cursor_only_windows, 1);
+                    assert!(engine.last_layout_stats().reused_rows > 0);
+                    let rows: Vec<_> = replayed
+                        .window_matrices
+                        .iter()
+                        .find(|entry| entry.window_id.get() == window.0 as i64)
+                        .unwrap()
+                        .matrix
+                        .rows
+                        .iter()
+                        .map(|row| (row.pixel_y, row.height_px, row.ascent_px))
+                        .collect();
+                    assert_eq!(
+                        rows, initial_rows,
+                        "point motion must not change row geometry"
+                    );
+                    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+                    crate::font::metrics::test_catalog::enable_metrics(&mut fresh);
+                    let FrameLayoutAttempt::Prepared(rebuilt) =
+                        fresh.redisplay_frame_attempt(&mut eval, frame)
+                    else {
+                        panic!("fresh should prepare");
+                    };
+                    let replayed = replayed.materialize();
+                    let rebuilt = rebuilt.materialize();
+                    let actual = replayed
+                        .active_cursor()
+                        .map(|cursor| (cursor.y, cursor.height, cursor.ascent));
+                    let expected = rebuilt
+                        .active_cursor()
+                        .map(|cursor| (cursor.y, cursor.height, cursor.ascent));
+                    if !hide_text || !(8..10).contains(&point) {
+                        assert!(expected.is_some(), "visible point must have a cursor");
+                    }
+                    assert_eq!(
+                        actual, expected,
+                        "cursor replay: height={height}, spacing={spacing}, extend={extend}, box={box_spec}, hidden={hide_text}, point={point}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Mixed-height rows must not change cursor geometry when only point moves.
+#[test]
+fn mixed_height_newline_cursor_replay_matches_fresh_capture() {
+    for spacing in [0, 5] {
+        for newline_height in ["0.1", "1.0"] {
+            let (mut eval, frame, buffer, _) = incr_editing_frame("AAAx\nnext\n", 800, 240);
+            realize_test_gui_frame(&mut eval, frame);
+            eval.eval_str(&format!("(progn (put-text-property 1 4 'face '(:height 2.0)) (put-text-property 5 6 'face '(:height {newline_height})))")).unwrap();
+            eval.buffer_manager_mut()
+                .get_mut(buffer)
+                .unwrap()
+                .set_buffer_local("line-spacing", Value::fixnum(spacing));
+            let mut engine = crate::font::metrics::test_catalog::layout_engine();
+            crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+            assert!(matches!(
+                engine.redisplay_frame_attempt(&mut eval, frame),
+                FrameLayoutAttempt::Prepared(_)
+            ));
+            for point in [4, 5, 1, 5] {
+                eval.eval_str(&format!("(set-window-point (selected-window) {point})"))
+                    .unwrap();
+                let FrameLayoutAttempt::Prepared(replay) =
+                    engine.redisplay_frame_attempt(&mut eval, frame)
+                else {
+                    panic!("cursor replay should prepare")
+                };
+                assert_eq!(engine.last_layout_stats().cursor_only_windows, 1);
+                assert!(engine.last_layout_stats().reused_rows > 0);
+                let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+                crate::font::metrics::test_catalog::enable_metrics(&mut fresh);
+                let FrameLayoutAttempt::Prepared(rebuilt) =
+                    fresh.redisplay_frame_attempt(&mut eval, frame)
+                else {
+                    panic!("fresh frame should prepare")
+                };
+                let replay = replay.materialize();
+                let rebuilt = rebuilt.materialize();
+                let actual = replay.active_cursor().unwrap();
+                let expected = rebuilt.active_cursor().unwrap();
+                assert_eq!(
+                    (actual.y, actual.height, actual.ascent),
+                    (expected.y, expected.height, expected.ascent),
+                    "spacing={spacing}, newline={newline_height}, point={point}"
+                );
+            }
+        }
+    }
+}
+
+/// A scroll retaining point's row must use its point glyph, not the whole row.
+#[test]
+fn mixed_height_scroll_cursor_matches_fresh_capture() {
+    for spacing in [0, 5] {
+        for point_offset in [4, 5] {
+            let text = "AAAx\n".repeat(80);
+            let point = 11 * 5 + point_offset;
+            let (mut eval, frame, buffer, window) = incr_editing_frame(&text, 800, 600);
+            realize_test_gui_frame(&mut eval, frame);
+            eval.eval_str("(put-text-property 56 59 'face '(:height 2.0))")
+                .unwrap();
+            eval.buffer_manager_mut()
+                .get_mut(buffer)
+                .unwrap()
+                .set_buffer_local("line-spacing", Value::fixnum(spacing));
+            let mut engine = crate::font::metrics::test_catalog::layout_engine();
+            crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+            scroll_window_to(&mut eval, frame, window, buffer, 1, point - 1);
+            assert!(matches!(
+                engine.redisplay_frame_attempt(&mut eval, frame),
+                FrameLayoutAttempt::Prepared(_)
+            ));
+            scroll_window_to(&mut eval, frame, window, buffer, 21, point - 1);
+            let FrameLayoutAttempt::Prepared(replay) =
+                engine.redisplay_frame_attempt(&mut eval, frame)
+            else {
+                panic!("scroll should prepare")
+            };
+            assert_eq!(engine.last_layout_stats().scroll_windows, 1);
+            assert!(engine.last_layout_stats().reused_rows > 0);
+            let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+            crate::font::metrics::test_catalog::enable_metrics(&mut fresh);
+            let FrameLayoutAttempt::Prepared(rebuilt) =
+                fresh.redisplay_frame_attempt(&mut eval, frame)
+            else {
+                panic!("fresh frame should prepare")
+            };
+            let replay = replay.materialize();
+            let rebuilt = rebuilt.materialize();
+            let actual = replay.active_cursor().unwrap();
+            let expected = rebuilt.active_cursor().unwrap();
+            assert_eq!(
+                (actual.y, actual.height, actual.ascent),
+                (expected.y, expected.height, expected.ascent),
+                "spacing={spacing}, point offset={point_offset}"
+            );
+        }
+    }
+}
+
+/// An unmeasured point glyph must decline replay rather than invent its descent.
+#[test]
+fn unmeasured_point_glyphs_decline_cursor_replay() {
+    for stretch in [false, true] {
+        for scroll in [false, true] {
+            let (mut eval, frame, buffer, window) =
+                incr_editing_frame(&"AAAx\n".repeat(80), 800, 600);
+            realize_test_gui_frame(&mut eval, frame);
+            eval.eval_str("(put-text-property 56 59 'face '(:height 2.0))")
+                .unwrap();
+            if stretch {
+                eval.eval_str(
+                    "(put-text-property 56 57 'display '(space :width 1 :height (40) :ascent 75))",
+                )
+                .unwrap();
+            }
+            let mut engine = crate::LayoutEngine::new_without_font_metrics();
+            scroll_window_to(
+                &mut eval,
+                frame,
+                window,
+                buffer,
+                1,
+                if scroll { 58 } else { 0 },
+            );
+            assert!(matches!(
+                engine.redisplay_frame_attempt(&mut eval, frame),
+                FrameLayoutAttempt::Prepared(_)
+            ));
+            if scroll {
+                scroll_window_to(&mut eval, frame, window, buffer, 21, 58);
+            } else {
+                eval.eval_str("(set-window-point (selected-window) 59)")
+                    .unwrap();
+            }
+            let FrameLayoutAttempt::Prepared(replayed) =
+                engine.redisplay_frame_attempt(&mut eval, frame)
+            else {
+                panic!("replay should prepare")
+            };
+            assert_eq!(engine.last_layout_stats().full_windows, 1);
+            assert_eq!(engine.last_layout_stats().scroll_windows, 0);
+            assert_eq!(engine.last_layout_stats().cursor_only_windows, 0);
+            let mut fresh = crate::LayoutEngine::new_without_font_metrics();
+            let FrameLayoutAttempt::Prepared(rebuilt) =
+                fresh.redisplay_frame_attempt(&mut eval, frame)
+            else {
+                panic!("fresh frame should prepare")
+            };
+            let replayed = replayed.materialize();
+            let rebuilt = rebuilt.materialize();
+            let actual = replayed.active_cursor().unwrap();
+            let expected = rebuilt.active_cursor().unwrap();
+            assert_eq!(
+                (actual.y, actual.height, actual.ascent),
+                (expected.y, expected.height, expected.ascent),
+                "scroll={scroll}, stretch={stretch}"
+            );
         }
     }
 }

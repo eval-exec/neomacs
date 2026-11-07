@@ -2021,6 +2021,7 @@ fn x_popup_menu_interactive(ctx: &mut Context, position: Value, menu: Value) -> 
 /// throws out of the modal read BEFORE the C-g key is dequeued; the popup then
 /// exits with the key still queued, the command loop reads it next as
 /// `keyboard-quit`, and its `cmd_error` echoes "Quit".
+/// Read navigation in the selected buffer and root its values across unwinding.
 fn read_popup_menu_key_sequence(ctx: &mut Context) -> Result<(Vec<Value>, Value), Flow> {
     let count = ctx.specpdl.len();
     ctx.try_specbind_or_unwind_to(
@@ -2028,7 +2029,15 @@ fn read_popup_menu_key_sequence(ctx: &mut Context) -> Result<(Vec<Value>, Value)
         crate::emacs_core::intern::intern("inhibit-quit"),
         Value::T,
     )?;
-    let read = ctx.read_key_sequence();
+    // GNU read_menu_command, like the command loop, follows a buffer
+    // displayed by an asynchronous callback before resolving its first key.
+    // Keep the other popup-reader options (including switch-frame handling).
+    let read = ctx
+        .read_key_sequence_with_options(crate::keyboard::ReadKeySequenceOptions {
+            buffer_selection: crate::keyboard::KeySequenceBufferSelection::SelectedWindow,
+            ..Default::default()
+        })
+        .map(|(keys, binding)| (keys, binding.executed()));
     // The read result carries Lisp values; keep them in the VM root window
     // while `unbind_to` can run an unlet/debug-on-exit watcher, exactly as the
     // command loop's own read does (runtime/eval/command_loop.rs:774-790).

@@ -2512,14 +2512,19 @@ impl BufferSourceLineBreakSourceAction {
         x: f32,
         col: usize,
     ) -> CapturedCursorInfo {
-        CapturedCursorInfo::from_active_face_state(
-            active_face_state,
-            CapturedCursorPlacement::from_row_text_position(
-                row_geometry.text_position(x, self.ch_start_byte_idx, col),
-                CapturedCursorSlotWidth::FaceChar,
-                false,
-            ),
-        )
+        // append_space_for_newline gives the synthetic glyph the accumulated
+        // row extents. Resolve after finalization, when spacing is also known.
+        CapturedCursorInfo {
+            vertical_source: crate::display_cursor::CursorVerticalSource::SyntheticNewline,
+            ..CapturedCursorInfo::from_active_face_state(
+                active_face_state,
+                CapturedCursorPlacement::from_row_text_position(
+                    row_geometry.text_position(x, self.ch_start_byte_idx, col),
+                    CapturedCursorSlotWidth::FaceChar,
+                    false,
+                ),
+            )
+        }
     }
 
     pub(crate) fn capture_cursor_if_point(

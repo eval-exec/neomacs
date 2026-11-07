@@ -7975,6 +7975,7 @@ fn buffer_text_window_tail_finalize_request_publishes_cursor_and_finishes_row() 
 
     let mut cursor_info = CursorCaptureState::new();
     cursor_info.capture_once(crate::display_cursor::CapturedCursorInfo {
+        vertical_source: crate::display_cursor::CursorVerticalSource::PointGlyph,
         x: 0.0,
         y: 0.0,
         face_w: 8.0,

@@ -1090,7 +1090,8 @@ pub struct GlyphRow {
     ///
     /// Mirrors GNU `struct glyph_row::height`. `0.0` means unset.
     pub height_px: f32,
-    /// Additional logical descent from line spacing. Cursor height excludes it.
+    /// Additional logical descent from line spacing. Ordinary point glyphs do
+    /// not inherit it; GNU's synthetic newline cursor uses the full row.
     #[serde(default)]
     pub line_spacing_px: f32,
     /// Authoritative baseline ascent from row top in pixels.
