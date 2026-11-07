@@ -16,13 +16,20 @@ fn load_dbus(eval: &mut Context) -> bool {
 
 #[test]
 fn session_bus_get_id_returns_through_read_event() {
+    // Hermetic bus: this test needs a live session daemon, and the ambient
+    // session bus is shared with every other process of the user (and can be
+    // absent). Bring a private daemon and point both ambient buses at it; a
+    // missing dbus-daemon fails here with the spawn error instead of being
+    // skipped.
+    let bus = crate::emacs_core::moved_system::private_bus::PrivateBus::start("get-id");
+    let _bus_env = bus.install_env();
     crate::test_utils::init_test_tracing();
     crate::emacs_core::dbusbind::reset_thread_locals();
     let mut eval = crate::test_utils::runtime_startup_context();
-    if !load_dbus(&mut eval) {
-        crate::emacs_core::dbusbind::reset_thread_locals();
-        return;
-    }
+    assert!(
+        load_dbus(&mut eval),
+        "the private session bus must accept the dbus client (no silent skip)"
+    );
 
     let id = eval
         .eval_str(

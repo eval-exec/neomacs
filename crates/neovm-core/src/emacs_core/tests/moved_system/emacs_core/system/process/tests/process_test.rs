@@ -10389,10 +10389,23 @@ fn network_lookup_literal_family_filtering_helpers() {
 #[test]
 fn network_lookup_embedded_nul_normalizes_like_c_strings() {
     crate::test_utils::init_test_tracing();
-    let plain = resolve_network_lookup_addresses("abc", None, None);
-    let embedded_nul = resolve_network_lookup_addresses("abc\0def", None, None);
+    // The address vectors need a live heap; a canonical bare Context provides
+    // one without loading the runtime image.
+    let _ctx = crate::test_utils::new_context();
+    // A numeric literal is resolved locally, so this stays hermetic (no
+    // resolver): GNU forwards the name through C APIs, where the first NUL
+    // terminates the effective host name, so both lookups must be the same
+    // loopback address.
+    let plain = resolve_network_lookup_addresses("127.0.0.1", None, None);
+    assert!(
+        !plain.is_empty(),
+        "the numeric loopback literal must resolve without DNS"
+    );
+    let embedded_nul = resolve_network_lookup_addresses("127.0.0.1\0def", None, None);
     assert_eq!(embedded_nul, plain);
 
+    // An empty name is rejected locally too; the NUL-only spelling is the
+    // empty C string.
     let empty = resolve_network_lookup_addresses("", None, None);
     let nul_only = resolve_network_lookup_addresses("\0", None, None);
     assert_eq!(nul_only, empty);

@@ -136,13 +136,18 @@ fn registered_signal_fills_the_handler_slot() {
 /// A directed signal reaches the handler `dbus-register-signal` installed.
 #[test]
 fn directed_signal_reaches_its_handler() {
+    // Hermetic bus: a directed signal needs a live session daemon, and the
+    // ambient one is shared/unreliable. A missing dbus-daemon fails loudly in
+    // PrivateBus::start; it is never a silent skip.
+    let bus = crate::emacs_core::moved_system::private_bus::PrivateBus::start("directed-signal");
+    let _bus_env = bus.install_env();
     crate::test_utils::init_test_tracing();
     crate::emacs_core::dbusbind::reset_thread_locals();
     let mut eval = crate::test_utils::runtime_startup_context();
-    if !load_dbus(&mut eval) {
-        crate::emacs_core::dbusbind::reset_thread_locals();
-        return;
-    }
+    assert!(
+        load_dbus(&mut eval),
+        "the private session bus must accept the dbus client (no silent skip)"
+    );
 
     let calls = eval
         .eval_str(
