@@ -928,8 +928,7 @@ impl BufferSourceOutputSetup {
                     // starting at 0. The full-rebuild path is unaffected: it
                     // captures the cursor y during emission from `row_geometry`.
                     cursor_row_pixel_y = row.pixel_y.max(prev_row_bottom);
-                    cursor_height = row.height_without_line_spacing();
-                    cursor_ascent = row.ascent_px;
+                    let mut point_face_metrics = None;
                     for glyph in &row.glyphs[GlyphArea::Text.index()] {
                         if row.glyph_covers_buffer_charpos(glyph, replay.new_point as usize) {
                             cursor_width = glyph.pixel_width;
@@ -942,26 +941,31 @@ impl BufferSourceOutputSetup {
                                 let face_ascent = face.font_ascent as f32;
                                 let face_height = face_ascent + face.font_descent as f32;
                                 if face_height > 0.0 {
-                                    let (y, height, ascent) =
-                                        crate::display_cursor::resolve_cursor_vertical_metrics(
-                                            cursor_row_pixel_y,
-                                            face_height,
-                                            face_ascent,
-                                            // Fresh capture clamps against the
-                                            // whole row, including spacing.
-                                            row.height_px,
-                                            cursor_ascent,
-                                            geometry.char_height,
-                                            row.ends_at_zv,
-                                        );
-                                    cursor_row_pixel_y = y;
-                                    cursor_height = height;
-                                    cursor_ascent = ascent;
+                                    point_face_metrics = Some((face_height, face_ascent));
                                 }
                             }
                             break;
                         }
                     }
+                    // A newline/hidden position has no covering text glyph,
+                    // but follows the same full-row cursor bounds as fresh
+                    // rendering. Spacing bounds the cursor; it is not added
+                    // unconditionally to the fallback font's height.
+                    let (face_height, face_ascent) = point_face_metrics
+                        .unwrap_or((row.height_without_line_spacing(), row.ascent_px));
+                    let (y, height, ascent) =
+                        crate::display_cursor::resolve_cursor_vertical_metrics(
+                            cursor_row_pixel_y,
+                            face_height,
+                            face_ascent,
+                            row.height_px,
+                            row.ascent_px,
+                            geometry.char_height,
+                            row.ends_at_zv,
+                        );
+                    cursor_row_pixel_y = y;
+                    cursor_height = height;
+                    cursor_ascent = ascent;
                 }
                 prev_row_bottom = row.pixel_y + row.height_px;
             }

@@ -80,21 +80,31 @@ struct DisplayReplacementStringRenderPolicy<'a, M> {
 impl<M: DisplayRowRenderPolicy> DisplayRowRenderPolicy
     for DisplayReplacementStringRenderPolicy<'_, M>
 {
+    /// Capture measured newline extents without consuming the buffer row
+    /// transition, which remains the replacement-string walker's responsibility.
     fn stop_before_item(
         &mut self,
         item: &DisplayItem,
         face_id: FaceId,
         face: &ResolvedFace,
+        newline_font_metrics: Option<DisplayRowMeasuredFaceMetrics>,
     ) -> bool {
         if let DisplayItemKind::RowBreak(row_break) = item.kind {
-            self.produced_row_break = Some(DisplayReplacementStringLineBreak::from_resolved_face(
+            let mut line_break = DisplayReplacementStringLineBreak::from_resolved_face(
                 face_id,
                 face,
                 self.fallback_metrics,
                 row_break.line_height,
                 row_break.line_spacing,
                 item.box_vertical_edges,
-            ));
+            );
+            if let Some(metrics) = newline_font_metrics {
+                line_break.metrics = metrics;
+                line_break.extend_face = line_break
+                    .extend_face
+                    .map(|face| DisplayRowExtendFace::new(face.background(), face_id, metrics));
+            }
+            self.produced_row_break = Some(line_break);
             true
         } else {
             false
@@ -311,7 +321,20 @@ impl DisplayReplacementStringRowSession {
         )?;
         let stop = if let Some(mut line_break) = render_policy.produced_row_break {
             match line_break.line_height() {
-                DisplayLineHeightPolicy::Default => {
+                DisplayLineHeightPolicy::Default
+                    if !state.measurement_mode().uses_concrete_font_geometry()
+                        || !super::metrics::newline_requires_height_resolution(
+                            line_break.line_height(),
+                            (
+                                line_break.metrics().row_height(),
+                                line_break.metrics().ascent(),
+                            ),
+                            (
+                                replacement_append_context.fallback_metrics.row_height(),
+                                replacement_append_context.fallback_metrics.ascent(),
+                            ),
+                        ) =>
+                {
                     outcome.include_vertical_metrics(row_geometry);
                     let metrics = line_break.metrics();
                     row_geometry
