@@ -202,6 +202,51 @@ pub type ProofEra<'heap, K> = crate::tagged::gc::ProofEra<'heap, K>;
 /// `tagged::gc::GenericProofEraFinishFailure`.
 pub type ProofEraFinishFailure<'heap, K> = crate::tagged::gc::ProofEraFinishFailure<'heap, K>;
 
+/// C5 intern-growth AUTHORITY fence (LEAD 05:3xZ; peer B2 host ruling).
+///
+/// The real two-actor intern-growth transaction is value's test-support
+/// testkit (`c5_intern_testkit`); that module stays crate-private, so this
+/// fence is the item's only public path. `epoch_probe` is the caller's
+/// per-actor function-epoch observation hook: value has no evaluator counter
+/// type and never inspects the returned value, so the upper layer attributes
+/// a bump on the actual committing actor thread. `None` is the historic
+/// non-jit shape. The testkit is absent under gc-memory-telemetry (the
+/// original history machinery's own exclusion) and in value's own `cfg(test)`
+/// build (`not(test)`: the test-support dependency build is the only consumer;
+/// value's unit-test graph enables the feature through unification but has no
+/// consumer for this fence), so this fence matches both.
+#[cfg(all(not(test), not(feature = "gc-memory-telemetry")))]
+pub fn c5_intern_growth_for_test<'heap, K: crate::tagged::gc::EraKeeper>(
+    era: &ProofEra<'heap, K>,
+    holders: [crate::intern::SymId; 2],
+    epoch_probe: Option<fn() -> u64>,
+) -> Result<C5InternGrowthReceipt, String> {
+    crate::tagged::gc::mutator_registration::c5_intern_testkit::c5_intern_growth_for_test(
+        era,
+        holders,
+        epoch_probe,
+    )
+}
+
+/// C5 relocating bridge: first force the qualified clean reservation refusal
+/// to replace the pointer spine; its reserved capacity covers the later win.
+#[cfg(all(not(test), not(feature = "gc-memory-telemetry")))]
+pub fn c5_intern_relocating_for_test<'heap, K: crate::tagged::gc::EraKeeper>(
+    era: &ProofEra<'heap, K>,
+    holders: [crate::intern::SymId; 2],
+    epoch_probe: Option<fn() -> u64>,
+) -> Result<C5InternGrowthReceipt, String> {
+    crate::tagged::gc::mutator_registration::c5_intern_testkit::c5_intern_relocating_for_test(
+        era,
+        holders,
+        epoch_probe,
+    )
+}
+
+/// Copied receipt of the C5 intern-growth transaction.
+#[cfg(all(not(test), not(feature = "gc-memory-telemetry")))]
+pub use crate::tagged::gc::mutator_registration::c5_intern_testkit::C5InternGrowthReceipt;
+
 /// FENCE observer (copied identity): the published table's address as seen
 /// through the activation's publication view and through its own table view.
 /// Equal addresses prove both borrows name the same published table; the

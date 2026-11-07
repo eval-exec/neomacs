@@ -112,7 +112,7 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
             .map_err(super::super::super::symbol_table::publication_error)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn initial_fault_for_test(
         &mut self,
         fault: crate::symbol::parallel::InitialInternFault,
@@ -142,7 +142,7 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn initial_facts_for_test(
         &mut self,
         id: SymId,

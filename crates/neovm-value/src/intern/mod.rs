@@ -1576,7 +1576,7 @@ pub fn restore_runtime_interner(
 /// Intern a string using the global runtime symbol registry.
 #[inline]
 pub fn intern(s: &str) -> SymId {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     {
         INTERN_CALLS.set(INTERN_CALLS.get() + 1);
         INTERN_CALL_NAMES.with(|names| names.borrow_mut().push(s.to_owned()));
@@ -1635,7 +1635,7 @@ pub fn intern_ascii_reader_name<F>(name: ValidatedAsciiName<'_>, make_name: F) -
 where
     F: FnOnce() -> LispString,
 {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     {
         // Account for this interner entry just like intern, including reader
         // hits that previously used the lookup-only entry point.

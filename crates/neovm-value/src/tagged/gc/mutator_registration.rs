@@ -67,6 +67,12 @@ pub use collection::{CollectionError, CollectionReport, MinorCollectionError};
 use gate::RegistryGuard;
 pub use root_slot::OwnerRootSlot;
 pub use run_slice::{RunSlice, SliceRoot};
+#[cfg(all(
+    feature = "test-support",
+    not(test),
+    not(feature = "gc-memory-telemetry")
+))]
+pub(crate) mod c5_intern_testkit;
 mod rendezvous;
 mod summaries;
 #[cfg(not(feature = "test-support"))]

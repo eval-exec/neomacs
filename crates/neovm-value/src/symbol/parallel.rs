@@ -10,7 +10,7 @@ mod table;
 pub(crate) use functions::FunctionUpdate;
 mod intern;
 mod write;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use intern::{InitialInternFacts, InitialInternFault};
 
 use super::{Obarray, SymbolTrappedWrite, ValueCell};
@@ -44,9 +44,9 @@ pub struct SymbolBacking {
     projections: NonNull<RefCell<ThreadProjectionTable>>,
     pub(crate) world: usize,
     pub(crate) generation: u64,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     intern_fault: std::sync::atomic::AtomicU8,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     intern_fault_receipt: std::sync::atomic::AtomicU8,
 }
 
@@ -120,9 +120,9 @@ impl SymbolBacking {
             projections,
             world,
             generation,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             intern_fault: std::sync::atomic::AtomicU8::new(0),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             intern_fault_receipt: std::sync::atomic::AtomicU8::new(0),
         }
     }

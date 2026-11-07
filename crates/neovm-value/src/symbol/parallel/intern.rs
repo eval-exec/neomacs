@@ -8,7 +8,7 @@ use std::mem::size_of;
 use std::ptr::addr_of_mut;
 
 /// Per-World test injection, absent from production types and instructions.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy)]
 #[repr(u8)]
 pub(crate) enum InitialInternFault {
@@ -17,7 +17,7 @@ pub(crate) enum InitialInternFault {
     InitialTablePreparation = 3,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct InitialInternFacts {
     pub(crate) members: usize,
@@ -122,7 +122,7 @@ impl PreparedChunks {
 impl SymbolBacking {
     /// # Safety
     /// The test owns this World's matching writer, with no operation active.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) unsafe fn arm_initial_fault_for_test(
         &self,
         fault: InitialInternFault,
@@ -154,7 +154,7 @@ impl SymbolBacking {
 
     /// # Safety
     /// Test assertions only, under this actual World's exclusive writer.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) unsafe fn initial_facts_for_test(
         &self,
         id: SymId,
@@ -286,7 +286,7 @@ impl SymbolBacking {
             return Err(RegistrationError::Publication);
         }
         let index = metadata.id().0 as usize;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let fault = self
             .intern_fault
             .swap(0, std::sync::atomic::Ordering::AcqRel);
@@ -332,7 +332,7 @@ impl SymbolBacking {
             .ok_or(RegistrationError::Capacity)?;
         // Capacity-only changes are retained and charged even if a subsequent
         // reservation refuses; logical length/membership remain untouched.
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if fault == InitialInternFault::ReservationAfterSpineMove as u8 {
             // Force a larger reservation at this allocation seam. The old
             // buffer remains allocated while its replacement reserves, so a
@@ -365,7 +365,7 @@ impl SymbolBacking {
         // if a later preparation refuses. Keep the old logical slots usable
         // on that clean failure path as well as on the final publication path.
         symbols.spine_addr = symbols.chunks.as_ptr() as usize;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if fault == InitialInternFault::ReservationAfterSpineMove as u8 {
             self.intern_fault_receipt
                 .store(fault, std::sync::atomic::Ordering::Release);
@@ -397,7 +397,7 @@ impl SymbolBacking {
                 authority,
             ));
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if fault == InitialInternFault::AfterSlotPublication as u8 {
             // Target presence/membership is now live, but its counters and
             // the destination are deliberately not committed. Resume is
