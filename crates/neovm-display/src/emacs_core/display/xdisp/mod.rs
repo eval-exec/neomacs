@@ -7826,7 +7826,9 @@ pub(crate) fn set_redisplay_idle_skip_for_test(enabled: Option<bool>) {
 /// FORCE argument (dispnew.c:Fredisplay); unchanged windows still skip layout.
 /// Read once; default on. Explicit off retains forced layout.
 pub(crate) fn redisplay_idle_skip_enabled() -> bool {
-    #[cfg(test)]
+    // Same rule as the override's own gate (and its authority setter): the
+    // moved idle-redisplay tests set it, so the read must exist there too.
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(enabled) = REDISPLAY_IDLE_SKIP_OVERRIDE.with(std::cell::Cell::get) {
         return enabled;
     }
