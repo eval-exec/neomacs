@@ -16,7 +16,7 @@ static CANONICAL_SCRATCH_ROOT_HOOKS: neovm_value::ScratchRootHooks =
         super::restore_scratch_gc_roots,
     );
 
-pub(super) fn install_scratch_root_hooks() {
+pub(super) fn install_scratch_root_hooks_seam() {
     // SAFETY: only Context::new_inner and Context::from_dump call this adapter,
     // before allocating through text-property storage. The canonical callbacks
     // retain each pushed Value on this mutator's scratch stack until restore.
@@ -2417,17 +2417,17 @@ impl Context {
         // free of it so the allocation fast path is untouched.
         // Every core-owned cold table was published by the E3a boot entry
         // before this constructor was allowed to run (the proof parameter).
-        crate::emacs_core::bytecode::semantics::install();
+        crate::emacs_core::bytecode::semantics::install_eval_bytecode_semantics_seam();
         // The value layer owns the function-cell observer table; the JIT
         // installs its four observations here, before any compiled leaf can
         // exist. An uninstalled observer is a typed no-op, so function
         // objects written outside a Context stay unaffected.
         #[cfg(feature = "jit")]
-        crate::emacs_core::jit::install_function_cell_observer();
+        crate::emacs_core::jit::install_function_cell_observer_seam();
         // The text-property storage in the value layer roots its intermediate
         // conses through the evaluator's scratch-root stack; hand it the
         // stack operations here, at the same one-time hooks.
-        super::construct::install_scratch_root_hooks();
+        super::construct::install_scratch_root_hooks_seam();
         // The string position cache lives above heap_types, but heap payload
         // mutations must invalidate it. Publish the cache's stamp at the same
         // one-time seam; the cache refuses to fill until it is installed.
@@ -2457,7 +2457,7 @@ impl Context {
         // The evaluator's observed-run log of function-epoch moves is plain
         // process state too; install it unconditionally so non-JIT builds
         // keep the verify-run mismatch report.
-        super::cconv_memo::install_function_epoch_move_sink();
+        super::cconv_memo::install_function_epoch_move_sink_seam();
         // The buffer substrate owns the automatic-composition span data; the
         // live rule-table scans and width queries stay in the text layer and
         // are published here as static fn pointers (stage-3 C7).  Buffer

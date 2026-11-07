@@ -689,7 +689,7 @@ pub(crate) fn note_function_epoch_move(why: FunctionEpochBump, sym: Option<SymId
 }
 
 /// Install the evaluator's process-lifetime function-epoch observation sink.
-pub(super) fn install_function_epoch_move_sink() {
+pub(super) fn install_function_epoch_move_sink_seam() {
     static SINK: neovm_value::FunctionEpochMoveSink =
         neovm_value::FunctionEpochMoveSink::new(note_function_epoch_move);
     // SAFETY: only Context::new_inner and Context::from_dump call this

@@ -34,7 +34,7 @@ static CANONICAL_BYTECODE_SEMANTICS: neovm_value::BytecodeSemantics =
         emacs_sxhash_bytecode,
     );
 
-pub(crate) fn install() {
+pub(crate) fn install_eval_bytecode_semantics_seam() {
     // SAFETY: only Context::new_inner and Context::from_dump call this adapter,
     // before exposing byte-code values to structural operations. Both seams
     // offer this same process-lifetime descriptor of the canonical callbacks.

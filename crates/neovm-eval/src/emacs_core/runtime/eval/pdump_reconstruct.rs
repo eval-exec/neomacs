@@ -47,18 +47,18 @@ impl Context {
         // Every core-owned cold table (lifecycle, process, input, command
         // layer, display query, perf) was published by the E3a boot entry
         // before this constructor was allowed to run (the proof parameter).
-        crate::emacs_core::bytecode::semantics::install();
+        crate::emacs_core::bytecode::semantics::install_eval_bytecode_semantics_seam();
         // The function-cell observer is process state, not image state, and a
         // restored image can hold byte-code functions before any Context
         // constructor ran. Install it exactly where the semantics hook is
         // installed; skipping this silently loses redefinition pinning and
         // inline eviction in every image-restored process.
         #[cfg(feature = "jit")]
-        crate::emacs_core::jit::install_function_cell_observer();
+        crate::emacs_core::jit::install_function_cell_observer_seam();
         // The text-property storage in the value layer roots its intermediate
         // conses through the evaluator's scratch-root stack; hand it the
         // stack operations here, at the same one-time hooks.
-        super::construct::install_scratch_root_hooks();
+        super::construct::install_scratch_root_hooks_seam();
         // The string position cache lives above heap_types; publish its
         // byte-mutation stamp at the same one-time seam. A restored image can
         // reach conversions before any Context constructor ran.
@@ -88,7 +88,7 @@ impl Context {
         // The evaluator's observed-run log of function-epoch moves is plain
         // process state too; install it unconditionally so non-JIT builds
         // keep the verify-run mismatch report.
-        super::cconv_memo::install_function_epoch_move_sink();
+        super::cconv_memo::install_function_epoch_move_sink_seam();
         // The buffer substrate asks the text layer for composition and
         // syntax queries through host-free fn-pointer tables; a restored
         // image builds buffers before any Context constructor runs, so

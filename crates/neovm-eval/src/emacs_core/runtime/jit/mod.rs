@@ -1787,7 +1787,7 @@ impl RuntimeStateTieringExt for RuntimeState {
 /// forwards to; without it the observer table stays uninstalled and every
 /// function-cell write takes the typed no-op path.
 #[cfg(feature = "jit")]
-pub(crate) fn install_function_cell_observer() {
+pub(crate) fn install_function_cell_observer_seam() {
     static OBSERVER: neovm_value::FunctionCellObserver = neovm_value::FunctionCellObserver::new(
         stats::note_function_epoch_bump,
         stats::note_function_cell_unchanged,

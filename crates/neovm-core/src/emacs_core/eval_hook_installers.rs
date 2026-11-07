@@ -44,7 +44,7 @@ pub fn install_eval_hooks() -> EvalHooksInstalled {
             crate::emacs_core::perf_trace::canonical_perf_enabled(),
             crate::emacs_core::perf_trace::canonical_perf_hooks(),
             crate::emacs_core::builtins::init_builtins,
-            install_sqlite_finalizer_hook,
+            install_sqlite_finalizer_hook_for_eval_hooks,
             &CANONICAL_WAIT_SERVICE,
             &CANONICAL_TIMER_SERVICE,
             &CANONICAL_FRONTEND_SERVICE,
@@ -59,12 +59,12 @@ pub fn install_eval_hooks() -> EvalHooksInstalled {
 }
 
 #[cfg(feature = "sqlite")]
-fn install_sqlite_finalizer_hook() -> Result<HookInstallStatus, HookInstallError> {
+fn install_sqlite_finalizer_hook_for_eval_hooks() -> Result<HookInstallStatus, HookInstallError> {
     crate::emacs_core::sqlite::install_sqlite_finalizer_hook()
 }
 
 #[cfg(not(feature = "sqlite"))]
-fn install_sqlite_finalizer_hook() -> Result<HookInstallStatus, HookInstallError> {
+fn install_sqlite_finalizer_hook_for_eval_hooks() -> Result<HookInstallStatus, HookInstallError> {
     // No finalizer table is compiled in; report it as published so the one
     // boot entry stays uniform across feature configurations.
     Ok(HookInstallStatus::Installed)
