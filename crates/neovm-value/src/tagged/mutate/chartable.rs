@@ -174,7 +174,7 @@ pub(crate) fn with_char_table_write<R>(
     LispCollectionRevision::changed(value);
     note_heap_write(value, HeapWriteKind::CharTableData);
     let object = NonNull::new(value.as_veclike_ptr()?.cast_mut().cast::<CharTableObj>())?;
-    #[cfg(debug_assertions)]
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
     let _guard = super::HeapMutClosureGuard::enter();
     Some(f(&mut CharTableWrite {
         object,
@@ -194,7 +194,7 @@ pub(crate) fn with_sub_char_table_write<R>(
     LispCollectionRevision::changed(value);
     note_heap_write(value, HeapWriteKind::SubCharTableData);
     let object = NonNull::new(value.as_veclike_ptr()?.cast_mut().cast::<SubCharTableObj>())?;
-    #[cfg(debug_assertions)]
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
     let _guard = super::HeapMutClosureGuard::enter();
     Some(f(&mut SubCharTableWrite {
         object,

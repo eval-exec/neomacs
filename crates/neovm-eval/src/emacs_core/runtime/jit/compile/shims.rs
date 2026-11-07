@@ -181,55 +181,66 @@ pub const STATUS_NEED_GENERIC: i64 = 4;
 /// Test/debug-build counter of speculated direct-call shim entries (evidence
 /// that `find_spec_sites` + the spec lowering actually engage). Release unit
 /// tests need this too; non-test release builds carry no counter.
-#[cfg(any(test, debug_assertions))]
+///
+/// CFG CONTRACT (RELEASE-TEST-SUPPORT-CFG): the reader in
+/// `crate::test_support` is compiled whenever `test-support` is on, which a
+/// unified release workspace test build enables on this LIB.  The callee
+/// gate must therefore include `feature = "test-support"` so the caller's
+/// gate stays a subset; never narrow the reader instead.
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 pub(crate) static SPEC_CALL_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Test/debug-build counter of V3 fast-path engagements: a speculated call that
 /// ran the cached callee leaf DIRECTLY (skipping funcall dispatch + the cache
 /// hash lookup), as opposed to falling back to `call_for_jit`. Test evidence
 /// that the fast path actually fires instead of silently no-op'ing.
-#[cfg(any(test, debug_assertions))]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 pub(crate) static SPEC_FAST_CALL_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Test/debug-build counter of the spec shim's OWN fast path (an armed slot
 /// whose leaf takes the call as laid out, entered from the shim's frame):
 /// distinct from [`SPEC_FAST_CALL_COUNT`], which the slow half's
 /// `call_armed_callee_native` also bumps when it runs a cached leaf.
-#[cfg(any(test, debug_assertions))]
+///
+/// CFG CONTRACT (RELEASE-TEST-SUPPORT-CFG): same rule as
+/// [`SPEC_CALL_COUNT`] -- the `test_support` reader compiled under
+/// `test-support` in a release workspace build must always find this
+/// callee; widen the callee, never narrow the reader.
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 pub(crate) static SPEC_SHIM_FAST_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Debug-build counter of speculated direct-SUBR shim entries (all three
 /// shims: general / predicate / equal-including-properties). Test evidence
 /// that the subr-kind sites in `find_spec_sites` + their lowering engage.
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 pub(crate) static SUBR_SPEC_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Debug-build counter of subr-spec FAST completions: the site was armed and
 /// the shim finished the call itself (direct subr dispatch, predicate tag
 /// test, or the bitwise-eq hit) — as opposed to bouncing to the generic
 /// fallback block. Proves the fast path fires instead of silently bouncing.
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 pub(crate) static SUBR_SPEC_FAST_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Debug-build counter of armed subr-spec calls that took the slot's cached
 /// screened entry (`SpecSlot::cached_subr_entry`) instead of re-reading the
 /// static subr object. Proves the cache engages, and its invalidation tests
 /// (a re-arm or restamp clears it) can assert the screen ran again.
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 pub(crate) static SUBR_SPEC_CACHED_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Debug-build counter of subr-spec [`STATUS_NEED_GENERIC`] bounces (binding
 /// changed, overrides active, or an eq-shim bitwise miss). Together with
 /// [`SUBR_SPEC_FAST_COUNT`] this lets tests prove a site RE-ARMED after an
 /// unrelated epoch bump (fast count grows, generic count doesn't).
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 pub(crate) static SUBR_SPEC_GENERIC_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Debug-build counter of entries to the dedicated `fboundp` shim
 /// ([`neovm_jit_fboundp_spec`]). Proves a `PredFboundp` site reaches the
 /// 4-argument shim rather than the generic pred shim (both bump
 /// [`SUBR_SPEC_COUNT`], so only this can tell them apart).
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 pub(crate) static FBOUNDP_SPEC_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Debug-build counters for the R2 CallBuiltinSym intrinsic shims (Tier-A read
@@ -241,64 +252,64 @@ pub(crate) static FBOUNDP_SPEC_COUNT: AtomicU64 = AtomicU64::new(0);
 /// value was never materialized, or the `NEOVM_JIT_FORCE_CBSYM_GENERIC`
 /// harness). Engagement tests read these to prove the fast path fires instead
 /// of silently bouncing to the general CBSym lowering.
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 pub(crate) static CBSYM_SPEC_COUNT: AtomicU64 = AtomicU64::new(0);
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 pub(crate) static CBSYM_SPEC_FAST_COUNT: AtomicU64 = AtomicU64::new(0);
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 pub(crate) static CBSYM_SPEC_GENERIC_COUNT: AtomicU64 = AtomicU64::new(0);
 
 // Copied read observers for the re-homed eval tests (P1-CLASSES-ALL-CRATES
 // C4/N2: the counters stay private; only the value copies out).
-#[cfg(any(test, debug_assertions))]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn spec_call_count_for_test() -> u64 {
     SPEC_CALL_COUNT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-#[cfg(any(test, debug_assertions))]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn spec_fast_call_count_for_test() -> u64 {
     SPEC_FAST_CALL_COUNT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-#[cfg(any(test, debug_assertions))]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn spec_shim_fast_count_for_test() -> u64 {
     SPEC_SHIM_FAST_COUNT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn subr_spec_count_for_test() -> u64 {
     SUBR_SPEC_COUNT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn subr_spec_fast_count_for_test() -> u64 {
     SUBR_SPEC_FAST_COUNT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn subr_spec_generic_count_for_test() -> u64 {
     SUBR_SPEC_GENERIC_COUNT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn cbsym_spec_count_for_test() -> u64 {
     CBSYM_SPEC_COUNT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn cbsym_spec_fast_count_for_test() -> u64 {
     CBSYM_SPEC_FAST_COUNT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn cbsym_spec_generic_count_for_test() -> u64 {
     CBSYM_SPEC_GENERIC_COUNT.load(std::sync::atomic::Ordering::Relaxed)

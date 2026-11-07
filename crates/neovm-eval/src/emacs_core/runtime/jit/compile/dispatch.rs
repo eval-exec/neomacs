@@ -1526,7 +1526,7 @@ macro_rules! spec_call_body {
      $args_ptr:ident, $nargs:ident, $out:ident) => {{
         // Evidence that speculation actually engages, including in release
         // unit tests. Non-test release builds carry no counter.
-        #[cfg(any(test, debug_assertions))]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         SPEC_CALL_COUNT.fetch_add(1, Ordering::Relaxed);
         // SAFETY: see neovm_jit_call's function-level contract; `slot` points
         // into the executing leaf's spec_slots.
@@ -1542,7 +1542,7 @@ macro_rules! spec_call_body {
             }
             && ctx_ref.depth < ctx_ref.max_depth
         {
-            #[cfg(any(test, debug_assertions))]
+            #[cfg(any(test, debug_assertions, feature = "test-support"))]
             {
                 SPEC_FAST_CALL_COUNT.fetch_add(1, Ordering::Relaxed);
                 SPEC_SHIM_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -2601,7 +2601,7 @@ pub unsafe extern "C" fn neovm_jit_call_subr_spec(
     out: *mut i64,
 ) -> i64 {
     jit_shim_contain!(detach args_ptr, ctx, STATUS_SIGNAL, {
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         SUBR_SPEC_COUNT.fetch_add(1, Ordering::Relaxed);
         let nargs = nargs as usize;
         // SAFETY: see neovm_jit_call's function-level contract.
@@ -2621,7 +2621,7 @@ pub unsafe extern "C" fn neovm_jit_call_subr_spec(
                     && !projection.debug_on_next_call_armed_fast()
             }
         {
-            #[cfg(debug_assertions)]
+            #[cfg(any(test, debug_assertions, feature = "test-support"))]
             SUBR_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
             // SAFETY: round-trip of interned ids stored in dispatch descriptors (peer seal N8).
             let sym_id = unsafe { SymId::from_raw(sym as u32) };
@@ -2637,7 +2637,7 @@ pub unsafe extern "C" fn neovm_jit_call_subr_spec(
             let screened = if cached != 0 {
                 let (fn_ptr, slots) = SpecSlot::decode_screened_subr_entry(cached);
                 if nargs <= slots {
-                    #[cfg(debug_assertions)]
+                    #[cfg(any(test, debug_assertions, feature = "test-support"))]
                     SUBR_SPEC_CACHED_COUNT.fetch_add(1, Ordering::Relaxed);
                     Some(FixedBuiltinEntry { fn_ptr, slots })
                 } else {
@@ -2701,11 +2701,11 @@ fn subr_spec_call_reference(
         return STATUS_SIGNAL;
     }
     if !subr_spec_armed(ctx, sym, expected, slot) {
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         SUBR_SPEC_GENERIC_COUNT.fetch_add(1, Ordering::Relaxed);
         return STATUS_NEED_GENERIC;
     }
-    #[cfg(debug_assertions)]
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
     SUBR_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
     let target = unsafe {
         /* SAFETY: JIT constant-pool word */
@@ -2827,7 +2827,7 @@ pub unsafe extern "C" fn neovm_jit_pred_spec(
     out: *mut i64,
 ) -> i64 {
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         SUBR_SPEC_COUNT.fetch_add(1, Ordering::Relaxed);
         // SAFETY: see neovm_jit_call's function-level contract.
         let ctx = unsafe { &mut *(ctx as *mut Context) };
@@ -2850,11 +2850,11 @@ pub unsafe extern "C" fn neovm_jit_pred_spec(
             || ctx.depth >= ctx.max_depth
             || !subr_spec_armed(ctx, sym, expected, slot)
         {
-            #[cfg(debug_assertions)]
+            #[cfg(any(test, debug_assertions, feature = "test-support"))]
             SUBR_SPEC_GENERIC_COUNT.fetch_add(1, Ordering::Relaxed);
             return STATUS_NEED_GENERIC;
         }
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         SUBR_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
         let v = unsafe {
             /* SAFETY: JIT constant-pool word */
@@ -2949,7 +2949,7 @@ pub unsafe extern "C" fn neovm_jit_fboundp_spec(
     out: *mut i64,
 ) -> i64 {
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         {
             SUBR_SPEC_COUNT.fetch_add(1, Ordering::Relaxed);
             FBOUNDP_SPEC_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -2971,11 +2971,11 @@ pub unsafe extern "C" fn neovm_jit_fboundp_spec(
             || ctx.depth >= ctx.max_depth
             || !subr_spec_armed(ctx, sym.to_raw() as i64, expected as i64, slot)
         {
-            #[cfg(debug_assertions)]
+            #[cfg(any(test, debug_assertions, feature = "test-support"))]
             SUBR_SPEC_GENERIC_COUNT.fetch_add(1, Ordering::Relaxed);
             return STATUS_NEED_GENERIC;
         }
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         SUBR_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
         let v = unsafe {
             /* SAFETY: JIT constant-pool word */
@@ -3056,7 +3056,7 @@ pub unsafe extern "C" fn neovm_jit_eq_incl_props_spec(
     out: *mut i64,
 ) -> i64 {
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         SUBR_SPEC_COUNT.fetch_add(1, Ordering::Relaxed);
         // SAFETY: see neovm_jit_call's function-level contract.
         let ctx = unsafe { &mut *(ctx as *mut Context) };
@@ -3067,13 +3067,13 @@ pub unsafe extern "C" fn neovm_jit_eq_incl_props_spec(
         // SAFETY: slot points into the executing leaf's spec_slots.
         let slot = unsafe { &*(slot as *const SpecSlot) };
         if subr_spec_armed(ctx, sym, expected, slot) && a == b {
-            #[cfg(debug_assertions)]
+            #[cfg(any(test, debug_assertions, feature = "test-support"))]
             SUBR_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
             // SAFETY: `out` is the generated code's result stack slot.
             unsafe { *out = Value::T.bits() as i64 };
             return STATUS_OK;
         }
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         SUBR_SPEC_GENERIC_COUNT.fetch_add(1, Ordering::Relaxed);
         STATUS_NEED_GENERIC
     })
@@ -3233,7 +3233,7 @@ pub unsafe extern "C" fn neovm_jit_arith_spec(
     out: *mut i64,
 ) -> i64 {
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         SUBR_SPEC_COUNT.fetch_add(1, Ordering::Relaxed);
         // SAFETY: see neovm_jit_call's function-level contract.
         let ctx = unsafe { &mut *(ctx as *mut Context) };
@@ -3292,14 +3292,14 @@ pub unsafe extern "C" fn neovm_jit_arith_spec(
                 }
             };
             if let Some(res) = res {
-                #[cfg(debug_assertions)]
+                #[cfg(any(test, debug_assertions, feature = "test-support"))]
                 SUBR_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
                 // SAFETY: `out` is the generated code's result stack slot.
                 unsafe { *out = Value::fixnum(res).bits() as i64 };
                 return STATUS_OK;
             }
         }
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         SUBR_SPEC_GENERIC_COUNT.fetch_add(1, Ordering::Relaxed);
         STATUS_NEED_GENERIC
     })
@@ -3363,7 +3363,7 @@ pub unsafe extern "C" fn neovm_jit_cbsym_spec(
     out: *mut i64,
 ) -> i64 {
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         CBSYM_SPEC_COUNT.fetch_add(1, Ordering::Relaxed);
         let nargs = nargs as usize;
         // SAFETY: see neovm_jit_call's function-level contract.
@@ -3388,11 +3388,11 @@ pub unsafe extern "C" fn neovm_jit_cbsym_spec(
             inline.function
         };
         let Some(function) = function else {
-            #[cfg(debug_assertions)]
+            #[cfg(any(test, debug_assertions, feature = "test-support"))]
             CBSYM_SPEC_GENERIC_COUNT.fetch_add(1, Ordering::Relaxed);
             return STATUS_NEED_GENERIC;
         };
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         CBSYM_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
         let saved = save_scratch_gc_roots();
         let args_start = ctx.bc_buf.len();
@@ -3504,7 +3504,7 @@ pub unsafe extern "C" fn neovm_jit_cbsym_read(
         // SAFETY: round-trip of interned ids stored in dispatch descriptors (peer seal N8).
         || !crate::emacs_core::eval::global_subr_is_builtin(unsafe { SymId::from_raw(sym as u32) })
     {
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         CBSYM_SPEC_GENERIC_COUNT.fetch_add(1, Ordering::Relaxed);
         return STATUS_NEED_GENERIC;
     }
@@ -3563,7 +3563,7 @@ pub unsafe extern "C" fn neovm_jit_cbsym_read(
         _ => None,
     };
     if let Some(value) = answered {
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         CBSYM_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
         // SAFETY: `out` is the generated code's result stack slot.
         unsafe { *out = value.bits() as i64 };
@@ -3590,7 +3590,7 @@ unsafe fn cbsym_read_contained(
     out: *mut i64,
 ) -> i64 {
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         CBSYM_SPEC_COUNT.fetch_add(1, Ordering::Relaxed);
         // SAFETY: see neovm_jit_call's function-level contract.
         let ctx = unsafe { &mut *(ctx as *mut Context) };
@@ -3598,26 +3598,26 @@ unsafe fn cbsym_read_contained(
         // bounce when it was never made (general path -> make_buffer, rooted).
         if which == CBSYM_A_CURRENT_BUFFER {
             let Some(buf_id) = ctx.edit.buffers.current_buffer().map(|b| b.id()) else {
-                #[cfg(debug_assertions)]
+                #[cfg(any(test, debug_assertions, feature = "test-support"))]
                 CBSYM_SPEC_GENERIC_COUNT.fetch_add(1, Ordering::Relaxed);
                 return STATUS_NEED_GENERIC;
             };
             return match neovm_value::tagged::gc::with_tagged_heap(|h| h.buffer_value(buf_id)) {
                 Some(v) => {
-                    #[cfg(debug_assertions)]
+                    #[cfg(any(test, debug_assertions, feature = "test-support"))]
                     CBSYM_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
                     // SAFETY: `out` is the generated code's result stack slot.
                     unsafe { *out = v.bits() as i64 };
                     STATUS_OK
                 }
                 None => {
-                    #[cfg(debug_assertions)]
+                    #[cfg(any(test, debug_assertions, feature = "test-support"))]
                     CBSYM_SPEC_GENERIC_COUNT.fetch_add(1, Ordering::Relaxed);
                     STATUS_NEED_GENERIC
                 }
             };
         }
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         CBSYM_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
         // DELEGATE to the builtin body (GC-free OK path). These are GNU's
         // inline opcodes: like the interpreter's inline tier (`Vm::op_point`,

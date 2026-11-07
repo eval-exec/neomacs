@@ -5053,7 +5053,7 @@ pub fn park_carrier_tls() {
 }
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 #[doc(hidden)]
 pub fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix(

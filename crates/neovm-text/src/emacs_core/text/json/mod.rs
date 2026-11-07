@@ -1276,8 +1276,10 @@ impl<'a> JsonParser<'a> {
         // errors. Allocation/refill never collects or runs Lisp, and signal()
         // returns a pinned payload; signal hooks run after parsing returns.
         // Neither recursion nor an error path can install a heap or change
-        // its Tier-H mode. Keep that contract enforced at GC entry in debug.
-        #[cfg(debug_assertions)]
+        // its Tier-H mode. Keep that contract enforced at GC entry whenever
+        // the GEN-5 guard family is compiled (debug builds and test builds,
+        // including the release workspace test graph).
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         let _guard = neovm_value::tagged::mutate::HeapMutClosureGuard::enter();
         let ht = Value::hash_table(HashTableTest::Equal);
         if c == b'}' {
@@ -1323,7 +1325,7 @@ impl<'a> JsonParser<'a> {
     fn parse_object_hash_table_concurrent(&mut self, mut c: u8) -> Result<Value, Flow> {
         // The same parser mode-stability contract applies to this active
         // clone. Each insertion keeps the normal snapshot/mutation lease.
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         let _guard = neovm_value::tagged::mutate::HeapMutClosureGuard::enter();
         let ht = Value::hash_table(HashTableTest::Equal);
         if c == b'}' {

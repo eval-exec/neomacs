@@ -67,7 +67,7 @@ impl TaggedHeap {
             !self.concurrent_mark_running,
             "collection requires an explicit successful marker finish"
         );
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         crate::tagged::mutate::debug_assert_no_heap_mut_closure();
         // SAFETY: collection entry has the sole stopped owner, no worker,
         // callbacks, or allocation safepoint. Residual words must survive a

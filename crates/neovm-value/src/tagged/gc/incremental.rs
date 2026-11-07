@@ -2208,6 +2208,14 @@ impl TaggedHeap {
 
     /// VIS row: copied tag-less ownership predicate for the relocated GC
     /// tests; the union oracle itself stays pub(super).
+    ///
+    /// CFG CONTRACT (RELEASE-TEST-SUPPORT-CFG): this caller is gated
+    /// `test | test-support`, so its callee's gate MUST include both.  A
+    /// unified workspace test build (`cargo nextest archive --release
+    /// --workspace`) enables `test-support` on this LIB in RELEASE, where
+    /// `debug_assertions` is off; a debug-only callee would leave the
+    /// caller uncallable (E0599).  Never cfg the caller out to fix that:
+    /// widen the callee instead, and keep caller-gate ⊆ callee-gate.
     #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn owns_non_cons_object_for_test(&self, ptr: *const u8) -> bool {
@@ -2216,7 +2224,11 @@ impl TaggedHeap {
 
     /// Tag-less union oracle used by debug checks and GC tests that have not
     /// decoded the value's heap tag yet.
-    #[cfg(any(debug_assertions, test))]
+    ///
+    /// The `test-support` arm exists for the contract above: the
+    /// `_for_test` caller compiled by a release workspace test build must
+    /// always find its callee.
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
     pub(super) fn owns_non_cons_object(&self, ptr: *const u8) -> bool {
         !ptr.is_null()
             && (self.string_arena.owns(ptr)

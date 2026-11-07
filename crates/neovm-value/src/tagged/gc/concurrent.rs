@@ -1227,7 +1227,7 @@ impl TaggedHeap {
         // retained by the caller until this non-yielding closure returns.
         let object = unsafe { &mut *ptr };
         let before = object.owned_bytes();
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter();
         let result = update(&mut object.payload.children);
         self.note_allocation_bytes(object.owned_bytes().saturating_sub(before));
@@ -1261,7 +1261,7 @@ impl TaggedHeap {
         if unsafe { (*ptr).payload.id().heap_identity() } != self.heap_identity() {
             return None;
         }
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter();
         // SAFETY: the validated live object is exclusively borrowed only for
         // the non-yielding closure; this view cannot introduce Lisp children.
@@ -1296,7 +1296,7 @@ impl TaggedHeap {
         // retained by the caller until this non-yielding closure returns.
         let object = unsafe { &mut *ptr };
         let before = object.owned_bytes();
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter();
         let result = update(&mut object.payload);
         self.note_allocation_bytes(object.owned_bytes().saturating_sub(before));
@@ -1330,7 +1330,7 @@ impl TaggedHeap {
         // retained by the caller until this non-yielding closure returns.
         let object = unsafe { &mut *ptr };
         let before = object.owned_bytes();
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter();
         let result = update(&mut object.payload);
         self.note_allocation_bytes(object.owned_bytes().saturating_sub(before));

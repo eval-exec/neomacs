@@ -4129,7 +4129,7 @@ impl TaggedValue {
         mutate::LispCollectionRevision::changed(self);
         note_heap_write(self, HeapWriteKind::ObarrayData);
         let ptr = self.as_veclike_ptr().unwrap() as *mut ObarrayObj;
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         let _guard = mutate::HeapMutClosureGuard::enter();
         Some(f(unsafe { &mut *ptr }))
     }

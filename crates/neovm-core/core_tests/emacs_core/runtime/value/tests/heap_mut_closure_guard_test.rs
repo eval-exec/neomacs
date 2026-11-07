@@ -1,21 +1,15 @@
 //! Runtime Value wrappers share GEN-5's mutable heap borrow extent.
 
-#[cfg(debug_assertions)]
 use super::*;
-#[cfg(debug_assertions)]
 use crate::tagged::gc::{TaggedHeap, set_tagged_heap};
-#[cfg(debug_assertions)]
 use crate::tagged::mutate::debug_assert_no_heap_mut_closure;
-#[cfg(debug_assertions)]
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-#[cfg(debug_assertions)]
 fn assert_guarded() {
     assert!(catch_unwind(AssertUnwindSafe(debug_assert_no_heap_mut_closure)).is_err());
 }
 
 #[test]
-#[cfg(debug_assertions)]
 fn gc_runtime_value_mutation_closures_are_guarded() {
     crate::test_utils::init_test_tracing();
     let mut heap = Box::new(TaggedHeap::new());
@@ -45,7 +39,6 @@ fn gc_runtime_value_mutation_closures_are_guarded() {
 }
 
 #[test]
-#[cfg(debug_assertions)]
 fn gc_runtime_value_mutation_guard_unwinds_and_rejects_wrong_kinds() {
     crate::test_utils::init_test_tracing();
     let mut heap = Box::new(TaggedHeap::new());
