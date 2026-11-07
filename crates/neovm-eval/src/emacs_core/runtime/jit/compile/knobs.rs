@@ -335,7 +335,9 @@ pub(crate) fn jit_inline_type_of_on() -> bool {
 /// site — the single-build A/B, and the identity check that the off mode
 /// emits the pre-existing CLIF byte for byte.
 pub(crate) fn jit_inline_predicates_on() -> bool {
-    #[cfg(test)]
+    // Same rule as the override's own gate: a re-homed test sets this through
+    // the test-support surface, and the read must exist in that build too.
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(on) = INLINE_PREDICATES_TEST_OVERRIDE.with(|c| c.get()) {
         return on;
     }
