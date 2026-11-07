@@ -389,9 +389,7 @@ fn replay_cursor_paint(
         .builder()
         .current_window_row(cursor_row)
         .and_then(|row| {
-            row.glyphs[GlyphArea::Text.index()]
-                .iter()
-                .find(|glyph| row.glyph_covers_buffer_charpos(glyph, point))
+            crate::display_cursor::CursorVisualColumnResolutionRequest::point_glyph(row, point)
                 .map(|glyph| glyph.face_id)
         });
     let glyph_face = glyph_face_id
@@ -417,9 +415,8 @@ fn retained_point_cursor_metrics(
     if buffer_newline && !row.continued && point == row.end_charpos {
         return Some((row.height_px, row.ascent_px));
     }
-    if let Some(glyph) = row.glyphs[GlyphArea::Text.index()]
-        .iter()
-        .find(|glyph| row.glyph_covers_buffer_charpos(glyph, point))
+    if let Some(glyph) =
+        crate::display_cursor::CursorVisualColumnResolutionRequest::point_glyph(row, point)
     {
         if glyph.pixel_height > 0.0 {
             return Some((glyph.pixel_height, glyph.pixel_ascent));
@@ -453,46 +450,43 @@ fn try_decorate_window_cursor(
     default_ascent: f32,
     measurement: DisplayRowMeasurementPolicy,
 ) -> bool {
-    let (row_pixel_y, row_height, row_ascent, cursor_width) =
-        match output.builder().current_window_row(cursor_row) {
-            Some(row) => {
-                let mut width = char_w;
-                for glyph in &row.glyphs[GlyphArea::Text.index()] {
-                    if row.glyph_covers_buffer_charpos(glyph, point) {
-                        // As the walk sizes it (`resolve_cursor_geometry`,
-                        // GNU `get_phys_cursor_geometry`): on a stretch --
-                        // a TAB -- the cursor is one column wide unless
-                        // `x-stretch-cursor` is set; a bar keeps its own.
-                        width = if matches!(glyph.glyph_type, GlyphType::Stretch { .. })
-                            && !params.x_stretch_cursor
-                            && !matches!(style, CursorStyle::Bar(_))
-                        {
-                            crate::display_row::width::DisplayRowCharWidthPolicy::new(char_w)
-                                .fallback()
-                        } else {
-                            glyph.pixel_width
-                        };
-                        break;
-                    }
-                }
-                let Some((face_height, face_ascent)) =
-                    retained_point_cursor_metrics(row, point, buffer_newline, measurement)
-                else {
-                    return false;
+    let (row_pixel_y, row_height, row_ascent, cursor_width) = match output
+        .builder()
+        .current_window_row(cursor_row)
+    {
+        Some(row) => {
+            let mut width = char_w;
+            if let Some(glyph) =
+                crate::display_cursor::CursorVisualColumnResolutionRequest::point_glyph(row, point)
+            {
+                // Preserve the GNU stretch/bar cursor width policy.
+                width = if matches!(glyph.glyph_type, GlyphType::Stretch { .. })
+                    && !params.x_stretch_cursor
+                    && !matches!(style, CursorStyle::Bar(_))
+                {
+                    crate::display_row::width::DisplayRowCharWidthPolicy::new(char_w).fallback()
+                } else {
+                    glyph.pixel_width
                 };
-                let (y, height, ascent) = crate::display_cursor::resolve_cursor_vertical_metrics(
-                    row.pixel_y,
-                    face_height,
-                    face_ascent,
-                    row.height_px,
-                    row.ascent_px,
-                    default_height,
-                    row.ends_at_zv,
-                );
-                (y, height, ascent, width)
             }
-            None => (0.0, default_height, default_ascent, char_w),
-        };
+            let Some((face_height, face_ascent)) =
+                retained_point_cursor_metrics(row, point, buffer_newline, measurement)
+            else {
+                return false;
+            };
+            let (y, height, ascent) = crate::display_cursor::resolve_cursor_vertical_metrics(
+                row.pixel_y,
+                face_height,
+                face_ascent,
+                row.height_px,
+                row.ascent_px,
+                default_height,
+                row.ends_at_zv,
+            );
+            (y, height, ascent, width)
+        }
+        None => (0.0, default_height, default_ascent, char_w),
+    };
     let window_id_i64 = window_id as i64;
     let paint = replay_cursor_paint(output, cursor_row, point, params);
     let cursor = PhysCursor {
@@ -962,37 +956,41 @@ impl BufferSourceOutputSetup {
                     // starting at 0. The full-rebuild path is unaffected: it
                     // captures the cursor y during emission from `row_geometry`.
                     cursor_row_pixel_y = row.pixel_y.max(prev_row_bottom);
-                    for glyph in &row.glyphs[GlyphArea::Text.index()] {
-                        if row.glyph_covers_buffer_charpos(glyph, replay.new_point as usize) {
-                            cursor_width = glyph.pixel_width;
-                            break;
-                        }
+                    if let Some(glyph) =
+                        crate::display_cursor::CursorVisualColumnResolutionRequest::point_glyph(
+                            row,
+                            replay.new_point as usize,
+                        )
+                    {
+                        cursor_width = glyph.pixel_width;
                     }
-                    let buffer_newline = buf_access
-                        .byte_at(buf_access.charpos_to_bytepos(replay.new_point))
-                        == Some(b'\n');
-                    let Some((face_height, face_ascent)) = retained_point_cursor_metrics(
-                        row,
-                        replay.new_point as usize,
-                        buffer_newline,
-                        default_face.measurement_policy(),
-                    ) else {
-                        output.restore_retry_checkpoint(retry_checkpoint);
-                        return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
-                    };
-                    let (y, height, ascent) =
-                        crate::display_cursor::resolve_cursor_vertical_metrics(
-                            cursor_row_pixel_y,
-                            face_height,
-                            face_ascent,
-                            row.height_px,
-                            row.ascent_px,
-                            geometry.char_height,
-                            row.ends_at_zv,
-                        );
-                    cursor_row_pixel_y = y;
-                    cursor_height = height;
-                    cursor_ascent = ascent;
+                    if replay.retained_cursor.is_none() {
+                        let buffer_newline = buf_access
+                            .byte_at(buf_access.charpos_to_bytepos(replay.new_point))
+                            == Some(b'\n');
+                        let Some((face_height, face_ascent)) = retained_point_cursor_metrics(
+                            row,
+                            replay.new_point as usize,
+                            buffer_newline,
+                            default_face.measurement_policy(),
+                        ) else {
+                            output.restore_retry_checkpoint(retry_checkpoint);
+                            return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
+                        };
+                        let (y, height, ascent) =
+                            crate::display_cursor::resolve_cursor_vertical_metrics(
+                                cursor_row_pixel_y,
+                                face_height,
+                                face_ascent,
+                                row.height_px,
+                                row.ascent_px,
+                                geometry.char_height,
+                                row.ends_at_zv,
+                            );
+                        cursor_row_pixel_y = y;
+                        cursor_height = height;
+                        cursor_ascent = ascent;
+                    }
                 }
                 prev_row_bottom = row.pixel_y + row.height_px;
             }

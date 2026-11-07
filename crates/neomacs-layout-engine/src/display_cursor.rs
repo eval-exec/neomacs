@@ -368,8 +368,14 @@ pub(crate) enum CursorSlotResolutionState {
 /// measured layout geometry with an unrelated window-grid estimate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ResolvedCursorSlot {
-    BufferGlyph(u16),
-    ReplacementString(u16),
+    BufferGlyph {
+        col: u16,
+        text_glyph: usize,
+    },
+    ReplacementString {
+        col: u16,
+        text_glyph: usize,
+    },
     /// Point is left of the horizontally visible source range, not merely
     /// hidden inside it. GNU clamps this cursor to the visible text edge.
     HorizontallyClipped(u16),
@@ -481,9 +487,8 @@ struct CursorDisplayCol(u16);
 impl ResolvedCursorSlot {
     pub(crate) const fn col(self) -> u16 {
         match self {
-            Self::BufferGlyph(col)
-            | Self::ReplacementString(col)
-            | Self::HorizontallyClipped(col)
+            Self::BufferGlyph { col, .. } | Self::ReplacementString { col, .. } => col,
+            Self::HorizontallyClipped(col)
             | Self::FollowingVisibleGlyph(col)
             | Self::RowEnd(col) => col,
         }
@@ -538,7 +543,12 @@ impl CursorVisualColumnResolutionRequest {
         }
         let rows = context.rows?;
         let row = rows.row(self.row)?;
+        Self::resolve_row_slot(row, self.charpos)
+    }
 
+    /// Select the materialized slot and source glyph together, before inspecting
+    /// its measurements. Bidi strings can share coverage but not cursor identity.
+    fn resolve_row_slot(row: &GlyphRow, point: usize) -> Option<ResolvedCursorSlot> {
         let mut col_acc: u16 = 0;
         for glyph in &row.glyphs[GlyphArea::LeftMargin.index()] {
             if glyph.padding {
@@ -592,27 +602,28 @@ impl CursorVisualColumnResolutionRequest {
         }
 
         let mut nearest_after: Option<(usize, u16)> = None;
-        let mut replacement_candidate: Option<(usize, u16)> = None;
+        let mut replacement_candidate: Option<(usize, u16, usize)> = None;
         let text_start_col = col_acc;
         let mut has_buffer_before_point = false;
-        for glyph in &text_glyphs[..text_end] {
+        for (text_glyph, glyph) in text_glyphs[..text_end].iter().enumerate() {
             if glyph.padding {
                 continue;
             }
             match glyph.provenance {
                 GlyphProvenance::Buffer { charpos } => {
-                    has_buffer_before_point |= charpos < self.charpos;
-                    if charpos == self.charpos {
-                        return Some(ResolvedCursorSlot::BufferGlyph(col_acc));
+                    has_buffer_before_point |= charpos < point;
+                    if charpos == point {
+                        return Some(ResolvedCursorSlot::BufferGlyph {
+                            col: col_acc,
+                            text_glyph,
+                        });
                     }
-                    if charpos > self.charpos
-                        && nearest_after.is_none_or(|(after, _)| charpos < after)
-                    {
+                    if charpos > point && nearest_after.is_none_or(|(after, _)| charpos < after) {
                         nearest_after = Some((charpos, col_acc));
                     }
                 }
                 GlyphProvenance::Str { index, .. }
-                    if row.glyph_covers_buffer_charpos(glyph, self.charpos) =>
+                    if row.glyph_covers_buffer_charpos(glyph, point) =>
                 {
                     // GNU set_cursor_from_row Step 2 chooses the smallest
                     // string index, not the first glyph in visual order (bidi
@@ -620,9 +631,9 @@ impl CursorVisualColumnResolutionRequest {
                     // carried once by the row's source occurrence instead of
                     // recovered heuristically or duplicated on every glyph.
                     if replacement_candidate
-                        .is_none_or(|(candidate_index, _)| index < candidate_index)
+                        .is_none_or(|(candidate_index, _, _)| index < candidate_index)
                     {
-                        replacement_candidate = Some((index, col_acc));
+                        replacement_candidate = Some((index, col_acc, text_glyph));
                     }
                 }
                 GlyphProvenance::Str { .. }
@@ -641,8 +652,8 @@ impl CursorVisualColumnResolutionRequest {
         // rather than None keeps a blank/EOL cursor out of the line-number
         // gutter (where the captured Text-index 0 would land it), matching GNU
         // set_cursor_from_row placing the cursor in the empty area after a row.
-        Some(if let Some((_, col)) = replacement_candidate {
-            ResolvedCursorSlot::ReplacementString(col)
+        Some(if let Some((_, col, text_glyph)) = replacement_candidate {
+            ResolvedCursorSlot::ReplacementString { col, text_glyph }
         } else if let Some((_, col)) = nearest_after {
             if row.truncated_left && !has_buffer_before_point {
                 ResolvedCursorSlot::HorizontallyClipped(text_start_col)
@@ -652,6 +663,19 @@ impl CursorVisualColumnResolutionRequest {
         } else {
             ResolvedCursorSlot::RowEnd(col_acc)
         })
+    }
+
+    /// Return the exact covering point glyph selected for cursor placement.
+    /// Hidden-text/row-end approximations have no covering glyph to substitute.
+    pub(crate) fn point_glyph(row: &GlyphRow, point: usize) -> Option<&Glyph> {
+        let text_glyph = match Self::resolve_row_slot(row, point)? {
+            ResolvedCursorSlot::BufferGlyph { text_glyph, .. }
+            | ResolvedCursorSlot::ReplacementString { text_glyph, .. } => text_glyph,
+            ResolvedCursorSlot::HorizontallyClipped(_)
+            | ResolvedCursorSlot::FollowingVisibleGlyph(_)
+            | ResolvedCursorSlot::RowEnd(_) => return None,
+        };
+        row.glyphs[GlyphArea::Text.index()].get(text_glyph)
     }
 
     #[cfg(test)]
@@ -1459,14 +1483,25 @@ impl<'a> CapturedTextWindowCursorPublishContext<'a> {
         // Explicit image/stretch captures and synthetic newlines keep their
         // own contracts; unmeasured glyphs retain the fresh active-face fallback.
         if cursor.vertical_source == CursorVerticalSource::ActiveFace {
-            if let Some(row) = output.builder().current_window_row(row_metric.row()) {
-                if let Some(glyph) = row.glyphs[GlyphArea::Text.index()].iter().find(|glyph| {
-                    glyph.pixel_height > 0.0
-                        && row
-                            .glyph_covers_buffer_charpos(glyph, self.point_charpos.max(0) as usize)
-                }) {
+            let builder = output.builder();
+            if let Some(row) = builder.current_window_row(row_metric.row()) {
+                if let Some(glyph) = CursorVisualColumnResolutionRequest::point_glyph(
+                    row,
+                    self.point_charpos.max(0) as usize,
+                )
+                .filter(|glyph| glyph.pixel_height > 0.0)
+                {
                     cursor.face_h = glyph.pixel_height;
                     cursor.face_ascent = glyph.pixel_ascent;
+                    if matches!(glyph.provenance, GlyphProvenance::Str { .. }) {
+                        // A replacement's face and width can differ from the
+                        // buffer face captured before rendering its string.
+                        cursor.slot_width = Some(glyph.pixel_width);
+                        if let Some(face) = builder.output_face(glyph.face_id) {
+                            cursor.fg = face.foreground;
+                            cursor.bg = face.background;
+                        }
+                    }
                 }
             }
         }

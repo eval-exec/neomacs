@@ -413,6 +413,95 @@ fn mixed_height_newline_cursor_replay_matches_fresh_capture() {
     }
 }
 
+/// Bidi replacement placement and vertical metrics must select the same glyph.
+#[test]
+fn rtl_replacement_cursor_uses_its_resolved_glyph_metrics() {
+    let (mut eval, frame, _buffer, window) = incr_editing_frame("x\n", 800, 240);
+    realize_test_gui_frame(&mut eval, frame);
+    eval.eval_str("(progn (put-text-property 1 2 'display (concat (propertize \"א\" 'face '(:height 2.0 :foreground \"white\" :background \"red\")) (propertize \"בג\" 'face '(:height 0.5 :foreground \"black\" :background \"blue\")))) (set-window-point (selected-window) 1))").unwrap();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+    let FrameLayoutAttempt::Prepared(prepared) = engine.redisplay_frame_attempt(&mut eval, frame)
+    else {
+        panic!("replacement should prepare")
+    };
+    let row = &prepared
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == window.0 as i64)
+        .unwrap()
+        .matrix
+        .rows[0];
+    let glyphs = &row.glyphs[GlyphArea::Text.index()];
+    let replacements = || {
+        glyphs.iter().filter(|glyph| {
+            !glyph.padding
+                && matches!(
+                    glyph.provenance,
+                    neomacs_display_protocol::glyph_matrix::GlyphProvenance::Str { .. }
+                )
+                && row.glyph_covers_buffer_charpos(glyph, 0)
+        })
+    };
+    let first = replacements().next().expect("visual replacement glyph");
+    let selected = replacements()
+        .min_by_key(|glyph| match glyph.provenance {
+            neomacs_display_protocol::glyph_matrix::GlyphProvenance::Str { index, .. } => index,
+            _ => unreachable!(),
+        })
+        .expect("logical replacement glyph");
+    assert_ne!(
+        first.pixel_height, selected.pixel_height,
+        "fixture must reorder differently sized glyphs"
+    );
+    let expected_height =
+        (row.ascent_px + selected.pixel_height - selected.pixel_ascent).min(row.height_px);
+    let expected_ascent = row.ascent_px;
+    let expected_width = selected.pixel_width.max(1.0);
+    let output = prepared.materialize();
+    let cursor = output.active_cursor().unwrap().clone();
+    assert_eq!(
+        (cursor.height, cursor.ascent),
+        (expected_height, expected_ascent)
+    );
+    assert_eq!(cursor.width, expected_width);
+    assert_eq!(cursor.cursor_fg, Color::from_pixel(0xff0000));
+    for point in [2, 1] {
+        eval.eval_str(&format!("(set-window-point (selected-window) {point})"))
+            .unwrap();
+        let FrameLayoutAttempt::Prepared(replayed) =
+            engine.redisplay_frame_attempt(&mut eval, frame)
+        else {
+            panic!("replacement replay should prepare")
+        };
+        assert_eq!(engine.last_layout_stats().cursor_only_windows, 1);
+        assert!(engine.last_layout_stats().reused_rows > 0);
+        if point == 1 {
+            assert_eq!(replayed.materialize().active_cursor().unwrap(), &cursor);
+        }
+    }
+}
+
+/// An unchanged authoritative cursor needs no new point-font measurement.
+#[test]
+fn unchanged_unmeasured_cursor_preserves_retained_replay() {
+    let (mut eval, frame, _buffer, _) = incr_editing_frame("text\n", 800, 240);
+    realize_test_gui_frame(&mut eval, frame);
+    let mut engine = crate::LayoutEngine::new_without_font_metrics();
+    let FrameLayoutAttempt::Prepared(first) = engine.redisplay_frame_attempt(&mut eval, frame)
+    else {
+        panic!("first frame should prepare")
+    };
+    let first = first.materialize().active_cursor().unwrap().clone();
+    let FrameLayoutAttempt::Prepared(second) = engine.redisplay_frame_attempt(&mut eval, frame)
+    else {
+        panic!("unchanged frame should prepare")
+    };
+    assert_eq!(engine.last_layout_stats().cursor_only_windows, 1);
+    assert!(engine.last_layout_stats().reused_rows > 0);
+    assert_eq!(second.materialize().active_cursor().unwrap(), &first);
+}
+
 /// A scroll retaining point's row must use its point glyph, not the whole row.
 #[test]
 fn mixed_height_scroll_cursor_matches_fresh_capture() {

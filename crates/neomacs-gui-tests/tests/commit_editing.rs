@@ -69,7 +69,7 @@ fn run_fixture_probe(probe: &str, fixture: &str) {
     assert!(!result.timed_out, "{result:#?}\n{stderr}");
     assert_eq!(result.exit_code, Some(0), "{result:#?}\n{stderr}");
     assert!(stderr.contains("COMMIT-EDITING-PASS"), "{stderr}");
-    if probe.ends_with("newline-cursor")
+    if (probe.ends_with("newline-cursor") || probe == "rtl-replacement-cursor")
         && !stderr.contains("CURSOR-REPLAY-REFERENCE-GEOMETRY-ONLY")
     {
         let marker = stderr
@@ -194,6 +194,11 @@ fn mixed_newline_cursor_matches_gnu_row_geometry() {
     ] {
         run_fixture_probe(probe, "newline-geometry.el");
     }
+}
+
+#[test]
+fn rtl_replacement_cursor_uses_one_glyph_for_placement_and_metrics() {
+    run_fixture_probe("rtl-replacement-cursor", "cursor-rtl.el");
 }
 
 #[test]
