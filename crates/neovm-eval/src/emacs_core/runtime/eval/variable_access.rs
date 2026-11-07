@@ -576,15 +576,29 @@ impl Context {
         VariableView::new(&self.obarray, &self.owner)
     }
 
-    /// [`VariableView::value`] of this owner's view.
+    /// The variable's DEFAULT-ONLY value: [`VariableView::value`] of this
+    /// owner's view, with no buffer. For a buffer-local variable that is the
+    /// default (owner) binding, never the current buffer's binding; for a
+    /// plain global it is the obarray cell (which a dynamic `let` writes); for
+    /// a forwarded variable it is the forwarder's bufferless load.
+    ///
+    /// GNU spells these reads `Fdefault_value` (src/data.c) or
+    /// `BVAR (&buffer_defaults, slot)` (src/buffer.c). A GNU C read of a
+    /// `DEFVAR_*` global, or a Lisp `symbol-value`, is the VISIBLE read and
+    /// must use [`Self::builtin_var_value`] /
+    /// [`Self::builtin_var_value_by_name`] / [`Self::builtin_var_value_cached`]
+    /// (or [`Self::special_variable_value_by_id`]) instead. The callers of
+    /// this accessor are counted and frozen by
+    /// `emacs_core/tests/architecture/default_value_only_ratchet_test.rs`.
     #[inline(always)]
-    pub fn variable_value(&self, id: SymId) -> Option<Value> {
+    pub fn default_value_only(&self, id: SymId) -> Option<Value> {
         self.variables().value(id)
     }
 
-    /// [`VariableView::value_by_name`] of this owner's view.
+    /// [`Self::default_value_only`] starting from the variable's name. The
+    /// name is interned per call; hot paths pre-intern and use the id form.
     #[inline(always)]
-    pub fn variable_value_by_name(&self, name: &str) -> Option<Value> {
+    pub fn default_value_only_by_name(&self, name: &str) -> Option<Value> {
         self.variables().value_by_name(name)
     }
 

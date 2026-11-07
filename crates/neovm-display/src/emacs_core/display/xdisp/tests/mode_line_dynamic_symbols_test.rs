@@ -462,7 +462,7 @@ fn mode_line_dynamic_symbols_split_callback_keeps_live_value_reads() {
     let mut ctx = context();
     let name = "ttykey-k5-dynamic-split-value";
     ctx.set_variable(name, Value::list(vec![Value::string("A")]));
-    let source = ctx.variable_value_by_name(name).expect("source list");
+    let source = ctx.default_value_only_by_name(name).expect("source list");
     // Risky evaluation does not affect an ordinary list of literal strings.
     let symbol = Value::from_sym_id(intern(name));
     let format = Value::list(vec![
@@ -518,7 +518,7 @@ fn mode_line_dynamic_symbols_eval_retains_object_after_actual_registry_change() 
     let pctx = ModeLinePercentContext::default();
     let output = render(&mut ctx, &pctx, format, Walker::Context);
     assert_eq!(
-        ctx.variable_value_by_name("ttykey-k5-dynamic-eval-did-reintern"),
+        ctx.default_value_only_by_name("ttykey-k5-dynamic-eval-did-reintern"),
         Some(Value::T),
         "the callback must reach its successful reintern marker"
     );

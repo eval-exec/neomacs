@@ -5,8 +5,10 @@
 //! CANONICAL value: what an owner without a binding sees. A Rust read or
 //! write of a variable that mirrors GNU's C (`Vfoo`, `BVAR (current_buffer,
 //! foo)`) must therefore go through the owner-aware `Context` API
-//! (`Context::variable_value`, `Context::store_variable`, ...), which answers
-//! the running owner's binding first.
+//! (`Context::builtin_var_value` for the visible read,
+//! `Context::default_value_only` for a GNU `Fdefault_value` read,
+//! `Context::store_variable`, ...), which answers the running owner's
+//! binding first.
 //!
 //! The obarray's value accessors take a [`CanonicalAccess`] instead of
 //! answering anyone who asks: every caller names why canonical storage is the

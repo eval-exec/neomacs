@@ -5657,7 +5657,7 @@ impl Context {
         if let Some(info) = neovm_edit::buffer::buffer::lookup_buffer_slot(name) {
             return Some(self.edit.buffers.buffer_defaults[info.offset.index()]);
         }
-        self.variable_value_by_name(name)
+        self.default_value_only_by_name(name)
     }
 
     /// [`Self::buffer_default_value`] for a fixed GNU spelling.
@@ -5670,7 +5670,7 @@ impl Context {
         if let Some(info) = neovm_edit::buffer::buffer::lookup_buffer_slot(symbol.name()) {
             return Some(self.edit.buffers.buffer_defaults[info.offset.index()]);
         }
-        self.variable_value(symbol.id())
+        self.default_value_only(symbol.id())
     }
 
     /// Seed the 24 GNU standard built-in fringe bitmaps into the registry and

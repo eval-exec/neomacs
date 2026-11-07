@@ -203,7 +203,7 @@ fn symbol_font_policy_tracks_the_live_char_script_table_and_invalidates_char_cac
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str("(set-char-table-range char-script-table '(#x2000 . #x27ff) 'symbol)")
         .expect("classify the Unicode symbol block");
-    let table = eval.variable_value_by_name("char-script-table");
+    let table = eval.default_value_only_by_name("char-script-table");
 
     let mut svc = make_svc();
     assert!(
@@ -274,7 +274,7 @@ fn covered_symbol_uses_and_publishes_the_realized_primary_font() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.eval_str("(set-char-table-range char-script-table '(#x2000 . #x27ff) 'symbol)")
         .expect("classify the Unicode symbol block");
-    let table = eval.variable_value_by_name("char-script-table");
+    let table = eval.default_value_only_by_name("char-script-table");
 
     let mut svc = make_svc();
     let _ = svc.synchronize_symbol_font_policy(true, table);

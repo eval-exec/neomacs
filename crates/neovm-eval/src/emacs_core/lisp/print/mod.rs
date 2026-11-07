@@ -882,7 +882,7 @@ fn bind_unreadable_printer_default(
     // for the print-unreadable-function nil binding made at print.c:1711,
     // which runs after print_prepare's destination-buffer switch
     // (print.c:143-151). The default cell is what that bind saves.
-    let old = context.variable_value(symbol).unwrap_or(Value::UNBOUND);
+    let old = context.default_value_only(symbol).unwrap_or(Value::UNBOUND);
     context.push_specpdl_with(|| SpecBinding::LetDefault {
         sym_id: symbol,
         old_value: SavedBindingValue::from_plain(old),

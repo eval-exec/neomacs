@@ -561,7 +561,7 @@ fn collect_gui_tool_bar_items_for_frame_retains_items_until_gnu_rebuild_predicat
     );
     eval.set_variable("tool-bar-map", map);
     let enable_evals = |eval: &Context| {
-        eval.variable_value_by_name("neo-enable-evals")
+        eval.default_value_only_by_name("neo-enable-evals")
             .expect("enable counter")
     };
     // A window that has never generated chrome carries GNU's

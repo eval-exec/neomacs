@@ -99,14 +99,18 @@ pub trait EditHost {
         inherit_global: bool,
     ) -> EvalResult;
 
-    /// The variable's value WITHOUT a buffer: the default of a
-    /// buffer-local variable, `None` when void. Use
-    /// [`Self::forwarded_variable_value`] for GNU `find_symbol_value`.
+    /// The variable's DEFAULT-ONLY value, without a buffer: for a
+    /// buffer-local variable the default cell, never the current buffer's
+    /// binding; `None` when void. GNU `Fdefault_value` /
+    /// `BVAR (&buffer_defaults, slot)`. Use
+    /// [`Self::forwarded_variable_value`] for GNU `find_symbol_value` (the
+    /// visible read); callers are counted by the default-value-only ratchet.
     /// C2.
-    fn variable_value(&self, id: SymId) -> Option<Value>;
+    fn default_value_only(&self, id: SymId) -> Option<Value>;
 
-    /// [`Self::variable_value`] starting from the variable's name. C2.
-    fn variable_value_by_name(&self, name: &str) -> Option<Value>;
+    /// [`Self::default_value_only`] starting from the variable's name.
+    /// C2.
+    fn default_value_only_by_name(&self, name: &str) -> Option<Value>;
 
     /// The variable's visible value in `buf`: the buffer's local
     /// binding when it has one, else the default. C2.
@@ -121,7 +125,7 @@ pub trait EditHost {
     /// buffer's forwarded/local binding (swapped into the C global by
     /// `set_buffer_internal_2`, src/buffer.c:2342ff) and the live dynamic
     /// binding, `None` when void. This is the value a `DEFVAR_*` C global
-    /// holds. Callers must use this, never `variable_value`, for the
+    /// holds. Callers must use this, never `default_value_only`, for the
     /// scanner/scan/search variables whose GNU C reads see buffer locals.
     /// Pure read. EDIT-HOST row (stage-3b forwarded-locals fix).
     fn forwarded_variable_value(&self, id: SymId) -> Option<Value>;

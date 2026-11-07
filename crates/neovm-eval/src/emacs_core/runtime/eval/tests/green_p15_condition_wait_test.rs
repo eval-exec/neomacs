@@ -97,8 +97,10 @@ fn p15_condition_wait_signal_restores_exact_depth_before_inner_handler() {
                     (mutex-lock p15-wait-m)))))))
            (condition-wait p15-wait-ready))",
     );
-    let worker = context.variable_value_by_name("p15-wait-worker").unwrap();
-    let condition = context.variable_value_by_name("p15-wait-c").unwrap();
+    let worker = context
+        .default_value_only_by_name("p15-wait-worker")
+        .unwrap();
+    let condition = context.default_value_only_by_name("p15-wait-c").unwrap();
     assert_eq!(
         context.threads.thread_blocker_for_value(worker),
         Some(condition)
@@ -142,9 +144,11 @@ fn p15_condition_wait_argument_is_the_only_reacquiring_condition_root() {
                p15-sole-ready (make-condition-variable p15-sole-m))",
     );
     // Plain Value words here are observations, not registered root leases.
-    let mutex = context.variable_value_by_name("p15-sole-m").unwrap();
-    let condition = context.variable_value_by_name("p15-sole-c").unwrap();
-    let ready = context.variable_value_by_name("p15-sole-ready").unwrap();
+    let mutex = context.default_value_only_by_name("p15-sole-m").unwrap();
+    let condition = context.default_value_only_by_name("p15-sole-c").unwrap();
+    let ready = context
+        .default_value_only_by_name("p15-sole-ready")
+        .unwrap();
     eval(
         &mut context,
         "(progn
@@ -159,7 +163,9 @@ fn p15_condition_wait_argument_is_the_only_reacquiring_condition_root() {
            (condition-wait p15-sole-ready)
            (setq p15-sole-ready nil p15-sole-m nil))",
     );
-    let worker = context.variable_value_by_name("p15-sole-worker").unwrap();
+    let worker = context
+        .default_value_only_by_name("p15-sole-worker")
+        .unwrap();
     assert_eq!(
         context.threads.thread_blocker_for_value(worker),
         Some(condition)

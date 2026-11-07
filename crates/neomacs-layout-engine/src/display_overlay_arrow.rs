@@ -130,7 +130,7 @@ pub(crate) fn draw_overlay_arrows<B: LayoutBufferView, FS: crate::neovm_bridge::
 /// as GNU's loop does.
 fn arrow_variables(evaluator: &Context) -> Vec<Value> {
     let Some(list) =
-        evaluator.variable_value(crate::fixed_symbols::OVERLAY_ARROW_VARIABLE_LIST.id())
+        evaluator.default_value_only(crate::fixed_symbols::OVERLAY_ARROW_VARIABLE_LIST.id())
     else {
         return Vec::new();
     };
@@ -150,7 +150,7 @@ fn arrow_variables(evaluator: &Context) -> Vec<Value> {
 /// into `buffer_id` (GNU additionally requires `current_buffer`).
 fn arrow_marker_charpos(evaluator: &Context, var: Value, buffer_id: BufferId) -> Option<usize> {
     let sym = var.as_bare_symbol_id()?;
-    let value = evaluator.variable_value(sym)?;
+    let value = evaluator.default_value_only(sym)?;
     let marker = value.as_marker_data()?;
     (marker.buffer_id() == Some(buffer_id)).then_some(marker.charpos.get())
 }
@@ -177,7 +177,7 @@ fn arrow_string(evaluator: &Context, var: Value) -> Option<String> {
         plist = rest.cons_cdr();
     }
     evaluator
-        .variable_value(crate::fixed_symbols::OVERLAY_ARROW_STRING.id())
+        .default_value_only(crate::fixed_symbols::OVERLAY_ARROW_STRING.id())
         .and_then(|value| value.as_str_owned())
 }
 

@@ -123,7 +123,7 @@ pub(crate) fn seed_input_decode_map_from_terminal(eval: &mut Context) {
         tracing::debug!("term_get_fkeys: no termcap/terminfo database for TERM={term:?}");
         return;
     };
-    let Some(input_decode_map) = eval.variable_value_by_name("input-decode-map") else {
+    let Some(input_decode_map) = eval.default_value_only_by_name("input-decode-map") else {
         return;
     };
 

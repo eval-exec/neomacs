@@ -94,7 +94,7 @@ fn probe(ev: &mut crate::emacs_core::eval::Context, weakness: &str, maker: &str)
     ev.eval_str("(setq d2 (hash-table-count wk-tbl))")
         .expect("second dropped count");
     ["rooted", "d1", "d2"].map(|name| {
-        ev.variable_value_by_name(name)
+        ev.default_value_only_by_name(name)
             .and_then(|v| v.as_fixnum())
             .unwrap_or(-1)
     })

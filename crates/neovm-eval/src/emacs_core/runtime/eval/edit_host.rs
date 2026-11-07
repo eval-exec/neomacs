@@ -75,12 +75,12 @@ impl EditHost for Context {
         )
     }
 
-    fn variable_value(&self, id: SymId) -> Option<Value> {
-        Context::variable_value(self, id)
+    fn default_value_only(&self, id: SymId) -> Option<Value> {
+        Context::default_value_only(self, id)
     }
 
-    fn variable_value_by_name(&self, name: &str) -> Option<Value> {
-        Context::variable_value_by_name(self, name)
+    fn default_value_only_by_name(&self, name: &str) -> Option<Value> {
+        Context::default_value_only_by_name(self, name)
     }
 
     fn variable_value_in_buffer(&self, buf: Option<&Buffer>, id: SymId) -> Option<Value> {

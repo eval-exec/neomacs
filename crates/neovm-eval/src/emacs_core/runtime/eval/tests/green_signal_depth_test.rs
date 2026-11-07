@@ -77,7 +77,9 @@ fn reserve_binding(mut context: Context, localized: bool) {
     context.depth = 100;
     let result = context.call_debugger(vec![Value::symbol("error"), Value::NIL]);
     context.depth = 0;
-    let seen = context.variable_value_by_name("green-depth-seen").unwrap();
+    let seen = context
+        .default_value_only_by_name("green-depth-seen")
+        .unwrap();
     let restored_limit = context
         .variable_value_in_current_buffer(neovm_value::intern::intern("max-lisp-eval-depth"))
         .unwrap();
@@ -85,7 +87,7 @@ fn reserve_binding(mut context: Context, localized: bool) {
         .variable_value_in_current_buffer(neovm_value::intern::intern("lisp-eval-depth-reserve"))
         .unwrap();
     let writes = context
-        .variable_value_by_name("green-depth-writes")
+        .default_value_only_by_name("green-depth-writes")
         .unwrap();
     let outcome = result.unwrap();
     assert_eq!(crate::emacs_core::print::print_value(&seen), "(300 0)");
@@ -203,7 +205,9 @@ fn reserve_canonical(mut context: Context, storage: CanonicalDepthStorage, switc
     assert_canonical(&context);
     assert_eq!(
         crate::emacs_core::print::print_value(
-            &context.variable_value_by_name("green-depth-seen").unwrap()
+            &context
+                .default_value_only_by_name("green-depth-seen")
+                .unwrap()
         ),
         "(300 0)"
     );
@@ -229,7 +233,7 @@ fn reserve_canonical(mut context: Context, storage: CanonicalDepthStorage, switc
     }
     assert_eq!(context.max_depth, 100);
     assert_eq!(
-        context.variable_value_by_name("green-depth-writes"),
+        context.default_value_only_by_name("green-depth-writes"),
         Some(Value::NIL),
         "canonical temporary reserve writes bypass watchers"
     );

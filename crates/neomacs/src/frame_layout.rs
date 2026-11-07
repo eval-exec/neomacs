@@ -394,7 +394,7 @@ fn prepare_tty_tree_before_activation(
 /// as non-nil here too.  One variable read per redisplay.
 pub(crate) fn very_visible_cursor(evaluator: &Context) -> bool {
     evaluator
-        .variable_value(neovm_core::emacs_core::intern::WellKnown::VisibleCursor.id())
+        .default_value_only(neovm_core::emacs_core::intern::WellKnown::VisibleCursor.id())
         .is_none_or(|value| value.is_truthy())
 }
 

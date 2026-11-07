@@ -165,7 +165,9 @@ fn default_realization_binding_restores_after_lisp_error() {
     let mut scope = RealizationBinding::enter(&mut context, "inhibit-redisplay", Value::T)
         .expect("ordinary special variable accepts its binding");
     assert_eq!(
-        scope.context().variable_value_by_name("inhibit-redisplay"),
+        scope
+            .context()
+            .default_value_only_by_name("inhibit-redisplay"),
         Some(Value::T)
     );
     let failure: Result<(), Flow> = Err(neovm_value::error::signal(
@@ -174,7 +176,7 @@ fn default_realization_binding_restores_after_lisp_error() {
     ));
     assert!(scope.finish(failure).is_err());
     assert_eq!(
-        context.variable_value_by_name("inhibit-redisplay"),
+        context.default_value_only_by_name("inhibit-redisplay"),
         Some(Value::NIL)
     );
 }
@@ -188,7 +190,7 @@ fn default_realization_binding_drop_restores_native_state() {
             .expect("ordinary special variable accepts its binding");
     }
     assert_eq!(
-        context.variable_value_by_name("inhibit-redisplay"),
+        context.default_value_only_by_name("inhibit-redisplay"),
         Some(Value::fixnum(7))
     );
 }

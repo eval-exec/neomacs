@@ -6027,13 +6027,15 @@ pub(crate) fn sync_runtime_interpreted_closure_filter(eval: &mut super::eval::Co
     let closure_filter_sym =
         neovm_value::intern::intern("internal-make-interpreted-closure-function");
     let cconv_sym = neovm_value::intern::intern("cconv-make-interpreted-closure");
-    let filter_fn = eval.builtin_var_value(closure_filter_sym).and_then(|value| {
-        if value.as_symbol_id(symbol_mode) == Some(cconv_sym) {
-            eval.obarray().symbol_function_id(cconv_sym)
-        } else {
-            None
-        }
-    });
+    let filter_fn = eval
+        .builtin_var_value(closure_filter_sym)
+        .and_then(|value| {
+            if value.as_symbol_id(symbol_mode) == Some(cconv_sym) {
+                eval.obarray().symbol_function_id(cconv_sym)
+            } else {
+                None
+            }
+        });
     eval.set_interpreted_closure_filter_fn(filter_fn);
 }
 

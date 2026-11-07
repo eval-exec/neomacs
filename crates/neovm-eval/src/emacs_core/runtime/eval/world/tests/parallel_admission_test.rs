@@ -100,7 +100,7 @@ fn attempt(context: &mut Context) -> Attempt {
 }
 
 fn check_serial_recovery(context: &mut Context, expected: i64) -> Result<(), String> {
-    let value = context.variable_value_by_name(VALUE_NAME);
+    let value = context.default_value_only_by_name(VALUE_NAME);
     if value != Some(TaggedValue::fixnum(expected)) {
         return Err(format!(
             "serial global after admission: {value:?}, expected {expected}"

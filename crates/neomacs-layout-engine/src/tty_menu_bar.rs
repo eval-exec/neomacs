@@ -286,7 +286,7 @@ fn resolve_keymap(eval: &Context, value: &Value) -> Option<Value> {
         return Some(*value);
     }
     if let Some(name) = value.as_symbol_name(eval.symbol_mode())
-        && let Some(symbol_value) = eval.variable_value_by_name(name)
+        && let Some(symbol_value) = eval.default_value_only_by_name(name)
         && is_keymap(&symbol_value, eval.symbol_mode())
     {
         return Some(symbol_value);
@@ -299,7 +299,7 @@ fn resolve_keymap(eval: &Context, value: &Value) -> Option<Value> {
 /// the current end.  The declared list therefore defines the final items'
 /// order; this is not a stable partition of their source-keymap order.
 fn move_final_items_to_end(eval: &Context, items: &mut Vec<TtyMenuBarItem>) {
-    let final_items = match eval.variable_value_by_name("menu-bar-final-items") {
+    let final_items = match eval.default_value_only_by_name("menu-bar-final-items") {
         Some(value) => value,
         None => return,
     };

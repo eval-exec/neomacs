@@ -51,7 +51,7 @@ impl ToolBarIconTheme {
 }
 
 pub fn compact_bar_mode_enabled(eval: &Context) -> bool {
-    eval.variable_value_by_name("compact-bar-mode")
+    eval.default_value_only_by_name("compact-bar-mode")
         .unwrap_or(Value::NIL)
         .is_truthy()
 }
@@ -660,7 +660,7 @@ fn themed_tool_bar_image_path(eval: &Context, path: &str) -> String {
 }
 
 fn current_tool_bar_icon_theme(eval: &Context) -> ToolBarIconTheme {
-    eval.variable_value_by_name("neomacs-toolbar-icon-theme")
+    eval.default_value_only_by_name("neomacs-toolbar-icon-theme")
         .and_then(|value| value.as_bare_symbol_name())
         .and_then(|name| ToolBarIconTheme::from_str(name).ok())
         .unwrap_or(ToolBarIconTheme::VscodeLike)
@@ -668,7 +668,7 @@ fn current_tool_bar_icon_theme(eval: &Context) -> ToolBarIconTheme {
 
 fn custom_tool_bar_icon_path(eval: &Context, icon_name: &str) -> Option<String> {
     let directory = eval
-        .variable_value_by_name("neomacs-toolbar-icon-directory")
+        .default_value_only_by_name("neomacs-toolbar-icon-directory")
         .and_then(|value| value.as_runtime_string_owned())?;
     let directory = directory.trim();
     if directory.is_empty() {
@@ -800,7 +800,7 @@ fn resolve_keymap(eval: &Context, value: &Value) -> Option<Value> {
         return Some(*value);
     }
     if let Some(name) = value.as_symbol_name(eval.symbol_mode())
-        && let Some(symbol_value) = eval.variable_value_by_name(name)
+        && let Some(symbol_value) = eval.default_value_only_by_name(name)
         && is_keymap(&symbol_value, eval.symbol_mode())
     {
         return Some(symbol_value);

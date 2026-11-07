@@ -202,7 +202,7 @@ fn final_menu_items_follow_the_declared_order() {
     eval.eval_str("(setq menu-bar-final-items '(completion inout signals help-menu))")
         .expect("set final menu order through the forwarded Lisp variable");
     assert_eq!(
-        eval.variable_value_by_name("menu-bar-final-items")
+        eval.default_value_only_by_name("menu-bar-final-items")
             .expect("menu-bar-final-items is bound")
             .cons_car()
             .as_bare_symbol_name(),

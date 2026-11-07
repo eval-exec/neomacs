@@ -229,7 +229,7 @@ fn a_buffer_slot_binding_lives_in_the_slot_and_parks_in_the_slab() {
         &mut ev,
         "(setq tom-name (concat \"inner-\" (number-to-string 7)))",
     );
-    let name = ev.variable_value_by_name("tom-name").expect("tom-name");
+    let name = ev.default_value_only_by_name("tom-name").expect("tom-name");
     ev.try_specbind(mode, name).expect("bind mode-name");
     // In place: the slot holds the binding, and the slab records nothing.
     assert_eq!(

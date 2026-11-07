@@ -889,9 +889,7 @@ fn deactivate_mark_set_is_noop<H: crate::emacs_core::edit_host::EditHost>(
         return false;
     }
     match redirect {
-        SymbolRedirect::Plainval => {
-            host.forwarded_variable_value(sym) == Some(Value::T)
-        }
+        SymbolRedirect::Plainval => host.forwarded_variable_value(sym) == Some(Value::T),
         SymbolRedirect::Localized => {
             host.edit_and_vars()
                 .0

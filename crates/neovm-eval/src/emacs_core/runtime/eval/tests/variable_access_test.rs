@@ -45,14 +45,14 @@ fn canonical(ev: &mut Context, name: &str) -> String {
 fn a_dormant_context_reads_and_writes_canonical_storage() {
     for projected in [false, true] {
         let mut ev = context(projected);
-        assert_eq!(show(ev.variable_value_by_name("tva-v")), "5");
+        assert_eq!(show(ev.default_value_only_by_name("tva-v")), "5");
         ev.store_variable_by_name("tva-v", Value::fixnum(6));
         assert_eq!(eval(&mut ev, "tva-v"), "6");
         assert_eq!(canonical(&mut ev, "tva-v"), "6");
         assert!(ev.variables().boundp_by_name("tva-v"));
         ev.makunbound_variable(intern("tva-v"));
         assert_eq!(eval(&mut ev, "(boundp 'tva-v)"), "nil");
-        assert_eq!(show(ev.variable_value_by_name("tva-v")), "void");
+        assert_eq!(show(ev.default_value_only_by_name("tva-v")), "void");
     }
 }
 
@@ -62,7 +62,7 @@ fn reads_answer_the_owner_binding() {
     let count = ev.specpdl.len();
     ev.try_specbind(intern("tva-v"), Value::fixnum(7))
         .expect("bind");
-    assert_eq!(show(ev.variable_value_by_name("tva-v")), "7");
+    assert_eq!(show(ev.default_value_only_by_name("tva-v")), "7");
     assert_eq!(print_value(&ev.variable_value_or_nil(intern("tva-v"))), "7");
     assert_eq!(show(ev.variables().default_value(intern("tva-v"))), "7");
     assert!(ev.variables().boundp(intern("tva-v")));
@@ -74,7 +74,7 @@ fn reads_answer_the_owner_binding() {
     );
     assert_eq!(canonical(&mut ev, "tva-v"), "5");
     ev.unbind_to(count);
-    assert_eq!(show(ev.variable_value_by_name("tva-v")), "5");
+    assert_eq!(show(ev.default_value_only_by_name("tva-v")), "5");
 }
 
 #[test]

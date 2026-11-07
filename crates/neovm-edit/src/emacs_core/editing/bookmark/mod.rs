@@ -820,9 +820,8 @@ fn active_bookmark_default_file<H: crate::emacs_core::edit_host::EditHost>(host:
 fn bookmark_timestamp_file<H: crate::emacs_core::edit_host::EditHost>(
     host: &H,
 ) -> Option<LispString> {
-    let value = host.forwarded_variable_value(neovm_value::intern::intern(
-        "bookmark-bookmarks-timestamp",
-    ))?;
+    let value =
+        host.forwarded_variable_value(neovm_value::intern::intern("bookmark-bookmarks-timestamp"))?;
     if !value.is_cons() {
         return None;
     };

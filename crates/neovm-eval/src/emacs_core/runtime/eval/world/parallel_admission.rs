@@ -324,7 +324,7 @@ mod heapborrow_tests {
         assert_eq!(value.cons_car(), TaggedValue::fixnum(41));
         assert!(
             context
-                .variable_value_by_name("window-dead-windows-table")
+                .builtin_var_value_by_name("window-dead-windows-table")
                 .is_some()
         );
     }

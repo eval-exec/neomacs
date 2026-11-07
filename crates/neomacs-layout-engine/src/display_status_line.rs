@@ -1718,7 +1718,7 @@ fn eval_status_line_format_output(
                 .unwrap_or_else(|| {
                     // Fall back to the global default
                     evaluator
-                        .variable_value(format_var.id())
+                        .default_value_only(format_var.id())
                         .unwrap_or(Value::NIL)
                 })
         });
@@ -2606,7 +2606,7 @@ pub(crate) fn build_tab_bar_display(
 
 pub(crate) fn max_mini_window_lines(evaluator: &Context, frame_rows: f32) -> f32 {
     let raw = evaluator
-        .variable_value(crate::fixed_symbols::MAX_MINI_WINDOW_HEIGHT.id())
+        .default_value_only(crate::fixed_symbols::MAX_MINI_WINDOW_HEIGHT.id())
         .unwrap_or_else(|| Value::make_float(0.25));
     max_mini_window_lines_from_value(raw, frame_rows)
 }
@@ -2617,7 +2617,7 @@ pub(crate) fn max_mini_window_lines_for_buffer<B: LayoutBufferView>(
     frame_rows: f32,
 ) -> f32 {
     let raw = buffer_local_value(buffer, LayoutVar::MaxMiniWindowHeight)
-        .or_else(|| evaluator.variable_value(crate::fixed_symbols::MAX_MINI_WINDOW_HEIGHT.id()))
+        .or_else(|| evaluator.default_value_only(crate::fixed_symbols::MAX_MINI_WINDOW_HEIGHT.id()))
         .unwrap_or_else(|| Value::make_float(0.25));
     max_mini_window_lines_from_value(raw, frame_rows)
 }

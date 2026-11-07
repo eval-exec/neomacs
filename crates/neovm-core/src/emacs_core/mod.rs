@@ -547,6 +547,10 @@ mod architecture_tagged_compile_seam_guard_test;
 mod architecture_coherence_upper_impl_ratchet_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/default_value_only_ratchet_test.rs"]
+mod architecture_default_value_only_ratchet_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/plist_head_seam_guard_test.rs"]
 mod architecture_plist_head_seam_guard_test;
 
