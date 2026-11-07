@@ -358,6 +358,44 @@ pub struct CharsetRegistrySnapshot {
     pub non_preferred_head: Option<usize>,
 }
 
+/// A charset's plist storage.
+///
+/// C-level charsets are registered by the build before a tagged heap may
+/// exist, so their plists start `Unmaterialized`; only that state is replaced
+/// by GNU's canonical C-level plist (charset.c:1268-1273) on the first
+/// `charset-plist` read.  A snapshot restore and a Lisp `set-charset-plist`
+/// always store `Set`, so an empty (`nil`) or one-pair Lisp value stays
+/// authoritative instead of being mistaken for a build placeholder.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[derive(Clone, Debug)]
+enum CharsetPlist {
+    Unmaterialized,
+    Set(Vec<(SymId, Value)>),
+}
+
+impl CharsetPlist {
+    fn as_slice(&self) -> &[(SymId, Value)] {
+        match self {
+            Self::Unmaterialized => &[],
+            Self::Set(plist) => plist,
+        }
+    }
+
+    fn as_mut_vec(&mut self) -> Option<&mut Vec<(SymId, Value)>> {
+        match self {
+            Self::Unmaterialized => None,
+            Self::Set(plist) => Some(plist),
+        }
+    }
+
+    fn into_vec(self) -> Vec<(SymId, Value)> {
+        match self {
+            Self::Unmaterialized => Vec::new(),
+            Self::Set(plist) => plist,
+        }
+    }
+}
+
 #[cfg(not(any(test, feature = "test-support")))]
 /// Information about a single charset.
 #[derive(Clone, Debug)]
@@ -377,7 +415,7 @@ struct CharsetInfo {
     invalid_code: Option<i64>,
     unify_map: Value,
     method: CharsetMethod,
-    plist: Vec<(SymId, Value)>,
+    plist: CharsetPlist,
 }
 #[cfg(any(test, feature = "test-support"))]
 /// Information about a single charset.
@@ -398,7 +436,7 @@ pub struct CharsetInfo {
     invalid_code: Option<i64>,
     pub unify_map: Value,
     pub method: CharsetMethod,
-    pub plist: Vec<(SymId, Value)>,
+    pub plist: CharsetPlist,
 }
 
 #[cfg(not(any(test, feature = "test-support")))]
@@ -552,7 +590,7 @@ impl CharsetRegistry {
             invalid_code: None,
             unify_map: Value::NIL,
             method: CharsetMethod::Offset(0),
-            plist: vec![],
+            plist: CharsetPlist::Unmaterialized,
         }
     }
 
@@ -662,44 +700,53 @@ impl CharsetRegistry {
         // the Lisp thread); the render thread keeps the fields and an empty
         // plist (it never reads `charset-plist`). Without this guard,
         // `Value::vector` panics with "no TaggedHeap set for this thread".
-        if info.plist.is_empty() && materialize_plists {
-            let code_offset = match info.method {
-                CharsetMethod::Offset(n) => n,
-                _ => 0,
-            };
-            let code_space = info
-                .code_space
-                .iter()
-                .map(|&n| Value::fixnum(n))
-                .collect::<Vec<_>>();
-            info.plist = vec![
-                (intern(":name"), Value::from_sym_id(info.name)),
-                (intern(":dimension"), Value::fixnum(info.dimension)),
-                (intern(":code-space"), Value::vector(code_space)),
-                (
-                    intern(":iso-final-char"),
-                    info.iso_final_char.map_or(Value::NIL, Value::fixnum),
-                ),
-                (
-                    intern(":emacs-mule-id"),
-                    info.emacs_mule_id.map_or(Value::NIL, Value::fixnum),
-                ),
-                (
-                    intern(":ascii-compatible-p"),
-                    if info.ascii_compatible_p {
-                        Value::T
-                    } else {
-                        Value::NIL
-                    },
-                ),
-                (intern(":code-offset"), Value::fixnum(code_offset)),
-            ];
+        if matches!(info.plist, CharsetPlist::Unmaterialized) && materialize_plists {
+            info.plist = CharsetPlist::Set(Self::canonical_builtin_plist(&info));
         }
         if add_ordered {
             self.register(info);
         } else {
             self.register_preseed(info);
         }
+    }
+
+    /// GNU's C-level `define_charset_internal` plist (charset.c:1268-1273):
+    /// `:name :dimension :code-space :iso-final-char :emacs-mule-id
+    /// :ascii-compatible-p :code-offset`, in that order.  Materializing it
+    /// allocates the `:code-space` vector on the tagged heap; the caller
+    /// guarantees a heap is available.
+    fn canonical_builtin_plist(info: &CharsetInfo) -> Vec<(SymId, Value)> {
+        let code_offset = match info.method {
+            CharsetMethod::Offset(n) => n,
+            _ => 0,
+        };
+        let code_space = info
+            .code_space
+            .iter()
+            .map(|&n| Value::fixnum(n))
+            .collect::<Vec<_>>();
+        vec![
+            (intern(":name"), Value::from_sym_id(info.name)),
+            (intern(":dimension"), Value::fixnum(info.dimension)),
+            (intern(":code-space"), Value::vector(code_space)),
+            (
+                intern(":iso-final-char"),
+                info.iso_final_char.map_or(Value::NIL, Value::fixnum),
+            ),
+            (
+                intern(":emacs-mule-id"),
+                info.emacs_mule_id.map_or(Value::NIL, Value::fixnum),
+            ),
+            (
+                intern(":ascii-compatible-p"),
+                if info.ascii_compatible_p {
+                    Value::T
+                } else {
+                    Value::NIL
+                },
+            ),
+            (intern(":code-offset"), Value::fixnum(code_offset)),
+        ]
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -720,12 +767,15 @@ impl CharsetRegistry {
         // Ensure the plist includes :dimension so that Elisp
         // charset-dimension (which reads the plist) returns a value.
         // GNU define-charset includes :dimension in the plist
-        // (charset.c:1269-1273).  Builtin charsets start with an
-        // empty plist; dynamic charsets from define-charset already
-        // include it — only push if absent.
-        let dim_sym = intern(":dimension");
-        if !info.plist.iter().any(|(k, _)| *k == dim_sym) {
-            info.plist.push((dim_sym, Value::fixnum(info.dimension)));
+        // (charset.c:1269-1273).  Dynamic charsets from define-charset carry
+        // a real Set plist and only gain :dimension when absent; an
+        // Unmaterialized build plist stays empty until the canonical
+        // materialization supplies the full list.
+        if let Some(plist) = info.plist.as_mut_vec() {
+            let dim_sym = intern(":dimension");
+            if !plist.iter().any(|(k, _)| *k == dim_sym) {
+                plist.push((dim_sym, Value::fixnum(info.dimension)));
+            }
         }
         let name = info.name;
         let supplementary_p = info.supplementary_p;
@@ -952,6 +1002,31 @@ impl CharsetRegistry {
             .map(|info| info.plist.as_slice())
     }
 
+    /// Materialize a built-in charset's canonical C-level plist on first
+    /// `charset-plist` use, when the registry was built before this thread
+    /// had a tagged heap (a test-support dependency build whose registry TLS
+    /// initialized first).  `charset-plist` only runs on a Lisp thread, where
+    /// a Context heap -- or the test fallback heap under the A-prime feature
+    /// -- is installed, so the `:code-space` vector allocation is safe.
+    ///
+    /// Only an `Unmaterialized` entry is replaced.  `Set` is authoritative by
+    /// construction: a snapshot restore and a Lisp `set-charset-plist` always
+    /// store `Set`, so `nil` or a one-pair plist is never sniffed back into
+    /// the canonical list (GNU keeps the Lisp value verbatim).
+    pub(crate) fn ensure_builtin_plist(&mut self, name: SymId) {
+        let resolved = self.resolve_name(name);
+        let Some(info) = self.charsets.get(&resolved).cloned() else {
+            return;
+        };
+        if !matches!(info.plist, CharsetPlist::Unmaterialized) {
+            return;
+        }
+        let plist = Self::canonical_builtin_plist(&info);
+        if let Some(stored) = self.charsets.get_mut(&resolved) {
+            stored.plist = CharsetPlist::Set(plist);
+        }
+    }
+
     /// Return the internal ID for a charset, if known.
     pub fn id(&self, name: SymId) -> Option<i64> {
         self.charsets
@@ -1028,7 +1103,7 @@ impl CharsetRegistry {
                         CharsetMethodSnapshot::Superset(members.clone())
                     }
                 },
-                plist: info.plist.clone(),
+                plist: info.plist.clone().into_vec(),
             })
             .collect::<Vec<_>>();
         charsets.sort_by(|left, right| resolve_sym(left.name).cmp(resolve_sym(right.name)));
@@ -1089,7 +1164,7 @@ impl CharsetRegistry {
                             CharsetMethod::Superset(members)
                         }
                     },
-                    plist: info.plist,
+                    plist: CharsetPlist::Set(info.plist),
                 },
             );
         }
@@ -1112,6 +1187,7 @@ impl CharsetRegistry {
                 .filter_map(|info| {
                     let canonical = info
                         .plist
+                        .as_slice()
                         .iter()
                         .find(|(key, _)| *key == name_key)
                         .and_then(|(_, value)| value.as_bare_symbol_id())?;
@@ -1161,10 +1237,13 @@ impl CharsetRegistry {
     }
 
     /// Replace the plist for a charset.
+    ///
+    /// A Lisp `set-charset-plist` always stores `Set`, so the value it wrote
+    /// (`nil` included) is authoritative on every later `charset-plist` read.
     pub fn set_plist(&mut self, name: SymId, plist: Vec<(SymId, Value)>) {
         let name = self.resolve_name(name);
         if let Some(info) = self.charsets.get_mut(&name) {
-            info.plist = plist;
+            info.plist = CharsetPlist::Set(plist);
         }
     }
 
@@ -1393,7 +1472,7 @@ pub fn collect_charset_registry_gc_roots(handle: &CharsetRegistryHandle, roots: 
         if !info.unify_map.is_nil() {
             roots.push(info.unify_map);
         }
-        roots.extend(info.plist.iter().map(|(_, value)| *value));
+        roots.extend(info.plist.as_slice().iter().map(|(_, value)| *value));
     }
 }
 
@@ -2360,7 +2439,8 @@ fn builtin_charset_plist_with_symbols(args: Vec<Value>, mode: SymbolMode) -> Eva
     expect_args("charset-plist", &args, 1)?;
     let name = require_known_charset(&args[0], mode)?;
     CHARSET_REGISTRY.with(|slot| {
-        let reg = slot.borrow();
+        let mut reg = slot.borrow_mut();
+        reg.ensure_builtin_plist(name);
         if let Some(pairs) = reg.plist(name) {
             let mut elems = Vec::with_capacity(pairs.len() * 2);
             for (key, val) in pairs {
@@ -2815,7 +2895,7 @@ fn builtin_define_charset_internal_with_symbols(args: Vec<Value>, mode: SymbolMo
             invalid_code,
             unify_map,
             method,
-            plist,
+            plist: CharsetPlist::Set(plist),
         };
         reg.register(info);
     });

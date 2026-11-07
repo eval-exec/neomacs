@@ -73,6 +73,13 @@ fn registry_priority_list() {
 #[test]
 fn registry_plist_canonical_for_standard() {
     crate::test_utils::init_test_tracing();
+    // Post-split the registry lives in a dependency test process: a bare
+    // CharsetRegistry::new() runs before any tagged heap exists, so the build
+    // leaves the C-level plists Unmaterialized and only the `charset-plist`
+    // Lisp route materializes them on demand.  A production Lisp thread
+    // always has a heap, so install the canonical Context first and keep
+    // pinning the direct-accessor contract on a materialized registry.
+    let _context = crate::test_utils::new_context();
     let reg = CharsetRegistry::new();
     let plist = reg.plist(intern("ascii")).unwrap();
     // Built-in charsets carry GNU's canonical charset plist (charset.c:1268):
@@ -310,6 +317,74 @@ fn charset_plist_unknown() {
 fn charset_plist_wrong_arg_count() {
     crate::test_utils::init_test_tracing();
     assert!(builtin_charset_plist(vec![]).is_err());
+}
+
+// GNU 31.1 oracle (a360712c9d27, `emacs -Q --batch --eval ...`):
+//   (progn (set-charset-plist 'ascii nil)
+//          (prin1 (charset-plist 'ascii)))                 => nil
+//   (progn (set-charset-plist 'ascii '(:dimension 1))
+//          (prin1 (charset-plist 'ascii)))                 => (:dimension 1)
+// The value the Lisp setter wrote is authoritative.  It must never be sniffed
+// as a build placeholder and re-materialized into the canonical 7-pair list.
+// RED before the CharsetPlist enum: a restored registry and a registry built
+// before a tagged heap existed both treated nil and a lone :dimension pair as
+// the build's placeholder, so `charset-plist` returned the canonical list
+// instead of the Lisp value.
+
+#[test]
+fn restored_registry_keeps_a_lisp_nil_plist() {
+    crate::test_utils::init_test_tracing();
+    restore_charset_registry(snapshot_charset_registry());
+    set_charset_plist_registry(intern("ascii"), Vec::new());
+    let got = builtin_charset_plist(vec![Value::symbol("ascii")]).unwrap();
+    assert!(got.is_nil(), "GNU keeps the Lisp nil plist, got {got:?}");
+}
+
+#[test]
+fn restored_registry_keeps_a_one_pair_lisp_plist() {
+    crate::test_utils::init_test_tracing();
+    restore_charset_registry(snapshot_charset_registry());
+    set_charset_plist_registry(
+        intern("ascii"),
+        vec![(intern(":dimension"), Value::fixnum(1))],
+    );
+    let got = builtin_charset_plist(vec![Value::symbol("ascii")]).unwrap();
+    let expected = Value::list(vec![Value::symbol(":dimension"), Value::fixnum(1)]);
+    assert_eq!(got, expected, "GNU keeps the Lisp one-pair plist verbatim");
+}
+
+#[test]
+fn heap_less_registry_keeps_a_lisp_nil_plist() {
+    crate::test_utils::init_test_tracing();
+    // Force the registry to be built before any tagged heap exists: the
+    // built-in charsets then carry Unmaterialized plists.
+    let _ = builtin_charsetp(vec![Value::symbol("ascii")]);
+    set_charset_plist_registry(intern("ascii"), Vec::new());
+    let got = builtin_charset_plist(vec![Value::symbol("ascii")]).unwrap();
+    assert!(got.is_nil(), "GNU keeps the Lisp nil plist, got {got:?}");
+}
+
+#[test]
+fn heap_less_registry_keeps_a_one_pair_lisp_plist() {
+    crate::test_utils::init_test_tracing();
+    let _ = builtin_charsetp(vec![Value::symbol("ascii")]);
+    set_charset_plist_registry(
+        intern("ascii"),
+        vec![(intern(":dimension"), Value::fixnum(1))],
+    );
+    let got = builtin_charset_plist(vec![Value::symbol("ascii")]).unwrap();
+    let expected = Value::list(vec![Value::symbol(":dimension"), Value::fixnum(1)]);
+    assert_eq!(got, expected, "GNU keeps the Lisp one-pair plist verbatim");
+}
+
+#[test]
+fn heap_less_registry_materializes_the_canonical_plist_on_first_read() {
+    crate::test_utils::init_test_tracing();
+    // Positive control for the same build path: with no Lisp value set, the
+    // first `charset-plist` read materializes GNU's canonical 7-pair list.
+    let _ = builtin_charsetp(vec![Value::symbol("ascii")]);
+    let got = builtin_charset_plist(vec![Value::symbol("ascii")]).unwrap();
+    assert_eq!(list_length(&got), Some(14));
 }
 
 #[test]

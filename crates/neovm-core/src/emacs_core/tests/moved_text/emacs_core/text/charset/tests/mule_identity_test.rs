@@ -1,4 +1,5 @@
 use super::*;
+use neovm_text::emacs_core::charset::CharsetPlist;
 use neovm_text::emacs_core::charset::prepared_mule::EmacsMuleEncoder;
 use neovm_value::value::Value;
 
@@ -21,7 +22,7 @@ fn prepared_mule_preserves_existing_member_identity_when_name_becomes_alias() {
             info.max_code = max_code;
             info.method = CharsetMethod::Offset(ch);
             info.emacs_mule_id = Some(mule_id);
-            info.plist = vec![(intern(":name"), Value::from_sym_id(name))];
+            info.plist = CharsetPlist::Set(vec![(intern(":name"), Value::from_sym_id(name))]);
             registry.register(info);
         }
     });
@@ -92,7 +93,7 @@ fn prepared_mule_preserves_legacy_alias_redefinition_fallback() {
         info.max_code = 126;
         info.emacs_mule_id = Some(150);
         info.method = CharsetMethod::Offset(0x1f300);
-        info.plist = vec![(intern(":name"), Value::from_sym_id(base))];
+        info.plist = CharsetPlist::Set(vec![(intern(":name"), Value::from_sym_id(base))]);
         registry.register(info.clone());
         registry.define_alias(alias, base);
         // Existing Neo definition-through-alias behavior changes the raw
@@ -100,7 +101,7 @@ fn prepared_mule_preserves_legacy_alias_redefinition_fallback() {
         // that fallback here; the alias entry must not become a Mule member.
         info.name = alias;
         info.method = CharsetMethod::Offset(0x1f400);
-        info.plist = vec![(intern(":name"), Value::from_sym_id(alias))];
+        info.plist = CharsetPlist::Set(vec![(intern(":name"), Value::from_sym_id(alias))]);
         registry.register(info);
     });
     for character in [0x1f300, 0x1f350, 0x1f400] {
@@ -130,7 +131,7 @@ fn prepared_mule_restores_legacy_materialized_alias_members_once() {
         info.max_code = 126;
         info.emacs_mule_id = Some(152);
         info.method = CharsetMethod::Offset(0x1f300);
-        info.plist = vec![(intern(":name"), Value::from_sym_id(base))];
+        info.plist = CharsetPlist::Set(vec![(intern(":name"), Value::from_sym_id(base))]);
         registry.register(info);
         registry.define_alias(alias, base);
     });
