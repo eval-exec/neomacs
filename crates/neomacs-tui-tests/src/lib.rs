@@ -44,12 +44,14 @@ use std::time::{Duration, Instant};
 
 pub mod launch;
 mod observation;
+pub mod oracle;
 mod pty_output;
 mod recording;
 pub mod startup;
 
 pub use launch::TuiLaunch;
 pub use observation::{FencedTerminal, TuiObservationError};
+pub use oracle::{assert_neomacs_dumped_runtime, gnu_oracle_program, gnu_oracle_stamp};
 use pty_output::{ObservationCursor, PtyOutputEvent, PtyOutputKind, PtyOutputPump};
 pub use recording::TuiRecordingScope;
 use recording::{
@@ -586,7 +588,7 @@ impl TuiSession {
         // downsamples every #RRGGBB face to an index (measured: Idx(211) for
         // Rgb(238,121,159)). GitHub runners export no COLORTERM, so pin the
         // terminal both editors see, the same way package_scenario does.
-        TuiLaunch::new("emacs")
+        TuiLaunch::new(crate::gnu_oracle_program().as_os_str())
             .with_uncertified_startup()
             .args([
                 "-nw",
