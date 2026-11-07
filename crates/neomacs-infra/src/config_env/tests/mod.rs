@@ -168,6 +168,28 @@ fn package_identity_records_the_straight_layout() {
 
 #[cfg(unix)]
 #[test]
+fn spec_platform_pins_are_independent() {
+    let owner = tempfile::tempdir().expect("spec dir");
+    let spec_dir = owner.path();
+    fs::write(
+        spec_dir.join("synthetic-spec.toml"),
+        "repo = \"https://example.invalid/fixture\"\n\
+         revision = \"a1b2c3d4e5f6\"\n\
+         packages = \"linux-digest\"\n\
+         packages_macos = \"macos-digest\"\n",
+    )
+    .expect("write spec");
+    let spec = super::common::Spec::load_from(spec_dir, "synthetic").expect("load spec");
+    assert_eq!(spec.packages_for("linux"), Some("linux-digest"));
+    assert_eq!(spec.packages_for("macos"), Some("macos-digest"));
+    assert_eq!(
+        spec.packages_for("windows"),
+        None,
+        "a host without a pin is unpinned, not bound to another host's set"
+    );
+}
+
+#[test]
 fn spec_pin_binds_the_recorded_package_identity() {
     let owner = tempfile::tempdir().expect("spec dir");
     let spec_dir = owner.path();
@@ -180,7 +202,10 @@ fn spec_pin_binds_the_recorded_package_identity() {
 
     // Unpinned: reading the pin answers None, not an error.
     let spec = super::common::Spec::load_from(spec_dir, "synthetic").expect("load unpinned spec");
-    assert!(spec.packages.is_none(), "no pin recorded yet: {spec:?}");
+    assert!(
+        spec.host_packages().is_none(),
+        "no pin recorded for this host yet: {spec:?}"
+    );
 
     // The identity under test: whatever a fixture's PACKAGES record says.
     let identity = super::package_state::PackageStateIdentity::parse_record(
@@ -192,7 +217,7 @@ fn spec_pin_binds_the_recorded_package_identity() {
     // Unpinned: the check passes for any identity -- nothing has committed
     // to a package set yet; `infra status` surfaces the unpinned state.
     assert!(
-        super::common::check_package_pin(spec.packages.as_deref(), "synthetic", &identity).is_ok(),
+        super::common::check_package_pin(spec.host_packages(), "synthetic", &identity).is_ok(),
         "an unpinned spec does not refuse any identity"
     );
 
@@ -206,13 +231,12 @@ fn spec_pin_binds_the_recorded_package_identity() {
     .expect("pin packages");
     let pinned = super::common::Spec::load_from(spec_dir, "synthetic").expect("load pinned");
     assert_eq!(
-        pinned.packages.as_deref(),
+        pinned.host_packages(),
         Some(fixture_digest.as_str()),
         "{pinned:?}"
     );
     assert!(
-        super::common::check_package_pin(pinned.packages.as_deref(), "synthetic", &identity)
-            .is_ok()
+        super::common::check_package_pin(pinned.host_packages(), "synthetic", &identity).is_ok()
     );
 
     // A changed fixture identity must fail the check with the fix named.
@@ -220,7 +244,7 @@ fn spec_pin_binds_the_recorded_package_identity() {
         "schema = 1\nlayout = straight\nbuild_cache = beff\nrepos = 1\nmelpa\n",
     )
     .expect("changed synthetic record");
-    let error = super::common::check_package_pin(pinned.packages.as_deref(), "synthetic", &changed)
+    let error = super::common::check_package_pin(pinned.host_packages(), "synthetic", &changed)
         .expect_err("diverging identity must fail");
     assert!(
         error.contains("pin-packages synthetic"),
@@ -237,13 +261,11 @@ fn spec_pin_binds_the_recorded_package_identity() {
     .expect("re-pin");
     let repinned = super::common::Spec::load_from(spec_dir, "synthetic").expect("re-pinned");
     assert!(
-        super::common::check_package_pin(repinned.packages.as_deref(), "synthetic", &changed)
-            .is_ok(),
+        super::common::check_package_pin(repinned.host_packages(), "synthetic", &changed).is_ok(),
         "the re-pinned spec must accept the new identity"
     );
     assert!(
-        super::common::check_package_pin(repinned.packages.as_deref(), "synthetic", &identity)
-            .is_err(),
+        super::common::check_package_pin(repinned.host_packages(), "synthetic", &identity).is_err(),
         "the re-pinned spec must refuse the old identity"
     );
     let spec_text =

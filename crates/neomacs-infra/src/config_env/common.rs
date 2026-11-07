@@ -6,6 +6,7 @@
 //! after which any write from an editor mounting it fails loudly instead
 //! of silently dirtying it for every other session.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -63,9 +64,18 @@ pub struct Spec {
     pub repo: String,
     pub revision: String,
     /// The SHA-256 of the sealed fixture's `PACKAGES` record, from the
-    /// `packages = "<digest>"` line.  `None` means unpinned: the fixture
-    /// exists, but no one has committed to its package identity yet.
+    /// legacy `packages = "<digest>"` line, which remains the Linux pin.
+    /// `None` means unpinned: the fixture exists, but no one has committed
+    /// to its package identity on this host yet.
     pub packages: Option<String>,
+    /// Host-scoped pins from `packages_<os> = "<digest>"` lines.
+    ///
+    /// A config framework installs OS-specific packages (Doom's straight
+    /// recipes differ on Darwin and Windows), so one package identity
+    /// cannot describe every host. The digest is whatever the bootstrap
+    /// produced on that host family; an absent host pin is unpinned, and
+    /// `infra status` reports it.
+    pub platform_packages: BTreeMap<String, String>,
 }
 
 impl Spec {
@@ -82,6 +92,7 @@ impl Spec {
         let mut repo = None;
         let mut revision = None;
         let mut packages = None;
+        let mut platform_packages = BTreeMap::new();
         for line in text.lines() {
             let line = line.trim();
             if let Some(value) = line.strip_prefix("repo = ") {
@@ -90,13 +101,39 @@ impl Spec {
                 revision = Some(value.trim_matches('"').to_owned());
             } else if let Some(value) = line.strip_prefix("packages = ") {
                 packages = Some(value.trim_matches('"').to_owned());
+            } else if let Some(rest) = line.strip_prefix("packages_")
+                && let Some((host, value)) = rest.split_once(" = ")
+            {
+                platform_packages.insert(host.to_owned(), value.trim_matches('"').to_owned());
             }
         }
         Ok(Self {
             repo: repo.ok_or_else(|| format!("{name}-spec.toml: repo is missing"))?,
             revision: revision.ok_or_else(|| format!("{name}-spec.toml: revision is missing"))?,
             packages,
+            platform_packages,
         })
+    }
+
+    /// The package pin that applies on `host` (a `std::env::consts::OS`
+    /// spelling such as `linux`, `macos`, or `windows`).
+    ///
+    /// `packages_<host>` wins; the legacy `packages` line is the Linux pin
+    /// so existing specs keep their commitment.
+    pub fn packages_for(&self, host: &str) -> Option<&str> {
+        self.platform_packages
+            .get(host)
+            .map(String::as_str)
+            .or_else(|| {
+                (host == "linux")
+                    .then_some(self.packages.as_deref())
+                    .flatten()
+            })
+    }
+
+    /// The package pin for the host running this process.
+    pub fn host_packages(&self) -> Option<&str> {
+        self.packages_for(std::env::consts::OS)
     }
 
     /// Record the fixture's package-identity pin in the spec, with a log
@@ -115,13 +152,23 @@ impl Spec {
         let path = manifest_dir.join(format!("{name}-spec.toml"));
         let text = fs::read_to_string(&path)
             .map_err(|error| format!("read {}: {error}", path.display()))?;
-        let pin_line = format!("packages = \"{digest}\"");
-        // Rewrite the pin line in place if present, else append it; then
-        // append the re-baseline log line.
+        // A package identity belongs to the host that produced it: Doom and
+        // Spacemacs install OS-specific package sets. Linux keeps the legacy
+        // `packages` line; every other host gets its own `packages_<os>`.
+        let host = std::env::consts::OS;
+        let key = if host == "linux" {
+            "packages".to_owned()
+        } else {
+            format!("packages_{host}")
+        };
+        let pin_line = format!("{key} = \"{digest}\"");
+        // Rewrite the host's pin line in place if present, else append it;
+        // then append the re-baseline log line.
         let mut lines: Vec<String> = text.lines().map(|line| line.to_owned()).collect();
+        let prefix = format!("{key} =");
         if let Some(existing) = lines
             .iter_mut()
-            .find(|line| line.trim_start().starts_with("packages ="))
+            .find(|line| line.trim_start().starts_with(&prefix))
         {
             *existing = pin_line;
         } else {
