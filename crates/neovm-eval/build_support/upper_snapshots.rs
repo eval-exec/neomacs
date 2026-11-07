@@ -26,11 +26,19 @@
 //! generated source and the compiled registration table agree row for row.
 
 // This file is compiled both by xtask and by eval's cfg(test) drift test;
-// only parsing and rendering are used. The host-cfg predicate lives in
-// neovm-eval's host_cfg module so every consumer shares one implementation.
+// only parsing and rendering are used. The host-cfg vocabulary lives in
+// neovm-eval's host_cfg module so every consumer shares one implementation;
+// its activity predicate is eval-only (host_cfg_active.rs) and is never
+// compiled by xtask, which has no build-script probe.
 #![allow(dead_code)]
 
 use std::path::Path;
+
+// The cfg-label vocabulary is shared with eval's unit runtime and the plan
+// generator; include the one host_cfg source so xtask cannot drift. Only the
+// vocabulary is included: the activity predicate stays in eval.
+#[path = "../src/host_cfg.rs"]
+mod host_cfg;
 
 pub const SUBRS_SOURCE: &str = "crates/neovm-eval/src/upper_subrs.generated.rs";
 pub const BOOTSTRAP_SOURCE: &str = "crates/neovm-eval/src/upper_bootstrap_vars.generated.rs";
@@ -482,8 +490,31 @@ pub fn generate(repo_root: &Path, check: bool) -> Result<(), String> {
         std::fs::read_to_string(repo_root.join(relative))
             .map_err(|error| format!("read {relative}: {error}"))
     };
+    if !host_cfg::HostCfgClass::vocabulary_round_trips() {
+        return Err(
+            "host cfg vocabulary does not round-trip; fix HostCfgClass::label/from_label \
+             in crates/neovm-eval/src/host_cfg.rs"
+                .to_owned(),
+        );
+    }
     let subrs = parse_upper_subrs(&read(SUBRS_SOURCE)?)?;
     let bootstrap = parse_bootstrap_binders(repo_root)?;
+    for row in &subrs {
+        host_cfg::HostCfgClass::from_label(&row.cfg).ok_or_else(|| {
+            format!(
+                "upper subr row {:?}: unknown cfg class {:?}; add it to HostCfgClass",
+                row.name, row.cfg
+            )
+        })?;
+    }
+    for row in &bootstrap {
+        host_cfg::HostCfgClass::from_label(&row.cfg).ok_or_else(|| {
+            format!(
+                "bootstrap snapshot row {:?}: unknown cfg class {:?}; add it to HostCfgClass",
+                row.name, row.cfg
+            )
+        })?;
+    }
     let snapshots = [
         (SUBRS_SNAPSHOT, render_upper_subrs(&subrs)),
         (BOOTSTRAP_SNAPSHOT, render_bootstrap_vars(&bootstrap)),

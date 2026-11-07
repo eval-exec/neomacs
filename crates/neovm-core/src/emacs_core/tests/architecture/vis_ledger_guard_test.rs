@@ -6898,18 +6898,18 @@ pub struct Tuple(pub u8);
         "/../neovm-eval/src/upper_bootstrap_vars.snapshot.tsv"
     ));
 
-    /// True when a snapshot cfg class is active for this build. eval's
-    /// generator reads the same classes; core's build.rs emits
-    /// `neomacs_have_dbus`, and core's `sqlite` feature forwards to eval's.
+    /// True when a snapshot cfg class is active for this build.
+    ///
+    /// The class vocabulary and its activity predicate have one home: eval's
+    /// shared `HostCfgClass`, compiled in the crate whose build script ran the
+    /// workspace host-cfg probe. A local `cfg!` copy would read the *test*
+    /// crate's cfg set instead, which is the extraction drift this replaces
+    /// (a harness build compiles the binder with eval's host cfg but the test
+    /// crate without it).
     fn snapshot_cfg_active(cfg: &str) -> bool {
-        match cfg {
-            "always" => true,
-            "macos" => cfg!(target_os = "macos"),
-            "windows" => cfg!(target_os = "windows"),
-            "dbus" => cfg!(neomacs_have_dbus),
-            "sqlite" => cfg!(feature = "sqlite"),
-            other => panic!("unknown snapshot cfg class `{other}`"),
-        }
+        neovm_eval::host_cfg::HostCfgClass::from_label(cfg)
+            .unwrap_or_else(|| panic!("unknown snapshot cfg class `{cfg}`"))
+            .is_active()
     }
 
     /// Snapshot rows: name, layer, cfg, production default (T4).

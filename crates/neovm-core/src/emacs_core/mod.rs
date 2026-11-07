@@ -483,6 +483,10 @@ mod architecture_production_source_roots;
 mod architecture_vis_ledger_guard_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/upper_subrs_generated_test.rs"]
+mod architecture_upper_subrs_generated_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/workspace_dependency_features_guard_test.rs"]
 mod architecture_workspace_dependency_features_guard_test;
 
