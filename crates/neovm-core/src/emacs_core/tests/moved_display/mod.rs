@@ -85,3 +85,7 @@ mod frame_resize_scroll_bar_test;
 #[cfg(test)]
 #[path = "terminal_frame_deletion_test.rs"]
 mod terminal_frame_deletion_test;
+
+#[cfg(test)]
+#[path = "fontset_freshness_test.rs"]
+mod fontset_freshness_test;

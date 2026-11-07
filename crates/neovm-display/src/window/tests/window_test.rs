@@ -4382,42 +4382,6 @@ fn a_prepared_presentation_shares_its_window_snapshots() {
     );
 }
 
-#[test]
-fn fontset_changes_invalidate_window_query_and_attempt_freshness() {
-    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let buffer = eval.buffer_manager().current_buffer().unwrap().id();
-    let frame = eval
-        .frame_manager_mut()
-        .create_frame("fontset-freshness", 800, 600, buffer);
-    let window = eval.frame_manager().get(frame).unwrap().selected_window;
-    let before = eval
-        .window_display_snapshot_freshness(frame, window, buffer)
-        .unwrap();
-    let attempt = eval
-        .window_layout_attempt_freshness(frame, window, buffer)
-        .unwrap();
-    eval.eval_str("(set-fontset-font t #x25cb '(nil . \"iso10646-1\"))")
-        .unwrap();
-    let after = eval
-        .window_display_snapshot_freshness(frame, window, buffer)
-        .unwrap();
-    let after_attempt = eval
-        .window_layout_attempt_freshness(frame, window, buffer)
-        .unwrap();
-    assert_ne!(
-        before, after,
-        "geometry queries must not return old font measurements"
-    );
-    assert!(!before.same_scroll_content(&after));
-    assert!(before.query_vscroll_delta(&after).is_none());
-    for boundary in [
-        WindowLayoutLispBoundary::BufferBody,
-        WindowLayoutLispBoundary::WindowChrome,
-    ] {
-        assert!(!attempt.remains_valid_across(&after_attempt, boundary));
-    }
-}
-
 #[cfg(test)]
 #[path = "split_hook_epoch_test.rs"]
 mod split_hook_epoch;
