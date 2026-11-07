@@ -90,7 +90,7 @@ impl CodingAccess<'_> {
         vars: VariableView<'_>,
         buffers: &neovm_edit::buffer::BufferManager,
         result: &mut ModeLineRendered,
-        properties: &std::collections::HashMap<Value, Value>,
+        properties: &[(Value, Value)],
         width: ModeLineNativeFieldWidth,
     ) {
         let buffer = buffers.current_buffer();
@@ -130,7 +130,7 @@ impl CodingAccess<'_> {
                     }
                     None => segment.push_plain_char(':'),
                 }
-                segment.overlay_property_map(properties.clone());
+                segment.overlay_property_map(properties.to_vec());
                 super::append_mode_line_rendered_segment(result, &segment, i64::from(width), 0);
             }
         }

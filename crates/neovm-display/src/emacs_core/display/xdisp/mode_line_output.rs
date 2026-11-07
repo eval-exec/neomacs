@@ -136,7 +136,11 @@ impl ElementAttribution {
     ) {
         match self.property() {
             ElementProperty::Generated { name, value } => {
-                table.put_property_in_char_range(range, name, value);
+                // GNU's final mode-line interval order appends
+                // `mode-line-elt-no` after the source plist (xdisp
+                // store_mode_line_string computes it with `plist_put`); an
+                // already-present key keeps its position.
+                table.put_property_appending_new_in_char_range(range, name, value);
             }
             ElementProperty::Unattributed { name } => {
                 table.remove_property_in_char_range(range, name);

@@ -290,6 +290,15 @@ fn cached_plist_flag_symbols() -> &'static PlistFlagSymbols {
     })
 }
 
+/// Where a newly added key lands in an interval plist.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NewPropertyPosition {
+    /// GNU `add_properties`: prepend (what most text-property writes do).
+    Prepend,
+    /// GNU `plist_put`: append after the last pair (mode-line attribution).
+    Append,
+}
+
 fn plist_pairs(plist: Value) -> Vec<(Value, Value)> {
     let mut pairs = Vec::new();
     let mut tail = plist;
@@ -363,6 +372,58 @@ fn plist_value_put_replace(plist: &mut Value, key: Value, value: Value) -> bool 
     // materialized every pair into a Vec and rebuilt the whole plist — n new
     // conses + a Vec per added property, 1,269 times in the type-sim window.
     *plist = plist_value_prepend_pair(*plist, key, value);
+    true
+}
+
+/// GNU `plist_put` order: an existing key keeps its position and takes the
+/// new value; a key that is absent is appended after the last complete pair.
+/// This is the order GNU's mode-line formatter exposes at the END of its
+/// pipeline (xdisp store_mode_line_string computes its property list with
+/// `plist_put`, so `mode-line-elt-no` lands last when the source plist did
+/// not already carry it). `plist_value_put_replace` above mirrors
+/// `add_properties`, which PREPENDS; the two are not interchangeable.
+fn plist_value_put_replace_appending_new(plist: &mut Value, key: Value, value: Value) -> bool {
+    crate::symbol::SymbolPropertyRevision::observe_category_property(key, value);
+    let mut prev = Value::NIL;
+    let mut tail = *plist;
+    while tail.is_cons() {
+        let name = tail.cons_car();
+        let rest = tail.cons_cdr();
+        if !rest.is_cons() {
+            break;
+        }
+        if eq_value(&name, &key) {
+            let existing = rest.cons_car();
+            if eq_value(&existing, &value) {
+                return false;
+            }
+            rest.set_car(value);
+            return true;
+        }
+        prev = tail;
+        tail = rest.cons_cdr();
+    }
+
+    let saved = save_scratch_gc_roots();
+    push_scratch_gc_root(*plist);
+    push_scratch_gc_root(key);
+    push_scratch_gc_root(value);
+
+    if prev.is_nil() {
+        // GNU plist_put's empty/no-complete-pair branch conses in front,
+        // keeping any malformed tail.
+        let value_cell = Value::cons(value, *plist);
+        push_scratch_gc_root(value_cell);
+        *plist = Value::cons(key, value_cell);
+    } else {
+        let value_cell = Value::cons(value, Value::NIL);
+        push_scratch_gc_root(value_cell);
+        let pair = Value::cons(key, value_cell);
+        // `prev` is the last complete pair's key cell; its cdr is the pair's
+        // value cell, whose cdr is the malformed tail or nil.
+        prev.cons_cdr().set_cdr(pair);
+    }
+    restore_scratch_gc_roots(saved);
     true
 }
 
@@ -3174,10 +3235,29 @@ impl TextPropertyTable {
         name: Value,
         value: Value,
     ) -> bool {
-        self.put_property_raw(range, name, value)
+        self.put_property_raw(range, name, value, NewPropertyPosition::Prepend)
     }
 
-    fn put_property_raw(&mut self, range: CharRange, name: Value, value: Value) -> bool {
+    /// Add NAME/VALUE with GNU `plist_put` order: an existing key keeps its
+    /// position; a new key is appended at the end of each interval's plist.
+    /// Mode-line element attribution uses this because GNU's final observable
+    /// order appends `mode-line-elt-no` after the source plist.
+    pub fn put_property_appending_new_in_char_range(
+        &mut self,
+        range: CharRange,
+        name: Value,
+        value: Value,
+    ) -> bool {
+        self.put_property_raw(range, name, value, NewPropertyPosition::Append)
+    }
+
+    fn put_property_raw(
+        &mut self,
+        range: CharRange,
+        name: Value,
+        value: Value,
+        new_position: NewPropertyPosition,
+    ) -> bool {
         self.mutation_tick += 1;
         if Self::name_is_syntax_relevant(name) {
             self.syntax_prop_tick += 1;
@@ -3191,8 +3271,17 @@ impl TextPropertyTable {
 
         let affected = self.intervals.intervals_overlapping_after_splits(range);
         for (_, id) in affected {
-            if plist_value_put_replace(&mut self.intervals.nodes[id.0].plist, name, value) {
-                self.intervals.nodes[id.0].refresh_cache();
+            let node = &mut self.intervals.nodes[id.0];
+            let updated = match new_position {
+                NewPropertyPosition::Prepend => {
+                    plist_value_put_replace(&mut node.plist, name, value)
+                }
+                NewPropertyPosition::Append => {
+                    plist_value_put_replace_appending_new(&mut node.plist, name, value)
+                }
+            };
+            if updated {
+                node.refresh_cache();
                 changed = true;
             }
         }

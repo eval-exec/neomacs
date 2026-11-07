@@ -3313,7 +3313,8 @@ struct ModeLineRendered {
 struct ModeLineMinWidthRun {
     width_spec: Value,
     columns: usize,
-    padding_properties: std::collections::HashMap<Value, Value>,
+    /// Source interval plist in insertion order (GNU's observable order).
+    padding_properties: Vec<(Value, Value)>,
 }
 
 #[derive(Clone, Debug)]
@@ -3450,7 +3451,7 @@ impl ModeLineRendered {
         }
         for transition in &other.min_width_transitions {
             self.pin_value(transition.run.width_spec);
-            for (&name, &value) in &transition.run.padding_properties {
+            for &(name, value) in &transition.run.padding_properties {
                 self.pin_value(name);
                 self.pin_value(value);
             }
@@ -3686,10 +3687,10 @@ impl ModeLineRendered {
                 .for_each_unmarked_range(self.text.len(), |range| {
                     let mut next_run = run.clone();
                     next_run.padding_properties =
-                        text_props.get_properties_at_char_pos(CharPos0::new(range.start));
+                        text_props.get_properties_ordered_at_char_pos(CharPos0::new(range.start));
                     if let Some(roots) = roots.as_mut() {
                         mode_line_gc::pin_accumulator_value(roots, next_run.width_spec);
-                        for (&name, &value) in &next_run.padding_properties {
+                        for &(name, value) in &next_run.padding_properties {
                             mode_line_gc::pin_accumulator_value(roots, name);
                             mode_line_gc::pin_accumulator_value(roots, value);
                         }
@@ -3706,9 +3707,11 @@ impl ModeLineRendered {
         // entire subtree, so any nested min-width markers it overwrote are no
         // longer observable by GNU's iterator.
         self.min_width_transitions.clear();
-        run.padding_properties = self.text_props.get_properties_at_char_pos(CharPos0::ZERO);
+        run.padding_properties = self
+            .text_props
+            .get_properties_ordered_at_char_pos(CharPos0::ZERO);
         self.pin_value(run.width_spec);
-        for (&name, &value) in &run.padding_properties {
+        for &(name, value) in &run.padding_properties {
             self.pin_value(name);
             self.pin_value(value);
         }
@@ -3859,7 +3862,7 @@ impl ModeLineRendered {
         &mut self,
         at: usize,
         columns: usize,
-        properties: &std::collections::HashMap<Value, Value>,
+        properties: &[(Value, Value)],
     ) {
         if columns == 0 {
             return;
@@ -3870,14 +3873,16 @@ impl ModeLineRendered {
             .splice(at..at, std::iter::repeat_n(' ' as u32, columns));
         self.text_props
             .adjust_for_insert_at_char_pos(CharPos0::new(at), CharLen::new(columns));
-        for (name, value) in properties {
+        // `put_property_in_char_range` prepends, so reversed source order
+        // leaves the synthetic stretch in the source's own order.
+        for &(name, value) in properties.iter().rev() {
             // The synthetic stretch inherits appearance, but it is not itself
             // another min-width source run.
             if !name.is_bare_symbol_named("display") {
                 self.text_props.put_property_in_char_range(
                     display_char_range(at, at.saturating_add(columns)),
-                    *name,
-                    *value,
+                    name,
+                    value,
                 );
             }
         }
@@ -3931,7 +3936,7 @@ impl ModeLineRendered {
         self.pin_properties();
     }
 
-    fn overlay_property_map(&mut self, props: std::collections::HashMap<Value, Value>) {
+    fn overlay_property_map(&mut self, props: Vec<(Value, Value)>) {
         if self.text.is_empty() || props.is_empty() {
             return;
         }
@@ -4056,7 +4061,7 @@ fn mode_line_display_spec_min_width(value: Value) -> Option<ModeLineMinWidthRun>
     Some(ModeLineMinWidthRun {
         width_spec,
         columns: mode_line_display_width_chars(width_spec)?,
-        padding_properties: std::collections::HashMap::new(),
+        padding_properties: Vec::new(),
     })
 }
 
@@ -4128,18 +4133,22 @@ fn append_mode_line_rendered_segment(
     result.append_rendered(&segment);
 }
 
-/// Apply the source format's map in its existing iteration order. Both
-/// temporary Lisp-text segments and directly emitted native fields use this
-/// definition, retaining the property table's canonical insertion semantics.
+/// Apply the source format's interval plist so the destination ends in the
+/// source's own order. `put_property_in_char_range` mirrors GNU
+/// `add_properties`, which PREPENDS each new key; feeding the pairs in
+/// reverse therefore produces source order in the destination, which is what
+/// GNU's format-mode-line pipeline exposes through `object-intervals` /
+/// `text-properties-at`. Existing keys keep their position (replace in
+/// place).
 fn overlay_mode_line_property_map(
     table: &mut TextPropertyTable,
     range: CharRange,
-    properties: &std::collections::HashMap<Value, Value>,
+    properties: &[(Value, Value)],
 ) {
     if range.is_empty() {
         return;
     }
-    for (&name, &value) in properties {
+    for &(name, value) in properties.iter().rev() {
         table.put_property_in_char_range(range, name, value);
     }
 }
@@ -4168,7 +4177,7 @@ fn set_mode_line_plain_field_for_test(path: ModeLinePlainFieldPath) -> ModeLineP
 fn append_mode_line_percent_string_spec(
     result: &mut ModeLineRendered,
     spec: &str,
-    props_at_percent: &std::collections::HashMap<Value, Value>,
+    props_at_percent: &[(Value, Value)],
     field_width: i64,
 ) {
     #[cfg(test)]
@@ -4207,7 +4216,7 @@ fn append_mode_line_percent_string_spec(
 fn append_mode_line_percent_segment(
     result: &mut ModeLineRendered,
     mut segment: ModeLineRendered,
-    props_at_percent: &std::collections::HashMap<Value, Value>,
+    props_at_percent: &[(Value, Value)],
     field_width: i64,
 ) {
     let rendered_len = segment.char_len() as i64;
@@ -4217,14 +4226,14 @@ fn append_mode_line_percent_segment(
     // GNU applies the source format string's properties to the entire
     // expanded field, including spaces introduced by `%12b`-style padding.
     // Inner rendered values still do not donate their properties to padding.
-    segment.overlay_property_map(props_at_percent.clone());
+    segment.overlay_property_map(props_at_percent.to_vec());
     result.append_rendered(&segment);
 }
 
 fn append_mode_line_percent_lisp_text_spec(
     result: &mut ModeLineRendered,
     value: &Value,
-    props_at_percent: &std::collections::HashMap<Value, Value>,
+    props_at_percent: &[(Value, Value)],
     field_width: i64,
 ) {
     let mut segment = ModeLineRendered::default();
@@ -4929,7 +4938,7 @@ enum NativeSpecAction<R> {
 fn append_unknown_mode_line_percent_spec(
     result: &mut ModeLineRendered,
     code: char,
-    properties: &std::collections::HashMap<Value, Value>,
+    properties: &[(Value, Value)],
     field_width: ModeLineNativeFieldWidth,
 ) {
     let mut unknown = String::from("%");
@@ -5026,7 +5035,7 @@ fn decode_one_native_spec<T: TargetPolicy, G: NativeGlobalPolicy>(
         properties.get_or_init(|| {
             if value.is_string() {
                 with_mode_line_string_properties(*value, |table| {
-                    table.get_properties_at_char_pos(percent_position)
+                    table.get_properties_ordered_at_char_pos(percent_position)
                 })
                 .unwrap_or_default()
             } else {
@@ -5174,7 +5183,7 @@ fn decode_one_native_spec<T: TargetPolicy, G: NativeGlobalPolicy>(
                 .target
                 .dash_string(CharLen::new(result.char_len()), decoded_width);
             let mut segment = ModeLineRendered::plain(&dash_string);
-            segment.overlay_property_map(props_at_percent().clone());
+            segment.overlay_property_map(props_at_percent().to_vec());
             append_mode_line_rendered_segment(result, &segment, field_width, 0);
         }
         Some('%') => {

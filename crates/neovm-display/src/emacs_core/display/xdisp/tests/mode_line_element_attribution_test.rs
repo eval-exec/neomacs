@@ -84,6 +84,130 @@ fn strict(eval: &mut Context, expression: &str, gnu: &str) {
     );
 }
 
+/// GNU's interval plist ORDER, recorded from the pinned 31.1 pty oracle
+/// (`object-intervals` / `text-properties-at`): source plist order with
+/// `mode-line-elt-no` APPENDED when it was absent, or replaced IN PLACE at
+/// its existing position. `equal-including-properties` parses property
+/// plists as unordered sets (GNU fns.c internal_equal, Neo matches), so this
+/// order is only observable through the ordered interval table; the oracle
+/// expectations below are literal GNU output, not Neo-derived.
+fn attribution_value_repr(value: Value) -> String {
+    if let Some(name) = value.as_bare_symbol_name() {
+        return name.to_string();
+    }
+    if let Some(number) = value.as_fixnum() {
+        return number.to_string();
+    }
+    if let Some(text) = value.as_utf8_str() {
+        return format!("{text:?}");
+    }
+    panic!("unexpected property value in the ordered oracle: {value:?}");
+}
+
+fn attribution_ordered_plists(eval: &mut Context, form: &str, positions: &[usize]) -> Vec<String> {
+    let value = eval
+        .eval_str(&format!("(format-mode-line {form})"))
+        .expect("format-mode-line returns");
+    positions
+        .iter()
+        .map(|position| {
+            let pairs = with_mode_line_string_properties(value, |table| {
+                table.get_properties_ordered_at_char_pos(CharPos0::new(*position))
+            })
+            .expect("formatted mode line carries a property table");
+            let rendered: Vec<String> = pairs
+                .iter()
+                .flat_map(|(name, value)| {
+                    [
+                        attribution_value_repr(*name),
+                        attribution_value_repr(*value),
+                    ]
+                })
+                .collect();
+            format!("({})", rendered.join(" "))
+        })
+        .collect()
+}
+
+/// GNU 31.1 pty oracle, recorded 2026-11-07 (probe files
+/// plist-order-result.txt / plist-order-result2.txt):
+///   A #("AB" 0 2 (p 1 q 2 r 3))            -> (p 1 q 2 r 3 mode-line-elt-no 2)
+///   B #("%l" 0 2 (p 1 q 2 r 3))            -> (p 1 q 2 r 3 mode-line-elt-no 2)
+///   H (:propertize "AB" p 1 q 2)           -> (p 1 q 2 mode-line-elt-no 3)
+///   G nested propertize with inner elt-no  -> (mode-line-elt-no 4 ep30-tag inner)
+///   I percent with existing elt-no 700 p 1 -> positions 0/1/2:
+///       (mode-line-elt-no 2) / (mode-line-elt-no 4 p 1) / (mode-line-elt-no 5)
+///   J #("XY" 0 2 (mode-line-elt-no 40 p 1 q 2))
+///                                          -> (mode-line-elt-no 2 p 1 q 2)
+///   K ("A" (:eval "EV") "Z")               -> output offsets 0/1/3:
+///       (mode-line-elt-no 2) / (mode-line-elt-no 4) / (mode-line-elt-no 5)
+///   L ((:eval "EV"))                       -> (mode-line-elt-no 3)
+#[test]
+fn mode_line_element_attribution_interval_plist_order_matches_gnu() {
+    let mut eval = context();
+    let mut mismatches: Vec<String> = Vec::new();
+    for (form, positions, expected) in [
+        (
+            r#"'(#("AB" 0 2 (p 1 q 2 r 3)))"#,
+            &[0usize][..],
+            &["(p 1 q 2 r 3 mode-line-elt-no 2)"][..],
+        ),
+        (
+            r#"'(#("%l" 0 2 (p 1 q 2 r 3)))"#,
+            &[0usize][..],
+            &["(p 1 q 2 r 3 mode-line-elt-no 2)"][..],
+        ),
+        (
+            r#"'((:propertize "AB" p 1 q 2))"#,
+            &[0usize][..],
+            &["(p 1 q 2 mode-line-elt-no 3)"][..],
+        ),
+        (
+            r#"'((:propertize (:propertize "P" mode-line-elt-no 900 ep30-tag inner) mode-line-elt-no 800 ep30-tag outer))"#,
+            &[0usize][..],
+            &["(mode-line-elt-no 4 ep30-tag inner)"][..],
+        ),
+        (
+            r#"'("A" (:propertize "%l" mode-line-elt-no 700 p 1) "C")"#,
+            &[0usize, 1, 2][..],
+            &[
+                "(mode-line-elt-no 2)",
+                "(mode-line-elt-no 4 p 1)",
+                "(mode-line-elt-no 5)",
+            ][..],
+        ),
+        (
+            r#"'(#("XY" 0 2 (mode-line-elt-no 40 p 1 q 2)))"#,
+            &[0usize][..],
+            &["(mode-line-elt-no 2 p 1 q 2)"][..],
+        ),
+        (
+            r#"'("A" (:eval "EV") "Z")"#,
+            &[0usize, 1, 3][..],
+            &[
+                "(mode-line-elt-no 2)",
+                "(mode-line-elt-no 4)",
+                "(mode-line-elt-no 5)",
+            ][..],
+        ),
+        (
+            r#"'((:eval "EV"))"#,
+            &[0usize][..],
+            &["(mode-line-elt-no 3)"][..],
+        ),
+    ] {
+        let actual = attribution_ordered_plists(&mut eval, form, positions);
+        if actual != expected {
+            mismatches.push(format!("{form}\n  GNU: {expected:?}\n  Neo: {actual:?}"));
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "interval plist order differs from GNU:\n{}",
+        mismatches.join("\n")
+    );
+}
+
 #[test]
 fn mode_line_element_attribution_literal_symbol_numeric_and_percent_are_strict() {
     let mut eval = context();

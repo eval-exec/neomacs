@@ -2668,6 +2668,7 @@ crates/neovm-value/src/value/text_props.rs	fn	fn impl TextPropertyTable::previou
 crates/neovm-value/src/value/text_props.rs	fn	fn impl TextPropertyTable::previous_syntax_prop_state_run_start_at_char_pos
 crates/neovm-value/src/value/text_props.rs	fn	fn impl TextPropertyTable::previous_watched_property_state_change_before_char_pos
 crates/neovm-value/src/value/text_props.rs	fn	fn impl TextPropertyTable::property_name_presence
+crates/neovm-value/src/value/text_props.rs	fn	fn impl TextPropertyTable::put_property_appending_new_in_char_range
 crates/neovm-value/src/value/text_props.rs	fn	fn impl TextPropertyTable::put_property_for_object_char_len
 crates/neovm-value/src/value/text_props.rs	fn	fn impl TextPropertyTable::put_property_in_char_range
 crates/neovm-value/src/value/text_props.rs	fn	fn impl TextPropertyTable::range_has_all_properties_in_char_range

@@ -294,7 +294,7 @@ fn rendered_trace(rendered: &ModeLineRendered) -> RenderedTrace {
 #[test]
 fn plain_percent_fields_preserve_multibyte_identity_like_temporary_segments() {
     crate::test_utils::init_test_tracing();
-    let properties = std::collections::HashMap::new();
+    let properties: Vec<(Value, Value)> = Vec::new();
     for (spec, width, precision) in [
         ("·", 0, None),
         ("AB·", 7, Some(2)),
@@ -339,7 +339,7 @@ fn empty_fields_preserve_ticks_intervals_sources_and_min_width_transitions() {
     seed.note_display_min_width_transition(min_width);
     seed.text_props
         .syntax_prop_free_run_end(CharPos0::ZERO, CharPos0::new(seed.char_len()));
-    let properties = std::collections::HashMap::new();
+    let properties: Vec<(Value, Value)> = Vec::new();
     let mut traces = Vec::new();
     for path in [
         ModeLinePlainFieldPath::Temporary,
@@ -366,10 +366,10 @@ fn propertized_fields_keep_graft_plist_order_and_ticks() {
     eval.set_variable("d5-plain-field-source", source);
     let mut seed = ModeLineRendered::default();
     seed.append_string_value_preserving_props(&source);
-    let properties = std::collections::HashMap::from([
+    let properties = vec![
         (Value::symbol("face"), Value::symbol("italic")),
         (Value::symbol("mouse-face"), Value::symbol("highlight")),
-    ]);
+    ];
     let mut traces = Vec::new();
     for path in [
         ModeLinePlainFieldPath::Temporary,
@@ -447,12 +447,12 @@ fn native_fields_keep_rooted_grafts_and_syntax_ticks_across_collection() {
     let syntax = eval.eval_str("'(3)").expect("syntax property");
     eval.set_variable("d5-plain-field-syntax", syntax);
     for properties in [
-        std::collections::HashMap::new(),
-        std::collections::HashMap::from([(Value::symbol("face"), Value::symbol("italic"))]),
-        std::collections::HashMap::from([
+        Vec::new(),
+        vec![(Value::symbol("face"), Value::symbol("italic"))],
+        vec![
             (Value::symbol("face"), Value::symbol("italic")),
             (Value::symbol("syntax-table"), syntax),
-        ]),
+        ],
     ] {
         let mut traces = Vec::new();
         for path in [

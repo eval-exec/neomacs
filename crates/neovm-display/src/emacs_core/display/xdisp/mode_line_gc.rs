@@ -20,7 +20,7 @@ fn visit_rendered_roots(rendered: &ModeLineRendered, mut visit: impl FnMut(Value
     }
     for transition in &rendered.min_width_transitions {
         visit(transition.run.width_spec);
-        for (&name, &value) in &transition.run.padding_properties {
+        for &(name, value) in &transition.run.padding_properties {
             visit(name);
             visit(value);
         }
