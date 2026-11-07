@@ -4,15 +4,24 @@
 //! A registration row's `cfg` label names the build condition under which the
 //! name is registered. The plan walker, the T6 trace comparison and the H3b
 //! binder test must all decide activity the same way, so they all call
-//! [`HostCfgClass::is_active`]. The underlying cfgs come from the workspace's
-//! single build-script probe (`build_support/host_cfg.rs`), so this predicate
-//! and the four probing crates' compile-time views agree.
+//! [`HostCfgClass::is_active`], defined in this crate's `host_cfg_active`
+//! module where the build-script probe's cfgs are compiled in. The underlying
+//! cfgs come from the workspace's single build-script probe
+//! (`build_support/host_cfg.rs`), so the predicate and the four probing
+//! crates' compile-time views agree.
+//!
+//! This file holds only the label VOCABULARY. The source-only generators in
+//! `build_support` include it verbatim and are compiled by `cargo xtask`,
+//! which has no build-script probe and no feature set: an `is_active` here
+//! would compile there as an unknown-cfg warning that always answers false.
+//! The activity predicate therefore lives in `host_cfg_active.rs`, which only
+//! eval compiles.
 
 /// Every host condition a registration row can be gated on.
 ///
 /// The enum is exhaustive on purpose: a new label must be added here (and to
-/// [`HostCfgClass::is_active`]) before a plan row may use it, so a row can
-/// never silently fall into a default activity.
+/// the activity predicate in `host_cfg_active`) before a plan row may use it,
+/// so a row can never silently fall into a default activity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum HostCfgClass {
     Always,
@@ -68,21 +77,16 @@ impl HostCfgClass {
         })
     }
 
-    /// Whether this build registers rows carrying this class.
+    /// Whether the label vocabulary is self-consistent: every class in
+    /// [`Self::ALL`] parses back from its own [`Self::label`].
     ///
-    /// `dbus` and `lcms2` are decided by the shared build-script probe in
-    /// every probing crate; the rest are plain target/feature facts.
-    pub const fn is_active(self) -> bool {
-        match self {
-            Self::Always => true,
-            Self::Macos => cfg!(target_os = "macos"),
-            Self::Windows => cfg!(windows),
-            Self::Linux => cfg!(target_os = "linux"),
-            Self::Dbus => cfg!(neomacs_have_dbus),
-            Self::Lcms2 => cfg!(neomacs_have_lcms2),
-            Self::Sqlite => cfg!(feature = "sqlite"),
-            Self::VmProfile => cfg!(feature = "vm-profile"),
-        }
+    /// The source-only generators call this before rendering, so a label that
+    /// only one direction knows about fails the build instead of silently
+    /// dropping a registration row.
+    pub fn vocabulary_round_trips() -> bool {
+        Self::ALL
+            .iter()
+            .all(|class| Self::from_label(class.label()) == Some(*class))
     }
 }
 
@@ -92,10 +96,7 @@ mod tests {
 
     #[test]
     fn every_class_round_trips_through_its_label() {
-        for class in HostCfgClass::ALL {
-            assert_eq!(HostCfgClass::from_label(class.label()), Some(class));
-        }
+        assert!(HostCfgClass::vocabulary_round_trips());
         assert_eq!(HostCfgClass::from_label("lcms"), None);
-        assert!(HostCfgClass::Always.is_active());
     }
 }

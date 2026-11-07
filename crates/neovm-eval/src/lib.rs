@@ -7,6 +7,11 @@ pub mod emacs_core;
 /// One host-cfg classification shared by the registration plan, the H3b
 /// bootstrap snapshot and the T6 order gate.
 pub mod host_cfg;
+/// The build-script-probed activity predicate for [`host_cfg::HostCfgClass`].
+///
+/// Kept outside `host_cfg` because the source-only generators include that
+/// file in `cargo xtask`, which has no build-script probe.
+mod host_cfg_active;
 pub mod host_effect;
 
 /// Test support shared by this crate's own unit tests and, behind
@@ -31,6 +36,14 @@ pub(crate) mod upper_snapshots_build_support;
 #[allow(dead_code)]
 #[path = "../build_support/canonical_subr_plan.rs"]
 pub(crate) mod canonical_subr_plan_build_support;
+
+// The H3 upper-subr source generator is shared with
+// `cargo xtask upper-subrs`; eval's cfg(test) drift test renders the tracked
+// source from the H3 ledger so a hand edit or a stale ledger cannot land.
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../build_support/upper_subrs_generated.rs"]
+pub(crate) mod upper_subrs_generated_build_support;
 
 // GNU seeds emacs-version from configure.ac's PACKAGE_VERSION; version.el
 // derives its numeric components from that same value. The evaluator seeds

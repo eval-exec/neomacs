@@ -6,6 +6,7 @@ mod pentry_inventory_command;
 mod pgo;
 mod production_capabilities;
 mod upper_snapshots_command;
+mod upper_subrs_command;
 mod window_icon;
 
 // SINGLE SOURCE OF TRUTH (ledger 206): the recipe for every Lisp file this
@@ -454,6 +455,13 @@ fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Re
     ) {
         args.next();
         return upper_snapshots_command::run(&repo_root, args);
+    }
+    if matches!(
+        args.peek().and_then(|arg| arg.to_str()),
+        Some("upper-subrs")
+    ) {
+        args.next();
+        return upper_subrs_command::run(&repo_root, args);
     }
     if matches!(
         args.peek().and_then(|arg| arg.to_str()),

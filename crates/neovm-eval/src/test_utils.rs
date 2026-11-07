@@ -1166,3 +1166,22 @@ mod unit_runtime_construction_census {
         );
     }
 }
+
+/// Freshness guard for the H3 unit-runtime upper-subr source: the tracked
+/// `upper_subrs.generated.rs` must be exactly what the generator renders from
+/// the H3 ledger, and the ledger must still match the canonical plan.
+#[cfg(test)]
+mod upper_subrs_generated_drift {
+    use crate::upper_subrs_generated_build_support as generator;
+
+    #[test]
+    fn the_upper_subrs_source_matches_the_ledger() {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let rendered = generator::rendered(&repo_root).expect("upper-subrs generator");
+        let tracked = include_str!("upper_subrs.generated.rs");
+        assert_eq!(
+            rendered, tracked,
+            "upper_subrs.generated.rs is stale; run `cargo xtask upper-subrs`"
+        );
+    }
+}
