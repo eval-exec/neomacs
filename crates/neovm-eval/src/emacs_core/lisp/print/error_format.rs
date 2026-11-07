@@ -287,13 +287,15 @@ pub fn print_value_in_state_with_options(
     value: &Value,
     options: PrintOptions,
 ) -> String {
-    format_value_in_state(
+    let number_index = super::begin_world_print_numbering(ctx);
+    format_value_in_state_indexed(
         &ctx.obarray,
         &ctx.edit.buffers,
         &ctx.frames,
         &ctx.threads,
         value,
         options,
+        Some(number_index.as_ref()),
     )
 }
 
@@ -334,6 +336,23 @@ fn format_value_in_state(
     value: &Value,
     options: PrintOptions,
 ) -> String {
+    format_value_in_state_indexed(obarray, buffers, frames, threads, value, options, None)
+}
+
+/// [`format_value_in_state`] with the World-owned `print_number_index` handle
+/// (design rev 2 A3). ONLY the stateful branch needs it: with `print-circle`
+/// active that branch prints the whole tree through `PrintState`, so the
+/// non-stateful recursion below (which happens only while `print-circle` is
+/// nil, where the index is never read) can keep the fallback.
+fn format_value_in_state_indexed(
+    obarray: &neovm_value::symbol::Obarray,
+    buffers: &neovm_edit::buffer::BufferManager,
+    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
+    threads: &crate::emacs_core::threads::ThreadManager,
+    value: &Value,
+    options: PrintOptions,
+    number_index: Option<&std::sync::atomic::AtomicI64>,
+) -> String {
     let _print_guard = super::enter_print_call(&options);
     if let Some(handle) = format_opaque_handle_in_state(buffers, frames, threads, value) {
         return handle;
@@ -342,7 +361,12 @@ fn format_value_in_state(
     // are active. This ensures correct handling of shared structure, depth
     // limiting, and length limiting throughout the entire value tree.
     if options.print_circle || options.print_level.is_some() || options.print_length.is_some() {
-        return super::print_value_stateful_with_buffers(value, Some(buffers), options);
+        return super::print_value_stateful_with_buffers_indexed(
+            value,
+            Some(buffers),
+            options,
+            number_index,
+        );
     }
     match value.kind() {
         ValueKind::Cons
@@ -655,11 +679,24 @@ pub fn print_value_bytes_in_state(
     threads: &crate::emacs_core::threads::ThreadManager,
     value: &Value,
 ) -> Vec<u8> {
+    print_value_bytes_in_state_indexed(vars, buffers, frames, threads, value, None)
+}
+
+/// [`print_value_bytes_in_state`] with the World-owned `print_number_index`
+/// handle for callers that hold a `Context` (design rev 2 A3).
+fn print_value_bytes_in_state_indexed(
+    vars: crate::emacs_core::eval::VariableView<'_>,
+    buffers: &neovm_edit::buffer::BufferManager,
+    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
+    threads: &crate::emacs_core::threads::ThreadManager,
+    value: &Value,
+    number_index: Option<&std::sync::atomic::AtomicI64>,
+) -> Vec<u8> {
     let obarray = vars.obarray();
     if let Some(handle) = format_opaque_handle_in_state(buffers, frames, threads, value) {
         return handle.into_bytes();
     }
-    format_value_bytes_in_state_with_options(
+    format_value_bytes_in_state_with_options_indexed(
         obarray,
         buffers,
         frames,
@@ -667,6 +704,7 @@ pub fn print_value_bytes_in_state(
         value,
         // Same `Vprin1_to_string_buffer` stream as `print_value_in_state`.
         print_options_from_state(vars, None),
+        number_index,
     )
 }
 
@@ -680,13 +718,15 @@ pub fn print_value_bytes_in_state_with_options(
     value: &Value,
     options: PrintOptions,
 ) -> Vec<u8> {
-    format_value_bytes_in_state_with_options(
+    let number_index = super::begin_world_print_numbering(ctx);
+    format_value_bytes_in_state_with_options_indexed(
         &ctx.obarray,
         &ctx.edit.buffers,
         &ctx.frames,
         &ctx.threads,
         value,
         options,
+        Some(number_index.as_ref()),
     )
 }
 
@@ -698,6 +738,25 @@ pub fn format_value_bytes_in_state_with_options(
     threads: &crate::emacs_core::threads::ThreadManager,
     value: &Value,
     options: PrintOptions,
+) -> Vec<u8> {
+    format_value_bytes_in_state_with_options_indexed(
+        obarray, buffers, frames, threads, value, options, None,
+    )
+}
+
+/// [`format_value_bytes_in_state_with_options`] with the World-owned
+/// `print_number_index` handle (design rev 2 A3); see
+/// [`format_value_in_state_indexed`] for why only the top-level stateful
+/// branch needs it.
+#[doc(hidden)]
+pub fn format_value_bytes_in_state_with_options_indexed(
+    obarray: &neovm_value::symbol::Obarray,
+    buffers: &neovm_edit::buffer::BufferManager,
+    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
+    threads: &crate::emacs_core::threads::ThreadManager,
+    value: &Value,
+    options: PrintOptions,
+    number_index: Option<&std::sync::atomic::AtomicI64>,
 ) -> Vec<u8> {
     let _print_guard = super::enter_print_call(&options);
     if options.print_noescape
@@ -714,7 +773,12 @@ pub fn format_value_bytes_in_state_with_options(
     // are active. Its canonical sink is byte-based so byte8/non-Unicode
     // characters survive graph preprocessing and depth/length limiting.
     if options.print_circle || options.print_level.is_some() || options.print_length.is_some() {
-        return super::print_value_stateful_bytes_with_buffers(value, Some(buffers), options);
+        return super::print_value_stateful_bytes_with_buffers_indexed(
+            value,
+            Some(buffers),
+            options,
+            number_index,
+        );
     }
     match value.kind() {
         ValueKind::Cons => {
@@ -1002,12 +1066,14 @@ pub fn print_value_bytes_with_eval(
     eval: &crate::emacs_core::eval::Context,
     value: &Value,
 ) -> Vec<u8> {
-    print_value_bytes_in_state(
+    let number_index = super::begin_world_print_numbering(eval);
+    print_value_bytes_in_state_indexed(
         eval.variables(),
         &eval.edit.buffers,
         &eval.frames,
         &eval.threads,
         value,
+        Some(number_index.as_ref()),
     )
 }
 
@@ -1027,13 +1093,15 @@ pub fn print_value_bytes_escaped_with_eval(
     }
     let mut options = print_options_from_state(eval.variables(), None);
     options.print_escape_nonascii = true;
-    format_value_bytes_in_state_with_options(
+    let number_index = super::begin_world_print_numbering(eval);
+    format_value_bytes_in_state_with_options_indexed(
         &eval.obarray,
         &eval.edit.buffers,
         &eval.frames,
         &eval.threads,
         value,
         options,
+        Some(number_index.as_ref()),
     )
 }
 

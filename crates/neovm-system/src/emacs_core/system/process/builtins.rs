@@ -640,6 +640,7 @@ pub fn builtin_print_preprocess(
     eval.push_specpdl_root(object);
     eval.push_specpdl_root(table_value);
     neovm_eval::emacs_core::print::preprocess_print_number_table(
+        eval,
         &object,
         table_value,
         print_gensym,

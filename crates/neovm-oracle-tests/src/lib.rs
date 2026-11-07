@@ -325,6 +325,7 @@ mod primitive_function_p_semantics;
 mod primitive_predicate_edge_semantics;
 mod prin1_comprehensive_patterns;
 mod prin1_to_string_advanced;
+mod print_buffer_nested;
 mod print_eval_strict_edge_semantics;
 mod print_unreadable_binding;
 mod process;

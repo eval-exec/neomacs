@@ -72,6 +72,7 @@ pub mod host_input;
 pub mod keyboard;
 #[doc(hidden)]
 pub mod keyboard_input;
+pub(crate) mod print_buffer;
 pub(crate) mod world;
 #[doc(hidden)]
 pub use world::ObarrayView;
@@ -1415,6 +1416,14 @@ pub enum NativeUnwindAction {
     /// its owner's slab. Unbinding restores the owner's slot; the values are
     /// the slab's, so the entry holds none.
     OwnerBinding(owner_bindings::OwnerBindingRef),
+    /// print.c `record_unwind_protect (print_unwind, string)` (print.c:176-187)
+    /// and `record_unwind_protect_void (print_free_buffer)` (:188-191): the
+    /// World print accumulator's partial restore. The saved content lives on
+    /// the accumulator's own LIFO stack, so the specpdl entry carries nothing;
+    /// unbinding it runs [`print_buffer::WorldPrintBuffer::unwind`] (SCHARS
+    /// bytes restored, `pos` left alone), on normal finish and on every
+    /// non-local exit alike (design rev 2 A2).
+    PrintBufferUnwind,
 }
 
 impl NativeUnwindAction {
@@ -1429,6 +1438,7 @@ impl NativeUnwindAction {
             Self::MinibufferBuffer { .. } => {}
             Self::BacktraceEvalRewind { .. } => {}
             Self::OwnerBinding(_) => {}
+            Self::PrintBufferUnwind => {}
             Self::KeyboardBinding(binding) => visit(binding.old_value),
         }
     }
@@ -1462,6 +1472,13 @@ impl NativeUnwindAction {
                 .map(|()| Value::NIL),
             Self::OwnerBinding(binding) => {
                 context.unbind_owner_binding(binding).map(|()| Value::NIL)
+            }
+            Self::PrintBufferUnwind => {
+                // GNU print_unwind / print_free_buffer: the destination bytes
+                // are already inserted by print_finish; this is the partial
+                // restore of the accumulator only.
+                context.world_print().unwind();
+                Ok(Value::NIL)
             }
         };
         context.restore_vm_roots(root_scope);

@@ -1160,6 +1160,94 @@ pub(crate) fn print_target_is_direct(target: Value) -> bool {
     (target.is_t() || target.is_nil() || target.is_buffer()) || super::marker::is_marker(&target)
 }
 
+/// GNU `print_prepare`/`print_finish` around one buffer/marker-directed print,
+/// backed by the World's one `print_buffer` accumulator
+/// (`crate::emacs_core::eval::print_buffer`).
+///
+/// `prepare` runs BEFORE the value is rendered, so a nested print performed by
+/// a `print-unreadable-function` callback (a `prin1-to-string` inside it) takes
+/// the nested save path on the same accumulator. Its unwind restores the saved
+/// bytes but leaves `pos`, exactly like GNU's static; the outer print then
+/// appends its own bytes at that position, reproducing the documented
+/// nested-print leak (U1/U10/B2/B3).
+///
+/// The guard is just the specpdl count captured before the accumulator entry.
+/// `prepare` pushes GNU's `record_unwind_protect (print_unwind, ...)` as a
+/// `PrintBufferUnwind` native-unwind entry, and `finish` runs GNU's
+/// `unbind_to`; the partial restore therefore runs on normal finishes AND on
+/// every non-local exit (signal/throw/panic replay), without a raw pointer or
+/// a borrow held across a Lisp callback (design rev 2 A2).
+pub(crate) struct PrintAccumulatorScope {
+    /// `SPECPDL_INDEX ()` from GNU `print_prepare`, captured before its
+    /// accumulator unwind entry is pushed; `print_finish` unbinds to it.
+    base: usize,
+}
+
+impl PrintAccumulatorScope {
+    /// GNU `print_prepare` for a buffer/marker destination, or `None` for the
+    /// echo area / `t` / a printer function (GNU's non-`Qnil` printcharfun
+    /// path never touches `print_buffer`).
+    pub(crate) fn prepare(
+        ctx: &mut crate::emacs_core::eval::Context,
+        target: Value,
+    ) -> Option<Self> {
+        if !print_target_is_direct(target) {
+            return None;
+        }
+        if !(target.is_buffer() || super::marker::is_marker(&target)) {
+            return None;
+        }
+        Some(Self::prepare_accumulator(ctx))
+    }
+
+    /// `print_prepare` for GNU's invisible `Vprin1_to_string_buffer`
+    /// destination: the accumulator takes part exactly as for a buffer, but
+    /// the destination buffer itself has no Lisp-visible identity (GNU's
+    /// `" prin1"` buffer is outside `Vbuffer_alist`; `(get-buffer " prin1")`
+    /// answers nil, and the name is free for a user buffer -- probe B1).
+    pub(crate) fn prepare_prin1_to_string(context: &mut crate::emacs_core::eval::Context) -> Self {
+        Self::prepare_accumulator(context)
+    }
+
+    fn prepare_accumulator(context: &mut crate::emacs_core::eval::Context) -> Self {
+        // GNU print_prepare: specpdl_count BEFORE record_unwind_protect.
+        let base = context.specpdl.len();
+        context.world_print().prepare();
+        context.push_specpdl_with(|| crate::emacs_core::eval::SpecBinding::NativeUnwind {
+            action: crate::emacs_core::eval::NativeUnwindAction::PrintBufferUnwind,
+        });
+        Self { base }
+    }
+
+    /// GNU `print_buffer`'s byte append; `append` advances `pos` by the
+    /// character count and `pos_byte` by the byte count. The Context borrow
+    /// is re-taken per operation: the accumulator stays Active across a
+    /// callback through its specpdl entry, never through a held borrow.
+    pub(crate) fn append(&mut self, ctx: &mut crate::emacs_core::eval::Context, bytes: &[u8]) {
+        ctx.world_print().append(bytes);
+    }
+
+    /// GNU `print_finish`: insert `buffer[0..pos]` into TARGET (when it has a
+    /// real buffer/marker identity), then run `unbind_to`'s recorded unwind
+    /// (the partial restore). Returns the inserted bytes -- the value
+    /// Fprin1_to_string reads back for its virtual destination.
+    pub(crate) fn finish(
+        self,
+        ctx: &mut crate::emacs_core::eval::Context,
+        target: Option<Value>,
+    ) -> Result<Vec<u8>, Flow> {
+        // GNU inserts into the destination BEFORE unbind_to runs the unwind.
+        let pending = ctx.world_print().pending();
+        if let Some(target) = target {
+            write_print_bytes_to_target(ctx, target, &pending)?;
+        }
+        // GNU print_finish's unbind_to(pc->specpdl_count, Qnil): runs the
+        // PrintBufferUnwind entry pushed by prepare (partial restore).
+        ctx.unbind_to_result(self.base)?;
+        Ok(pending)
+    }
+}
+
 /// Walk canonical Emacs internal-encoding bytes one character at a time and
 /// invoke a callable print target with each code. Eight-bit raw bytes and
 /// non-Unicode codes therefore surface as their real Emacs character codes,
@@ -1656,12 +1744,19 @@ fn prin1_to_lisp_string_value_in_state_with_overrides(
             overrides.copied().unwrap_or(Value::NIL),
         )?
         .into_options();
-        let bytes = super::print::print_value_bytes_in_context(
+        // GNU Fprin1_to_string: print_prepare(Vprin1_to_string_buffer) before
+        // the print, print_finish after it. The destination buffer is
+        // Lisp-invisible (probe B1: (get-buffer " prin1") is nil), so the
+        // World accumulator carries the GNU state and its pending bytes are
+        // the string Fbuffer_string would read back.
+        let accumulator = PrintAccumulatorScope::prepare_prin1_to_string(ctx);
+        super::print::print_value_bytes_sinking_to_accumulator(
             ctx,
             value,
             options,
             super::print::PrintSettingsSource::Globals,
         )?;
+        let bytes = accumulator.finish(ctx, None)?;
         Ok(if bytes.is_ascii() {
             neovm_value::heap_types::LispString::from_unibyte(bytes)
         } else {
@@ -1732,9 +1827,26 @@ pub(crate) fn builtin_princ_impl(
             print_target_current_buffer(ctx, target),
         );
         options.print_noescape = true;
-        let bytes =
-            super::print::print_value_bytes_in_context(ctx, &args[0], options, settings_source)?;
-        write_print_bytes_from_ctx(ctx, Some(&output_target), &bytes)?;
+        // GNU print_prepare BEFORE the render: a print-unreadable callback's
+        // nested print takes the nested save path on the World accumulator.
+        let accumulator = PrintAccumulatorScope::prepare(ctx, target);
+        if let Some(accumulator) = accumulator {
+            super::print::print_value_bytes_sinking_to_accumulator(
+                ctx,
+                &args[0],
+                options,
+                settings_source,
+            )?;
+            accumulator.finish(ctx, Some(target))?;
+        } else {
+            let bytes = super::print::print_value_bytes_in_context(
+                ctx,
+                &args[0],
+                options,
+                settings_source,
+            )?;
+            write_print_bytes_from_ctx(ctx, Some(&output_target), &bytes)?;
+        }
         Ok(args[0])
     })();
     scope.finish_value(result)
@@ -1812,9 +1924,25 @@ pub(crate) fn builtin_prin1_impl(
         // octal-escaped into a multibyte buffer.
         // Issue #131: emit canonical Emacs bytes so a real Private-Use glyph in the
         // printed output is inserted as itself, not decoded as a raw byte.
-        let bytes =
-            super::print::print_value_bytes_in_context(ctx, &args[0], options, settings_source)?;
-        write_print_bytes_from_ctx(ctx, Some(&output_target), &bytes)?;
+        // GNU print_prepare BEFORE the render (see PrintAccumulatorScope).
+        let accumulator = PrintAccumulatorScope::prepare(ctx, target);
+        if let Some(accumulator) = accumulator {
+            super::print::print_value_bytes_sinking_to_accumulator(
+                ctx,
+                &args[0],
+                options,
+                settings_source,
+            )?;
+            accumulator.finish(ctx, Some(target))?;
+        } else {
+            let bytes = super::print::print_value_bytes_in_context(
+                ctx,
+                &args[0],
+                options,
+                settings_source,
+            )?;
+            write_print_bytes_from_ctx(ctx, Some(&output_target), &bytes)?;
+        }
         Ok(args[0])
     })();
     scope.finish_value(result)
@@ -1903,16 +2031,30 @@ pub(crate) fn builtin_print_impl(
             print_target_current_buffer(ctx, target),
         );
         // Issue #131: emit canonical Emacs bytes (see `builtin_prin1_impl`).
-        let mut bytes = Vec::new();
-        bytes.push(b'\n');
-        bytes.extend_from_slice(&super::print::print_value_bytes_in_context(
-            ctx,
-            &args[0],
-            options,
-            settings_source,
-        )?);
-        bytes.push(b'\n');
-        write_print_bytes_from_ctx(ctx, Some(&output_target), &bytes)?;
+        // GNU print_prepare BEFORE the render (see PrintAccumulatorScope).
+        let mut accumulator = PrintAccumulatorScope::prepare(ctx, target);
+        let rendered = if let Some(scope) = accumulator.as_mut() {
+            // GNU Fprint: printchar ('\n') BEFORE the object print().
+            scope.append(ctx, b"\n");
+            super::print::print_value_bytes_sinking_to_accumulator(
+                ctx,
+                &args[0],
+                options,
+                settings_source,
+            )?
+        } else {
+            super::print::print_value_bytes_in_context(ctx, &args[0], options, settings_source)?
+        };
+        if let Some(mut accumulator) = accumulator {
+            accumulator.append(ctx, b"\n");
+            accumulator.finish(ctx, Some(target))?;
+        } else {
+            let mut bytes = Vec::new();
+            bytes.push(b'\n');
+            bytes.extend_from_slice(&rendered);
+            bytes.push(b'\n');
+            write_print_bytes_from_ctx(ctx, Some(&output_target), &bytes)?;
+        }
         Ok(args[0])
     })();
     scope.finish_value(result)
@@ -1995,6 +2137,27 @@ pub(crate) fn builtin_terpri_impl(
     expect_max_args("terpri", &args, 2)?;
     let target = resolve_print_target_in_state(ctx, args.first());
     if print_target_is_direct(target) {
+        if target.is_buffer() || super::marker::is_marker(&target) {
+            // GNU print.c:638 Fterpri runs entirely inside
+            // print_prepare/print_finish, so a buffer/marker destination
+            // writes through the shared accumulator (and a nested call
+            // leaves GNU's `pos` quirk behind).
+            let mut accumulator = PrintAccumulatorScope::prepare(ctx, target)
+                .expect("buffer/marker destination takes print_prepare");
+            let print_newline = if args.get(1).copied().is_some_and(Value::is_truthy) {
+                match terpri_line_state(ctx, target)? {
+                    TerpriLineState::BeginningOfLine => false,
+                    TerpriLineState::NeedsNewline => true,
+                }
+            } else {
+                true
+            };
+            if print_newline {
+                accumulator.append(ctx, b"\n");
+            }
+            accumulator.finish(ctx, Some(target))?;
+            return Ok(Some(if print_newline { Value::T } else { Value::NIL }));
+        }
         if args.get(1).copied().is_some_and(Value::is_truthy)
             && !(ctx.noninteractive() && (target.is_t() || target.is_nil()))
         {
@@ -2102,7 +2265,17 @@ pub(crate) fn builtin_write_char_impl(
 
     if print_target_is_direct(target) {
         if let Some(bytes) = write_char_emacs_bytes(char_code) {
-            write_print_bytes_from_ctx(ctx, args.get(1), &bytes)?;
+            if target.is_buffer() || super::marker::is_marker(&target) {
+                // GNU print.c:561 Fwrite_char runs inside
+                // print_prepare/print_finish: the byte goes through the
+                // shared accumulator for a buffer/marker destination.
+                let mut accumulator = PrintAccumulatorScope::prepare(ctx, target)
+                    .expect("buffer/marker destination takes print_prepare");
+                accumulator.append(ctx, &bytes);
+                accumulator.finish(ctx, Some(target))?;
+            } else {
+                write_print_bytes_from_ctx(ctx, args.get(1), &bytes)?;
+            }
         }
         return Ok(Some(Value::fixnum(char_code)));
     }

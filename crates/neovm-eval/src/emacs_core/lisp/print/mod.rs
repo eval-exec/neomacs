@@ -105,6 +105,21 @@ impl StatefulPrintOutput {
     pub fn into_bytes(self) -> Vec<u8> {
         self.bytes
     }
+
+    #[doc(hidden)]
+    pub fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    #[doc(hidden)]
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    #[doc(hidden)]
+    pub fn bytes_from(&self, start: usize) -> &[u8] {
+        &self.bytes[start..]
+    }
 }
 
 impl std::fmt::Write for StatefulPrintOutput {
@@ -509,6 +524,17 @@ pub(crate) struct PrintState<'a> {
     _mutator: std::marker::PhantomData<*const ()>,
     default_print_stack: Vec<Option<u64>>,
     object_stack: Vec<u64>,
+    /// How many bytes of the renderer's output were already appended to the
+    /// World print accumulator. GNU `printchar` writes `print_buffer`
+    /// incrementally, so a nested print must see the outer prefix and write
+    /// at the shared cursor; `Some` only when this print owns the accumulator
+    /// (buffer/marker or prin1-to-string destination). `None` for function
+    /// streams and the Context-less printer, which never touch it.
+    world_sink_flushed: Option<usize>,
+    /// Whether a Lisp callback flushed any output into the accumulator during
+    /// this render. When false, the accumulator cursor is untouched at 0 and
+    /// the whole rendered buffer can be installed without a copy.
+    world_sink_touched: bool,
 }
 
 /// Select the bindings used by the print destination. Scratch/format targets
@@ -1001,7 +1027,10 @@ fn prepare_print_number_table(
         .value_in_buffer_by_name(source.buffer(context), "print-number-table")
         .unwrap_or(Value::NIL);
     if !options.print_continuous_numbering || table.is_nil() {
-        reset_print_number_index();
+        // Design rev 2 A3: the World owns GNU's `print_number_index`, so a
+        // nested print, including one run by another Lisp thread of this
+        // World, sees the same reset.
+        context.world_print().reset_number_index();
         if !table.is_nil() {
             source.write_number_table(context, Value::NIL)?;
         }
@@ -1023,8 +1052,37 @@ fn prepare_print_number_table(
 pub(crate) fn print_value_bytes_in_context(
     context: &mut crate::emacs_core::eval::Context,
     value: &Value,
+    options: PrintOptions,
+    settings_source: PrintSettingsSource,
+) -> Result<Vec<u8>, neovm_value::error::Flow> {
+    print_value_bytes_in_context_inner(context, value, options, settings_source, false)
+}
+
+/// [`print_value_bytes_in_context`] for a print that OWNS the World print
+/// accumulator (buffer/marker and prin1-to-string destinations).
+///
+/// GNU writes `print_buffer` incrementally through `printchar`; our renderer
+/// builds a byte vector instead. To keep a nested print's observable order
+/// (its `print_prepare` saves the outer prefix, its unwind restores SCHARS
+/// bytes, and the outer continues at the left-over `pos`), every chunk is
+/// appended to the World accumulator before the next Lisp callback can nest,
+/// and the remainder is appended at the end. The returned vector is still the
+/// complete rendering for the caller's own bookkeeping.
+pub(crate) fn print_value_bytes_sinking_to_accumulator(
+    context: &mut crate::emacs_core::eval::Context,
+    value: &Value,
+    options: PrintOptions,
+    settings_source: PrintSettingsSource,
+) -> Result<Vec<u8>, neovm_value::error::Flow> {
+    print_value_bytes_in_context_inner(context, value, options, settings_source, true)
+}
+
+fn print_value_bytes_in_context_inner(
+    context: &mut crate::emacs_core::eval::Context,
+    value: &Value,
     mut options: PrintOptions,
     settings_source: PrintSettingsSource,
+    sink_to_accumulator: bool,
 ) -> Result<Vec<u8>, neovm_value::error::Flow> {
     prepare_print_number_table(context, value, &mut options, settings_source)?;
     // Immediate values and property-free strings cannot invoke Lisp or reach
@@ -1044,7 +1102,20 @@ pub(crate) fn print_value_bytes_in_context(
             | ValueKind::Unknown => false,
         }
     {
-        return Ok(print_value_bytes_with_options(value, options));
+        let bytes = print_value_bytes_with_options(value, options);
+        if sink_to_accumulator {
+            if context.world_print().pending_len() == 0 {
+                // No Lisp ran and the caller left the cursor at 0: install the
+                // rendered buffer as the accumulator content without a copy.
+                context.world_print().replace_pending_bytes(bytes);
+            } else {
+                // A caller pre-filled the accumulator (print's leading
+                // newline); append at the live cursor as GNU printchar does.
+                context.world_print().append(&bytes);
+            }
+            return Ok(Vec::new());
+        }
+        return Ok(bytes);
     }
     let scope = PrintEvaluationGuard::new(context);
     if let Some(buffer_id) = scope.context.edit.buffers.current_buffer_id() {
@@ -1067,13 +1138,20 @@ pub(crate) fn print_value_bytes_in_context(
     let _guard = enter_print_call(&options);
     let mut circle = PrintCircleState::new();
     let number_table = active_print_number_table(&options);
+    // GNU's `print_number_index` is World-owned (design rev 2 A3); the handle
+    // outlives every callback without borrowing the Context.
+    let number_index = scope.context.world_print().number_index_handle();
     if options.print_circle {
         if let Some(table) = number_table {
-            print_preprocess_external(value, table, options);
+            print_preprocess_external(value, table, options, Some(number_index.as_ref()));
         } else {
-            print_preprocess(value, &mut circle, options);
+            print_preprocess(value, &mut circle, options, Some(number_index.as_ref()));
         }
     }
+    // A caller may pre-fill the accumulator before rendering (GNU Fprint
+    // writes its leading newline there first). In that case the cursor is not
+    // at 0 and the no-copy install path must not run.
+    let world_sink_prefilled = sink_to_accumulator && scope.context.world_print().pending_len() > 0;
     let mut state = PrintState {
         options,
         circle: (options.print_circle && number_table.is_none()).then_some(&mut circle),
@@ -1085,11 +1163,37 @@ pub(crate) fn print_value_bytes_in_context(
         _mutator: std::marker::PhantomData,
         default_print_stack: Vec::new(),
         object_stack: Vec::new(),
+        world_sink_flushed: sink_to_accumulator.then_some(0),
+        world_sink_touched: world_sink_prefilled,
     };
     let mut output = StatefulPrintOutput::default();
     write_value_stateful(value, &mut output, &mut state);
     let failure = state.failure.take();
+    let flushed = state.world_sink_flushed.take();
+    let touched = state.world_sink_touched;
     drop(state);
+    if failure.is_none() && sink_to_accumulator {
+        if touched {
+            if let Some(already) = flushed
+                && output.len() > already
+            {
+                // GNU printchar has already written everything before this
+                // point; append only the tail, directly from the buffer.
+                scope
+                    .context
+                    .world_print()
+                    .append(output.bytes_from(already));
+            }
+        } else {
+            // No callback interrupted the render: the accumulator cursor is
+            // untouched, so hand the whole buffer over without a copy.
+            scope
+                .context
+                .world_print()
+                .replace_pending_bytes(output.into_bytes());
+            return scope.finish(Ok(Vec::new()));
+        }
+    }
     scope.finish(match failure {
         Some(error) => Err(error),
         None => Ok(output.into_bytes()),
@@ -1277,7 +1381,12 @@ fn write_print_number_table_entry(
 
 /// Preprocess pass: walk the value tree to find shared/circular structures.
 /// Uses an explicit stack (not recursive) matching GNU Emacs.
-fn print_preprocess(value: &Value, state: &mut PrintCircleState, options: PrintOptions) {
+fn print_preprocess(
+    value: &Value,
+    state: &mut PrintCircleState,
+    options: PrintOptions,
+    number_index: Option<&std::sync::atomic::AtomicI64>,
+) {
     let mut stack: Vec<Value> = vec![*value];
     while let Some(obj) = stack.pop() {
         if !is_print_circle_candidate(&obj, options.print_gensym) {
@@ -1291,7 +1400,7 @@ fn print_preprocess(value: &Value, state: &mut PrintCircleState, options: PrintO
             if *status == 0 {
                 // Seen second time -- assign label
                 let label = if options.print_continuous_numbering {
-                    next_print_number_index()
+                    crate::emacs_core::eval::print_buffer::next_print_number_index(number_index)
                 } else {
                     state.next_label += 1;
                     state.next_label
@@ -1302,7 +1411,10 @@ fn print_preprocess(value: &Value, state: &mut PrintCircleState, options: PrintO
             continue;
         }
         if options.print_continuous_numbering && is_uninterned_symbol(&obj) {
-            state.number_table.insert(key, -next_print_number_index());
+            state.number_table.insert(
+                key,
+                -crate::emacs_core::eval::print_buffer::next_print_number_index(number_index),
+            );
             continue;
         }
         // First time seen -- mark and process children
@@ -1387,8 +1499,13 @@ fn print_preprocess(value: &Value, state: &mut PrintCircleState, options: PrintO
     state.number_table.retain(|_, v| *v != 0);
 }
 
-fn print_preprocess_external(value: &Value, table_value: Value, options: PrintOptions) {
-    print_preprocess_external_with_t_removal(value, table_value, options, true);
+fn print_preprocess_external(
+    value: &Value,
+    table_value: Value,
+    options: PrintOptions,
+    number_index: Option<&std::sync::atomic::AtomicI64>,
+) {
+    print_preprocess_external_with_t_removal(value, table_value, options, true, number_index);
 }
 
 /// Core of GNU `print_preprocess`. When `remove_t_entries` is true the
@@ -1401,6 +1518,7 @@ fn print_preprocess_external_with_t_removal(
     table_value: Value,
     options: PrintOptions,
     remove_t_entries: bool,
+    number_index: Option<&std::sync::atomic::AtomicI64>,
 ) {
     let mut stack: Vec<Value> = vec![*value];
     while let Some(obj) = stack.pop() {
@@ -1412,7 +1530,8 @@ fn print_preprocess_external_with_t_removal(
         };
         if !entry.is_nil() || (options.print_continuous_numbering && is_uninterned_symbol(&obj)) {
             if print_number_entry_is_symbol(entry) {
-                let label = next_print_number_index();
+                let label =
+                    crate::emacs_core::eval::print_buffer::next_print_number_index(number_index);
                 put_print_number_table_entry(table_value, key, obj, Value::fixnum(-label));
             }
             continue;
@@ -1522,12 +1641,16 @@ fn push_string_text_property_plists(value: Value, stack: &mut Vec<Value>) {
 /// the gensym special case, exactly as in GNU.
 #[doc(hidden)]
 pub fn preprocess_print_number_table(
+    context: &mut crate::emacs_core::eval::Context,
     value: &Value,
     table_value: Value,
     print_gensym: bool,
     print_continuous_numbering: bool,
 ) {
-    reset_print_number_index();
+    // GNU Fprint_preprocess (print.c:1521-1528): reset the shared
+    // `print_number_index` before the traversal. The World owns the counter.
+    context.world_print().reset_number_index();
+    let number_index = context.world_print().number_index_handle();
     let options = PrintOptions {
         print_circle: true,
         print_gensym,
@@ -1537,7 +1660,13 @@ pub fn preprocess_print_number_table(
     // GNU's `print--preprocess` leaves the transient `t` status entries in the
     // table (the printer simply ignores non-fixnum entries), so don't strip
     // them here.
-    print_preprocess_external_with_t_removal(value, table_value, options, false);
+    print_preprocess_external_with_t_removal(
+        value,
+        table_value,
+        options,
+        false,
+        Some(number_index.as_ref()),
+    );
 }
 
 /// Entry point for stateful printing (circle/level/length aware).
@@ -1551,8 +1680,24 @@ pub(crate) fn print_value_stateful_with_buffers(
     buffers: Option<&neovm_edit::buffer::BufferManager>,
     options: PrintOptions,
 ) -> String {
-    String::from_utf8_lossy(&print_value_stateful_bytes_with_buffers(
-        value, buffers, options,
+    print_value_stateful_with_buffers_indexed(value, buffers, options, None)
+}
+
+/// [`print_value_stateful_with_buffers`] with the World-owned
+/// `print_number_index` handle (design rev 2 A3). Renderers that hold a
+/// `Context` pass `Some`; the Context-less diagnostics printer passes `None`
+/// and keeps the historical thread-local counter.
+pub(crate) fn print_value_stateful_with_buffers_indexed(
+    value: &Value,
+    buffers: Option<&neovm_edit::buffer::BufferManager>,
+    options: PrintOptions,
+    number_index: Option<&std::sync::atomic::AtomicI64>,
+) -> String {
+    String::from_utf8_lossy(&print_value_stateful_bytes_with_buffers_indexed(
+        value,
+        buffers,
+        options,
+        number_index,
     ))
     .into_owned()
 }
@@ -1563,15 +1708,27 @@ pub(crate) fn print_value_stateful_bytes_with_buffers(
     buffers: Option<&neovm_edit::buffer::BufferManager>,
     options: PrintOptions,
 ) -> Vec<u8> {
+    print_value_stateful_bytes_with_buffers_indexed(value, buffers, options, None)
+}
+
+/// [`print_value_stateful_bytes_with_buffers`] with the World-owned
+/// `print_number_index` handle; see
+/// [`print_value_stateful_with_buffers_indexed`].
+pub(crate) fn print_value_stateful_bytes_with_buffers_indexed(
+    value: &Value,
+    buffers: Option<&neovm_edit::buffer::BufferManager>,
+    options: PrintOptions,
+    number_index: Option<&std::sync::atomic::AtomicI64>,
+) -> Vec<u8> {
     let _print_guard = enter_print_call(&options);
     let mut out = StatefulPrintOutput::default();
     let number_table = active_print_number_table(&options);
     if options.print_circle {
         let mut circle = PrintCircleState::new();
         if let Some(table_value) = number_table {
-            print_preprocess_external(value, table_value, options);
+            print_preprocess_external(value, table_value, options, number_index);
         } else {
-            print_preprocess(value, &mut circle, options);
+            print_preprocess(value, &mut circle, options, number_index);
         }
         let mut state = PrintState {
             options,
@@ -1588,6 +1745,8 @@ pub(crate) fn print_value_stateful_bytes_with_buffers(
             _mutator: std::marker::PhantomData,
             default_print_stack: Vec::new(),
             object_stack: Vec::new(),
+            world_sink_flushed: None,
+            world_sink_touched: false,
         };
         write_value_stateful(value, &mut out, &mut state);
     } else {
@@ -1602,10 +1761,41 @@ pub(crate) fn print_value_stateful_bytes_with_buffers(
             _mutator: std::marker::PhantomData,
             default_print_stack: Vec::new(),
             object_stack: Vec::new(),
+            world_sink_flushed: None,
+            world_sink_touched: false,
         };
         write_value_stateful(value, &mut out, &mut state);
     }
     out.into_bytes()
+}
+
+/// GNU `print()`'s number-index reset (`src/print.c:1296-1303`) for a
+/// renderer that only holds `&Context` (the error/message printer), followed
+/// by the World-owned `print_number_index` handle (design rev 2 A3).
+///
+/// GNU renders error data through `Fprin1`/`Fprinc` on the hidden `" prin1"`
+/// buffer, and every one of those calls enters `print()`, which resets the
+/// process-static index unless `print-continuous-numbering` is non-nil and
+/// `print-number-table` is a table. The label source is then the shared
+/// static: an error rendered while an outer print-circle print is in flight
+/// continues that print's numbering (GNU 31.1: `boom: #2=(1 . #2#)` after the
+/// outer print consumed `#1`). The Context-less entries keep the fallback.
+#[doc(hidden)]
+pub(crate) fn begin_world_print_numbering(
+    context: &crate::emacs_core::eval::Context,
+) -> std::sync::Arc<std::sync::atomic::AtomicI64> {
+    let continuous = context
+        .variables()
+        .value_in_buffer_by_name(None, "print-continuous-numbering")
+        .is_some_and(|value| value.is_truthy());
+    let table = context
+        .variables()
+        .value_in_buffer_by_name(None, "print-number-table")
+        .unwrap_or(Value::NIL);
+    if !continuous || table.is_nil() {
+        context.reset_print_number_index_world();
+    }
+    context.print_number_index_handle()
 }
 
 pub(crate) fn default_cycle_candidate_key(value: &Value) -> Option<u64> {
@@ -1778,6 +1968,24 @@ fn write_value_stateful_rooted(
     write_value_stateful_inner(value, out, state);
 }
 
+/// GNU `printchar` ordering: everything rendered so far is in `print_buffer`
+/// before the callback runs, so its `print_prepare` saves that prefix.
+fn flush_print_output_to_accumulator(
+    context: &mut crate::emacs_core::eval::Context,
+    out: &StatefulPrintOutput,
+    flushed: &mut Option<usize>,
+    touched: &mut bool,
+) {
+    let Some(already) = flushed else {
+        return;
+    };
+    *touched = true;
+    if out.len() > *already {
+        context.world_print().append(out.bytes_from(*already));
+        *already = out.len();
+    }
+}
+
 fn write_value_stateful_inner(
     value: &Value,
     out: &mut StatefulPrintOutput,
@@ -1787,6 +1995,12 @@ fn write_value_stateful_inner(
         let outcome = match &mut state.context {
             PrinterContext::Standalone(_) => Ok(UnreadableResult::NotCalled),
             PrinterContext::Evaluator(context) => {
+                flush_print_output_to_accumulator(
+                    context,
+                    out,
+                    &mut state.world_sink_flushed,
+                    &mut state.world_sink_touched,
+                );
                 call_unreadable_printer(context, *value, state.options, state.settings_source)
             }
         };
@@ -1912,8 +2126,7 @@ fn write_value_stateful_inner(
                     return;
                 }
                 // Try shorthand (quote, function, backquote, etc.)
-                if let Some(shorthand) = write_list_shorthand_stateful(value, state) {
-                    out.append(shorthand);
+                if write_list_shorthand_stateful(value, out, state) {
                     return;
                 }
                 let mut depth_guard = PrintDepthGuard::enter(state);
@@ -2698,55 +2911,64 @@ impl Drop for PrintShorthandGuard<'_, '_> {
 /// stateful printing. Returns `Some(string)` on success.
 fn write_list_shorthand_stateful(
     value: &Value,
+    out: &mut StatefulPrintOutput,
     state: &mut PrintState,
-) -> Option<StatefulPrintOutput> {
-    let items = list_to_vec(value)?;
+) -> bool {
+    /// Every write goes to the caller's output, which for a buffer/marker
+    /// destination is the World accumulator cursor (GNU printchar order):
+    /// a callback nested inside the abbreviated value must see the prefix
+    /// already written, exactly like GNU's print_buffer.
+    let Some(items) = list_to_vec(value) else {
+        return false;
+    };
     if items.len() != 2 {
-        return None;
+        return false;
     }
 
     let head = match items[0].kind() {
         ValueKind::Symbol(id) => id,
-        _ => return None,
+        _ => return false,
     };
 
     if symbol_id_is(head, "make-hash-table-from-literal") {
         if let Some(payload) = quote_payload_stateful(&items[1]) {
-            let mut out = StatefulPrintOutput::from_str("#s");
-            write_value_stateful(&payload, &mut out, state);
-            return Some(out);
+            out.push_str("#s");
+            write_value_stateful(&payload, out, state);
+            return true;
         }
-        return None;
+        return false;
     }
 
     // GNU print.c:2533-2568 gates every quote/function/backquote/comma
     // abbreviation on the live flag, including callback option refresh.
     if !state.options.print_quoted {
-        return None;
+        return false;
     }
-    let shorthand = symbol_shorthand(head)?;
+    let Some(shorthand) = symbol_shorthand(head) else {
+        return false;
+    };
     let (prefix, nested_options) = match shorthand {
         SymbolShorthand::Quote => ("'", state.options),
         SymbolShorthand::Function => ("#'", state.options),
         SymbolShorthand::Backquote => ("`", state.options.enter_backquote()),
         SymbolShorthand::Comma => {
             if !state.options.allow_unquote_shorthand() {
-                return None;
+                return false;
             }
             (",", state.options.exit_backquote())
         }
         SymbolShorthand::CommaAt => {
             if !state.options.allow_unquote_shorthand() {
-                return None;
+                return false;
             }
             (",@", state.options.exit_backquote())
         }
     };
 
+    out.push_str(prefix);
     let mut scope = PrintShorthandGuard::enter(state, nested_options, shorthand);
-    let mut out = StatefulPrintOutput::from_str(prefix);
-    write_value_stateful(&items[1], &mut out, scope.state());
-    Some(out)
+    write_value_stateful(&items[1], out, scope.state());
+    true
 }
 
 fn quote_payload_stateful(value: &Value) -> Option<Value> {

@@ -719,12 +719,18 @@ fn format_object_in_state(
             FormatObjectPrinting::Prin1 => super::misc_eval::ObjectEscaping::Escaped,
         };
         let options = super::misc_eval::prepare_format_object_options(ctx, *value, escaping)?;
-        super::print::print_value_bytes_in_context(
+        // GNU format's %s/%S go through Fprin1_to_string: the object is
+        // printed into the hidden " prin1" buffer through print_prepare, so a
+        // nested prin1 in a print-unreadable callback shares the World
+        // accumulator exactly as in GNU (oracle U10).
+        let accumulator = super::misc_eval::PrintAccumulatorScope::prepare_prin1_to_string(ctx);
+        super::print::print_value_bytes_sinking_to_accumulator(
             ctx,
             value,
             options,
             super::print::PrintSettingsSource::Globals,
-        )
+        )?;
+        accumulator.finish(ctx, None)
     })();
     scope.finish(result)
 }

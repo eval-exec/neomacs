@@ -150,20 +150,20 @@ impl Context {
             coding_systems: coding_systems,
             macro_perf_stats: MacroPerfStats::default(),
             buffers: buffers,
-            global: super::global_state::GlobalState {
-                modes,
-                face_table,
-                abbrevs,
-                interactive,
-                rectangle,
-                selected_global_map,
-                kmacro,
-                registers,
-                bookmarks,
-                ..super::global_state::GlobalState::fresh(
-                    crate::emacs_core::eval::data::command_loop::CommandLoop::new(),
-                )
-            },
+            global: super::global_state::GlobalState::fresh_then(
+                crate::emacs_core::eval::data::command_loop::CommandLoop::new(),
+                |global| {
+                    global.modes = modes;
+                    global.face_table = face_table;
+                    global.abbrevs = abbrevs;
+                    global.interactive = interactive;
+                    global.rectangle = rectangle;
+                    global.selected_global_map = selected_global_map;
+                    global.kmacro = kmacro;
+                    global.registers = registers;
+                    global.bookmarks = bookmarks;
+                },
+            ),
             // Prepare allocation-capable managers before retiring the old TLS
             // installation. The closed factory reinstalls the final view.
             tagged_heap,

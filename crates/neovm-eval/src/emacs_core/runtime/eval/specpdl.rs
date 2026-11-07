@@ -427,6 +427,10 @@ impl Context {
                     | NativeUnwindAction::MinibufferSession { .. }
                     | NativeUnwindAction::MinibufferBuffer { .. }
                     | NativeUnwindAction::BacktraceEvalRewind { .. } => {}
+                    // GNU print_unwind. The LispCleanup path runs this via
+                    // `NativeUnwindAction::run`; the PureStorage replay (Rust
+                    // panic containment) must not skip the restore.
+                    NativeUnwindAction::PrintBufferUnwind => self.world_print().unwind(),
                 },
                 SpecBinding::GcRoot { .. }
                 | SpecBinding::Backtrace1 { .. }
