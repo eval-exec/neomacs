@@ -233,7 +233,6 @@ syn = { version = "3.0.3", features = ["full", "visit", "extra-traits"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 
 [build-dependencies]
-cc = "1.4.5"
 flate2.workspace = true
 pkg-config.workspace = true
 sha2.workspace = true

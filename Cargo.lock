@@ -4280,7 +4280,6 @@ dependencies = [
  "bitflags 2.13.1",
  "bytemuck",
  "cbc",
- "cc",
  "cranelift-codegen",
  "cranelift-frontend",
  "cranelift-jit",
@@ -4436,6 +4435,7 @@ version = "0.0.20"
 dependencies = [
  "bitflags 2.13.1",
  "bytemuck",
+ "cc",
  "cranelift-codegen",
  "cranelift-frontend",
  "cranelift-jit",

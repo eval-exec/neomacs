@@ -1,13 +1,4 @@
 use std::path::{Path, PathBuf};
-/// Compile the C long-double bridge with Cargo's target toolchain. `cc` also
-/// discovers Visual Studio tools outside PATH and selects the target CRT.
-fn compile_float_format(manifest: &Path) {
-    cc::Build::new()
-        .file(manifest.join("build_support/float_format.c"))
-        .std("c11")
-        .pic(true)
-        .compile("neovm_float_format");
-}
 
 // SINGLE SOURCE OF TRUTH (ledger 206): the recipe for every Lisp file this
 // build generates lives in `build_support/generated_lisp.rs` and is included
@@ -52,11 +43,6 @@ fn main() {
         "cargo:rustc-env=NEOVM_HOST_TRIPLE={}",
         std::env::var("TARGET").expect("cargo sets TARGET for build scripts")
     );
-
-    // Rust has no C long-double ABI; this bridge retains GNU's exact integer
-    // float conversion instead of narrowing intmax/uintmax to double first.
-    println!("cargo:rerun-if-changed=build_support/float_format.c");
-    compile_float_format(&manifest_dir);
 
     host_cfg::configure_all();
     ensure_generated_unicode_lisp(&project_root);

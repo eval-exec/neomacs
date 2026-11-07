@@ -38,6 +38,8 @@ dbus-vendored = []
 [build-dependencies]
 # Host-cfg probe shared by core/system/value/eval (build_support/host_cfg.rs).
 pkg-config.workspace = true
+# The C long-double bridge this crate's float builtins call.
+cc = "1.4.5"
 
 [dependencies]
 # B3 TEST-SUPPORT-VIS: pub only in the test-support build; product visibility
