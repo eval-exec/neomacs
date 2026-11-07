@@ -3839,6 +3839,58 @@ fn terminal_live_p_reports_a_frameless_gui_terminals_type() {
 }
 
 #[test]
+fn display_queries_signal_for_a_deleted_terminal_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::terminal::pure::{
+        TerminalRuntimeConfig, builtin_delete_terminal, ensure_terminal_runtime_owner,
+    };
+    use neomacs_display_protocol::{GraphicalBackend, GraphicalDisplayIdentity};
+
+    // GNU oracle (gnu-dead-terminal-probe.el on the pinned 31.1 build): after
+    // the terminal is dead, display-graphic-p / display-planes /
+    // display-selections-p all signal
+    //   (error "Invalid argument #<terminal N> in ‘get-device-terminal’")
+    // because framep-on-display's frames-on-display-list reaches
+    // get-device-terminal (lisp/frame.el:1205-1215).
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    let handle = ensure_terminal_runtime_owner(
+        0,
+        "x11_terminal",
+        TerminalRuntimeConfig::window_system(GraphicalDisplayIdentity::anonymous_connection(
+            GraphicalBackend::X11,
+        )),
+    );
+    // FORCE: the public guard counts live active terminals; the unit runtime
+    // has none, so the unforced call refuses. GNU's own forced deletion is the
+    // state whose dead-handle behavior the oracle above records.
+    builtin_delete_terminal(&mut eval, vec![handle, Value::T])
+        .expect("delete the graphical terminal");
+    for query in [
+        builtin_display_graphic_p
+            as fn(&mut neovm_eval::emacs_core::eval::Context, Vec<Value>) -> EvalResult,
+        builtin_display_planes,
+        builtin_display_selections_p,
+    ] {
+        match query(&mut eval, vec![handle]).kinded() {
+            Err(FlowKind::Signal(sig)) => {
+                assert_eq!(sig.symbol_name(), "error");
+                let message = sig
+                    .data
+                    .first()
+                    .map(neovm_eval::emacs_core::print::print_value)
+                    .unwrap_or_default();
+                assert!(
+                    message.contains("Invalid argument ")
+                        && message.contains("get-device-terminal"),
+                    "unexpected dead-terminal error: {message:?}"
+                );
+            }
+            other => panic!("expected the GNU get-device-terminal error, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn display_graphic_p_uses_global_window_system_without_live_frame() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
