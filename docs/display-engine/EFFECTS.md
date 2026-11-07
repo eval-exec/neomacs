@@ -1,48 +1,80 @@
 # Renderer effects
 
-Neomacs exposes renderer effects through one name-based Elisp interface.  An
-effect has its own typed property set; unrelated effects do not pretend to
-share one universal options struct.
+Renderer effects are user options.  Behavioural effects — cursor motion,
+buffer and scroll transitions, window and child-frame animation — are one
+option per property.  A decorative effect is one option, `neomacs-effect-NAME`,
+whose value is a plist of that effect's properties.  `setopt` and Customize
+are the interface: both run the option's `:set` function, and that is what
+reaches the renderer.  A plain `setq` after `neomacs-effects.el` has loaded
+changes the variable only.  A value already set when that file loads is picked
+up by the `defcustom`.
 
 ```elisp
-(neomacs-effect-set 'cursor-glow
-                    :enabled t
-                    :color "#66CCFF"
-                    :radius 48)
+(setopt neomacs-effect-cursor-glow
+        '(:enabled t :color "#66CCFF" :radius 48))
 
 (neomacs-effect-get 'cursor-glow)
-(neomacs-effect-reset 'cursor-glow)
 (neomacs-effect-names)
 ```
+
+A gallery assignment replaces the option's plist.  The renderer merges the
+properties it is given, so a later `(setopt neomacs-effect-cursor-glow
+'(:radius 40))` leaves glow enabled on screen while the option no longer
+records `:enabled`.  Saving that value and starting again applies only
+`:radius` onto the defaults, and the enablement is gone.  Include every
+property that should persist, or merge onto the current plist first.
+
+`neomacs-effect-set`, `neomacs-effect-reset`, and `neomacs-effects-apply` are
+not defined.
 
 `neomacs-effect-names` accepts an optional discovery scope: `shader` lists
 renderer shader configs, `cursor` lists configs valid in a buffer-local cursor
 profile, and `behavior` lists cursor/window animation policy.  With no scope it
 returns the complete `VisualConfig` registry.
 
-The same interface owns animation behavior that used to be split across
+The same options own animation behavior that used to be split across
 positional setters:
 
 ```elisp
-(neomacs-effect-set 'cursor-motion
-                    :enabled t :speed 2.4
-                    :style 'critically-damped-spring
-                    :duration 0.15 :trail-size 0.7)
-(neomacs-effect-set 'cursor-color-cycle :enabled t :fps 24)
-(neomacs-effect-set 'cursor-blink :enabled t :interval 0.5)
-(neomacs-effect-set 'cursor-size-transition :enabled t :duration 0.15)
-(neomacs-effect-set 'buffer-transition
-                    :enabled t :duration 0.2
-                    :effect 'slide :easing 'ease-out-quad
-                    :axis 'auto :direction 'forward)
-(neomacs-effect-set 'scroll-transition
-                    :enabled t :duration 0.15
-                    :effect 'page-curl :easing 'spring)
+(setopt neomacs-cursor-motion-enabled t
+        neomacs-cursor-motion-speed 2.4
+        neomacs-cursor-motion-style 'critically-damped-spring
+        neomacs-cursor-motion-duration 0.15
+        neomacs-cursor-motion-trail-size 0.7)
+(setopt neomacs-effect-cursor-color-cycle '(:enabled t :fps 24))
+(setopt neomacs-cursor-blink-enabled t
+        neomacs-cursor-blink-interval 0.5)
+(setopt neomacs-cursor-size-transition-enabled t
+        neomacs-cursor-size-transition-duration 0.15)
 ```
 
-Unknown effects, unknown properties, invalid colors, wrong value types, and
-non-integral values for integer properties signal an Elisp error.  Property
-names use Lisp kebab-case and map to the Rust config field with the same name
+`neomacs-cursor-blink-enabled` and `neomacs-cursor-blink-interval` are not
+what a session keeps.  After the first frame, `neomacs--setup-cursor-blink`
+copies `blink-cursor-mode` and `blink-cursor-interval` into the renderer
+with `neomacs--effect-set`, and a later `blink-cursor-mode` change does
+that again.  The option variables stay as they were, so a `setopt` of them
+in an init file can disappear from the screen.  Set `blink-cursor-mode` and
+`blink-cursor-interval` for the blink that should persist.
+
+```elisp
+(setopt neomacs-buffer-transition-enabled t
+        neomacs-buffer-transition-duration 0.2
+        neomacs-buffer-transition-effect 'slide
+        neomacs-buffer-transition-easing 'ease-out-quad
+        neomacs-buffer-transition-axis 'auto
+        neomacs-buffer-transition-direction 'forward)
+(setopt neomacs-scroll-transition-enabled t
+        neomacs-scroll-transition-duration 0.15
+        neomacs-scroll-transition-effect 'page-curl
+        neomacs-scroll-transition-easing 'spring)
+```
+
+`neomacs--effect-set` rejects an unknown effect, an unknown property, an
+invalid color, a wrong value type, and a non-integral value for an integer
+property.  An option's `:set` function stores the Lisp value first and
+ignores that signal, so a rejected value changes the option and leaves the
+renderer as it was.  Property names use Lisp kebab-case and map to the Rust
+config field with the same name
 in snake_case.  Colors use sRGB `#RRGGBB` or `#RRGGBBAA` strings and are
 converted to and from the renderer's linear color storage at the protocol
 boundary.  Time fields whose names end in `-ms` are milliseconds, while Rust
@@ -80,25 +112,25 @@ Other motion styles remain available: `exponential`, `critically-damped-spring`,
 `ease-in-out-cubic`. The plain `ease-out-expo` style moves one rectangle;
 `neovide` independently animates its corners.
 
-### Applying profiles
+### Applying several effects
 
-`neomacs-effects-apply` replaces the complete profile, starting from the
-Rust-defined defaults and applying every entry before publishing anything:
+Set each option.  There is no public command that replaces the whole profile.
+`neomacs--effects-apply` is internal: it rebuilds the renderer from the Rust
+defaults plus the profile it is given, and it does not write the options, so
+calling it directly leaves Customize showing the previous values.  An invalid
+entry makes that subr signal and publish nothing.
 
 ```elisp
-(neomacs-effects-apply
- '((cursor-glow :enabled t :color "#66CCFF" :radius 48)
-   (rain-effect :enabled t :drop-count 30 :speed 120.0)))
+(setopt neomacs-effect-cursor-glow
+        '(:enabled t :color "#66CCFF" :radius 48)
+        neomacs-effect-rain-effect
+        '(:enabled t :drop-count 30 :speed 120.0))
 ```
 
-If any entry is invalid, neither evaluator state nor renderer state changes.
-An empty profile restores every Rust default.  `neomacs-effects`, the Custom
-option in `term/neo-win.el`, has the same format.
-
-`neomacs-cursor-effect` accepts one cursor-effect entry or a list of entries
-in this format as a buffer-local variable or window parameter.  The layout
-engine validates it through the same protocol registry used by global
-configuration.
+`neomacs-cursor-effect`, in `term/neo-win.el`, accepts one
+`(EFFECT :PROPERTY VALUE ...)` entry or a list of them as a buffer-local
+variable or window parameter.  The layout engine validates it through the
+same protocol registry used by the options above.
 
 ## Ownership and update flow
 

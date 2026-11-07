@@ -131,7 +131,7 @@ Submodule charters — a new file needs one of these to belong:
 6. **A config value that Lisp can set must be scalar.** The effect registry is
    serde reflection over `VisualConfig` and carries only scalars plus
    `Duration`; a field that serializes to an object breaks
-   `neomacs-effects-apply` for every effect, not just its own.
+   `neomacs--effects-apply` for every effect, not just its own.
 6. **Lint suppressions are per item, never per crate.** A `#![allow(...)]` in a
    `lib.rs` covers code nobody has read yet, so the count it hides drifts:
    `neomacs-layout-engine`'s crate-wide `clippy::too_many_arguments` allow was

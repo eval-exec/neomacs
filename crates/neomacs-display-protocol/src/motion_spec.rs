@@ -275,7 +275,7 @@ impl<'de> serde::Deserialize<'de> for DevicePixels {
 /// that type is a *registry* field on four different configs, and the effect
 /// registry can only carry scalar property values. A data-carrying easing
 /// variant would serialize to an object and break `neomacs-effect-get` for
-/// whichever slot selected it -- and `neomacs-effects-apply`, which walks every
+/// whichever slot selected it -- and `neomacs--effects-apply`, which walks every
 /// effect, along with it. Keeping `TransitionEasing` fieldless makes that
 /// impossible by construction rather than by discipline.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]

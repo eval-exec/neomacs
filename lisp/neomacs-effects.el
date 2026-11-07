@@ -6,8 +6,11 @@
 
 ;; Every renderer effect is configured through `defcustom', the way
 ;; `blink-cursor-interval' and friends are: one option per property, with a
-;; type, a docstring and a group.  There is no public setter function.  Setting
-;; an option with `setq' or through \\[customize] is the whole interface.
+;; type, a docstring and a group.  There is no public setter function: `setopt'
+;; and \\[customize] are the whole interface, because an option reaches the
+;; renderer through its `:set' function.  As with any GNU option that has one, a
+;; plain `setq' once this file is loaded changes the variable and nothing else;
+;; a value already set when this file loads is picked up by the `defcustom'.
 ;;
 ;; The properties themselves are defined in Rust and published by
 ;; `neomacs-effect-schema', which reports each property's kind, its bounds and,
@@ -534,7 +537,7 @@ decorative."
   "Curve shape for a buffer switch."
   :type '(choice (const linear) (const ease-out-quad) (const ease-out-cubic)
                  (const ease-out-expo) (const ease-in-out-cubic)
-                 (const spring) (const cubic-bezier))
+                 (const spring))
   :group 'neomacs-transitions
   :set (lambda (symbol value)
          (set-default symbol value)
@@ -594,7 +597,7 @@ When nil the viewport jumps to its new position on the next frame."
   "Curve shape for a scroll."
   :type '(choice (const linear) (const ease-out-quad) (const ease-out-cubic)
                  (const ease-out-expo) (const ease-in-out-cubic)
-                 (const spring) (const cubic-bezier))
+                 (const spring))
   :group 'neomacs-transitions
   :set (lambda (symbol value)
          (set-default symbol value)

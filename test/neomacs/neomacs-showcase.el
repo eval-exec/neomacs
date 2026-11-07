@@ -5,6 +5,19 @@
 (require 'neomacs-video nil t)
 (require 'neomacs-image nil t)
 
+(defun showcase--require-effects ()
+  "Load `neomacs-effects' when the renderer can be configured.
+WebKit, video, and image are optional.  The effect options are not:
+without them a later setter only changes a variable and the renderer
+never sees it.  When the renderer subr is absent, keep the load
+optional so this file can still be read."
+  (if (fboundp 'neomacs--effect-set)
+      (unless (require 'neomacs-effects nil t)
+        (error "Showcase needs library `neomacs-effects'"))
+    (require 'neomacs-effects nil t)))
+
+(showcase--require-effects)
+
 (defvar showcase--log-file "/tmp/neomacs-showcase.log"
   "Path to the log file.")
 
@@ -304,9 +317,154 @@ The future of text editing is here.  It's called Neomacs.
     (push frame showcase--child-frames)
     frame))
 
-(defun showcase--reset-all-effects ()
-  "Disable every visual effect for a clean slate."
-  (showcase--log "RESET-ALL-EFFECTS called (step=%d)" showcase--step)
+(defvar showcase--saved-renderer nil
+  "Renderer plists captured before this demo changes an effect.
+Nil means no session is open.  Each element is (EFFECT . PLIST), as
+returned by `neomacs-effect-get'.")
+
+(defvar showcase--saved-options nil
+  "Option values captured with `showcase--saved-renderer'.
+Each element is (SYMBOL . VALUE).  Restoring writes these with
+`set-default' so a demo cannot mark them customized.")
+
+(defun showcase--effect-option (effect)
+  "Return the option `neomacs-effects' generates for gallery EFFECT."
+  (intern (format "neomacs-effect-%s" effect)))
+
+(defun showcase--plist-merge (base overlay)
+  "Return a plist of BASE with OVERLAY's properties written over it."
+  (setq base (copy-sequence (if (listp base) base nil)))
+  (while overlay
+    (setq base (plist-put base (car overlay) (cadr overlay)))
+    (setq overlay (cddr overlay)))
+  base)
+
+(defun showcase--each-effect-option (function)
+  "Call FUNCTION with each effect option that has a `:set' function."
+  (when (and (fboundp 'neomacs-effect-names) (fboundp 'neomacs-effect-get))
+    (dolist (effect (neomacs-effect-names))
+      (let ((gallery (showcase--effect-option effect)))
+        (if (and (boundp gallery) (get gallery 'custom-set))
+            (funcall function gallery)
+          (let ((plist (neomacs-effect-get effect)))
+            (while plist
+              (let ((symbol (intern (format "neomacs-%s-%s"
+                                            effect
+                                            (substring (symbol-name (car plist)) 1)))))
+                (when (and (boundp symbol) (get symbol 'custom-set))
+                  (funcall function symbol)))
+              (setq plist (cddr plist)))))))))
+
+(defun showcase--begin-effect-session ()
+  "Remember the renderer and the option values before the first demo change."
+  (when (and (not showcase--saved-renderer)
+             (fboundp 'neomacs-effect-names)
+             (fboundp 'neomacs-effect-get)
+             (fboundp 'neomacs--effects-apply))
+    (setq showcase--saved-renderer
+          (mapcar (lambda (effect)
+                    (cons effect (neomacs-effect-get effect)))
+                  (neomacs-effect-names)))
+    (setq showcase--saved-options nil)
+    (showcase--each-effect-option
+     (lambda (symbol)
+       (push (cons symbol (symbol-value symbol)) showcase--saved-options)))))
+
+(defun showcase--install-renderer-into-options ()
+  "Copy the current renderer into the option variables.
+Uses `set-default', not an option's `:set' function: the renderer was
+just published, and `:set' would publish it again and could record a
+customization."
+  (when (and (fboundp 'neomacs-effect-names) (fboundp 'neomacs-effect-get))
+    (dolist (effect (neomacs-effect-names))
+      (let ((plist (neomacs-effect-get effect))
+            (gallery (showcase--effect-option effect)))
+        (if (and (boundp gallery) (get gallery 'custom-set))
+            (set-default gallery (copy-sequence plist))
+          (while plist
+            (let ((symbol (intern (format "neomacs-%s-%s"
+                                          effect
+                                          (substring (symbol-name (car plist)) 1)))))
+              (when (and (boundp symbol) (get symbol 'custom-set))
+                (set-default symbol (cadr plist))))
+            (setq plist (cddr plist))))))))
+
+(defun showcase--option-set (symbol value)
+  "Set option SYMBOL to VALUE through its `:set' function.
+This updates the variable and the renderer together.  It does not call
+`customize-set-variable' or `custom-reevaluate-setting', so the change
+is not saved as the user's customization and a saved value is not
+reapplied."
+  (showcase--begin-effect-session)
+  (let ((setter (get symbol 'custom-set)))
+    (if setter
+        (funcall setter symbol value)
+      (set-default symbol value))))
+
+(defun showcase--gallery-set (effect plist)
+  "Set gallery EFFECT to PLIST, keeping its other properties.
+When the effect has an option, the option and the renderer receive the
+merged plist.  Otherwise only the renderer changes."
+  (let ((symbol (showcase--effect-option effect)))
+    (if (and (boundp symbol) (get symbol 'custom-set))
+        (showcase--option-set
+         symbol
+         (showcase--plist-merge (and (listp (symbol-value symbol))
+                                     (symbol-value symbol))
+                                plist))
+      (showcase--begin-effect-session)
+      (when (fboundp 'neomacs--effect-set)
+        (apply #'neomacs--effect-set effect plist)))))
+
+(defun showcase--apply-profile (profile)
+  "Apply each entry of PROFILE with `showcase--gallery-set'.
+PROFILE has the same shape `neomacs--effects-apply' accepts.  Unlike
+that subr, this does not rebuild every effect from the Rust defaults,
+so options the profile does not mention stay in sync with the renderer.
+Call `showcase--replace-profile' when the profile should be shown alone."
+  (dolist (entry profile)
+    (showcase--gallery-set (car entry) (cdr entry))))
+
+(defun showcase--replace-profile (profile)
+  "Show PROFILE alone on the demo slate.
+Clears every effect to the demo defaults, then applies PROFILE through
+the option setters.  The user's pre-demo values stay in the snapshot
+`showcase-quit' restores."
+  (showcase--demo-clean-effects)
+  (showcase--apply-profile profile))
+
+(defun showcase--effect-enable (effect)
+  "Turn on gallery EFFECT without recording a user customization."
+  (showcase--gallery-set effect '(:enabled t)))
+
+(defun showcase--effect-reset (effect)
+  "Turn gallery EFFECT off for the demo, ignoring any saved Custom value.
+The value from before the demo is put back by `showcase-quit'."
+  (showcase--gallery-set effect '(:enabled nil)))
+
+(defun showcase--demo-clean-effects ()
+  "Make the renderer, and the options, a clean demo slate.
+The slate is the Rust defaults with `cursor-color-cycle' forced off.
+The pre-demo renderer and option values stay in the session snapshot."
+  (showcase--begin-effect-session)
+  (when (fboundp 'neomacs--effects-apply)
+    (neomacs--effects-apply '((cursor-color-cycle :enabled nil)))
+    (showcase--install-renderer-into-options)))
+
+(defun showcase--end-effect-session ()
+  "Put back the renderer and the options captured for this demo."
+  (when showcase--saved-renderer
+    (neomacs--effects-apply
+     (mapcar (lambda (entry)
+               (cons (car entry) (copy-sequence (cdr entry))))
+             showcase--saved-renderer))
+    (dolist (cell showcase--saved-options)
+      (set-default (car cell) (cdr cell)))
+    (setq showcase--saved-renderer nil
+          showcase--saved-options nil)))
+
+(defun showcase--reset-demo-chrome ()
+  "Drop timers, child frames, and extra windows used by the demo."
   (showcase--cancel-timers)
   (showcase--cleanup-child-frames)
   (delete-other-windows)
@@ -316,10 +474,15 @@ The future of text editing is here.  It's called Neomacs.
       (ignore-errors (neomacs-video-stop-all))))
   (when (fboundp 'neomacs-webkit-close-all)
     (let ((inhibit-message t))
-      (ignore-errors (neomacs-webkit-close-all))))
-  ;; Restore every renderer-defined default, then turn off the one shader
-  ;; whose Rust default is intentionally enabled.
-  (neomacs-effects-apply '((cursor-color-cycle :enabled nil))))
+      (ignore-errors (neomacs-webkit-close-all)))))
+
+(defun showcase--reset-all-effects ()
+  "Disable every visual effect for a clean slate.
+The user's options and the pre-demo renderer are remembered and put
+back by `showcase-quit'.  Nothing here is recorded as a customization."
+  (showcase--log "RESET-ALL-EFFECTS called (step=%d)" showcase--step)
+  (showcase--reset-demo-chrome)
+  (showcase--demo-clean-effects))
 
 (defun showcase--title-card (title &optional subtitle)
   "Show a title card with TITLE and optional SUBTITLE."
@@ -504,9 +667,10 @@ The future of text editing is here.  It's called Neomacs.
                   (goto-char (+ (match-beginning 0) 1)))
                 (redisplay t))))))))
   ;; Breathing border (purple, slow)
-  (neomacs-effect-set 'breathing-border
-                      :enabled t :color "#9966FF"
-                      :min-opacity 0.05 :max-opacity 0.4 :cycle-ms 4000))
+  (showcase--gallery-set
+   'breathing-border
+   '(:enabled t :color "#9966FF"
+     :min-opacity 0.05 :max-opacity 0.4 :cycle-ms 4000)))
 
 (defun showcase--section-cursor-anim ()
   "Demonstrate smooth cursor with spring physics and glow."
@@ -520,8 +684,9 @@ The future of text editing is here.  It's called Neomacs.
     (recenter)
     (redisplay t)
     ;; Enable smooth cursor + glow + line highlight
-    (neomacs-effect-set 'cursor-glow :enabled t :color "#4D99FF" :radius 40)
-    (neomacs-effect-set 'line-highlight :enabled t)
+    (showcase--gallery-set 'cursor-glow
+                           '(:enabled t :color "#4D99FF" :radius 40))
+    (showcase--gallery-set 'line-highlight '(:enabled t))
     ;; Animate cursor through positions
     (let ((delay 0.3))
       (showcase--schedule delay
@@ -596,8 +761,8 @@ The future of text editing is here.  It's called Neomacs.
         (showcase--schedule delay
           (lambda ()
             (showcase--log "  scroll effect: %s" effect)
-            (neomacs-effect-set 'scroll-transition
-                                :enabled t :effect effect)
+            (showcase--option-set 'neomacs-scroll-transition-enabled t)
+            (showcase--option-set 'neomacs-scroll-transition-effect effect)
             (message "Scroll Effect: %s" effect)))
         (showcase--schedule (+ delay 0.2)
           (lambda ()
@@ -640,10 +805,10 @@ The future of text editing is here.  It's called Neomacs.
           (showcase--schedule delay
             (lambda ()
               (when old
-                (neomacs-effect-reset old))
-              (neomacs-effect-set effect :enabled t)
+                (showcase--effect-reset old))
+              (showcase--effect-enable effect)
               (when (eq effect 'cursor-color-cycle)
-                (neomacs-effect-set 'cursor-glow :enabled t :radius 35))
+                (showcase--gallery-set 'cursor-glow '(:enabled t :radius 35)))
               (showcase--log "  cursor effect: %s" name)
               (message "Cursor Effect: %s" name))))
         (setq previous (cdr entry))
@@ -685,7 +850,7 @@ The future of text editing is here.  It's called Neomacs.
             (profile (cadr entry)))
         (showcase--schedule delay
           (lambda ()
-            (neomacs-effects-apply profile)
+            (showcase--replace-profile profile)
             (showcase--log "  atmosphere: %s" name)
             (message "Atmosphere: %s" name))))
       (setq delay (+ delay 1.0)))))
@@ -702,37 +867,38 @@ The future of text editing is here.  It's called Neomacs.
     (let ((features '((0.2 "Line Numbers"
                        (display-line-numbers-mode 1))
                       (0.8 "Rainbow Indent Guides"
-                       (neomacs-effect-set 'indent-guides
-                                           :enabled t :rainbow-enabled t))
+                       (showcase--gallery-set 'indent-guides
+                                              '(:enabled t :rainbow-enabled t)))
                       (1.4 "Line Highlight"
-                       (neomacs-effect-set 'line-highlight :enabled t))
+                       (showcase--gallery-set 'line-highlight '(:enabled t)))
                       (2.0 "Visible Whitespace"
-                       (neomacs-effect-set 'show-whitespace
-                                           :enabled t :color "#33FF66"))
+                       (showcase--gallery-set 'show-whitespace
+                                              '(:enabled t :color "#33FF66")))
                       (2.6 "Minimap"
-                       (neomacs-effect-set 'minimap :enabled t))
+                       (showcase--gallery-set 'minimap '(:enabled t)))
                       (3.2 "Focus Mode"
-                       (neomacs-effect-set 'focus-mode
-                                           :enabled t :opacity 0.3))
+                       (showcase--gallery-set 'focus-mode
+                                              '(:enabled t :opacity 0.3)))
                       (3.8 "Scroll Progress"
-                       (neomacs-effect-set 'scroll-progress :enabled t))
+                       (showcase--gallery-set 'scroll-progress '(:enabled t)))
                       (4.5 "Split + Inactive Dimming"
                        (progn
                          (split-window-right)
                          (other-window 1)
                          (switch-to-buffer (showcase--insert-prose-buffer))
                          (other-window 1)
-                         (neomacs-effect-set 'inactive-dim
-                                             :enabled t :opacity 0.2)))
+                         (showcase--gallery-set 'inactive-dim
+                                                '(:enabled t :opacity 0.2))))
                       (5.5 "Zen Mode"
                        (progn
                          (delete-other-windows)
-                         (neomacs-effect-reset 'focus-mode)
-                         (neomacs-effect-reset 'minimap)
+                         (showcase--effect-reset 'focus-mode)
+                         (showcase--effect-reset 'minimap)
                          (switch-to-buffer (showcase--insert-prose-buffer))
-                         (neomacs-effect-set 'zen-mode :enabled t
-                                             :content-width-pct 60
-                                             :margin-opacity 0.3))))))
+                         (showcase--gallery-set
+                          'zen-mode
+                          '(:enabled t :content-width-pct 60
+                            :margin-opacity 0.3)))))))
       (dolist (feat features)
         (let ((d (nth 0 feat))
               (name (nth 1 feat))
@@ -991,9 +1157,10 @@ The future of text editing is here.  It's called Neomacs.
       (lambda ()
         (showcase--log "  window-trans: focus border")
         (message "Transition: Focus Gradient Border")
-        (neomacs-effect-set 'focus-gradient-border
-                            :enabled t :top-color "#4D99FF"
-                            :bot-color "#FF4DFF" :width 3 :opacity 0.8)))
+        (showcase--gallery-set
+         'focus-gradient-border
+         '(:enabled t :top-color "#4D99FF"
+           :bot-color "#FF4DFF" :width 3 :opacity 0.8))))
     (showcase--schedule 4.3
       (lambda ()
         (other-window 1)))
@@ -1239,8 +1406,8 @@ The future of text editing is here.  It's called Neomacs.
       (erase-buffer)
       (insert (propertize "RETRO MODE ACTIVATED\n" 'face '(:height 2.0 :foreground "#4DFF4D" :weight bold)))
       (insert "\n")))
-  ;; Stack retro effects in one renderer update.
-  (neomacs-effects-apply
+  ;; Stack retro effects without rebuilding the other options from defaults.
+  (showcase--apply-profile
    '((scanlines :enabled t :spacing 3 :opacity 0.12 :color "#000000")
      (dot-matrix :enabled t)
      (bg-pattern :style 1 :spacing 16 :color "#003300" :opacity 0.08)
@@ -1347,7 +1514,7 @@ The future of text editing is here.  It's called Neomacs.
                 (redisplay t))))))))
 
   ;; Stack the prettiest effects.
-  (neomacs-effects-apply
+  (showcase--apply-profile
    '((aurora :enabled t :color1 "#33CC66" :color2 "#9966FF"
              :height 100 :opacity 0.2)
      (neon-border :enabled t)
@@ -1433,7 +1600,8 @@ The future of text editing is here.  It's called Neomacs.
   (showcase--log "=== SHOWCASE QUIT ===")
   (showcase--stop-countdown)
   (showcase--cancel-seq-timers)
-  (showcase--reset-all-effects)
+  (showcase--reset-demo-chrome)
+  (showcase--end-effect-session)
   (when showcase--original-mode-line-format
     (set-default 'mode-line-format showcase--original-mode-line-format)
     (force-mode-line-update t))
@@ -1487,8 +1655,13 @@ The future of text editing is here.  It's called Neomacs.
         (message "Neomacs Showcase: a=run-all  n=next  p=prev  0-9=jump  q=quit"))
     (showcase-run-all)))
 
-;; Auto-initialize when loaded
-(showcase--init)
+(defvar showcase--inhibit-init nil
+  "When non-nil, loading this file does not start the demo.
+Tests bind this before loading so they can call the helpers.")
+
+;; Auto-initialize when loaded as a demo, not when a test is driving it.
+(unless showcase--inhibit-init
+  (showcase--init))
 
 (provide 'neomacs-showcase)
 ;;; neomacs-showcase.el ends here

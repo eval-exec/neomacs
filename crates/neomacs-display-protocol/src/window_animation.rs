@@ -13,7 +13,7 @@
 //! The effect registry reflects [`crate::visual_config::VisualConfig`] through
 //! serde and can carry only scalar property values. Every `MotionSpec` variant
 //! but `Instant` serializes to an *object*, so storing one here would make
-//! `neomacs-effect-get` fail for the slot -- and `neomacs-effects-apply`, which
+//! `neomacs-effect-get` fail for the slot -- and `neomacs--effects-apply`, which
 //! walks every effect, with it. [`WindowAnimation::motion`] converts to the
 //! form the compositor samples.
 //!
