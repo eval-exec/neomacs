@@ -81,3 +81,7 @@ mod mode_line_point_test;
 #[cfg(test)]
 #[path = "frame_resize_scroll_bar_test.rs"]
 mod frame_resize_scroll_bar_test;
+
+#[cfg(test)]
+#[path = "terminal_frame_deletion_test.rs"]
+mod terminal_frame_deletion_test;
