@@ -68,6 +68,11 @@ neomacs-test-fonts.workspace = true
 neovm-core = { workspace = true, features = ["jit", "redisplay-test-policy"] }
 # The Rows-lifetime fixtures pin their GC mode through value's signed per-heap
 # test fence; this downward dev edge enables that test surface only for tests.
+# Scope proof for the dedicated test-thread fallback heap: this crate's own
+# graph must NOT enable neovm-value's `test-thread-fallback-heap`, and this
+# crate never calls the split crates' test init that arms it per process, so
+# the no-heap tripwire stays armed here even in a unified `--workspace` test
+# build where cargo has unified that dev-dep feature for every member.
 neovm-value = { workspace = true, features = ["test-support"] }
 # value's test-support exposes CacheRootScan::Snapshot, so text must compile
 # its matching arm in the same test build (A1 consumer gate, downward only).
