@@ -3941,25 +3941,11 @@ fn ta2_fence(sources: &[GuardSource], package: &str) -> Result<Option<Ta2Fence>,
     if !(support.content.is_some() && file == lib) {
         fence.definition_files.insert(file.clone());
     }
-    // The whole test_support module tree is the gated fence surface: its
-    // sibling test modules are the fence's own tests, not a second route from
-    // product code.
-    fn collect_test_support_files(dir: &Path, files: &mut BTreeSet<PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                collect_test_support_files(&path, files);
-            } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
-                if let Ok(canonical) = path.canonicalize() {
-                    files.insert(canonical);
-                }
-            }
-        }
-    }
-    collect_test_support_files(&module_dir, &mut fence.definition_files);
+    // The fence's definition surface is the authority MODULE TREE: the
+    // authority declaration file plus its DECLARED child modules (collected
+    // below). Physical siblings in the same directory are not exempt: a
+    // test_support file the authority module does not declare stays product
+    // surface and cannot name the fence.
     let authority: Vec<_> = items
         .iter()
         .filter_map(|i| match i {

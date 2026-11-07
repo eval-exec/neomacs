@@ -928,3 +928,11 @@ pub fn reset_plist_get_walks() {
 pub fn reset_symbol_with_pos_plist_comparisons() {
     crate::symbol::plist_core::reset_symbol_with_pos_plist_comparisons();
 }
+
+/// The fence's own behavioural tests are a DECLARED CHILD of the authority
+/// module, not a physical sibling: TA2's definition surface is this module
+/// tree, so the tests' `crate::test_support::authority` references stay
+/// inside the signed fence. A plain child declaration keeps the rustc and
+/// guard resolvers identical (`test_support/authority/`).
+#[cfg(test)]
+mod test_heap_scope_tests;

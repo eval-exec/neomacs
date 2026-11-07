@@ -13,10 +13,6 @@
 /// AUTHORITY-ITEMS.tsv row signed before code.
 pub mod authority;
 
-#[cfg(test)]
-#[path = "test_support/test_heap_scope_tests.rs"]
-mod test_heap_scope_tests;
-
 use crate::heap_types::LispString;
 
 // VALUE-A3-COLLAPSE (peer 00:36:00Z): the A3 v2/R8 payload rows collapsed onto
