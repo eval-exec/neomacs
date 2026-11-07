@@ -879,12 +879,20 @@ pub fn builtin_window_system(
 ) -> EvalResult {
     expect_max_args("window-system", &args, 1)?;
     let window_system = if args.first().is_none_or(|v| v.is_nil()) {
-        // A cached GUI bootstrap deliberately has no frame yet (the host
-        // creates it at bootstrap), so an empty frame manager reports the
-        // window system the runtime was built for.
-        selected_frame_window_system_symbol_in_state(&eval.frame_manager()).or_else(|| {
+        // GNU 31.1 src/frame.c:415-436 decides from the frame alone: the
+        // selected frame's output method (Fframep) is the answer, a termcap
+        // frame answers nil, and the deprecated window-system variable is
+        // never consulted. Only a genuinely empty frame manager -- the
+        // cached GUI bootstrap state, which GNU cannot be in -- reports the
+        // window system the runtime was built for. Gating on the selected
+        // frame, not on the frame's value, keeps a selected termcap frame
+        // from picking up the variable.
+        let has_selected_frame = eval.frame_manager().selected_frame().is_some();
+        if has_selected_frame {
+            selected_frame_window_system_symbol_in_state(&eval.frame_manager())
+        } else {
             dynamic_or_global_symbol_value_in_state_fixed(eval.variables(), WellKnown::WindowSystem)
-        })
+        }
     } else {
         let (frames, buffers) = eval.frame_manager_and_buffers_mut();
         frame_window_system_symbol_in_state(frames, buffers, args.first())?

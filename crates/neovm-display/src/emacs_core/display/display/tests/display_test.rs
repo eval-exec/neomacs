@@ -3558,6 +3558,40 @@ fn window_system_prefers_selected_frame_then_global_fallback() {
 }
 
 #[test]
+fn window_system_ignores_the_deprecated_variable_when_a_frame_is_selected() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+    assert!(
+        eval.frame_manager()
+            .selected_frame()
+            .is_some_and(|frame| frame.effective_window_system().is_none()),
+        "the synthesized selected frame must model a termcap frame"
+    );
+
+    // GNU 31.1 src/frame.c:415-436 (Fwindow_system): the value comes from
+    // Fframep of the frame. A termcap frame answers nil, and the deprecated
+    // window-system variable is never consulted. Oracle on the pinned
+    // a360712c9d build (tty/batch):
+    //   (progn (setq window-system 'tty) (window-system)) => nil
+    //   (let ((f (selected-frame)))
+    //     (list (window-system) (window-system f)))       => (nil nil)
+    for label in ["tty", "neo"] {
+        eval.set_variable("window-system", Value::symbol(label));
+        assert_eq!(
+            builtin_window_system(&mut eval, vec![]).unwrap(),
+            Value::NIL,
+            "a selected termcap frame must answer nil; GNU ignores the window-system variable"
+        );
+        assert_eq!(
+            builtin_window_system(&mut eval, vec![Value::make_frame(frame_id.0)]).unwrap(),
+            Value::NIL,
+            "an explicit termcap frame must answer nil like GNU"
+        );
+    }
+}
+
+#[test]
 fn display_graphic_p_uses_global_window_system_without_live_frame() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
