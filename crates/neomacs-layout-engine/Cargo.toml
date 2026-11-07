@@ -66,6 +66,12 @@ wio.workspace = true
 [dev-dependencies]
 neomacs-test-fonts.workspace = true
 neovm-core = { workspace = true, features = ["jit", "redisplay-test-policy"] }
+# The Rows-lifetime fixtures pin their GC mode through value's signed per-heap
+# test fence; this downward dev edge enables that test surface only for tests.
+neovm-value = { workspace = true, features = ["test-support"] }
+# value's test-support exposes CacheRootScan::Snapshot, so text must compile
+# its matching arm in the same test build (A1 consumer gate, downward only).
+neovm-text = { path = "../neovm-text", default-features = false, features = ["test-support"] }
 serde_json.workspace = true
 tracing-test.workspace = true
 
