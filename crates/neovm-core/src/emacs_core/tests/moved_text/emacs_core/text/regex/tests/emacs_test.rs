@@ -1598,6 +1598,7 @@ fn prefilter_built_for_keyword_alternation() {
 
 #[test]
 fn prefilter_none_for_custom_case_table() {
+    crate::test_utils::init_test_tracing();
     // A case-canon char-table that folds a non-ASCII character into a needle
     // byte gets no prefilter; the standard translation does.
     let table = Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3);

@@ -564,6 +564,7 @@ fn pure_dispatch_typed_div_float_zero_uses_ieee_results() {
 /// every NaN negative diverged there.
 #[test]
 fn float_division_propagates_an_input_nan_with_its_sign() {
+    crate::test_utils::init_test_tracing();
     for args in [
         vec![Value::make_float(f64::NAN), Value::make_int(1)],
         vec![Value::make_int(1), Value::make_float(f64::NAN)],

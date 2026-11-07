@@ -99,6 +99,7 @@ fn char_table_extras_narrow_at_the_gnu_c_int_boundary() {
 
 #[test]
 fn computed_integer_constructor_preserves_i64_domain() {
+    crate::test_utils::init_test_tracing();
     let expected = oracle(
         "'(9223372036854775807 -9223372036854775808)",
         include_str!("boundary_numbers/computed_integer_constructor_preserves_i64_domain.expect"),

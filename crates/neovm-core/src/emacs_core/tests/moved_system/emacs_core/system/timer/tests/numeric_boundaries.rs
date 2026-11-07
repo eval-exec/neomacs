@@ -55,6 +55,7 @@ fn typed_wait_timeout_matches_gnu_dtotimespec() {
 
 #[test]
 fn timer_duration_saturates_like_gnu_timespec_sub() {
+    crate::test_utils::init_test_tracing();
     let mut slots = vec![Value::NIL; 10];
     slots[1] = Value::fixnum(-(1_i64 << 47));
     slots[2] = Value::fixnum(0);

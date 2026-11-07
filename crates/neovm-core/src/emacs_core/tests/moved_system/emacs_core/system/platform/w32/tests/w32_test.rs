@@ -5,6 +5,7 @@ use neovm_value::value::Value;
 
 #[test]
 fn windows_symbol_registration_matches_gnu_bootstrap_shape() {
+    crate::test_utils::init_test_tracing();
     let mut obarray = Obarray::new();
     register_bootstrap_symbols(&mut obarray);
 
@@ -31,6 +32,7 @@ fn windows_symbol_registration_matches_gnu_bootstrap_shape() {
 
 #[test]
 fn undefined_color_has_gnu_error_properties() {
+    crate::test_utils::init_test_tracing();
     let mut obarray = Obarray::new();
     register_bootstrap_symbols(&mut obarray);
 

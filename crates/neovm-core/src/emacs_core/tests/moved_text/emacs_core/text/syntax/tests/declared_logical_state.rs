@@ -127,6 +127,7 @@ fn ignoring_supplied_counts_keeps_the_position_independent_gnu_path() {
 
 #[test]
 fn syntax_heap_source_validates_object_payload_and_rejects_scalars() {
+    crate::test_utils::init_test_tracing();
     assert_eq!(
         StringSyntaxPositionSource::try_from(&Value::NIL).unwrap_err(),
         StringSyntaxPositionSourceError::NotString

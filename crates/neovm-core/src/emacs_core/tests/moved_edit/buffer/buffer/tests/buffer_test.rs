@@ -41,6 +41,7 @@ use neovm_value::value::ValueKind;
 
 #[test]
 fn forwarded_slot_predicates_are_closed_typed_contracts() {
+    crate::test_utils::init_test_tracing();
     use BufferSlotPredicate::{
         Fraction, Integer, Number, OverwriteMode, String as StringPredicate, Symbol, Unrestricted,
         VerticalScrollBar,
@@ -1838,6 +1839,7 @@ fn measured_manager_edit_entrypoints_match_typed_range_entrypoints() {
 
 #[test]
 fn lisp_string_insert_into_unibyte_buffer_preserves_gnu_chars_and_properties() {
+    crate::test_utils::init_test_tracing();
     for kind in implemented_text_backends() {
         let mut buf = buf_with_text_backend("", kind);
         buf.set_multibyte_value(false);
@@ -1870,6 +1872,7 @@ fn lisp_string_insert_into_unibyte_buffer_preserves_gnu_chars_and_properties() {
 
 #[test]
 fn manager_replace_lisp_string_grafts_converted_intervals_once() {
+    crate::test_utils::init_test_tracing();
     for kind in implemented_text_backends() {
         let mut mgr = manager_with_text_backend(kind);
         let id = mgr.current_buffer_id().expect("scratch buffer");
@@ -3021,6 +3024,7 @@ fn mark_marker_object_survives_gc_before_any_mark_is_set() {
 
 #[test]
 fn changed_char_range_tracks_real_edits() {
+    crate::test_utils::init_test_tracing();
     let mut buf = buf_with_text("hello world\nfoo bar\nbaz qux\n");
     // Ack to start from a clean (fully-unchanged) state.
     buf.reset_unchanged_region();
@@ -3054,6 +3058,7 @@ fn changed_char_range_tracks_real_edits() {
 /// with an insert elsewhere.
 #[test]
 fn changed_char_range_tracks_replacements() {
+    crate::test_utils::init_test_tracing();
     let mut buf = buf_with_text("hello world\nfoo bar\nbaz qux\n");
     buf.reset_unchanged_region();
     // "world" (chars [6, 11)) -> "there!!" (7 chars).
@@ -3170,6 +3175,7 @@ fn killing_a_base_buffer_kills_its_indirect_children() {
 /// distinct values so no two fields could be confused for each other.
 #[test]
 fn the_baked_position_offsets_address_the_fields_the_accessors_read() {
+    crate::test_utils::init_test_tracing();
     let mut buf = buf_with_text("hello world");
     buf.set_accessible_region_and_point_from_emacs_bytes(
         EmacsByteRange::from_usize(2, 8),
@@ -3211,6 +3217,7 @@ fn the_baked_position_offsets_address_the_fields_the_accessors_read() {
 /// retired before killing a selected allocation.
 #[test]
 fn the_jit_buffer_walk_finds_what_current_buffer_finds() {
+    crate::test_utils::init_test_tracing();
     use neovm_edit::buffer::buffer::jit_layout;
 
     let agrees = |mgr: &BufferManager, what: &str| {

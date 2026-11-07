@@ -955,6 +955,7 @@ fn current_time_and_time_convert_respect_current_time_list() {
 
 #[test]
 fn make_lisp_time_uses_typed_output_representation() {
+    crate::test_utils::init_test_tracing();
     let list = make_lisp_time(1_234_567_890, 123_456_789, LispTimeOutput::LegacyList);
     let items = list_to_vec(&list).expect("legacy time must be a list");
     assert_eq!(items.len(), 4);

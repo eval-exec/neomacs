@@ -257,6 +257,7 @@ fn jump_table_lookup_matches_the_materialized_key() {
 /// no longer `equal`, and the new shape hashes elsewhere.
 #[test]
 fn a_key_mutated_after_insertion_answers_like_gnu() {
+    crate::test_utils::init_test_tracing();
     let (a, b, z) = (sym("a"), sym("b"), sym("z"));
     let key = list(&[a, b]);
     let mut table = LispHashTable::new(HashTableTest::Equal);

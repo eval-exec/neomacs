@@ -98,6 +98,7 @@ fn module_context_guard_restores_previous_on_drop_and_panic() {
 
 #[test]
 fn module_make_interactive_wraps_specs_like_gnu() {
+    crate::test_utils::init_test_tracing();
     let mut fixture = TestEnv::new();
     let env = fixture.env_ptr();
     let func = unsafe {
@@ -139,6 +140,7 @@ fn module_make_interactive_wraps_specs_like_gnu() {
 
 #[test]
 fn active_module_environment_values_are_gc_roots() {
+    crate::test_utils::init_test_tracing();
     let mut fixture = TestEnv::new();
     let env = fixture.env_ptr();
     let priv_ptr = fixture.priv_ptr();
@@ -189,6 +191,7 @@ fn module_big_integer_zero_and_null_outputs_match_gnu() {
 
 #[test]
 fn module_extract_big_integer_reports_too_small_buffer() {
+    crate::test_utils::init_test_tracing();
     let mut fixture = TestEnv::new();
     let env = fixture.env_ptr();
     let large = Value::make_integer(Integer::from(1u64) << 80u32);
@@ -273,6 +276,7 @@ fn install_module_function(
 /// message carries the marker + panic text, and return the sentinel.
 #[test]
 fn module_guard_converts_panic_to_pending_error() {
+    crate::test_utils::init_test_tracing();
     let mut fixture = TestEnv::new();
     let env = fixture.env_ptr();
 
@@ -294,6 +298,7 @@ fn module_guard_converts_panic_to_pending_error() {
 /// preserved by the guard's `set_pending_signal`.
 #[test]
 fn module_guard_preserves_earlier_pending_exit() {
+    crate::test_utils::init_test_tracing();
     let mut fixture = TestEnv::new();
     let env = fixture.env_ptr();
     unsafe {
@@ -316,6 +321,7 @@ fn module_guard_preserves_earlier_pending_exit() {
 /// permanent for this process — fine under nextest's process-per-test.
 #[test]
 fn module_guard_re_raises_on_poisoned_gc_locks_without_ctx() {
+    crate::test_utils::init_test_tracing();
     neovm_value::tagged::gc::with_tagged_heap(|h| h.poison_gc_locks_for_test());
     let mut fixture = TestEnv::new();
     let env = fixture.env_ptr();

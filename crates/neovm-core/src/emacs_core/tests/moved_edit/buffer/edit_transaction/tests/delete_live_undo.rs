@@ -22,21 +22,25 @@ use neovm_edit::buffer::{InsertionType, UndoRecording};
 
 #[test]
 fn deletion_enabled_at_commit_reads_live_marker_chain() {
+    crate::test_utils::init_test_tracing();
     assert_live_delete(UndoRecording::Enabled, UndoRecording::Enabled);
 }
 
 #[test]
 fn deletion_enabling_undo_after_prepare_records_live_markers() {
+    crate::test_utils::init_test_tracing();
     assert_live_delete(UndoRecording::Disabled, UndoRecording::Enabled);
 }
 
 #[test]
 fn deletion_disabling_undo_after_prepare_still_relocates_markers() {
+    crate::test_utils::init_test_tracing();
     assert_live_delete(UndoRecording::Enabled, UndoRecording::Disabled);
 }
 
 #[test]
 fn deletion_disabled_at_commit_still_relocates_live_markers() {
+    crate::test_utils::init_test_tracing();
     assert_live_delete(UndoRecording::Disabled, UndoRecording::Disabled);
 }
 

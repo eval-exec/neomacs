@@ -118,6 +118,7 @@ fn canonical_pair_preserves_completed_writer_updates_after_rust_panic() {
 
 #[test]
 fn canonical_pair_follows_live_boolean_and_clone_owns_its_descriptor() {
+    crate::test_utils::init_test_tracing();
     let mut obarray = Obarray::new();
     let id = intern("debug-on-next-call");
     assert!(obarray.debug_on_next_call_armed_fast());

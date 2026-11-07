@@ -124,6 +124,7 @@ fn an_accepting_start_closure_is_a_match() {
 /// it appears.
 #[test]
 fn classes_agree_with_the_matcher_tests_on_every_sample_character() {
+    crate::test_utils::init_test_tracing();
     let lookups: [&dyn SyntaxLookup; 3] = [
         &DefaultSyntaxLookup,
         &CustomTableLookup,

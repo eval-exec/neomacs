@@ -254,6 +254,7 @@ fn test_directory_files_and_attributes_count_and_id_format() {
 
 #[test]
 fn file_id_format_domain_matches_gnu_dired() {
+    crate::test_utils::init_test_tracing();
     let integer_name: &'static str = FileIdFormat::Integer.into();
     let string_name: &'static str = FileIdFormat::String.into();
 

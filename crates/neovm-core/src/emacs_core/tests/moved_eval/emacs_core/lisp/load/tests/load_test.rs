@@ -196,6 +196,7 @@ fn load_path_entry_strings(entries: &[Value]) -> Vec<String> {
 
 #[test]
 fn runtime_load_path_uses_defaults_when_emacsloadpath_is_unset() {
+    crate::test_utils::init_test_tracing();
     let temp = tempdir().expect("tempdir");
     let lisp_dir = temp.path().join("lisp");
     std::fs::create_dir_all(&lisp_dir).expect("create lisp dir");
@@ -209,6 +210,7 @@ fn runtime_load_path_uses_defaults_when_emacsloadpath_is_unset() {
 
 #[test]
 fn runtime_load_path_splices_defaults_at_empty_emacsloadpath_elements() {
+    crate::test_utils::init_test_tracing();
     let temp = tempdir().expect("tempdir");
     let lisp_dir = temp.path().join("lisp");
     let before = temp.path().join("before");
@@ -232,6 +234,7 @@ fn runtime_load_path_splices_defaults_at_empty_emacsloadpath_elements() {
 
 #[test]
 fn runtime_load_path_without_empty_element_appends_defaults() {
+    crate::test_utils::init_test_tracing();
     let temp = tempdir().expect("tempdir");
     let lisp_dir = temp.path().join("lisp");
     let custom = temp.path().join("custom");
@@ -253,6 +256,7 @@ fn runtime_load_path_without_empty_element_appends_defaults() {
 
 #[test]
 fn site_lisp_directories_lead_the_default_load_path() {
+    crate::test_utils::init_test_tracing();
     // GNU `init_lread` prepends the site-lisp directories to the default
     // load-path (src/lread.c:5514-5519), so distribution Lisp shadows
     // nothing but is found without configuration.
@@ -275,6 +279,7 @@ fn site_lisp_directories_lead_the_default_load_path() {
 
 #[test]
 fn site_lisp_follows_the_defaults_into_an_empty_emacsloadpath_element() {
+    crate::test_utils::init_test_tracing();
     // GNU splices `default_lpath` -- site-lisp included -- wherever
     // EMACSLOADPATH has an empty element (src/lread.c:5477-5501).
     let temp = tempdir().expect("tempdir");

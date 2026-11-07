@@ -35,6 +35,7 @@ fn promoted(src: &[u8]) -> Vec<u8> {
 
 #[test]
 fn c0_c1_pairs_split_into_eight_bit_characters() {
+    crate::test_utils::init_test_tracing();
     // GNU Emacs 31.1: (string-as-multibyte (unibyte-string 192 128))
     // -> chars (4194240 4194176), 4 bytes.
     // (string-as-multibyte (unibyte-string 193 191))
@@ -68,6 +69,7 @@ fn c0_c1_pairs_split_into_eight_bit_characters() {
 
 #[test]
 fn valid_non_eight_bit_sequences_are_preserved() {
+    crate::test_utils::init_test_tracing();
     // C2 80 is U+0080. The allow_8bit=false window still accepts w == 0x2C2.
     // C3 A9 is U+00E9. E0 A0 80 is U+0800. F0 90 80 80 is U+10000.
     let cases: &[(&[u8], &[u32])] = &[

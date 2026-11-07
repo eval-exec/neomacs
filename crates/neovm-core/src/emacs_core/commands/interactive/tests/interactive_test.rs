@@ -7242,6 +7242,7 @@ fn self_inserted_space_fills_without_shifting_point() {
 /// object has to *remove* the stale entry, not leave it behind.
 #[test]
 fn interactive_heap_specs_track_the_heap_valued_specs() {
+    crate::test_utils::init_test_tracing();
     let expected = |registry: &InteractiveRegistry| {
         registry
             .specs

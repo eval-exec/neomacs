@@ -278,6 +278,7 @@ fn pending_key_echo_drops_the_start_decoration_when_the_next_key_arrives() {
 
 #[test]
 fn presented_interactions_retain_exact_posn_string_until_retirement() {
+    crate::test_utils::init_test_tracing();
     let mut interactions = PresentedInteractions::default();
     let presentation = interactions.begin();
     let caption = Value::string("tab");

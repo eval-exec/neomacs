@@ -296,6 +296,7 @@ fn rustls_backend_advertises_conservative_gnutls_compatibility() {
 
 #[test]
 fn gnutls_boot_parameters_parse_x509_hostname() {
+    crate::test_utils::init_test_tracing();
     let parameters = parse_gnutls_boot_parameters(
         Value::symbol("gnutls-x509pki"),
         Value::list(vec![
@@ -312,6 +313,7 @@ fn gnutls_boot_parameters_parse_x509_hostname() {
 
 #[test]
 fn gnutls_boot_parameters_preserve_trust_files_as_additional_roots() {
+    crate::test_utils::init_test_tracing();
     let parameters = parse_gnutls_boot_parameters(
         Value::symbol("gnutls-x509pki"),
         Value::list(vec![
@@ -338,6 +340,7 @@ fn gnutls_boot_parameters_preserve_trust_files_as_additional_roots() {
 
 #[test]
 fn gnutls_boot_parameters_reject_non_string_trust_file_entries() {
+    crate::test_utils::init_test_tracing();
     let error = parse_gnutls_boot_parameters(
         Value::symbol("gnutls-x509pki"),
         Value::list(vec![
@@ -372,6 +375,7 @@ fn rustls_root_store_adds_certificates_from_explicit_trust_files() {
 
 #[test]
 fn gnutls_boot_parameters_validate_gnu_argument_shape() {
+    crate::test_utils::init_test_tracing();
     let type_error = parse_gnutls_boot_parameters(
         Value::fixnum(1),
         Value::NIL,
@@ -445,6 +449,7 @@ fn der_certificates_are_formatted_as_pem_blocks() {
 
 #[test]
 fn certificate_details_value_uses_gnu_peer_status_plist_shape() {
+    crate::test_utils::init_test_tracing();
     let details = certificate_details_value_pem(TEST_CERTIFICATE_PEM).expect("valid cert");
     let items = neovm_value::value::list_to_vec(&details).expect("plist");
     assert_eq!(items[0], Value::keyword(":version"));
@@ -482,6 +487,7 @@ fn gnutls_close_notify_results_use_gnu_error_symbols() {
 
 #[test]
 fn gnutls_peer_status_plist_matches_gnu_certificate_shape() {
+    crate::test_utils::init_test_tracing();
     let status = TlsPeerStatus {
         warnings: vec![":unknown-ca"],
         certificates: vec![
@@ -520,6 +526,7 @@ fn gnutls_peer_status_plist_matches_gnu_certificate_shape() {
 
 #[test]
 fn gnutls_peer_status_warning_descriptions_match_gnu() {
+    crate::test_utils::init_test_tracing();
     assert_eq!(
         builtin_gnutls_peer_status_warning_describe(
             vec![Value::keyword(":unknown-ca")],
@@ -548,6 +555,7 @@ fn gnutls_peer_status_warning_descriptions_match_gnu() {
 
 #[test]
 fn gnutls_error_helpers_match_gnu_type_and_known_code_rules() {
+    crate::test_utils::init_test_tracing();
     assert_eq!(
         builtin_gnutls_error_string(
             vec![Value::string("x")],

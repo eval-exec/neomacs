@@ -723,6 +723,7 @@ fn localized_blv_cache_invalidated_on_buffer_switch() {
 
 #[test]
 fn indexed_localized_reads_preserve_shared_cells_defaults_and_void_values() {
+    crate::test_utils::init_test_tracing();
     let mut ob = Obarray::new();
     let id = intern("indexed-localized-value");
     ob.make_symbol_localized(id, Value::fixnum(7));
@@ -1055,6 +1056,7 @@ fn uninterned_keyword_and_nil_names_are_not_canonical_constants() {
 /// because the fast read no longer re-resolves on every call.
 #[test]
 fn bare_obarray_reads_absent_then_follows_a_late_defvar_bool() {
+    crate::test_utils::init_test_tracing();
     use crate::emacs_core::defvar_bool::ByteBooleanVars;
 
     let mut ob = Obarray::new();
@@ -1091,6 +1093,7 @@ fn bare_obarray_reads_absent_then_follows_a_late_defvar_bool() {
 /// one in the BLV: the fast read follows that one too.
 #[test]
 fn a_reattached_localized_debug_cell_is_what_the_fast_read_follows() {
+    crate::test_utils::init_test_tracing();
     let mut ob = Obarray::new();
     let id = intern("debug-on-next-call");
     ob.make_symbol_localized(id, Value::T);
@@ -1115,6 +1118,7 @@ fn a_reattached_localized_debug_cell_is_what_the_fast_read_follows() {
 /// cache has to re-resolve rather than alias the source's.
 #[test]
 fn cloned_obarray_resolves_its_own_debug_on_next_call_cell() {
+    crate::test_utils::init_test_tracing();
     use crate::emacs_core::defvar_bool::ByteBooleanVars;
 
     let mut ob = Obarray::new();

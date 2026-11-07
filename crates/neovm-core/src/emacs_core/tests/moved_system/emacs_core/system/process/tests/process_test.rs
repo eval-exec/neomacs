@@ -34,6 +34,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[test]
 fn process_finite_domains_match_gnu_symbols() {
+    crate::test_utils::init_test_tracing();
     assert_eq!(ProcessKind::Real.name(), "real");
     assert_eq!(ProcessKind::Network.name(), "network");
     assert_eq!(ProcessKind::Pipe.name(), "pipe");
@@ -206,6 +207,7 @@ fn process_finite_domains_match_gnu_symbols() {
 #[cfg(target_os = "linux")]
 #[test]
 fn waitpid_signal_status_preserves_core_dump_flag_for_sentinel_messages() {
+    crate::test_utils::init_test_tracing();
     let raw_status = libc::SIGQUIT | 0x80;
     let status = match process_child_status_change_from_wait(sys::decode_wait_status(raw_status)) {
         ChildStatusChange::Reaped(status) => status,
@@ -9042,6 +9044,7 @@ fn make_network_process_nowait_tcp_loopback_opens_like_gnu() {
 
 #[test]
 fn make_network_process_nowait_retains_tls_parameters_until_connect_completes() {
+    crate::test_utils::init_test_tracing();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test listener");
     let port = listener.local_addr().expect("listener address").port();
     let tls_parameters = Value::list(vec![

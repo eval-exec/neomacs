@@ -196,6 +196,7 @@ fn plan_answers_exactly_what_the_hashed_lookup_answers() {
 
 #[test]
 fn plan_shapes_follow_the_key_set() {
+    crate::test_utils::init_test_tracing();
     let (a, b, c) = (sym("a"), sym("b"), sym("c"));
 
     let dense = table_of(
@@ -339,6 +340,7 @@ fn plan_shapes_follow_the_key_set() {
 /// within the tag, for each.
 #[test]
 fn every_plan_shape_hits_and_misses() {
+    crate::test_utils::init_test_tracing();
     let (a, b) = (sym("a"), sym("b"));
     let cases: Vec<(LispHashTable, Vec<Value>)> = vec![
         (
@@ -417,6 +419,7 @@ fn every_plan_shape_hits_and_misses() {
 /// answers from the new contents.
 #[test]
 fn every_table_mutation_drops_the_plan() {
+    crate::test_utils::init_test_tracing();
     let (a, b, c) = (sym("a"), sym("b"), sym("c"));
     let eq = HashTableTest::Eq;
     let table = Value::hash_table(eq);
@@ -495,6 +498,7 @@ fn every_table_mutation_drops_the_plan() {
 /// lookup, still exact.
 #[test]
 fn a_table_mutated_between_dispatches_stops_replanning() {
+    crate::test_utils::init_test_tracing();
     let (a, b) = (sym("a"), sym("b"));
     let eq = HashTableTest::Eq;
     let table = Value::hash_table(eq);
@@ -526,6 +530,7 @@ fn a_table_mutated_between_dispatches_stops_replanning() {
 /// documented exception; the untouched key still answers alike.
 #[test]
 fn a_key_mutated_after_planning_answers_from_the_plan() {
+    crate::test_utils::init_test_tracing();
     let (a, b, z) = (sym("a"), sym("b"), sym("z"));
     let key = list(&[a, b]);
     let table = table_of(HashTableTest::Equal, &[key, list(&[z])]);
@@ -618,6 +623,7 @@ fn positioned_symbols_match_their_bare_symbols_only_under_swp() {
 /// again once the table has changed.
 #[test]
 fn every_table_mutation_raises_the_epoch() {
+    crate::test_utils::init_test_tracing();
     let (a, b, c) = (sym("a"), sym("b"), sym("c"));
     let eq = HashTableTest::Eq;
     let table = Value::hash_table(eq);
@@ -677,6 +683,7 @@ fn every_table_mutation_raises_the_epoch() {
 /// untagged pointer, which is how JIT code reads it.
 #[test]
 fn the_epoch_offset_reads_the_epoch() {
+    crate::test_utils::init_test_tracing();
     let table = Value::hash_table(HashTableTest::Equal);
     for _ in 0..5 {
         let _ = table.with_hash_table_mut(|_| ());

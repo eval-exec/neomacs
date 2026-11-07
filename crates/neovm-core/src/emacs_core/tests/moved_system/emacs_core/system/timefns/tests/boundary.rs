@@ -165,6 +165,7 @@ fn encode_time_clamps_numeric_zone_like_gnu() {
 #[cfg(unix)]
 #[test]
 fn encode_time_extreme_year_matches_gnu_without_hanging() {
+    crate::test_utils::init_test_tracing();
     // Fixture refreshed by standalone sandboxed GNU, avoiding a nested scope
     // or an oracle subprocess inheriting the test-local CPU soft limit.
     let expected = include_str!("tsb-calendar-year-overflow.expect").trim();
@@ -186,6 +187,7 @@ fn encode_time_extreme_year_matches_gnu_without_hanging() {
 #[cfg(unix)]
 #[test]
 fn encode_time_extreme_month_matches_gnu_without_hanging() {
+    crate::test_utils::init_test_tracing();
     let expected = include_str!("tsb-calendar-month-overflow.expect").trim();
     let _lock = tz_test_lock();
     reset_tz_rule();

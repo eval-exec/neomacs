@@ -4,6 +4,7 @@ use neovm_value::value::positions::CharPos0;
 
 #[test]
 fn byte_caps_still_clamp_and_align_before_raw_absence_or_presence_queries() {
+    crate::test_utils::init_test_tracing();
     for kind in BufferTextBackendKind::implemented_variants() {
         for content in ["abcdef", "a好bcé"] {
             let text = BufferText::try_from_str_with_backend_kind(content, kind)
