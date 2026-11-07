@@ -327,7 +327,3 @@ pub fn builtin_x_hide_tip_eval(ctx: &mut Context, args: Vec<Value>) -> EvalResul
         .map_err(|e| signal("error", vec![Value::string(e)]))?;
     Ok(if hidden { Value::T } else { Value::NIL })
 }
-
-#[cfg(test)]
-#[path = "tests/tooltip_test.rs"]
-mod tests;

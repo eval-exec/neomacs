@@ -1,12 +1,14 @@
 //! The DISPLAY entry must read the same live coordinates as format-mode-line.
 
-use super::*;
+//! Re-homed from display::xdisp::tests (TEST-SUPPORT-DESIGN 1a, boot facade).
+use crate::window::DisplayFrameManagerExt;
 use neovm_eval::emacs_core::eval::Context;
+use neovm_value::value::Value;
 
 #[test]
 fn mode_line_display_point_tracks_eval_moves_and_restrictions() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("noninteractive", Value::NIL);
     eval.eval_str(
         r#"(progn
@@ -43,7 +45,13 @@ fn mode_line_display_point_tracks_eval_moves_and_restrictions() {
              "restored[%l/%c/%C]")"#,
         )
         .expect("point format");
-    let value = format_mode_line_for_display(&mut eval, format, Value::NIL, Value::NIL, 120);
+    let value = crate::emacs_core::xdisp::format_mode_line_for_display(
+        &mut eval,
+        format,
+        Value::NIL,
+        Value::NIL,
+        120,
+    );
     // Literal from interactive GNU31.1, same fields in mode_line_point_probe.el:
     // sandbox-run.sh <python> -B tmp/editpath-cont16/point-pty.py
     //   $NEOVM_FORCE_ORACLE_PATH -nw -Q -no-comp-spawn

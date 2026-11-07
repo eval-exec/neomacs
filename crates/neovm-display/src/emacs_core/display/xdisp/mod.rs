@@ -10534,24 +10534,12 @@ mod mode_line_live_spine;
 mod mode_line_flow;
 
 #[cfg(test)]
-#[path = "tests/mode_line_outer_flow_test.rs"]
-mod mode_line_outer_flow;
-
-#[cfg(test)]
-#[path = "tests/mode_line_outer_handlers_test.rs"]
-mod mode_line_outer_handlers;
-
-#[cfg(test)]
 #[path = "tests/fontification_demand_test.rs"]
 mod fontification_demand_tests;
 
 #[cfg(test)]
 #[path = "tests/mode_line_fixed_symbols_test.rs"]
 mod mode_line_fixed_symbols;
-
-#[cfg(test)]
-#[path = "tests/mode_line_point_test.rs"]
-mod mode_line_point_test;
 
 #[cfg(test)]
 #[path = "tests/mode_line_nested_point_test.rs"]

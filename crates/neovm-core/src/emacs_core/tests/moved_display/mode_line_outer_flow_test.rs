@@ -1,8 +1,10 @@
 //! GNU's outer redisplay handler catches the `error` family, not all signals.
 
-use super::*;
+//! Re-homed from display::xdisp::tests (TEST-SUPPORT-DESIGN 1a, boot facade).
+use crate::window::DisplayFrameManagerExt;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::emacs_core::eval::save_scratch_gc_roots;
+use neovm_value::value::Value;
 
 #[test]
 fn mode_line_outer_binding_signals_preserve_non_error_conditions_and_scopes() {
@@ -13,7 +15,7 @@ fn mode_line_outer_binding_signals_preserve_non_error_conditions_and_scopes() {
     let mut observed = Vec::new();
     for operation in ["let", "unlet"] {
         for condition in ["quit", "fx2-derived-quit", "fx2-non-error", "error"] {
-            let mut eval = Context::new(crate::test_utils::unit_runtime());
+            let mut eval = crate::test_utils::new_context();
             eval.set_variable("noninteractive", Value::NIL);
             eval.set_variable("inhibit-quit", Value::NIL);
             let bid = eval
@@ -40,7 +42,13 @@ fn mode_line_outer_binding_signals_preserve_non_error_conditions_and_scopes() {
                     .obarray_view()
                     .symbol_value_copied("fx2-outer-format")
                     .unwrap();
-                format_mode_line_for_display_with_sources(eval, format, window, Value::NIL, 80);
+                crate::emacs_core::xdisp::format_mode_line_for_display_with_sources(
+                    eval,
+                    format,
+                    window,
+                    Value::NIL,
+                    80,
+                );
             }));
             let roots = save_scratch_gc_roots();
             let specpdl = eval.specpdl().len();

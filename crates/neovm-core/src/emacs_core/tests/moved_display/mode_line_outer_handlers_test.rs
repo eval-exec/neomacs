@@ -1,8 +1,10 @@
 //! GNU's window error handler blocks outer handlers and debugger entry.
 
-use super::*;
+//! Re-homed from display::xdisp::tests (TEST-SUPPORT-DESIGN 1a, boot facade).
+use crate::window::DisplayFrameManagerExt;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::emacs_core::eval::save_scratch_gc_roots;
+use neovm_value::value::Value;
 
 #[test]
 fn mode_line_outer_binding_errors_block_outer_handlers_and_debugger() {
@@ -12,7 +14,7 @@ fn mode_line_outer_binding_errors_block_outer_handlers_and_debugger() {
     crate::test_utils::init_test_tracing();
     let mut observations = Vec::new();
     for phase in ["let", "unlet"] {
-        let mut eval = Context::new(crate::test_utils::unit_runtime());
+        let mut eval = crate::test_utils::new_context();
         eval.set_variable("noninteractive", Value::NIL);
         let bid = eval
             .edit
@@ -55,7 +57,7 @@ fn mode_line_outer_binding_errors_block_outer_handlers_and_debugger() {
                 .obarray_view()
                 .symbol_value_copied("fx2-outer-format")
                 .unwrap();
-            format_mode_line_for_display_with_sources(
+            crate::emacs_core::xdisp::format_mode_line_for_display_with_sources(
                 eval,
                 format,
                 Value::make_window(window.0),
@@ -83,7 +85,7 @@ fn mode_line_outer_binding_errors_block_outer_handlers_and_debugger() {
         "#,
             )
             .expect("ordinary redisplay error is consumed");
-        let fields = list_to_vec(&value).expect("observations");
+        let fields = neovm_value::value::list_to_vec(&value).expect("observations");
         assert!(fields[0].is_t(), "redisplay returns t");
         assert!(fields[1].is_t(), "native callback ran");
         assert!(fields[2].is_t(), "{phase} watcher signaled");

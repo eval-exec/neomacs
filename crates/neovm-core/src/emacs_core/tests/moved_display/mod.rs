@@ -61,3 +61,19 @@ mod xdisp_runtime_eval_test;
 #[cfg(test)]
 #[path = "image_lisp_playback_test.rs"]
 mod image_lisp_playback_test;
+
+#[cfg(test)]
+#[path = "tooltip_test.rs"]
+mod tooltip_test;
+
+#[cfg(test)]
+#[path = "mode_line_outer_flow_test.rs"]
+mod mode_line_outer_flow_test;
+
+#[cfg(test)]
+#[path = "mode_line_outer_handlers_test.rs"]
+mod mode_line_outer_handlers_test;
+
+#[cfg(test)]
+#[path = "mode_line_point_test.rs"]
+mod mode_line_point_test;
