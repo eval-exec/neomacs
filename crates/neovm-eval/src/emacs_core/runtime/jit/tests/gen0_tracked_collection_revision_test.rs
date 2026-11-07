@@ -43,7 +43,7 @@ fn context() -> Context {
     let mut context = Context::new(crate::test_utils::unit_runtime());
     context.gc_stress = false;
     context.tagged_heap.set_gc_threshold(usize::MAX);
-    assert!(!context.tagged_heap.generational_enabled());
+    assert!(!context.tagged_heap.tagged_heap_generational_enabled());
     // Even WRITE_LAZY keeps history after a capture. This reads no owner.
     assert!(capture(|| ()).1.is_some());
     context

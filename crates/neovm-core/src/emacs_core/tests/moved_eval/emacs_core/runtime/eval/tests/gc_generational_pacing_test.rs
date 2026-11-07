@@ -67,7 +67,7 @@ fn context(max_minors: usize, stress_every: usize) -> Context {
             .expect("controlled fixture pacing");
     });
     context.gc_collect_exact();
-    assert!(context.tagged_heap().generational_enabled());
+    assert!(context.tagged_heap().tagged_heap_generational_enabled());
     context.with_gc_inhibited(|context| {
         context
             .eval_str(

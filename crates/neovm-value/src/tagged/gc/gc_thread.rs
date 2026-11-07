@@ -1696,7 +1696,7 @@ unsafe fn sync_heap_tls_mirrors(root: *mut TaggedHeap) {
     let observed = super::super::collection_reads::compiled_observation_gate(dump);
     {
         let heap = unsafe { &mut *root };
-        TAGGED_HEAP_ID.with(|identity| identity.set(Some(heap.identity())));
+        TAGGED_HEAP_ID.with(|identity| identity.set(Some(heap.tagged_heap_identity())));
         TAGGED_HEAP_WRITE_TRACKING_MODE.with(|mode| mode.set(heap.write_tracking_mode()));
         TAGGED_HEAP_PARTITION_ACTIVE.with(|p| p.set(heap.partition_dump));
         TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(heap.concurrent_mark_running));
@@ -1898,7 +1898,7 @@ pub fn tagged_heap_is_installed() -> bool {
 #[doc(hidden)]
 pub fn tagged_heap_is_current(heap: &TaggedHeap) -> bool {
     TAGGED_HEAP.with(|h| std::ptr::eq(h.get(), heap))
-        && TAGGED_HEAP_ID.with(|identity| identity.get() == Some(heap.identity()))
+        && TAGGED_HEAP_ID.with(|identity| identity.get() == Some(heap.tagged_heap_identity()))
 }
 
 /// Return the current thread's tagged heap identity, if one is installed.
@@ -2325,7 +2325,7 @@ pub(super) fn barrier_needs_heap(
         // Tracking and concurrent marking use the legacy barrier below and
         // must not pay for a generational heap lookup.
         let gen_decision = with_tagged_heap(|heap| {
-            if !heap.generational_enabled() {
+            if !heap.tagged_heap_generational_enabled() {
                 return None;
             }
             // Characters have fixnum encoding. Symbols (including nil/t) and

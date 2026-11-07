@@ -337,7 +337,7 @@ impl Context {
         self.trace_private_roots(&mut roots);
         // Parking needs values only, without the collection helper's group
         // timing, tagged copies, or temporary allocation for every group.
-        let heap = self.tagged_heap.identity();
+        let heap = self.tagged_heap.tagged_heap_identity();
         let epoch = self.tagged_heap.gc_collections();
         let scan = neovm_value::tagged::gc::CacheRootScan::Parked;
         super::super::for_each_thread_local_root_source(heap, epoch, scan, |_, collect| {
@@ -637,7 +637,7 @@ impl Context {
                 cancel_park!(error);
             }
         };
-        let publication = match finalized.publish() {
+        let publication = match finalized.publish_finalized_root_batch() {
             Ok(publication) => publication,
             Err(failure) => {
                 let (finalized, error) = failure.into_parts();

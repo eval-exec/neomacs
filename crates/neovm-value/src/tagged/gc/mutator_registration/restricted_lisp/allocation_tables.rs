@@ -289,7 +289,7 @@ fn a6_ht_b7_make_copy_collect_resume_and_reclaim() {
                                     heap.owns_heap_value_for_test(TaggedValue::from_bits(
                                         snap.slots[1]
                                     )),
-                                    heap.generational_enabled()
+                                    heap.tagged_heap_generational_enabled()
                                 );
                             }
                         });

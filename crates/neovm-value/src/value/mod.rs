@@ -4065,7 +4065,7 @@ impl TaggedValue {
     fn hydrate_hash_table_for_access(self, ptr: *mut HashTableObj) {
         // A parked structural key without a snapshot can be reconstructed as
         // a fresh heap object. Remember the owner before creating that edge.
-        if with_tagged_heap(|heap| heap.generational_enabled()) {
+        if with_tagged_heap(|heap| heap.tagged_heap_generational_enabled()) {
             note_heap_write(self, HeapWriteKind::HashTableData);
         }
         // SAFETY: as_hash_table has checked the type and holds no reference

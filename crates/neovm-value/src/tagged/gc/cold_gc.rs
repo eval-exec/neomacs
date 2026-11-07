@@ -219,7 +219,7 @@ impl TaggedHeap {
         if let Some(snapshot) = &snapshot {
             assert_eq!(
                 snapshot.heap_identity(),
-                self.identity(),
+                self.tagged_heap_identity(),
                 "Tier-H snapshot belongs to another heap"
             );
         }
@@ -322,7 +322,7 @@ mod tests {
     fn u35_cold_carrier_is_absent_off_and_separates_census_from_claims() {
         let off = heap(false, knobs::CensusMode::Off);
         // Only a GEN1 heap's card table occupies the carrier then.
-        assert_eq!(off.census.is_some(), off.generational_enabled());
+        assert_eq!(off.census.is_some(), off.tagged_heap_generational_enabled());
         assert!(!off.concurrent_claims());
         assert!(off.concurrent_hash_mutators().next().is_none());
         assert!(off.concurrent_leaf_claimed().is_none());
@@ -362,7 +362,7 @@ mod tests {
             for generational in [false, true] {
                 let heap = TaggedHeap::new_for_concurrent_hash_test(generational);
                 assert!(heap.concurrent_claims());
-                assert_eq!(heap.generational_enabled(), generational);
+                assert_eq!(heap.tagged_heap_generational_enabled(), generational);
                 assert!(!knobs::concurrent_claims_on());
             }
             let result = std::panic::catch_unwind(|| {
@@ -425,7 +425,7 @@ mod tests {
         // alter accounting layout; the OFF allocation uses the original path.
         let cons = off.alloc_cons(TaggedValue::fixnum(5), TaggedValue::NIL);
         assert!(cons.is_cons());
-        assert_eq!(off.census.is_some(), off.generational_enabled());
+        assert_eq!(off.census.is_some(), off.tagged_heap_generational_enabled());
     }
 
     #[test]

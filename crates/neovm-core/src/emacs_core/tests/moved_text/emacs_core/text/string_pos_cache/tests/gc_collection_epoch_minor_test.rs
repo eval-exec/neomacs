@@ -50,11 +50,11 @@ fn gc_collection_epoch_string_pos_minor_sweep_activation_keeps_warm_entry() {
 #[test]
 fn gc_collection_epoch_string_pos_minor_activation_discards_swept_source_entry() {
     let mut context = generational_context();
-    let heap_identity = context.tagged_heap().identity();
+    let heap_identity = context.tagged_heap().tagged_heap_identity();
     let string = cache_young_string(&mut context);
     let (mut context, completed) =
         collect_minor_with_uncovered_cache(context, string, ReturnAt::Completed);
-    assert_eq!(context.tagged_heap().identity(), heap_identity);
+    assert_eq!(context.tagged_heap().tagged_heap_identity(), heap_identity);
     assert_eq!(context.tagged_heap().gc_collections(), completed + 1);
     assert!(!context.tagged_heap().owns_heap_value_for_test(string));
     // Only compare identity bits after the destination reclaimed the string.
@@ -99,7 +99,7 @@ fn generational_context() -> Context {
     crate::test_utils::init_test_tracing();
     let mut context = crate::test_utils::new_context();
     context.gc_stress = false;
-    assert!(context.tagged_heap().generational_enabled());
+    assert!(context.tagged_heap().tagged_heap_generational_enabled());
     assert!(!context.gc_stress);
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { context.tagged_heap_mut() }.set_gc_threshold(usize::MAX);
@@ -121,7 +121,7 @@ fn cache_young_string(context: &mut Context) -> Value {
 }
 
 fn start_minor(context: &mut Context) -> usize {
-    assert!(context.tagged_heap().generational_enabled());
+    assert!(context.tagged_heap().tagged_heap_generational_enabled());
     assert!(!context.gc_stress);
     assert!(context.tagged_heap().should_run_minor(false, false));
     assert!(!context.tagged_heap().mark_in_progress());

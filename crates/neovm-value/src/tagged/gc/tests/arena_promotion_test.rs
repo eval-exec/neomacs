@@ -448,11 +448,11 @@ fn tenured_page_owner_keeps_young_cons_child_alive_body(verify: bool) {
     assert!(heap.dump_blackened);
     assert_eq!(
         unsafe { (*(v.as_veclike_ptr().unwrap())).gc.tenured },
-        heap.generational_enabled(),
+        heap.tagged_heap_generational_enabled(),
     );
     assert_eq!(
         unsafe { (*(s.as_string_ptr().unwrap())).header.tenured },
-        heap.generational_enabled(),
+        heap.tagged_heap_generational_enabled(),
     );
 
     // Two partitioned cycles (one per parity): the owners are black and

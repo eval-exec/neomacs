@@ -82,7 +82,7 @@ fn stopped_scalar_fold_preserves_history_and_rebases_real_live_credits_once() {
     let after_count = heap.current_mutator_gc().allocated_count;
     assert_eq!(after_count, 1, "dead physical objects must debit the union");
     assert_eq!(heap.total_allocated_bytes(), before_bytes);
-    let gen1 = heap.generational_enabled();
+    let gen1 = heap.tagged_heap_generational_enabled();
     history.restore(&mut heap, gen1);
     peer.finish_collection_response(if gen1 {
         ResponsePacing::Reset

@@ -161,7 +161,7 @@ fn mode_copied_properties_have_only_manager_roots() {
     };
 
     let completed = eval.gc_count;
-    if eval.tagged_heap().generational_enabled() {
+    if eval.tagged_heap().tagged_heap_generational_enabled() {
         assert!(eval.tagged_heap().should_run_minor(false, false));
         eval.gc_pending = true;
         eval.gc_safe_point_exact();

@@ -2234,7 +2234,7 @@ fn p15_gc_thread_payload_fields_have_only_object_edges() {
         }
     };
     let completed = eval.gc_count;
-    if eval.tagged_heap.generational_enabled() {
+    if eval.tagged_heap.tagged_heap_generational_enabled() {
         assert!(eval.tagged_heap.should_run_minor(false, false));
         eval.gc_pending = true;
         eval.gc_safe_point_exact();
@@ -2283,7 +2283,7 @@ fn p15_gc_old_thread_payload_remembers_young_children() {
     });
     eval.gc_collect_exact();
     assert!(eval.tagged_heap.owns_heap_value_for_test(thread));
-    if eval.tagged_heap.generational_enabled() {
+    if eval.tagged_heap.tagged_heap_generational_enabled() {
         assert!(eval.tagged_heap.value_is_old_for_test(thread));
     }
 
@@ -2320,7 +2320,7 @@ fn p15_gc_old_thread_payload_remembers_young_children() {
     };
 
     let completed = eval.gc_count;
-    if eval.tagged_heap.generational_enabled() {
+    if eval.tagged_heap.tagged_heap_generational_enabled() {
         assert!(eval.tagged_heap.should_run_minor(false, false));
         eval.gc_pending = true;
         eval.gc_safe_point_exact();
@@ -2337,7 +2337,7 @@ fn p15_gc_old_thread_payload_remembers_young_children() {
     }
     assert_eq!(eval.gc_count, completed + 1);
     check(&eval);
-    if eval.tagged_heap.generational_enabled() {
+    if eval.tagged_heap.tagged_heap_generational_enabled() {
         assert!(eval.tagged_heap.value_is_old_for_test(child));
     }
     eval.gc_collect_exact();

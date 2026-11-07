@@ -14,7 +14,7 @@ enum ActualMode {
 impl ActualMode {
     #[doc(hidden)]
     pub fn read(context: &Context) -> Self {
-        match context.tagged_heap.generational_enabled() {
+        match context.tagged_heap.tagged_heap_generational_enabled() {
             false => Self::Gen0,
             true => Self::Gen1,
         }

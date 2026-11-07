@@ -115,7 +115,7 @@ fn gc_generational_hydration_old_owner_keeps_key_through_minors_and_majors() {
     crate::test_utils::init_test_tracing();
     let mut heap = heap_with_generational_knob(true);
     set_tagged_heap(&mut heap);
-    assert!(heap.generational_enabled());
+    assert!(heap.tagged_heap_generational_enabled());
     assert!(!heap.dump_partition_active());
     let mut table = LispHashTable::new(HashTableTest::Equal);
     table.set_pending_dump_entries(vec![(

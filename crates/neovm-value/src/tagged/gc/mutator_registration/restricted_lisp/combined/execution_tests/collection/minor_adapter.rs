@@ -78,7 +78,7 @@ fn rebind(era: &ParallelHeapEra<'_>, stopped: &AllStopped<'_>) -> YoungCredit {
     stopped.check_world_roots(era.heap_identity()).unwrap();
     let mut slot = era.core.collector.try_borrow_mut().unwrap();
     let heap = slot.as_mut().unwrap().registration_heap_mut();
-    if !heap.generational_enabled() {
+    if !heap.tagged_heap_generational_enabled() {
         return YoungCredit::Unchanged;
     }
     // Verify the real captured inventory and promotion, not only report flags.

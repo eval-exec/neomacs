@@ -146,7 +146,7 @@ impl ParkedJit {
                 .ok_or(AdmissionError::InvalidIdentity)?,
         );
         let heap = HeapIdentity(
-            NonZeroUsize::new(context.tagged_heap.identity())
+            NonZeroUsize::new(context.tagged_heap.tagged_heap_identity())
                 .ok_or(AdmissionError::InvalidIdentity)?,
         );
         // A VM-only owner cannot have an executing cached native leaf. Avoid
@@ -226,7 +226,7 @@ impl ParkedJit {
         let called = &scratch.called;
         let roots = &mut scratch.roots;
         super::cache::trace_redefined_pins(
-            context.tagged_heap.identity(),
+            context.tagged_heap.tagged_heap_identity(),
             &|symbol| {
                 called
                     .binary_search_by_key(&symbol.to_raw(), |s| s.to_raw())
@@ -267,7 +267,7 @@ impl ParkedJit {
         scratch: &mut ParkedJitScratch,
     ) -> Result<(), AdmissionError> {
         if self.owner.0.get() != context.context_instance_id()
-            || self.heap.0.get() != context.tagged_heap.identity()
+            || self.heap.0.get() != context.tagged_heap.tagged_heap_identity()
         {
             return Err(AdmissionError::ReturningOwner);
         }

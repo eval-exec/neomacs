@@ -181,7 +181,7 @@ fn non_generational_context() -> Context {
     unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
     let mut ctx = crate::test_utils::new_context();
     ctx.gc_stress = false;
-    assert!(!ctx.tagged_heap().generational_enabled());
+    assert!(!ctx.tagged_heap().tagged_heap_generational_enabled());
     assert!(!ctx.gc_stress);
     ctx
 }
@@ -192,13 +192,13 @@ fn assert_uncovered_cache_discards_swept_roots(owner: CacheOwner, synchronize_at
     let mut ctx = crate::test_utils::new_context();
     // Build the cache fixture without safe-point collections of Rust locals.
     ctx.gc_inhibit_depth += 1;
-    let identity = ctx.tagged_heap().identity();
+    let identity = ctx.tagged_heap().tagged_heap_identity();
     let (table, payload) = populate_cache(&mut ctx, owner);
     ctx.gc_inhibit_depth -= 1;
     let stale = UncoveredRegexCaches::take();
     ctx.gc_collect_exact();
     stale.restore();
-    assert_eq!(ctx.tagged_heap().identity(), identity);
+    assert_eq!(ctx.tagged_heap().tagged_heap_identity(), identity);
     // Box ownership checks inspect the allocation registry, never the freed
     // char-table/hash-table memory. Exact collection must have swept both.
     assert!(!ctx.tagged_heap().owns_heap_value_for_test(table));
@@ -217,7 +217,7 @@ fn assert_uncovered_cache_discards_swept_roots(owner: CacheOwner, synchronize_at
     let mut roots = Vec::new();
     collect_regex_gc_roots(
         &mut roots,
-        ctx.tagged_heap().identity(),
+        ctx.tagged_heap().tagged_heap_identity(),
         ctx.tagged_heap().gc_collections(),
         neovm_value::tagged::gc::CacheRootScan::Collection,
     );
@@ -440,7 +440,7 @@ impl WarmRegexCaches {
 
 fn start_public_concurrent_cycle(ctx: &mut Context) {
     // The completed bootstrap makes the public safe-point path concurrent.
-    assert!(!ctx.tagged_heap().generational_enabled());
+    assert!(!ctx.tagged_heap().tagged_heap_generational_enabled());
     assert!(ctx.tagged_heap().should_run_concurrent());
     for i in 0..20_000u64 {
         // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
@@ -631,7 +631,7 @@ fn regex_roots(ctx: &Context) -> Vec<Value> {
     let mut roots = Vec::new();
     collect_regex_gc_roots(
         &mut roots,
-        ctx.tagged_heap().identity(),
+        ctx.tagged_heap().tagged_heap_identity(),
         ctx.tagged_heap().gc_collections(),
         neovm_value::tagged::gc::CacheRootScan::Snapshot {
             collection_in_progress: ctx.tagged_heap().mark_in_progress()

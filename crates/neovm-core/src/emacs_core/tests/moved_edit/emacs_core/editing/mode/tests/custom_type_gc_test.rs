@@ -18,7 +18,7 @@ fn nested_custom_type_choices_survive_full_gc() {
     // Run this same regression with NEOVM_GC_GENERATIONAL=0 and =1. The knob
     // is read at construction; the test never mutates process environment.
     assert_eq!(
-        heap.generational_enabled(),
+        heap.tagged_heap_generational_enabled(),
         std::env::var("NEOVM_GC_GENERATIONAL").as_deref() != Ok("0")
     );
 

@@ -390,7 +390,7 @@ fn nmjit_n4_execution_production_only_source_guard_test() {
         "../../../../../../neovm-value/src/tagged/gc/mutator_registration/execution.rs"
     );
     assert!(!execution.contains("crate::emacs_core"));
-    assert!(!execution.contains("generational_enabled"));
+    assert!(!execution.contains("tagged_heap_generational_enabled"));
     assert!(!execution.contains("std::env"));
     assert!(execution.contains("_production: &Gen1Construction"));
 }

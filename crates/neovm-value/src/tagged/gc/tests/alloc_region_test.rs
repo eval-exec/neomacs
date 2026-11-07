@@ -640,7 +640,7 @@ fn promotion_does_not_tenure_a_regions_reserved_slots() {
     assert!(!page.retired);
     for f in &kept {
         // Runtime survivors: tenured old in GEN1, still young in GEN0.
-        assert_eq!(heap.value_is_tenured(*f), heap.generational_enabled());
+        assert_eq!(heap.value_is_tenured(*f), heap.tagged_heap_generational_enabled());
     }
     for index in 3..FLOAT_REGION_MAX_SLOTS {
         assert!(

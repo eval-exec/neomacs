@@ -135,7 +135,7 @@ fn sim(shape: &str, n: usize) {
                 / size_of::<ConsCell>();
             assert!(remaining >= 127, "fresh maximum region after one warm cell");
             let before = Counts::of(&heap.region_stats_for_test());
-            let gen1 = heap.generational_enabled();
+            let gen1 = heap.tagged_heap_generational_enabled();
             head = r2_cons_micro_sim_loop(heap, Value::fixnum(CAR), head, n);
             let delta = Counts::of(&heap.region_stats_for_test()).since(before);
             if shape == "resident" {
@@ -185,7 +185,7 @@ fn local(shape: &str, n: usize) {
             // SAFETY: test-only owner-thread heap policy write through the
             // non-swappable accessor contract; the view is used in place.
             unsafe { context.tagged_heap_mut() }.set_gc_threshold_for_test(usize::MAX);
-            let gen1 = context.tagged_heap().generational_enabled();
+            let gen1 = context.tagged_heap().tagged_heap_generational_enabled();
             // SAFETY: immediate values are live on this sole serial heap.
             let car = unsafe { SharedRoot::new(context.tagged_heap(), Value::fixnum(CAR)) };
             let nil = unsafe { SharedRoot::new(context.tagged_heap(), Value::NIL) };

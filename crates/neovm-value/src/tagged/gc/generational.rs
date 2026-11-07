@@ -53,7 +53,7 @@ impl GenState {
 impl TaggedHeap {
     #[inline]
     #[doc(hidden)]
-    pub fn generational_enabled(&self) -> bool {
+    pub fn tagged_heap_generational_enabled(&self) -> bool {
         self.generational.enabled
     }
 

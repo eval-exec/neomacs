@@ -109,7 +109,7 @@ impl Context {
     #[inline(always)]
     #[doc(hidden)]
     pub fn trace_private_roots_reusing(&self, roots: &mut Vec<Value>, called: &mut Vec<SymId>) {
-        let heap_id = self.tagged_heap.identity();
+        let heap_id = self.tagged_heap.tagged_heap_identity();
         self.trace_root_groups::<false>(
             heap_id,
             |_| {},
@@ -887,7 +887,7 @@ impl Context {
         let thread = std::thread::current().id();
         let thread_changed = self.last_activation_thread != Some(thread);
         self.last_activation_thread = Some(thread);
-        let heap_identity = self.tagged_heap.identity();
+        let heap_identity = self.tagged_heap.tagged_heap_identity();
         let collection_epoch = self.tagged_heap.gc_collections();
         let collection_in_progress = match self.tagged_heap.mark_phase() {
             MarkPhase::Idle => false,

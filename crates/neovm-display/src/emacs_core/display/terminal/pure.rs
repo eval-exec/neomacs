@@ -30,7 +30,7 @@ thread_local! {
 
 fn ensure_current_terminal_registry() {
     let heap_identity = neovm_value::tagged::gc::current_tagged_heap_identity()
-        .unwrap_or_else(|| neovm_value::tagged::gc::with_tagged_heap(|heap| heap.identity()));
+        .unwrap_or_else(|| neovm_value::tagged::gc::with_tagged_heap(|heap| heap.tagged_heap_identity()));
     TERMINAL_LISP_STATE.with(|slot| {
         if slot.current().heap_identity() != heap_identity {
             slot.reset(TerminalLispRegistry::default());

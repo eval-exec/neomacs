@@ -411,7 +411,7 @@ impl ConsCatalog {
     }
 
     fn publish_card_base(&self, heap: &TaggedHeap) {
-        let base = if heap.generational_enabled() {
+        let base = if heap.tagged_heap_generational_enabled() {
             usize::from_ne_bytes([
                 heap.card_table_base_0.get(),
                 heap.card_table_base_1.get(),

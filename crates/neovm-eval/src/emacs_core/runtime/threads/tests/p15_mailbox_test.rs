@@ -312,7 +312,7 @@ fn p15_mailbox_completed_target_refuses_admission_without_consuming_leases() {
 }
 
 fn minor_or_full(context: &mut Context) {
-    if !context.tagged_heap.generational_enabled() {
+    if !context.tagged_heap.tagged_heap_generational_enabled() {
         context.gc_collect_exact();
         return;
     }

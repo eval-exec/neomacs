@@ -31,7 +31,7 @@ fn publish(
     // all subsequent scans; tests collect from its registered table roots.
     unsafe { prepared.finalize(values) }
         .unwrap()
-        .publish()
+        .publish_finalized_root_batch()
         .unwrap()
 }
 
@@ -55,7 +55,7 @@ fn reserved_storage_is_initialized_and_invisible_until_publication() {
     assert_eq!(finalized.payload.used, 1);
     assert!(finalized.payload.words[1..].iter().all(Option::is_none));
     assert!(roots(&heap).is_empty());
-    let lease = finalized.publish().unwrap();
+    let lease = finalized.publish_finalized_root_batch().unwrap();
     let control = &lease.ownership.as_ref().unwrap().control;
     assert_eq!(Arc::as_ptr(control), control_address);
     assert_eq!(Arc::as_ptr(control.payload.get().unwrap()), payload_address);
@@ -193,7 +193,7 @@ fn capacity_failure_preserves_unique_storage_for_original_owner_retry() {
     // object; no collection, callback or ownership handoff intervened.
     let lease = unsafe { prepared.finalize(&[first]) }
         .unwrap()
-        .publish()
+        .publish_finalized_root_batch()
         .unwrap();
     assert_eq!(roots(&heap), vec![first]);
     lease.try_finish().unwrap();
@@ -486,7 +486,7 @@ fn restored_batch_reuses_control_payload_and_words_with_a_new_generation() {
         // collection or callback occurs between finalization and publication.
         let lease = unsafe { prepared.finalize(&[value, TaggedValue::fixnum(index)]) }
             .unwrap()
-            .publish()
+            .publish_finalized_root_batch()
             .unwrap();
         let reader = lease.reader(&heap).unwrap();
         let mut read = Vec::new();
@@ -541,7 +541,7 @@ fn restored_batch_retirement_preserves_deferred_sweep_and_owner_roots() {
         // This sole owner executes the whole mark extent, including every
         // explicit table reader. GEN1 exercises a young minor survivor;
         // GEN0 uses the same deferred sweep after a full stopped-world mark.
-        if heap.generational_enabled() {
+        if heap.tagged_heap_generational_enabled() {
             assert!(!heap.value_is_old_for_test(parent));
             heap.begin_minor_collection();
         } else {
@@ -723,7 +723,7 @@ fn recycled_storage_preserves_heap_identity_and_rejects_stale_generation() {
     // no collection, callback or handoff has occurred while it was unrooted.
     let lease = unsafe { prepared.finalize(&[value]) }
         .unwrap()
-        .publish()
+        .publish_finalized_root_batch()
         .unwrap();
     assert_eq!(lease.heap_identity(), heap.heap_identity());
     assert!(matches!(

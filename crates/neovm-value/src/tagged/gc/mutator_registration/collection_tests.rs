@@ -132,7 +132,7 @@ fn two_requesters_collect_transitive_world_private_and_image_roots() {
                 dead,
                 shared_only,
                 internal.bits(),
-                context.tagged_heap.generational_enabled(),
+                context.tagged_heap.tagged_heap_generational_enabled(),
             )
         },
         |era, (a, b, world, legacy, logs, dead, shared_only, internal, generational)| {

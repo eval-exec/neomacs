@@ -286,7 +286,7 @@ impl TaggedHeap {
     pub fn set_pending_obarray_scan(&mut self, snap: crate::symbol::ObarrayScanSnapshot) {
         assert_eq!(
             snap.heap_identity(),
-            self.identity(),
+            self.tagged_heap_identity(),
             "snapshot belongs to another heap"
         );
         // Retain the start slot count for the termination residual re-seed before
@@ -428,7 +428,7 @@ impl TaggedHeap {
                 // marker finishes, and slots follow atomic publication.
                 unsafe { snap.push(obj.data.scan_entry()) };
             }
-            debug_assert_eq!(snap.heap_identity(), heap.identity());
+            debug_assert_eq!(snap.heap_identity(), heap.tagged_heap_identity());
             Some(snap)
         };
         self.handshake.last_start_vecsnap_us = vecsnap_t0.elapsed().as_micros() as u64;
@@ -476,7 +476,7 @@ impl TaggedHeap {
                     unsafe { snapshot.capture_owned(addr, scope) };
                 }
             }
-            debug_assert_eq!(snapshot.heap_identity(), heap.identity());
+            debug_assert_eq!(snapshot.heap_identity(), heap.tagged_heap_identity());
             if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
                 eprintln!(
                     "NEOVM_GC hash_snapshot capture={}us tables={} slots={} entries={} descriptor_bytes={}",

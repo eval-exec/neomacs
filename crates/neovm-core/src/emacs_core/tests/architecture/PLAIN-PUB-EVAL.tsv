@@ -3027,19 +3027,19 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	VideoResolveRequest f
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	WebKitResolveRequest field height
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	WebKitResolveRequest field source
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	WebKitResolveRequest field width
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::buffer_default_value
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::buffer_default_value_fixed
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::buffer_manager
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::buffer_manager_mut
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::clear_current_message
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::current_message_text
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::current_message_value
+crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs	fn	fn impl Context::buffer_default_value
+crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs	fn	fn impl Context::buffer_default_value_fixed
+crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs	fn	fn impl Context::buffer_manager
+crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs	fn	fn impl Context::buffer_manager_mut
+crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs	fn	fn impl Context::clear_current_message
+crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs	fn	fn impl Context::current_message_text
+crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs	fn	fn impl Context::current_message_value
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::dispatch_subr
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::dispatch_subr_id
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::dispatch_subr_value
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::echo_area_display_buffer
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::echo_area_resize_exact_pending
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::ensure_echo_area_buffers
+crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs	fn	fn impl Context::echo_area_display_buffer
+crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs	fn	fn impl Context::echo_area_resize_exact_pending
+crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs	fn	fn impl Context::ensure_echo_area_buffers
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::eval_form
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::eval_str
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::eval_str_each
@@ -3047,17 +3047,17 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::eval_va
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::face_table
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::face_table_mut
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::finish_concurrent_mark
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::frame_manager
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::frame_manager_mut
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::fringe_bitmap_for_symbol
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::fringe_bitmap_index_for_name
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::fringe_bitmap_registry
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::has_current_message
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::inactive_echo_area_cursor_requested
+crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs	fn	fn impl Context::frame_manager
+crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs	fn	fn impl Context::frame_manager_mut
+crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs	fn	fn impl Context::fringe_bitmap_for_symbol
+crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs	fn	fn impl Context::fringe_bitmap_index_for_name
+crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs	fn	fn impl Context::fringe_bitmap_registry
+crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs	fn	fn impl Context::has_current_message
+crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs	fn	fn impl Context::inactive_echo_area_cursor_requested
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::lexical_binding
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::obarray
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::obarray_mut
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::set_current_message
+crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs	fn	fn impl Context::obarray
+crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs	fn	fn impl Context::obarray_mut
+crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs	fn	fn impl Context::set_current_message
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::set_face_attribute
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::set_function
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::set_lexical_binding
@@ -3066,7 +3066,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::shutdow
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::symbol_mode
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::sync_runtime_faces_for_frame
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::unwrap_symbol
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl Context::with_obarray_mut
+crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs	fn	fn impl Context::with_obarray_mut
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl GuiFrameHostRequest::for_frame
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl ResolvedOpenedFont::char_width
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	fn	fn impl ResolvedOpenedFont::font_size_px
@@ -4557,3 +4557,9 @@ crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	use	use dispatch::*
 crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	use	use leaf::*
 crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	use	use lowering::*
 crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	use	use shims::*
+crates/neovm-eval/src/host_cfg.rs	const	const impl HostCfgClass::ALL
+crates/neovm-eval/src/host_cfg.rs	enum	enum HostCfgClass
+crates/neovm-eval/src/host_cfg.rs	fn	fn impl HostCfgClass::from_label
+crates/neovm-eval/src/host_cfg.rs	fn	fn impl HostCfgClass::is_active
+crates/neovm-eval/src/host_cfg.rs	fn	fn impl HostCfgClass::label
+crates/neovm-eval/src/lib.rs	mod	mod host_cfg

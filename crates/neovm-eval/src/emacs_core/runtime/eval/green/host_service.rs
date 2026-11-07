@@ -619,7 +619,7 @@ impl HostRegistry {
             let (_prepared, error) = failure.into_parts();
             HostRootError::Root(error)
         })?;
-        let lease = finalized.publish().map_err(|failure| {
+        let lease = finalized.publish_finalized_root_batch().map_err(|failure| {
             let (_finalized, error) = failure.into_parts();
             HostRootError::Root(error)
         })?;
@@ -705,7 +705,7 @@ impl HostRegistry {
             let (_prepared, error) = failure.into_parts();
             HostRootError::Root(error)
         })?;
-        let lease = finalized.publish().map_err(|failure| {
+        let lease = finalized.publish_finalized_root_batch().map_err(|failure| {
             let (_finalized, error) = failure.into_parts();
             HostRootError::Root(error)
         })?;

@@ -222,7 +222,7 @@ fn gdl_eval_error_memory_round_trip_keeps_original_binding_through_clone_and_gc(
     let error = original_error.clone();
     drop(original_error);
     let mut roots = Vec::new();
-    collect_in_flight_flow_gc_roots(&mut roots, ctx.tagged_heap().identity());
+    collect_in_flight_flow_gc_roots(&mut roots, ctx.tagged_heap().tagged_heap_identity());
     assert!(
         roots.iter().any(|root| root.bits() == binding.bits()),
         "the public error clone must pin the original memory descriptor"

@@ -148,7 +148,7 @@ fn round(
     let roots = ledger(era, &mut stopped);
     let (cycle, before) = era
         .with_stopped_heap_for_test(&stopped, |heap| {
-            let cycle = match heap.generational_enabled() {
+            let cycle = match heap.tagged_heap_generational_enabled() {
                 true => Cycle::Minor,
                 false => Cycle::Full,
             };

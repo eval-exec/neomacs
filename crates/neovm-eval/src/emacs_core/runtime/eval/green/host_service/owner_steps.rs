@@ -1154,7 +1154,7 @@ impl OwnerExecutionFrame<'_> {
                 neovm_value::error::collect_in_flight_registry_gc_roots(
                     &mut roots,
                     &self.context.in_flight_registry,
-                    self.context.tagged_heap.identity(),
+                    self.context.tagged_heap.tagged_heap_identity(),
                 );
                 let runtime = baton.green_runtime();
                 let runtime = runtime.as_ref().ok_or(HostRootError::BatonRequired)?;

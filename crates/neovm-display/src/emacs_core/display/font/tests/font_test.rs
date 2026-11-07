@@ -2288,7 +2288,7 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
     };
 
     let completed = eval.gc_count;
-    if eval.tagged_heap().generational_enabled() {
+    if eval.tagged_heap().tagged_heap_generational_enabled() {
         assert!(eval.tagged_heap().should_run_minor(false, false));
         assert!(
             !eval
@@ -2319,7 +2319,7 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
     }
     assert_eq!(eval.gc_count, completed + 1);
     check_cached_graph(&eval);
-    if eval.tagged_heap().generational_enabled() {
+    if eval.tagged_heap().tagged_heap_generational_enabled() {
         assert!(
             eval.tagged_heap()
                 .value_is_old_for_test(unsafe { Value::from_bits(cached_bits) })

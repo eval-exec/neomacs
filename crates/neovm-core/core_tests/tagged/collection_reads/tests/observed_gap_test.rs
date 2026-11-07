@@ -52,7 +52,7 @@ fn context() -> Context {
     context.gc_stress = false;
     // SAFETY: serial test setup; the WorldView is used in place and never swapped.
     unsafe { context.tagged_heap_mut() }.set_gc_threshold(usize::MAX);
-    assert!(!context.tagged_heap().generational_enabled());
+    assert!(!context.tagged_heap().tagged_heap_generational_enabled());
     context
 }
 

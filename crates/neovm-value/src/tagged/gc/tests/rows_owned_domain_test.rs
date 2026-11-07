@@ -140,7 +140,7 @@ fn rows_owned_domain_requires_existing_chunk_map() {
 fn rows_owned_domain_idle_refuses_major_partial_and_deferred_without_count_change() {
     let mut heap = gen1_heap();
     assert!(
-        heap.generational_enabled(),
+        heap.tagged_heap_generational_enabled(),
         "the lifecycle fixture explicitly selects GEN1"
     );
     let root = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
@@ -165,7 +165,7 @@ fn rows_owned_domain_idle_refuses_major_partial_and_deferred_without_count_chang
 #[test]
 fn rows_owned_domain_minor_to_deferred_handoff_has_no_idle_gap() {
     let mut heap = gen1_heap();
-    assert!(heap.generational_enabled());
+    assert!(heap.tagged_heap_generational_enabled());
     let root = heap.alloc_vector(vec![TaggedValue::NIL]);
     let count = heap.gc_collections();
     heap.begin_minor_collection().unwrap();
@@ -197,7 +197,7 @@ fn rows_owned_domain_caught_direct_gen1_reclaim_panic_keeps_visible_obligation()
         }
     }
     let mut heap = gen1_heap();
-    assert!(heap.generational_enabled());
+    assert!(heap.tagged_heap_generational_enabled());
     let dead = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL).0;
     let count = heap.gc_collections();
     let subscriber = tracing_subscriber::registry().with(PanicAfterReclaim);

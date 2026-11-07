@@ -323,7 +323,7 @@ fn obarray_snapshot_leases_survive_owner_drop() {
     // and no other mutator can modify this owner after it is dropped.
     let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(&mut heap) };
     let snapshot = obarray.scan_snapshot(&world);
-    assert_eq!(snapshot.heap_identity(), heap.identity());
+    assert_eq!(snapshot.heap_identity(), heap.tagged_heap_identity());
     drop(obarray);
     let mut children = Vec::new();
     // SAFETY: the snapshot's leases made owner Drop retain its chunk/side

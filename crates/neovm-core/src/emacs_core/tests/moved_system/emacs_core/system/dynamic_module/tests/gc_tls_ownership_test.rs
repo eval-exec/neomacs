@@ -47,7 +47,7 @@ impl Drop for GlobalReference {
 fn roots_for(ctx: &Context) -> Vec<Value> {
     let mut roots = Vec::new();
     collect_dynamic_module_registry_gc_roots(&ctx.dynamic_module_registry, &mut roots);
-    collect_dynamic_module_gc_roots(&mut roots, ctx.tagged_heap().identity());
+    collect_dynamic_module_gc_roots(&mut roots, ctx.tagged_heap().tagged_heap_identity());
     roots
 }
 

@@ -42,7 +42,7 @@ fn full_collection_resolves_nonempty_peer_young_and_promotes_before_response() {
                 stopped.check_world_roots(era.heap_identity()).unwrap();
                 let mut slot = era.core.collector.try_borrow_mut().unwrap();
                 let heap = slot.as_mut().unwrap().registration_heap_mut();
-                if heap.generational_enabled() {
+                if heap.tagged_heap_generational_enabled() {
                     // No control gate survives into the allocator lock. All
                     // participants are stopped; the keeper alone borrows these
                     // two canonical entry images and the real heap catalog.

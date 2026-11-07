@@ -1133,7 +1133,7 @@ impl Context {
     #[doc(hidden)]
     pub fn gc_collect_from_current_roots(&mut self) {
         self.profiler_gc_start();
-        let force_complete = self.gc_stress && !self.tagged_heap.generational_enabled();
+        let force_complete = self.gc_stress && !self.tagged_heap.tagged_heap_generational_enabled();
         self.gc_collect_from_current_roots_impl(force_complete);
         self.profiler_gc_finish();
     }
@@ -1332,7 +1332,7 @@ impl Context {
                         return;
                     }
                     MarkPhase::Idle => {
-                        if self.gc_stress && (*heap_ptr).generational_enabled() {
+                        if self.gc_stress && (*heap_ptr).tagged_heap_generational_enabled() {
                             // A fresh automatic stress cycle is synchronous. Choose its
                             // generation before advancing the next-cycle stride; an
                             // explicit full collection and every continuation took the
@@ -1529,7 +1529,7 @@ impl Context {
         // SAFETY: this function runs only in the stopped seeding window. The
         // independent loan drops (including on unwind) before returning.
         let mut thread_local_roots = unsafe { (*heap_ptr).root_seed_scratch() };
-        let heap_identity = unsafe { (*heap_ptr).identity() };
+        let heap_identity = unsafe { (*heap_ptr).tagged_heap_identity() };
         self.trace_roots_reusing(
             heap_identity,
             |roots| {

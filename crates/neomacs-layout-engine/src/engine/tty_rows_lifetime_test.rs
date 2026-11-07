@@ -32,7 +32,7 @@ impl GcMode {
             );
         }
         assert_eq!(
-            context.tagged_heap().generational_enabled(),
+            neovm_value::test_support::authority::generational_enabled_for_test(context.tagged_heap()),
             enabled,
             "the TTY Rows fixture must run under its explicitly pinned GC mode",
         );

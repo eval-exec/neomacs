@@ -107,7 +107,7 @@ fn generational_context() -> Context {
     };
     context.gc_stress = false;
     context.tagged_heap.set_gc_threshold(usize::MAX);
-    assert!(context.tagged_heap.generational_enabled());
+    assert!(context.tagged_heap.tagged_heap_generational_enabled());
     context.gc_collect_exact();
     context
 }
@@ -217,7 +217,7 @@ fn a_covering_window_sends_every_store_to_the_barrier() {
     assert_eq!(native(ctx_ptr, &leaf, &[cell, Value::T], "untracked"), "t");
     assert_eq!(
         shim_calls() - before,
-        usize::from(eval.tagged_heap.generational_enabled()),
+        usize::from(eval.tagged_heap.tagged_heap_generational_enabled()),
         "Stage A generations keep the window covering until C2.8"
     );
     assert_eq!(print_value(&cell), "(t . 2)");

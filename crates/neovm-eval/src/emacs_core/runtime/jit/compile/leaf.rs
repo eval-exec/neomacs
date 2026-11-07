@@ -1530,7 +1530,7 @@ impl CompiledLeaf {
         #[cfg(debug_assertions)]
         if self.needs_vmctx && !vmctx.is_null() {
             // SAFETY: the vmctx contract (a live Context); an identity read.
-            let heap = unsafe { (*(vmctx as *const Context)).tagged_heap.identity() };
+            let heap = unsafe { (*(vmctx as *const Context)).tagged_heap.tagged_heap_identity() };
             debug_assert_eq!(
                 neovm_value::tagged::gc::current_tagged_heap_identity(),
                 Some(heap),

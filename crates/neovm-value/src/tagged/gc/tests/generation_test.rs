@@ -60,7 +60,7 @@ fn black_by_generation_per_scope() {
 fn the_first_partition_cycle_reserves_permanence_for_image_residents() {
     let mut heap = TaggedHeap::new();
     set_tagged_heap(&mut heap);
-    let generational = heap.generational_enabled();
+    let generational = heap.tagged_heap_generational_enabled();
     heap.extend_dump_span(4096, 16);
     let table = heap.alloc_hash_table(crate::value::LispHashTable::new(
         crate::value::HashTableTest::Eq,
@@ -190,7 +190,7 @@ fn parity_alternates_and_rest_is_white_under_both() {
         );
         heap.complete_collection();
         assert!(heap.owns_heap_value_for_test(v));
-        if heap.generational_enabled() {
+        if heap.tagged_heap_generational_enabled() {
             assert!(heap.value_is_old_for_test(v));
             assert_eq!(
                 unsafe { (*header).raw_mark() },

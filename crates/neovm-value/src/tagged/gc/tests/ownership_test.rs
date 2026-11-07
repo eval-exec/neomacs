@@ -172,8 +172,8 @@ fn dirty_owner_tracking_is_cleared_at_begin_so_freed_slot_reuse_is_not_deduped()
 fn heap_identity_is_unique_across_heap_lifetimes() {
     crate::test_utils::init_test_tracing();
 
-    let first_id = TaggedHeap::new().identity();
-    let second_id = TaggedHeap::new().identity();
+    let first_id = TaggedHeap::new().tagged_heap_identity();
+    let second_id = TaggedHeap::new().tagged_heap_identity();
 
     assert_ne!(first_id, second_id);
 }
@@ -2171,7 +2171,7 @@ fn parity_string_claim_works_across_two_cycles() {
         heap.finish_incremental_sweep_now();
         assert!(!heap.sweep_in_progress());
         assert!(heap.owns_non_cons_object(s_ptr));
-        if heap.generational_enabled() {
+        if heap.tagged_heap_generational_enabled() {
             assert!(heap.value_is_old_for_test(s));
             assert_eq!(
                 unsafe { (*(s_ptr as *const StringObj)).header.raw_mark() },
@@ -3153,7 +3153,7 @@ fn write_barrier_caches_skip_only_writes_with_nothing_to_record() {
     // boundary; OFF inserts directly into the persistent mapped set.
     for &owner in &owners {
         assert!(heap.is_remembered_for_test(owner));
-        if heap.generational_enabled() {
+        if heap.tagged_heap_generational_enabled() {
             assert!(heap.mutators().any(|mutator| {
                 mutator.r_mapped_seen.contains(&owner.bits())
                     && mutator

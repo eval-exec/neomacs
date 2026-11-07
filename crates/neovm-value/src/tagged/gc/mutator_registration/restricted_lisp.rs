@@ -2644,7 +2644,7 @@ fn run_program<'era>(
 
 fn with_admitted(body: impl FnOnce(&ParallelHeapEra, bool, &SharedRoot, &SharedRoot)) {
     let mut context = Context::new();
-    let generational = context.tagged_heap.generational_enabled();
+    let generational = context.tagged_heap.tagged_heap_generational_enabled();
     // SAFETY: nil and a fixnum are immediates of this Context's heap.
     let nil = unsafe { SharedRoot::new(&context.tagged_heap, TaggedValue::NIL) };
     let one = unsafe { SharedRoot::new(&context.tagged_heap, TaggedValue::fixnum(1)) };

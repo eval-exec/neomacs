@@ -12,10 +12,10 @@ use neovm_value::tagged::gc::{CONS_BLOCK_CELLS, TaggedHeap, set_tagged_heap};
 #[test]
 fn gc_collection_epoch_string_pos_activation_discards_swept_source_entry() {
     let mut context = crate::test_utils::new_context();
-    let heap_identity = context.tagged_heap().identity();
+    let heap_identity = context.tagged_heap().tagged_heap_identity();
     let string = populate_cache(&mut context);
     let mut context = collect_with_uncovered_cache(context, string);
-    assert_eq!(context.tagged_heap().identity(), heap_identity);
+    assert_eq!(context.tagged_heap().tagged_heap_identity(), heap_identity);
     // The restored cache has the same heap identity but an uncovered epoch.
     // Activation must reject its reclaimed string before offering a root.
     assert!(CACHE.with(Cell::get).is_some());
@@ -41,7 +41,7 @@ fn gc_collection_epoch_string_pos_root_scan_discards_swept_source_entry() {
     let mut roots = Vec::new();
     collect_string_pos_cache_gc_roots(
         &mut roots,
-        context.tagged_heap().identity(),
+        context.tagged_heap().tagged_heap_identity(),
         context.tagged_heap().gc_collections(),
         neovm_value::tagged::gc::CacheRootScan::Collection,
     );
@@ -78,7 +78,7 @@ fn gc_collection_epoch_string_pos_thread_change_activation_invalidates_changed_l
     assert_eq!(context.tagged_heap().gc_collections(), initial_epoch);
     // A different mutator has its own byte-mutation epoch. Exercise the
     // activation's explicit thread-change input against the restored epoch.
-    activate_string_pos_cache(context.tagged_heap().identity(), initial_epoch, false, true);
+    activate_string_pos_cache(context.tagged_heap().tagged_heap_identity(), initial_epoch, false, true);
     assert_eq!(
         string_char_to_byte(string, string.as_lisp_string().unwrap(), 1),
         2,
@@ -128,7 +128,7 @@ fn gc_collection_epoch_string_pos_partial_sweep_root_scan_discards_swept_entry()
     let mut roots = Vec::new();
     collect_string_pos_cache_gc_roots(
         &mut roots,
-        heap.identity(),
+        heap.tagged_heap_identity(),
         heap.gc_collections(),
         neovm_value::tagged::gc::CacheRootScan::Snapshot {
             collection_in_progress: heap.mark_in_progress() || heap.sweep_in_progress(),
@@ -249,7 +249,7 @@ fn collect_with_uncovered_cache(mut context: Context, string: Value) -> Context 
 
 fn activate_cache_for_heap(heap: &TaggedHeap) {
     activate_string_pos_cache(
-        heap.identity(),
+        heap.tagged_heap_identity(),
         heap.gc_collections(),
         heap.mark_in_progress() || heap.sweep_in_progress(),
         false,
@@ -341,7 +341,7 @@ fn non_generational_context() -> Context {
     unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
     let mut context = crate::test_utils::new_context();
     context.gc_stress = false;
-    assert!(!context.tagged_heap().generational_enabled());
+    assert!(!context.tagged_heap().tagged_heap_generational_enabled());
     assert!(!context.gc_stress);
     context
 }

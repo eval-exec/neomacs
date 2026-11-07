@@ -177,7 +177,7 @@ fn cons_real_window_first_pointer_stores_follow_span_tracking_heap_switch_and_un
     for heap in &mut heaps {
         set_tagged_heap(heap);
         assert_mirrors(heap);
-        assert_eq!(current_tagged_heap_identity(), Some(heap.identity()));
+        assert_eq!(current_tagged_heap_identity(), Some(heap.tagged_heap_identity()));
     }
     clear_tagged_heap_if_installed(&heaps[0]);
     assert_mirrors(&heaps[1]);

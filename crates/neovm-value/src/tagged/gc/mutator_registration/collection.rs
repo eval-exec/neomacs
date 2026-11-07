@@ -651,7 +651,7 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
         let allocated_count = heap.current_mutator_gc().allocated_count;
         let memory_use_counts = heap.memory_use_counts_snapshot();
         let total_allocated_bytes = heap.total_allocated_bytes();
-        let generational = heap.generational_enabled();
+        let generational = heap.tagged_heap_generational_enabled();
         history.restore(heap, generational);
         let response_pacing = if generational {
             ResponsePacing::Reset

@@ -192,7 +192,7 @@ fn exercise(cycles: &[Cycle]) {
             let mut stopped = era.stop().unwrap();
             let before = inspect(&era, &stopped, &graph, unrelated);
             let generations = era
-                .with_stopped_heap_for_test(&stopped, |heap| heap.generational_enabled())
+                .with_stopped_heap_for_test(&stopped, |heap| heap.tagged_heap_generational_enabled())
                 .unwrap();
             if let Cycle::Minor = cycle {
                 // Preparation must not have secretly promoted these children

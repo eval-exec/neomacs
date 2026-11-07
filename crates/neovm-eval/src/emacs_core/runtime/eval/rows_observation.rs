@@ -112,7 +112,7 @@ impl Context {
         if !gc::tagged_heap_is_current(&self.tagged_heap) {
             return Err(RowsObservationRefusal::InactiveContext);
         }
-        if !self.tagged_heap.generational_enabled() {
+        if !self.tagged_heap.tagged_heap_generational_enabled() {
             return Err(RowsObservationRefusal::GenerationalDisabled);
         }
         if self.gc_driver_active {
@@ -268,7 +268,7 @@ impl Context {
         {
             return Err(RowsObservationRefusal::RuntimeChanged);
         }
-        if !self.tagged_heap.generational_enabled() {
+        if !self.tagged_heap.tagged_heap_generational_enabled() {
             return Err(RowsObservationRefusal::GenerationalDisabled);
         }
         if self.gc_driver_active {

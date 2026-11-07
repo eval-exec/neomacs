@@ -11,7 +11,7 @@ fn generational_context() -> Context {
     // This fixture observes manual deferred minors. Automatic synchronous
     // stress routing is covered separately by gc_generational_pacing.
     context.gc_stress = false;
-    assert!(context.tagged_heap().generational_enabled());
+    assert!(context.tagged_heap().tagged_heap_generational_enabled());
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { context.tagged_heap_mut() }.set_gc_threshold(usize::MAX);
     context.gc_collect_exact();

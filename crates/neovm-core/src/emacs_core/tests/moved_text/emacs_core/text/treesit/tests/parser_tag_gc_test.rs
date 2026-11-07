@@ -96,7 +96,7 @@ fn native_parser_tag_survives(first: FirstCollection) {
 }
 
 fn collect_minor_or_full(heap: &mut TaggedHeap, roots: Vec<Value>) {
-    if heap.generational_enabled() {
+    if heap.tagged_heap_generational_enabled() {
         heap.begin_minor_collection()
             .expect("fresh GEN1 heap admits a minor");
         for root in roots {

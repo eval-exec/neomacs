@@ -808,7 +808,7 @@ fn tenured_owner_keeps_young_page_float_alive_body(verify: bool) {
     // in GEN0.
     assert_eq!(
         unsafe { (*t_header).gc.tenured },
-        heap.generational_enabled(),
+        heap.tagged_heap_generational_enabled(),
         "record tenure must follow the generation mode",
     );
     assert!(heap.owns_non_cons_object(f_ptr));

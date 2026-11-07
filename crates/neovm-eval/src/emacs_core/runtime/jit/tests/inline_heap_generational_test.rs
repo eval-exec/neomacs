@@ -40,7 +40,7 @@ fn context(generational: bool) -> Context {
     };
     context.gc_stress = false;
     context.tagged_heap.set_gc_threshold(usize::MAX);
-    assert_eq!(context.tagged_heap.generational_enabled(), generational);
+    assert_eq!(context.tagged_heap.tagged_heap_generational_enabled(), generational);
     context.gc_collect_exact();
     context
 }

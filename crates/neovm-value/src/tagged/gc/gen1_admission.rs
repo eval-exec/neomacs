@@ -57,7 +57,7 @@ impl<'heap> Gen1Admission<'heap> {
         mut collector: QuiescentCollector<'heap>,
     ) -> Result<Self, Gen1AdmissionFailure<'heap>> {
         // Read the retained heap's actual mode exactly once at construction.
-        if !collector.registration_heap_mut().generational_enabled() {
+        if !collector.registration_heap_mut().tagged_heap_generational_enabled() {
             return Err(Gen1AdmissionFailure {
                 reason: Gen1AdmissionError::GenerationalRequired,
                 collector,

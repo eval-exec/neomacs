@@ -64,7 +64,7 @@ fn issue554_cloned_owned_throw_roundtrip_preserves_policy_and_roots() {
         // equality. Collection has only the cloned owned error's pin here.
         ctx.set_variable("symbols-with-pos-enabled", Value::NIL);
         let mut roots = Vec::new();
-        collect_in_flight_flow_gc_roots(&mut roots, ctx.tagged_heap().identity());
+        collect_in_flight_flow_gc_roots(&mut roots, ctx.tagged_heap().tagged_heap_identity());
         assert!(roots.iter().any(|root| root.bits() == tag.bits()));
         assert!(roots.iter().any(|root| root.bits() == payload.bits()));
         ctx.gc_collect_exact();
@@ -84,7 +84,7 @@ fn issue554_cloned_owned_throw_roundtrip_preserves_policy_and_roots() {
         assert_eq!(thrown.tag.as_symbol_with_pos_sym(), Some(bare_tag));
         drop(roundtrip);
         let mut roots = Vec::new();
-        collect_in_flight_flow_gc_roots(&mut roots, ctx.tagged_heap().identity());
+        collect_in_flight_flow_gc_roots(&mut roots, ctx.tagged_heap().tagged_heap_identity());
         assert!(roots.iter().all(|root| root.bits() != tag.bits()));
         assert!(roots.iter().all(|root| root.bits() != payload.bits()));
     }

@@ -83,7 +83,7 @@ impl Context {
             // Only this original owner; never owner_slabs.trace_roots.
             slab.trace_roots(&mut |value| words.push(value));
         }
-        let heap_id = self.tagged_heap.identity();
+        let heap_id = self.tagged_heap.tagged_heap_identity();
         let epoch = self.tagged_heap.gc_collections();
         super::super::super::for_each_thread_local_root_source(
             heap_id,

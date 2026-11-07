@@ -43,7 +43,7 @@ fn context() -> Context {
             .expect("set bounded test pacing");
     });
     context.gc_collect_exact();
-    assert!(context.tagged_heap().generational_enabled());
+    assert!(context.tagged_heap().tagged_heap_generational_enabled());
     assert!(context.tagged_heap().should_run_minor(false, false));
     context
 }
@@ -204,7 +204,7 @@ fn major_and_minor_keep_only_the_matching_heaps_scratch_root_graph() {
     let mut discovered = Vec::new();
     collect_thread_local_gc_roots(
         &mut discovered,
-        second.tagged_heap().identity(),
+        second.tagged_heap().tagged_heap_identity(),
         second.tagged_heap().gc_collections(),
         neovm_value::tagged::gc::CacheRootScan::Snapshot {
             collection_in_progress: second.tagged_heap().mark_in_progress()

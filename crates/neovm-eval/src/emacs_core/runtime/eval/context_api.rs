@@ -778,7 +778,7 @@ impl Context {
         neovm_value::error::collect_in_flight_registry_gc_roots(
             roots,
             &self.in_flight_registry,
-            self.tagged_heap().identity(),
+            self.tagged_heap().tagged_heap_identity(),
         );
     }
 

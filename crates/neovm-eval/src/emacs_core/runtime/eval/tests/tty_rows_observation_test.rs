@@ -53,7 +53,7 @@ fn ready() -> (Context, FrameId, RestoreTerminal) {
     context.sync_runtime_faces_for_frame(frame);
     context.setup_thread_locals();
     assert!(
-        context.tagged_heap.generational_enabled(),
+        context.tagged_heap.tagged_heap_generational_enabled(),
         "GEN1 test policy required"
     );
     assert!(

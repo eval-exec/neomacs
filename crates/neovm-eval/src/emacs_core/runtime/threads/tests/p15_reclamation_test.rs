@@ -43,7 +43,7 @@ fn initialized_world() -> Context {
 /// something passes. The following full is a separate, fixed phase in each test.
 fn collect_young_or_full(context: &mut Context) {
     let before = context.gc_count;
-    if context.tagged_heap.generational_enabled() {
+    if context.tagged_heap.tagged_heap_generational_enabled() {
         assert!(context.tagged_heap.should_run_minor(false, false));
         context.gc_pending = true;
         context.gc_safe_point_exact();

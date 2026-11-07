@@ -112,6 +112,6 @@ fn populate(_ctx: &mut Context) -> Value {
 
 fn roots(ctx: &Context) -> Vec<Value> {
     let mut roots = Vec::new();
-    collect_syntax_gc_roots(&mut roots, ctx.tagged_heap().identity());
+    collect_syntax_gc_roots(&mut roots, ctx.tagged_heap().tagged_heap_identity());
     roots
 }

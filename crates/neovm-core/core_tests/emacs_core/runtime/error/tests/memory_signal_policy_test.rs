@@ -44,7 +44,7 @@ fn issue554_positioned_memory_descriptor_roundtrip_keeps_original_and_roots() {
     let error = original_error.clone();
     drop(original_error);
     let mut roots = Vec::new();
-    collect_in_flight_flow_gc_roots(&mut roots, context.tagged_heap().identity());
+    collect_in_flight_flow_gc_roots(&mut roots, context.tagged_heap().tagged_heap_identity());
     assert!(roots.iter().any(|root| root.bits() == original.bits()));
     context.gc_collect_exact();
     for value in [original, condition, tail, vector] {

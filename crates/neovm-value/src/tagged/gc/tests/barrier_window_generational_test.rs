@@ -127,7 +127,7 @@ fn generational_cons_protocol_window_fallback_install_derives_both_mirrors() {
     TAGGED_HEAP_CONS_BARRIER_WINDOW.with(|w| w.set(BarrierWindow::span(8, 16)));
     with_tagged_heap(|fallback| {
         assert_published_windows(fallback, fallback.barrier_window());
-        assert_eq!(current_tagged_heap_identity(), Some(fallback.identity()));
+        assert_eq!(current_tagged_heap_identity(), Some(fallback.tagged_heap_identity()));
         clear_tagged_heap_if_installed(fallback);
     });
     assert_eq!(published_cons_barrier_window(), BarrierWindow::NONE);

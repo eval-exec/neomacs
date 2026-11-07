@@ -101,7 +101,7 @@ impl TestHeapScope {
     /// scope). No heap reference escapes.
     #[doc(hidden)]
     pub fn identity(&self) -> usize {
-        self.heap.identity()
+        self.heap.tagged_heap_identity()
     }
 }
 
@@ -834,6 +834,14 @@ pub unsafe fn set_generational_enabled_for_test(
 ) {
     // SAFETY: the caller upholds the exclusive-quiescent-heap contract above.
     unsafe { heap.set_generational_enabled(enabled) }
+}
+
+/// Value-FENCE row (PC1 ruling 11:5xZ): read-only GEN1 policy observation
+/// for the re-homed rows fixtures. App-crate tests use this instead of the
+/// fenced hot-path getter, so the name-keyed fence has no app-crate callers.
+#[cfg(any(test, feature = "test-support"))]
+pub fn generational_enabled_for_test(heap: &crate::tagged::gc::TaggedHeap) -> bool {
+    heap.tagged_heap_generational_enabled()
 }
 
 /// Value-FENCE row (P1-CLASSES-ALL-CRATES C3): start a real mark cycle so the

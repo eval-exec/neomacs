@@ -168,7 +168,7 @@ impl Placement {
                 let mut stopped = era.stop().unwrap();
                 let cycle = era
                     .with_stopped_heap_for_test(&stopped, |heap| {
-                        match heap.generational_enabled() {
+                        match heap.tagged_heap_generational_enabled() {
                             true => Cycle::Minor,
                             false => Cycle::Full,
                         }

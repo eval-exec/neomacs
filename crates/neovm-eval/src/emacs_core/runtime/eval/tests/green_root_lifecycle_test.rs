@@ -50,7 +50,7 @@ fn restored_owner_retirement_leaves_cooperative_sweep_pending() {
         .unwrap()
         .publish()
         .unwrap();
-    if owner.tagged_heap.generational_enabled() {
+    if owner.tagged_heap.tagged_heap_generational_enabled() {
         assert!(!owner.tagged_heap.value_is_old_for_test(root));
         owner.tagged_heap.begin_minor_collection();
     } else {

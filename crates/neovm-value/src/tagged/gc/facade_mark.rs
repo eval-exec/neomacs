@@ -673,7 +673,7 @@ mod tests {
         // owner's remembered edge keeps it live.
         assert_eq!(
             heap.value_is_tenured(image_child),
-            heap.generational_enabled(),
+            heap.tagged_heap_generational_enabled(),
         );
         assert_eq!(image_child.xfloat(), 8.25);
         assert!(!heap.first_cycle_concurrent);

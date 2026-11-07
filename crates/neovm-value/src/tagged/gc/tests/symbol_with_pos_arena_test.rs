@@ -650,7 +650,7 @@ fn tenured_page_symbol_with_pos_keeps_young_child_alive_body(verify: bool) {
     // Runtime owner: ordinary old in GEN1; young in GEN0.
     assert_eq!(
         unsafe { (*b.as_veclike_ptr().unwrap()).gc.tenured },
-        heap.generational_enabled(),
+        heap.tagged_heap_generational_enabled(),
     );
 
     for cycle in 0..2 {

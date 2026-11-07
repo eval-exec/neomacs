@@ -1391,7 +1391,7 @@ impl Context {
     pub(crate) fn register_owner_slab(
         &mut self,
     ) -> std::ptr::NonNull<super::owner_bindings::OwnerSlab> {
-        let heap = self.tagged_heap.identity();
+        let heap = self.tagged_heap.tagged_heap_identity();
         self.obarray.lease.0.owner_slabs.borrow_mut().register(heap)
     }
 

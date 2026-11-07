@@ -735,7 +735,7 @@ fn tenured_page_lambda_keeps_young_cons_child_alive_body(verify: bool) {
     // full collection traces the child directly.
     assert_eq!(
         unsafe { (*b.as_veclike_ptr().unwrap()).gc.tenured },
-        heap.generational_enabled(),
+        heap.tagged_heap_generational_enabled(),
     );
 
     for cycle in 0..2 {

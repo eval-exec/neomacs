@@ -179,13 +179,13 @@ fn generational_context() -> Context {
     ctx.gc_collect_exact();
     ctx.setup_thread_locals();
     ctx.set_gc_threshold(usize::MAX);
-    assert!(ctx.tagged_heap().generational_enabled());
+    assert!(ctx.tagged_heap().tagged_heap_generational_enabled());
     assert!(ctx.tagged_heap().should_run_minor(false, false));
     ctx
 }
 
 fn start_public_minor(ctx: &mut Context) -> MinorCounts {
-    assert!(ctx.tagged_heap().generational_enabled());
+    assert!(ctx.tagged_heap().tagged_heap_generational_enabled());
     assert!(!ctx.gc_stress);
     assert!(ctx.tagged_heap().should_run_minor(false, false));
     assert!(!ctx.tagged_heap().mark_in_progress());

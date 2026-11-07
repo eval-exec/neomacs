@@ -85,7 +85,7 @@ fn shared_table_gc(old_table: bool) {
     const N: usize = 4;
     const NSLOTS: usize = 6;
     let mut context = Context::new();
-    let generational = context.tagged_heap.generational_enabled();
+    let generational = context.tagged_heap.tagged_heap_generational_enabled();
     let tables = context.eval_str("(progn (setq a6-gc-t0 (make-hash-table :test 'eq) a6-gc-t1 (make-hash-table :test 'eq)) (list a6-gc-t0 a6-gc-t1))").unwrap();
     // Only the shells are transport roots; no graph node has a SharedRoot.
     let nil = unsafe { SharedRoot::new(&context.tagged_heap, TaggedValue::NIL) };

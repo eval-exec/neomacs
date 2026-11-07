@@ -119,7 +119,7 @@ fn check_catalog(heap: &TaggedHeap) {
         if let Some(map) = heap.chunk_map.as_deref() {
             assert_eq!(map.get(base), ChunkEntry::new(ChunkClass::Cons, index));
         }
-        if heap.generational_enabled() {
+        if heap.tagged_heap_generational_enabled() {
             assert!(
                 heap.card_slots()
                     .unwrap()

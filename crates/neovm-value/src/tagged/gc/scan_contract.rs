@@ -40,7 +40,7 @@ impl<'h> SingleMutatorWorld<'h> {
     }
 
     pub(crate) fn heap_identity(&self) -> usize {
-        self.heap.identity()
+        self.heap.tagged_heap_identity()
     }
 
     pub(crate) fn heap(&self) -> &TaggedHeap {

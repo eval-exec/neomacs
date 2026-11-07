@@ -1336,7 +1336,7 @@ impl TaggedHeap {
     }
 
     #[doc(hidden)]
-    pub fn identity(&self) -> usize {
+    pub fn tagged_heap_identity(&self) -> usize {
         self.identity.get()
     }
 

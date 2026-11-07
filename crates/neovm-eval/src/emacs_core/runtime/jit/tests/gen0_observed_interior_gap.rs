@@ -188,7 +188,7 @@ fn gen0_native_exact_cons_and_large_gap_both_survive_alternating_stores() {
     };
     context.gc_stress = false;
     context.tagged_heap.set_gc_threshold(usize::MAX);
-    assert!(!context.tagged_heap.generational_enabled());
+    assert!(!context.tagged_heap.tagged_heap_generational_enabled());
     neovm_value::tagged::gc::set_tagged_heap(&mut context.tagged_heap);
     let roots = context.save_specpdl_roots();
     let mut owners = std::array::from_fn::<_, 9, _>(|_| {
@@ -301,7 +301,7 @@ fn gen0_native_two_store_leaf_closes_only_the_first_read_owner() {
     let mut context = crate::test_utils::with_legacy_gc(Context::new);
     context.gc_stress = false;
     context.tagged_heap.set_gc_threshold(usize::MAX);
-    assert!(!context.tagged_heap.generational_enabled());
+    assert!(!context.tagged_heap.tagged_heap_generational_enabled());
     neovm_value::tagged::gc::set_tagged_heap(&mut context.tagged_heap);
     let roots = context.save_specpdl_roots();
     let mut owners = std::array::from_fn::<_, 9, _>(|_| {

@@ -298,7 +298,7 @@ fn constructor_generation_with_knob(value: Option<&str>) -> bool {
             None => std::env::remove_var("NEOVM_GC_GENERATIONAL"),
         }
     }
-    TaggedHeap::new().generational_enabled()
+    TaggedHeap::new().tagged_heap_generational_enabled()
 }
 
 #[test]

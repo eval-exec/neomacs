@@ -727,7 +727,7 @@ fn parse_nested_hash_tables_during_concurrent_gen1_mark() {
     assert!(!gc::tagged_heap_is_installed());
     let mut heap = Box::new(TaggedHeap::new_for_concurrent_hash_test(true));
     gc::set_tagged_heap(&mut heap);
-    assert!(heap.generational_enabled());
+    assert!(heap.tagged_heap_generational_enabled());
 
     // Only the holder is a root at mark start. The parser's custom null
     // object is white until new, born-black JSON containers retain it.

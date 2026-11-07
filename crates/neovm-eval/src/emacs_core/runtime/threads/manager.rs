@@ -305,7 +305,7 @@ impl ThreadManager {
     /// (src/thread.c:757+) executes only after `acquire_global_lock`. The
     /// simulation runs that body at the caller's next release point instead of
     /// during construction, so `New`/`Active(Running)` means "created, not run".
-    pub fn thread_is_pending_sim_run(&self, native: u64) -> bool {
+    pub(crate) fn thread_is_pending_sim_run(&self, native: u64) -> bool {
         self.get_thread(native).is_some_and(|thread| {
             !thread.native().executing()
                 && matches!(
@@ -316,7 +316,7 @@ impl ThreadManager {
     }
 
     /// The function object this thread will run, while it is still pending.
-    pub fn thread_function(&self, native: u64) -> Option<Value> {
+    pub(crate) fn thread_function(&self, native: u64) -> Option<Value> {
         self.get_thread(native)
             .map(|thread| thread.children().function())
     }

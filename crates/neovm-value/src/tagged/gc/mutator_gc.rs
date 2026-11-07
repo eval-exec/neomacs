@@ -734,7 +734,7 @@ impl TestMutatorSwitch {
     /// Refresh the existing heap's owner mirrors without a fallible TLS access.
     /// Same-heap owner switching changes no compiled barrier-window field.
     fn refresh_tls(heap: &mut TaggedHeap) {
-        let _ = TAGGED_HEAP_ID.try_with(|slot| slot.set(Some(heap.identity())));
+        let _ = TAGGED_HEAP_ID.try_with(|slot| slot.set(Some(heap.tagged_heap_identity())));
         let _ =
             TAGGED_HEAP_WRITE_TRACKING_MODE.try_with(|slot| slot.set(heap.write_tracking_mode()));
         let _ = TAGGED_HEAP_PARTITION_ACTIVE.try_with(|slot| slot.set(heap.partition_dump));

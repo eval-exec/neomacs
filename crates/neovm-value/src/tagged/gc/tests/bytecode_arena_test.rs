@@ -1201,7 +1201,7 @@ fn bytecode_constants_test_seam_fires_write_barrier_body(verify: bool) {
     // in GEN0. The seam fires either way; GEN0 needs no remembered edge.
     assert_eq!(
         unsafe { (*b.as_veclike_ptr().unwrap()).gc.tenured },
-        heap.generational_enabled(),
+        heap.tagged_heap_generational_enabled(),
     );
 
     // The seam refuses non-bytecode values.
@@ -1262,7 +1262,7 @@ fn tenured_page_bytecode_keeps_young_cons_child_alive_body(verify: bool) {
     assert!(heap.dump_blackened);
     assert_eq!(
         unsafe { (*b.as_veclike_ptr().unwrap()).gc.tenured },
-        heap.generational_enabled(),
+        heap.tagged_heap_generational_enabled(),
     );
 
     // Two partitioned cycles (one per parity): the owner is black and

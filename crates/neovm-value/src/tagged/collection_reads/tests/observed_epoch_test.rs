@@ -89,7 +89,7 @@ fn heap_with_generation(generational: bool) -> Box<TaggedHeap> {
         }
     }
     let heap = Box::new(TaggedHeap::new());
-    assert_eq!(heap.generational_enabled(), generational);
+    assert_eq!(heap.tagged_heap_generational_enabled(), generational);
     heap
 }
 

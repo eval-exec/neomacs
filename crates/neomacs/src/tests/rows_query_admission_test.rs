@@ -19,7 +19,7 @@ fn pin_gc_mode(context: &mut Context, generational: bool) {
         );
     }
     assert_eq!(
-        context.tagged_heap().generational_enabled(),
+        neovm_value::test_support::authority::generational_enabled_for_test(context.tagged_heap()),
         generational,
         "the Rows query fixture must run under its explicitly pinned GC mode",
     );
