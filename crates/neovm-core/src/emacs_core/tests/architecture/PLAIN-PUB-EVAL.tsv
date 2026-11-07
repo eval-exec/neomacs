@@ -4560,6 +4560,7 @@ crates/neovm-eval/src/emacs_core/runtime/jit/compile.rs	use	use shims::*
 crates/neovm-eval/src/host_cfg.rs	const	const impl HostCfgClass::ALL
 crates/neovm-eval/src/host_cfg.rs	enum	enum HostCfgClass
 crates/neovm-eval/src/host_cfg.rs	fn	fn impl HostCfgClass::from_label
-crates/neovm-eval/src/host_cfg.rs	fn	fn impl HostCfgClass::is_active
+crates/neovm-eval/src/host_cfg_active.rs	fn	fn impl HostCfgClass::is_active
 crates/neovm-eval/src/host_cfg.rs	fn	fn impl HostCfgClass::label
+crates/neovm-eval/src/host_cfg.rs	fn	fn impl HostCfgClass::vocabulary_round_trips
 crates/neovm-eval/src/lib.rs	mod	mod host_cfg
