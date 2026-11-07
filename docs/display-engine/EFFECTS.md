@@ -17,6 +17,13 @@ up by the `defcustom`.
 (neomacs-effect-names)
 ```
 
+A gallery assignment replaces the option's plist.  The renderer merges the
+properties it is given, so a later `(setopt neomacs-effect-cursor-glow
+'(:radius 40))` leaves glow enabled on screen while the option no longer
+records `:enabled`.  Saving that value and starting again applies only
+`:radius` onto the defaults, and the enablement is gone.  Include every
+property that should persist, or merge onto the current plist first.
+
 `neomacs-effect-set`, `neomacs-effect-reset`, and `neomacs-effects-apply` are
 not defined.
 
@@ -39,6 +46,17 @@ positional setters:
         neomacs-cursor-blink-interval 0.5)
 (setopt neomacs-cursor-size-transition-enabled t
         neomacs-cursor-size-transition-duration 0.15)
+```
+
+`neomacs-cursor-blink-enabled` and `neomacs-cursor-blink-interval` are not
+what a session keeps.  After the first frame, `neomacs--setup-cursor-blink`
+copies `blink-cursor-mode` and `blink-cursor-interval` into the renderer
+with `neomacs--effect-set`, and a later `blink-cursor-mode` change does
+that again.  The option variables stay as they were, so a `setopt` of them
+in an init file can disappear from the screen.  Set `blink-cursor-mode` and
+`blink-cursor-interval` for the blink that should persist.
+
+```elisp
 (setopt neomacs-buffer-transition-enabled t
         neomacs-buffer-transition-duration 0.2
         neomacs-buffer-transition-effect 'slide
