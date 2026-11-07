@@ -470,6 +470,8 @@ impl ResolvedLineEndPlan {
         }
     }
 
+    /// Execute source-dependent highlighting only with the owning buffer's
+    /// predicate; keep this stored row plan independent of buffer lifetimes.
     fn apply_with_source(
         self,
         row: &mut GlyphRow,

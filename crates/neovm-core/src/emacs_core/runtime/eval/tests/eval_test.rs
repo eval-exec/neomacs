@@ -4614,6 +4614,7 @@ fn read_key_sequence_can_return_select_window_at_sequence_start() {
     assert_eq!(binding, Value::symbol("neomacs-test-handle-select-window"));
 }
 
+/// Resolve a mouse press against the clicked window's published geometry.
 #[test]
 fn read_char_mouse_press_uses_clicked_window_geometry() {
     crate::test_utils::init_test_tracing();
@@ -4648,6 +4649,7 @@ fn read_char_mouse_press_uses_clicked_window_geometry() {
         .get_mut(fid)
         .expect("mutable frame")
         .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
+            logical_cursor_dimensions: None,
             posn_matrix: None,
             point_rows: None,
             window_id: w2,
@@ -4727,6 +4729,7 @@ fn read_char_mouse_press_uses_clicked_window_geometry() {
     );
 }
 
+/// Mouse-key lookup uses the clicked window's local map, not the selected one.
 #[test]
 fn read_key_sequence_uses_clicked_window_local_map_for_mouse_event() {
     crate::test_utils::init_test_tracing();
@@ -4823,6 +4826,7 @@ fn read_key_sequence_uses_clicked_window_local_map_for_mouse_event() {
                 end_source: Default::default(),
                 fringe: Default::default(),
             }],
+            logical_cursor_dimensions: None,
         }]);
 
     // GNU drops an up event with no matching down (src/keyboard.c:6628-6632),
@@ -4854,6 +4858,7 @@ fn read_key_sequence_uses_clicked_window_local_map_for_mouse_event() {
     assert_eq!(position_slots[5], Value::fixnum(77));
 }
 
+/// An unbound press must not obscure the following bound release event.
 #[test]
 fn read_key_sequence_drops_unbound_down_mouse_before_bound_click() {
     crate::test_utils::init_test_tracing();
@@ -4950,6 +4955,7 @@ fn read_key_sequence_drops_unbound_down_mouse_before_bound_click() {
                 end_source: Default::default(),
                 fringe: Default::default(),
             }],
+            logical_cursor_dimensions: None,
         }]);
 
     ev.command_loop.keyboard.pending_input_events.push_back(
@@ -5441,6 +5447,7 @@ fn read_key_sequence_reduces_unbound_triple_mouse_to_bound_click() {
     assert_eq!(keys, vec![Value::symbol("mouse-1")]);
 }
 
+/// Route mouse keys through the clicked buffer's local minor-mode maps.
 #[test]
 fn read_key_sequence_uses_clicked_window_buffer_local_minor_mode_maps() {
     crate::test_utils::init_test_tracing();
@@ -5506,6 +5513,7 @@ fn read_key_sequence_uses_clicked_window_buffer_local_minor_mode_maps() {
         .get_mut(fid)
         .expect("mutable frame")
         .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
+            logical_cursor_dimensions: None,
             posn_matrix: None,
             point_rows: None,
             window_id: w2,
@@ -5581,6 +5589,7 @@ fn read_key_sequence_uses_clicked_window_buffer_local_minor_mode_maps() {
     assert_eq!(ev.buffers.current_buffer_id(), Some(original_buffer));
 }
 
+/// Preserve the mode-line area prefix when resolving a mouse-key binding.
 #[test]
 fn read_key_sequence_prefixes_mode_line_mouse_click_for_lookup() {
     crate::test_utils::init_test_tracing();
@@ -5638,6 +5647,7 @@ fn read_key_sequence_prefixes_mode_line_mouse_click_for_lookup() {
             regions_materialized: true,
             body_rows: Vec::new(),
             text_area_left_offset: 0,
+            logical_cursor_dimensions: None,
             mode_line_height: 18,
             header_line_height: 0,
             tab_line_height: 0,

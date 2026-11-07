@@ -344,6 +344,7 @@ impl ScrollCoverage {
         snapshot.rows = body.geometry.rows;
         snapshot.body_rows = body.geometry.body_rows;
         snapshot.logical_cursor = None;
+        snapshot.logical_cursor_dimensions = None;
         snapshot.phys_cursor = None;
         // Geometry remains private; keep the captured source identity separately
         // so bounded measurement can validate it together with the read certificate.

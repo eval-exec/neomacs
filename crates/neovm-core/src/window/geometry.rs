@@ -244,6 +244,8 @@ impl PresentationWindow {
         Self::from_snapshot_with_mode(snapshot, geometry_positions_mode())
     }
 
+    /// Build one presentation without forcing deferred positions. Cursor paint
+    /// wins over explicit logical extent, then legacy canonical lookup is used.
     #[inline]
     fn from_snapshot_with_mode(
         snapshot: &WindowDisplaySnapshot,
@@ -272,11 +274,18 @@ impl PresentationWindow {
         let positions =
             PresentationPositions::from_snapshot(snapshot, body_rows, row_heights, mode)?;
         let cursor = snapshot.logical_cursor_pos().and_then(|cursor| {
-            let (width, height) = positions.cursor_dimensions(
-                cursor.row,
-                cursor.col,
-                snapshot.phys_cursor.as_ref(),
-            )?;
+            // Paint takes precedence; hidden cursors retain the selected glyph's
+            // extent without guessing identity from potentially colliding columns.
+            let (width, height) = snapshot
+                .phys_cursor
+                .as_ref()
+                .map(|physical| (physical.width, physical.height))
+                .or_else(|| {
+                    snapshot
+                        .logical_cursor_dimensions
+                        .map(|extent| (i64::from(extent.width), i64::from(extent.height)))
+                })
+                .or_else(|| positions.cursor_dimensions(cursor.row, cursor.col, None))?;
             Some(PresentationCursor {
                 x: cursor.x,
                 body_y: cursor.y,

@@ -980,6 +980,8 @@ fn root_lisp_position_char(source: &crate::display_item::DisplaySourcePosition) 
     }
 }
 
+/// Resolve cursor-property eligibility at the string's source slot and attach
+/// its measured extent before later bidi reordering changes visual placement.
 fn capture_overlay_string_cursor_at_slot(
     text_props: Option<&neovm_core::buffer::text_props::TextPropertyTable>,
     slot: &DisplayRowGlyphSlot,
@@ -992,7 +994,7 @@ fn capture_overlay_string_cursor_at_slot(
     let Some(char_idx) = root_lisp_position_char(&slot.source()) else {
         return;
     };
-    capture_overlay_string_cursor(
+    capture_overlay_string_cursor_with_dimensions(
         text_props,
         char_idx,
         cursor_info,
@@ -1003,11 +1005,16 @@ fn capture_overlay_string_cursor_at_slot(
         visual_state,
         CapturedCursorSlotWidth::Explicit(slot.width_px()),
         cursor_context,
+        slot.glyph_height_px().and_then(|height| {
+            crate::display_cursor::measured_logical_cursor_dimensions(slot.width_px(), height)
+        }),
     );
 }
 
+/// Keep explicit string-cursor identity and measured extent together; window
+/// row defaults are not evidence of the selected slot's glyph height.
 #[allow(clippy::too_many_arguments)]
-fn capture_overlay_string_cursor(
+fn capture_overlay_string_cursor_with_dimensions(
     text_props: Option<&neovm_core::buffer::text_props::TextPropertyTable>,
     char_idx: usize,
     cursor_info: &mut CursorCaptureState,
@@ -1018,6 +1025,7 @@ fn capture_overlay_string_cursor(
     visual_state: CapturedCursorVisualState,
     slot_width: CapturedCursorSlotWidth,
     cursor_context: DisplayStringCursorContext,
+    logical_dimensions: Option<neovm_core::window::LogicalCursorDimensions>,
 ) {
     let Some(props) = text_props else {
         return;
@@ -1028,7 +1036,7 @@ fn capture_overlay_string_cursor(
     ) else {
         return;
     };
-    let info = CapturedCursorInfo::from_visual_state(
+    let mut info = CapturedCursorInfo::from_visual_state(
         visual_state,
         CapturedCursorPlacement {
             x,
@@ -1040,6 +1048,7 @@ fn capture_overlay_string_cursor(
             stretch_like: false,
         },
     );
+    info.logical_dimensions = logical_dimensions;
     if let Some(candidate) = cursor_context.resolve(cursor_prop, info) {
         cursor_info.capture_display_string_cursor(candidate);
     }

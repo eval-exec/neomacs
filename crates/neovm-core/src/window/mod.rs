@@ -2865,6 +2865,14 @@ impl WindowCursorPos {
     }
 }
 
+/// Measured extent of the selected logical glyph, independent of cursor paint.
+/// Zero-width glyphs remain representable; absence means no explicit extent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LogicalCursorDimensions {
+    pub width: u32,
+    pub height: u32,
+}
+
 /// Last authoritative physical cursor geometry for a window.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WindowCursorSnapshot {
@@ -3067,6 +3075,9 @@ pub struct WindowDisplaySnapshot {
     /// Intended cursor position in the redisplay result, even when no physical
     /// cursor was emitted.
     pub logical_cursor: Option<WindowCursorPos>,
+    /// Extent from the same selected glyph as the logical position. Legacy
+    /// snapshots may omit it and retain canonical source-point lookup.
+    pub logical_cursor_dimensions: Option<LogicalCursorDimensions>,
     /// Last redisplay physical cursor geometry for this window, if the cursor
     /// was shown.
     pub phys_cursor: Option<WindowCursorSnapshot>,
@@ -3946,6 +3957,7 @@ impl PartialEq for WindowDisplaySnapshot {
             && self.tab_line_height == other.tab_line_height
             && self.chrome_strings == other.chrome_strings
             && self.logical_cursor == other.logical_cursor
+            && self.logical_cursor_dimensions == other.logical_cursor_dimensions
             && self.phys_cursor == other.phys_cursor
             && self.rows == other.rows
             && self.eob_overlay_motion == other.eob_overlay_motion
@@ -3971,6 +3983,7 @@ impl Default for WindowDisplaySnapshot {
             tab_line_height: 0,
             chrome_strings: PresentedWindowChromeStrings::default(),
             logical_cursor: None,
+            logical_cursor_dimensions: None,
             phys_cursor: None,
             points: Vec::new(),
             point_rows: None,

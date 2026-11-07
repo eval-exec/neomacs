@@ -359,6 +359,7 @@ impl PreparedViewports {
             candidate.presented_cursor = None;
             let snapshot = std::sync::Arc::make_mut(&mut candidate.display_snapshot);
             snapshot.logical_cursor = None;
+            snapshot.logical_cursor_dimensions = None;
             snapshot.phys_cursor = None;
             snapshot.layout_freshness = None;
             snapshot.window_end_record = None;

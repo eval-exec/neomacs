@@ -170,6 +170,7 @@ impl PreparedViewports {
                 })
                 .collect();
             snapshot.logical_cursor = None;
+            snapshot.logical_cursor_dimensions = None;
             snapshot.phys_cursor = None;
             snapshot.chrome_strings = Default::default();
             snapshot.regions_materialized = true;

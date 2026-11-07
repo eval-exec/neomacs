@@ -1352,6 +1352,7 @@ pub(crate) struct DisplayRowGlyphSlot {
     // Primitive boundary relative to the start of this text append. Source
     // characters and stored glyphs differ for padding and composition.
     text_glyph_offset: Option<usize>,
+    glyph_height_px: Option<f32>,
 }
 
 /// Source positions and paint primitives are not one-to-one. Composition
@@ -1376,6 +1377,8 @@ impl DisplayRowGlyphSlot {
         Self::with_pointer_appearance(source, x_px, col, width_px, width_cols, None)
     }
 
+    /// Record a source slot's advance and pointer appearance. A vertical
+    /// measurement is attached separately only when a primitive was emitted.
     pub(crate) fn with_pointer_appearance(
         source: DisplaySourcePosition,
         x_px: f32,
@@ -1395,6 +1398,7 @@ impl DisplayRowGlyphSlot {
             },
             default_cell_height: false,
             text_glyph_offset: None,
+            glyph_height_px: None,
         }
     }
 
@@ -1416,6 +1420,17 @@ impl DisplayRowGlyphSlot {
     pub(crate) fn with_text_glyph_offset(mut self, offset: usize) -> Self {
         self.text_glyph_offset = Some(offset);
         self
+    }
+
+    /// Keep the emitted glyph's measured height with its source slot; row
+    /// defaults and composition members are not measurements of this glyph.
+    fn with_glyph_height(mut self, height: Option<f32>) -> Self {
+        self.glyph_height_px = height.filter(|height| height.is_finite() && *height > 0.0);
+        self
+    }
+
+    pub(crate) fn glyph_height_px(&self) -> Option<f32> {
+        self.glyph_height_px
     }
 
     pub(crate) fn text_glyph_offset(&self) -> Option<usize> {
@@ -2128,7 +2143,8 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                     written.width_cols(),
                     item.pointer_appearance.clone(),
                 )
-                .with_text_glyph_offset(char_offset.get()),
+                .with_text_glyph_offset(char_offset.get())
+                .with_glyph_height(Some(glyph.pixel_height)),
             );
             self.writer.row.glyphs[GlyphArea::Text.index()].push(glyph);
             self.advance(written);
@@ -2152,6 +2168,8 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
         ))
     }
 
+    /// Append one canonical item and report its addressable source slots with
+    /// the metrics of the actual emitted primitives, including clipped output.
     pub(crate) fn push_item(&mut self, item: DisplayItem) -> DisplayRowAppendProgress {
         let start = self.position;
         let mut metrics = DisplayRowWriteMetrics::default();
@@ -2400,14 +2418,21 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                     }
                 }
                 if !written.is_empty() {
-                    slots.push(DisplayRowGlyphSlot::with_pointer_appearance(
-                        slot_source,
-                        slot_start.x_px(),
-                        slot_start.col(),
-                        written.width_px(),
-                        written.width_cols(),
-                        pointer_appearance.clone(),
-                    ));
+                    slots.push(
+                        DisplayRowGlyphSlot::with_pointer_appearance(
+                            slot_source,
+                            slot_start.x_px(),
+                            slot_start.col(),
+                            written.width_px(),
+                            written.width_cols(),
+                            pointer_appearance.clone(),
+                        )
+                        .with_glyph_height(
+                            self.writer.row.glyphs[self.writer.area_index()]
+                                .get(before_len)
+                                .map(|glyph| glyph.pixel_height),
+                        ),
+                    );
                 }
                 self.advance(written);
                 metrics.add(written);
@@ -2477,6 +2502,8 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
         apply_box_run_topology_to_glyphs(glyphs, membership, source_edges, source_item_complete);
     }
 
+    /// Keep each character's source slot paired with its emitted primitive
+    /// after measurement and clipping, rather than using the row's defaults.
     #[allow(clippy::too_many_arguments)]
     fn push_text_item(
         &mut self,
@@ -2594,7 +2621,12 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                 .with_default_cell_height(
                     ch == '\t' && matches!(source_mapping, DisplayTextSourceMapping::NaturalText),
                 )
-                .with_text_glyph_offset(before_len - glyph_start),
+                .with_text_glyph_offset(before_len - glyph_start)
+                .with_glyph_height(
+                    self.writer.row.glyphs[area_index]
+                        .get(before_len)
+                        .map(|glyph| glyph.pixel_height),
+                ),
             );
             self.advance(written);
             metrics.add(written);
@@ -2606,6 +2638,8 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
         status
     }
 
+    /// Emit a composition once while retaining all source positions. Only its
+    /// head owns primitive metrics; members must not invent measured extents.
     #[allow(clippy::too_many_arguments)]
     fn push_automatic_text_item(
         &mut self,
@@ -2671,6 +2705,13 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                 },
                 pointer_appearance.cloned(),
             );
+            if char_offset == 0 {
+                slot = slot.with_glyph_height(
+                    self.writer.row.glyphs[area_index]
+                        .get(before_len)
+                        .map(|glyph| glyph.pixel_height),
+                );
+            }
             slot.coverage = if char_offset == 0 {
                 DisplayRowGlyphCoverage::Primitive { source_chars }
             } else {

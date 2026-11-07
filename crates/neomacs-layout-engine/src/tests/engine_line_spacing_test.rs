@@ -561,6 +561,142 @@ fn replacement_logical_cursor_tracks_the_selected_visual_slot() {
     }
 }
 
+/// Hidden-cursor anchors must use the replacement's dimensions, not a preceding
+/// zero-width combining point that happens to share its logical column.
+#[test]
+fn hidden_rtl_cursor_anchor_uses_selected_glyph_dimensions() {
+    use neovm_core::window::geometry::{PresentationId, VisualAnchor, VisualAnchorQuery};
+    let (mut eval, frame, _, window) = incr_editing_frame("a\u{0301}x\n", 800, 240);
+    realize_test_gui_frame(&mut eval, frame);
+    eval.buffer_manager_mut()
+        .current_buffer_mut()
+        .unwrap()
+        .set_buffer_local("cursor-type", Value::NIL);
+    eval.eval_str(
+        "(progn (put-text-property 3 4 'display \"אבג\") (set-window-point (selected-window) 3))",
+    )
+    .unwrap();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+    let FrameLayoutAttempt::Prepared(prepared) = engine.redisplay_frame_attempt(&mut eval, frame)
+    else {
+        panic!("hidden replacement")
+    };
+    let row = &prepared
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == window.0 as i64)
+        .unwrap()
+        .matrix
+        .rows[0];
+    let selected = row.glyphs[GlyphArea::Text.index()]
+        .iter()
+        .filter(|glyph| !glyph.padding && row.glyph_covers_buffer_charpos(glyph, 2))
+        .filter_map(|glyph| match glyph.provenance {
+            neomacs_display_protocol::glyph_matrix::GlyphProvenance::Str { index, .. } => {
+                Some((index, glyph))
+            }
+            _ => None,
+        })
+        .min_by_key(|(index, _)| *index)
+        .unwrap()
+        .1;
+    let expected_width = selected.pixel_width.round();
+    assert!(expected_width > 0.0);
+    assert!(prepared.materialize().active_cursor().is_none());
+    let snapshot = eval
+        .frame_manager()
+        .get(frame)
+        .unwrap()
+        .redisplay_snapshot(window)
+        .unwrap()
+        .clone();
+    let owner = eval.frame_manager_mut().get_mut(frame).unwrap();
+    // The layout attempt already prepared generation one.
+    let presentation = PresentationId::new(2);
+    owner
+        .prepare_live_window_presentation(presentation, vec![snapshot])
+        .unwrap();
+    owner.activate_display_presentation(presentation).unwrap();
+    let anchor = owner
+        .resolve_active_visual_anchor(VisualAnchorQuery::new(
+            presentation,
+            VisualAnchor::CursorBottom { window },
+        ))
+        .unwrap();
+    assert_eq!(anchor.bounds_in_frame().width().get(), expected_width);
+}
+
+/// Explicit string cursors must carry their own measured height, not the
+/// window's default row height used while recording the overlay candidate.
+#[test]
+fn hidden_explicit_string_cursor_anchor_uses_selected_glyph_height() {
+    use neovm_core::window::geometry::{PresentationId, VisualAnchor, VisualAnchorQuery};
+    for (source, selected_index) in [
+        ("(propertize \"X\" 'cursor 1 'face '(:height 2.0))", 0),
+        (
+            "(concat \"א\" (propertize \"X\" 'cursor 1 'face '(:height 2.0)) \"ב\")",
+            1,
+        ),
+    ] {
+        let (mut eval, frame, _, window) = incr_editing_frame("a\n", 800, 240);
+        realize_test_gui_frame(&mut eval, frame);
+        eval.buffer_manager_mut()
+            .current_buffer_mut()
+            .unwrap()
+            .set_buffer_local("cursor-type", Value::NIL);
+        eval.eval_str(&format!(
+            "(overlay-put (make-overlay 1 1) 'before-string {source})"
+        ))
+        .unwrap();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
+        crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+        let FrameLayoutAttempt::Prepared(prepared) =
+            engine.redisplay_frame_attempt(&mut eval, frame)
+        else {
+            panic!("explicit overlay")
+        };
+        let row = &prepared
+            .window_matrices
+            .iter()
+            .find(|entry| entry.window_id.get() == window.0 as i64)
+            .unwrap()
+            .matrix
+            .rows[0];
+        let selected = row.glyphs[GlyphArea::Text.index()]
+        .iter()
+        .find(|glyph| {
+            matches!(
+                glyph.provenance,
+                neomacs_display_protocol::glyph_matrix::GlyphProvenance::Str { index, .. } if index == selected_index
+            )
+        })
+        .unwrap();
+        let expected = selected.pixel_height.round();
+        assert!(prepared.materialize().active_cursor().is_none());
+        let snapshot = eval
+            .frame_manager()
+            .get(frame)
+            .unwrap()
+            .redisplay_snapshot(window)
+            .unwrap()
+            .clone();
+        let owner = eval.frame_manager_mut().get_mut(frame).unwrap();
+        let presentation = PresentationId::new(2);
+        owner
+            .prepare_live_window_presentation(presentation, vec![snapshot])
+            .unwrap();
+        owner.activate_display_presentation(presentation).unwrap();
+        let anchor = owner
+            .resolve_active_visual_anchor(VisualAnchorQuery::new(
+                presentation,
+                VisualAnchor::CursorBottom { window },
+            ))
+            .unwrap();
+        assert_eq!(anchor.bounds_in_frame().height().get(), expected);
+    }
+}
+
 /// Moved-point reconstruction must share fresh stretch-width policy, including
 /// preserving narrow stretches and respecting x-stretch-cursor.
 #[test]
@@ -595,6 +731,9 @@ fn stretch_cursor_only_replay_matches_fresh_width_policy() {
             assert_eq!(engine.last_layout_stats().cursor_only_windows, 1);
             assert!(engine.last_layout_stats().reused_rows > 0);
             let actual = replayed.materialize().active_cursor().unwrap().width;
+            if style == "bar" {
+                assert_eq!(actual, 2.0, "stretch={stretch} width={width}");
+            }
             let mut fresh = crate::font::metrics::test_catalog::layout_engine();
             crate::font::metrics::test_catalog::enable_metrics(&mut fresh);
             let FrameLayoutAttempt::Prepared(rebuilt) =

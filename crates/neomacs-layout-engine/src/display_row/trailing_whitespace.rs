@@ -80,6 +80,8 @@ fn has_buffer_position(glyph: &Glyph) -> bool {
 impl DisplayCurrentRowMutation for HighlightTrailingWhitespaceMutation<'_> {
     type Output = ();
 
+    /// Validate the last buffer candidate once, then paint its logical run.
+    /// String-owned glyphs stop the run; only nil-object end markers are skipped.
     fn apply(self, row: &mut GlyphRow) -> Self::Output {
         let glyphs = &mut row.glyphs[GlyphArea::Text.index()];
         // GNU: "Skip over glyphs inserted to display the cursor at the end of

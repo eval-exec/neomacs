@@ -1442,7 +1442,11 @@ pub(crate) struct WindowOutputEmitter {
     eob_overlay_motion: neovm_core::window::EobOverlayMotionCoverage,
     current_automatic_mini_row_end: AutomaticMiniRowEnd,
     previous_automatic_mini_row_end: AutomaticMiniRowEnd,
-    logical_cursor: Option<WindowCursorPos>,
+    // Extent cannot outlive its position within the producer.
+    logical_cursor: Option<(
+        WindowCursorPos,
+        Option<neovm_core::window::LogicalCursorDimensions>,
+    )>,
     phys_cursor: Option<WindowCursorSnapshot>,
     chrome_strings: WindowChromeStringState,
 }
@@ -2088,8 +2092,13 @@ impl WindowOutputEmitter {
         self.geometry.push_chrome_row_progress(progress)
     }
 
-    pub(crate) fn set_logical_cursor(&mut self, cursor: WindowCursorPos) {
-        self.logical_cursor = Some(cursor);
+    /// Publish a position and its selected extent atomically, independently of paint.
+    pub(crate) fn set_logical_cursor(
+        &mut self,
+        cursor: WindowCursorPos,
+        dimensions: Option<neovm_core::window::LogicalCursorDimensions>,
+    ) {
+        self.logical_cursor = Some((cursor, dimensions));
     }
 
     pub(crate) fn set_phys_cursor(&mut self, cursor: WindowCursorSnapshot) {
@@ -2101,6 +2110,8 @@ impl WindowOutputEmitter {
         self.phys_cursor.as_ref()
     }
 
+    /// Freeze row geometry and cursor facts into one snapshot. Logical extent
+    /// travels with its position even when no physical cursor is painted.
     pub(crate) fn finish_snapshot_with_geometry(
         mut self,
         evaluator: &mut Context,
@@ -2112,7 +2123,11 @@ impl WindowOutputEmitter {
     ) -> WindowDisplaySnapshot {
         let frame_id = self.frame_id;
         let window_id = self.window_id;
-        let logical_cursor = self.logical_cursor.take();
+        let (logical_cursor, logical_cursor_dimensions) = self
+            .logical_cursor
+            .take()
+            .map(|(position, dimensions)| (Some(position), dimensions))
+            .unwrap_or_default();
         let phys_cursor = self.phys_cursor.take();
         let mut eob_overlay_motion = self.eob_overlay_motion;
         let prepared_rows = self
@@ -2170,6 +2185,7 @@ impl WindowOutputEmitter {
             tab_line_height,
             chrome_strings,
             logical_cursor,
+            logical_cursor_dimensions,
             phys_cursor: phys_cursor.clone(),
             points: prepared_rows.points,
             point_rows: prepared_rows.point_rows,
