@@ -1450,6 +1450,10 @@ effect_config!(
 
 effect_config!(
     /// Configuration for the scroll bar effect.
+    ///
+    /// `width` is the visible trough/thumb thickness in logical pixels. Zero
+    /// uses half of the allocated scroll-bar band, matching the narrower
+    /// visible scroll bar GTK paints inside the full theme-width allocation.
     ScrollBarConfig {
         width: i32 = 0,
         thumb_radius: f32 = 0.4,
