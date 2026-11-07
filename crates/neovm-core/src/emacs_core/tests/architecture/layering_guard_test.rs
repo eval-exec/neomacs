@@ -292,6 +292,13 @@ enum Upper {
     /// crate's Cargo manifest, not to the layering ratchet; workspace
     /// siblings would be a value -> core/UI edge and are counted.
     Extern(String),
+    /// A named module of a workspace-sibling crate. After the split the
+    /// historical emacs_core modules live in the extracted crates, and upper
+    /// code reaches them either through a crate-qualified import
+    /// (`neovm_value::value::Value`) or through the crate's `emacs_core`
+    /// facade re-export. Naming the module keeps the ratchet's rows
+    /// re-attributable one-to-one instead of collapsing them into the crate.
+    ExternModule { crate_name: String, module: String },
 }
 
 impl Upper {
@@ -304,6 +311,9 @@ impl Upper {
             Self::Ec(sub) => sub.0.clone(),
             Self::Top(root) => format!("top:{}", root.name()),
             Self::Extern(name) => format!("extern:{name}"),
+            Self::ExternModule { crate_name, module } => {
+                format!("extern:{crate_name}::{module}")
+            }
         }
     }
 }
@@ -312,6 +322,19 @@ impl Upper {
 /// current crate itself (`neovm_core`) is not a sibling reference.
 fn is_workspace_sibling(name: &str) -> bool {
     (name.starts_with("neomacs_") || name.starts_with("neovm_")) && name != "neovm_core"
+}
+
+/// Bottom-peer modules that were `emacs_core` submodules before they moved
+/// down (`emacs_core::plist` and the stage-3/4 facade modules). The layering
+/// ratchet measured them under those historical names, so a direct import of
+/// the module from upper code re-attributes its ceiling row instead of
+/// disappearing. `tagged`, `heap_types`, `gc_trace` and `tls_fingerprint`
+/// were top-level modules before the split and were never ceiling rows.
+fn is_historical_ec_bottom_peer(name: &str) -> bool {
+    matches!(
+        name,
+        "plist" | "string_pos_cache" | "heap_registry" | "system_vocab"
+    )
 }
 
 /// A moving-set file is either a bottom-peer top-level module or a G0
@@ -433,10 +456,27 @@ struct ProductionWalker {
     index: ModuleIndex,
     exports: Vec<(Vec<String>, Vec<String>, String)>,
     sites: Sites,
+    /// One physical file under one logical module is scanned once per phase.
+    /// The split wires the same source under several cfg arms
+    /// (`#[cfg(not(feature = "test-support"))] mod x;` beside
+    /// `#[cfg(feature = "test-support")] pub mod x;` with the same `#[path]`),
+    /// and counting both declarations would double every reference in the
+    /// file.
+    visited: BTreeSet<(u8, PathBuf, Vec<String>)>,
 }
 
 impl ProductionWalker {
     fn file(&mut self, path: &Path) {
+        let phase = match self.phase {
+            ScanPhase::Discover => 0,
+            ScanPhase::References => 1,
+        };
+        if !self
+            .visited
+            .insert((phase, path.to_path_buf(), self.logical_path.clone()))
+        {
+            return;
+        }
         let source = std::fs::read_to_string(path)
             .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
         let syntax = syn::parse_file(&source)
@@ -499,18 +539,44 @@ impl ProductionWalker {
             return Classification::NotUpward;
         };
         if !matches!(first.as_str(), "crate" | "super") {
-            // `self::` stays inside the module. A bare path whose first
-            // segment is a workspace-sibling crate is an upper dependency
-            // only when the source moves (the value crate must not depend on
-            // a sibling workspace crate).
-            if moving && is_workspace_sibling(first) {
+            // `self::` stays inside the module.
+            if is_workspace_sibling(first) {
+                if moving {
+                    // A moving-set file reaching a sibling moving crate stays
+                    // inside the extracted set; a non-moving sibling crate
+                    // would be an upward dependency.
+                    if is_moving_crate(first) {
+                        return Classification::NotUpward;
+                    }
+                    return Classification::Upward(Pair {
+                        lower: source_root,
+                        upper: Upper::Extern(first.clone()),
+                    });
+                }
+                // Upper (non-moving) production code depends on a lower
+                // extracted crate: a counted upward edge. Count at the module
+                // segment that historically lived under emacs_core, so a
+                // relocated ceiling row keeps its own name and count; a bare
+                // crate path descends to that segment and a module the
+                // ratchet never tracked stays unmeasured.
                 if is_moving_crate(first) {
+                    let Some(module) = segments.get(1) else {
+                        return Classification::NotUpward;
+                    };
+                    if is_g0_member(module)
+                        || is_historical_ec_bottom_peer(module)
+                        || self.index.ec_modules.contains(module)
+                    {
+                        return Classification::Upward(Pair {
+                            lower: source_root,
+                            upper: Upper::ExternModule {
+                                crate_name: first.clone(),
+                                module: module.clone(),
+                            },
+                        });
+                    }
                     return Classification::NotUpward;
                 }
-                return Classification::Upward(Pair {
-                    lower: source_root,
-                    upper: Upper::Extern(first.clone()),
-                });
             }
             return Classification::NotUpward;
         }
@@ -569,6 +635,13 @@ impl ProductionWalker {
             });
         }
         if moving {
+            // A bottom-peer module's `crate::` reference to a G0 member (the
+            // value crate's `value`, `symbol`, ... roots) stays inside the
+            // moved crate. G0 members are seeded under their historical
+            // `emacs_core` paths, so they never enter `crate_modules`.
+            if is_g0_member(name) {
+                return Classification::NotUpward;
+            }
             if self.index.crate_modules.contains(name) {
                 let root = LowerRoot::parse(name);
                 if is_bottom_peer(root) {
@@ -713,6 +786,14 @@ impl ProductionWalker {
                 lower: LowerRoot::G0,
                 upper: Upper::Extern(first.clone()),
             });
+        }
+        // A G0 member's `crate::` reference to another G0 member or a
+        // bottom-peer module stays inside the moved crate. Only bottom peers
+        // have a historical crate-root spelling in `crate_modules` after the
+        // split, so G0 targets (`crate::symbol`, `crate::alloc`, ...) must be
+        // recognized here before the unknown-module assertion.
+        if is_g0_member(first) || is_bottom_peer_name(first) {
+            return Classification::NotUpward;
         }
         assert!(
             self.index.crate_modules.contains(first),
@@ -1032,6 +1113,7 @@ fn new_walker() -> ProductionWalker {
         index: ModuleIndex::default(),
         exports: Vec::new(),
         sites: BTreeMap::new(),
+        visited: BTreeSet::new(),
     }
 }
 
@@ -1152,7 +1234,17 @@ fn finalize_walker(
             }
             let origin = path.first().expect("facade re-export has an origin");
             let upper = if is_workspace_sibling(origin) {
-                Upper::Extern(origin.clone())
+                // `pub use neovm_value::value;` in a crate's emacs_core
+                // facade carries the moved module's name; keep it so the
+                // ceiling row re-attributes to the same module in its new
+                // crate. A bare crate rebind stays crate-level.
+                match path.last().filter(|_| path.len() > 1) {
+                    Some(module) if is_moving_crate(origin) => Upper::ExternModule {
+                        crate_name: origin.clone(),
+                        module: module.clone(),
+                    },
+                    _ => Upper::Extern(origin.clone()),
+                }
             } else {
                 Upper::Ec(EcSub::validated(origin, &walker.index.ec_modules))
             };
@@ -1221,11 +1313,26 @@ fn parse_ceilings(text: &str, index: &ModuleIndex) -> Ceilings {
             );
             Upper::Top(root)
         } else if let Some(name) = columns[1].strip_prefix("extern:") {
-            assert!(
-                is_workspace_sibling(name),
-                "extern ceiling must name a workspace-sibling crate: {line}"
-            );
-            Upper::Extern(name.to_owned())
+            if let Some((crate_name, module)) = name.split_once("::") {
+                assert!(
+                    is_workspace_sibling(crate_name),
+                    "extern ceiling must name a workspace-sibling crate: {line}"
+                );
+                assert!(
+                    !module.is_empty() && !module.contains(':'),
+                    "extern module ceiling must name one module: {line}"
+                );
+                Upper::ExternModule {
+                    crate_name: crate_name.to_owned(),
+                    module: module.to_owned(),
+                }
+            } else {
+                assert!(
+                    is_workspace_sibling(name),
+                    "extern ceiling must name a workspace-sibling crate: {line}"
+                );
+                Upper::Extern(name.to_owned())
+            }
         } else {
             Upper::Ec(EcSub::validated(columns[1], &index.ec_modules))
         };
@@ -1682,6 +1789,62 @@ fn layering_guard_counts_workspace_sibling_edges() {
         directory.path(),
         &sites,
         &parse_ceilings(&current_table(&sites), &index),
+    );
+}
+
+/// After the split, an upper (non-moving) root reaches a historical
+/// emacs_core module through the extracted crate: either a crate-qualified
+/// import (`neovm_value::value::Value`) or the crate's `emacs_core` facade
+/// re-export. Both must count as the same named module so a ceiling row
+/// re-attributes one-to-one; a moving-set source stays internal.
+#[test]
+fn layering_guard_counts_direct_moving_crate_imports() {
+    let source = r#"
+        mod emacs_core { pub use neovm_value::value; }
+        mod buffer {
+            use neovm_value::value::{Value, eq_value};
+            use crate::emacs_core::value::Value as FacadeValue;
+        }
+        mod tagged { use neovm_value::value::Value; }
+    "#;
+    let directory = fixture(source);
+    let (index, sites) = production_sites(directory.path());
+    let table = current_table(&sites);
+    assert!(
+        table.contains("buffer extern:neovm_value::value 2"),
+        "{table}"
+    );
+    assert!(!table.contains("tagged "), "{table}");
+    let ceilings = parse_ceilings(&table, &index);
+    assert_production_ceilings(directory.path(), &sites, &ceilings);
+    // One more upward reference in the same module turns the pinned ceiling
+    // RED; the restored source is green again.
+    std::fs::write(
+        directory.path().join("lib.rs"),
+        source.replace(
+            "use crate::emacs_core::value::Value as FacadeValue;",
+            "use crate::emacs_core::value::Value as FacadeValue;\n            use neovm_value::value::Extra;",
+        ),
+    )
+    .expect("planted upward reference");
+    let (index, sites) = production_sites(directory.path());
+    let message = panic_message(|| {
+        assert_production_ceilings(
+            directory.path(),
+            &sites,
+            &parse_ceilings(&table, &index),
+        );
+    });
+    assert!(
+        message.contains("exceed the ceiling 2"),
+        "planted ref must overflow the row: {message}"
+    );
+    std::fs::write(directory.path().join("lib.rs"), source).expect("restore");
+    let (index, sites) = production_sites(directory.path());
+    assert_production_ceilings(
+        directory.path(),
+        &sites,
+        &parse_ceilings(&table, &index),
     );
 }
 
