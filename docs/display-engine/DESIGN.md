@@ -289,10 +289,11 @@ region, excluding mode-lines and fringes.
 ```
 Elisp                    Evaluator / protocol              Render thread
 ─────                    ────────────────────              ─────────────
-(neomacs-effect-set      validate named properties        ConfigCommand::
- 'cursor-glow              against VisualConfig             SetVisualConfig(snapshot)
- :enabled t                apply to cloned snapshot              ↓
- :radius 48)               commit atomically              effect/cursor/transition state
+(setopt                  option :set calls                ConfigCommand::
+  neomacs-effect-           neomacs--effect-set            SetVisualConfig(snapshot)
+  cursor-glow            validate named properties             ↓
+  '(:enabled t            against VisualConfig           effect/cursor/transition state
+    :radius 48))         commit atomically
 ```
 
 Each effect keeps its own typed property schema.  Profiles validate completely
