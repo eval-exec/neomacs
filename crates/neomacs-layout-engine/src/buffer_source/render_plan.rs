@@ -49,7 +49,7 @@ use crate::window_output::{
 use neomacs_display_protocol::frame_glyphs::{
     CursorStyle, DisplaySlotId, GlyphRowRole, PhysCursor,
 };
-use neomacs_display_protocol::glyph_matrix::{FaceFillItem, GlyphArea, GlyphType};
+use neomacs_display_protocol::glyph_matrix::{FaceFillItem, GlyphArea, GlyphRow, GlyphType};
 use neomacs_display_protocol::types::{Color, DisplayWindowId, Rect};
 use neovm_core::buffer::BufferId;
 use neovm_core::window::{FrameId, WindowId};
@@ -406,21 +406,44 @@ fn replay_cursor_paint(
     )
 }
 
-/// Re-decorate a window's cursor for the current point on an already-installed
-/// grid row (Phase 2 scroll fast path). Reads the row geometry from the grid,
-/// resolves the visual column, and writes the cursor onto the matrix row + the
-/// window snapshot, then publishes the cursor via the shared role-directed
-/// machinery (see [`publish_fast_path_cursor`]) so an inactive window's cursor
-/// never clobbers the active window's frame phys-cursor. Mirrors the Phase 1
-/// cursor-only branch but sources the row from the grid (the cursor may land in
-/// a reused or a newly-exposed row).
+/// Retained point glyphs keep their measured descent; a real newline is the
+/// synthetic full-row glyph from GNU append_space_for_newline, including spacing.
+fn retained_point_cursor_metrics(
+    row: &GlyphRow,
+    point: usize,
+    buffer_newline: bool,
+    measurement: DisplayRowMeasurementPolicy,
+) -> Option<(f32, f32)> {
+    if buffer_newline && !row.continued && point == row.end_charpos {
+        return Some((row.height_px, row.ascent_px));
+    }
+    if let Some(glyph) = row.glyphs[GlyphArea::Text.index()]
+        .iter()
+        .find(|glyph| row.glyph_covers_buffer_charpos(glyph, point))
+    {
+        if glyph.pixel_height > 0.0 {
+            return Some((glyph.pixel_height, glyph.pixel_ascent));
+        }
+        if measurement.uses_concrete_font_geometry() {
+            // Zero means unmeasured, not a zero-descent point font. Fresh
+            // capture distinguishes active-face and special-glyph fallbacks;
+            // without a measurement replay cannot prove either geometry.
+            return None;
+        }
+    }
+    Some((row.height_without_line_spacing(), row.ascent_px))
+}
+
+/// Publish a role-directed cursor on an installed scroll row. Return false
+/// when retained point metrics cannot prove fresh-layout geometry.
 #[allow(clippy::too_many_arguments)]
-fn decorate_window_cursor(
+fn try_decorate_window_cursor(
     output: &mut TextWindowOutputTarget<'_>,
     output_emitter: &mut WindowOutputEmitter,
     window_id: u64,
     cursor_row: usize,
     point: usize,
+    buffer_newline: bool,
     style: CursorStyle,
     params: &WindowParams,
     text_area_left: f32,
@@ -428,7 +451,8 @@ fn decorate_window_cursor(
     char_w: f32,
     default_height: f32,
     default_ascent: f32,
-) {
+    measurement: DisplayRowMeasurementPolicy,
+) -> bool {
     let (row_pixel_y, row_height, row_ascent, cursor_width) =
         match output.builder().current_window_row(cursor_row) {
             Some(row) => {
@@ -451,12 +475,21 @@ fn decorate_window_cursor(
                         break;
                     }
                 }
-                (
+                let Some((face_height, face_ascent)) =
+                    retained_point_cursor_metrics(row, point, buffer_newline, measurement)
+                else {
+                    return false;
+                };
+                let (y, height, ascent) = crate::display_cursor::resolve_cursor_vertical_metrics(
                     row.pixel_y,
-                    row.height_without_line_spacing(),
+                    face_height,
+                    face_ascent,
+                    row.height_px,
                     row.ascent_px,
-                    width,
-                )
+                    default_height,
+                    row.ends_at_zv,
+                );
+                (y, height, ascent, width)
             }
             None => (0.0, default_height, default_ascent, char_w),
         };
@@ -492,6 +525,7 @@ fn decorate_window_cursor(
         text_area_left,
         window_top,
     );
+    true
 }
 
 impl BufferSourceOutputSetup {
@@ -928,31 +962,24 @@ impl BufferSourceOutputSetup {
                     // starting at 0. The full-rebuild path is unaffected: it
                     // captures the cursor y during emission from `row_geometry`.
                     cursor_row_pixel_y = row.pixel_y.max(prev_row_bottom);
-                    let mut point_face_metrics = None;
                     for glyph in &row.glyphs[GlyphArea::Text.index()] {
                         if row.glyph_covers_buffer_charpos(glyph, replay.new_point as usize) {
                             cursor_width = glyph.pixel_width;
-                            // Use the point face's descent, not the tallest
-                            // neighbouring face's full cell, just as the
-                            // canonical cursor capture path does.
-                            if let Some(face) =
-                                output.output_target().builder().output_face(glyph.face_id)
-                            {
-                                let face_ascent = face.font_ascent as f32;
-                                let face_height = face_ascent + face.font_descent as f32;
-                                if face_height > 0.0 {
-                                    point_face_metrics = Some((face_height, face_ascent));
-                                }
-                            }
                             break;
                         }
                     }
-                    // A newline/hidden position has no covering text glyph,
-                    // but follows the same full-row cursor bounds as fresh
-                    // rendering. Spacing bounds the cursor; it is not added
-                    // unconditionally to the fallback font's height.
-                    let (face_height, face_ascent) = point_face_metrics
-                        .unwrap_or((row.height_without_line_spacing(), row.ascent_px));
+                    let buffer_newline = buf_access
+                        .byte_at(buf_access.charpos_to_bytepos(replay.new_point))
+                        == Some(b'\n');
+                    let Some((face_height, face_ascent)) = retained_point_cursor_metrics(
+                        row,
+                        replay.new_point as usize,
+                        buffer_newline,
+                        default_face.measurement_policy(),
+                    ) else {
+                        output.restore_retry_checkpoint(retry_checkpoint);
+                        return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
+                    };
                     let (y, height, ascent) =
                         crate::display_cursor::resolve_cursor_vertical_metrics(
                             cursor_row_pixel_y,
@@ -1590,12 +1617,14 @@ impl BufferSourceOutputSetup {
             if let Some(cursor_row) = cursor_row
                 && let Some(style) = cursor_style_for_window(params)
             {
-                decorate_window_cursor(
+                if !try_decorate_window_cursor(
                     &mut output,
                     &mut output_emitter,
                     output_window_id,
                     cursor_row,
                     scroll.new_point as usize,
+                    buf_access.byte_at(buf_access.charpos_to_bytepos(scroll.new_point))
+                        == Some(b'\n'),
                     style,
                     params,
                     walk_setup.text_area_left,
@@ -1603,7 +1632,14 @@ impl BufferSourceOutputSetup {
                     geometry.char_width,
                     geometry.char_height,
                     window_metrics.ascent(),
-                );
+                    default_face.measurement_policy(),
+                ) {
+                    crate::window_output::restore_text_window_retry_checkpoint(
+                        output.reborrow(),
+                        retry_checkpoint,
+                    );
+                    return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
+                }
             }
 
             // A replay may not be SEALED without the frame's physical cursor.

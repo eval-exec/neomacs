@@ -48,6 +48,13 @@ fn run_fixture_probe(probe: &str, fixture: &str) {
     )
     .with_program(program)
     .with_env("NEOMACS_COMMIT_PROBE", probe)
+    .with_env(
+        "NEOMACS_LAYOUT_STATS_FILE",
+        artifacts
+            .join("layout-stats.log")
+            .to_string_lossy()
+            .into_owned(),
+    )
     .with_env("RUST_LOG", "warn");
     for (key, value) in session.env() {
         plan = plan.with_env(key, value);
@@ -62,6 +69,58 @@ fn run_fixture_probe(probe: &str, fixture: &str) {
     assert!(!result.timed_out, "{result:#?}\n{stderr}");
     assert_eq!(result.exit_code, Some(0), "{result:#?}\n{stderr}");
     assert!(stderr.contains("COMMIT-EDITING-PASS"), "{stderr}");
+    if probe.ends_with("newline-cursor")
+        && !stderr.contains("CURSOR-REPLAY-REFERENCE-GEOMETRY-ONLY")
+    {
+        let marker = stderr
+            .lines()
+            .find_map(|line| line.strip_prefix("CURSOR-REPLAY-STATS "))
+            .expect("missing replay telemetry interval");
+        let bounds: Vec<usize> = marker
+            .split_whitespace()
+            .map(|value| value.parse().unwrap())
+            .collect();
+        assert_eq!(bounds.len(), 2, "{marker}");
+        let stats = fs::read_to_string(artifacts.join("layout-stats.log")).unwrap();
+        let interval = stats
+            .get(bounds[0]..bounds[1])
+            .expect("invalid replay telemetry interval");
+        assert!(
+            cursor_replay_reused_rows(interval),
+            "point move did not reuse rows through cursor-only replay: {interval}"
+        );
+    }
+}
+
+/// Require the marked redisplay to reuse body rows rather than rebuilding them.
+fn cursor_replay_reused_rows(stats: &str) -> bool {
+    stats.lines().any(|line| {
+        let counter = |name: &str| {
+            line.split_whitespace().find_map(|entry| {
+                entry
+                    .strip_prefix(name)
+                    .and_then(|value| value.parse::<usize>().ok())
+            })
+        };
+        counter("cursor_only=").is_some_and(|value| value > 0)
+            && counter("reused=").is_some_and(|value| value > 0)
+            && counter("relaid_body=") == Some(0)
+    })
+}
+
+#[test]
+fn replay_telemetry_rejects_full_layout_and_missing_reuse() {
+    assert!(cursor_replay_reused_rows(
+        "cursor_only=1 reused=3 relaid_body=0"
+    ));
+    for stats in [
+        "",
+        "full=1 reused=3 relaid_body=0",
+        "cursor_only=1 reused=0 relaid_body=0",
+        "cursor_only=1 reused=3 relaid_body=1",
+    ] {
+        assert!(!cursor_replay_reused_rows(stats), "{stats}");
+    }
 }
 
 /// Backend aliases and platform defaults must not require a live compositor.
@@ -123,6 +182,18 @@ fn tall_overlay_newline_grows_the_empty_row() {
 #[test]
 fn short_newline_cursor_replay_uses_full_row_bounds() {
     run_fixture_probe("short-newline-cursor", "newline-geometry.el");
+}
+
+#[test]
+fn mixed_newline_cursor_matches_gnu_row_geometry() {
+    for probe in [
+        "mixed-newline-cursor",
+        "mixed-small-newline-cursor",
+        "mixed-spaced-newline-cursor",
+        "mixed-spaced-small-newline-cursor",
+    ] {
+        run_fixture_probe(probe, "newline-geometry.el");
+    }
 }
 
 #[test]

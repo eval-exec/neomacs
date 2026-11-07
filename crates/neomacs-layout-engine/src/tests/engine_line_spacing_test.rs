@@ -364,6 +364,167 @@ fn newline_cursor_replay_preserves_font_and_spacing_metrics() {
     }
 }
 
+/// Mixed-height rows must not change cursor geometry when only point moves.
+#[test]
+fn mixed_height_newline_cursor_replay_matches_fresh_capture() {
+    for spacing in [0, 5] {
+        for newline_height in ["0.1", "1.0"] {
+            let (mut eval, frame, buffer, _) = incr_editing_frame("AAAx\nnext\n", 800, 240);
+            realize_test_gui_frame(&mut eval, frame);
+            eval.eval_str(&format!("(progn (put-text-property 1 4 'face '(:height 2.0)) (put-text-property 5 6 'face '(:height {newline_height})))")).unwrap();
+            eval.buffer_manager_mut()
+                .get_mut(buffer)
+                .unwrap()
+                .set_buffer_local("line-spacing", Value::fixnum(spacing));
+            let mut engine = crate::font::metrics::test_catalog::layout_engine();
+            crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+            assert!(matches!(
+                engine.redisplay_frame_attempt(&mut eval, frame),
+                FrameLayoutAttempt::Prepared(_)
+            ));
+            for point in [4, 5, 1, 5] {
+                eval.eval_str(&format!("(set-window-point (selected-window) {point})"))
+                    .unwrap();
+                let FrameLayoutAttempt::Prepared(replay) =
+                    engine.redisplay_frame_attempt(&mut eval, frame)
+                else {
+                    panic!("cursor replay should prepare")
+                };
+                assert_eq!(engine.last_layout_stats().cursor_only_windows, 1);
+                assert!(engine.last_layout_stats().reused_rows > 0);
+                let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+                crate::font::metrics::test_catalog::enable_metrics(&mut fresh);
+                let FrameLayoutAttempt::Prepared(rebuilt) =
+                    fresh.redisplay_frame_attempt(&mut eval, frame)
+                else {
+                    panic!("fresh frame should prepare")
+                };
+                let replay = replay.materialize();
+                let rebuilt = rebuilt.materialize();
+                let actual = replay.active_cursor().unwrap();
+                let expected = rebuilt.active_cursor().unwrap();
+                assert_eq!(
+                    (actual.y, actual.height, actual.ascent),
+                    (expected.y, expected.height, expected.ascent),
+                    "spacing={spacing}, newline={newline_height}, point={point}"
+                );
+            }
+        }
+    }
+}
+
+/// A scroll retaining point's row must use its point glyph, not the whole row.
+#[test]
+fn mixed_height_scroll_cursor_matches_fresh_capture() {
+    for spacing in [0, 5] {
+        for point_offset in [4, 5] {
+            let text = "AAAx\n".repeat(80);
+            let point = 11 * 5 + point_offset;
+            let (mut eval, frame, buffer, window) = incr_editing_frame(&text, 800, 600);
+            realize_test_gui_frame(&mut eval, frame);
+            eval.eval_str("(put-text-property 56 59 'face '(:height 2.0))")
+                .unwrap();
+            eval.buffer_manager_mut()
+                .get_mut(buffer)
+                .unwrap()
+                .set_buffer_local("line-spacing", Value::fixnum(spacing));
+            let mut engine = crate::font::metrics::test_catalog::layout_engine();
+            crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+            scroll_window_to(&mut eval, frame, window, buffer, 1, point - 1);
+            assert!(matches!(
+                engine.redisplay_frame_attempt(&mut eval, frame),
+                FrameLayoutAttempt::Prepared(_)
+            ));
+            scroll_window_to(&mut eval, frame, window, buffer, 21, point - 1);
+            let FrameLayoutAttempt::Prepared(replay) =
+                engine.redisplay_frame_attempt(&mut eval, frame)
+            else {
+                panic!("scroll should prepare")
+            };
+            assert_eq!(engine.last_layout_stats().scroll_windows, 1);
+            assert!(engine.last_layout_stats().reused_rows > 0);
+            let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+            crate::font::metrics::test_catalog::enable_metrics(&mut fresh);
+            let FrameLayoutAttempt::Prepared(rebuilt) =
+                fresh.redisplay_frame_attempt(&mut eval, frame)
+            else {
+                panic!("fresh frame should prepare")
+            };
+            let replay = replay.materialize();
+            let rebuilt = rebuilt.materialize();
+            let actual = replay.active_cursor().unwrap();
+            let expected = rebuilt.active_cursor().unwrap();
+            assert_eq!(
+                (actual.y, actual.height, actual.ascent),
+                (expected.y, expected.height, expected.ascent),
+                "spacing={spacing}, point offset={point_offset}"
+            );
+        }
+    }
+}
+
+/// An unmeasured point glyph must decline replay rather than invent its descent.
+#[test]
+fn unmeasured_point_glyphs_decline_cursor_replay() {
+    for stretch in [false, true] {
+        for scroll in [false, true] {
+            let (mut eval, frame, buffer, window) =
+                incr_editing_frame(&"AAAx\n".repeat(80), 800, 600);
+            realize_test_gui_frame(&mut eval, frame);
+            eval.eval_str("(put-text-property 56 59 'face '(:height 2.0))")
+                .unwrap();
+            if stretch {
+                eval.eval_str(
+                    "(put-text-property 56 57 'display '(space :width 1 :height (40) :ascent 75))",
+                )
+                .unwrap();
+            }
+            let mut engine = crate::LayoutEngine::new_without_font_metrics();
+            scroll_window_to(
+                &mut eval,
+                frame,
+                window,
+                buffer,
+                1,
+                if scroll { 58 } else { 0 },
+            );
+            assert!(matches!(
+                engine.redisplay_frame_attempt(&mut eval, frame),
+                FrameLayoutAttempt::Prepared(_)
+            ));
+            if scroll {
+                scroll_window_to(&mut eval, frame, window, buffer, 21, 58);
+            } else {
+                eval.eval_str("(set-window-point (selected-window) 59)")
+                    .unwrap();
+            }
+            let FrameLayoutAttempt::Prepared(replayed) =
+                engine.redisplay_frame_attempt(&mut eval, frame)
+            else {
+                panic!("replay should prepare")
+            };
+            assert_eq!(engine.last_layout_stats().full_windows, 1);
+            assert_eq!(engine.last_layout_stats().scroll_windows, 0);
+            assert_eq!(engine.last_layout_stats().cursor_only_windows, 0);
+            let mut fresh = crate::LayoutEngine::new_without_font_metrics();
+            let FrameLayoutAttempt::Prepared(rebuilt) =
+                fresh.redisplay_frame_attempt(&mut eval, frame)
+            else {
+                panic!("fresh frame should prepare")
+            };
+            let replayed = replayed.materialize();
+            let rebuilt = rebuilt.materialize();
+            let actual = replayed.active_cursor().unwrap();
+            let expected = rebuilt.active_cursor().unwrap();
+            assert_eq!(
+                (actual.y, actual.height, actual.ascent),
+                (expected.y, expected.height, expected.ascent),
+                "scroll={scroll}, stretch={stretch}"
+            );
+        }
+    }
+}
+
 #[test]
 fn text_cursor_keeps_its_metrics_when_line_spacing_enlarges_the_row() {
     let (mut eval, frame, buffer, _window) = incr_editing_frame("alpha\nbeta\n", 800, 240);

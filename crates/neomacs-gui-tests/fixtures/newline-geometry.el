@@ -12,6 +12,17 @@
   "Return the redisplayed buffer POSITION's vertical pixel coordinate."
   (cdr (posn-x-y (posn-at-point position))))
 
+(defun neo-newline-probe-stats-size ()
+  "Return the layout telemetry size in Neomacs, or nil for the GNU reference."
+  (when (fboundp 'neomacs--frame-snapshot)
+    (let* ((path (getenv "NEOMACS_LAYOUT_STATS_FILE"))
+           (attributes (and path (file-attributes path))))
+      (unless attributes (error "Missing layout telemetry: %S" path))
+      (file-attribute-size attributes))))
+
+(defvar neo-newline-probe-cold-cursor nil
+  "Physical cursor captured by the first mixed-height full layout.")
+
 (defun neo-newline-probe-finish ()
   "Check physical row or cursor geometry after the queued redisplay."
   (condition-case err
@@ -36,6 +47,14 @@
                   (expected (* normal 1.5)))
               (unless (<= (abs (- height expected)) 1)
                 (error "Shifted text lost an opposite extent: %S/%S" height expected))))
+           ((string-prefix-p "mixed-" probe)
+            (let ((height (- (neo-newline-probe-y 5) (neo-newline-probe-y 1)))
+                  (cursor (window-cursor-info)))
+              (unless (and (> height 0) (= (aref cursor 4) height)
+                           (= (aref neo-newline-probe-cold-cursor 4) height)
+                           (= (aref cursor 5) (aref neo-newline-probe-cold-cursor 5)))
+                (error "Mixed newline cursor must fill the row, cold and replayed: %S/%S/%S"
+                       neo-newline-probe-cold-cursor cursor height))))
            ((equal probe "short-newline-cursor")
             (let ((row-height (- body-y (neo-newline-probe-y 5)))
                   (cursor-height (aref (window-cursor-info) 4)))
@@ -65,16 +84,32 @@
   ("short-newline-cursor"
    (put-text-property 5 6 'face '(:height 0.1))
    (setq-local line-spacing 5)))
-(goto-char 1)
+(when (string-prefix-p "mixed-" (getenv "NEOMACS_COMMIT_PROBE"))
+  (put-text-property 1 4 'face '(:height 2.0))
+  (put-text-property 4 5 'face
+                     (list :height (if (string-match-p "small" (getenv "NEOMACS_COMMIT_PROBE")) 0.1 1.0)))
+  (setq-local line-spacing (if (string-match-p "spaced" (getenv "NEOMACS_COMMIT_PROBE")) 5 0)))
+(goto-char (if (string-prefix-p "mixed-" (getenv "NEOMACS_COMMIT_PROBE")) 4 1))
 (run-at-time
  0.5 nil
  (lambda ()
    (condition-case err
        (progn
          (redisplay t)
-         (when (equal (getenv "NEOMACS_COMMIT_PROBE") "short-newline-cursor")
-           ;; Retain rows first, then move only point onto the short newline.
-           (goto-char 5)
-           (redisplay t))
+         (when (string-suffix-p "newline-cursor" (getenv "NEOMACS_COMMIT_PROBE"))
+           (when (string-prefix-p "mixed-" (getenv "NEOMACS_COMMIT_PROBE"))
+             (setq neo-newline-probe-cold-cursor (window-cursor-info))
+             (goto-char 1)
+             (redisplay t))
+           ;; Retain rows first, then move only point onto the newline.
+           (let ((before (neo-newline-probe-stats-size)))
+             (goto-char (if neo-newline-probe-cold-cursor 4 5))
+             (redisplay t)
+             (if before
+                 (princ (format "CURSOR-REPLAY-STATS %d %d\n"
+                                before (neo-newline-probe-stats-size))
+                        'external-debugging-output)
+               (princ "CURSOR-REPLAY-REFERENCE-GEOMETRY-ONLY\n"
+                      'external-debugging-output))))
          (run-at-time 0.5 nil #'neo-newline-probe-finish))
      (error (neo-newline-probe-fail err)))))

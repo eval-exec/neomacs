@@ -689,6 +689,7 @@ fn face_scan_checkpoint_tracks_resolution_boundaries_and_invalidation() {
 
 fn cursor_info_at(x: f32, display_row_offset: usize) -> CapturedCursorInfo {
     CapturedCursorInfo {
+        vertical_source: crate::display_cursor::CursorVerticalSource::PointGlyph,
         x,
         y: display_row_offset as f32 * 14.0,
         face_w: 7.0,

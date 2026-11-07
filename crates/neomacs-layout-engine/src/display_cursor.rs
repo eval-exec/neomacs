@@ -80,8 +80,19 @@ impl ResolvedBoxCursorPaint {
     }
 }
 
+/// GNU's synthetic newline glyph uses finalized row extents, not its face alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CursorVerticalSource {
+    PointGlyph,
+    /// Prefer the finalized point glyph (including fallback fonts); retain the
+    /// active face only when no measured glyph represents the capture.
+    ActiveFace,
+    SyntheticNewline,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CapturedCursorInfo {
+    pub(crate) vertical_source: CursorVerticalSource,
     pub(crate) x: f32,
     pub(crate) y: f32,
     pub(crate) face_w: f32,
@@ -851,6 +862,7 @@ impl CapturedCursorInfo {
         Self {
             x: placement.x,
             y: placement.y,
+            vertical_source: CursorVerticalSource::PointGlyph,
             face_w: visual_state.face_width,
             face_h: visual_state.face_height,
             face_ascent: visual_state.face_ascent,
@@ -870,10 +882,13 @@ impl CapturedCursorInfo {
         active_face_state: &DisplayRowActiveFaceState,
         placement: CapturedCursorPlacement,
     ) -> Self {
-        Self::from_visual_state(
-            CapturedCursorVisualState::from_active_face_state(active_face_state),
-            placement,
-        )
+        Self {
+            vertical_source: CursorVerticalSource::ActiveFace,
+            ..Self::from_visual_state(
+                CapturedCursorVisualState::from_active_face_state(active_face_state),
+                placement,
+            )
+        }
     }
 
     pub(crate) fn display_box_from_active_face_state(
@@ -967,8 +982,18 @@ impl CursorGeometrySource {
             x: cursor.x,
             y: cursor.y,
             slot_width: context.slot_width.max(1.0),
-            face_height: cursor.face_h,
-            face_ascent: cursor.face_ascent,
+            face_height: match cursor.vertical_source {
+                CursorVerticalSource::PointGlyph | CursorVerticalSource::ActiveFace => {
+                    cursor.face_h
+                }
+                CursorVerticalSource::SyntheticNewline => row_metric.height(),
+            },
+            face_ascent: match cursor.vertical_source {
+                CursorVerticalSource::PointGlyph | CursorVerticalSource::ActiveFace => {
+                    cursor.face_ascent
+                }
+                CursorVerticalSource::SyntheticNewline => row_metric.ascent(),
+            },
             row_height: row_metric.height(),
             row_ascent: row_metric.ascent(),
             default_line_height: context.default_line_height,
@@ -1417,10 +1442,10 @@ impl<'a> CapturedTextWindowCursorPublishContext<'a> {
 
     pub(crate) fn publish_captured_cursor(
         self,
-        cursor: CapturedCursorInfo,
+        mut cursor: CapturedCursorInfo,
         row_metrics: &[RowMetricsSnapshot],
         fallback_row_metric: RowMetricsSnapshot,
-        output: TextWindowOutputTarget<'_>,
+        mut output: TextWindowOutputTarget<'_>,
         output_emitter: &mut WindowOutputEmitter,
     ) -> CapturedTextWindowCursorPublishOutcome {
         let row_metric = row_metrics_for_cursor(
@@ -1428,6 +1453,23 @@ impl<'a> CapturedTextWindowCursorPublishContext<'a> {
             self.display_text_row_base + cursor.display_row_offset,
             fallback_row_metric,
         );
+
+        // GNU uses the point glyph's actual descent, including a fallback
+        // font's metrics, rather than the primary face captured before shaping.
+        // Explicit image/stretch captures and synthetic newlines keep their
+        // own contracts; unmeasured glyphs retain the fresh active-face fallback.
+        if cursor.vertical_source == CursorVerticalSource::ActiveFace {
+            if let Some(row) = output.builder().current_window_row(row_metric.row()) {
+                if let Some(glyph) = row.glyphs[GlyphArea::Text.index()].iter().find(|glyph| {
+                    glyph.pixel_height > 0.0
+                        && row
+                            .glyph_covers_buffer_charpos(glyph, self.point_charpos.max(0) as usize)
+                }) {
+                    cursor.face_h = glyph.pixel_height;
+                    cursor.face_ascent = glyph.pixel_ascent;
+                }
+            }
+        }
 
         // For a cursor at a `display`-property replacement slot, derive its
         // integer grid x from the already-rounded display point of the glyph
