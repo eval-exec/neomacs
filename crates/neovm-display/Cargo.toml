@@ -55,7 +55,7 @@ visibility = { version = "0.1.1", optional = true }
 # Downward-only: shared value test helpers for this crate's own unit tests
 # (dependency crates never have cfg(test), so the provider feature is enabled
 # only by this dev edge, exactly like neovm-eval).
-neovm-value = { path = "../neovm-value", default-features = false, features = ["test-support"] }
+neovm-value = { path = "../neovm-value", default-features = false, features = ["test-support", "test-thread-fallback-heap"] }
 # Consumer gate: value's test-support widens CacheRootScan::Snapshot, so the
 # text regex arm that matches it must be compiled in the same test graph.
 neovm-text = { path = "../neovm-text", default-features = false, features = ["test-support"] }

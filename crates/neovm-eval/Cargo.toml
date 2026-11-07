@@ -112,7 +112,7 @@ inotify.workspace = true
 
 [dev-dependencies]
 # Downward-only: shared value test helpers for this crate's own unit tests.
-neovm-value = { path = "../neovm-value", default-features = false, features = ["test-support"] }
+neovm-value = { path = "../neovm-value", default-features = false, features = ["test-support", "test-thread-fallback-heap"] }
 # value's test-support exposes CacheRootScan::Snapshot, so text must compile
 # its matching arm in the same test build (A1 consumer gate, downward only).
 neovm-text = { path = "../neovm-text", default-features = false, features = ["test-support"] }

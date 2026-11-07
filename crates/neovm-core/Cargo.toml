@@ -200,7 +200,7 @@ contract-fixtures = ["neovm-eval/contract-fixtures"]
 # Peer ruling A2 + TEST-SUPPORT-DESIGN rev 2: a provider's test surface is
 # enabled only by a dev edge from a crate above it, never for normal builds.
 # Each edge below enables one lower provider's surface for core's test units.
-neovm-value = { workspace = true, features = ["test-support"] }
+neovm-value = { workspace = true, features = ["test-support", "test-thread-fallback-heap"] }
 # The moved re-homes need text's feature-gated CacheRootScan match to compile
 # in the core-test graph (TEST-SUPPORT-DESIGN rev 2 consumer gate).
 neovm-text = { path = "../neovm-text", default-features = false, features = ["test-support"] }

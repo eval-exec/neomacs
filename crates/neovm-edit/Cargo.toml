@@ -36,7 +36,7 @@ tracing.workspace = true
 visibility = { version = "0.1.1", optional = true }
 
 [dev-dependencies]
-neovm-value = { path = "../neovm-value", default-features = false, features = ["test-support"] }
+neovm-value = { path = "../neovm-value", default-features = false, features = ["test-support", "test-thread-fallback-heap"] }
 proptest.workspace = true
 
 [lints.rust]

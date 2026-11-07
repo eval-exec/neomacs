@@ -80,7 +80,7 @@ pkg-config.workspace = true
 [dev-dependencies]
 # Downward test-only edge: the crate's own tests use the value-level helpers
 # through src/test_utils.rs.  Not a product dependency.
-neovm-value = { path = "../neovm-value", default-features = false, features = ["test-support"] }
+neovm-value = { path = "../neovm-value", default-features = false, features = ["test-support", "test-thread-fallback-heap"] }
 # The re-homed process/wait tests name eval's test-support surface (wait gates,
 # process-state metadata).  Downward, test-only.
 neovm-eval = { path = "../neovm-eval", default-features = false, features = ["test-support"] }

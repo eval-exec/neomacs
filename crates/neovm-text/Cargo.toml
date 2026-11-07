@@ -47,7 +47,7 @@ visibility = { version = "0.1.1", optional = true }
 [dev-dependencies]
 # Enables the value provider's test-support surface for text's own test build
 # (downward only; never a product feature).
-neovm-value = { path = "../neovm-value", default-features = false, features = ["test-support"] }
+neovm-value = { path = "../neovm-value", default-features = false, features = ["test-support", "test-thread-fallback-heap"] }
 neovm-edit = { path = "../neovm-edit", default-features = false, features = ["test-support"] }
 
 [lints.rust]
