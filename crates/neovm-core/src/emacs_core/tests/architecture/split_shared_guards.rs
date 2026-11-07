@@ -2050,7 +2050,8 @@ impl<'ast> Visit<'ast> for Pc1References<'_> {
         // fenced method (a local named `identity`, a plain function call) is
         // not a call of the fenced method. Flag only a qualified path whose
         // OWNER segment is the row's type, e.g. `TaggedValue::from_fixnum` or
-        // `crate::tagged::value::TaggedHeap::identity`. Receiver types in
+        // `crate::tagged::value::TaggedHeap::tagged_heap_identity`. Receiver
+        // types in
         // method-call syntax cannot be inferred, so those stay ambiguous and
         // fail closed in `visit_expr_method_call` below.
         let segments: Vec<String> = path
@@ -3965,6 +3966,98 @@ fn architecture_pc2_guard_self_test() {
     assert!(
         scan_pc2_table(root, test_table).unwrap().is_empty(),
         "PC2_RESTORED_TEST_ONLY_PRODUCT_REF"
+    );
+}
+
+/// Two PC2 precision relaxations are pinned here. First, a module declared by
+/// several cfg arms is production when ANY arm is production: treating it as
+/// test-only (the old any-arm-wins classification) would hide installer calls
+/// that escape from that module. Second, an undeclared nested file under a
+/// crate's `tests/`/`benches/`/`examples/` tree is exempt from the
+/// unknown-module error because cargo does not compile it unless a target
+/// names it; the same undeclared file under `src/` must stay an error.
+#[test]
+fn architecture_pc2_cfg_split_and_crate_test_tree_relaxations() {
+    let dir = tempfile::tempdir().expect("SPLIT_CFG_TREE fixture");
+    let root = dir.path();
+    guard_fixture_workspace(root, &["neovm-core", "neovm-value"]);
+    let core = root.join("crates/neovm-core/src");
+    std::fs::create_dir_all(&core).expect("SPLIT_CFG_TREE src");
+    std::fs::write(
+        core.join("lib.rs"),
+        "#[cfg(feature = \"test-support\")]\nmod feature_hook;\nmod feature_hook;\nmod low;\nmod seam;\nmod external;\n",
+    )
+    .expect("SPLIT_CFG_TREE lib");
+    std::fs::write(
+        core.join("low.rs"),
+        "use std::sync::OnceLock;\nstatic HOOK: OnceLock<fn()> = OnceLock::new();\npub fn install_hook(f: fn()) { let _ = HOOK.set(f); }\n",
+    )
+    .expect("SPLIT_CFG_TREE low");
+    std::fs::write(
+        core.join("feature_hook.rs"),
+        "pub fn install() { crate::low::install_hook(|| {}); }\n",
+    )
+    .expect("SPLIT_CFG_TREE feature_hook");
+    std::fs::write(
+        core.join("seam.rs"),
+        "pub struct Context;\nimpl Context { pub fn new_inner() { crate::feature_hook::install(); } pub fn from_dump() { crate::feature_hook::install(); } }\n",
+    )
+    .expect("SPLIT_CFG_TREE seam");
+    std::fs::write(core.join("external.rs"), "fn unrelated() {}\n")
+        .expect("SPLIT_CFG_TREE external");
+    let table = "kind\tstatic\tinstaller\tadapter\tseams\nproduction\tneovm_core::low::HOOK\tneovm_core::low::install_hook\tcrates/neovm-core/src/feature_hook.rs:install\tcrates/neovm-core/src/seam.rs:Context::new_inner;crates/neovm-core/src/seam.rs:Context::from_dump\n";
+    let green = scan_pc2_table(root, table).expect("SPLIT_CFG_TREE scan");
+    assert!(green.is_empty(), "SPLIT_CFG_TREE baseline: {green:?}");
+    // One cfg arm is unconditional, so the module is production. A second
+    // installer caller inside it is an escape and must be seen.
+    std::fs::write(
+        core.join("feature_hook.rs"),
+        "pub fn install() { crate::low::install_hook(|| {}); }\npub fn escape() { crate::low::install_hook(|| {}); }\n",
+    )
+    .expect("SPLIT_CFG_TREE mutation");
+    let red = scan_pc2_table(root, table).expect("SPLIT_CFG_TREE mutation scan");
+    assert!(
+        red.iter().any(|error| error.contains("feature_hook.rs")),
+        "SPLIT_CFG_TREE_ESCAPE must go red: {red:?}"
+    );
+    std::fs::write(
+        core.join("feature_hook.rs"),
+        "pub fn install() { crate::low::install_hook(|| {}); }\n",
+    )
+    .expect("SPLIT_CFG_TREE restore");
+    assert!(
+        scan_pc2_table(root, table)
+            .expect("SPLIT_CFG_TREE restored")
+            .is_empty(),
+        "SPLIT_CFG_TREE_RESTORED"
+    );
+    let tests_helper = root.join("crates/neovm-core/tests/sub/helper.rs");
+    std::fs::create_dir_all(tests_helper.parent().expect("tests parent"))
+        .expect("SPLIT_CFG_TREE tests dir");
+    std::fs::write(
+        &tests_helper,
+        "fn helper() { crate::low::install_hook(|| {}); }\n",
+    )
+    .expect("SPLIT_CFG_TREE tests helper");
+    assert!(
+        scan_pc2_table(root, table)
+            .expect("SPLIT_CFG_TREE tests scan")
+            .is_empty(),
+        "SPLIT_CFG_TREE_TESTS_EXEMPT"
+    );
+    let src_unknown = core.join("sub/external.rs");
+    std::fs::create_dir_all(src_unknown.parent().expect("src parent"))
+        .expect("SPLIT_CFG_TREE src subdir");
+    std::fs::write(
+        &src_unknown,
+        "fn helper() { crate::low::install_hook(|| {}); }\n",
+    )
+    .expect("SPLIT_CFG_TREE src unknown");
+    let red = scan_pc2_table(root, table).expect("SPLIT_CFG_TREE src scan");
+    assert!(
+        red.iter()
+            .any(|error| error.contains("PC2_UNRESOLVED_REFERENCE")),
+        "SPLIT_CFG_TREE_SRC_UNKNOWN must go red: {red:?}"
     );
 }
 
