@@ -10329,10 +10329,17 @@ fn network_interface_broadcast_derivation_helpers() {
 #[test]
 fn network_interface_info_loopback_matches_gnu_linux_ioctl_metadata() {
     crate::test_utils::init_test_tracing();
+    // The full Lisp printer runs through the runtime's lifecycle hooks; the
+    // canonical test Context installs them (the builtin itself needs none).
+    let _ctx = crate::emacs_core::eval_hook_installers::new_context();
     let info = builtin_network_interface_info_impl(vec![Value::string("lo")]).unwrap();
 
+    // GNU 31.1 oracle: `emacs -Q --batch --eval "(princ (format \"%S\"
+    // (network-interface-info \"lo\")))"` prints exactly the expected
+    // string.  The full Lisp printer is required here: Value's Display is a
+    // re-home placeholder that prints "<Value>" for a list.
     assert_eq!(
-        format!("{info}"),
+        crate::emacs_core::print::print_value(&info),
         "([127 0 0 1 0] [0 0 0 0 0] [255 0 0 0 0] (772 . [0 0 0 0 0 0]) (running loopback up))"
     );
 }
