@@ -116,7 +116,8 @@ thread_local! {
 /// The L2 mode, read once from `NEOVM_SYNTAX_PARSE_CACHE_L2`.
 #[inline]
 pub(crate) fn canon_mode() -> CanonMode {
-    #[cfg(test)]
+    // See parse_cache::parse_cache_mode: the override is test-support-visible.
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(mode) = CANON_MODE_OVERRIDE.with(Cell::get) {
         return mode;
     }

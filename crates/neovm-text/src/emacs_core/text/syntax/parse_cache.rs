@@ -135,7 +135,9 @@ thread_local! {
 /// The cache mode, read once from `NEOVM_SYNTAX_PARSE_CACHE`.
 #[inline]
 pub(crate) fn parse_cache_mode() -> ParseCacheMode {
-    #[cfg(test)]
+    // Same rule as the override's own gate: moved text tests set it through
+    // the test-support surface, so the read must exist there too.
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(mode) = MODE_OVERRIDE.with(std::cell::Cell::get) {
         return mode;
     }
@@ -373,7 +375,8 @@ thread_local! {
 /// Characters between recorded loop-top states
 /// (`NEOVM_SYNTAX_PARSE_CACHE_CHUNK`, default 2048, at least 16).
 fn chunk_chars() -> usize {
-    #[cfg(test)]
+    // See parse_cache_mode: the override is test-support-visible.
+    #[cfg(any(test, feature = "test-support"))]
     if let Some((chunk, _)) = GEOMETRY_OVERRIDE.with(std::cell::Cell::get) {
         return chunk;
     }
@@ -383,7 +386,8 @@ fn chunk_chars() -> usize {
 /// The shortest scan that starts a run (`NEOVM_SYNTAX_PARSE_CACHE_MIN_SPAN`,
 /// default 128): a shorter one costs less than recording it.
 fn min_span_chars() -> usize {
-    #[cfg(test)]
+    // See parse_cache_mode: the override is test-support-visible.
+    #[cfg(any(test, feature = "test-support"))]
     if let Some((_, span)) = GEOMETRY_OVERRIDE.with(std::cell::Cell::get) {
         return span;
     }

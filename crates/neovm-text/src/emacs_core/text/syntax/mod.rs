@@ -3651,7 +3651,9 @@ impl<'a> SyntaxPropByteRun<'a> {
         byte_pos: EmacsBytePos,
         resolver: CharPropertyResolver<'_>,
     ) -> Option<Value> {
-        #[cfg(test)]
+        // The re-homed byte-run test asserts this counter, so it must move
+        // in the test-support build too.
+        #[cfg(any(test, feature = "test-support"))]
         SYNTAX_BYTE_RUN_REFILLS.with(|c| c.set(c.get() + 1));
         // Byte-run memo: a hit answers with zero conversions and no interval
         // lookup. Only sound when the resolver's coalescing preconditions
@@ -5931,7 +5933,8 @@ fn back_comment_safe_key(
     props: SyntaxProperties<'_>,
     escape_policy: CommentEndEscapePolicy,
 ) -> Option<neovm_edit::buffer::buffer_text::SyntaxSafeKey> {
-    #[cfg(test)]
+    // See parse_cache::parse_cache_mode: the bypass is a test-support switch.
+    #[cfg(any(test, feature = "test-support"))]
     if BACK_COMMENT_SAFE_BYPASS.with(|b| b.get()) {
         return None;
     }
@@ -5963,7 +5966,9 @@ fn back_comment_safe_key(
 
 /// Characters between recorded safe positions.
 fn back_comment_safe_chunk() -> usize {
-    #[cfg(test)]
+    // The override is test-support-visible; the re-homed safe-position tests
+    // set it, so the read must exist there too.
+    #[cfg(any(test, feature = "test-support"))]
     {
         let over = BACK_COMMENT_SAFE_CHUNK_OVERRIDE.with(|c| c.get());
         if over != 0 {
@@ -6039,7 +6044,8 @@ fn back_comment_reparse(
         match back_comment_safe_key(buf, &table, props, escape_policy) {
             Some(key) => {
                 let mut index = buf.take_syntax_safe_positions();
-                #[cfg(test)]
+                // The re-homed back-comment tests assert this counter.
+                #[cfg(any(test, feature = "test-support"))]
                 BACK_COMMENT_SAFE_REPARSES.with(|c| c.set(c.get() + 1));
                 if index.key() != Some(key) {
                     index.points_mut().clear();
@@ -6084,7 +6090,8 @@ fn back_comment_reparse(
                     unreachable!("the safe-position recorder never pauses")
                 };
                 buf.put_syntax_safe_positions(index);
-                #[cfg(test)]
+                // The re-homed back-comment tests assert this counter.
+                #[cfg(any(test, feature = "test-support"))]
                 BACK_COMMENT_SAFE_STARTS
                     .with(|c| c.set(c.get() + usize::from(start0 > begv.get())));
                 #[cfg(debug_assertions)]

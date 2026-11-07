@@ -55,7 +55,8 @@ thread_local! {
 /// (`NEOVM_PPS_PROPERTIZE`, default on; `0`/`off`/`no`/`false` disables it).
 #[inline]
 pub(crate) fn pps_propertize_on() -> bool {
-    #[cfg(test)]
+    // See parse_cache::parse_cache_mode: the override is test-support-visible.
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(on) = PPS_PROPERTIZE_OVERRIDE.with(Cell::get) {
         return on;
     }
