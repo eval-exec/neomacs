@@ -5,6 +5,14 @@
   (princ (format "COMMIT-EDITING-FAIL %S\n" err) 'external-debugging-output)
   (kill-emacs 1))
 
+(defun neo-rtl-stats-size ()
+  "Require Neomacs telemetry, returning nil only for the GNU reference."
+  (when (fboundp 'neomacs--frame-snapshot)
+    (let* ((path (getenv "NEOMACS_LAYOUT_STATS_FILE"))
+           (attributes (and path (file-attributes path))))
+      (unless attributes (error "Missing layout telemetry: %S" path))
+      (file-attribute-size attributes))))
+
 (run-at-time 10 nil (lambda () (neo-rtl-fail "watchdog expired")))
 (switch-to-buffer (get-buffer-create "*rtl-cursor*"))
 (fundamental-mode)
@@ -27,16 +35,14 @@
              (error "RTL cursor must use logical first glyph's full height: %S/%S" cold height))
            (goto-char 4)
            (redisplay t)
-           (let* ((path (and (fboundp 'neomacs--frame-snapshot)
-                             (getenv "NEOMACS_LAYOUT_STATS_FILE")))
-                  (before (and path (file-attribute-size (file-attributes path)))))
+           (let ((before (neo-rtl-stats-size)))
              (goto-char 1)
              (redisplay t)
              (unless (equal (window-cursor-info) cold)
                (error "RTL cursor changed under replay: %S/%S" cold (window-cursor-info)))
              (if before
                  (princ (format "CURSOR-REPLAY-STATS %d %d\n" before
-                                (file-attribute-size (file-attributes path)))
+                                (neo-rtl-stats-size))
                         'external-debugging-output)
                (princ "CURSOR-REPLAY-REFERENCE-GEOMETRY-ONLY\n" 'external-debugging-output)))
            (princ "COMMIT-EDITING-PASS\n" 'external-debugging-output)

@@ -37,6 +37,14 @@ fn run_fixture_probe(probe: &str, fixture: &str) {
     let program = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));
+    let missing_telemetry = probe == "rtl-missing-telemetry";
+    let stats_path = if missing_telemetry {
+        artifacts
+            .join(format!("missing-{}", std::process::id()))
+            .join("layout-stats.log")
+    } else {
+        artifacts.join("layout-stats.log")
+    };
     let mut plan = GuiTestPlan::new(
         backend,
         &root,
@@ -50,12 +58,24 @@ fn run_fixture_probe(probe: &str, fixture: &str) {
     .with_env("NEOMACS_COMMIT_PROBE", probe)
     .with_env(
         "NEOMACS_LAYOUT_STATS_FILE",
-        artifacts
-            .join("layout-stats.log")
-            .to_string_lossy()
-            .into_owned(),
+        stats_path.to_string_lossy().into_owned(),
     )
     .with_env("RUST_LOG", "warn");
+    if missing_telemetry {
+        assert!(!stats_path.exists());
+        // Exercise Neomacs's mandatory-telemetry contract on either executable.
+        plan = plan.with_args([
+            "-Q".to_string(),
+            "--eval".to_string(),
+            "(unless (fboundp 'neomacs--frame-snapshot) (fset 'neomacs--frame-snapshot #'ignore))"
+                .to_string(),
+            "-l".to_string(),
+            root.join("crates/neomacs-gui-tests/fixtures")
+                .join(fixture)
+                .to_string_lossy()
+                .into_owned(),
+        ]);
+    }
     for (key, value) in session.env() {
         plan = plan.with_env(key, value);
     }
@@ -67,6 +87,15 @@ fn run_fixture_probe(probe: &str, fixture: &str) {
         .unwrap();
     let stderr = fs::read_to_string(&result.artifacts.stderr).unwrap_or_default();
     assert!(!result.timed_out, "{result:#?}\n{stderr}");
+    if missing_telemetry {
+        assert_eq!(result.exit_code, Some(1), "{result:#?}\n{stderr}");
+        assert!(stderr.contains("Missing layout telemetry"), "{stderr}");
+        assert!(
+            !stderr.contains("CURSOR-REPLAY-REFERENCE-GEOMETRY-ONLY"),
+            "{stderr}"
+        );
+        return;
+    }
     assert_eq!(result.exit_code, Some(0), "{result:#?}\n{stderr}");
     assert!(stderr.contains("COMMIT-EDITING-PASS"), "{stderr}");
     if (probe.ends_with("newline-cursor") || probe == "rtl-replacement-cursor")
@@ -194,6 +223,11 @@ fn mixed_newline_cursor_matches_gnu_row_geometry() {
     ] {
         run_fixture_probe(probe, "newline-geometry.el");
     }
+}
+
+#[test]
+fn rtl_missing_telemetry_is_an_explicit_failure() {
+    run_fixture_probe("rtl-missing-telemetry", "cursor-rtl.el");
 }
 
 #[test]
