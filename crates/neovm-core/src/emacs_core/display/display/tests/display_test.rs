@@ -32,6 +32,41 @@ use neomacs_display_protocol::SelectionOwner;
 use std::fs;
 use std::sync::{Arc, Mutex};
 
+/// Popup navigation follows the selected window after callbacks display another buffer.
+#[test]
+fn popup_key_reader_follows_selected_buffer_after_async_display() {
+    use crate::emacs_core::eval::RedisplayHookPolicyGuard;
+    use crate::test_utils::input_wait::InputGateOwner;
+    let _policy = RedisplayHookPolicyGuard::legacy();
+    let mut ctx = crate::test_utils::runtime_startup_context();
+    let old = ctx.buffers.create_buffer("*popup-old*");
+    ctx.buffers.set_current(old);
+    let frame = ctx.frames.create_frame("F1", 80, 24, old);
+    assert!(ctx.frames.select_frame(frame));
+    let _input_owner = InputGateOwner::install(&mut ctx);
+    ctx.eval_str(r#"(progn
+        (setq timer-list nil timer-idle-list nil unread-command-events nil popup-read-timer-fired nil)
+        (use-local-map (make-sparse-keymap))
+        (local-set-key "a" 'popup-old-command)
+        (with-current-buffer (get-buffer-create "*popup-new*")
+          (fundamental-mode)
+          (use-local-map (make-sparse-keymap))
+          (local-set-key "a" 'popup-new-command))
+        (run-at-time 0.01 nil
+          (lambda ()
+            (save-current-buffer (switch-to-buffer "*popup-new*"))
+            (setq popup-read-timer-fired t unread-command-events (list ?a)))))"#).unwrap();
+    let (keys, binding) = super::read_popup_menu_key_sequence(&mut ctx).unwrap();
+    assert_eq!(ctx.eval_symbol("popup-read-timer-fired").unwrap(), Value::T);
+    assert_eq!(keys, vec![Value::fixnum('a' as i64)]);
+    assert_eq!(binding, Value::symbol("popup-new-command"));
+    assert_eq!(
+        ctx.eval_str("(eq (current-buffer) (window-buffer))")
+            .unwrap(),
+        Value::T
+    );
+}
+
 fn builtin_x_popup_menu(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     super::builtin_x_popup_menu_batch(eval, args)
 }
