@@ -79,6 +79,15 @@ requires_libfaketime=false
 install_nerd_fonts=false
 case "$profile" in
     build)
+        # The archived core shard suite (nextest-shards.yml with
+        # LINUX_PROFILE=build) runs the whole neovm-core package, including
+        # the D-Bus rows, which spawn their own private `dbus-daemon`
+        # (crates/neovm-core moved_system dbusbind tests).  libdbus-1-dev in
+        # build_packages supplies only the client library and headers; the
+        # daemon package itself must be present or those rows fail loudly at
+        # PrivateBus::start instead of skipping.  The ecosystem profile
+        # already lists dbus for the window-system tests.
+        profile_packages=(dbus)
         ;;
     # GNU Emacs is NOT an apt package here: every GNU-vs-Neomacs comparison
     # runs against the pinned build installed by
