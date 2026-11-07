@@ -593,3 +593,94 @@ fn the_c_surface_carries_all_31_of_gnus_x_only_variables_and_29_of_the_31_shared
     );
     assert_eq!(result, "OK (31 31 31 29 93 nil)");
 }
+
+/// TEMACS-SHADOWED-SUBRS row: GNU defines the `display-*` predicate family
+/// and `get-device-terminal` only in preloaded Lisp (lisp/frame.el:
+/// display-graphic-p at 2735, display-planes at 2947, ...,
+/// get-device-terminal at 1199), so `(fboundp 'display-graphic-p)` is nil in
+/// GNU's temacs before frame.el loads and faces.el:1663-1665 skips its
+/// dump-time branch. Neo's production subr surface is enumerated from a bare
+/// evaluator (no Lisp loaded): 1560 names, and not one of them has a GNU home
+/// that is preloaded-Lisp-only (census: the campaign evidence file
+/// oracleb-dgp-term/temacs-shadowed-census.txt; GNU C DEFUNs 1737, preloaded Lisp defuns 4279,
+/// intersection with Neo's subrs 0). The cited `display-graphic-p` /
+/// `display-planes` are not Neo subrs at all.
+///
+/// The expected list is the REAL pre-loadup surface, not just a facade:
+/// on 2026-11-07 lisp/loadup.el was instrumented immediately before
+/// `(load "frame")` and the real dump producer
+/// (`neomacs-temacs --batch -l loadup --temacs=pbootstrap`) was run over it.
+/// The probe recorded `(:purify nil :dump-mode "pbootstrap" :fboundp
+/// (nil ×12, t) :framep t :frame-list t :terminal-live-p t
+/// :get-device-terminal nil)` — the 12 frame.el `display-*` names and
+/// `get-device-terminal` nil, and the three C/Rust controls t, exactly as
+/// this test asserts (probe record:
+/// oracleb-dgp-term/hermetic/real-loadup-pre-frame-probe.txt).
+///
+/// `window-system` is deliberately NOT asserted here: GNU defines it as a C
+/// DEFUN (src/frame.c:415), and the real producer's pre-frame probe has it
+/// bound t as well — Neo's display crate registers it through `world_subr!`
+/// before loadup. This core-side facade does not install the display
+/// registrar, so its answer would describe the facade, not production.
+#[test]
+fn display_predicates_are_preloaded_lisp_names_not_rust_subrs() {
+    let mut ev = crate::test_utils::new_context();
+    let result = ev
+        .eval_str(
+            "(list (fboundp 'display-graphic-p)
+                   (fboundp 'display-planes)
+                   (fboundp 'display-visual-class)
+                   (fboundp 'display-selections-p)
+                   (fboundp 'display-mouse-p)
+                   (fboundp 'display-popup-menus-p)
+                   (fboundp 'display-images-p)
+                   (fboundp 'display-symbol-keys-p)
+                   (fboundp 'display-screens)
+                   (fboundp 'display-pixel-width)
+                   (fboundp 'display-color-cells)
+                   (fboundp 'display-monitor-attributes-list)
+                   (fboundp 'get-device-terminal)
+                   (fboundp 'framep)
+                   (fboundp 'frame-list)
+                   (fboundp 'terminal-live-p))",
+        )
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        result,
+        "(nil nil nil nil nil nil nil nil nil nil nil nil nil t t t)"
+    );
+}
+
+/// The other half of the row: with the pre-loadup surface equal to GNU's, the
+/// dump-time faces.el branch takes the same path, so the dumped default face
+/// is the GNU default. GNU 31.1 batch oracle (pinned a360712c9d):
+///   ("default" "default" normal 1 normal normal "unspecified-fg"
+///    "unspecified-bg" nil nil nil nil nil nil nil nil ((t nil)))
+/// This checks the same attributes in the full byte-compiled bootstrap.
+#[test]
+fn bootstrapped_default_face_matches_gnus_dumped_default() {
+    let result = crate::test_utils::runtime_startup_eval_one(
+        "(list (face-attribute 'default :family)
+               (face-attribute 'default :foundry)
+               (face-attribute 'default :width)
+               (face-attribute 'default :height)
+               (face-attribute 'default :weight)
+               (face-attribute 'default :slant)
+               (face-attribute 'default :foreground)
+               (face-attribute 'default :background)
+               (face-attribute 'default :underline)
+               (face-attribute 'default :overline)
+               (face-attribute 'default :strike-through)
+               (face-attribute 'default :box)
+               (face-attribute 'default :inverse-video)
+               (face-attribute 'default :stipple)
+               (face-attribute 'default :inherit)
+               (face-attribute 'default :extend)
+               (get 'default 'face-defface-spec))",
+    );
+    assert_eq!(
+        result,
+        "OK (\"default\" \"default\" normal 1 normal normal \"unspecified-fg\" \"unspecified-bg\" nil nil nil nil nil nil nil nil ((t nil)))"
+    );
+}
