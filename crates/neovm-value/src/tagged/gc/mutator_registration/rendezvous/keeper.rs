@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use super::super::a8_probes;
 use super::super::image::PublishedGcImage;
 use super::super::{
@@ -391,7 +391,7 @@ impl<'era> AllStopped<'era> {
             gate.rendezvous.poison();
             self.registry.poison();
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if completion.is_ok() {
             a8_probes::mark(a8_probes::KEEPER_COMPLETED, gate.rendezvous.completed, 0);
         }

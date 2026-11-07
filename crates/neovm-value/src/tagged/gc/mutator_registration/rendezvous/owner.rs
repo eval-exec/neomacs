@@ -143,7 +143,7 @@ impl<'era> Mutator<'era> {
         roots: &[SharedRoot],
     ) -> Result<(), RendezvousError> {
         self.check_thread()?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         a8_probes::mark(
             a8_probes::PUBLISH_ENTERED,
             wanted.map(NonZeroU64::get).unwrap_or(0),
@@ -201,7 +201,7 @@ impl<'era> Mutator<'era> {
             .ok_or(RendezvousError::Publication)?
             .validate_publication()
             .map_err(RegistrationError::from)?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         a8_probes::mark(a8_probes::REGION_CLOSED, epoch, self.entry.key.owner);
         let identity = ParallelRootIdentity::new(self.entry.key, generation, epoch);
         let retention = self
@@ -264,7 +264,7 @@ impl<'era> Mutator<'era> {
                 return Err(RegistrationError::from(error).into());
             }
         };
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         a8_probes::mark(a8_probes::HOSTALLOC_DONE, epoch, self.entry.key.owner);
         // From this point a failure must retain BOTH payloads. Their Drop cannot
         // release the root lease, but the GC image must be retained explicitly.
@@ -320,7 +320,7 @@ impl<'era> Mutator<'era> {
             Mode::Stopped
         };
         self.protocol.participating = true;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         a8_probes::mark(
             if native {
                 a8_probes::NATIVE_ACK

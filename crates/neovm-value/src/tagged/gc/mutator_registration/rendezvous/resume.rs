@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use super::super::a8_probes;
 use super::super::image::PublishedGcImage;
 use super::super::{EntryPhase, Mutator, RegistrationError};
@@ -267,7 +267,7 @@ impl<'owner, 'era> ResumeGcImage<'owner, 'era> {
             .finish_restore(self.owner.entry.key, &mut state.rendezvous);
         if completion.is_ok() {
             state.phase = EntryPhase::Running;
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             a8_probes::mark(
                 a8_probes::OWNER_RUNNING,
                 self.epoch,

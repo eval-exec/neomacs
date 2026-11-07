@@ -487,7 +487,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             crate::tagged::transport::collect_shared_root_gc_roots(heap, &mut roots);
         }
         let root_count = roots.len() + words.len();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         super::a8_probes::mark(super::a8_probes::ROOT_CENSUS_DONE, stopped.epoch().get(), 0);
         let traced = stopped.trace(|guard, proof| {
             let mut slot = self
@@ -520,7 +520,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
                 },
             )?
         });
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         super::a8_probes::mark(super::a8_probes::MARK_SWEEP_DONE, stopped.epoch().get(), 0);
         traced
     }

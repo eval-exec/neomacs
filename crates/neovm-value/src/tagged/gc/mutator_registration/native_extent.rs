@@ -140,14 +140,14 @@ impl<'era> Mutator<'era> {
                 Err(error) => return Err(error),
             }
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let native_seq = super::a8_probes::native_seq();
         let result = body(&NativeRoots {
             heap,
             words: &handles,
             _thread: PhantomData,
         });
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         super::a8_probes::mark(
             super::a8_probes::NATIVE_RETURNED,
             native_seq,
@@ -166,7 +166,7 @@ impl<'era> Mutator<'era> {
                 Err(error) => return Err(error),
             }
         };
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         super::a8_probes::mark(
             super::a8_probes::NATIVE_PERMITTED,
             native_seq,

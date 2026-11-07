@@ -339,7 +339,7 @@ impl<'era> Mutator<'era> {
     #[cold]
     #[inline(never)]
     fn admission_backout(&self) -> RegistrationError {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         a8_probes::mark(a8_probes::ADMISSION_BACKOUT, 0, self.entry.key.owner);
         self.entry
             .admission

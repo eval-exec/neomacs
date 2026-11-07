@@ -1,7 +1,11 @@
 //! Cold latency probes for the A8 qualification rows.
 //!
-//! Every call site is `#[cfg(test)]`, so production images carry none of
-//! this. A probe is one relaxed atomic load while disabled; recording is a
+//! Every call site is `#[cfg(any(test, feature = "test-support"))]`, so
+//! production images carry none of this: the feature is enabled only by
+//! dev-dependencies, never by a shipped build. The re-homed core latency
+//! tests live in a different crate, so they can only reach the probes when
+//! the call sites exist in this dependency build (cfg(test) is off there).
+//! A probe is one relaxed atomic load while disabled; recording is a
 //! mutex-guarded vector push on a per-collection cold path. The overhead is
 //! quantified by [`overhead_ns`] and excluded from throughput rows, which run
 //! with probes disabled on non-instrumented images.
