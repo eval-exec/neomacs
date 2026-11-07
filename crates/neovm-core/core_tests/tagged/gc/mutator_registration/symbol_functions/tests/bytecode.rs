@@ -20,6 +20,7 @@ fn constant_bytecode() -> Value {
 
 #[test]
 fn p3sym_c4_initial_constant_bytecode_admission() {
+    crate::test_utils::ensure_eval_hooks_installed();
     for kind in [
         PlainSymbolBacking::Unprojected,
         PlainSymbolBacking::Projected,
@@ -226,6 +227,7 @@ fn p3sym_c4_initial_bytecode_unbind_and_reinstall_refusal() {
 
 #[test]
 fn p3sym_c4_initial_bytecode_shape_and_materialization_fence() {
+    crate::test_utils::ensure_eval_hooks_installed();
     for excluded in [
         "interactive",
         "environment",

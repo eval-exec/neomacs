@@ -22,6 +22,39 @@ use neovm_value::test_support::authority::{
 };
 use std::ops::ControlFlow;
 
+/// Pin the GEN1 heap mode for the fixture's minimal World and restore the
+/// ambient setting on drop.
+///
+/// The execution admission this fixture re-admits is GEN1-only by design, and
+/// `TaggedHeap::new` reads the mode at construction (value `tagged/gc.rs`
+/// :1056). Pinning keeps the fixture deterministic when the surrounding run
+/// asks for GEN0, the same mode-pin convention the GC tests use.
+struct Gen1ModePin {
+    previous: Option<std::ffi::OsString>,
+}
+
+impl Gen1ModePin {
+    fn new() -> Self {
+        let previous = std::env::var_os("NEOVM_GC_GENERATIONAL");
+        // SAFETY: the lib-test target executes one test per process, and the
+        // ambient value is restored before the test returns.
+        unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "1") };
+        Self { previous }
+    }
+}
+
+impl Drop for Gen1ModePin {
+    fn drop(&mut self) {
+        // SAFETY: single-threaded test process; see `new`.
+        unsafe {
+            match self.previous.take() {
+                Some(value) => std::env::set_var("NEOVM_GC_GENERATIONAL", value),
+                None => std::env::remove_var("NEOVM_GC_GENERATIONAL"),
+            }
+        }
+    }
+}
+
 /// The seeded symbol state for [`prepared_cell_fixture`].
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum FixtureSeed {
@@ -58,6 +91,9 @@ pub(crate) fn prepared_cell_fixture<P>(
         &SymbolHandle,
     ),
 ) -> FixtureReceipt {
+    // The admission below is GEN1-only; pin the mode before the fixture builds
+    // its heap.
+    let _gen1 = Gen1ModePin::new();
     // The minimal World has no Context, so install the one real boot hook set
     // the activation/read path consults. Idempotent: another fixture in this
     // test process may have published the same canonical set already.

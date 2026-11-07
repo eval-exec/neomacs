@@ -1316,6 +1316,7 @@ fn prefix_arg_values() {
 #[test]
 fn command_loop_enqueue_read() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let mut cl = CommandLoop::new();
     cl.enqueue_event(InputEvent::key_press(KeyEvent::char('a')));
     cl.enqueue_event(InputEvent::key_press(KeyEvent::char('b')));
@@ -1330,6 +1331,7 @@ fn command_loop_enqueue_read() {
 #[test]
 fn unread_events_have_priority() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let mut cl = CommandLoop::new();
     cl.enqueue_event(InputEvent::key_press(KeyEvent::char('a')));
     cl.unread_key(KeyEvent::char('z'));
@@ -1424,6 +1426,7 @@ fn keyboard_runtime_reports_pending_input_across_parked_kboards() {
 #[test]
 fn keyboard_macro_recording() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let mut cl = CommandLoop::new();
     cl.start_kbd_macro();
 

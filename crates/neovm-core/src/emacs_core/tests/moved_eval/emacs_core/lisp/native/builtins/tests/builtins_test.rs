@@ -5576,31 +5576,49 @@ fn pure_dispatch_typed_propertize_preserves_raw_unibyte_payload() {
 #[test]
 fn pure_dispatch_typed_unibyte_string_round_trips_bytes() {
     crate::test_utils::init_test_tracing();
-    let s = dispatch_builtin_pure(
+    let mut ctx = crate::test_utils::new_context();
+    let s = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
         "unibyte-string",
         vec![Value::fixnum(65), Value::fixnum(255), Value::fixnum(66)],
     )
     .expect("builtin unibyte-string should resolve")
     .expect("builtin unibyte-string should evaluate");
 
-    let len = dispatch_builtin_pure("string-bytes", vec![s])
-        .expect("builtin string-bytes should resolve")
-        .expect("builtin string-bytes should evaluate");
+    let len = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "string-bytes",
+        vec![s],
+    )
+    .expect("builtin string-bytes should resolve")
+    .expect("builtin string-bytes should evaluate");
     assert_eq!(len, Value::fixnum(3));
 
-    let a = dispatch_builtin_pure("aref", vec![s, Value::fixnum(0)])
-        .expect("builtin aref should resolve")
-        .expect("builtin aref should evaluate");
+    let a = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "aref",
+        vec![s, Value::fixnum(0)],
+    )
+    .expect("builtin aref should resolve")
+    .expect("builtin aref should evaluate");
     assert_eq!(a, Value::fixnum(65));
 
-    let ff = dispatch_builtin_pure("aref", vec![s, Value::fixnum(1)])
-        .expect("builtin aref should resolve")
-        .expect("builtin aref should evaluate");
+    let ff = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "aref",
+        vec![s, Value::fixnum(1)],
+    )
+    .expect("builtin aref should resolve")
+    .expect("builtin aref should evaluate");
     assert_eq!(ff, Value::fixnum(255));
 
-    let b = dispatch_builtin_pure("aref", vec![s, Value::fixnum(2)])
-        .expect("builtin aref should resolve")
-        .expect("builtin aref should evaluate");
+    let b = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "aref",
+        vec![s, Value::fixnum(2)],
+    )
+    .expect("builtin aref should resolve")
+    .expect("builtin aref should evaluate");
     assert_eq!(b, Value::fixnum(66));
 }
 
@@ -5967,78 +5985,136 @@ fn pure_dispatch_typed_hash_table_round_trip() {
 #[test]
 fn pure_dispatch_typed_hash_table_extended_builtins_round_trip() {
     crate::test_utils::init_test_tracing();
+    let mut ctx = crate::test_utils::new_context();
     let alias = Value::symbol("neovm--pure-dispatch-eq-test-alias");
-    dispatch_builtin_pure(
+    crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
         "define-hash-table-test",
         vec![alias, Value::symbol("eq"), Value::symbol("sxhash-eq")],
     )
     .expect("define-hash-table-test should resolve")
     .expect("define-hash-table-test should evaluate");
 
-    let table = dispatch_builtin_pure("make-hash-table", vec![Value::keyword(":test"), alias])
-        .expect("make-hash-table should resolve")
-        .expect("make-hash-table should evaluate");
+    let table = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "make-hash-table",
+        vec![Value::keyword(":test"), alias],
+    )
+    .expect("make-hash-table should resolve")
+    .expect("make-hash-table should evaluate");
 
-    let test_name = dispatch_builtin_pure("hash-table-test", vec![table])
-        .expect("hash-table-test should resolve")
-        .expect("hash-table-test should evaluate");
+    let test_name = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "hash-table-test",
+        vec![table],
+    )
+    .expect("hash-table-test should resolve")
+    .expect("hash-table-test should evaluate");
     assert_eq!(test_name, alias.clone());
 
-    let size = dispatch_builtin_pure("hash-table-size", vec![table])
-        .expect("hash-table-size should resolve")
-        .expect("hash-table-size should evaluate");
+    let size = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "hash-table-size",
+        vec![table],
+    )
+    .expect("hash-table-size should resolve")
+    .expect("hash-table-size should evaluate");
     assert_eq!(size, Value::fixnum(0));
 
-    let weakness = dispatch_builtin_pure("hash-table-weakness", vec![table])
-        .expect("hash-table-weakness should resolve")
-        .expect("hash-table-weakness should evaluate");
+    let weakness = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "hash-table-weakness",
+        vec![table],
+    )
+    .expect("hash-table-weakness should resolve")
+    .expect("hash-table-weakness should evaluate");
     assert_eq!(weakness, Value::NIL);
 
-    let rehash_size = dispatch_builtin_pure("hash-table-rehash-size", vec![table])
-        .expect("hash-table-rehash-size should resolve")
-        .expect("hash-table-rehash-size should evaluate");
+    let rehash_size = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "hash-table-rehash-size",
+        vec![table],
+    )
+    .expect("hash-table-rehash-size should resolve")
+    .expect("hash-table-rehash-size should evaluate");
     assert_eq!(rehash_size, Value::make_float(1.5));
 
-    let rehash_threshold = dispatch_builtin_pure("hash-table-rehash-threshold", vec![table])
-        .expect("hash-table-rehash-threshold should resolve")
-        .expect("hash-table-rehash-threshold should evaluate");
+    let rehash_threshold = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "hash-table-rehash-threshold",
+        vec![table],
+    )
+    .expect("hash-table-rehash-threshold should resolve")
+    .expect("hash-table-rehash-threshold should evaluate");
     assert_eq!(rehash_threshold, Value::make_float(0.8125));
 
-    let sxhash = dispatch_builtin_pure("sxhash-eq", vec![Value::symbol("k")])
-        .expect("sxhash-eq should resolve")
-        .expect("sxhash-eq should evaluate");
+    let sxhash = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "sxhash-eq",
+        vec![Value::symbol("k")],
+    )
+    .expect("sxhash-eq should resolve")
+    .expect("sxhash-eq should evaluate");
     assert!(sxhash.is_fixnum());
 
-    let buckets_before = dispatch_builtin_pure("internal--hash-table-buckets", vec![table])
-        .expect("internal--hash-table-buckets should resolve")
-        .expect("internal--hash-table-buckets should evaluate");
+    let buckets_before = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "internal--hash-table-buckets",
+        vec![table],
+    )
+    .expect("internal--hash-table-buckets should resolve")
+    .expect("internal--hash-table-buckets should evaluate");
     assert_eq!(buckets_before, Value::NIL);
 
-    let _ = dispatch_builtin_pure("puthash", vec![Value::symbol("k"), Value::fixnum(1), table])
-        .expect("puthash should resolve")
-        .expect("puthash should evaluate");
+    let _ = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "puthash",
+        vec![Value::symbol("k"), Value::fixnum(1), table],
+    )
+    .expect("puthash should resolve")
+    .expect("puthash should evaluate");
 
-    let buckets_after = dispatch_builtin_pure("internal--hash-table-buckets", vec![table])
-        .expect("internal--hash-table-buckets should resolve")
-        .expect("internal--hash-table-buckets should evaluate");
+    let buckets_after = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "internal--hash-table-buckets",
+        vec![table],
+    )
+    .expect("internal--hash-table-buckets should resolve")
+    .expect("internal--hash-table-buckets should evaluate");
     assert!(!buckets_after.is_nil());
 
-    let histogram = dispatch_builtin_pure("internal--hash-table-histogram", vec![table])
-        .expect("internal--hash-table-histogram should resolve")
-        .expect("internal--hash-table-histogram should evaluate");
+    let histogram = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "internal--hash-table-histogram",
+        vec![table],
+    )
+    .expect("internal--hash-table-histogram should resolve")
+    .expect("internal--hash-table-histogram should evaluate");
     assert!(!histogram.is_nil());
 
-    let index_size = dispatch_builtin_pure("internal--hash-table-index-size", vec![table])
-        .expect("internal--hash-table-index-size should resolve")
-        .expect("internal--hash-table-index-size should evaluate");
+    let index_size = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "internal--hash-table-index-size",
+        vec![table],
+    )
+    .expect("internal--hash-table-index-size should resolve")
+    .expect("internal--hash-table-index-size should evaluate");
     assert!(index_size.as_fixnum().is_some_and(|n| n >= 1));
 
-    let copied = dispatch_builtin_pure("copy-hash-table", vec![table])
-        .expect("copy-hash-table should resolve")
-        .expect("copy-hash-table should evaluate");
-    let copied_test = dispatch_builtin_pure("hash-table-test", vec![copied])
-        .expect("hash-table-test should resolve for copied table")
-        .expect("hash-table-test should evaluate for copied table");
+    let copied = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "copy-hash-table",
+        vec![table],
+    )
+    .expect("copy-hash-table should resolve")
+    .expect("copy-hash-table should evaluate");
+    let copied_test = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "hash-table-test",
+        vec![copied],
+    )
+    .expect("hash-table-test should resolve for copied table")
+    .expect("hash-table-test should evaluate for copied table");
     assert_eq!(copied_test, alias);
 }
 
@@ -6119,6 +6195,9 @@ fn define_hash_table_test_alias_is_thread_local() {
     let alias_name = "neovm--cross-thread-eq-test-alias";
     // Register alias on a spawned thread
     std::thread::spawn(move || {
+        // The worker thread needs its own heap and registry carrier before it
+        // can construct the alias values.
+        let _ctx = crate::test_utils::new_context();
         let _ = builtin_define_hash_table_test(vec![
             Value::symbol(alias_name),
             Value::symbol("eq"),
@@ -6138,9 +6217,11 @@ fn define_hash_table_test_alias_is_thread_local() {
 #[test]
 fn define_hash_table_test_alias_redefinition_updates_mapping() {
     crate::test_utils::init_test_tracing();
+    let mut ctx = crate::test_utils::new_context();
     let alias_name = "neovm--eq-test-alias-redefined";
 
-    dispatch_builtin_pure(
+    crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
         "define-hash-table-test",
         vec![
             Value::symbol(alias_name),
@@ -6150,7 +6231,8 @@ fn define_hash_table_test_alias_redefinition_updates_mapping() {
     )
     .expect("initial define-hash-table-test should resolve")
     .expect("initial define-hash-table-test should evaluate");
-    let first = dispatch_builtin_pure(
+    let first = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
         "make-hash-table",
         vec![Value::keyword(":test"), Value::symbol(alias_name)],
     )
@@ -6168,7 +6250,8 @@ fn define_hash_table_test_alias_redefinition_updates_mapping() {
         HashTableTest::Eq
     ));
 
-    dispatch_builtin_pure(
+    crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
         "define-hash-table-test",
         vec![
             Value::symbol(alias_name),
@@ -6178,7 +6261,8 @@ fn define_hash_table_test_alias_redefinition_updates_mapping() {
     )
     .expect("redefined hash-table test should resolve")
     .expect("redefined hash-table test should evaluate");
-    let second = dispatch_builtin_pure(
+    let second = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
         "make-hash-table",
         vec![Value::keyword(":test"), Value::symbol(alias_name)],
     )
@@ -6527,9 +6611,14 @@ fn pure_dispatch_typed_extended_list_ops_work() {
 #[test]
 fn pure_dispatch_obarray_make_returns_gnu_obarray_and_clear_keeps_vector_compat() {
     crate::test_utils::init_test_tracing();
-    let made = dispatch_builtin_pure("obarray-make", vec![Value::fixnum(3)])
-        .expect("builtin obarray-make should resolve")
-        .expect("builtin obarray-make should evaluate");
+    let mut ctx = crate::test_utils::new_context();
+    let made = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "obarray-make",
+        vec![Value::fixnum(3)],
+    )
+    .expect("builtin obarray-make should resolve")
+    .expect("builtin obarray-make should evaluate");
     if !&made.is_obarray() {
         panic!("obarray-make should return obarray");
     };
@@ -6537,9 +6626,13 @@ fn pure_dispatch_obarray_make_returns_gnu_obarray_and_clear_keeps_vector_compat(
     assert_eq!(created_data.len(), 4);
     assert!(created_data.iter().all(|v| v.is_nil()));
 
-    let default = dispatch_builtin_pure("obarray-make", vec![])
-        .expect("builtin obarray-make should resolve")
-        .expect("builtin obarray-make should evaluate");
+    let default = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "obarray-make",
+        vec![],
+    )
+    .expect("builtin obarray-make should resolve")
+    .expect("builtin obarray-make should evaluate");
     if !&default.is_obarray() {
         panic!("obarray-make default should return obarray");
     };
@@ -6549,18 +6642,26 @@ fn pure_dispatch_obarray_make_returns_gnu_obarray_and_clear_keeps_vector_compat(
     );
 
     let table = Value::vector(vec![Value::NIL, Value::list(vec![Value::symbol("x")])]);
-    let cleared = dispatch_builtin_pure("obarray-clear", vec![table])
-        .expect("builtin obarray-clear should resolve")
-        .expect("builtin obarray-clear should evaluate");
+    let cleared = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "obarray-clear",
+        vec![table],
+    )
+    .expect("builtin obarray-clear should resolve")
+    .expect("builtin obarray-clear should evaluate");
     assert!(cleared.is_nil());
     if !&table.is_vector() {
         panic!("table should stay vector");
     };
     assert!(table.as_vector_data().unwrap().iter().all(|v| v.is_nil()));
 
-    let wrong_type = dispatch_builtin_pure("obarray-clear", vec![Value::fixnum(1)])
-        .expect("builtin obarray-clear should resolve")
-        .expect_err("obarray-clear should reject non-obarray arguments");
+    let wrong_type = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "obarray-clear",
+        vec![Value::fixnum(1)],
+    )
+    .expect("builtin obarray-clear should resolve")
+    .expect_err("obarray-clear should reject non-obarray arguments");
     match wrong_type.into_kind() {
         FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
@@ -7101,102 +7202,179 @@ fn pure_dispatch_open_overlay_placeholders_match_compat_contracts() {
 #[test]
 fn pure_dispatch_profiler_primitives_collect_cpu_and_memory_logs() {
     crate::test_utils::init_test_tracing();
-    let cpu_log = dispatch_builtin_pure("profiler-cpu-log", vec![])
-        .expect("builtin profiler-cpu-log should resolve")
-        .expect("builtin profiler-cpu-log should evaluate");
+    let mut ctx = crate::test_utils::new_context();
+    let cpu_log = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "profiler-cpu-log",
+        vec![],
+    )
+    .expect("builtin profiler-cpu-log should resolve")
+    .expect("builtin profiler-cpu-log should evaluate");
     assert!(cpu_log.is_nil());
 
-    let cpu_running = dispatch_builtin_pure("profiler-cpu-running-p", vec![])
-        .expect("builtin profiler-cpu-running-p should resolve")
-        .expect("builtin profiler-cpu-running-p should evaluate");
+    let cpu_running = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "profiler-cpu-running-p",
+        vec![],
+    )
+    .expect("builtin profiler-cpu-running-p should resolve")
+    .expect("builtin profiler-cpu-running-p should evaluate");
     assert!(cpu_running.is_nil());
 
-    let cpu_start = dispatch_builtin_pure("profiler-cpu-start", vec![Value::fixnum(1)])
-        .expect("builtin profiler-cpu-start should resolve")
-        .expect("builtin profiler-cpu-start should evaluate");
+    let cpu_start = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "profiler-cpu-start",
+        vec![Value::fixnum(1)],
+    )
+    .expect("builtin profiler-cpu-start should resolve")
+    .expect("builtin profiler-cpu-start should evaluate");
     assert!(cpu_start.is_truthy());
 
-    let cpu_running = dispatch_builtin_pure("profiler-cpu-running-p", vec![])
-        .expect("builtin profiler-cpu-running-p should resolve")
-        .expect("builtin profiler-cpu-running-p should evaluate");
+    let cpu_running = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "profiler-cpu-running-p",
+        vec![],
+    )
+    .expect("builtin profiler-cpu-running-p should resolve")
+    .expect("builtin profiler-cpu-running-p should evaluate");
     assert!(cpu_running.is_truthy());
 
-    let cpu_second_start = dispatch_builtin_pure("profiler-cpu-start", vec![Value::fixnum(1)])
-        .expect("builtin profiler-cpu-start should resolve");
+    let cpu_second_start = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "profiler-cpu-start",
+        vec![Value::fixnum(1)],
+    )
+    .expect("builtin profiler-cpu-start should resolve");
     assert!(cpu_second_start.is_err());
 
     for value in 0..10_000 {
         std::hint::black_box(value * value);
     }
 
-    let cpu_stop = dispatch_builtin_pure("profiler-cpu-stop", vec![])
-        .expect("builtin profiler-cpu-stop should resolve")
-        .expect("builtin profiler-cpu-stop should evaluate");
+    let cpu_stop = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "profiler-cpu-stop",
+        vec![],
+    )
+    .expect("builtin profiler-cpu-stop should resolve")
+    .expect("builtin profiler-cpu-stop should evaluate");
     assert!(cpu_stop.is_truthy());
 
-    let cpu_log = dispatch_builtin_pure("profiler-cpu-log", vec![])
-        .expect("builtin profiler-cpu-log should resolve")
-        .expect("builtin profiler-cpu-log should evaluate");
+    let cpu_log = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "profiler-cpu-log",
+        vec![],
+    )
+    .expect("builtin profiler-cpu-log should resolve")
+    .expect("builtin profiler-cpu-log should evaluate");
     assert!(cpu_log.is_hash_table());
     assert!(!cpu_log.as_hash_table().unwrap().data.is_empty());
 
-    let cpu_log = dispatch_builtin_pure("profiler-cpu-log", vec![])
-        .expect("builtin profiler-cpu-log should resolve")
-        .expect("builtin profiler-cpu-log should evaluate");
+    let cpu_log = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "profiler-cpu-log",
+        vec![],
+    )
+    .expect("builtin profiler-cpu-log should resolve")
+    .expect("builtin profiler-cpu-log should evaluate");
     assert!(cpu_log.is_nil());
 
-    let invalid_cpu_start = dispatch_builtin_pure("profiler-cpu-start", vec![Value::fixnum(0)])
-        .expect("builtin profiler-cpu-start should resolve");
+    let invalid_cpu_start = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "profiler-cpu-start",
+        vec![Value::fixnum(0)],
+    )
+    .expect("builtin profiler-cpu-start should resolve");
     assert!(invalid_cpu_start.is_err());
 
-    let mem_log = dispatch_builtin_pure("profiler-memory-log", vec![])
-        .expect("builtin profiler-memory-log should resolve")
-        .expect("builtin profiler-memory-log should evaluate");
+    let mem_log = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "profiler-memory-log",
+        vec![],
+    )
+    .expect("builtin profiler-memory-log should resolve")
+    .expect("builtin profiler-memory-log should evaluate");
     assert!(mem_log.is_nil());
 
-    let _ = dispatch_builtin_pure("profiler-memory-stop", vec![]);
+    let _ = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "profiler-memory-stop",
+        vec![],
+    );
 
-    let mem_running = dispatch_builtin_pure("profiler-memory-running-p", vec![])
-        .expect("builtin profiler-memory-running-p should resolve")
-        .expect("builtin profiler-memory-running-p should evaluate");
+    let mem_running = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "profiler-memory-running-p",
+        vec![],
+    )
+    .expect("builtin profiler-memory-running-p should resolve")
+    .expect("builtin profiler-memory-running-p should evaluate");
     assert!(mem_running.is_nil());
 
-    let mem_start = dispatch_builtin_pure("profiler-memory-start", vec![])
-        .expect("builtin profiler-memory-start should resolve")
-        .expect("builtin profiler-memory-start should evaluate");
+    let mem_start = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "profiler-memory-start",
+        vec![],
+    )
+    .expect("builtin profiler-memory-start should resolve")
+    .expect("builtin profiler-memory-start should evaluate");
     assert!(mem_start.is_truthy());
 
     let allocated = Value::list((0..256).map(Value::fixnum).collect());
     std::hint::black_box(allocated);
 
-    let mem_running = dispatch_builtin_pure("profiler-memory-running-p", vec![])
-        .expect("builtin profiler-memory-running-p should resolve")
-        .expect("builtin profiler-memory-running-p should evaluate");
+    let mem_running = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "profiler-memory-running-p",
+        vec![],
+    )
+    .expect("builtin profiler-memory-running-p should resolve")
+    .expect("builtin profiler-memory-running-p should evaluate");
     assert!(mem_running.is_truthy());
 
-    let mem_second_start = dispatch_builtin_pure("profiler-memory-start", vec![])
-        .expect("builtin profiler-memory-start should resolve");
+    let mem_second_start = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "profiler-memory-start",
+        vec![],
+    )
+    .expect("builtin profiler-memory-start should resolve");
     assert!(mem_second_start.is_err());
 
-    let mem_stop = dispatch_builtin_pure("profiler-memory-stop", vec![])
-        .expect("builtin profiler-memory-stop should resolve")
-        .expect("builtin profiler-memory-stop should evaluate");
+    let mem_stop = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "profiler-memory-stop",
+        vec![],
+    )
+    .expect("builtin profiler-memory-stop should resolve")
+    .expect("builtin profiler-memory-stop should evaluate");
     assert!(mem_stop.is_truthy());
 
-    let mem_log = dispatch_builtin_pure("profiler-memory-log", vec![])
-        .expect("builtin profiler-memory-log should resolve")
-        .expect("builtin profiler-memory-log should evaluate");
+    let mem_log = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "profiler-memory-log",
+        vec![],
+    )
+    .expect("builtin profiler-memory-log should resolve")
+    .expect("builtin profiler-memory-log should evaluate");
     assert!(mem_log.is_hash_table());
     assert!(!mem_log.as_hash_table().unwrap().data.is_empty());
 
-    let mem_log = dispatch_builtin_pure("profiler-memory-log", vec![])
-        .expect("builtin profiler-memory-log should resolve")
-        .expect("builtin profiler-memory-log should evaluate");
+    let mem_log = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "profiler-memory-log",
+        vec![],
+    )
+    .expect("builtin profiler-memory-log should resolve")
+    .expect("builtin profiler-memory-log should evaluate");
     assert!(mem_log.is_nil());
 
-    let mem_stop = dispatch_builtin_pure("profiler-memory-stop", vec![])
-        .expect("builtin profiler-memory-stop should resolve")
-        .expect("builtin profiler-memory-stop should evaluate");
+    let mem_stop = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "profiler-memory-stop",
+        vec![],
+    )
+    .expect("builtin profiler-memory-stop should resolve")
+    .expect("builtin profiler-memory-stop should evaluate");
     assert!(mem_stop.is_nil());
 }
 
@@ -7304,6 +7482,7 @@ fn pure_dispatch_record_placeholders_match_compat_contracts() {
 #[test]
 fn query_fontset_matches_emacs_regexp_syntax() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     neovm_eval::test_support::authority::reset_symbols_thread_locals_for_test();
 
     // `[([]` is the character class emitted by GNU `rx` for `[` or `(`.
@@ -12973,18 +13152,28 @@ fn dispatch_builtin_pure_handles_face_attribute_vector() {
 #[test]
 fn dispatch_builtin_pure_handles_fontset_placeholders() {
     crate::test_utils::init_test_tracing();
+    let mut ctx = crate::test_utils::new_context();
     neovm_eval::test_support::authority::reset_symbols_thread_locals_for_test();
-    let system = dispatch_builtin_pure("font-get-system-font", vec![])
-        .expect("font-get-system-font should resolve")
-        .expect("font-get-system-font should evaluate");
+    let system = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "font-get-system-font",
+        vec![],
+    )
+    .expect("font-get-system-font should resolve")
+    .expect("font-get-system-font should evaluate");
     assert_eq!(system, Value::NIL);
 
-    let normal = dispatch_builtin_pure("font-get-system-normal-font", vec![])
-        .expect("font-get-system-normal-font should resolve")
-        .expect("font-get-system-normal-font should evaluate");
+    let normal = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "font-get-system-normal-font",
+        vec![],
+    )
+    .expect("font-get-system-normal-font should resolve")
+    .expect("font-get-system-normal-font should evaluate");
     assert_eq!(normal, Value::NIL);
 
-    let fontset = dispatch_builtin_pure(
+    let fontset = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
         "fontset-font",
         vec![Value::symbol("fontset-default"), Value::fixnum('a' as i64)],
     )
@@ -12992,17 +13181,25 @@ fn dispatch_builtin_pure_handles_fontset_placeholders() {
     .expect("fontset-font should evaluate");
     assert_eq!(fontset, Value::NIL);
 
-    let info_err = dispatch_builtin_pure("fontset-info", vec![Value::symbol("fontset-default")])
-        .expect("fontset-info should resolve")
-        .unwrap_err();
+    let info_err = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "fontset-info",
+        vec![Value::symbol("fontset-default")],
+    )
+    .expect("fontset-info should resolve")
+    .unwrap_err();
     match info_err.into_kind() {
         FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
         other => panic!("expected signal, got {other:?}"),
     }
 
-    let list = dispatch_builtin_pure("fontset-list", vec![])
-        .expect("fontset-list should resolve")
-        .expect("fontset-list should evaluate");
+    let list = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
+        "fontset-list",
+        vec![],
+    )
+    .expect("fontset-list should resolve")
+    .expect("fontset-list should evaluate");
     assert_eq!(
         list,
         Value::list(vec![Value::string(
@@ -13011,7 +13208,8 @@ fn dispatch_builtin_pure_handles_fontset_placeholders() {
     );
 
     assert!(
-        dispatch_builtin_pure(
+        crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+            &mut ctx,
             "new-fontset",
             vec![
                 Value::string("-*-fixed-medium-r-normal-*-16-*-*-*-*-*-fontset-standard"),
@@ -13021,7 +13219,8 @@ fn dispatch_builtin_pure_handles_fontset_placeholders() {
         .is_none()
     );
 
-    let fontset_err = dispatch_builtin_pure(
+    let fontset_err = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+        &mut ctx,
         "fontset-font",
         vec![Value::symbol("fontset-default"), Value::NIL],
     )

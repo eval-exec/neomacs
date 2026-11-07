@@ -2595,12 +2595,12 @@ fn bootstrap_runtime_matches_gnu_oclosure_advice_surface() {
 }
 
 const BOOTSTRAP_CACHE_RACE_DUMP_ENV: &str = "NEOVM_BOOTSTRAP_RACE_DUMP_PATH";
-const BOOTSTRAP_CACHE_RACE_WORKER_TEST: &str =
-    "emacs_core::load::tests::bootstrap_cache_parallel_creation_worker";
+// Spawned through libtest's substring filter, so the moved module path does
+// not have to be repeated here.
+const BOOTSTRAP_CACHE_RACE_WORKER_TEST: &str = "bootstrap_cache_parallel_creation_worker";
 const BOOTSTRAP_CACHE_LOCK_HOLDER_ENV: &str = "NEOVM_BOOTSTRAP_CACHE_LOCK_HOLDER";
 const BOOTSTRAP_CACHE_LOCK_READY_ENV: &str = "NEOVM_BOOTSTRAP_CACHE_LOCK_READY";
-const BOOTSTRAP_CACHE_LOCK_HOLDER_TEST: &str =
-    "emacs_core::load::tests::bootstrap_cache_lock_holder_worker";
+const BOOTSTRAP_CACHE_LOCK_HOLDER_TEST: &str = "bootstrap_cache_lock_holder_worker";
 
 #[test]
 fn bootstrap_cache_lock_holder_worker() {
@@ -2630,7 +2630,6 @@ fn bootstrap_cache_write_lock_reports_busy_without_blocking() {
     holder
         .env(BOOTSTRAP_CACHE_LOCK_HOLDER_ENV, &lock_path)
         .env(BOOTSTRAP_CACHE_LOCK_READY_ENV, &ready_path)
-        .arg("--exact")
         .arg(BOOTSTRAP_CACHE_LOCK_HOLDER_TEST)
         .arg("--nocapture");
     let mut child = holder.spawn().expect("spawn lock holder");
@@ -2697,7 +2696,6 @@ fn bootstrap_cache_parallel_creation_is_safe() {
     for _ in 0..2 {
         let mut cmd = Command::new(&exe);
         cmd.env(BOOTSTRAP_CACHE_RACE_DUMP_ENV, &dump_path)
-            .arg("--exact")
             .arg(BOOTSTRAP_CACHE_RACE_WORKER_TEST)
             .arg("--nocapture");
         children.push(cmd.spawn().expect("spawn bootstrap worker"));
@@ -2735,7 +2733,6 @@ fn bootstrap_cache_parallel_stale_repair_is_safe() {
     for _ in 0..2 {
         let mut cmd = Command::new(&exe);
         cmd.env(BOOTSTRAP_CACHE_RACE_DUMP_ENV, &dump_path)
-            .arg("--exact")
             .arg(BOOTSTRAP_CACHE_RACE_WORKER_TEST)
             .arg("--nocapture");
         children.push(cmd.spawn().expect("spawn stale-cache bootstrap worker"));

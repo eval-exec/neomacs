@@ -58,6 +58,7 @@ pub(super) fn fixture_case(
         SymId,
     ),
 ) -> std::thread::Result<()> {
+    crate::test_utils::ensure_eval_hooks_installed();
     Context::with_test_symbol_backing_era(kind, |era, id| {
         let handle = era.admit_plain_symbol(id).unwrap();
         // Explicit matching stopped heap for serial immediate-root setup;
@@ -250,7 +251,14 @@ fn p3sym_c3_surface_is_slot_to_slot() {
     }
     let parent =
         include_str!("../../../../../../neovm-value/src/tagged/gc/mutator_registration.rs");
-    assert!(parent.contains("#[cfg(test)]\nmod symbol_globals;"));
+    // The module is a cfg-split pair: value's own unit tests take the private
+    // arm, and dependency builds expose it only under `test-support`. Neither
+    // arm may exist in a production build.
+    assert!(
+        parent
+            .contains("#[cfg(test)]\n#[cfg(not(feature = \"test-support\"))]\nmod symbol_globals;")
+    );
+    assert!(parent.contains("#[cfg(feature = \"test-support\")]\npub mod symbol_globals;"));
     let production = include_str!(
         "../../../../../../neovm-value/src/tagged/gc/mutator_registration/symbol_authority/globals.rs"
     );

@@ -342,9 +342,13 @@ impl StackParamShape {
 impl StackParamShape {
     #[doc(hidden)]
     pub fn new(required: usize, nonrest: usize, rest: RestSlot) -> Self {
-        // Installation proves the required count fits inside the non-rest
-        // prefix; below it, `accepts` would wrap past the interval's width.
-        debug_assert!(required <= nonrest);
+        // GNU's descriptor is two independent bit fields
+        // (bytecode.c:533-537: required = low 7 bits, nonrest = bits 8..), so
+        // an inconsistent template may report required > nonrest. Such a
+        // template is still a storable GNU object: `accepts`/`call_shape`
+        // reject every call through it with GNU's arity error, and the
+        // optional-count projection answers None. Do not assert the
+        // invariant here; the shape math uses only nonrest + rest.
         Self {
             required,
             nonrest,

@@ -491,7 +491,9 @@ fn only_the_shipped_editors_main_announces_itself() {
     // The scan excludes its own compiler-reported source path below, so a
     // rename cannot turn its literal and policy test into forbidden callers.
     const ALLOWED_CALLER: &str = "crates/neomacs/src/main.rs";
-    const ALLOWED_MENTIONS: &[&str] = &["crates/neovm-core/src/emacs_core/lisp/load/mod.rs"];
+    // The function's defining file moved with the eval layer; its definition
+    // line contains the call spelling and is not a caller.
+    const ALLOWED_MENTIONS: &[&str] = &["crates/neovm-eval/src/emacs_core/lisp/load/mod.rs"];
 
     let root = crate::test_utils::workspace_root();
 

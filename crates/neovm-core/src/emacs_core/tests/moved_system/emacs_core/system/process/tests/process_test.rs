@@ -645,6 +645,7 @@ impl std::io::Write for BrokenPipeWriter {
 #[test]
 fn epipe_closes_the_exact_selected_pty_writer() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let mut pm = ProcessManager::new();
     let id = pm.create_process(
         "pty-epipe".into(),
@@ -687,6 +688,7 @@ fn epipe_closes_the_exact_selected_pty_writer() {
 #[test]
 fn send_eof_after_epipe_installs_discard_sink_and_clears_queued_input() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let mut pm = ProcessManager::new();
     let id = pm.create_process(
         "pipe-epipe-eof".into(),
@@ -723,6 +725,7 @@ fn send_eof_after_epipe_installs_discard_sink_and_clears_queued_input() {
 #[test]
 fn sends_after_epipe_do_not_accumulate_unsendable_input() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let mut pm = ProcessManager::new();
     let id = pm.create_process(
         "pipe-epipe-queue".into(),
@@ -751,6 +754,7 @@ fn sends_after_epipe_do_not_accumulate_unsendable_input() {
 #[test]
 fn process_manager_create_and_query() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let mut pm = ProcessManager::new();
     let id = pm.create_process(
         "test".into(),
@@ -774,6 +778,7 @@ fn process_manager_create_and_query() {
 #[test]
 fn process_manager_kill() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let mut pm = ProcessManager::new();
     let id = pm.create_process(
         "p".into(),
@@ -796,6 +801,7 @@ fn process_manager_kill() {
 #[test]
 fn process_manager_delete() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let mut pm = ProcessManager::new();
     let id = pm.create_process(
         "p".into(),
@@ -811,6 +817,7 @@ fn process_manager_delete() {
 #[test]
 fn process_manager_send_input() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let mut pm = ProcessManager::new();
     let id = pm.create_process(
         "p".into(),
@@ -841,6 +848,7 @@ fn process_manager_send_input() {
 #[test]
 fn builtin_process_send_string_preserves_raw_unibyte_write_queue_entries() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let mut pm = ProcessManager::new();
     let buffers = neovm_edit::buffer::BufferManager::new();
     let id = pm.create_process(
@@ -1134,6 +1142,7 @@ fn process_test_pid_exists(pid: libc::pid_t) -> bool {
 #[test]
 fn internal_default_signal_process_targets_only_the_named_pid_like_gnu() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let directory = tempfile::tempdir().expect("tempdir");
     let ready = directory.path().join("ready");
     let release = directory.path().join("release");
@@ -1262,6 +1271,7 @@ fn delete_process_accepts_get_process_designators_like_gnu() {
 #[test]
 fn process_manager_find_by_name() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let mut pm = ProcessManager::new();
     let id = pm.create_process(
         "my-proc".into(),
@@ -1370,6 +1380,7 @@ fn make_process_non_executable_program_reports_gnu_errno_data() {
 #[test]
 fn builtin_process_name_uses_lisp_value_storage() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let mut pm = ProcessManager::new();
     let id = pm.create_process(
         "my-proc".into(),
@@ -1392,6 +1403,7 @@ fn builtin_process_name_uses_lisp_value_storage() {
 #[test]
 fn process_type_and_contact_use_stored_lisp_fields() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let mut pm = ProcessManager::new();
     let buffers = neovm_edit::buffer::BufferManager::new();
     let network = pm.create_process_with_kind(
@@ -1854,6 +1866,7 @@ fn process_status_notification_runs_default_sentinel_and_reaps() {
 #[test]
 fn builtin_process_tty_name_uses_value_slot() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let mut pm = ProcessManager::new();
     let real_id = pm.create_process(
         "tty-proc".into(),
@@ -2775,6 +2788,7 @@ fn stderr_pipe_writer_is_restored_after_pty_spawn_failure() {
 #[test]
 fn builtin_process_command_uses_value_slot() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let mut pm = ProcessManager::new();
     let real_id = pm.create_process(
         "cmd-proc".into(),
@@ -2807,6 +2821,7 @@ fn builtin_process_command_uses_value_slot() {
 #[test]
 fn process_manager_list() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let mut pm = ProcessManager::new();
     let id1 = pm.create_process(
         "a".into(),
@@ -2830,6 +2845,7 @@ fn process_manager_list() {
 #[test]
 fn process_manager_env() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let mut pm = ProcessManager::new();
     pm.setenv(
         LispString::from_utf8("NEOVM_TEST_VAR"),
@@ -3560,6 +3576,7 @@ fn process_exit_status_initial() {
 #[test]
 fn pty_process_output_does_not_translate_lf_to_crlf_like_gnu() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let sh = find_bin("sh");
     let mut processes = ProcessManager::new();
     let pid = processes.create_process_lisp(
@@ -3726,6 +3743,7 @@ fn deleted_pty_process_releases_live_io_and_reaps_child() {
     let watchers =
         neovm_system::emacs_core::process::test_support::DeferredWatcherTestScopeForTest::new();
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let sh = find_bin("sh");
     let mut processes = ProcessManager::new();
     let baseline_ptmx = open_ptmx_descriptor_count();
@@ -3769,6 +3787,7 @@ fn dropping_process_manager_terminates_and_reaps_live_child() {
     let watchers =
         neovm_system::emacs_core::process::test_support::DeferredWatcherTestScopeForTest::new();
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let sh = find_bin("sh");
     let mut processes = ProcessManager::new();
     let id = processes.create_process(
@@ -4596,6 +4615,7 @@ fn make_process_pipe_uses_the_canonical_child_environment() {
 #[test]
 fn process_output_read_errors_remain_distinct_from_clean_eof() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let mut processes = ProcessManager::new();
     let pid = processes.create_process_lisp(
         LispString::from_utf8("read-error-eof"),
@@ -6418,6 +6438,7 @@ fn accept_process_output_still_catches_error_signal_from_timer_callback() {
 
 #[test]
 fn accept_process_output_request_uses_gnu_wait_deadlines() {
+    let _ctx = crate::test_utils::new_context();
     let mut processes = ProcessManager::new();
 
     let poll = parse_accept_process_output_request(&mut processes, &[])
@@ -6508,6 +6529,7 @@ fn timer_service_intent_exposes_side_effects_only() {
 
 #[test]
 fn process_wait_events_use_structured_event_shape() {
+    let _ctx = crate::test_utils::new_context();
     let processes = ProcessManager::new();
 
     let events = processes.wait_for_process_events(Duration::ZERO);
@@ -6520,6 +6542,7 @@ fn process_wait_events_use_structured_event_shape() {
 #[test]
 fn wait_scheduler_remembers_cross_platform_notification_before_wait() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let processes = ProcessManager::new();
     assert!(processes.has_wait_notification_backend());
     let notifier = processes
@@ -6548,6 +6571,7 @@ fn wait_scheduler_remembers_cross_platform_notification_before_wait() {
 #[test]
 fn wait_scheduler_does_not_report_timeout_as_notification() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let processes = ProcessManager::new();
 
     let events = processes
@@ -9465,6 +9489,7 @@ fn make_network_process_stop_server_defers_accept_until_continue_like_gnu() {
 #[test]
 fn process_send_string_rejects_network_server_like_gnu() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let mut pm = ProcessManager::new();
     let buffers = neovm_edit::buffer::BufferManager::new();
     let id = pm.create_process_with_kind(
@@ -10755,6 +10780,7 @@ fn read_process_output_carries_split_decode_sequences_between_chunks() {
 
 #[test]
 fn adaptive_read_buffering_updates_delay_with_gnu_thresholds() {
+    let _ctx = crate::test_utils::new_context();
     let mut processes = ProcessManager::new();
     processes.set_default_read_config(ProcessReadConfig {
         readmax: 1024,
@@ -14548,6 +14574,7 @@ fn stderr_pipe_sentinel_neighbour_audit() {
 #[test]
 fn signal_process_reads_an_integer_as_an_os_pid_like_gnu() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     {
         let mut processes = ProcessManager::new();
         let buffers = neovm_edit::buffer::BufferManager::new();
@@ -14814,6 +14841,7 @@ fn two_processes_notified_in_one_pass_run_their_sentinels_newest_first_like_gnu(
 #[test]
 fn the_notification_walk_permutes_only_the_pending_entries() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let mut pm = ProcessManager::new();
     let ids: Vec<ProcessId> = (0..4)
         .map(|i| {
@@ -15411,6 +15439,7 @@ fn gnus_sigchld_sweep_records_an_exited_child_and_cannot_reach_a_pidless_process
     use crate::emacs_core::process::child_status::SweepableChild;
 
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let sh = find_bin("sh");
     let mut processes = ProcessManager::new();
     let child = processes.create_process_lisp(
@@ -15557,6 +15586,7 @@ fn gnus_sigchld_sweep_records_an_exited_child_and_cannot_reach_a_pidless_process
 #[test]
 fn a_reaped_child_leaves_no_pid_for_the_kill_path_like_gnu() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let sh = find_bin("sh");
     let mut processes = ProcessManager::new();
     let child = processes.create_process_lisp(
@@ -15654,6 +15684,7 @@ fn a_reaped_child_leaves_no_pid_for_the_kill_path_like_gnu() {
 #[test]
 fn deleting_a_reaped_child_does_not_kill_its_process_group_like_gnu() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let sh = find_bin("sh");
     let marker = tmp_file("pw187-orphan");
     let _ = std::fs::remove_file(&marker);
@@ -17528,6 +17559,7 @@ fn deinitializing_pending_tls_wakes_the_negotiation_owner() {
 
 #[test]
 fn temporary_green_select_capture_does_not_retire_the_backend() {
+    let _ctx = crate::test_utils::new_context();
     use neovm_eval::host_effect::wake::{ControlNudge, ControlWakeOutcome};
     let manager = ProcessManager::new();
     drop(manager.green_select_handle());
@@ -17548,6 +17580,7 @@ fn temporary_green_select_capture_does_not_retire_the_backend() {
 
 #[test]
 fn backend_retirement_closes_surviving_green_control_observers() {
+    let _ctx = crate::test_utils::new_context();
     use neovm_eval::host_effect::wake::{ControlWakeOutcome, HostClosure};
     let manager = ProcessManager::new();
     let selector = manager

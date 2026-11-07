@@ -63,8 +63,10 @@ fn transpose_marker_then_delete_stays_consistent() {
 
 fn assert_gnu(name: &str, form: &str) {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // The fixture recordings moved with the edit layer into neovm-edit; the
+    // test kept its historical name and form.
     let fixture = root
-        .join("src/buffer/edit_transaction/tests")
+        .join("../neovm-edit/src/buffer/edit_transaction/tests")
         .join(format!("{name}.expect"));
     if std::env::var("UPDATE_EXPECT").as_deref() == Ok("1") {
         let script = root

@@ -118,6 +118,7 @@ fn fixture_initialized(
     init: impl FnOnce(&mut crate::symbol::Obarray, &[crate::intern::SymId]),
     body: impl for<'owner, 'era> FnOnce(&mut RunAccess<'owner, 'era>, &[SymbolHandle], &mut Homes<'era>),
 ) -> std::thread::Result<()> {
+    crate::test_utils::ensure_eval_hooks_installed();
     with_test_symbol_functions_init_era(kind, init, |era, ids| {
         let handles: Vec<_> = ids
             .iter()

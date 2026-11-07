@@ -77,6 +77,7 @@ fn finish(era: ParallelHeapEra<'_>) {
 /// No Context, setup collection, live owner or external graph root exists.
 /// Two full jobs remove birth retention as a substitute for current reseeding.
 fn root_families(backing: PlainSymbolBacking) {
+    crate::test_utils::ensure_eval_hooks_installed();
     let expected = RefCell::new(Vec::<ExpectedRoot>::new());
     Context::with_test_symbol_functions_init_era(
         backing,
@@ -286,6 +287,7 @@ fn p3sym_c6_keeper_projected_families_survive_two_full_stops_with_serial_skip() 
 
 #[test]
 fn p3sym_c6_keeper_nonzero_word_refuses_before_copy_and_recovers() {
+    crate::test_utils::ensure_eval_hooks_installed();
     Context::with_test_symbol_era(|era, _| {
         let mut stopped = era.stop().unwrap();
         let mut observations = Vec::new();
@@ -327,6 +329,7 @@ fn p3sym_c6_keeper_nonzero_word_refuses_before_copy_and_recovers() {
 
 #[test]
 fn p3sym_c6_keeper_foreign_world_and_backing_refuse_before_copy() {
+    crate::test_utils::ensure_eval_hooks_installed();
     Context::with_test_symbol_era(|outer, _| {
         let mut outer_stop = outer.stop().unwrap();
         let outer_symbols = outer_stop.symbols().unwrap();

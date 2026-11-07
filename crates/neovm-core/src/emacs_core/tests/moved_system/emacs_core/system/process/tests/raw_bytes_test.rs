@@ -82,6 +82,7 @@ fn builtin_make_process_preserves_raw_unibyte_command_argument_storage() {
 #[test]
 fn spawn_child_with_environment_uses_process_environment_list() {
     crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
     let shell = find_bin("sh");
     let mut processes = ProcessManager::new();
     let pid = processes.create_process_lisp(

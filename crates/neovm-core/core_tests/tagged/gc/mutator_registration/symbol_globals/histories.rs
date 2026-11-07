@@ -33,6 +33,7 @@ fn sample<'era>(
 
 #[test]
 fn p3sym_c3_two_to_four_owner_real_global_histories() {
+    crate::test_utils::ensure_eval_hooks_installed();
     for kind in [
         PlainSymbolBacking::Unprojected,
         PlainSymbolBacking::Projected,

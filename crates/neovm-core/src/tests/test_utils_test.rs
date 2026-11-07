@@ -23,9 +23,29 @@ use crate::heap_types::LispString;
 use std::path::PathBuf;
 
 pub(crate) use neovm_value::test_support::authority::with_legacy_gc;
-pub use neovm_value::test_utils::{
-    cargo_workspace_root, init_test_tracing, nextest_workspace_root, workspace_root,
-};
+pub use neovm_value::test_utils::{cargo_workspace_root, nextest_workspace_root, workspace_root};
+
+/// Initialize process-wide test tracing and publish the canonical eval hook
+/// set for this test process.
+///
+/// Production builds every `Context` from `install_eval_hooks`'s proof, so an
+/// eval read path never runs before its cold tables exist. Core tests that
+/// drive eval-side machinery (a bare process manager, a symbol world fixture)
+/// before any `Context` exists must boot the same set first; otherwise the
+/// fail-closed read guards panic. Both steps are idempotent and the hook set
+/// publishes only descriptor slots, so this stays a test-harness concern.
+pub fn init_test_tracing() {
+    neovm_value::test_utils::init_test_tracing();
+    ensure_eval_hooks_installed();
+}
+
+/// Publish the one canonical eval hook set for this test process.
+///
+/// Idempotent; any later `Context` construction in the same process re-runs
+/// the same publication entry and receives the same set.
+pub fn ensure_eval_hooks_installed() {
+    crate::emacs_core::eval_hook_installers::install_eval_hooks();
+}
 
 /// The abbreviation the platform's own `gmtime_r` reports for UTC.
 ///

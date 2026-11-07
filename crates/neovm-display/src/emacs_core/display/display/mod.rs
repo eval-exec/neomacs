@@ -879,16 +879,17 @@ pub fn builtin_window_system(
 ) -> EvalResult {
     expect_max_args("window-system", &args, 1)?;
     let window_system = if args.first().is_none_or(|v| v.is_nil()) {
-        selected_frame_window_system_symbol_in_state(&eval.frame_manager())
+        // A cached GUI bootstrap deliberately has no frame yet (the host
+        // creates it at bootstrap), so an empty frame manager reports the
+        // window system the runtime was built for.
+        selected_frame_window_system_symbol_in_state(&eval.frame_manager()).or_else(|| {
+            dynamic_or_global_symbol_value_in_state_fixed(eval.variables(), WellKnown::WindowSystem)
+        })
     } else {
         let (frames, buffers) = eval.frame_manager_and_buffers_mut();
         frame_window_system_symbol_in_state(frames, buffers, args.first())?
     };
-    return Ok(window_system.unwrap_or(Value::NIL));
-    Ok(
-        dynamic_or_global_symbol_value_in_state_fixed(eval.variables(), WellKnown::WindowSystem)
-            .unwrap_or(Value::NIL),
-    )
+    Ok(window_system.unwrap_or(Value::NIL))
 }
 
 /// Context-aware variant of `frame-edges`.

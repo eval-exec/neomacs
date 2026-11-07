@@ -77,6 +77,7 @@ fn fixture(
         Inputs,
     ),
 ) {
+    crate::test_utils::ensure_eval_hooks_installed();
     for kind in [HofOperation::Mapc, HofOperation::Mapcar] {
         register_global_subr_entry(intern(spelling(kind)), builtin(kind));
     }
@@ -459,6 +460,7 @@ fn nmjit_n4_hof_guard_source_guard_test() {
 
 #[test]
 fn nmjit_n4_hof_preparation_refuses_re_registered_implementation() {
+    crate::test_utils::ensure_eval_hooks_installed();
     #[derive(Clone, Copy)]
     enum ChangedRegistration {
         Body,

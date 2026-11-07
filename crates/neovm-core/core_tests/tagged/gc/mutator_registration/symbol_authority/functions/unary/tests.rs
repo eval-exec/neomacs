@@ -45,6 +45,7 @@ fn fixture(
         &[SymbolHandle],
     ),
 ) {
+    crate::test_utils::ensure_eval_hooks_installed();
     let parameter = intern("nmjit-n4-ordinary-parameter");
     let replacement_holder = intern("nmjit-n4-unary-replacement");
     let outcome = Context::try_with_test_symbol_backing_init_era(
@@ -255,6 +256,7 @@ fn nmjit_n4_unary_refuses_stale_homes_capabilities_and_managed_argument() {
 
 #[test]
 fn nmjit_n4_unary_preparation_refuses_special_and_marker_parameters() {
+    crate::test_utils::ensure_eval_hooks_installed();
     for parameter_name in [
         "&optional",
         "&rest",
