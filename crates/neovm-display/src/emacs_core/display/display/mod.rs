@@ -5,8 +5,8 @@
 //! sensible defaults for a modern graphical display.
 
 use super::terminal::pure::{
-    is_terminal_handle, make_alist, terminal_designator_p, terminal_handle_id,
-    terminal_runtime_color_cells, terminal_runtime_supports_color,
+    builtin_terminal_live_p, is_terminal_handle, make_alist, terminal_designator_p,
+    terminal_handle_id, terminal_runtime_color_cells, terminal_runtime_supports_color,
 };
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
@@ -375,7 +375,15 @@ pub fn display_window_system_symbol_eval(
             Ok(selected_frame_window_system_symbol(eval)
                 .or_else(|| global_window_system_symbol(eval)))
         }
-        Some(d) if terminal_designator_p(d) => Ok(None),
+        // GNU lisp/frame.el:1231-1239: framep-on-display's first conjunct is
+        // terminal-live-p, which returns the terminal's TYPE symbol for a live
+        // display terminal (src/terminal.c:443-480). A TTY terminal answers t
+        // (not graphic); a GUI terminal answers its window-system symbol, so
+        // the display-*-p predicates must see it.
+        Some(d) if terminal_designator_p(d) => Ok(Some(builtin_terminal_live_p(
+            eval,
+            std::slice::from_ref(d),
+        )?)),
         Some(d) if live_frame_designator_p(eval, d) => frame_window_system_symbol(eval, Some(d)),
         Some(d) if d.is_string() => {
             let display = display_string_text(d).expect("checked string");

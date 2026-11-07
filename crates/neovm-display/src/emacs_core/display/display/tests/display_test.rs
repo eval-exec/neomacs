@@ -3721,6 +3721,80 @@ fn display_graphic_p_without_a_display_uses_the_selected_frames_output_method() 
 }
 
 #[test]
+fn display_graphic_p_reads_the_terminal_type_for_a_terminal_designator() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::terminal::pure::{TerminalRuntimeConfig, ensure_terminal_runtime_owner};
+    use neomacs_display_protocol::{GraphicalBackend, GraphicalDisplayIdentity};
+
+    // GNU src/terminal.c:443-480: terminal-live-p returns the terminal's TYPE
+    // symbol; lisp/frame.el:1231-1239 framep-on-display ORs it; frame.el:
+    // 2735-2743 display-graphic-p memqs it. Oracle on the pinned a360712c9d
+    // build:
+    //   batch/tty: (:term t :framep t :dgp-frame nil :dgp-term nil :dgp-noarg nil)
+    //   GUI :0:    (:gui x :term x :dgp-frame t :dgp-term t :dgp-noarg t)
+    // The Context must exist first: the unit-runtime construction installs the
+    // tagged heap the terminal registry needs.
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    ensure_terminal_runtime_owner(
+        0,
+        "gui_terminal",
+        TerminalRuntimeConfig::window_system(GraphicalDisplayIdentity::anonymous_connection(
+            GraphicalBackend::X11,
+        )),
+    );
+    ensure_terminal_runtime_owner(1, "tty_terminal", TerminalRuntimeConfig::inactive());
+    let scratch = eval.buffer_manager_mut().create_buffer("*terminal-type*");
+    eval.buffer_manager_mut().set_current(scratch);
+    let gui = eval
+        .frame_manager_mut()
+        .create_frame_on_terminal("gui", 0, 800, 600, scratch);
+    eval.frame_manager_mut()
+        .get_mut(gui)
+        .expect("gui frame")
+        .install_backend_less_gui_kind(WindowSystemKind::X);
+    let gui_terminal = builtin_frame_terminal(&mut eval, vec![Value::make_frame(gui.0)]).unwrap();
+    assert_eq!(
+        builtin_terminal_live_p(&mut eval, &[gui_terminal]).unwrap(),
+        Value::symbol("x"),
+        "a live GUI terminal's type is its window-system symbol"
+    );
+    assert_eq!(
+        builtin_display_graphic_p(&mut eval, vec![gui_terminal]).unwrap(),
+        Value::T,
+        "(display-graphic-p (frame-terminal gui-frame)) is t on a GUI terminal"
+    );
+
+    let tty = eval
+        .frame_manager_mut()
+        .create_frame_on_terminal("tty", 1, 80, 25, scratch);
+    eval.frame_manager_mut()
+        .get_mut(tty)
+        .expect("tty frame")
+        .set_window_system(None);
+    eval.frame_manager_mut().select_frame(tty);
+    let tty_terminal = builtin_frame_terminal(&mut eval, vec![Value::make_frame(tty.0)]).unwrap();
+    assert_eq!(
+        builtin_terminal_live_p(&mut eval, &[tty_terminal]).unwrap(),
+        Value::T,
+        "a live TTY terminal's type is t"
+    );
+    assert_eq!(
+        builtin_display_graphic_p(&mut eval, vec![tty_terminal]).unwrap(),
+        Value::NIL,
+        "(display-graphic-p (frame-terminal tty-frame)) is nil on a TTY"
+    );
+    assert_eq!(
+        builtin_display_graphic_p(&mut eval, vec![]).unwrap(),
+        Value::NIL,
+        "the no-argument form on the selected TTY frame agrees"
+    );
+    assert_eq!(
+        builtin_display_graphic_p(&mut eval, vec![Value::NIL]).unwrap(),
+        Value::NIL
+    );
+}
+
+#[test]
 fn display_graphic_p_uses_global_window_system_without_live_frame() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
