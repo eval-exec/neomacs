@@ -28,7 +28,6 @@ neovm-text = { path = "../neovm-text", default-features = false }
 neovm-eval = { path = "../neovm-eval", default-features = false }
 base64.workspace = true
 crossbeam-channel.workspace = true
-dbus = { version = "0.9", default-features = false }
 dns-lookup.workspace = true
 errno.workspace = true
 libc.workspace = true
@@ -56,6 +55,23 @@ tree-sitter.workspace = true
 webpki-roots.workspace = true
 windows-sys.workspace = true
 x509-parser.workspace = true
+
+# GNU's configure probes `dbus-1 >= 1.0` (`configure.ac:3919-3944`) and simply
+# sets `HAVE_DBUS=no` when it is missing, so dbusbind is absent rather than
+# fatal.  `libdbus-sys` has no such mode: with no `dbus-1.pc` its build script
+# `panic!()`s, which made every macOS build fail.  Stock macOS ships no
+# `dbus-1.pc` -- CI's macos-latest included -- so the dependency itself has to
+# be absent there.  Every Rust module that names `dbus` is already behind
+# `cfg(neomacs_have_dbus)` (dbusbind/mod.rs), so macOS takes the same
+# `--without-dbus` configuration its GNU counterpart takes (and the one CI's
+# oracle is built with: `.github/actions/setup-gnu-emacs/action.yml:121`).
+# Stage 6 moved the transport here with the dependency; this gate is the
+# neovm-core/Cargo.toml rule moved with it.
+#
+# Keep this rule in step with `detect_dbus`'s macOS guard in
+# build_support/host_cfg.rs.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+dbus = { version = "0.9", default-features = false }
 
 [build-dependencies]
 # dbus-1 detection for the moved dbusbind transport (see build.rs).

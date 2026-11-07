@@ -64,7 +64,6 @@ errno.workspace = true
 fs4.workspace = true
 hashbrown.workspace = true
 hostname.workspace = true
-inotify.workspace = true
 keysymdefs.workspace = true
 libc.workspace = true
 libloading.workspace = true
@@ -100,6 +99,17 @@ rustls.workspace = true
 socket2.workspace = true
 neomacs-video-model.workspace = true
 windows-sys.workspace = true
+
+# `inotify` is the Linux file-notification adapter's dependency
+# (emacs_core/lisp/native/builtins/file_notify/platform/linux, itself compiled
+# only under `#[cfg(target_os = "linux")]`).  inotify 0.11 refuses to build on
+# other targets (`compile_error!` on the missing kcmp_file implementation), so
+# the dependency must be absent there, exactly as neovm-core/Cargo.toml keeps
+# its own inotify edge target-gated.  The macOS backend is kqueue and the
+# Windows backend is w32notify; neither names this crate.
+[target.'cfg(target_os = "linux")'.dependencies]
+inotify.workspace = true
+
 [dev-dependencies]
 # Downward-only: shared value test helpers for this crate's own unit tests.
 neovm-value = { path = "../neovm-value", default-features = false, features = ["test-support"] }
