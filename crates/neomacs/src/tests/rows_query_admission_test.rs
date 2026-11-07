@@ -117,7 +117,7 @@ fn rows_query_admission_actual_tty_host_matches_inert_type_authority() {
         }
     }
 
-    let mut context = Context::new();
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let _restore = RestoreTerminal;
     context.setup_thread_locals();
     pure::configure_terminal_runtime(TerminalRuntimeConfig::interactive(
@@ -206,7 +206,7 @@ fn rows_query_admission_actual_tty_host_canonical_rows_certifies_and_drops_lease
         }
     }
 
-    let mut context = Context::new();
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let _restore = RestoreTerminal;
     // Use public collection APIs, matching the actual Layout TTY fixture.
     context.set_gc_threshold(usize::MAX);

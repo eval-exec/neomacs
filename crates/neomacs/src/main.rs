@@ -6078,7 +6078,7 @@ fn run_gnu_startup_inner(eval: &mut Context) {
 
     eval.init_input_system();
 
-    let result = neovm_core::emacs_core::keyboard::recursive_edit(&mut eval);
+    let result = neovm_core::emacs_core::keyboard::recursive_edit(eval);
 
     if let Err(other) = result {
         let last_phase = eval

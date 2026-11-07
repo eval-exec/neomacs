@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 thread_local! {
-    static IMAGE_SPEC_TEST_CONTEXT: Context = Context::new();
+    static IMAGE_SPEC_TEST_CONTEXT: Context = neovm_core::emacs_core::eval_hook_installers::new_context();
 }
 
 use neomacs_display_protocol::ImageAnimationPolicy;
@@ -437,7 +437,7 @@ fn stale_decode_completion_cannot_promote_a_replacement_load() {
 fn pending_geometry_resolves_from_the_header_before_any_pixel_exists() {
     let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
-    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let redisplay = neovm_core::host_input::HostInputPublisher::install(&mut evaluator);
     let catalog = test_catalog(
         cmd_tx,

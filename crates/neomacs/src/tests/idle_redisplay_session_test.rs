@@ -7,7 +7,7 @@
 use super::super::frame_layout::run_tty_layout_tree;
 use super::super::{Interactivity, bootstrap_buffers, bootstrap_tty_display_config};
 use neomacs_display_runtime::redisplay::RedisplayRuntime;
-use neovm_core::emacs_core::load::create_bootstrap_evaluator_cached_with_features;
+use neovm_core::emacs_core::load_boot::create_bootstrap_evaluator_cached_with_features;
 
 #[test]
 fn an_idle_redisplay_skips_layout_in_a_real_session() {

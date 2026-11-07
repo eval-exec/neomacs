@@ -42,7 +42,7 @@ fn opened_secondary_tty_reads_bytes_for_its_own_frame_and_uses_device_size() {
         "xterm-256color".to_string(),
     )
     .expect("valid request");
-    let mut context = neovm_core::emacs_core::Context::new();
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let input = neovm_core::host_input::HostInputPublisher::install(&mut context);
     let (session, opened_size, _) =
         super::SecondaryTtySession::open(&request, input, QuitRequest::new())
@@ -126,7 +126,7 @@ fn padded_secondary_terminal_renders_and_resumes_with_its_attached_device() {
         "neo-app-padding".to_owned(),
     )
     .unwrap();
-    let mut context = neovm_core::emacs_core::Context::new();
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let input = neovm_core::host_input::HostInputPublisher::install(&mut context);
     let (mut session, _, _) =
         super::SecondaryTtySession::open(&request, input, QuitRequest::new()).unwrap();

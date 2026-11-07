@@ -72,7 +72,7 @@ fn daemon_startup_keeps_action_operands_and_normal_modes_distinct() {
 
 #[test]
 fn daemon_initialized_consumes_a_failing_notifier_and_rejects_retry() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let calls = Arc::new(AtomicUsize::new(0));
     let notified = Arc::clone(&calls);
     eval.configure_daemon(
@@ -103,7 +103,7 @@ fn daemon_initialized_consumes_a_failing_notifier_and_rejects_retry() {
 
 #[test]
 fn daemon_identity_and_initialization_are_host_owned_and_one_shot() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     assert_eq!(eval.eval_str("(daemonp)").unwrap(), Value::NIL);
     assert!(eval.eval_str("(daemon-initialized)").is_err());
     let calls = Arc::new(AtomicUsize::new(0));
@@ -131,7 +131,7 @@ fn daemon_identity_and_initialization_are_host_owned_and_one_shot() {
         eval.eval_str("(daemonp)").unwrap().as_utf8_str(),
         Some("work")
     );
-    let mut unnamed = Context::new();
+    let mut unnamed = neovm_core::emacs_core::eval_hook_installers::new_context();
     unnamed.configure_daemon(None, None);
     assert_eq!(unnamed.eval_str("(daemonp)").unwrap(), Value::T);
 }

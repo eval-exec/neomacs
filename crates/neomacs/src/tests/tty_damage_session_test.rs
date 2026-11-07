@@ -13,7 +13,7 @@ use neomacs_display_runtime::backend::tty::rif::damage::{
 };
 use neomacs_display_runtime::redisplay::RedisplayRuntime;
 use neovm_core::emacs_core::Context;
-use neovm_core::emacs_core::load::create_bootstrap_evaluator_cached_with_features;
+use neovm_core::emacs_core::load_boot::create_bootstrap_evaluator_cached_with_features;
 
 const COLS: usize = 100;
 const ROWS: usize = 36;
