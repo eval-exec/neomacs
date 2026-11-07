@@ -1,6 +1,9 @@
 //! GNU trailing-whitespace classification must inspect source, not stretch shape.
 use super::*;
 
+/// Lay out real source and optional display replacements, returning the buffer
+/// positions painted with the trailing-whitespace face. Default point is zero
+/// so positive controls do not accidentally suppress their own endpoint.
 fn highlighted(text: &str, replacement: Option<&str>, point: Option<usize>) -> Vec<usize> {
     let trace = layout_trace_with_buffer_setup(text, 800, 240, |buffer, _, _| {
         buffer.set_buffer_local("show-trailing-whitespace", Value::T);
@@ -31,6 +34,8 @@ fn highlighted(text: &str, replacement: Option<&str>, point: Option<usize>) -> V
         .collect()
 }
 
+/// Source classification uses character coordinates, accessible bounds and GNU
+/// CR/ZV termination, rather than treating missing bytes or display ends as EOF.
 #[test]
 fn trailing_source_predicate_respects_cr_zv_narrowing_and_character_coordinates() {
     use crate::display_row::trailing_whitespace::buffer_trailing_whitespace_p;
@@ -61,6 +66,8 @@ fn trailing_source_predicate_respects_cr_zv_narrowing_and_character_coordinates(
     }
 }
 
+/// Both cursor-only and scrolling reuse must reproduce fresh endpoint-dependent
+/// faces after point leaves or enters a whitespace run.
 #[test]
 fn trailing_whitespace_point_motion_keeps_reused_rows_equal_to_fresh() {
     let positions = |trace: BackendLayoutTrace| -> Vec<usize> {
@@ -99,6 +106,62 @@ fn trailing_whitespace_point_motion_keeps_reused_rows_equal_to_fresh() {
     }
 }
 
+/// Edits can invalidate an earlier suppressed run even if point's numeric
+/// position stays unchanged; ordinary non-highlighting edits still reuse rows.
+#[test]
+fn trailing_whitespace_edit_replay_does_not_retain_point_dependent_faces() {
+    let positions = |trace: BackendLayoutTrace| -> Vec<usize> {
+        trace
+            .matrix_rows
+            .iter()
+            .filter(|row| row.role == GlyphRowRole::Text && !row.mode_line)
+            .flat_map(|row| row.glyph_areas[1].iter())
+            .filter(|glyph| glyph.face.contains("trailing-whitespace"))
+            .map(|glyph| glyph.charpos)
+            .collect()
+    };
+    for show in [false, true] {
+        for moved in [false, true] {
+            let (mut eval, frame, _, _) = incr_editing_frame(&"x  \n".repeat(30), 800, 240);
+            eval.buffer_manager_mut()
+                .current_buffer_mut()
+                .unwrap()
+                .set_buffer_local(
+                    "show-trailing-whitespace",
+                    if show { Value::T } else { Value::NIL },
+                );
+            eval.eval_str(if moved {
+                "(goto-char 4)"
+            } else {
+                "(goto-char 12)"
+            })
+            .unwrap();
+            let mut engine = crate::font::metrics::test_catalog::layout_engine();
+            engine.layout_frame_rust(&mut eval, frame);
+            // Either leave the old endpoint and edit below it, or keep the same
+            // numeric point while an insertion above shifts its former row.
+            eval.eval_str(if moved {
+                "(progn (goto-char 21) (insert \"z\"))"
+            } else {
+                "(progn (goto-char 1) (insert \"z\") (goto-char 12))"
+            })
+            .unwrap();
+            engine.layout_frame_rust(&mut eval, frame);
+            let actual = positions(selected_window_layout_trace(&eval, &engine, frame));
+            let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+            fresh.layout_frame_rust(&mut eval, frame);
+            let expected = positions(selected_window_layout_trace(&eval, &fresh, frame));
+            assert_eq!(actual, expected, "show={show} moved={moved}");
+            assert_eq!(
+                engine.last_layout_stats().edit_windows,
+                usize::from(!show),
+                "show={show} moved={moved}"
+            );
+        }
+    }
+}
+
+/// Model org-modern's visible border without depending on third-party packages.
 fn table_bar() -> Value {
     Value::list(vec![
         Value::symbol("space"),
@@ -107,6 +170,8 @@ fn table_bar() -> Value {
     ])
 }
 
+/// Display appearance is not source whitespace; string-owned glyphs block the
+/// backward scan rather than behaving like nil-object synthetic padding.
 #[test]
 fn display_stretches_do_not_turn_org_table_padding_into_trailing_whitespace() {
     for text in ["| alpha    |\n", "| café     |\n", "x  |\n"] {
@@ -124,6 +189,8 @@ fn display_stretches_do_not_turn_org_table_padding_into_trailing_whitespace() {
     }
 }
 
+/// Genuine spaces/tabs still highlight, including a preceding displayed stretch
+/// licensed by GNU's single last-candidate source check.
 #[test]
 fn actual_trailing_spaces_and_tabs_keep_gnu_highlighting() {
     assert_eq!(highlighted("x  \n", None, None), vec![1, 2]);
@@ -133,6 +200,8 @@ fn actual_trailing_spaces_and_tabs_keep_gnu_highlighting() {
     assert_eq!(highlighted("x|  \n", Some("stretch"), None), vec![1, 2, 3]);
 }
 
+/// Only point at the end of the complete source run suppresses highlighting;
+/// point inside that run must leave its face intact.
 #[test]
 fn trailing_whitespace_is_suppressed_when_point_is_at_its_endpoint() {
     assert!(highlighted("x  \n", None, Some(3)).is_empty());

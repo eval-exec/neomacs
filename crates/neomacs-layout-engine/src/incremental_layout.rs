@@ -451,6 +451,12 @@ impl RetainedWindowKey {
     /// modiff (xdisp.c GIVE_UP 200). An overlay/face move still escalates to
     /// a full rebuild. `point` may also move with the edit.
     pub fn edit_eligible(prev: &Self, curr: &Self) -> bool {
+        // Even an unchanged numeric point can change which source endpoint it
+        // suppresses when an edit above shifts a reused row. GNU try_window_id
+        // refuses this shortcut outright with trailing whitespace (xdisp:22653).
+        if curr.show_trailing_whitespace {
+            return false;
+        }
         let delta = WindowDelta::between(prev, curr);
         // Something about the TEXT changed -- characters or properties -- and
         // nothing else did. An unchanged buffer is the cursor-only path's
