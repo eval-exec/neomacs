@@ -509,3 +509,19 @@ fn the_linked_desktop_font_subscription_is_advertised_to_lisp() {
     );
     assert_eq!(result, "OK (t t)");
 }
+
+/// The default core build enables neither the Linux display runtime nor its
+/// native GSettings subscription, so the moved table must leave both features
+/// absent.  Together with the `cfg(feature)` variant above this pins the
+/// table's verdict in both directions: the default per-package core suite runs
+/// this counterpart, the display runtime's normal test build runs its own
+/// copy, and a feature-enabled core build runs the enabled variant.
+#[cfg(all(target_os = "linux", not(feature = "desktop-font-settings")))]
+#[test]
+fn the_absent_desktop_font_subscription_is_not_advertised_to_lisp() {
+    crate::test_utils::init_test_tracing();
+    let result = runtime_startup_eval_one(
+        "(list (featurep 'dynamic-setting) (featurep 'system-font-setting))",
+    );
+    assert_eq!(result, "OK (nil nil)");
+}

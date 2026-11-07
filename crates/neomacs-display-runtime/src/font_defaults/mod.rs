@@ -76,3 +76,7 @@ pub fn observe_font_defaults(backend: GraphicalBackend) -> std::io::Result<FontD
         _ => { Ok(FontDefaultsObserver::unsupported(GuiFontDefaults::for_backend(backend))) }
     }
 }
+
+#[cfg(test)]
+#[path = "tests.rs"]
+mod tests;
