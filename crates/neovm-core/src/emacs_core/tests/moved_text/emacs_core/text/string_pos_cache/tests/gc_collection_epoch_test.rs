@@ -78,7 +78,12 @@ fn gc_collection_epoch_string_pos_thread_change_activation_invalidates_changed_l
     assert_eq!(context.tagged_heap().gc_collections(), initial_epoch);
     // A different mutator has its own byte-mutation epoch. Exercise the
     // activation's explicit thread-change input against the restored epoch.
-    activate_string_pos_cache(context.tagged_heap().tagged_heap_identity(), initial_epoch, false, true);
+    activate_string_pos_cache(
+        context.tagged_heap().tagged_heap_identity(),
+        initial_epoch,
+        false,
+        true,
+    );
     assert_eq!(
         string_char_to_byte(string, string.as_lisp_string().unwrap(), 1),
         2,

@@ -25,9 +25,15 @@ fn gc_tls_ownership_activation_clears_weak_barrier_owner_words() {
     second.current_mutator_gc_mut().remembered_cache[slot] = owner.bits();
     set_tagged_heap(&mut second);
     assert_empty_barrier_caches(Some(&second));
-    assert_eq!(current_tagged_heap_identity(), Some(second.tagged_heap_identity()));
+    assert_eq!(
+        current_tagged_heap_identity(),
+        Some(second.tagged_heap_identity())
+    );
     drop(first);
-    assert_eq!(current_tagged_heap_identity(), Some(second.tagged_heap_identity()));
+    assert_eq!(
+        current_tagged_heap_identity(),
+        Some(second.tagged_heap_identity())
+    );
     drop(second);
     assert!(current_tagged_heap_identity().is_none());
     assert_empty_barrier_caches(None);
@@ -74,7 +80,10 @@ fn gc_tls_ownership_allocation_view_metadata_rejects_pointer_reuse() {
     set_tagged_heap(&mut second);
     assert!(tagged_heap_is_current(&second));
     drop(first);
-    assert_eq!(current_tagged_heap_identity(), Some(second.tagged_heap_identity()));
+    assert_eq!(
+        current_tagged_heap_identity(),
+        Some(second.tagged_heap_identity())
+    );
     drop(second);
     assert!(current_tagged_heap_identity().is_none());
 }
@@ -154,7 +163,10 @@ fn gc_tls_hash_activation_survives_displaced_heap_join_and_reinstallation() {
     // It must not clear the installed heap's dedicated Tier-H activation.
     drop(first);
     assert!(concurrent_hash_mutation_active());
-    assert_eq!(current_tagged_heap_identity(), Some(second.tagged_heap_identity()));
+    assert_eq!(
+        current_tagged_heap_identity(),
+        Some(second.tagged_heap_identity())
+    );
     TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| active.set(false));
     set_tagged_heap(&mut second);
     assert!(

@@ -1564,7 +1564,6 @@ impl TaggedHeap {
         &mut self.handshake
     }
 
-
     fn record_heap_write(&mut self, record: HeapWriteRecord) {
         #[cfg(test)]
         RECORD_HEAP_WRITE_CALLS.with(|calls| calls.set(calls.get() + 1));

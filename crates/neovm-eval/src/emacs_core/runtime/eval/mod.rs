@@ -5251,7 +5251,6 @@ impl Context {
         self.unwind_cleanup_depth
     }
 
-
     /// Public read access to the face table.
     pub fn face_table(&self) -> &FaceTable {
         &self.face_table

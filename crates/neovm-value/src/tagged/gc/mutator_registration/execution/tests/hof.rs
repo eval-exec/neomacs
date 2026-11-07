@@ -105,7 +105,10 @@ pub(crate) fn prepared_hof_fixture<P>(
                 .take()
                 .expect("rooted HOF setup evidence");
             let (mut collector, keeper) = proof.finish().expect("small HOF setup return");
-            let mode = if collector.registration_heap_mut().tagged_heap_generational_enabled() {
+            let mode = if collector
+                .registration_heap_mut()
+                .tagged_heap_generational_enabled()
+            {
                 ActualMode::Gen1
             } else {
                 ActualMode::Gen0

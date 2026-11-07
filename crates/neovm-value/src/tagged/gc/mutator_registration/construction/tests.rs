@@ -18,7 +18,10 @@ fn nmjit_n2_actual_constructor_checks_mode_and_returns_complete_ownership() {
             .finish()
             .expect("empty fixture ends before admission probe");
         let heap = collector.heap_identity();
-        let expected = match collector.registration_heap_mut().tagged_heap_generational_enabled() {
+        let expected = match collector
+            .registration_heap_mut()
+            .tagged_heap_generational_enabled()
+        {
             false => ActualMode::Gen0,
             true => ActualMode::Gen1,
         };
@@ -62,13 +65,17 @@ fn nmjit_n2_proof_inputs_preserve_collector_mode_without_production_capability()
     Context::with_test_symbol_era(|era, _| {
         let (mut collector, keeper) = era.finish().expect("empty proof fixture ends");
         let heap = collector.heap_identity();
-        let mode = collector.registration_heap_mut().tagged_heap_generational_enabled();
+        let mode = collector
+            .registration_heap_mut()
+            .tagged_heap_generational_enabled();
         let proof = ProofAdmission::check(collector, keeper).expect("explicit proof admission");
         let (checked, _proof_witness) = proof.into_checked();
         let (mut collector, keeper) = checked.into_parts();
         assert_eq!(collector.heap_identity(), heap);
         assert_eq!(
-            collector.registration_heap_mut().tagged_heap_generational_enabled(),
+            collector
+                .registration_heap_mut()
+                .tagged_heap_generational_enabled(),
             mode
         );
         drop(collector);
@@ -87,7 +94,9 @@ fn nmjit_n3_initial_table_preparation_refusal_returns_complete_ownership() {
     Context::with_test_symbol_era(|era, _| {
         let (mut collector, keeper) = era.finish().expect("empty proof fixture ends");
         let original_heap = collector.heap_identity();
-        let original_mode = collector.registration_heap_mut().tagged_heap_generational_enabled();
+        let original_mode = collector
+            .registration_heap_mut()
+            .tagged_heap_generational_enabled();
         let admission = ProofAdmission::check(collector, keeper)
             .expect("empty fixture returns valid exclusive admission inputs");
         let (checked, witness) = admission.into_checked();
@@ -110,7 +119,9 @@ fn nmjit_n3_initial_table_preparation_refusal_returns_complete_ownership() {
             }
         };
         let returned_heap = collector.heap_identity();
-        let returned_mode = collector.registration_heap_mut().tagged_heap_generational_enabled();
+        let returned_mode = collector
+            .registration_heap_mut()
+            .tagged_heap_generational_enabled();
         let returned_keeper_heap = keeper.parallel_heap_identity();
         let returned_keeper_held = keeper.held_here();
         // The one-shot refusal must preserve usable ownership, not just scalar
@@ -119,7 +130,9 @@ fn nmjit_n3_initial_table_preparation_refusal_returns_complete_ownership() {
             .expect("initial preparation refusal preserves re-admission inputs");
         let (mut collector, keeper) = era.finish().expect("re-admitted empty fixture ends");
         let recovered_heap = collector.heap_identity();
-        let recovered_mode = collector.registration_heap_mut().tagged_heap_generational_enabled();
+        let recovered_mode = collector
+            .registration_heap_mut()
+            .tagged_heap_generational_enabled();
         let recovered_keeper_heap = keeper.parallel_heap_identity();
         let recovered_keeper_held = keeper.held_here();
         drop(collector);

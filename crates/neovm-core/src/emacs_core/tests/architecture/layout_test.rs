@@ -413,10 +413,9 @@ fn bytecode_obj_finder_still_counts_a_non_chokepoint_mention() {
             }
         }
     }
-    let parsed = syn::parse_file(
-        "pub fn peek(value: &Value) -> Option<&ByteCodeObj> { value.bytecode() }",
-    )
-    .expect("parse planted source");
+    let parsed =
+        syn::parse_file("pub fn peek(value: &Value) -> Option<&ByteCodeObj> { value.bytecode() }")
+            .expect("parse planted source");
     let mut finder = IdentFinder { hits: 0 };
     finder.visit_file(&parsed);
     assert_eq!(finder.hits, 1);

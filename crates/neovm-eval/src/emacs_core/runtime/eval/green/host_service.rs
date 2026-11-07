@@ -619,10 +619,12 @@ impl HostRegistry {
             let (_prepared, error) = failure.into_parts();
             HostRootError::Root(error)
         })?;
-        let lease = finalized.publish_finalized_root_batch().map_err(|failure| {
-            let (_finalized, error) = failure.into_parts();
-            HostRootError::Root(error)
-        })?;
+        let lease = finalized
+            .publish_finalized_root_batch()
+            .map_err(|failure| {
+                let (_finalized, error) = failure.into_parts();
+                HostRootError::Root(error)
+            })?;
         self.records.insert(
             key,
             Record {
@@ -705,10 +707,12 @@ impl HostRegistry {
             let (_prepared, error) = failure.into_parts();
             HostRootError::Root(error)
         })?;
-        let lease = finalized.publish_finalized_root_batch().map_err(|failure| {
-            let (_finalized, error) = failure.into_parts();
-            HostRootError::Root(error)
-        })?;
+        let lease = finalized
+            .publish_finalized_root_batch()
+            .map_err(|failure| {
+                let (_finalized, error) = failure.into_parts();
+                HostRootError::Root(error)
+            })?;
         let slot = RootSlot(record.roots.len());
         record.roots.push(lease);
         // SAFETY: the just-published lease now belongs to this World registry,

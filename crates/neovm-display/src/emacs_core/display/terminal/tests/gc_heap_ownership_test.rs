@@ -16,7 +16,10 @@ fn terminal_gc_roots_exclude_another_live_heap() {
         "the terminal root walk retained another evaluator's handle"
     );
     let mut active_roots = Vec::new();
-    collect_terminal_gc_roots(&mut active_roots, other.tagged_heap().tagged_heap_identity());
+    collect_terminal_gc_roots(
+        &mut active_roots,
+        other.tagged_heap().tagged_heap_identity(),
+    );
     let active_handle = builtin_selected_terminal(vec![]).expect("selected terminal");
     assert!(active_roots.contains(&active_handle));
 }

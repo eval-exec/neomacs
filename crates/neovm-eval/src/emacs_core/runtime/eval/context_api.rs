@@ -334,7 +334,6 @@ impl Context {
         &self.input_rx
     }
 
-
     /// R-b (PC11-F f1): owner-carried redisplay-hook ownership (read).
     #[doc(hidden)]
     #[inline(always)]
@@ -394,7 +393,9 @@ impl Context {
     }
 
     /// Borrow the fringe-bitmap registry (read-only) for per-frame snapshots.
-    pub fn fringe_bitmap_registry(&self) -> &super::super::builtins::fringe_bitmap::FringeBitmapRegistry {
+    pub fn fringe_bitmap_registry(
+        &self,
+    ) -> &super::super::builtins::fringe_bitmap::FringeBitmapRegistry {
         &self.fringe_bitmaps
     }
 

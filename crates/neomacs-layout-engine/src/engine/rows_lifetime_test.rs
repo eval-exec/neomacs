@@ -27,7 +27,9 @@ impl GcMode {
             );
         }
         assert_eq!(
-            neovm_value::test_support::authority::generational_enabled_for_test(context.tagged_heap()),
+            neovm_value::test_support::authority::generational_enabled_for_test(
+                context.tagged_heap()
+            ),
             enabled,
             "the Rows fixture must run under its explicitly pinned GC mode",
         );

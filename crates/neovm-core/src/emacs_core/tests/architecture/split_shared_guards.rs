@@ -31,8 +31,8 @@
 use proc_macro2::Span;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::rc::Rc;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
@@ -818,7 +818,11 @@ impl N13Modules {
         // A cyclic import rewrite that asks for a resolution currently being
         // computed contributes nothing; the caller still fails closed if it
         // needed that branch.
-        if !self.module_path_in_progress.borrow_mut().insert(key.clone()) {
+        if !self
+            .module_path_in_progress
+            .borrow_mut()
+            .insert(key.clone())
+        {
             return BTreeSet::new();
         }
         let result = self.resolve_module_path_at(module, path, 0);
@@ -898,18 +902,14 @@ impl N13Modules {
             for import in &info.imports {
                 match &import.alias {
                     Some(alias) if alias == segment => {
-                        for target in
-                            self.resolve_module_path(&current, &import.path)
-                        {
+                        for target in self.resolve_module_path(&current, &import.path) {
                             queue.push_back((target, consumed + 1));
                         }
                     }
                     // A glob makes the target module's items visible here: view
                     // it at the same segment without consuming anything.
                     None => {
-                        for target in
-                            self.resolve_module_path(&current, &import.path)
-                        {
+                        for target in self.resolve_module_path(&current, &import.path) {
                             queue.push_back((target, consumed));
                         }
                     }
@@ -1250,8 +1250,7 @@ impl N13Visitor<'_> {
     }
 
     fn delegation(&self, path: &[String], name: &str) -> Result<bool, String> {
-        if self.fn_stack.len() != 1 || self.fn_stack.first().map(String::as_str) != Some(name)
-        {
+        if self.fn_stack.len() != 1 || self.fn_stack.first().map(String::as_str) != Some(name) {
             return Ok(false);
         }
         if path.len() != 2 {
@@ -1361,10 +1360,7 @@ impl N13Visitor<'_> {
                             // A hooks-table entry or a same-named helper from
                             // another module is not a carried reference when the
                             // path resolves only to non-carried identities.
-                            if self
-                                .resolves_only_outside_carried(&path)
-                                .unwrap_or(false)
-                            {
+                            if self.resolves_only_outside_carried(&path).unwrap_or(false) {
                                 self.allow(ident);
                             }
                         }
@@ -2680,11 +2676,25 @@ impl Pc2Visitor<'_> {
         };
         match (self.pass, origin) {
             (Pc2Pass::HelperSummaries, Pc2CellOrigin::Parameter(index)) => {
-                self.facts.helper_writes.entry(writer).or_default().insert(index);
+                self.facts
+                    .helper_writes
+                    .entry(writer)
+                    .or_default()
+                    .insert(index);
             }
-            (Pc2Pass::References, Pc2CellOrigin::Static(cell)) => self.facts.writes.push(Pc2Write { cell, writer, source: self.site_source.clone(), line: line_of(span) }),
-            (_, Pc2CellOrigin::Local | Pc2CellOrigin::Parameter(_)) => {},
-            (Pc2Pass::Declarations | Pc2Pass::HelperSummaries, Pc2CellOrigin::Static(_) | Pc2CellOrigin::Unresolved) => {},
+            (Pc2Pass::References, Pc2CellOrigin::Static(cell)) => {
+                self.facts.writes.push(Pc2Write {
+                    cell,
+                    writer,
+                    source: self.site_source.clone(),
+                    line: line_of(span),
+                })
+            }
+            (_, Pc2CellOrigin::Local | Pc2CellOrigin::Parameter(_)) => {}
+            (
+                Pc2Pass::Declarations | Pc2Pass::HelperSummaries,
+                Pc2CellOrigin::Static(_) | Pc2CellOrigin::Unresolved,
+            ) => {}
             (Pc2Pass::References, Pc2CellOrigin::Unresolved) => {
                 // Test-only fixtures (Arc/OnceLock helpers) cannot prove a
                 // cell origin and do not need to: every installer reference
@@ -3290,7 +3300,9 @@ impl Pc2Parsed {
             return Ok(cached.clone());
         }
         let parsed = Rc::new(parse_file(path)?);
-        self.files.borrow_mut().insert(path.to_path_buf(), parsed.clone());
+        self.files
+            .borrow_mut()
+            .insert(path.to_path_buf(), parsed.clone());
         Ok(parsed)
     }
 }
@@ -3460,7 +3472,12 @@ pub(crate) fn scan_pc2_table(workspace: &Path, text: &str) -> Result<Vec<String>
         let parsed = parsed_files.get(path)?;
         if let Some(modules) = catalog.files.get(path) {
             for module in modules {
-                gated(&parsed.1.items, &mut module.clone(), false, &mut test_modules);
+                gated(
+                    &parsed.1.items,
+                    &mut module.clone(),
+                    false,
+                    &mut test_modules,
+                );
             }
         }
     }
@@ -4102,8 +4119,9 @@ fn architecture_pc2_literal_include_adapter_is_scanned() {
     .expect("INCLUDE escape");
     let red = scan_pc2_table(root, table).expect("INCLUDE mutation scan");
     assert!(
-        red.iter().any(|error| error.contains("PC2_INSTALLER_OUTSIDE_EXACT_CHAIN")
-            && error.contains("fixtures/included_adapter.rs")),
+        red.iter()
+            .any(|error| error.contains("PC2_INSTALLER_OUTSIDE_EXACT_CHAIN")
+                && error.contains("fixtures/included_adapter.rs")),
         "PC2_INCLUDE_ESCAPE: {red:?}"
     );
     std::fs::write(
