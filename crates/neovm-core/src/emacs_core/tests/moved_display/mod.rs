@@ -77,3 +77,7 @@ mod mode_line_outer_handlers_test;
 #[cfg(test)]
 #[path = "mode_line_point_test.rs"]
 mod mode_line_point_test;
+
+#[cfg(test)]
+#[path = "frame_resize_scroll_bar_test.rs"]
+mod frame_resize_scroll_bar_test;
