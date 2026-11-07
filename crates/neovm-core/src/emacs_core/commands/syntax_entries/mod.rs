@@ -161,6 +161,13 @@ pub(crate) fn builtin_backward_prefix_chars(
     builtin_backward_prefix_chars_in_buffers(buffers, args, props)
 }
 
+/// GNU `find-word-boundary-function-table`'s symbol (DEFVAR_LISP,
+/// src/syntax.c:3793), interned once.
+fn find_word_boundary_function_table_sym() -> neovm_value::intern::SymId {
+    static SYMBOL: std::sync::OnceLock<neovm_value::intern::SymId> = std::sync::OnceLock::new();
+    *SYMBOL.get_or_init(|| neovm_value::intern::intern("find-word-boundary-function-table"))
+}
+
 /// `(forward-word &optional COUNT)` — move point forward COUNT words.
 pub(crate) fn builtin_forward_word(
     eval: &mut super::eval::Context,
@@ -192,9 +199,12 @@ pub(crate) fn builtin_forward_word(
     };
     // When `find-word-boundary-function-table` is active (subword/superword),
     // GNU's scan_words consults it per word; otherwise the plain syntax scan is
-    // used unchanged.
+    // used unchanged. GNU reads Vfind_word_boundary_function_table
+    // (DEFVAR_LISP, src/syntax.c:3793) through do_symval_forwarding, so a
+    // buffer-local or `let` binding must win over the default: read the
+    // visible value, never the buffer-blind default.
     let wbtable = eval
-        .variable_value_by_name("find-word-boundary-function-table")
+        .builtin_var_value(find_word_boundary_function_table_sym())
         .unwrap_or(Value::NIL);
     let (raw_byte, completed) = if word_boundary_table_active(&wbtable, eval.symbol_mode()) {
         word_motion_with_table(eval, count, honor, wbtable)

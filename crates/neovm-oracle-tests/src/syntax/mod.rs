@@ -1,5 +1,6 @@
 //! Syntax oracle parity tests.
 
+mod forwarded_locals;
 mod local_strict_edge_semantics;
 mod parse_state;
 mod pps_propertize;

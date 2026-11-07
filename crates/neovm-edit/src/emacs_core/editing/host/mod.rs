@@ -99,8 +99,10 @@ pub trait EditHost {
         inherit_global: bool,
     ) -> EvalResult;
 
-    /// The variable's visible value (GNU `find_symbol_value`), `None`
-    /// when unbound. C2.
+    /// The variable's value WITHOUT a buffer: the default of a
+    /// buffer-local variable, `None` when void. Use
+    /// [`Self::forwarded_variable_value`] for GNU `find_symbol_value`.
+    /// C2.
     fn variable_value(&self, id: SymId) -> Option<Value>;
 
     /// [`Self::variable_value`] starting from the variable's name. C2.
@@ -114,6 +116,15 @@ pub trait EditHost {
     /// `BVAR (current_buffer, ...)` read). Added for the text layer's
     /// character-width policy (stage-3b T6 thin addition).
     fn variable_value_in_current_buffer(&self, id: SymId) -> Option<Value>;
+
+    /// GNU `find_symbol_value` for a C-forwarded variable: the current
+    /// buffer's forwarded/local binding (swapped into the C global by
+    /// `set_buffer_internal_2`, src/buffer.c:2342ff) and the live dynamic
+    /// binding, `None` when void. This is the value a `DEFVAR_*` C global
+    /// holds. Callers must use this, never `variable_value`, for the
+    /// scanner/scan/search variables whose GNU C reads see buffer locals.
+    /// Pure read. EDIT-HOST row (stage-3b forwarded-locals fix).
+    fn forwarded_variable_value(&self, id: SymId) -> Option<Value>;
 
     /// GNU `default_value` without a buffer. C2.
     fn default_value(&self, id: SymId) -> Option<Value>;

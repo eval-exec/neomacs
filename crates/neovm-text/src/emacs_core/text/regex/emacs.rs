@@ -4210,23 +4210,6 @@ impl Default for WordBoundaryLookup {
     }
 }
 
-/// Interned-once ids for the three GNU word-boundary state variables.
-#[inline(always)]
-fn char_script_table_sym() -> neovm_value::intern::SymId {
-    static SYMBOL: std::sync::OnceLock<neovm_value::intern::SymId> = std::sync::OnceLock::new();
-    *SYMBOL.get_or_init(|| neovm_value::intern::intern("char-script-table"))
-}
-#[inline(always)]
-fn word_combining_categories_sym() -> neovm_value::intern::SymId {
-    static SYMBOL: std::sync::OnceLock<neovm_value::intern::SymId> = std::sync::OnceLock::new();
-    *SYMBOL.get_or_init(|| neovm_value::intern::intern("word-combining-categories"))
-}
-#[inline(always)]
-fn word_separating_categories_sym() -> neovm_value::intern::SymId {
-    static SYMBOL: std::sync::OnceLock<neovm_value::intern::SymId> = std::sync::OnceLock::new();
-    *SYMBOL.get_or_init(|| neovm_value::intern::intern("word-separating-categories"))
-}
-
 /// The word-boundary state snapshot the scan/search prep needs: GNU's
 /// `char-script-table`, `word-combining-categories` and
 /// `word-separating-categories` read through the typed host read
@@ -4235,17 +4218,21 @@ fn word_separating_categories_sym() -> neovm_value::intern::SymId {
 /// `builtins/search.rs` at stage-3b T3 so text never calls upward.
 #[doc(hidden)]
 pub fn current_word_boundary_lookup<H: super::text_host::TextHost>(eval: &H) -> WordBoundaryLookup {
-    // The variable view is EditHost::Vars; its reads are EditVariableRead's.
-    use neovm_edit::emacs_core::edit_host::EditVariableRead as _;
+    // GNU reads the C globals, which reflect the current buffer's forwarded
+    // locals and a dynamic `let`; never the buffer-blind default.
+    use crate::emacs_core::syntax::forwarded_var::GnuForwardedVariable;
     WordBoundaryLookup::new_with_symbols(
-        eval.variables()
-            .value(char_script_table_sym())
+        GnuForwardedVariable::CharScriptTable
+            .forwarded()
+            .visible_value(eval)
             .filter(|value| !value.is_nil()),
-        eval.variables()
-            .value(word_combining_categories_sym())
+        GnuForwardedVariable::WordCombiningCategories
+            .forwarded()
+            .visible_value(eval)
             .unwrap_or(Value::NIL),
-        eval.variables()
-            .value(word_separating_categories_sym())
+        GnuForwardedVariable::WordSeparatingCategories
+            .forwarded()
+            .visible_value(eval)
             .unwrap_or(Value::NIL),
         eval.symbol_mode(),
     )

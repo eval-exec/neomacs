@@ -91,6 +91,10 @@ impl EditHost for Context {
         Context::variable_value_in_current_buffer(self, id)
     }
 
+    fn forwarded_variable_value(&self, id: SymId) -> Option<Value> {
+        Context::builtin_var_value(self, id)
+    }
+
     fn default_value(&self, id: SymId) -> Option<Value> {
         self.variables().default_value(id)
     }

@@ -3,6 +3,8 @@ pub use neovm_text::emacs_core::syntax::*;
 mod back_comment_safe_positions_test;
 #[path = "../text/syntax/tests/declared_logical_state.rs"]
 mod declared_logical_state_tests;
+#[path = "../text/syntax/tests/forwarded_locals_gnu_test.rs"]
+mod forwarded_locals_gnu_tests;
 #[path = "../text/syntax/tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
 #[path = "../text/syntax/tests/issue554_ascii_memo_test.rs"]

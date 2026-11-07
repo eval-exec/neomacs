@@ -98,9 +98,7 @@ fn live_done<H: crate::emacs_core::text_host::TextHost>(eval: &H) -> i64 {
     {
         return i64::MAX;
     }
-    let Some(done) = eval
-        .variables()
-        .value(syntax_propertize_done_sym())
+    let Some(done) = syntax_propertize_done_value(eval)
         .unwrap_or(Value::fixnum(-1))
         .as_fixnum()
     else {
@@ -126,9 +124,7 @@ pub(super) fn may_propertize<H: crate::emacs_core::text_host::TextHost>(eval: &H
     }
     // The common case first: `done' already covers TO (`syntax-ppss' and
     // font-lock propertize before they parse), one variable read.
-    let covered = eval
-        .variables()
-        .value(syntax_propertize_done_sym())
+    let covered = syntax_propertize_done_value(eval)
         .unwrap_or(Value::fixnum(-1))
         .as_fixnum()
         .is_none_or(|done| done > to);
@@ -249,9 +245,7 @@ fn run_propertize<H: crate::emacs_core::text_host::TextHost>(
         ));
     }
     let zv = buf.accessible_char_region().end_lisp().as_i64();
-    let done = eval
-        .variables()
-        .value(syntax_propertize_done_sym())
+    let done = syntax_propertize_done_value(eval)
         .unwrap_or(Value::fixnum(-1))
         .as_fixnum();
     if done.is_some_and(|done| done <= charpos && done < zv) {

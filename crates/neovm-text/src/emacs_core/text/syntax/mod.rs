@@ -12,6 +12,7 @@ use std::ops::Deref;
 
 use strum::{EnumString, IntoStaticStr};
 
+use self::forwarded_var::GnuForwardedVariable;
 use super::text_host::TextHost;
 // The variable view is EditHost::Vars; its read methods live on
 // EditVariableRead, so method resolution on the projection needs it in scope.
@@ -26,6 +27,7 @@ use neovm_value::heap_types::{GnuStringCharPos, LispString, StringCharacterCount
 use neovm_value::value::{Value, ValueKind, list_to_vec};
 
 mod declared_string;
+pub(crate) mod forwarded_var;
 #[doc(hidden)]
 pub mod parse_cache;
 #[cfg(not(any(test, feature = "test-support")))]
@@ -275,9 +277,20 @@ impl SyntaxStateVariable {
 
     #[inline(always)]
     fn enabled<H: TextHost>(self, ctx: &H) -> bool {
-        ctx.variables()
-            .value(self.symbol_id())
-            .is_some_and(|value| value.is_truthy())
+        // GNU reads these C globals, which set_buffer_internal_2 swaps to the
+        // current buffer's forwarded locals; the typed read also answers a
+        // dynamic `let` binding. Never the buffer-blind `variables().value`.
+        match self {
+            Self::CommentEndCanBeEscaped => GnuForwardedVariable::CommentEndCanBeEscaped
+                .forwarded()
+                .is_truthy(ctx),
+            Self::ParseSexpIgnoreComments => GnuForwardedVariable::ParseSexpIgnoreComments
+                .forwarded()
+                .is_truthy(ctx),
+            Self::ParseSexpLookupProperties => GnuForwardedVariable::ParseSexpLookupProperties
+                .forwarded()
+                .is_truthy(ctx),
+        }
     }
 }
 
@@ -1667,8 +1680,9 @@ pub fn forward_word_destination<H: TextHost>(
     count: i64,
     honor: bool,
 ) -> EmacsBytePos {
-    let wbtable = eval
-        .variable_value_by_name("find-word-boundary-function-table")
+    let wbtable = GnuForwardedVariable::FindWordBoundaryFunctionTable
+        .forwarded()
+        .visible_value(eval)
         .unwrap_or(Value::NIL);
     if word_boundary_table_active(&wbtable, eval.symbol_mode()) {
         let current_id = eval.buffers().current_buffer_id();
@@ -4936,6 +4950,17 @@ pub fn syntax_propertize_done_sym() -> neovm_value::intern::SymId {
     *SYMBOL.get_or_init(|| neovm_value::intern::intern("syntax-propertize--done"))
 }
 
+/// GNU `syntax-propertize--done` through the C-forwarded read: the current
+/// buffer's local value (GNU `Fmake_variable_buffer_local`, src/syntax.c:
+/// 3777) and the live dynamic binding. The scanner must never read the
+/// default here.
+#[inline(always)]
+pub(crate) fn syntax_propertize_done_value<H: TextHost>(eval: &H) -> Option<Value> {
+    GnuForwardedVariable::SyntaxPropertizeDone
+        .forwarded()
+        .visible_value(eval)
+}
+
 #[doc(hidden)]
 pub fn maybe_syntax_propertize_for_scan<H: TextHost>(
     eval: &mut H,
@@ -4962,10 +4987,7 @@ pub fn maybe_syntax_propertize_for_scan_with_scope<H: TextHost, G>(
         return Ok(Value::NIL);
     }
 
-    let done = eval
-        .variables()
-        .value(syntax_propertize_done_sym())
-        .unwrap_or(Value::fixnum(-1));
+    let done = syntax_propertize_done_value(eval).unwrap_or(Value::fixnum(-1));
     if let ValueKind::Fixnum(done) = done.kind()
         && done >= target_char_pos as i64
     {
@@ -5015,7 +5037,7 @@ pub fn syntax_propertize_would_run<H: TextHost>(eval: &H, target_char_pos: usize
         return false;
     }
     !matches!(
-        eval.variables().value(syntax_propertize_done_sym()).map(|done| done.kind()),
+        syntax_propertize_done_value(eval).map(|done| done.kind()),
         Some(ValueKind::Fixnum(done)) if done >= target_char_pos as i64
     )
 }
@@ -5033,10 +5055,7 @@ pub fn syntax_propertize_frontier_for_scan<H: TextHost>(
     from: usize,
     end: usize,
 ) -> usize {
-    let done = eval
-        .variables()
-        .value(syntax_propertize_done_sym())
-        .unwrap_or(Value::NIL);
+    let done = syntax_propertize_done_value(eval).unwrap_or(Value::NIL);
     match done.kind() {
         ValueKind::Fixnum(done) if done > 0 && (done as usize) <= end => {
             (done as usize - 1).max(from.saturating_add(1)).min(end)
