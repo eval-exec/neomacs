@@ -20,6 +20,7 @@ use std::sync::OnceLock;
 use neovm_edit::buffer::buffer::*;
 use neovm_edit::buffer::position::TextPositionAnchor;
 use neovm_edit::buffer::shared::SharedUndoState;
+use neovm_edit::test_support::authority::reset_local_var_alist_entry_probes;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_value::heap_types::byte_positions::EmacsByteLen;
 use neovm_value::heap_types::byte_positions::EmacsBytePos;

@@ -543,7 +543,6 @@ pub(crate) fn parse_cache_mismatches() -> u64 {
 }
 
 #[cfg(any(test, feature = "test-support"))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn reset_parse_cache_stats() {
     STATS.with(|cell| cell.set(ParseCacheStats::default()));
 }

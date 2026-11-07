@@ -16,7 +16,7 @@ use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::Vm;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
-use crate::test_support::authority::eval_fixture_program_named;
+use crate::test_support::jit_fixture::eval_fixture_program_named;
 use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 

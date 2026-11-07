@@ -72,7 +72,6 @@ thread_local! {
 }
 
 #[cfg(any(test, feature = "test-support"))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn reset_new_child_command_calls_for_test() {
     NEW_CHILD_COMMAND_CALLS.with(|calls| calls.set(0));
 }

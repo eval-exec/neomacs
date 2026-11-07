@@ -23,7 +23,7 @@ use neovm_value::value::Value;
 
 use neovm_edit::buffer::overlay::*;
 use neovm_value::heap_types::overlay_storage::instrumentation::endpoint_search_node_visit_count;
-use neovm_value::heap_types::overlay_storage::instrumentation::reset_endpoint_search_node_visit_count;
+use neovm_value::test_support::authority::reset_endpoint_search_node_visit_count;
 
 #[test]
 fn monotonic_overlay_insertion_keeps_interval_index_logarithmic() {

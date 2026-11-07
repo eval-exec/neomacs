@@ -41,14 +41,14 @@ struct IdleSkipOn;
 
 impl IdleSkipOn {
     fn new() -> Self {
-        crate::test_support::authority::set_redisplay_idle_skip_for_test(Some(true));
+        neovm_display::test_support::authority::set_redisplay_idle_skip_for_test(Some(true));
         Self
     }
 }
 
 impl Drop for IdleSkipOn {
     fn drop(&mut self) {
-        crate::test_support::authority::set_redisplay_idle_skip_for_test(None);
+        neovm_display::test_support::authority::set_redisplay_idle_skip_for_test(None);
     }
 }
 

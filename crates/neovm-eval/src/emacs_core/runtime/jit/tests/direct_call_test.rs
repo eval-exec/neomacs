@@ -13,7 +13,7 @@ use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
-use crate::test_support::authority::{eval_fixture_program, eval_fixture_program_named};
+use crate::test_support::jit_fixture::{eval_fixture_program, eval_fixture_program_named};
 use neovm_value::intern::intern;
 
 #[test]

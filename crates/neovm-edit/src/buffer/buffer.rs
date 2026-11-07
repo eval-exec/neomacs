@@ -80,7 +80,6 @@ fn note_local_var_alist_entry_probe() {
 fn note_local_var_alist_entry_probe() {}
 
 #[cfg(any(test, feature = "test-support"))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn reset_local_var_alist_entry_probes() {
     LOCAL_VAR_ALIST_ENTRY_PROBES.set(0);
 }

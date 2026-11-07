@@ -1632,7 +1632,7 @@ impl RuntimeStateTieringExt for RuntimeState {
     /// forced-cold half of the benchmark A/B; see `force_interpret`).
     #[cfg(any(test, feature = "test-support"))]
     fn set_cold_for_test(&self) {
-        crate::test_support::authority::set_force_interpret_for_test(self, true);
+        neovm_value::test_support::authority::set_force_interpret_for_test(self, true);
     }
 
     /// Record an observed callee `sym` at the call site at instruction `pc`

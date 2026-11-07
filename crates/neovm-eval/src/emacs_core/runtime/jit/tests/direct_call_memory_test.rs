@@ -3,7 +3,7 @@
 //! every exact-call observable through this entry and its forced fallback.
 
 use super::*;
-use crate::test_support::authority::eval_fixture_program;
+use crate::test_support::jit_fixture::eval_fixture_program;
 
 fn setup(register: bool) {
     crate::test_utils::init_test_tracing();

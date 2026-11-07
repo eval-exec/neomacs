@@ -27,10 +27,6 @@ pub mod test_utils {
     }
 }
 
-pub mod test_support {
-    pub use neovm_display::test_support::*;
-}
-
 pub mod host_input {
     pub use neovm_core::host_input::*;
 }

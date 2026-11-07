@@ -4,7 +4,7 @@ use super::*;
 impl Context {
     #[doc(hidden)]
     pub(crate) fn with_test_symbol_era<R>(
-        body: impl for<'heap> FnOnce(crate::test_support::authority::WorldProofEra<'heap>, SymId) -> R,
+        body: impl for<'heap> FnOnce(crate::emacs_core::eval::world::WorldProofEra<'heap>, SymId) -> R,
     ) -> R {
         Self::with_test_symbol_backing_era(
             neovm_value::tagged::gc::PlainSymbolBacking::Unprojected,
@@ -16,7 +16,7 @@ impl Context {
     /// refusal to a setup panic. Refused ownership is released before return.
     #[doc(hidden)]
     pub(crate) fn try_with_test_symbol_era<R>(
-        body: impl for<'heap> FnOnce(crate::test_support::authority::WorldProofEra<'heap>, SymId) -> R,
+        body: impl for<'heap> FnOnce(crate::emacs_core::eval::world::WorldProofEra<'heap>, SymId) -> R,
     ) -> Result<R, neovm_value::tagged::gc::RegistrationError> {
         Self::try_with_test_symbol_backings_init_era(
             &[neovm_value::tagged::gc::PlainSymbolBacking::Unprojected],
@@ -31,7 +31,7 @@ impl Context {
     pub(crate) fn try_with_test_symbol_backing_init_era<R>(
         kind: neovm_value::tagged::gc::PlainSymbolBacking,
         init: impl FnOnce(&mut Obarray, SymId),
-        body: impl for<'heap> FnOnce(crate::test_support::authority::WorldProofEra<'heap>, SymId) -> R,
+        body: impl for<'heap> FnOnce(crate::emacs_core::eval::world::WorldProofEra<'heap>, SymId) -> R,
     ) -> Result<R, neovm_value::tagged::gc::RegistrationError> {
         Self::try_with_test_symbol_backings_init_era(
             &[kind],
@@ -45,7 +45,7 @@ impl Context {
     #[doc(hidden)]
     pub(crate) fn with_test_symbol_backing_era<R>(
         kind: neovm_value::tagged::gc::PlainSymbolBacking,
-        body: impl for<'heap> FnOnce(crate::test_support::authority::WorldProofEra<'heap>, SymId) -> R,
+        body: impl for<'heap> FnOnce(crate::emacs_core::eval::world::WorldProofEra<'heap>, SymId) -> R,
     ) -> R {
         Self::with_test_symbol_backings_era(&[kind], |era, ids| body(era, ids[0]))
     }
@@ -56,7 +56,7 @@ impl Context {
     pub(crate) fn with_test_symbol_backings_era<R>(
         kinds: &[neovm_value::tagged::gc::PlainSymbolBacking],
         body: impl for<'heap> FnOnce(
-            crate::test_support::authority::WorldProofEra<'heap>,
+            crate::emacs_core::eval::world::WorldProofEra<'heap>,
             Vec<SymId>,
         ) -> R,
     ) -> R {
@@ -70,7 +70,7 @@ impl Context {
     pub(crate) fn with_test_symbol_functions_era<R>(
         kind: neovm_value::tagged::gc::PlainSymbolBacking,
         body: impl for<'heap> FnOnce(
-            crate::test_support::authority::WorldProofEra<'heap>,
+            crate::emacs_core::eval::world::WorldProofEra<'heap>,
             Vec<SymId>,
         ) -> R,
     ) -> R {
@@ -84,7 +84,7 @@ impl Context {
         kind: neovm_value::tagged::gc::PlainSymbolBacking,
         init: impl FnOnce(&mut Obarray, &[SymId]),
         body: impl for<'heap> FnOnce(
-            crate::test_support::authority::WorldProofEra<'heap>,
+            crate::emacs_core::eval::world::WorldProofEra<'heap>,
             Vec<SymId>,
         ) -> R,
     ) -> R {
@@ -113,7 +113,7 @@ impl Context {
         kind: neovm_value::tagged::gc::PlainSymbolBacking,
         spelling: &str,
         body: impl for<'heap> FnOnce(
-            crate::test_support::authority::WorldProofEra<'heap>,
+            crate::emacs_core::eval::world::WorldProofEra<'heap>,
             Vec<SymId>,
         ) -> R,
     ) -> R {
@@ -126,7 +126,7 @@ impl Context {
         spelling: &str,
         init: impl FnOnce(&mut Obarray, &[SymId]),
         body: impl for<'heap> FnOnce(
-            crate::test_support::authority::WorldProofEra<'heap>,
+            crate::emacs_core::eval::world::WorldProofEra<'heap>,
             Vec<SymId>,
         ) -> R,
     ) -> R {
@@ -154,7 +154,7 @@ impl Context {
         kind: neovm_value::tagged::gc::PlainSymbolBacking,
         spellings: &[String],
         body: impl for<'heap> FnOnce(
-            crate::test_support::authority::WorldProofEra<'heap>,
+            crate::emacs_core::eval::world::WorldProofEra<'heap>,
             Vec<SymId>,
         ) -> R,
     ) -> R {
@@ -182,7 +182,7 @@ impl Context {
         kinds: &[neovm_value::tagged::gc::PlainSymbolBacking],
         init: impl FnOnce(&mut Obarray, &[SymId]),
         body: impl for<'heap> FnOnce(
-            crate::test_support::authority::WorldProofEra<'heap>,
+            crate::emacs_core::eval::world::WorldProofEra<'heap>,
             Vec<SymId>,
         ) -> R,
     ) -> R {
@@ -195,7 +195,7 @@ impl Context {
         kinds: &[neovm_value::tagged::gc::PlainSymbolBacking],
         init: impl FnOnce(&mut Obarray, &[SymId]),
         body: impl for<'heap> FnOnce(
-            crate::test_support::authority::WorldProofEra<'heap>,
+            crate::emacs_core::eval::world::WorldProofEra<'heap>,
             Vec<SymId>,
         ) -> R,
     ) -> Result<R, neovm_value::tagged::gc::RegistrationError> {

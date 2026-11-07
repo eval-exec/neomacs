@@ -30,6 +30,7 @@ use neovm_value::value::list_to_vec;
 use neovm_text::emacs_core::syntax::DESCRIPTOR_LOG_CAP;
 use neovm_text::emacs_core::syntax::parse_cache::MAX_RUNS;
 use neovm_text::emacs_core::syntax::parse_cache::*;
+use neovm_text::test_support::authority::reset_parse_cache_stats;
 
 #[test]
 fn cached_answers_equal_plain_scans_under_every_change() {

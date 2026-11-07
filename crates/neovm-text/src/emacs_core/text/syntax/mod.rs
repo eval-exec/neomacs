@@ -3377,7 +3377,6 @@ fn record_syntax_table_decode() {
 fn record_syntax_table_decode() {}
 
 #[cfg(any(test, feature = "test-support"))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn reset_syntax_table_decodes_for_test() {
     SYNTAX_TABLE_DECODES.with(|n| n.set(0));
 }

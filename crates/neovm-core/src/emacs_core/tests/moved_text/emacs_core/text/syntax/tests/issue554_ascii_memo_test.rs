@@ -9,6 +9,7 @@ use neovm_text::emacs_core::regex_emacs::SyntaxAssertion;
 use neovm_text::emacs_core::syntax::parse_loop::{
     Entry, Plain, SafePositionRecorder, ScanEnd, ScanFinish, run_parse_loop,
 };
+use neovm_text::test_support::authority::reset_syntax_table_decodes_for_test;
 use neovm_value::emacs_char::EmacsChar;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};

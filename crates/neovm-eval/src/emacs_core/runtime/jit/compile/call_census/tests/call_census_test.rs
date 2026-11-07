@@ -44,7 +44,8 @@ fn census_delta(on: bool) -> Vec<(&'static str, &'static str, u64)> {
             force_direct_shapes_for_test(Some(DirectShapesKnob::OFF));
             force_call_census_for_test(Some(on));
             let mut ev = crate::test_utils::runtime_startup_context();
-            crate::test_support::authority::eval_fixture_program(&mut ev, PROGRAM).expect("warmed");
+            crate::test_support::jit_fixture::eval_fixture_program(&mut ev, PROGRAM)
+                .expect("warmed");
             let before = census_counts();
             ev.eval_str("(dotimes (i 100) (neovm--cc-caller i))")
                 .expect("runs");
@@ -115,7 +116,8 @@ fn the_census_counts_apply_opcode_and_builtin_targets() {
             force_direct_shapes_for_test(Some(DirectShapesKnob::OFF));
             force_call_census_for_test(Some(true));
             let mut ev = crate::test_utils::runtime_startup_context();
-            crate::test_support::authority::eval_fixture_program(&mut ev, PROGRAM).expect("warmed");
+            crate::test_support::jit_fixture::eval_fixture_program(&mut ev, PROGRAM)
+                .expect("warmed");
             let symbol = Value::symbol("neovm--cc-applied");
             let object = ev
                 .obarray
@@ -234,7 +236,7 @@ fn accepted_spec_fast_counts(on: bool) -> ((u64, u64), (u64, u64)) {
             force_call_census_for_test(Some(on));
             let mut ev = crate::test_utils::runtime_startup_context();
             ev.refresh_attention_for_test();
-            crate::test_support::authority::eval_fixture_program(&mut ev, SPEC_FAST_PROGRAM)
+            crate::test_support::jit_fixture::eval_fixture_program(&mut ev, SPEC_FAST_PROGRAM)
                 .expect("callees warmed");
             let caller = ev
                 .obarray

@@ -5,6 +5,9 @@
 
 pub mod emacs_core;
 
+#[cfg(feature = "test-support")]
+pub mod test_support;
+
 /// Test-only fixtures for this crate's tests and for upper test builds.
 ///
 /// Compiled for the crate's own tests and under the `test-support` feature;

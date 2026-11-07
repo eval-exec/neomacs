@@ -875,3 +875,56 @@ pub unsafe fn heap_types__LispString__from_borrowed_bytes(
 pub fn with_legacy_gc<T>(create: impl FnOnce() -> T) -> T {
     crate::test_utils::with_legacy_gc(create)
 }
+
+// ---------------------------------------------------------------------------
+// FENCES (LEAD 18:1xZ, VIS-FREE-FN-RESET-ALLOWLIST 14 -> 0): every free-fn
+// reset of a TLS/static counter is a write, so its owning crate's signed
+// authority module is the only cross-crate route. The originals stay
+// pub(crate) with no A-prime; these delegates are their sole public path.
+// ---------------------------------------------------------------------------
+
+/// FENCE (N2 TLS/static reset): zero the overlay-storage visit counter on the
+/// calling thread. The original stays pub(crate) in the cfg-gated overlay
+/// instrumentation module.
+pub fn reset_overlays_at_node_visit_count() {
+    crate::heap_types::overlay_storage::instrumentation::reset_overlays_at_node_visit_count();
+}
+
+/// FENCE (N2 TLS/static reset): zero the overlay-iterator frame-push counter.
+pub fn reset_overlay_iterator_frame_push_count() {
+    crate::heap_types::overlay_storage::instrumentation::reset_overlay_iterator_frame_push_count();
+}
+
+/// FENCE (N2 TLS/static reset): zero the overlay shift-node visit counter.
+pub fn reset_overlay_shift_node_visit_count() {
+    crate::heap_types::overlay_storage::instrumentation::reset_overlay_shift_node_visit_count();
+}
+
+/// FENCE (N2 TLS/static reset): zero the endpoint search node-visit counter.
+pub fn reset_endpoint_search_node_visit_count() {
+    crate::heap_types::overlay_storage::instrumentation::reset_endpoint_search_node_visit_count();
+}
+
+/// FENCE (N2 TLS/static reset): zero the endpoint search summary-shift counter.
+pub fn reset_endpoint_search_summary_shift_count() {
+    crate::heap_types::overlay_storage::instrumentation::reset_endpoint_search_summary_shift_count(
+    );
+}
+
+/// FENCE (N2 TLS/static reset): zero the overlay full-enumeration visit counter.
+pub fn reset_overlay_full_enumeration_visit_count() {
+    crate::heap_types::overlay_storage::instrumentation::reset_overlay_full_enumeration_visit_count(
+    );
+}
+
+/// FENCE (N2 TLS reset): zero the plist-get walk counter on the calling
+/// thread. The original stays pub(crate) in symbol::plist_core.
+pub fn reset_plist_get_walks() {
+    crate::symbol::plist_core::reset_plist_get_walks();
+}
+
+/// FENCE (N2 TLS reset): zero the symbol-with-position plist comparison
+/// counter. The original stays pub(crate) in symbol::plist_core.
+pub fn reset_symbol_with_pos_plist_comparisons() {
+    crate::symbol::plist_core::reset_symbol_with_pos_plist_comparisons();
+}

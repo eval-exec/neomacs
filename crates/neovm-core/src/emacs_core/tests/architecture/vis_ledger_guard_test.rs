@@ -5435,13 +5435,13 @@ fn duplicated_test_support_widening(workspace: &Path) -> Result<(), String> {
 
 // ---------------------------------------------------------------------------
 // Free-function TLS/static counter resets are AUTHORITY-class (LEAD 11:2xZ
-// set 2). Rows that predate the ruling are frozen in
-// VIS-FREE-FN-RESET-ALLOWLIST.tsv with an exact ceiling; the allowlist may
-// only shrink. Owned-instance resets (methods on a type the test owns, and
-// free functions that only touch an owned argument) remain VIS. A NEW VIS row
-// for a free-function reset/store of process or thread static state is red:
-// the write must route through the owning crate's test_support::authority
-// fence with an AUTHORITY row.
+// set 2). LEAD 18:1xZ retired the frozen allowlist: every historical case is
+// now an owning-crate test_support::authority fence delegate with an
+// AUTHORITY row, so ANY VIS row in this class is red. Owned-instance resets
+// (methods on a type the test owns, and free functions that only touch an
+// owned argument) remain VIS. A VIS row for a free-function reset/store of
+// process or thread static state must route the write through the owning
+// crate's test_support::authority fence with an AUTHORITY row instead.
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -5636,76 +5636,16 @@ fn free_fn_reset_candidates(
     Ok(candidates)
 }
 
-fn load_vis_free_fn_reset_allowlist(
-    workspace: &Path,
-) -> Result<(BTreeSet<FreeFnResetRow>, usize), String> {
-    let architecture = workspace.join(ARCHITECTURE_DIR);
-    let file = architecture.join("VIS-FREE-FN-RESET-ALLOWLIST.tsv");
-    let ceiling_file = architecture.join("VIS-FREE-FN-RESET-ALLOWLIST.ceiling");
-    let mut allowlist = BTreeSet::new();
-    if file.is_file() {
-        for (index, line) in read(&file)?.lines().enumerate().skip(1) {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let fields: Vec<&str> = line.split('\t').collect();
-            if fields.len() != 3 {
-                return Err(format!(
-                    "{}:{}: expected 3 columns (crate, item, defining_file)",
-                    file.display(),
-                    index + 1
-                ));
-            }
-            allowlist.insert(FreeFnResetRow {
-                crate_name: fields[0].to_owned(),
-                item: fields[1].to_owned(),
-                defining_file: fields[2].to_owned(),
-            });
-        }
-    }
-    let ceiling: usize = read(&ceiling_file)?.trim().parse().map_err(|_| {
-        format!(
-            "{}: expected one nonnegative integer",
-            ceiling_file.display()
-        )
-    })?;
-    if allowlist.len() > ceiling {
-        return Err(format!(
-            "{}: {} allowlist rows exceed the ceiling {ceiling}",
-            file.display(),
-            allowlist.len()
-        ));
-    }
-    Ok((allowlist, ceiling))
-}
-
 fn vis_free_fn_reset_violation(workspace: &Path, rows: &[VisRow]) -> Result<(), String> {
-    let (allowlist, ceiling) = load_vis_free_fn_reset_allowlist(workspace)?;
     let computed = free_fn_reset_candidates(workspace, rows)?;
-    let new: Vec<String> = computed
-        .difference(&allowlist)
-        .map(|row| format!("{} `{}` ({})", row.crate_name, row.item, row.defining_file))
-        .collect();
-    if !new.is_empty() {
+    if !computed.is_empty() {
+        let offending: Vec<String> = computed
+            .iter()
+            .map(|row| format!("{} `{}` ({})", row.crate_name, row.item, row.defining_file))
+            .collect();
         return Err(format!(
-            "TEST-SUPPORT-VIS: NEW free-function TLS/static counter reset/store row(s); route the write through the owning crate's test_support::authority fence and add an AUTHORITY row (LEAD 11:2xZ; the frozen allowlist may only shrink): {}",
-            new.join(" | ")
-        ));
-    }
-    let stale: Vec<String> = allowlist
-        .difference(&computed)
-        .map(|row| format!("{} `{}` ({})", row.crate_name, row.item, row.defining_file))
-        .collect();
-    if !stale.is_empty() {
-        return Err(format!(
-            "TEST-SUPPORT-VIS: frozen free-function reset row(s) no longer classify as free-function TLS/static resets; shrink VIS-FREE-FN-RESET-ALLOWLIST.tsv (and its ceiling): {}",
-            stale.join(" | ")
-        ));
-    }
-    if allowlist.len() > ceiling {
-        return Err(format!(
-            "VIS-FREE-FN-RESET-ALLOWLIST.ceiling {ceiling}: allowlist has {} rows",
-            allowlist.len()
+            "TEST-SUPPORT-VIS: free-function TLS/static counter reset/store VIS row(s); route the write through the owning crate's test_support::authority fence and add an AUTHORITY row (LEAD 11:2xZ; LEAD 18:1xZ retired the allowlist, so every case is red): {}",
+            offending.join(" | ")
         ));
     }
     Ok(())
@@ -7632,9 +7572,14 @@ fn auth_fence_file(crate_name: &str) -> Option<AuthFence> {
             file: "crates/neovm-text/src/test_support/authority.rs",
             segments: &["test_support", "authority"],
         }),
-        // NO signed test_support::authority module: TS-UNROWED original-path
-        // rows only (LEAD 02:2xZ owns arm; peer signed the system families).
-        "neovm-system" => Some(AuthFence::OriginalPathOnly),
+        // LEAD 18:1xZ: the callproc TLS reset now routes through the signed
+        // system fence. Existing system rows remain original-path rows and are
+        // still validated by the OriginalPath branch; the fence must not
+        // declare their leaves as a second route.
+        "neovm-system" => Some(AuthFence::Module {
+            file: "crates/neovm-system/src/test_support/authority.rs",
+            segments: &["test_support", "authority"],
+        }),
         _ => None,
     }
 }
@@ -8921,10 +8866,19 @@ fn authority_public_paths_mutations() {
 fn authority_original_path_only_fenceless_mutations() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sys_src = dir.path().join("crates/neovm-system/src");
-    std::fs::create_dir_all(&sys_src).expect("system src");
+    std::fs::create_dir_all(sys_src.join("test_support")).expect("system src");
+    // neovm-system is a fenced crate (LEAD 18:1xZ added its
+    // test_support::authority module), so the original-path rows below are
+    // validated in the Module branch; the fence must not expose their leaf.
+    std::fs::write(sys_src.join("test_support.rs"), "pub mod authority;\n").expect("support");
+    std::fs::write(
+        sys_src.join("test_support/authority.rs"),
+        "pub fn fence_only_item() {}\n",
+    )
+    .expect("fence");
     std::fs::write(
         sys_src.join("lib.rs"),
-        "pub mod fileio;\npub mod original;\n",
+        "pub mod fileio;\npub mod original;\npub mod test_support;\n",
     )
     .expect("lib");
     std::fs::write(sys_src.join("fileio.rs"), "pub fn decode_for_test() {}\n").expect("fileio");
@@ -8948,7 +8902,7 @@ fn authority_original_path_only_fenceless_mutations() {
     // test-support build view.
     std::fs::write(
         sys_src.join("lib.rs"),
-        "pub(crate) mod fileio;\npub mod original;\n",
+        "pub(crate) mod fileio;\npub mod original;\npub mod test_support;\n",
     )
     .expect("lib");
     let error =
@@ -8959,7 +8913,7 @@ fn authority_original_path_only_fenceless_mutations() {
     );
     std::fs::write(
         sys_src.join("lib.rs"),
-        "pub mod fileio;\npub mod original;\n",
+        "pub mod fileio;\npub mod original;\npub mod test_support;\n",
     )
     .expect("lib");
 
@@ -9444,21 +9398,8 @@ mod disjointness_ratchet_tests {
     fn vis_free_fn_reset_ratchet_mutations() {
         let dir = tempfile::tempdir().expect("tempdir");
         let value_src = dir.path().join("crates/neovm-value/src");
-        let arch = dir.path().join(ARCHITECTURE_DIR);
         std::fs::create_dir_all(&value_src).expect("src");
-        std::fs::create_dir_all(&arch).expect("arch");
         let file = value_src.join("lib.rs");
-        let allow_file = arch.join("VIS-FREE-FN-RESET-ALLOWLIST.tsv");
-        let ceiling_file = arch.join("VIS-FREE-FN-RESET-ALLOWLIST.ceiling");
-        let write_allow = |rows: &[&str], ceiling: usize| {
-            let mut text = String::from("crate\titem\tdefining_file\n");
-            for row in rows {
-                text.push_str(row);
-                text.push('\n');
-            }
-            std::fs::write(&allow_file, text).expect("allow");
-            std::fs::write(&ceiling_file, format!("{ceiling}\n")).expect("ceiling");
-        };
         let row = |item: &str| VisRow {
             crate_dir: "neovm-value".to_owned(),
             item: item.to_owned(),
@@ -9466,30 +9407,22 @@ mod disjointness_ratchet_tests {
             file: "crates/neovm-value/src/lib.rs".to_owned(),
             tests: vec!["crates/neovm-core/tests/t.rs".to_owned()],
         };
-        // A new free-fn TLS counter reset is red until frozen.
+        // A free-fn TLS counter reset is red: the allowlist is retired, so
+        // there is no frozen-green state.
         std::fs::write(
             &file,
             "thread_local! { static COUNTER: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }\npub(crate) fn reset_counter() { COUNTER.with(|count| count.set(0)); }\n",
         )
         .expect("reset");
-        write_allow(&[], 0);
         let error = vis_free_fn_reset_violation(dir.path(), &[row("reset_counter")])
-            .expect_err("new reset is red");
-        assert!(error.contains("NEW free-function TLS/static"), "{error}");
-        // The frozen signed row is green.
-        write_allow(
-            &["neovm-value\treset_counter\tcrates/neovm-value/src/lib.rs"],
-            1,
-        );
-        vis_free_fn_reset_violation(dir.path(), &[row("reset_counter")])
-            .expect("frozen reset is green");
+            .expect_err("free-fn TLS reset is red");
+        assert!(error.contains("free-function TLS/static"), "{error}");
         // A method reset mutates an owned instance: it stays VIS.
         std::fs::write(
             &file,
             "pub(crate) struct Owned { count: std::cell::Cell<usize> }\nimpl Owned { pub(crate) fn reset_count(&self) { self.count.set(0); } }\n",
         )
         .expect("method");
-        write_allow(&[], 0);
         vis_free_fn_reset_violation(dir.path(), &[row("reset_count")])
             .expect("owned-instance reset stays VIS");
         // A free function that only resets its owned argument stays VIS.
@@ -9515,32 +9448,9 @@ mod disjointness_ratchet_tests {
             "static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);\npub(crate) fn store_counter() { COUNTER.store(0, std::sync::atomic::Ordering::Relaxed); }\n",
         )
         .expect("store");
-        write_allow(&[], 0);
         let error = vis_free_fn_reset_violation(dir.path(), &[row("store_counter")])
             .expect_err("static store is red");
-        assert!(error.contains("NEW free-function TLS/static"), "{error}");
-        // A frozen row that no longer classifies is stale and must shrink.
-        std::fs::write(&file, "pub(crate) fn reset_counter() {}\n").expect("no static");
-        write_allow(
-            &["neovm-value\treset_counter\tcrates/neovm-value/src/lib.rs"],
-            1,
-        );
-        let error = vis_free_fn_reset_violation(dir.path(), &[row("reset_counter")])
-            .expect_err("stale row is red");
-        assert!(error.contains("no longer classify"), "{error}");
-        // The exact ceiling may only shrink.
-        std::fs::write(
-            &file,
-            "thread_local! { static COUNTER: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }\npub(crate) fn reset_counter() { COUNTER.with(|count| count.set(0)); }\n",
-        )
-        .expect("reset again");
-        write_allow(
-            &["neovm-value\treset_counter\tcrates/neovm-value/src/lib.rs"],
-            0,
-        );
-        let error = vis_free_fn_reset_violation(dir.path(), &[row("reset_counter")])
-            .expect_err("ceiling shrink");
-        assert!(error.contains("ceiling"), "{error}");
+        assert!(error.contains("free-function TLS/static"), "{error}");
     }
 
     #[test]

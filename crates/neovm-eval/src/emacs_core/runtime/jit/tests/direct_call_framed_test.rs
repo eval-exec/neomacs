@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
-use crate::test_support::authority::eval_fixture_program;
+use crate::test_support::jit_fixture::eval_fixture_program;
 use std::path::PathBuf;
 
 fn gnu_expect(name: &str, program: &str, observe: &str, fixture: &str) -> String {

@@ -2688,7 +2688,6 @@ pub(crate) fn dfa_stats() -> DfaStats {
 
 /// Reset this thread's filter counters (tests).
 #[cfg(any(test, feature = "test-support"))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn reset_dfa_stats() {
     STATS.with(|cell| *cell.borrow_mut() = DfaStats::default());
 }

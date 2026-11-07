@@ -28,6 +28,7 @@ use super::gc_collection_epoch_tests::WarmRegexCaches;
 use crate::emacs_core::eval::Context;
 
 use neovm_text::emacs_core::regex::*;
+use neovm_text::test_support::authority::clear_regex_caches;
 
 use neovm_value::value::Value;
 

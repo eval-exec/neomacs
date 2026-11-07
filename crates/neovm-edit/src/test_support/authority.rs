@@ -54,3 +54,9 @@ pub fn reset_display_stop_recomputes_for_test() {
 pub fn reset_char_pos_to_emacs_byte_pos_call_count() {
     crate::buffer::buffer_text::reset_char_pos_to_emacs_byte_pos_call_count();
 }
+
+/// FENCE (N2 TLS reset): zero the local-var alist probe counter on the test
+/// thread. The original stays pub(crate) with no visibility widening.
+pub fn reset_local_var_alist_entry_probes() {
+    crate::buffer::buffer::reset_local_var_alist_entry_probes();
+}

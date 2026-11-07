@@ -101,14 +101,17 @@ impl NonNilPropertyValue {
 
 #[cfg(test)]
 pub(crate) use neovm_value::heap_types::overlay_storage::instrumentation::{
-    overlays_at_node_visit_count, record_overlays_at_node_visit, reset_overlays_at_node_visit_count,
+    overlays_at_node_visit_count, record_overlays_at_node_visit,
 };
+#[cfg(test)]
+pub(crate) use neovm_value::test_support::authority::reset_overlays_at_node_visit_count;
 
 #[cfg(test)]
 pub(crate) use neovm_value::heap_types::overlay_storage::instrumentation::{
     overlay_iterator_frame_push_count, record_overlay_iterator_frame_push,
-    reset_overlay_iterator_frame_push_count,
 };
+#[cfg(test)]
+pub(crate) use neovm_value::test_support::authority::reset_overlay_iterator_frame_push_count;
 
 #[cfg(test)]
 static OVERLAY_PROPERTY_EXTENT_INSPECTIONS: std::sync::atomic::AtomicUsize =
@@ -160,20 +163,23 @@ pub(super) fn record_overlay_edit_candidate_inspection() {
 #[cfg(test)]
 pub(crate) use neovm_value::heap_types::overlay_storage::instrumentation::{
     overlay_shift_node_visit_count, record_overlay_shift_node_visit,
-    reset_overlay_shift_node_visit_count,
 };
+#[cfg(test)]
+pub(crate) use neovm_value::test_support::authority::reset_overlay_shift_node_visit_count;
 
 #[cfg(test)]
 pub(crate) use neovm_value::heap_types::overlay_storage::instrumentation::{
     endpoint_search_node_visit_count, record_endpoint_search_node_visit,
-    reset_endpoint_search_node_visit_count,
 };
+#[cfg(test)]
+pub(crate) use neovm_value::test_support::authority::reset_endpoint_search_node_visit_count;
 
 #[cfg(test)]
 pub(crate) use neovm_value::heap_types::overlay_storage::instrumentation::{
     endpoint_search_summary_shift_count, record_endpoint_search_summary_shift,
-    reset_endpoint_search_summary_shift_count,
 };
+#[cfg(test)]
+pub(crate) use neovm_value::test_support::authority::reset_endpoint_search_summary_shift_count;
 
 #[cfg(test)]
 static ENDPOINT_PUBLICATION_INTERVAL_READS: std::sync::atomic::AtomicUsize =
@@ -197,8 +203,9 @@ pub(super) fn record_endpoint_publication_interval_read() {
 #[cfg(test)]
 pub(crate) use neovm_value::heap_types::overlay_storage::instrumentation::{
     overlay_full_enumeration_visit_count, record_overlay_full_enumeration_visit,
-    reset_overlay_full_enumeration_visit_count,
 };
+#[cfg(test)]
+pub(crate) use neovm_value::test_support::authority::reset_overlay_full_enumeration_visit_count;
 
 #[cfg(not(any(test, feature = "test-support")))]
 pub struct OverlayList {

@@ -1174,7 +1174,7 @@ pub fn redefined_pins_present_for_test() -> bool {
 /// moved spec pair use it). Crate-private: the only cross-crate route is the
 /// authority delegates above.
 #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
-mod jit_fixture {
+pub(crate) mod jit_fixture {
     use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
     use crate::emacs_core::eval::Context;
     use neovm_value::intern::intern;

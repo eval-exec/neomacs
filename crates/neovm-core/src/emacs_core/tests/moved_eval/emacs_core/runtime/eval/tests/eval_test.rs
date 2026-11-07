@@ -26,9 +26,9 @@ mod moved_eval_prelude {
     pub use crate::emacs_core::threads::ThreadManager;
     pub use crate::window::display::WindowDisplayContextExt;
     pub use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
-    pub use neovm_eval::test_support::authority::service_pending_timers_for_test;
+    pub(crate) use neovm_eval::test_support::authority::service_pending_timers_for_test;
     #[cfg(feature = "jit")]
-    pub use neovm_eval::test_support::authority::{
+    pub(crate) use neovm_eval::test_support::authority::{
         force_profit_gate_for_test, jit_compiled_id_for_test, jit_compiled_id_or_assign_for_test,
         jit_is_hot_for_test, jit_mark_cold_for_test, jit_mark_hot_for_test,
         jit_patched_prefix_for_test,
@@ -12940,7 +12940,7 @@ fn overlay_modification_hooks_are_collected_after_before_change_functions() {
 #[test]
 fn deleting_before_a_large_overlay_suffix_does_not_enumerate_every_overlay() {
     crate::test_utils::init_test_tracing();
-    neovm_value::heap_types::overlay_storage::instrumentation::reset_overlay_full_enumeration_visit_count();
+    neovm_value::test_support::authority::reset_overlay_full_enumeration_visit_count();
 
     let result = eval_one(
         r#"(progn

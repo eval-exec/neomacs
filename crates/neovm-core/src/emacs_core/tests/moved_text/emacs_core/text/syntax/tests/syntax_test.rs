@@ -29,6 +29,7 @@ use neovm_value::value::list_to_vec;
 use neovm_edit::buffer::{CharPos0, LispCharPos1};
 
 use neovm_text::emacs_core::syntax::*;
+use neovm_text::test_support::authority::reset_syntax_table_decodes_for_test;
 
 use neovm_value::error::{FlowKind, FlowResultExt as _};
 

@@ -32,7 +32,6 @@ fn note_symbol_with_pos_plist_comparison() {
 }
 
 #[cfg(any(test, feature = "test-support"))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[doc(hidden)]
 pub(crate) fn reset_symbol_with_pos_plist_comparisons() {
     SYMBOL_WITH_POS_PLIST_COMPARISONS.with(|count| count.set(0));
@@ -51,7 +50,6 @@ fn note_plist_get_walk() {
 }
 
 #[cfg(any(test, feature = "test-support"))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[doc(hidden)]
 pub(crate) fn reset_plist_get_walks() {
     PLIST_GET_WALKS.with(|count| count.set(0));

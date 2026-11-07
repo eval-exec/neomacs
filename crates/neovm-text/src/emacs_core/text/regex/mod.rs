@@ -731,8 +731,7 @@ thread_local! {
     static REGEX_CACHE_COLLECTION_EPOCH: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-fn clear_regex_caches() {
+pub(crate) fn clear_regex_caches() {
     SEARCH_PATTERN_CACHE.with(|cache| cache.borrow_mut().clear());
     LISP_REGEX_PATTERN_CACHE.with(|cache| cache.borrow_mut().clear());
     LITERAL_TRT_CACHE.with(|cache| *cache.borrow_mut() = None);

@@ -30,7 +30,7 @@ use crate::emacs_core::identity_commands::{
 };
 
 use neovm_system::emacs_core::callproc::new_child_command_calls_for_test;
-use neovm_system::emacs_core::callproc::reset_new_child_command_calls_for_test;
+use neovm_system::test_support::authority::reset_new_child_command_calls_for_test;
 use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
 
 #[test]

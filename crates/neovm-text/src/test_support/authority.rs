@@ -21,3 +21,31 @@ pub fn reset_regex_match_stats_for_test() {
     #[cfg(debug_assertions)]
     crate::emacs_core::regex::match_stats::reset();
 }
+
+/// FENCE (N2 TLS reset): clear this thread's regex pattern caches.
+/// The original stays pub(crate) with no visibility widening; this fence is
+/// its only cross-crate route (LEAD 18:1xZ).
+pub fn clear_regex_caches() {
+    crate::emacs_core::regex::clear_regex_caches();
+}
+
+/// FENCE (N2 TLS reset): reset this thread's existence-DFA filter counters.
+/// The original stays pub(crate) with no visibility widening; this fence is
+/// its only cross-crate route (LEAD 18:1xZ).
+pub fn reset_dfa_stats() {
+    crate::emacs_core::regex_emacs::dfa::reset_dfa_stats();
+}
+
+/// FENCE (N2 TLS reset): reset this thread's syntax parse-cache stats.
+/// The original stays pub(crate) with no visibility widening; this fence is
+/// its only cross-crate route (LEAD 18:1xZ).
+pub fn reset_parse_cache_stats() {
+    crate::emacs_core::syntax::parse_cache::reset_parse_cache_stats();
+}
+
+/// FENCE (N2 TLS reset): zero the per-thread syntax-table decode counter.
+/// The original stays pub(crate) with no visibility widening; this fence is
+/// its only cross-crate route (LEAD 18:1xZ).
+pub fn reset_syntax_table_decodes_for_test() {
+    crate::emacs_core::syntax::reset_syntax_table_decodes_for_test();
+}

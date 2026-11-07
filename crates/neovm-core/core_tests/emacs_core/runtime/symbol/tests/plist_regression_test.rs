@@ -51,7 +51,7 @@ fn get_does_not_enter_the_plist_walker_when_a_symbol_has_no_entries() {
     crate::test_utils::init_test_tracing();
     let mut ctx = make_ctx();
 
-    neovm_value::symbol::plist_core::reset_plist_get_walks();
+    neovm_value::test_support::authority::reset_plist_get_walks();
     assert_eq!(eval(&mut ctx, "(get 'plist-empty 'missing)"), Value::NIL);
     assert_eq!(
         neovm_value::symbol::plist_core::plist_get_walks(),
@@ -66,7 +66,7 @@ fn get_skips_non_cons_symbol_plists_without_hiding_the_verbatim_value() {
     let mut ctx = make_ctx();
     eval(&mut ctx, "(setplist 'plist-malformed 42)");
 
-    neovm_value::symbol::plist_core::reset_plist_get_walks();
+    neovm_value::test_support::authority::reset_plist_get_walks();
     assert_eq!(
         eval(&mut ctx, "(get 'plist-malformed 'missing)"),
         Value::NIL
@@ -89,7 +89,7 @@ fn ordinary_plist_get_does_not_enter_symbol_with_position_comparison_loop() {
         Value::fixnum(2),
     ]);
 
-    neovm_value::symbol::plist_core::reset_symbol_with_pos_plist_comparisons();
+    neovm_value::test_support::authority::reset_symbol_with_pos_plist_comparisons();
     assert_eq!(
         neovm_value::symbol::plist_core::plist_get_swp(
             plist,
@@ -104,7 +104,7 @@ fn ordinary_plist_get_does_not_enter_symbol_with_position_comparison_loop() {
         "ordinary GNU EQ plist lookup must select its identity-only loop before walking entries"
     );
 
-    neovm_value::symbol::plist_core::reset_symbol_with_pos_plist_comparisons();
+    neovm_value::test_support::authority::reset_symbol_with_pos_plist_comparisons();
     assert_eq!(
         neovm_value::symbol::plist_core::plist_get_swp(
             plist,

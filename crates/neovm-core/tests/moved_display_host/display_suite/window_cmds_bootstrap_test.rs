@@ -2725,7 +2725,7 @@ fn gnu_lisp_window_edges_use_logical_outer_and_presented_body_regions() {
         frame.set_window_system(Some(Value::symbol("neo")));
         frame.char_width = 8.0;
         frame.char_height = 16.0;
-        crate::test_support::authority::prepare_and_activate_display_presentation_for_test(
+        neovm_display::test_support::authority::prepare_and_activate_display_presentation_for_test(
             frame,
             crate::window::geometry::PresentationId::new(presentation),
             vec![crate::window::WindowDisplaySnapshot {

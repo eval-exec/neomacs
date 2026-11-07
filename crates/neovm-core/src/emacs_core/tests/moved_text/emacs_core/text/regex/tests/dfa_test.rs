@@ -12,6 +12,7 @@ use neovm_text::emacs_core::regex::*;
 use neovm_text::emacs_core::regex_emacs::CompiledPattern;
 use neovm_text::emacs_core::regex_emacs::SyntaxLookup;
 use neovm_text::emacs_core::regex_emacs::dfa::UNKNOWN;
+use neovm_text::test_support::authority::reset_dfa_stats;
 use neovm_value::emacs_char;
 
 use neovm_text::emacs_core::regex_emacs::{
