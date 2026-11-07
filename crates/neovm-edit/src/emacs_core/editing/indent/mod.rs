@@ -796,7 +796,9 @@ fn next_screen_line_scan<H: EditHost, P: ScreenLineScanPolicy<H>>(
     let stop_cache = DisplayStopCache::new();
 
     while scan < point_max {
-        #[cfg(test)]
+        // The accessor below is test-support-visible; display's window tests
+        // assert this counter, so it must move in that build too.
+        #[cfg(any(test, feature = "test-support"))]
         SCREEN_LINE_SCAN_STEPS.with(|steps| steps.set(steps.get().saturating_add(1)));
         let probes_can_run = stop_cache.probes_at(scan.get());
         let Some(advance) = display_advance_at(host, buffer_id, scan.get(), column, &stop_cache)?
@@ -2017,7 +2019,8 @@ pub(crate) fn display_advance_at<H: EditHost>(
     }
 
     if byte >= stop.recompute_at.get() {
-        #[cfg(test)]
+        // See next_screen_line_scan: display's window tests assert this.
+        #[cfg(any(test, feature = "test-support"))]
         DISPLAY_STOP_RECOMPUTES.with(|n| n.set(n.get().saturating_add(1)));
         // STOP: probe each display-relevant property (DisplayStopProp) in order.
         // On a hit, return the coalesced run and arm the cache to re-probe at its
