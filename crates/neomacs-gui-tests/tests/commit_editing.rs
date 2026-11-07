@@ -6,13 +6,23 @@ use neomacs_gui_tests::{
 };
 use std::{fs, path::PathBuf, time::Duration};
 
+/// Honor explicit compositor selection, defaulting to the host's native backend.
+fn commit_probe_backend(configured: Option<&str>) -> GuiBackend {
+    match configured {
+        Some("wayland" | "linux-wayland") => GuiBackend::LinuxWayland,
+        Some("x11" | "linux-x11") => GuiBackend::LinuxX11,
+        Some("macos") => GuiBackend::Macos,
+        None if cfg!(target_os = "macos") => GuiBackend::Macos,
+        None => GuiBackend::LinuxX11,
+        Some(other) => panic!("unsupported NEOMACS_GUI_TEST_BACKEND={other:?}"),
+    }
+}
+
+/// Run a native commit-editing fixture and require its explicit success marker.
 fn run_commit_probe(probe: &str) {
     let root = neomacs_infra::crate_root!().join("../..");
-    let backend = if cfg!(target_os = "macos") {
-        GuiBackend::Macos
-    } else {
-        GuiBackend::LinuxX11
-    };
+    let configured = std::env::var("NEOMACS_GUI_TEST_BACKEND").ok();
+    let backend = commit_probe_backend(configured.as_deref());
     let artifacts = root
         .join("target/neomacs-gui-tests")
         .join(format!("commit-{probe}"));
@@ -49,9 +59,45 @@ fn run_commit_probe(probe: &str) {
     assert!(stderr.contains("COMMIT-EDITING-PASS"), "{stderr}");
 }
 
+/// Backend aliases and platform defaults must not require a live compositor.
+#[test]
+fn commit_probe_respects_requested_backend() {
+    for name in ["wayland", "linux-wayland"] {
+        assert_eq!(commit_probe_backend(Some(name)), GuiBackend::LinuxWayland);
+    }
+    for name in ["x11", "linux-x11"] {
+        assert_eq!(commit_probe_backend(Some(name)), GuiBackend::LinuxX11);
+    }
+    assert_eq!(commit_probe_backend(Some("macos")), GuiBackend::Macos);
+    assert_eq!(
+        commit_probe_backend(None),
+        if cfg!(target_os = "macos") {
+            GuiBackend::Macos
+        } else {
+            GuiBackend::LinuxX11
+        }
+    );
+}
+
+#[test]
+#[should_panic(expected = "unsupported NEOMACS_GUI_TEST_BACKEND")]
+fn commit_probe_rejects_unknown_backend() {
+    commit_probe_backend(Some("unknown"));
+}
+
 #[test]
 fn first_commit_character_uses_the_asynchronously_selected_buffer() {
     run_commit_probe("async-map");
+}
+
+#[test]
+fn delayed_timer_service_waits_for_commit_commands() {
+    run_commit_probe("async-map-delayed");
+}
+
+#[test]
+fn overlay_separator_uses_its_small_font_height() {
+    run_commit_probe("overlay-separator");
 }
 
 #[test]

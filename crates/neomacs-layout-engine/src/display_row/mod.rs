@@ -1108,6 +1108,8 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
         )
     }
 
+    /// Render the next source fragment into a row under its acquisition policy.
+    /// Return `None` when the source state is already finished.
     fn render_display_item_source_row_fragment_step_into_row_with_policy<
         S: DisplayItemSource,
         P: DisplayRowRenderPolicy,
@@ -1383,12 +1385,12 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
                 }
             }
         };
-        if let (
+        let resolved_row_metrics = if let (
             DisplayRowRenderStop::RowBreak(row_break),
             Some((row_break_face_id, box_edges, box_membership)),
         ) = (stop, row_break_face)
         {
-            let _ = DisplayRowLineEndFinalizer::new(
+            let mut finalizer = DisplayRowLineEndFinalizer::new(
                 row_break,
                 row_break_face_id,
                 line_end_right_edge_x - position.x_px(),
@@ -1397,9 +1399,31 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
                 self.measurement_mode,
                 box_edges,
                 box_membership,
-            )
-            .finalize(row, &row_faces);
-        }
+            );
+            // Measure the primary newline font, not a newline glyph or the
+            // row's seeded default extents. Logical-cell rows stay untouched.
+            if self.measurement_mode.uses_concrete_font_geometry()
+                && let Some(face) = row_faces
+                    .iter()
+                    .find(|face| face.face_id == row_break_face_id)
+                && let Some(service) = face_realizer.font_metrics_service_mut()
+            {
+                let metrics = service.font_metrics(
+                    &face.font_family,
+                    face.font_weight,
+                    face.italic,
+                    face.font_size,
+                );
+                finalizer = finalizer.with_newline_font_metrics(
+                    builder::DisplayRowVerticalMetrics::new(metrics.line_height, metrics.ascent),
+                );
+            }
+            finalizer.finalize(row, &row_faces).map(|metrics| {
+                builder::DisplayRowVerticalMetrics::new(metrics.height, metrics.ascent)
+            })
+        } else {
+            None
+        };
         let progress_height = if row.height_px > 0.0 {
             row.height_px
         } else {
@@ -1413,12 +1437,10 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
                 .prepare_face_into_output(face.render_face(), &mut faces)
                 .expect("row rendering must preserve its realized face identity");
         }
-        Some(DisplayRowRenderIntoRowResult::new(
-            progress,
-            source_slots,
-            faces,
-            stop,
-        ))
+        Some(
+            DisplayRowRenderIntoRowResult::new(progress, source_slots, faces, stop)
+                .with_resolved_row_metrics(resolved_row_metrics),
+        )
     }
 }
 

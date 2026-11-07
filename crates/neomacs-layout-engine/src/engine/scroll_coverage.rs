@@ -205,6 +205,8 @@ impl ScrollCoverage {
             })
     }
 
+    /// Validate completed worker coverage and publish bounded prepared rows.
+    /// Reject stale admissions and do not publish incomplete bridge coverage.
     pub(super) fn drain(
         &mut self,
         destination: &mut PreparedViewports,

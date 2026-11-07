@@ -1,6 +1,7 @@
 //! Line spacing is row geometry, independent of point and region decoration.
 use super::*;
 
+/// A small buffer newline changes only its own row, independently of point.
 #[test]
 fn small_newline_face_shrinks_only_its_own_row() {
     for extend in ["nil", "t"] {
@@ -47,6 +48,7 @@ fn small_newline_face_shrinks_only_its_own_row() {
     }
 }
 
+/// Normal-size visible content still determines mixed-font row extents.
 #[test]
 fn small_newline_keeps_normal_sized_content_in_the_same_row() {
     let (mut eval, frame, _buffer, window) = incr_editing_frame("Summary: \nx\nbody\n", 800, 240);
@@ -70,6 +72,7 @@ fn small_newline_keeps_normal_sized_content_in_the_same_row() {
     assert_eq!(rows[2].height_px, rows[0].height_px);
 }
 
+/// Font height properties cannot shrink a terminal's logical row cells.
 #[test]
 fn small_newline_face_does_not_shrink_terminal_rows() {
     let (mut eval, frame, _buffer, window) = incr_editing_frame("Summary: \n\nbody\n", 800, 240);
@@ -89,6 +92,71 @@ fn small_newline_face_does_not_shrink_terminal_rows() {
         .rows;
     assert_eq!(rows[1].height_px, rows[0].height_px);
     assert_eq!(rows[2].height_px, rows[0].height_px);
+}
+
+/// Overlay newlines use their own GUI font, but never shrink terminal cells.
+#[test]
+fn small_overlay_newline_uses_its_own_font_geometry() {
+    for graphical in [false, true] {
+        for property in ["before-string", "after-string"] {
+            for extend in ["nil", "t"] {
+                for prefix in ["", "x"] {
+                    let (mut eval, frame, _buffer, window) =
+                        incr_editing_frame("Summary: \nbody\n", 800, 240);
+                    if graphical {
+                        realize_test_gui_frame(&mut eval, frame);
+                    }
+                    eval.eval_str(&format!(
+                        "(let ((overlay (make-overlay 11 11)))
+                           (overlay-put overlay '{property}
+                             (concat \"{prefix}\" (propertize \"\\n\" 'face
+                               '(:height 0.1 :inverse-video t :extend {extend})))))"
+                    ))
+                    .unwrap();
+                    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+                    if graphical {
+                        crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+                    }
+                    let rows = |engine: &mut LayoutEngine, eval: &mut Context| {
+                        let FrameLayoutAttempt::Prepared(output) =
+                            engine.redisplay_frame_attempt(eval, frame)
+                        else {
+                            panic!("overlay frame should prepare");
+                        };
+                        output
+                            .window_matrices
+                            .iter()
+                            .find(|entry| entry.window_id.get() == window.0 as i64)
+                            .unwrap()
+                            .matrix
+                            .rows
+                            .iter()
+                            .take(3)
+                            .map(|row| (row.pixel_y, row.height_px))
+                            .collect::<Vec<_>>()
+                    };
+                    let before = rows(&mut engine, &mut eval);
+                    if graphical && prefix.is_empty() {
+                        assert!(
+                            before[1].1 < before[0].1 / 2.0,
+                            "small {property} newline must shrink its row: {before:?}"
+                        );
+                    } else {
+                        assert_eq!(before[1].1, before[0].1);
+                    }
+                    assert_eq!(before[2].1, before[0].1);
+                    assert_eq!(before[2].0 - before[1].0, before[1].1);
+                    eval.eval_str("(set-window-point (selected-window) 11)")
+                        .unwrap();
+                    assert_eq!(
+                        rows(&mut engine, &mut eval),
+                        before,
+                        "point must not change overlay row geometry"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]

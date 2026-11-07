@@ -760,6 +760,8 @@ impl BufferSourceOutputSetup {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Render a window body using eligible retained-row replay or source layout,
+    /// returning the resulting installation or retry outcome.
     pub(crate) fn render_body_attempt<
         'a,
         'surface,

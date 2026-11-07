@@ -241,6 +241,7 @@ fn wrapped_program_supports_tab_after_continuation_and_rejects_cancellation() {
     ));
 }
 
+/// Worker reconstruction must preserve the captured fonts' exact row geometry.
 #[test]
 fn complete_row_program_uses_exact_captured_fonts_on_worker() {
     fn require_send<T: Send + 'static>() {}
