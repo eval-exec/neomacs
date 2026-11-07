@@ -253,6 +253,7 @@ fn decode_negative_integer_is_center() {
 
 #[test]
 fn decode_positive_float_is_fraction() {
+    crate::test_utils::init_test_tracing();
     assert_eq!(
         HscrollStep::decode(Some(&Value::make_float(0.3))),
         HscrollStep::Fraction(0.3)
@@ -261,6 +262,7 @@ fn decode_positive_float_is_fraction() {
 
 #[test]
 fn decode_negative_float_is_center() {
+    crate::test_utils::init_test_tracing();
     assert_eq!(
         HscrollStep::decode(Some(&Value::make_float(-0.3))),
         HscrollStep::Center

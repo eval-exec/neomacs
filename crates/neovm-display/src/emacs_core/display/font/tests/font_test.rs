@@ -109,6 +109,7 @@ fn raw_context_does_not_prebind_x_color_aliases() {
 
 #[test]
 fn named_font_string_parses_fractional_point_size() {
+    crate::test_utils::init_test_tracing();
     let request = frame_font_request_from_named_font_string("CaskaydiaCove NF-10.5")
         .expect("font name should parse");
     assert_eq!(
@@ -127,6 +128,7 @@ fn named_font_string_parses_fractional_point_size() {
 
 #[test]
 fn named_font_string_requires_a_representable_positive_point_size() {
+    crate::test_utils::init_test_tracing();
     let below_precision =
         frame_font_request_from_named_font_string("Example-0.01").expect("font name should parse");
     assert_eq!(
@@ -2454,6 +2456,7 @@ fn font_put_wrong_arity() {
 
 #[test]
 fn bounded_family_alternatives_preserve_order_and_refuse_excess_payload() {
+    crate::test_utils::init_test_tracing();
     crate::emacs_core::xfaces::builtin_internal_set_alternative_font_family_alist(vec![
         Value::list(vec![Value::list(vec![
             Value::string("Fixture"),

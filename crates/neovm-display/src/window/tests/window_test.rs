@@ -21,6 +21,7 @@ mod point_rows_query_test;
 
 #[test]
 fn layout_variable_enum_covers_the_display_dirty_registry() {
+    crate::test_utils::init_test_tracing();
     use neovm_edit::buffer::buffer::{
         DISPLAY_AFFECTING_BUFFER_SLOTS, DISPLAY_AFFECTING_GLOBAL_VARS,
     };
@@ -62,6 +63,7 @@ fn measured_suffix_reindexes_end_record_without_changing_source_offsets() {
 
 #[test]
 fn window_end_state_preserves_one_atomic_record_across_invalidation() {
+    crate::test_utils::init_test_tracing();
     let mut window = Window::new_leaf(WindowId(11), BufferId(1), Rect::new(0.0, 0.0, 800.0, 600.0));
 
     assert_eq!(window.window_end_state(), Some(WindowEndState::Unrecorded));
@@ -98,6 +100,7 @@ fn window_end_state_preserves_one_atomic_record_across_invalidation() {
 
 #[test]
 fn prepared_presentation_publishes_one_atomic_window_redisplay_output() {
+    crate::test_utils::init_test_tracing();
     use super::geometry::PresentationId;
     let mut frames = FrameManager::new();
     let frame_id = frames.create_frame("atomic-window-output", 800, 600, BufferId(1));
@@ -190,6 +193,7 @@ fn prepared_presentation_publishes_one_atomic_window_redisplay_output() {
 
 #[test]
 fn snapshot_window_geometry_keeps_pixel_spaces_and_cell_origin_distinct() {
+    crate::test_utils::init_test_tracing();
     use super::geometry::{PresentationGeometry, PresentationId};
     use neomacs_display_protocol::types::Rect as TransportRect;
     use neovm_eval::emacs_core::eval::data::window_state::{Column, Line};
@@ -491,6 +495,7 @@ fn sealed_geometry_queries_reject_stale_presentations_and_use_explicit_regions()
 
 #[test]
 fn prepare_activate_replaces_geometry_and_presentation_together() {
+    crate::test_utils::init_test_tracing();
     use super::geometry::{PresentationId, PresentationPrepareError};
 
     let mut manager = FrameManager::new();
@@ -546,6 +551,7 @@ fn prepare_activate_replaces_geometry_and_presentation_together() {
 
 #[test]
 fn prepared_display_presentation_does_not_replace_active_geometry() {
+    crate::test_utils::init_test_tracing();
     use super::geometry::PresentationId;
 
     let mut manager = FrameManager::new();
@@ -621,6 +627,7 @@ fn prepared_display_presentation_does_not_replace_active_geometry() {
 
 #[test]
 fn geometry_only_snapshot_is_interactive_but_not_live_redisplay_evidence() {
+    crate::test_utils::init_test_tracing();
     use super::geometry::{PresentationId, PresentationPrepareError};
 
     let mut manager = FrameManager::new();
@@ -694,6 +701,7 @@ fn geometry_only_snapshot_is_interactive_but_not_live_redisplay_evidence() {
 
 #[test]
 fn preparing_accepted_presentation_commits_live_window_output() {
+    crate::test_utils::init_test_tracing();
     use super::geometry::PresentationId;
 
     let mut manager = FrameManager::new();
@@ -838,6 +846,7 @@ fn discarded_snapshot_preserves_latest_completed_coordinate_queries() {
 
 #[test]
 fn completed_geometry_survives_initial_snapshot_discard_and_renderer_retirement() {
+    crate::test_utils::init_test_tracing();
     use super::geometry::PresentationId;
 
     let mut manager = FrameManager::new();
@@ -875,6 +884,7 @@ fn completed_geometry_survives_initial_snapshot_discard_and_renderer_retirement(
 
 #[test]
 fn completed_geometry_releases_superseded_discarded_snapshots() {
+    crate::test_utils::init_test_tracing();
     use super::geometry::PresentationId;
 
     let mut manager = FrameManager::new();
@@ -922,6 +932,7 @@ fn completed_geometry_releases_superseded_discarded_snapshots() {
 
 #[test]
 fn discarded_display_presentation_cannot_be_activated() {
+    crate::test_utils::init_test_tracing();
     use super::geometry::{PresentationActivateError, PresentationId, PresentationPrepareError};
 
     let mut manager = FrameManager::new();
@@ -956,6 +967,7 @@ fn presentation_identity_rejects_zero() {
 
 #[test]
 fn presented_child_placement_uses_immediate_parent_coordinates_without_chrome_or_desktop_offsets() {
+    crate::test_utils::init_test_tracing();
     use super::geometry::PresentationId;
 
     let mut manager = FrameManager::new();
@@ -1033,6 +1045,7 @@ fn presented_child_placement_uses_immediate_parent_coordinates_without_chrome_or
 
 #[test]
 fn popup_anchor_translates_with_side_window_without_changing_body_local_cursor_geometry() {
+    crate::test_utils::init_test_tracing();
     use super::geometry::{PresentationId, WindowGeometryQuery};
     use neomacs_display_protocol::types::Rect as TransportRect;
 
@@ -1136,6 +1149,7 @@ fn popup_anchor_translates_with_side_window_without_changing_body_local_cursor_g
 
 #[test]
 fn active_visual_anchors_are_semantic_and_presentation_qualified() {
+    crate::test_utils::init_test_tracing();
     use super::geometry::{
         AnchorEdge, GeometryQueryError, PresentationId, VisualAnchor, VisualAnchorQuery,
         WindowRegion,
@@ -1256,6 +1270,7 @@ fn active_visual_anchors_are_semantic_and_presentation_qualified() {
 
 #[test]
 fn duplicate_windows_reject_candidate_without_replacing_publication() {
+    crate::test_utils::init_test_tracing();
     use super::geometry::{GeometryError, PresentationId, PresentationPrepareError};
 
     let mut manager = FrameManager::new();
@@ -1334,6 +1349,7 @@ fn presented_positions_require_body_local_row_facts() {
 
 #[test]
 fn legacy_unowned_snapshots_do_not_create_an_authoritative_geometry_view() {
+    crate::test_utils::init_test_tracing();
     let mut manager = FrameManager::new();
     let frame_id = manager.create_frame("legacy", 800, 600, BufferId(1));
     let frame = manager.get_mut(frame_id).expect("frame");
@@ -1372,6 +1388,7 @@ fn window_cursor_kind_codes_match_gnu_text_cursor_kinds() {
 
 #[test]
 fn source_preload_window_sequence_retirement_refuses_live_frames() {
+    crate::test_utils::init_test_tracing();
     let mut frames = FrameManager::new();
     let frame = frames.create_frame("preload", 80, 25, BufferId(1));
     let root = frames.get(frame).expect("preload frame").selected_window;
@@ -1752,6 +1769,7 @@ fn render_frame_tree_returns_root_relative_bottom_to_top_nodes() {
 
 #[test]
 fn render_frame_forest_returns_each_visible_native_window_tree_once() {
+    crate::test_utils::init_test_tracing();
     let mut mgr = FrameManager::new();
     let first = mgr.create_frame("first", 80, 25, BufferId(1));
     let child = mgr.create_frame("child", 20, 10, BufferId(1));
@@ -1855,6 +1873,7 @@ fn frame_manager_gc_traces_name_icon_name_and_title_values() {
 
 #[test]
 fn prepared_and_active_chrome_strings_are_rooted_by_their_shared_roots() {
+    crate::test_utils::init_test_tracing();
     let mut heap = neovm_value::tagged::gc::TaggedHeap::new();
     let displayed = heap.alloc_string(neovm_value::heap_types::LispString::from_utf8(
         "displayed tab line",
@@ -2309,6 +2328,7 @@ fn delete_frame() {
 
 #[test]
 fn frame_deletion_replacement_policy_distinguishes_mru_from_frame_list_order() {
+    crate::test_utils::init_test_tracing();
     let mut mgr = FrameManager::new();
     let oldest = mgr.create_frame("oldest", 80, 25, BufferId(1));
     let middle = mgr.create_frame("middle", 80, 25, BufferId(2));
@@ -2330,6 +2350,7 @@ fn frame_deletion_replacement_policy_distinguishes_mru_from_frame_list_order() {
 
 #[test]
 fn navigation_intents_are_scoped_and_acknowledged_by_identity() {
+    crate::test_utils::init_test_tracing();
     let mut manager = FrameManager::new();
     let frame_id = manager.create_frame("intent-frame", 80, 24, BufferId(1));
     let window_id = manager.get(frame_id).expect("frame").selected_window;
@@ -2381,6 +2402,7 @@ fn multiple_frames() {
 
 #[test]
 fn terminal_top_frame_survives_selecting_a_frame_on_another_terminal() {
+    crate::test_utils::init_test_tracing();
     let mut mgr = FrameManager::new();
     let gui = mgr.create_frame_on_terminal("GUI", 0, 800, 600, BufferId(1));
     let first_tty = mgr.create_frame_on_terminal("TTY-1", 7, 80, 25, BufferId(2));
@@ -2875,6 +2897,7 @@ fn expanded_mini_frame_for_resize_control() -> FrameManager {
 
 #[test]
 fn width_only_frame_resize_preserves_expanded_minibuffer_height() {
+    crate::test_utils::init_test_tracing();
     let mut frames = expanded_mini_frame_for_resize_control();
     let frame = frames.selected_frame_mut().expect("frame");
     frame.resize_pixelwise(100, 29);
@@ -2895,6 +2918,7 @@ fn width_only_frame_resize_preserves_expanded_minibuffer_height() {
 
 #[test]
 fn same_size_frame_refresh_preserves_expanded_minibuffer_height() {
+    crate::test_utils::init_test_tracing();
     let mut frames = expanded_mini_frame_for_resize_control();
     let frame = frames.selected_frame_mut().expect("frame");
     frame.resize_pixelwise(80, 29);
@@ -2911,6 +2935,7 @@ fn same_size_frame_refresh_preserves_expanded_minibuffer_height() {
 
 #[test]
 fn font_geometry_refresh_preserves_expanded_minibuffer_pixel_allocation() {
+    crate::test_utils::init_test_tracing();
     let mut frames = expanded_mini_frame_for_resize_control();
     let frame = frames.selected_frame_mut().expect("frame");
     frame.char_width = 2.0;
@@ -3074,6 +3099,7 @@ fn frame_resize_pixelwise_preserves_flexible_window_proportions() {
 
 #[test]
 fn completed_redisplay_syncs_live_window_cursor_state() {
+    crate::test_utils::init_test_tracing();
     let mut mgr = FrameManager::new();
     let fid = mgr.create_frame("F1", 800, 600, BufferId(1));
     let wid = mgr.get(fid).unwrap().selected_window;
@@ -3133,6 +3159,7 @@ fn completed_redisplay_syncs_live_window_cursor_state() {
 
 #[test]
 fn completed_redisplay_replaces_old_output_cursor_progress() {
+    crate::test_utils::init_test_tracing();
     let mut mgr = FrameManager::new();
     let fid = mgr.create_frame("F1", 800, 600, BufferId(1));
     let wid = mgr.get(fid).unwrap().selected_window;
@@ -3197,6 +3224,7 @@ fn completed_redisplay_replaces_old_output_cursor_progress() {
 
 #[test]
 fn cache_only_fixture_preserves_live_window_cursor_state() {
+    crate::test_utils::init_test_tracing();
     let mut mgr = FrameManager::new();
     let fid = mgr.create_frame("F1", 800, 600, BufferId(1));
     let wid = mgr.get(fid).unwrap().selected_window;
@@ -3266,6 +3294,7 @@ fn cache_only_fixture_preserves_live_window_cursor_state() {
 
 #[test]
 fn no_op_set_window_vscroll_preserves_display_snapshot() {
+    crate::test_utils::init_test_tracing();
     let mut mgr = FrameManager::new();
     let fid = mgr.create_frame("F1", 800, 600, BufferId(1));
     let wid = mgr.get(fid).unwrap().selected_window;
@@ -3320,6 +3349,7 @@ fn no_op_set_window_vscroll_preserves_display_snapshot() {
 
 #[test]
 fn completed_redisplay_preserves_logical_cursor_without_physical_cursor() {
+    crate::test_utils::init_test_tracing();
     let mut mgr = FrameManager::new();
     let fid = mgr.create_frame("F1", 800, 600, BufferId(1));
     let wid = mgr.get(fid).unwrap().selected_window;
@@ -3374,6 +3404,7 @@ fn completed_redisplay_preserves_logical_cursor_without_physical_cursor() {
 
 #[test]
 fn completed_redisplay_commits_last_cursor_visibility_state() {
+    crate::test_utils::init_test_tracing();
     let mut mgr = FrameManager::new();
     let fid = mgr.create_frame("F1", 800, 600, BufferId(1));
     let wid = mgr.get(fid).unwrap().selected_window;
@@ -3638,6 +3669,7 @@ fn output_pass_commits_output_cursor_from_row_geometry() {
 
 #[test]
 fn explicit_window_output_finalization_prefers_live_output_progress() {
+    crate::test_utils::init_test_tracing();
     let mut mgr = FrameManager::new();
     let fid = mgr.create_frame("F1", 800, 600, BufferId(1));
     let wid = mgr.get(fid).unwrap().selected_window;
@@ -3682,6 +3714,7 @@ fn explicit_window_output_finalization_prefers_live_output_progress() {
 
 #[test]
 fn frame_output_progress_api_tracks_intra_row_progress() {
+    crate::test_utils::init_test_tracing();
     let mut mgr = FrameManager::new();
     let fid = mgr.create_frame("F1", 800, 600, BufferId(1));
     let wid = mgr.get(fid).unwrap().selected_window;
@@ -3712,6 +3745,7 @@ fn frame_output_progress_api_tracks_intra_row_progress() {
 
 #[test]
 fn explicit_window_output_finalization_preserves_live_logical_and_physical_cursor_state() {
+    crate::test_utils::init_test_tracing();
     let mut mgr = FrameManager::new();
     let fid = mgr.create_frame("F1", 800, 600, BufferId(1));
     let wid = mgr.get(fid).unwrap().selected_window;
@@ -3791,6 +3825,7 @@ fn explicit_window_output_finalization_preserves_live_logical_and_physical_curso
 
 #[test]
 fn finish_window_output_update_preserves_live_cursor_state_with_snapshot_output_fallback() {
+    crate::test_utils::init_test_tracing();
     let mut mgr = FrameManager::new();
     let fid = mgr.create_frame("F1", 800, 600, BufferId(1));
     let wid = mgr.get(fid).unwrap().selected_window;
@@ -3957,6 +3992,7 @@ fn output_pass_keeps_cursor_target_and_output_progress_separate() {
 
 #[test]
 fn completed_redisplay_preserves_output_cursor_for_omitted_windows() {
+    crate::test_utils::init_test_tracing();
     let mut mgr = FrameManager::new();
     let fid = mgr.create_frame("F1", 800, 600, BufferId(1));
     let wid = mgr.get(fid).unwrap().selected_window;
@@ -4264,6 +4300,7 @@ fn grow_mini_window_lands_on_whole_rows_of_the_current_unit() {
 
 #[test]
 fn mini_window_pixel_resize_stops_when_frame_cannot_hold_a_full_line() {
+    crate::test_utils::init_test_tracing();
     let mut frames = FrameManager::new();
     let id = frames.create_frame("short-frame", 320, 10, BufferId(1));
     let frame = frames.get_mut(id).expect("frame");
@@ -4283,6 +4320,7 @@ fn mini_window_pixel_resize_stops_when_frame_cannot_hold_a_full_line() {
 
 #[test]
 fn mini_window_pixel_resize_keeps_the_last_whole_line_at_a_fractional_unit() {
+    crate::test_utils::init_test_tracing();
     let mut frames = FrameManager::new();
     let id = frames.create_frame("fractional-mini-cap", 320, 200, BufferId(1));
     let frame = frames.get_mut(id).expect("frame");
@@ -4348,6 +4386,7 @@ fn grow_mini_window_always_moves_from_a_whole_row_count_at_a_fractional_unit() {
 /// the same window snapshot: preparing one copies no visible position or row.
 #[test]
 fn a_prepared_presentation_shares_its_window_snapshots() {
+    crate::test_utils::init_test_tracing();
     use super::geometry::PresentationId;
 
     let mut manager = FrameManager::new();
@@ -4388,6 +4427,7 @@ mod split_hook_epoch;
 
 #[test]
 fn selected_window_read_tracks_exact_ids_live_contents_and_sparse_tables() {
+    crate::test_utils::init_test_tracing();
     let mut frames = FrameManager::new();
     assert!(frames.selected_window().is_none());
     let first = frames.create_frame("first", 800, 600, BufferId(1));

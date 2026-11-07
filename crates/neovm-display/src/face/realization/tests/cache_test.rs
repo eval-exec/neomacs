@@ -79,6 +79,7 @@ fn realization_cache_generation_and_owners_are_independent() {
 
 #[test]
 fn realization_cache_uses_structural_lisp_attribute_equality() {
+    crate::test_utils::init_test_tracing();
     let mut first = source();
     first.family = Some(Value::string("separately-allocated-family"));
     first.stipple = Some(Value::list(vec![
@@ -135,6 +136,7 @@ fn realization_source_identity_detects_copy_on_write_definition_replacement() {
 
 #[test]
 fn forced_basic_roles_keep_distinct_results_for_identical_attributes() {
+    crate::test_utils::init_test_tracing();
     let attributes = source();
     let mut default = attributes.clone();
     default.foreground = Some(Color::rgb(1, 2, 3));
@@ -224,6 +226,7 @@ fn realization_epoch_survives_definition_refresh_but_never_full_retirement() {
 
 #[test]
 fn default_retirement_restores_the_last_equal_role_and_preserves_unrelated_entries() {
+    crate::test_utils::init_test_tracing();
     let source = source();
     let mut default = source.clone();
     default.foreground = Some(Color::rgb(1, 2, 3));
@@ -260,6 +263,7 @@ fn default_retirement_restores_the_last_equal_role_and_preserves_unrelated_entri
 
 #[test]
 fn forced_default_retirement_restores_ordinary_predecessor_and_traces_it() {
+    crate::test_utils::init_test_tracing();
     let mut ordinary_source = source();
     ordinary_source.family = Some(Value::string("ordinary-predecessor-source"));
     let mut ordinary_paint = ordinary_source.clone();

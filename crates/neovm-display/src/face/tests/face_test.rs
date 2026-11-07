@@ -988,6 +988,7 @@ fn face_remapping_from_lisp_interns_string_names_to_symbols() {
 /// underline that silently lost its colour on every terminal frame.
 #[test]
 fn an_anonymous_plist_realizes_its_underline_color_through_the_palette() {
+    crate::test_utils::init_test_tracing();
     use neomacs_display_protocol::terminal_color::TerminalColor;
     use neomacs_display_protocol::{TtyPalette, TtyPaletteEntry};
 

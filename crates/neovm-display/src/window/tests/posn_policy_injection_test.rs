@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 #[test]
 fn independent_frames_pin_extent_policy_without_changing_process_default() {
+    crate::test_utils::init_test_tracing();
     let process = posn_object_extent_mode();
     let mut frames = FrameManager::new();
     let on = frames.create_frame("extent-on", 80, 40, BufferId(1));

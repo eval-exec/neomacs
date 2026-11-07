@@ -24,6 +24,7 @@ fn split_tree(direction: SplitDirection) -> (WindowTree, WindowId, WindowId) {
 
 #[test]
 fn resize_check_requires_complete_staging_and_existing_children() {
+    crate::test_utils::init_test_tracing();
     let (mut tree, first, second) = split_tree(SplitDirection::Vertical);
     let root = tree.root_id();
     let cells = WindowBodyCellSize::new(8.0, 16.0);
@@ -67,6 +68,7 @@ fn resize_check_requires_complete_staging_and_existing_children() {
 
 #[test]
 fn resize_check_requires_iso_sum_and_ortho_equality() {
+    crate::test_utils::init_test_tracing();
     let (mut tree, first, second) = split_tree(SplitDirection::Vertical);
     let root = tree.root_id();
     let cells = WindowBodyCellSize::new(8.0, 16.0);
@@ -112,6 +114,7 @@ fn resize_check_requires_iso_sum_and_ortho_equality() {
 
 #[test]
 fn resize_check_enforces_one_line_and_two_column_leaf_minimums() {
+    crate::test_utils::init_test_tracing();
     let mut tree = WindowTree::new(Window::new_leaf(
         WindowId(11),
         BufferId(1),
@@ -156,6 +159,7 @@ fn resize_check_enforces_one_line_and_two_column_leaf_minimums() {
 
 #[test]
 fn resize_check_rejects_overfull_and_empty_combinations() {
+    crate::test_utils::init_test_tracing();
     let (mut tree, first, second) = split_tree(SplitDirection::Horizontal);
     let root = tree.root_id();
     let cells = WindowBodyCellSize::new(8.0, 16.0);
@@ -188,6 +192,7 @@ fn resize_check_rejects_overfull_and_empty_combinations() {
 
 #[test]
 fn resize_pixel_commit_publishes_floored_lines_and_child_edges() {
+    crate::test_utils::init_test_tracing();
     let (mut tree, first, second) = split_tree(SplitDirection::Vertical);
     let root = tree.root_id();
     for node in tree.nodes_mut() {
@@ -221,6 +226,7 @@ fn resize_pixel_commit_publishes_floored_lines_and_child_edges() {
 
 #[test]
 fn resize_pixel_commit_publishes_floored_columns_and_child_edges() {
+    crate::test_utils::init_test_tracing();
     let (mut tree, first, second) = split_tree(SplitDirection::Horizontal);
     let root = tree.root_id();
     for node in tree.nodes_mut() {
@@ -254,6 +260,7 @@ fn resize_pixel_commit_publishes_floored_columns_and_child_edges() {
 
 #[test]
 fn resize_pixel_commit_gives_ortho_children_one_cell_origin() {
+    crate::test_utils::init_test_tracing();
     let (mut tree, first, second) = split_tree(SplitDirection::Vertical);
     let root = tree.root_id();
     for node in tree.nodes_mut() {

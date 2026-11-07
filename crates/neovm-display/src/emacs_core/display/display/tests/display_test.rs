@@ -4575,6 +4575,7 @@ fn a_nil_message_prints_an_empty_line_in_batch_unless_the_cursor_is_in_the_echo_
 }
 #[test]
 fn native_menu_result_rejects_a_previous_session_or_revision() {
+    crate::test_utils::init_test_tracing();
     use neomacs_display_protocol::menu::MenuToken;
     let expected = MenuToken {
         session: 42,

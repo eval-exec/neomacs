@@ -8310,6 +8310,7 @@ fn test_optional_args() {
 /// the spec head/shape matters — so minimal forms are used.
 #[test]
 fn display_prop_replacing_p_matches_gnu_taxonomy() {
+    crate::test_utils::init_test_tracing();
     fn head(name: &str) -> Value {
         Value::list(vec![Value::symbol(name)])
     }

@@ -3,6 +3,7 @@ use crate::window::DisplayFrameExt;
 use neovm_value::value::Value;
 #[test]
 fn gnu_frame_alpha_components() {
+    crate::test_utils::init_test_tracing();
     assert_eq!(component(Value::fixnum(1), 1.0).unwrap(), 0.01);
     assert_eq!(component(Value::make_float(1.0), 1.0).unwrap(), 1.0);
     assert_eq!(component(Value::NIL, 1.0).unwrap(), 1.0);
@@ -19,6 +20,7 @@ fn gnu_frame_alpha_components() {
 }
 #[test]
 fn gnu_frame_alpha_raw_and_accepted_state_are_distinct() {
+    crate::test_utils::init_test_tracing();
     use crate::window::{Frame, FrameId, FrameParam, Rect, Window, WindowId};
     use neovm_edit::buffer::BufferId;
     let root = Window::new_leaf(WindowId(1), BufferId(0), Rect::new(0.0, 0.0, 80.0, 60.0));
@@ -52,6 +54,7 @@ fn gnu_frame_alpha_raw_and_accepted_state_are_distinct() {
 
 #[test]
 fn gnu_frame_alpha_pair() {
+    crate::test_utils::init_test_tracing();
     assert_eq!(pair(Value::fixnum(50)).unwrap(), [0.5, 0.5]);
     assert_eq!(
         pair(Value::cons(Value::fixnum(80), Value::fixnum(60))).unwrap(),
@@ -74,6 +77,7 @@ fn gnu_frame_alpha_pair() {
 }
 #[test]
 fn gnu_frame_alpha_lower_limit_keeps_x_set_frame_alpha_values() {
+    crate::test_utils::init_test_tracing();
     // GNU x_set_frame_alpha: a fixnum is a percentage and a float a fraction;
     // anything else leaves alpha_min at 1.0 (fully opaque).  Out-of-range
     // values pass through: alpha_min only applies when it is at most 1.0.

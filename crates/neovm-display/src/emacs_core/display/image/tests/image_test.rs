@@ -1990,6 +1990,7 @@ fn image_spec_parse_reduces_rotation_to_a_quarter_turn() {
 
 #[test]
 fn image_spec_parses_frame_index_into_a_dedicated_type() {
+    crate::test_utils::init_test_tracing();
     let spec = Value::list(vec![
         Value::symbol("image"),
         Value::keyword("type"),
@@ -2008,6 +2009,7 @@ fn image_spec_parses_frame_index_into_a_dedicated_type() {
 
 #[test]
 fn image_spec_parses_gnu_mask_intent_into_a_closed_policy() {
+    crate::test_utils::init_test_tracing();
     let request_for = |key: &str, value: Value| {
         let spec = Value::list(vec![
             Value::symbol("image"),
@@ -2082,6 +2084,7 @@ fn image_spec_parses_gnu_mask_intent_into_a_closed_policy() {
 /// textures for the same file.
 #[test]
 fn image_request_uses_the_default_face_colors_like_gnu() {
+    crate::test_utils::init_test_tracing();
     let mut table = FaceTable::new();
     let mut default = table.resolve("default");
     default.foreground = Some(Color::rgb(0x11, 0x22, 0x33));
@@ -2244,6 +2247,7 @@ fn a_nil_message_log_max_silences_image_diagnostics() {
 /// (`image_not_found_error`, `src/image.c:8285`).
 #[test]
 fn a_file_image_is_named_by_its_file() {
+    crate::test_utils::init_test_tracing();
     let spec = builtin_create_image(vec![
         Value::string("/tmp/missing.png"),
         Value::symbol("png"),
@@ -2269,6 +2273,7 @@ fn a_file_image_is_named_by_its_file() {
 /// quotes around the data and make the line a different one.
 #[test]
 fn a_data_image_is_named_by_its_princ_printed_specification() {
+    crate::test_utils::init_test_tracing();
     let spec = builtin_create_image(vec![
         Value::string("definitely not an image"),
         Value::symbol("png"),
@@ -2291,6 +2296,7 @@ fn a_data_image_is_named_by_its_princ_printed_specification() {
 
 #[test]
 fn image_spec_animation_policy_parses_the_neomacs_extension() {
+    crate::test_utils::init_test_tracing();
     // The domain is deliberately narrow: `t` opts in at the default
     // sampling ceiling, a positive fixnum sets the ceiling, and anything
     // else (absent, nil, zero, symbols) is the GNU-compatible static

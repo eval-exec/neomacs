@@ -139,6 +139,7 @@ fn fixed_frame_parameter_symbols_match_canonical_names_without_warm_intern() {
 
 #[test]
 fn fixed_frame_queries_preserve_dynamic_parameter_results() {
+    crate::test_utils::init_test_tracing();
     use crate::window::FrameManager;
     use neovm_edit::buffer::BufferId;
     let mut frames = FrameManager::new();

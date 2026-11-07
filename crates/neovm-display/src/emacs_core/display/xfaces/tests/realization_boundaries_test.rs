@@ -197,6 +197,7 @@ fn default_realization_binding_drop_restores_native_state() {
 
 #[test]
 fn foreground_underline_symbol_does_not_become_a_color_name() {
+    crate::test_utils::init_test_tracing();
     let attribute = Value::list(vec![
         Value::keyword("color"),
         Value::string("red"),
@@ -399,6 +400,7 @@ fn creation_color_replay_defers_the_other_color_and_initial_error_restores_param
 
 #[test]
 fn named_and_anonymous_underlines_retain_identical_ordered_operations() {
+    crate::test_utils::init_test_tracing();
     let attribute = Value::list(vec![
         Value::keyword("color"),
         Value::string("#111111"),

@@ -59,6 +59,7 @@ fn split_after_record(splice: bool, new_buffer: BufferId, gnu: bool) {
 
 #[test]
 fn gnu_interposed_split_leaf_has_no_recorded_hook_epoch() {
+    crate::test_utils::init_test_tracing();
     for buffer in [BufferId(1), BufferId(2)] {
         split_after_record(false, buffer, true);
     }
@@ -66,6 +67,7 @@ fn gnu_interposed_split_leaf_has_no_recorded_hook_epoch() {
 
 #[test]
 fn gnu_spliced_split_leaf_has_no_recorded_hook_epoch() {
+    crate::test_utils::init_test_tracing();
     for buffer in [BufferId(1), BufferId(2)] {
         split_after_record(true, buffer, true);
     }
@@ -73,6 +75,7 @@ fn gnu_spliced_split_leaf_has_no_recorded_hook_epoch() {
 
 #[test]
 fn legacy_split_leaf_retains_existing_epoch_policy() {
+    crate::test_utils::init_test_tracing();
     for splice in [false, true] {
         split_after_record(splice, BufferId(1), false);
     }
