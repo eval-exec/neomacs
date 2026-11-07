@@ -1139,9 +1139,7 @@ fn search_test_ctx<R>(f: impl FnOnce(&mut crate::emacs_core::eval::Context) -> R
     SEARCH_TEST_CTX.with(|slot| {
         let mut slot = slot.borrow_mut();
         let ctx = slot.get_or_insert_with(|| {
-            neovm_value::thread_exit_leak::ThreadExitLeak::new(
-                crate::test_utils::new_context(),
-            )
+            neovm_value::thread_exit_leak::ThreadExitLeak::new(crate::test_utils::new_context())
         });
         f(ctx.get_mut())
     })

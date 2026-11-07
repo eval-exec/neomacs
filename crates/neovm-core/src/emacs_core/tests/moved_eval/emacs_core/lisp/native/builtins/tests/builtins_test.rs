@@ -129,9 +129,7 @@ fn dispatch_builtin_pure(name: &str, args: Vec<Value>) -> Option<EvalResult> {
     PURE_DISPATCH_TEST_CTX.with(|slot| {
         let mut slot = slot.borrow_mut();
         let ctx = slot.get_or_insert_with(|| {
-            neovm_value::thread_exit_leak::ThreadExitLeak::new(
-                crate::test_utils::new_context(),
-            )
+            neovm_value::thread_exit_leak::ThreadExitLeak::new(crate::test_utils::new_context())
         });
         crate::emacs_core::builtins::dispatch_pure_builtin_for_test(ctx.get_mut(), name, args)
     })

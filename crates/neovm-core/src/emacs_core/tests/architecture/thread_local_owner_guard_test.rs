@@ -113,7 +113,9 @@ fn statics_in_block(block: &str, outer_attrs: &[String]) -> Vec<(String, String,
         let Some(rest) = trimmed.strip_prefix("static ") else {
             continue;
         };
-        let Some(colon) = rest.find(':') else { continue };
+        let Some(colon) = rest.find(':') else {
+            continue;
+        };
         let name = rest[..colon].trim().to_string();
         if name.is_empty() {
             continue;

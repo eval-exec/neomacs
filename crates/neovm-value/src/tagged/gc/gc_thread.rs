@@ -1986,11 +1986,9 @@ pub fn with_tagged_heap<R>(f: impl FnOnce(&mut TaggedHeap) -> R) -> R {
                 let root = {
                     let mut borrow = fb.borrow_mut();
                     if borrow.is_none() {
-                        *borrow = Some(
-                            crate::thread_exit_leak::ThreadExitLeak::new(
-                                AliasableBox::new(TaggedHeap::new()),
-                            ),
-                        );
+                        *borrow = Some(crate::thread_exit_leak::ThreadExitLeak::new(
+                            AliasableBox::new(TaggedHeap::new()),
+                        ));
                     }
                     borrow.as_mut().unwrap().get_mut().root()
                 };
