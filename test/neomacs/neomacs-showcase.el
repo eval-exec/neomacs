@@ -4,7 +4,19 @@
 (require 'neomacs-webkit nil t)
 (require 'neomacs-video nil t)
 (require 'neomacs-image nil t)
-(require 'neomacs-effects nil t)
+
+(defun showcase--require-effects ()
+  "Load `neomacs-effects' when the renderer can be configured.
+WebKit, video, and image are optional.  The effect options are not:
+without them a later setter only changes a variable and the renderer
+never sees it.  When the renderer subr is absent, keep the load
+optional so this file can still be read."
+  (if (fboundp 'neomacs--effect-set)
+      (unless (require 'neomacs-effects nil t)
+        (error "Showcase needs library `neomacs-effects'"))
+    (require 'neomacs-effects nil t)))
+
+(showcase--require-effects)
 
 (defvar showcase--log-file "/tmp/neomacs-showcase.log"
   "Path to the log file.")
@@ -408,9 +420,18 @@ merged plist.  Otherwise only the renderer changes."
   "Apply each entry of PROFILE with `showcase--gallery-set'.
 PROFILE has the same shape `neomacs--effects-apply' accepts.  Unlike
 that subr, this does not rebuild every effect from the Rust defaults,
-so options the profile does not mention stay in sync with the renderer."
+so options the profile does not mention stay in sync with the renderer.
+Call `showcase--replace-profile' when the profile should be shown alone."
   (dolist (entry profile)
     (showcase--gallery-set (car entry) (cdr entry))))
+
+(defun showcase--replace-profile (profile)
+  "Show PROFILE alone on the demo slate.
+Clears every effect to the demo defaults, then applies PROFILE through
+the option setters.  The user's pre-demo values stay in the snapshot
+`showcase-quit' restores."
+  (showcase--demo-clean-effects)
+  (showcase--apply-profile profile))
 
 (defun showcase--effect-enable (effect)
   "Turn on gallery EFFECT without recording a user customization."
@@ -829,7 +850,7 @@ back by `showcase-quit'.  Nothing here is recorded as a customization."
             (profile (cadr entry)))
         (showcase--schedule delay
           (lambda ()
-            (showcase--apply-profile profile)
+            (showcase--replace-profile profile)
             (showcase--log "  atmosphere: %s" name)
             (message "Atmosphere: %s" name))))
       (setq delay (+ delay 1.0)))))

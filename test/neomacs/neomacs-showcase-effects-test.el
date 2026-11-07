@@ -39,10 +39,10 @@
     (list :enabled nil)))
 
 (defun neomacs-effect-names (&optional scope)
-  (let ((shaders '(aurora breathing-border cursor-color-cycle cursor-firework
+  (let (        (shaders '(aurora breathing-border cursor-color-cycle cursor-firework
                          cursor-glow focus-gradient-border focus-mode
-                         inactive-dim indent-guides line-highlight minimap
-                         scroll-progress show-whitespace zen-mode))
+                         inactive-dim indent-guides line-highlight matrix-rain
+                         minimap scroll-progress show-whitespace zen-mode))
         (behavior '(buffer-transition cursor-blink cursor-motion
                                       cursor-size-transition scroll-transition
                                       window-animations window-close
@@ -215,6 +215,70 @@
     (when (showcase-effects-test-enabled (neomacs-effect-get 'aurora))
       (showcase-effects-test-fail
        "quit left aurora renderer %S" (neomacs-effect-get 'aurora)))))
+
+;; Atmosphere presets are shown one at a time.  Applying the next profile
+;; must turn the previous preset off in both the option and the renderer.
+(let ((aurora 'neomacs-effect-aurora)
+      (rain 'neomacs-effect-matrix-rain))
+  (showcase-effects-test-reset-session)
+  (showcase-effects-test-custom-clean aurora)
+  (showcase-effects-test-custom-clean rain)
+  (showcase-effects-test-user-set aurora '(:enabled nil))
+  (showcase--replace-profile '((aurora :enabled t :opacity 0.18)))
+  (showcase--replace-profile '((matrix-rain :enabled t :opacity 0.15)))
+  (when (or (eq (showcase-effects-test-enabled (symbol-value aurora)) t)
+            (eq (showcase-effects-test-enabled (neomacs-effect-get 'aurora)) t))
+    (showcase-effects-test-fail
+     "second preset left aurora option %S renderer %S"
+     (symbol-value aurora) (neomacs-effect-get 'aurora)))
+  (unless (and (eq (showcase-effects-test-enabled (symbol-value rain)) t)
+               (eq (showcase-effects-test-enabled (neomacs-effect-get 'matrix-rain)) t))
+    (showcase-effects-test-fail
+     "second preset desynced matrix-rain option %S renderer %S"
+     (symbol-value rain) (neomacs-effect-get 'matrix-rain)))
+  (when (or (get aurora 'customized-value) (get rain 'customized-value))
+    (showcase-effects-test-fail "replace-profile recorded a customization"))
+  (showcase-quit)
+  (when (eq (showcase-effects-test-enabled (neomacs-effect-get 'matrix-rain)) t)
+    (showcase-effects-test-fail
+     "quit left matrix-rain renderer %S" (neomacs-effect-get 'matrix-rain))))
+
+;; A gallery :set replaces the option plist and merges into the renderer.
+(let* ((sym 'neomacs-effect-cursor-glow)
+       (setter (get sym 'custom-set)))
+  (unless setter
+    (showcase-effects-test-fail "cursor-glow has no :set function"))
+  (when setter
+    (funcall setter sym '(:enabled t :color "#112233" :radius 48))
+    (funcall setter sym '(:radius 10))
+    (let ((option (symbol-value sym))
+          (renderer (neomacs-effect-get 'cursor-glow)))
+      (when (plist-member option :enabled)
+        (showcase-effects-test-fail
+         "partial plist kept :enabled in the option %S" option))
+      (unless (and (eq (plist-get renderer :enabled) t)
+                   (equal (plist-get renderer :color) "#112233")
+                   (eql (plist-get renderer :radius) 10))
+        (showcase-effects-test-fail
+         "renderer did not keep omitted glow properties %S" renderer)))))
+
+;; The effects library is required when the renderer subr exists, and the
+;; load stays quiet when that subr is absent.
+(cl-letf (((symbol-function 'require) (lambda (&rest _) nil)))
+  (condition-case err
+      (progn
+        (showcase--require-effects)
+        (showcase-effects-test-fail "missing neomacs-effects did not signal"))
+    (error
+     (unless (string-match-p "neomacs-effects" (error-message-string err))
+       (showcase-effects-test-fail "unexpected require error %S" err)))))
+(let ((orig (symbol-function 'neomacs--effect-set)))
+  (fmakunbound 'neomacs--effect-set)
+  (condition-case err
+      (showcase--require-effects)
+    (error
+     (showcase-effects-test-fail "require signaled without the subr: %S" err)))
+  (fset 'neomacs--effect-set orig))
 
 (when showcase-effects-test-failures
   (princ (format "FAILED %d\n" (length showcase-effects-test-failures)))
