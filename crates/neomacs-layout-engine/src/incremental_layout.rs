@@ -399,6 +399,9 @@ impl RetainedWindowKey {
     /// properties, overlays, faces, or the viewport changed, so the retained body
     /// rows are no longer trustworthy).
     pub fn cursor_only_eligible(prev: &Self, curr: &Self) -> bool {
+        if !Self::trailing_whitespace_unchanged_by_point_motion(prev, curr) {
+            return false;
+        }
         // Nothing moved except possibly point.
         //
         // Note what this now tolerates that it did not before: an overlay set
@@ -411,12 +414,23 @@ impl RetainedWindowKey {
         WindowDelta::between(prev, curr).only_point_moved_at_most()
     }
 
+    /// Highlighting suppresses the whitespace run ending at point. A moved
+    /// point can therefore change body faces despite unchanged source text.
+    /// GNU likewise refuses these shortcuts with show-trailing-whitespace
+    /// (xdisp.c:19880,21804); unchanged-point body reuse remains safe here.
+    fn trailing_whitespace_unchanged_by_point_motion(prev: &Self, curr: &Self) -> bool {
+        !curr.show_trailing_whitespace || prev.point == curr.point
+    }
+
     /// Whether a window may take the pure-scroll fast path: every layout input is
     /// identical to the retained (`prev`) key EXCEPT `window_start` (which moved)
     /// and `point` (which may follow the scroll). Any tick/geometry/face move
     /// escalates to a full rebuild. Whether the scroll is by WHOLE rows is decided
     /// separately against the retained matrix ([`RetainedWindowMatrix::scroll_replay`]).
     pub fn scroll_eligible(prev: &Self, curr: &Self) -> bool {
+        if !Self::trailing_whitespace_unchanged_by_point_motion(prev, curr) {
+            return false;
+        }
         let delta = WindowDelta::between(prev, curr);
         // The visible region moved and nothing else did.
         delta.window_start_moved

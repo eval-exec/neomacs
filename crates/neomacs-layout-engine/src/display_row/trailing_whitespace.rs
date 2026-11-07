@@ -10,13 +10,43 @@
 //! glyph provenance carries the same discriminator, so this mutation can
 //! require the `Buffer` arm directly instead of inferring it from a sentinel.
 //!
+//! A stretch can also represent a non-whitespace character (for example an
+//! org-modern table border). The last candidate must first pass GNU's source
+//! predicate; string-owned glyphs block the walk instead of being skipped.
+//!
 //! WHEN the highlight runs is not decided here: [`super::line_end::plan`] is
 //! the one place that orders it (first, at a true line end only) for every
 //! row producer.
 
 use crate::display_current_row_output::DisplayCurrentRowMutation;
-use neomacs_display_protocol::glyph_matrix::{Glyph, GlyphArea, GlyphRow, GlyphType};
+use neomacs_display_protocol::glyph_matrix::{
+    Glyph, GlyphArea, GlyphProvenance, GlyphRow, GlyphType,
+};
 use neomacs_display_protocol::types::FaceId;
+use neovm_core::buffer::{CharPos0, EmacsBytePos};
+
+/// GNU `trailing_whitespace_p`: inspect actual accessible buffer bytes, not
+/// the shape of a display replacement, and suppress the run ending at point.
+/// The predicate is asked once for the last candidate, before the row walk.
+pub(crate) fn buffer_trailing_whitespace_p(
+    buffer: &impl crate::neovm_bridge::LayoutBufferView,
+    point: i64,
+    from: CharPos0,
+) -> bool {
+    if from > buffer.layout_point_max_char_pos() {
+        return false;
+    }
+    let end = buffer.layout_point_max_emacs_byte_pos();
+    let mut pos = buffer.layout_char_pos_to_emacs_byte_pos(from);
+    if pos < buffer.layout_point_min_emacs_byte_pos() {
+        return false;
+    }
+    while pos < end && matches!(buffer.layout_emacs_byte_at_pos(pos), Some(b' ' | b'\t')) {
+        pos = EmacsBytePos::new(pos.get() + 1);
+    }
+    (pos == end || matches!(buffer.layout_emacs_byte_at_pos(pos), Some(b'\n' | b'\r')))
+        && buffer.layout_emacs_byte_pos_to_char_pos(pos).get() as i64 != point
+}
 
 /// Re-face the current row's trailing whitespace glyphs with the
 /// `trailing-whitespace` face (GNU `highlight_trailing_whitespace`, xdisp.c).
@@ -27,8 +57,9 @@ use neomacs_display_protocol::types::FaceId;
 /// resolved from its `face_id`, so this paints the trailing run through the
 /// same per-glyph background path the `region` face uses. Called only at true
 /// line ends (before a real newline / at ZV), never at a visual wrap.
-pub(super) struct HighlightTrailingWhitespaceMutation {
+pub(super) struct HighlightTrailingWhitespaceMutation<'a> {
     pub(super) face_id: FaceId,
+    pub(super) source_is_trailing: &'a dyn Fn(CharPos0) -> bool,
 }
 
 /// GNU also accepts only space `Char` glyphs (tabs render as `Stretch`); the
@@ -46,7 +77,7 @@ fn has_buffer_position(glyph: &Glyph) -> bool {
     glyph.provenance.buffer_charpos().is_some()
 }
 
-impl DisplayCurrentRowMutation for HighlightTrailingWhitespaceMutation {
+impl DisplayCurrentRowMutation for HighlightTrailingWhitespaceMutation<'_> {
     type Output = ();
 
     fn apply(self, row: &mut GlyphRow) -> Self::Output {
@@ -62,10 +93,26 @@ impl DisplayCurrentRowMutation for HighlightTrailingWhitespaceMutation {
                 glyph.glyph_type,
                 GlyphType::Char { .. } | GlyphType::Stretch { .. }
             );
-            if !skippable || has_buffer_position(glyph) {
+            let nil_object = match glyph.provenance {
+                GlyphProvenance::Buffer { .. } | GlyphProvenance::Str { .. } => false,
+                GlyphProvenance::LineEnd
+                | GlyphProvenance::Mark
+                | GlyphProvenance::LeftTruncation
+                | GlyphProvenance::EmptyLineNewline { .. } => true,
+            };
+            if !skippable || !nil_object {
                 break;
             }
             end -= 1;
+        }
+        let Some(last) = end.checked_sub(1).map(|index| &glyphs[index]) else {
+            return;
+        };
+        let Some(charpos) = last.provenance.buffer_charpos() else {
+            return;
+        };
+        if !is_whitespace_glyph(last) || !(self.source_is_trailing)(CharPos0::new(charpos)) {
+            return;
         }
         // Re-face backward while the glyph is buffer whitespace (GNU's
         // `BUFFERP (glyph->object)` plus space/stretch condition).

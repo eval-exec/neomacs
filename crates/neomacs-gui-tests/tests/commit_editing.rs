@@ -179,6 +179,11 @@ fn commit_probe_rejects_unknown_backend() {
 }
 
 #[test]
+fn org_table_display_stretches_preserve_padding_and_border_faces() {
+    run_fixture_probe("org-table-whitespace", "org-table-whitespace.el");
+}
+
+#[test]
 fn first_commit_character_uses_the_asynchronously_selected_buffer() {
     run_commit_probe("async-map");
 }

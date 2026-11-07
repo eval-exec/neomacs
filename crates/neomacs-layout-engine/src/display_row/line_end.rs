@@ -454,12 +454,37 @@ impl ResolvedLineEndPlan {
     /// Apply the resolved plan to `row` — the single line-end executor shared
     /// by the buffer-source lifecycle and the item-renderer finalizer.
     pub(crate) fn apply_to(self, row: &mut GlyphRow) {
+        // Bufferless producers cannot establish source trailing whitespace.
+        self.apply_with_source(row, &|_| false);
+    }
+
+    /// Attach the buffer/point predicate only at execution, keeping the plan
+    /// independent of source storage and retaining the GNU effect ordering.
+    pub(crate) fn with_trailing_whitespace_source(
+        self,
+        source_is_trailing: &dyn Fn(neovm_core::buffer::CharPos0) -> bool,
+    ) -> SourceCheckedLineEndPlan<'_> {
+        SourceCheckedLineEndPlan {
+            plan: self,
+            source_is_trailing,
+        }
+    }
+
+    fn apply_with_source(
+        self,
+        row: &mut GlyphRow,
+        source_is_trailing: &dyn Fn(neovm_core::buffer::CharPos0) -> bool,
+    ) {
         let text_index = GlyphArea::Text.index();
         let before_len = row.glyphs[text_index].len();
         for step in self.steps {
             match step {
                 ResolvedLineEndStep::HighlightTrailingWhitespace { face_id } => {
-                    HighlightTrailingWhitespaceMutation { face_id }.apply(row);
+                    HighlightTrailingWhitespaceMutation {
+                        face_id,
+                        source_is_trailing,
+                    }
+                    .apply(row);
                 }
                 ResolvedLineEndStep::AppendGlyph {
                     ch,
@@ -490,11 +515,16 @@ impl ResolvedLineEndPlan {
     }
 }
 
-impl DisplayCurrentRowMutation for ResolvedLineEndPlan {
+pub(crate) struct SourceCheckedLineEndPlan<'a> {
+    plan: ResolvedLineEndPlan,
+    source_is_trailing: &'a dyn Fn(neovm_core::buffer::CharPos0) -> bool,
+}
+
+impl DisplayCurrentRowMutation for SourceCheckedLineEndPlan<'_> {
     type Output = ();
 
     fn apply(self, row: &mut GlyphRow) -> Self::Output {
-        self.apply_to(row);
+        self.plan.apply_with_source(row, self.source_is_trailing);
     }
 }
 
