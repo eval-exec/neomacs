@@ -98,7 +98,20 @@ fn run_fixture_probe(probe: &str, fixture: &str) {
     }
     assert_eq!(result.exit_code, Some(0), "{result:#?}\n{stderr}");
     assert!(stderr.contains("COMMIT-EDITING-PASS"), "{stderr}");
-    if (probe.ends_with("newline-cursor") || probe == "rtl-replacement-cursor")
+    if probe == "org-table-whitespace" {
+        let rendered = stderr.contains("ORG-TABLE-RENDERED-FACES-PASS");
+        let source_only = stderr.contains("ORG-TABLE-REFERENCE-SOURCE-ONLY");
+        assert_ne!(
+            rendered, source_only,
+            "missing or ambiguous Org evidence: {stderr}"
+        );
+        if source_only {
+            eprintln!("Org reference control: source setup only; rendered faces were not asserted");
+        }
+    }
+    if (probe.ends_with("newline-cursor")
+        || probe == "rtl-replacement-cursor"
+        || probe.starts_with("stretch-policy-"))
         && !stderr.contains("CURSOR-REPLAY-REFERENCE-GEOMETRY-ONLY")
     {
         let marker = stderr
@@ -178,9 +191,23 @@ fn commit_probe_rejects_unknown_backend() {
     commit_probe_backend(Some("unknown"));
 }
 
+/// Neomacs verifies rendered faces; GNU explicitly reports a source-only control.
 #[test]
-fn org_table_display_stretches_preserve_padding_and_border_faces() {
+fn org_table_probe_reports_rendered_faces_or_reference_source() {
     run_fixture_probe("org-table-whitespace", "org-table-whitespace.el");
+}
+
+/// Fresh and actual cursor-only replay obey narrow/wide stretch policy in RTL.
+#[test]
+fn stretch_cursor_replay_obeys_width_policy() {
+    for probe in [
+        "stretch-policy-narrow",
+        "stretch-policy-wide",
+        "stretch-policy-narrow-enabled",
+        "stretch-policy-wide-enabled",
+    ] {
+        run_fixture_probe(probe, "cursor-stretch-policy.el");
+    }
 }
 
 #[test]

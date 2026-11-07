@@ -38,10 +38,13 @@
                      (when (seq-some (lambda (row) (memq row '(0 1 2))) highlighted)
                        (error "Org table border/padding was classified as trailing whitespace: %S" highlighted))
                      (unless (memq 4 highlighted)
-                       (error "Genuine trailing spaces lost their highlight: %S" highlighted)))
-                 ;; GNU lacks the snapshot API; check the same display source.
-                 (unless (equal (get-text-property 1 'display) '(space :width (3)))
-                   (error "Missing reference table-bar display property")))
+                       (error "Genuine trailing spaces lost their highlight: %S" highlighted))
+                     (princ "ORG-TABLE-RENDERED-FACES-PASS\n" 'external-debugging-output))
+                 ;; This is explicitly source-only, not a GNU face-color oracle.
+                 (progn
+                   (unless (equal (get-text-property 1 'display) '(space :width (3)))
+                     (error "Missing reference table-bar display property"))
+                   (princ "ORG-TABLE-REFERENCE-SOURCE-ONLY\n" 'external-debugging-output)))
                (princ "COMMIT-EDITING-PASS\n" 'external-debugging-output)
                (kill-emacs 0))
            (error (neo-org-probe-fail error-data))))))

@@ -482,6 +482,135 @@ fn rtl_replacement_cursor_uses_its_resolved_glyph_metrics() {
     }
 }
 
+/// Replacement placement must identify the selected glyph independently of
+/// fresh/replay equality, and logical cursor anchors must use its finalized x.
+#[test]
+fn replacement_logical_cursor_tracks_the_selected_visual_slot() {
+    for (replacement, visible) in ["אבג", "abc"]
+        .into_iter()
+        .flat_map(|replacement| [true, false].map(|visible| (replacement, visible)))
+    {
+        let (mut eval, frame, _, window) = incr_editing_frame("ax\n", 800, 240);
+        realize_test_gui_frame(&mut eval, frame);
+        eval.buffer_manager_mut()
+            .current_buffer_mut()
+            .unwrap()
+            .set_buffer_local("cursor-type", if visible { Value::T } else { Value::NIL });
+        eval.eval_str(&format!("(progn (put-text-property 2 3 'display \"{replacement}\") (set-window-point (selected-window) 2))")).unwrap();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
+        crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+        let FrameLayoutAttempt::Prepared(prepared) =
+            engine.redisplay_frame_attempt(&mut eval, frame)
+        else {
+            panic!("replacement frame")
+        };
+        let row = &prepared
+            .window_matrices
+            .iter()
+            .find(|entry| entry.window_id.get() == window.0 as i64)
+            .unwrap()
+            .matrix
+            .rows[0];
+        let glyphs = &row.glyphs[GlyphArea::Text.index()];
+        let selected = glyphs
+            .iter()
+            .enumerate()
+            .filter(|(_, glyph)| !glyph.padding && row.glyph_covers_buffer_charpos(glyph, 1))
+            .filter_map(|(i, glyph)| match glyph.provenance {
+                neomacs_display_protocol::glyph_matrix::GlyphProvenance::Str { index, .. } => {
+                    Some((index, i))
+                }
+                _ => None,
+            })
+            .min()
+            .expect("replacement glyph")
+            .1;
+        let expected_col: u16 = row.glyphs[GlyphArea::LeftMargin.index()]
+            .iter()
+            .chain(glyphs[..selected].iter())
+            .filter(|glyph| !glyph.padding)
+            .map(|glyph| glyph.materialized_slot_span())
+            .sum();
+        let expected_x = row.pixel_x
+            + glyphs[..selected]
+                .iter()
+                .filter(|glyph| !glyph.padding)
+                .map(|glyph| glyph.pixel_width)
+                .sum::<f32>();
+        let output = prepared.materialize();
+        if visible {
+            assert_eq!(output.active_cursor().unwrap().slot_id.col, expected_col);
+        } else {
+            assert!(output.active_cursor().is_none());
+        }
+        let snapshot = eval
+            .frame_manager()
+            .get(frame)
+            .unwrap()
+            .redisplay_snapshot(window)
+            .unwrap();
+        let logical = snapshot.logical_cursor.as_ref().unwrap();
+        assert_eq!(
+            logical.x,
+            expected_x.round() as i64,
+            "{replacement}, visible={visible}"
+        );
+        if let Some(physical) = snapshot.phys_cursor.as_ref() {
+            assert_eq!(logical.x, physical.x, "{replacement}");
+        }
+    }
+}
+
+/// Moved-point reconstruction must share fresh stretch-width policy, including
+/// preserving narrow stretches and respecting x-stretch-cursor.
+#[test]
+fn stretch_cursor_only_replay_matches_fresh_width_policy() {
+    for stretch in [false, true] {
+        for (width, style) in [0.25, 5.0]
+            .into_iter()
+            .flat_map(|width| ["box", "bar", "hbar"].map(|style| (width, style)))
+        {
+            let (mut eval, frame, _, _) = incr_editing_frame("אxב\n", 800, 240);
+            realize_test_gui_frame(&mut eval, frame);
+            let cursor_type = match style {
+                "box" => Value::T,
+                "bar" => Value::cons(Value::symbol("bar"), Value::fixnum(2)),
+                _ => Value::symbol("hbar"),
+            };
+            eval.buffer_manager_mut()
+                .current_buffer_mut()
+                .unwrap()
+                .set_buffer_local("cursor-type", cursor_type);
+            eval.eval_str(&format!("(progn (setq x-stretch-cursor {}) (put-text-property 2 3 'display '(space :width {width})) (set-window-point (selected-window) 1))", if stretch { "t" } else { "nil" })).unwrap();
+            let mut engine = crate::font::metrics::test_catalog::layout_engine();
+            crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+            engine.layout_frame_rust(&mut eval, frame);
+            eval.eval_str("(set-window-point (selected-window) 2)")
+                .unwrap();
+            let FrameLayoutAttempt::Prepared(replayed) =
+                engine.redisplay_frame_attempt(&mut eval, frame)
+            else {
+                panic!("stretch replay")
+            };
+            assert_eq!(engine.last_layout_stats().cursor_only_windows, 1);
+            assert!(engine.last_layout_stats().reused_rows > 0);
+            let actual = replayed.materialize().active_cursor().unwrap().width;
+            let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+            crate::font::metrics::test_catalog::enable_metrics(&mut fresh);
+            let FrameLayoutAttempt::Prepared(rebuilt) =
+                fresh.redisplay_frame_attempt(&mut eval, frame)
+            else {
+                panic!("fresh stretch")
+            };
+            assert_eq!(
+                actual,
+                rebuilt.materialize().active_cursor().unwrap().width,
+                "stretch={stretch} width={width} style={style}"
+            );
+        }
+    }
+}
+
 /// An unchanged authoritative cursor needs no new point-font measurement.
 #[test]
 fn unchanged_unmeasured_cursor_preserves_retained_replay() {

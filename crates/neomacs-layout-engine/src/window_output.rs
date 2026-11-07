@@ -875,6 +875,20 @@ impl TextWindowCursor {
     }
 }
 
+/// Share integer-grid rounding between logical anchors and physical snapshots.
+/// A replacement boundary override is valid only if final slot placement stayed
+/// at the captured x; bidi-selected glyphs otherwise use their measured x.
+pub(crate) fn cursor_snapshot_x(
+    captured_x: f32,
+    display_x: f32,
+    text_area_left: f32,
+    grid_x_override: Option<i64>,
+) -> i64 {
+    grid_x_override
+        .filter(|_| (display_x - captured_x).abs() <= f32::EPSILON)
+        .unwrap_or_else(|| (display_x - text_area_left).round() as i64)
+}
+
 impl ResolvedTextWindowCursor {
     fn row(self) -> usize {
         self.coordinates.display_slot_id().row as usize
@@ -887,11 +901,12 @@ impl ResolvedTextWindowCursor {
     fn window_snapshot(self) -> WindowCursorSnapshot {
         WindowCursorSnapshot {
             kind: window_cursor_kind(self.captured.style),
-            x: self
-                .captured
-                .grid_x_override
-                .filter(|_| (self.display_x - self.captured.x).abs() <= f32::EPSILON)
-                .unwrap_or_else(|| (self.display_x - self.captured.text_area_left).round() as i64),
+            x: cursor_snapshot_x(
+                self.captured.x,
+                self.display_x,
+                self.captured.text_area_left,
+                self.captured.grid_x_override,
+            ),
             y: (self.captured.y - self.captured.window_top).round() as i64,
             width: self.captured.width.round() as i64,
             height: self.captured.height.round() as i64,

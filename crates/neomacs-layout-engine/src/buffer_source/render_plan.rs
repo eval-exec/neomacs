@@ -459,15 +459,13 @@ fn try_decorate_window_cursor(
             if let Some(glyph) =
                 crate::display_cursor::CursorVisualColumnResolutionRequest::point_glyph(row, point)
             {
-                // Preserve the GNU stretch/bar cursor width policy.
-                width = if matches!(glyph.glyph_type, GlyphType::Stretch { .. })
-                    && !params.x_stretch_cursor
-                    && !matches!(style, CursorStyle::Bar(_))
-                {
-                    crate::display_row::width::DisplayRowCharWidthPolicy::new(char_w).fallback()
-                } else {
-                    glyph.pixel_width
-                };
+                width = crate::display_cursor::resolve_cursor_width(
+                    style,
+                    glyph.pixel_width,
+                    matches!(glyph.glyph_type, GlyphType::Stretch { .. }),
+                    params.x_stretch_cursor,
+                    char_w,
+                );
             }
             let Some((face_height, face_ascent)) =
                 retained_point_cursor_metrics(row, point, buffer_newline, measurement)
@@ -937,6 +935,7 @@ impl BufferSourceOutputSetup {
             // canonical cursor geometry rule. Width comes from the point glyph.
             // Fall back to row metrics at EOL or hidden text without a glyph.
             let mut cursor_width = geometry.char_width;
+            let mut cursor_stretch_like = false;
             let mut cursor_height = geometry.char_height;
             let mut cursor_ascent = window_metrics.ascent();
             let mut cursor_row_pixel_y = 0.0_f32;
@@ -963,6 +962,7 @@ impl BufferSourceOutputSetup {
                         )
                     {
                         cursor_width = glyph.pixel_width;
+                        cursor_stretch_like = matches!(glyph.glyph_type, GlyphType::Stretch { .. });
                     }
                     if replay.retained_cursor.is_none() {
                         let buffer_newline = buf_access
@@ -1090,7 +1090,13 @@ impl BufferSourceOutputSetup {
                         },
                         x: walk_setup.text_area_left,
                         y: walk_setup.window_top + cursor_row_pixel_y,
-                        width: cursor_width,
+                        width: crate::display_cursor::resolve_cursor_width(
+                            style,
+                            cursor_width,
+                            cursor_stretch_like,
+                            params.x_stretch_cursor,
+                            geometry.char_width,
+                        ),
                         height: cursor_height,
                         ascent: cursor_ascent,
                         style,

@@ -1348,6 +1348,28 @@ pub(crate) fn resolve_cursor_vertical_metrics(
     (y, height, ascent.min(height))
 }
 
+/// GNU caps non-stretching box/hbar cursors at one column, without
+/// enlarging a narrower glyph; vertical bars keep their explicit ink width.
+pub(crate) fn resolve_cursor_width(
+    style: CursorStyle,
+    slot_width: f32,
+    stretch_like: bool,
+    x_stretch_cursor: bool,
+    fallback_char_width: f32,
+) -> f32 {
+    let actual = match style {
+        CursorStyle::Bar(width) => width.max(1.0),
+        CursorStyle::Hbar(_) | CursorStyle::FilledBox | CursorStyle::Hollow => slot_width.max(1.0),
+    };
+    if stretch_like && !x_stretch_cursor && !matches!(style, CursorStyle::Bar(_)) {
+        actual.min(DisplayRowCharWidthPolicy::new(fallback_char_width).fallback())
+    } else {
+        actual
+    }
+}
+
+/// Combine the selected slot's canonical width and vertical metrics with cursor
+/// paint, without letting stretch policy change explicit vertical-bar geometry.
 pub(crate) fn resolve_cursor_geometry(
     style: CursorStyle,
     source: CursorGeometrySource,
@@ -1356,18 +1378,13 @@ pub(crate) fn resolve_cursor_geometry(
     color: Color,
     frame_cursor_foreground: Color,
 ) -> ResolvedCursorGeometry {
-    let actual_slot_width = match style {
-        CursorStyle::Bar(width) => width.max(1.0),
-        CursorStyle::Hbar(_) | CursorStyle::FilledBox | CursorStyle::Hollow => {
-            source.slot_width.max(1.0)
-        }
-    };
-    let width = if source.stretch_like && !x_stretch_cursor && !matches!(style, CursorStyle::Bar(_))
-    {
-        DisplayRowCharWidthPolicy::new(fallback_char_width).fallback()
-    } else {
-        actual_slot_width
-    };
+    let width = resolve_cursor_width(
+        style,
+        source.slot_width,
+        source.stretch_like,
+        x_stretch_cursor,
+        fallback_char_width,
+    );
     let (y, height, ascent) = resolve_cursor_vertical_metrics(
         source.y,
         source.face_height,
@@ -1464,6 +1481,8 @@ impl<'a> CapturedTextWindowCursorPublishContext<'a> {
         }
     }
 
+    /// Publish logical anchors even when painting is disabled, then materialize
+    /// the same selected slot's physical geometry and face when a cursor is shown.
     pub(crate) fn publish_captured_cursor(
         self,
         mut cursor: CapturedCursorInfo,
@@ -1493,9 +1512,14 @@ impl<'a> CapturedTextWindowCursorPublishContext<'a> {
                 {
                     cursor.face_h = glyph.pixel_height;
                     cursor.face_ascent = glyph.pixel_ascent;
-                    if matches!(glyph.provenance, GlyphProvenance::Str { .. }) {
-                        // A replacement's face and width can differ from the
-                        // buffer face captured before rendering its string.
+                    let stretch = matches!(
+                        glyph.glyph_type,
+                        neomacs_display_protocol::glyph_matrix::GlyphType::Stretch { .. }
+                    );
+                    if stretch || matches!(glyph.provenance, GlyphProvenance::Str { .. }) {
+                        // Replacement/stretch width can differ from the buffer
+                        // face captured before its display property was rendered.
+                        cursor.stretch_like = stretch;
                         cursor.slot_width = Some(glyph.pixel_width);
                         if let Some(face) = builder.output_face(glyph.face_id) {
                             cursor.fg = face.foreground;
@@ -1532,9 +1556,30 @@ impl<'a> CapturedTextWindowCursorPublishContext<'a> {
             self.text_area_left,
             self.window_top,
         );
-        if let Some(grid_x) = grid_x_override {
-            logical_cursor.x = grid_x;
-        }
+        // Logical anchors and physical publication must accept the same
+        // integer override only when bidi did not move the selected slot.
+        // Explicit string-cursor candidates already have resolved placement.
+        let finalized_x = if cursor.slot_state == CursorSlotResolutionState::Unresolved {
+            output
+                .builder()
+                .resolve_finalized_cursor_placement(
+                    CursorVisualColumnResolutionRequest::new(
+                        self.params.window_id,
+                        row_metric.row(),
+                        self.point_charpos.max(0) as usize,
+                    ),
+                    self.char_w,
+                )
+                .map_or(cursor.x, |placement| placement.x())
+        } else {
+            cursor.x
+        };
+        logical_cursor.x = crate::window_output::cursor_snapshot_x(
+            cursor.x,
+            finalized_x,
+            self.text_area_left,
+            grid_x_override,
+        );
         output_emitter.set_logical_cursor(logical_cursor);
 
         let Some(style) = cursor_style_for_window(self.params) else {
