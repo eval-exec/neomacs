@@ -238,9 +238,64 @@ thread_local! {
     /// The owner keeps the allocation's single provenance root, so the raw
     /// pointer installed in `TAGGED_HEAP` is never derived from a borrow that
     /// a later `borrow_mut` would invalidate.
-    #[cfg(test)]
-    static TEST_FALLBACK_TAGGED_HEAP: std::cell::RefCell<Option<AliasableBox<TaggedHeap>>> =
-        const { std::cell::RefCell::new(None) };
+    ///
+    /// The fallback heap is deliberately behind its own feature, not
+    /// `test-support`: it disables the "no TaggedHeap set" tripwire, and
+    /// pre-split only the core test build (cfg(test)) had it.  The six split
+    /// crates whose lib tests lived in the monolith's cfg(test) build enable
+    /// it from their [dev-dependencies]; no product or consumer crate does.
+    ///
+    /// The feature alone only makes the fallback AVAILABLE.  A unified
+    /// workspace test build (CI's `cargo nextest archive --workspace`) unifies
+    /// dev-dependency features, so the feature is compiled for every
+    /// dependent, including crates that never had the fallback pre-split.
+    /// `with_tagged_heap` therefore creates the fallback only after a test
+    /// tree arms it process-wide through `enable_test_thread_fallback` (called
+    /// by the shared `test_utils::init_test_tracing`); a crate that never runs
+    /// that init keeps the production panic.  A plain cfg(test) build of
+    /// neovm-value itself is always armed.
+    ///
+    /// The heap itself is held through `ThreadExitLeak`: this thread-local
+    /// is destroyed inside TLS destruction, and an owning TaggedHeap dropped
+    /// there could join its collector and emit a tracing event after
+    /// tracing's own TLS is gone (peer ruling 11:5xZ G3).
+    #[cfg(any(test, feature = "test-thread-fallback-heap"))]
+    static TEST_FALLBACK_TAGGED_HEAP: std::cell::RefCell<
+        Option<crate::thread_exit_leak::ThreadExitLeak<AliasableBox<TaggedHeap>>>,
+    > = const { std::cell::RefCell::new(None) };
+}
+
+/// Whether `with_tagged_heap` may create the per-thread fallback heap.
+///
+/// A unified workspace test build (CI's `cargo nextest archive --workspace`)
+/// enables dev-dependency features for the whole graph, so the
+/// `test-thread-fallback-heap` feature is compiled for every dependent crate.
+/// The feature only makes the fallback available; this process flag is what
+/// keeps the "no TaggedHeap set" tripwire armed for a crate that never had the
+/// fallback pre-split.  See [`enable_test_thread_fallback`].
+#[cfg(any(test, feature = "test-thread-fallback-heap"))]
+static TEST_FALLBACK_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Arm the per-thread fallback heap for this process (idempotent).
+///
+/// Called once per test process by `crate::test_utils::init_test_tracing`,
+/// which all six split crates' test trees re-export.  In a unified workspace
+/// test build the feature is compiled for every dependent, so this flag -- not
+/// the feature -- is what preserves the production panic for crates that never
+/// call the init (`neomacs-layout-engine`).
+#[cfg(any(test, feature = "test-thread-fallback-heap"))]
+#[inline]
+pub(crate) fn enable_test_thread_fallback() {
+    TEST_FALLBACK_ENABLED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the fallback heap may be created: always in neovm-value's own
+/// cfg(test) build, otherwise only after an explicit arming call.
+#[cfg(any(test, feature = "test-thread-fallback-heap"))]
+#[inline]
+pub(crate) fn test_fallback_enabled() -> bool {
+    cfg!(test) || TEST_FALLBACK_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Query the installed mutator's existing write-tracking protocol mirror.

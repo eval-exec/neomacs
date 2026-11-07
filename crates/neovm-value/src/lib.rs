@@ -46,6 +46,12 @@ pub mod logging;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 
+/// The one typed thread-exit leak wrapper for test fixtures that own a
+/// Context/World/TaggedHeap (peer ruling 11:5xZ G2).  Available in cfg(test)
+/// and test-support builds; see the module invariant.
+#[cfg(any(test, feature = "test-support"))]
+pub mod thread_exit_leak;
+
 /// Upper-free test helpers shared with core's test build (peer-signed R7c).
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_utils;

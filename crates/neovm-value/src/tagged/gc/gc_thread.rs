@@ -1761,15 +1761,20 @@ pub fn carrier_heap_is_acceptable_for_job_start() -> bool {
     if ptr.is_null() {
         return true;
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-thread-fallback-heap"))]
     {
+        // Only an ARMED fallback is acceptable: an unarmed process keeps the
+        // production rule even when the feature is compiled in.
+        if !test_fallback_enabled() {
+            return false;
+        }
         TEST_FALLBACK_TAGGED_HEAP.with(|fb| {
             fb.borrow()
                 .as_ref()
-                .is_some_and(|heap| heap.root().as_ptr() == ptr)
+                .is_some_and(|leak| leak.get().root().as_ptr() == ptr)
         })
     }
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "test-thread-fallback-heap")))]
     {
         false
     }
@@ -1951,8 +1956,12 @@ unsafe fn installed_heap_generational_enabled(heap: *const TaggedHeap) -> bool {
 
 /// Access the thread-local tagged heap.
 ///
-/// In test mode, auto-creates a fallback heap if none is set.
-/// In production, panics if no heap is set.
+/// In a cfg(test) build, or after the dedicated test-thread-fallback-heap
+/// build used by the core tests' no-Context fixtures has been ARMED for this
+/// process (see `enable_test_thread_fallback`), auto-creates a fallback heap
+/// if none is set.  Every other build, and an unarmed test process, panics if
+/// no heap is set: the fallback must not disable the tripwire for crates that
+/// never had it.
 #[inline]
 pub fn with_tagged_heap<R>(f: impl FnOnce(&mut TaggedHeap) -> R) -> R {
     TAGGED_HEAP.with(|h| {
@@ -1960,8 +1969,16 @@ pub fn with_tagged_heap<R>(f: impl FnOnce(&mut TaggedHeap) -> R) -> R {
         if !ptr.is_null() {
             return f(unsafe { &mut *ptr });
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-thread-fallback-heap"))]
         {
+            // The feature only makes the fallback available; it is created
+            // only after this process's test tree armed it (see
+            // `enable_test_thread_fallback`).  A unified workspace build
+            // compiles the feature for every dependent, and a crate that
+            // never arms it must keep the production panic.
+            if !test_fallback_enabled() {
+                panic!("no TaggedHeap set for this thread");
+            }
             TEST_FALLBACK_TAGGED_HEAP.with(|fb| {
                 // Copy the root out first: holding the `RefCell` borrow across
                 // `f` would both block reentrancy and hand out a `&mut` with a
@@ -1969,15 +1986,19 @@ pub fn with_tagged_heap<R>(f: impl FnOnce(&mut TaggedHeap) -> R) -> R {
                 let root = {
                     let mut borrow = fb.borrow_mut();
                     if borrow.is_none() {
-                        *borrow = Some(AliasableBox::new(TaggedHeap::new()));
+                        *borrow = Some(
+                            crate::thread_exit_leak::ThreadExitLeak::new(
+                                AliasableBox::new(TaggedHeap::new()),
+                            ),
+                        );
                     }
-                    borrow.as_ref().unwrap().root()
+                    borrow.as_mut().unwrap().get_mut().root()
                 };
                 set_tagged_heap_root(root);
                 f(unsafe { &mut *root.as_ptr() })
             })
         }
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-thread-fallback-heap")))]
         {
             panic!("no TaggedHeap set for this thread");
         }

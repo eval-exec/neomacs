@@ -77,6 +77,16 @@ desktop-font-settings = []
 # this feature (peer ruling A2 and the manifest architecture guard); it is off
 # in every product profile.
 test-support = ["dep:visibility"]
+# Dedicated test-only thread fallback heap (peer ruling 06:4xZ, A-prime;
+# CI amendment 15:2xZ O1): compiles the lazy per-thread TaggedHeap that
+# cfg(test) builds of this crate have always had, for a dependency test
+# graph that cannot see cfg(test).  The compiled-in feature only makes the
+# fallback AVAILABLE: `with_tagged_heap` creates it only after a test tree
+# arms it through the shared test_utils::init_test_tracing, because a
+# unified `cargo nextest archive --workspace` build enables every dev-dep
+# feature for every dependent.  Only the six split crates'
+# [dev-dependencies] enable the feature; no product crate does.
+test-thread-fallback-heap = []
 
 [lints.rust]
 # Split-wave class guard (LEAD 11:5xZ): deny accidental self-recursion.

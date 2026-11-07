@@ -8,13 +8,26 @@
 
 use std::path::PathBuf;
 
-/// Initialize the tracing subscriber for test output.
+/// Initialize the process-wide test support shared by every split crate's
+/// test tree.
 ///
-/// Thin wrapper around [`crate::logging::init_for_tests`] kept for the
-/// many existing call sites in this crate's test files. Tests never
-/// write to a log file regardless of `NEOMACS_LOG_TO_FILE` — output is
-/// always routed through the test harness's writer.
+/// Arms the dedicated per-thread test fallback heap.  A unified workspace
+/// test build (CI's `cargo nextest archive --workspace`) unifies
+/// dev-dependency features, so `test-thread-fallback-heap` is compiled for
+/// every dependent; the fallback must still stay unavailable to a crate that
+/// never had it, so the feature only makes it available and this explicit
+/// arming call enables it for the process.  Only the six split crates' test
+/// trees reach this init (through their `test_utils` re-export);
+/// `neomacs-layout-engine` never does and keeps the production panic.
+///
+/// Also initializes the tracing subscriber for test output. Thin wrapper
+/// around [`crate::logging::init_for_tests`] kept for the many existing call
+/// sites in this crate's test files. Tests never write to a log file
+/// regardless of `NEOMACS_LOG_TO_FILE` — output is always routed through the
+/// test harness's writer.
 pub fn init_test_tracing() {
+    #[cfg(any(test, feature = "test-thread-fallback-heap"))]
+    crate::tagged::gc::enable_test_thread_fallback();
     crate::logging::init_for_tests();
 }
 
