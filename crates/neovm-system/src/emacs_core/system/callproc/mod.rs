@@ -101,7 +101,9 @@ pub(crate) fn new_child_command_calls_for_test() -> usize {
 /// controlling terminal (M-x shell/term) are spawned via portable_pty, which
 /// sets up the pty as their controlling terminal — they do not use this path.
 pub(crate) fn new_child_command<S: AsRef<std::ffi::OsStr>>(program: S) -> ChildCommand {
-    #[cfg(test)]
+    // The re-homed editfns test asserts this counter, so it must move in the
+    // test-support build too.
+    #[cfg(any(test, feature = "test-support"))]
     NEW_CHILD_COMMAND_CALLS.with(|calls| calls.set(calls.get() + 1));
     ChildCommand::new(program)
 }
