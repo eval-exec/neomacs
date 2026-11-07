@@ -15,7 +15,9 @@ pub enum CompiledJournalMode {
 #[inline]
 #[doc(hidden)]
 pub fn compiled_journal_mode() -> CompiledJournalMode {
-    #[cfg(test)]
+    // Same rule as the override's own gate (and its setter): a re-homed test
+    // sets this through test-support, so the read must exist there too.
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(mode) = TEST_MODE.with(std::cell::Cell::get) {
         return mode;
     }
