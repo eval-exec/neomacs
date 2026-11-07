@@ -526,10 +526,40 @@ fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Re
     run_fresh_build(&options)
 }
 
+/// Environment inputs of [`FreshBuildOptions::parse`].
+///
+/// The parser reads two environment values. Injecting them keeps tests
+/// hermetic: the P2 baseline's `parse_release_uses_release_bin_dir` expected
+/// `/repo/target/release` while an ambient `CARGO_TARGET_DIR` silently won.
+/// Production passes [`ParseEnv::from_process`]; tests pass a clean value.
+#[derive(Clone, Debug, Default)]
+struct ParseEnv {
+    cargo_target_dir: Option<OsString>,
+    native_comp: bool,
+}
+
+impl ParseEnv {
+    fn from_process() -> Self {
+        Self {
+            cargo_target_dir: env::var_os("CARGO_TARGET_DIR"),
+            native_comp: env::var("NEOMACS_NATIVE_COMP")
+                .is_ok_and(|value| value.eq_ignore_ascii_case("yes")),
+        }
+    }
+}
+
 impl FreshBuildOptions {
     fn parse(
         repo_root: PathBuf,
         args: impl IntoIterator<Item = OsString>,
+    ) -> Result<FreshBuildOptions> {
+        Self::parse_with_env(repo_root, args, ParseEnv::from_process())
+    }
+
+    fn parse_with_env(
+        repo_root: PathBuf,
+        args: impl IntoIterator<Item = OsString>,
+        parse_env: ParseEnv,
     ) -> Result<FreshBuildOptions> {
         let mut args = args.into_iter().peekable();
 
@@ -548,8 +578,7 @@ impl FreshBuildOptions {
         let mut profile: Option<BuildProfile> = None;
         let mut cargo_jobs = CargoJobBudget::Inherit;
         let mut dry_run = false;
-        let mut native_comp =
-            env::var("NEOMACS_NATIVE_COMP").is_ok_and(|value| value.eq_ignore_ascii_case("yes"));
+        let mut native_comp = parse_env.native_comp;
         let mut skip_build = false;
         let mut no_byte_compile = false;
         let mut features: Vec<RequestedCargoFeature> = Vec::new();
@@ -651,7 +680,9 @@ impl FreshBuildOptions {
             .into());
         }
 
-        let bin_dir = bin_dir.unwrap_or_else(|| default_bin_dir(&repo_root, &profile));
+        let bin_dir = bin_dir.unwrap_or_else(|| {
+            default_bin_dir_with_target(&repo_root, &profile, parse_env.cargo_target_dir.as_deref())
+        });
 
         Ok(FreshBuildOptions {
             repo_root,
@@ -716,7 +747,19 @@ fn repository_root() -> PathBuf {
 }
 
 fn default_bin_dir(repo_root: &Path, profile: &BuildProfile) -> PathBuf {
-    env::var_os("CARGO_TARGET_DIR")
+    default_bin_dir_with_target(
+        repo_root,
+        profile,
+        env::var_os("CARGO_TARGET_DIR").as_deref(),
+    )
+}
+
+fn default_bin_dir_with_target(
+    repo_root: &Path,
+    profile: &BuildProfile,
+    cargo_target_dir: Option<&OsStr>,
+) -> PathBuf {
+    cargo_target_dir
         .map(PathBuf::from)
         .map(|path| {
             if path.is_absolute() {
