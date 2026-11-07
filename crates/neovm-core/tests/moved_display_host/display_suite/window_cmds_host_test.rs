@@ -1,6 +1,7 @@
 //! Re-homed window-command host tests (P1 B1): bodies are the display originals;
 //! only the constructor line changed.
 use super::*;
+use neovm_value::display_vocab::WindowSystemKind;
 
 #[test]
 fn modify_frame_parameters_after_live_font_change_defers_gui_resize_until_geometry_query() {
@@ -118,7 +119,7 @@ fn set_frame_size_keeps_resize_pending_until_geometry_queries_force_sync() {
             .frame_manager_mut()
             .get_mut(fid)
             .expect("frame should exist");
-        frame.set_parameter(Value::symbol("window-system"), Value::symbol("x"));
+        frame.install_backend_less_gui_kind(WindowSystemKind::X);
         frame.char_width = 16.0;
         frame.char_height = 33.0;
         frame.set_parameter(Value::symbol("width"), Value::fixnum(79));
@@ -169,7 +170,7 @@ fn set_frame_size_syncs_resize_event_before_followup_frame_width_queries() {
             .frame_manager_mut()
             .get_mut(fid)
             .expect("frame should exist");
-        frame.set_parameter(Value::symbol("window-system"), Value::symbol("x"));
+        frame.install_backend_less_gui_kind(WindowSystemKind::X);
         frame.char_width = 16.0;
         frame.char_height = 33.0;
         frame.set_parameter(Value::symbol("width"), Value::fixnum(79));
@@ -291,7 +292,7 @@ fn x_create_frame_syncs_pending_resize_before_adopting_opening_gui_frame() {
             .frame_manager_mut()
             .get_mut(fid)
             .expect("bootstrap frame");
-        frame.set_parameter(Value::symbol("window-system"), Value::symbol("x"));
+        frame.install_backend_less_gui_kind(WindowSystemKind::X);
         frame.char_width = 10.0;
         frame.char_height = 20.0;
         if let Some(mini_leaf) = frame.minibuffer_leaf.as_mut() {

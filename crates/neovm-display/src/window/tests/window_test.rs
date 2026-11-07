@@ -10,6 +10,7 @@ use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
 use neomacs_display_protocol::TransitionDirection;
 use neovm_edit::buffer::{CharLen, EmacsByteLen};
 use neovm_value::display_vocab::SourcePreloadWindowRetirementRefusal;
+use neovm_value::display_vocab::WindowSystemKind;
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::heap_types::byte_positions::EmacsBytePos;
 use std::sync::Arc;
@@ -1588,22 +1589,32 @@ fn nil_internal_window_system_does_not_make_tty_frame_graphic() {
 }
 
 #[test]
-fn window_system_parameter_fallback_follows_the_parameter() {
+fn window_system_frame_parameter_does_not_change_the_output_method() {
     crate::test_utils::init_test_tracing();
     let mut mgr = FrameManager::new();
     let fid = mgr.create_frame("F1", 100, 80, BufferId(1));
     let frame = mgr.get_mut(fid).expect("frame");
     assert_eq!(frame.effective_window_system(), None);
 
-    // Frames no backend created (batch fixtures, tests) become window-system
-    // frames when Lisp says so, and stop being them when it says otherwise.
+    // GNU 31.1 src/frame.c:415-436: Fwindow_system reads the frame's output
+    // method (Fframep), never the Lisp `window-system` frame parameter.
+    // Oracle on the pinned a360712c9d build for a termcap frame:
+    //   (modify-frame-parameters f '((window-system . x)))
+    //   => (window-system) nil, (frame-parameter f 'window-system) x,
+    //      (framep f) t
     frame.set_parameter(Value::symbol("window-system"), Value::symbol("neo"));
-    assert_eq!(frame.effective_window_system(), Some(Value::symbol("neo")));
-    frame.set_parameter(Value::symbol("window-system"), Value::NIL);
     assert_eq!(frame.effective_window_system(), None);
     frame.set_parameter(Value::symbol("window-system"), Value::symbol("x"));
+    assert_eq!(frame.effective_window_system(), None);
     frame.remove_parameter(Value::symbol("window-system"));
     assert_eq!(frame.effective_window_system(), None);
+
+    // The typed fixture constructor is the one path that installs a GUI
+    // output method on a frame no backend created.
+    frame.install_backend_less_gui_kind(WindowSystemKind::Neo);
+    assert_eq!(frame.effective_window_system(), Some(Value::symbol("neo")));
+    frame.install_backend_less_gui_kind(WindowSystemKind::X);
+    assert_eq!(frame.effective_window_system(), Some(Value::symbol("x")));
 }
 
 #[test]

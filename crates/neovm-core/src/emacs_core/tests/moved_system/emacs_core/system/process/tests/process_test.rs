@@ -19,6 +19,7 @@ use neovm_system::emacs_core::process::reap::ChildOwnershipIo;
 use neovm_system::emacs_core::process::*;
 use neovm_system::emacs_core::timer::TimerContextExt;
 use neovm_system::emacs_core::wait::WaitContextExt;
+use neovm_value::display_vocab::WindowSystemKind;
 use neovm_value::error::signal;
 use neovm_value::error::{FlowKind, FlowRef, FlowResultExt};
 use neovm_value::heap_types::LispString;
@@ -7936,7 +7937,7 @@ fn accept_process_output_services_pending_resize_from_shared_wait_request() {
     ev.frame_manager_mut()
         .get_mut(fid)
         .expect("frame should exist")
-        .set_parameter(Value::symbol("window-system"), Value::symbol("x"));
+        .install_backend_less_gui_kind(WindowSystemKind::X);
 
     let tx = crate::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 
@@ -7978,7 +7979,7 @@ fn accept_process_output_services_resize_arriving_during_wait() {
     ev.frame_manager_mut()
         .get_mut(fid)
         .expect("frame should exist")
-        .set_parameter(Value::symbol("window-system"), Value::symbol("x"));
+        .install_backend_less_gui_kind(WindowSystemKind::X);
 
     let input_owner = InputGateOwner::install(&mut ev);
     let (gate, publication) = input_owner.gate(vec![

@@ -14,6 +14,7 @@ use neovm_eval::emacs_core::eval::GuiFrameHostRequest;
 use neovm_eval::emacs_core::eval::data::minibuffer_entry::MinibufferManagerExt;
 use neovm_eval::emacs_core::eval::{FontPxProbeResult, GuiFrameHostSize, ResolvedFrameFont};
 use neovm_eval::emacs_core::print::format_eval_result;
+use neovm_value::display_vocab::WindowSystemKind;
 use neovm_value::error::FlowResultExt as _;
 use neovm_value::heap_types::LispString;
 use neovm_value::value::Value;
@@ -3494,7 +3495,7 @@ fn x_create_frame_creates_live_frame_and_preserves_char_geometry_params() {
     ev.frame_manager_mut()
         .get_mut(fid)
         .expect("bootstrap frame")
-        .set_parameter(Value::symbol("window-system"), Value::symbol("x"));
+        .install_backend_less_gui_kind(WindowSystemKind::X);
 
     let params = Value::list(vec![
         Value::cons(Value::symbol("name"), Value::string("GUI")),
@@ -3533,7 +3534,7 @@ fn x_create_frame_creates_opening_frame_and_notifies_host() {
             .frame_manager_mut()
             .get_mut(fid)
             .expect("bootstrap frame");
-        frame.set_parameter(Value::symbol("window-system"), Value::symbol("x"));
+        frame.install_backend_less_gui_kind(WindowSystemKind::X);
         if let Some(mini_leaf) = frame.minibuffer_leaf.as_mut() {
             mini_leaf.set_bounds(crate::window::Rect::new(0.0, 608.0, 960.0, 32.0));
         }
@@ -3593,7 +3594,7 @@ fn x_create_frame_fullscreen_maximized_param_reaches_display_host() {
             .frame_manager_mut()
             .get_mut(fid)
             .expect("bootstrap frame");
-        frame.set_parameter(Value::symbol("window-system"), Value::symbol("x"));
+        frame.install_backend_less_gui_kind(WindowSystemKind::X);
     }
     ev.set_variable("terminal-frame", Value::make_frame(fid.0));
     let host = RecordingDisplayHost::new();
@@ -4457,7 +4458,7 @@ fn x_create_frame_reserves_tab_bar_space_above_root_window() {
     ev.frame_manager_mut()
         .get_mut(fid)
         .expect("bootstrap frame")
-        .set_parameter(Value::symbol("window-system"), Value::symbol("x"));
+        .install_backend_less_gui_kind(WindowSystemKind::X);
 
     let params = Value::list(vec![
         Value::cons(Value::symbol("name"), Value::string("GUI")),
@@ -4570,7 +4571,7 @@ fn x_create_frame_prefers_display_host_primary_window_size_without_explicit_geom
             .frame_manager_mut()
             .get_mut(fid)
             .expect("bootstrap frame");
-        frame.set_parameter(Value::symbol("window-system"), Value::symbol("x"));
+        frame.install_backend_less_gui_kind(WindowSystemKind::X);
         frame.char_width = 10.0;
         frame.char_height = 20.0;
         if let Some(mini_leaf) = frame.minibuffer_leaf.as_mut() {
@@ -4740,7 +4741,7 @@ fn framep_returns_window_system_symbol_for_gui_frames() {
     ev.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
-        .set_parameter(Value::symbol("window-system"), Value::symbol("x"));
+        .install_backend_less_gui_kind(WindowSystemKind::X);
 
     let result =
         crate::emacs_core::frame::builtin_framep(&mut ev, vec![Value::make_frame(frame_id.0)])
@@ -5628,7 +5629,7 @@ fn set_frame_size_builtins_resize_live_gui_frames_and_notify_host() {
             .frame_manager_mut()
             .get_mut(fid)
             .expect("frame should exist");
-        frame.set_parameter(Value::symbol("window-system"), Value::symbol("x"));
+        frame.install_backend_less_gui_kind(WindowSystemKind::X);
     }
     let host = RecordingDisplayHost::new();
     let resized = host.resized.clone();

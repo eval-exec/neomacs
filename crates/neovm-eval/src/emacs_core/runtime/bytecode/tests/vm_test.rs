@@ -9,6 +9,7 @@ use crate::emacs_core::jit::feedback::RuntimeStateCallSitesExt;
 use crate::emacs_core::print::map_flow;
 use crate::window::{SplitDirection, SplitPlacement};
 use neovm_edit::buffer::LispCharPos1;
+use neovm_value::display_vocab::WindowSystemKind;
 use neovm_value::error::{FlowKind, FlowRef, FlowResultExt};
 use neovm_value::value::HashTableTest;
 use std::cell::RefCell;
@@ -4117,7 +4118,7 @@ fn vm_frame_native_metrics_sync_pending_resize_events() {
             let frame = eval.frames.get_mut(fid).expect("frame should exist");
             frame.width = 960;
             frame.height = 640;
-            frame.set_parameter(Value::symbol("window-system"), Value::symbol("x"));
+            frame.install_backend_less_gui_kind(WindowSystemKind::X);
 
             let tx = crate::emacs_core::eval::host_input::HostInputPublisher::install(eval);
 
@@ -4304,7 +4305,7 @@ fn vm_x_create_frame_syncs_pending_resize_before_adopting_opening_gui_frame() {
             let fid = eval.frames.create_frame("bootstrap", 960, 640, scratch);
             {
                 let frame = eval.frames.get_mut(fid).expect("bootstrap frame");
-                frame.set_parameter(Value::symbol("window-system"), Value::symbol("x"));
+                frame.install_backend_less_gui_kind(WindowSystemKind::X);
                 frame.char_width = 10.0;
                 frame.char_height = 20.0;
                 if let Some(mini_leaf) = frame.minibuffer_leaf.as_mut() {
@@ -4393,7 +4394,7 @@ fn vm_x_create_frame_prefers_display_host_primary_window_size_when_available() {
             let fid = eval.frames.create_frame("bootstrap", 960, 640, scratch);
             {
                 let frame = eval.frames.get_mut(fid).expect("bootstrap frame");
-                frame.set_parameter(Value::symbol("window-system"), Value::symbol("x"));
+                frame.install_backend_less_gui_kind(WindowSystemKind::X);
                 frame.char_width = 10.0;
                 frame.char_height = 20.0;
                 if let Some(mini_leaf) = frame.minibuffer_leaf.as_mut() {
@@ -9449,23 +9450,31 @@ fn vm_x_display_query_builtins_reject_non_window_system_frame_designators() {
 #[test]
 fn vm_gui_display_capability_builtins_use_live_window_system_state() {
     crate::test_utils::init_test_tracing();
-    assert_eq!(
-        vm_eval_str(
-            r#"(let ((f (selected-frame)))
-                 (modify-frame-parameters f '((window-system . neo)))
-                 (setq initial-window-system nil)
-                 (setq window-system nil)
-                 (list
-                  (xw-display-color-p f)
-                  ;; `display-color-cells' is lisp/frame.el:2966 and has no
-                  ;; Rust subr (DIVERGENCES.md 157).  This VM runtime is
-                  ;; deliberately minimal, so ask the C primitive the `memq'
-                  ;; arm of its body calls for a `neo' frame:
-                  ;; `x-display-color-cells' (src/xfns.c:5714).
-                  (x-display-color-cells f)))"#
-        ),
-        r#"OK (t 16777216)"#
+    let result = vm_eval_with_init_str(
+        r#"(progn
+             (setq initial-window-system nil)
+             (setq window-system nil)
+             (let ((f (selected-frame)))
+               (list
+                (xw-display-color-p f)
+                ;; `display-color-cells' is lisp/frame.el:2966 and has no
+                ;; Rust subr (DIVERGENCES.md 157).  This VM runtime is
+                ;; deliberately minimal, so ask the C primitive the `memq'
+                ;; arm of its body calls for a `neo' frame:
+                ;; `x-display-color-cells' (src/xfns.c:5714).
+                (x-display-color-cells f))))"#,
+        |eval| {
+            // GNU's Lisp `window-system` frame parameter never changes a
+            // frame's output method (src/frame.c:415-436); a backend-less GUI
+            // fixture installs the kind through the typed constructor.
+            let selected = eval.frames.selected_frame().expect("selected frame").id;
+            eval.frames
+                .get_mut(selected)
+                .expect("selected frame")
+                .install_backend_less_gui_kind(WindowSystemKind::Neo);
+        },
     );
+    assert_eq!(result, r#"OK (t 16777216)"#);
 }
 
 #[test]

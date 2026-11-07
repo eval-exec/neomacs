@@ -123,6 +123,7 @@ fn progn_reads_the_body_tail_before_evaluating_a_form() {
 #[cfg(feature = "perf-probes")]
 use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::eval::VariableView;
+use neovm_value::display_vocab::WindowSystemKind;
 use neovm_value::symbol::CanonicalAccess;
 
 #[cfg(test)]
@@ -3290,7 +3291,7 @@ fn frame_native_width_syncs_pending_resize_without_read_char() {
     ev.frame_manager_mut()
         .get_mut(fid)
         .expect("frame should exist")
-        .set_parameter(Value::symbol("window-system"), Value::symbol("x"));
+        .install_backend_less_gui_kind(WindowSystemKind::X);
 
     let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 
@@ -3392,7 +3393,7 @@ fn frame_native_width_syncs_pending_resize_behind_focus_event() {
     ev.frame_manager_mut()
         .get_mut(fid)
         .expect("frame should exist")
-        .set_parameter(Value::symbol("window-system"), Value::symbol("x"));
+        .install_backend_less_gui_kind(WindowSystemKind::X);
 
     let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 

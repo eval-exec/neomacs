@@ -3524,11 +3524,34 @@ fn window_system_prefers_selected_frame_then_global_fallback() {
     );
 
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+    // GNU 31.1 src/frame.c:415-436: Fwindow_system reads the frame's output
+    // method, never the Lisp `window-system` frame parameter. Peer oracle on
+    // the pinned a360712c9d build for a termcap frame:
+    //   (modify-frame-parameters f '((window-system . x)))
+    //   => (:mfp-x nil nil x t nil t): (window-system) and (window-system f)
+    //      are nil, (frame-parameter f 'window-system) is x, framep is t.
     eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_parameter(Value::symbol("window-system"), Value::symbol("x"));
+    assert_eq!(
+        builtin_window_system(&mut eval, vec![]).unwrap(),
+        Value::NIL,
+        "the Lisp window-system frame parameter must not become the output method"
+    );
+    assert_eq!(
+        builtin_window_system(&mut eval, vec![Value::make_frame(frame_id.0)]).unwrap(),
+        Value::NIL,
+        "an explicit termcap frame stays nil after the parameter write"
+    );
 
+    // The typed fixture constructor is the one path that gives a
+    // backend-less frame a GUI output method; the selected frame then wins
+    // over the global window-system value set above.
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("selected frame")
+        .install_backend_less_gui_kind(WindowSystemKind::X);
     assert_eq!(
         builtin_window_system(&mut eval, vec![]).unwrap(),
         Value::symbol("x")
@@ -3589,6 +3612,44 @@ fn window_system_ignores_the_deprecated_variable_when_a_frame_is_selected() {
             "an explicit termcap frame must answer nil like GNU"
         );
     }
+}
+
+#[test]
+fn window_system_ignores_the_frame_parameter_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+
+    // GNU 31.1 src/frame.c:415-436: Fwindow_system reads the frame's output
+    // method (Fframep). The Lisp `window-system` frame parameter is ordinary
+    // frame data. Peer oracle on the pinned a360712c9d build (tty frame):
+    //   (modify-frame-parameters f '((window-system . x)))
+    //   => (:mfp-x nil nil x t nil t)
+    //      (window-system) nil, (window-system f) nil,
+    //      (frame-parameter f 'window-system) x, (framep f) t,
+    //      (display-graphic-p) nil
+    eval.eval_str("(modify-frame-parameters nil '((window-system . x)))")
+        .unwrap();
+    assert_eq!(
+        eval.eval_str("(frame-parameter nil 'window-system)").unwrap(),
+        Value::symbol("x"),
+        "the parameter write is stored, it just is not the output method"
+    );
+    assert_eq!(
+        builtin_window_system(&mut eval, vec![]).unwrap(),
+        Value::NIL,
+        "the Lisp window-system frame parameter must not become the output method"
+    );
+    assert_eq!(
+        builtin_window_system(&mut eval, vec![Value::make_frame(frame_id.0)]).unwrap(),
+        Value::NIL,
+        "an explicit termcap frame stays nil after the parameter write"
+    );
+    assert_eq!(
+        builtin_display_graphic_p(&mut eval, vec![Value::make_frame(frame_id.0)]).unwrap(),
+        Value::NIL,
+        "display-graphic-p for the frame follows its output method, not the Lisp parameter"
+    );
 }
 
 #[test]
