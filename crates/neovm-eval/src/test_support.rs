@@ -12,6 +12,26 @@
 /// Context-free execution home adapter, built only from value primitives.
 pub mod execution_fixtures;
 
+/// C5 JIT attribution probe: the pub(crate) original behind the authority
+/// fence. Eval's own tests call this directly; display (a higher crate) calls
+/// the signed fence.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn c5_function_epoch_probe() -> Option<fn() -> u64> {
+    #[cfg(feature = "jit")]
+    {
+        Some(c5_jit_epoch_total)
+    }
+    #[cfg(not(feature = "jit"))]
+    {
+        None
+    }
+}
+
+#[cfg(all(any(test, feature = "test-support"), feature = "jit"))]
+fn c5_jit_epoch_total() -> u64 {
+    crate::emacs_core::jit::stats::epoch::EpochCounters::snapshot().total()
+}
+
 /// TA2 authority fence. Exactly the signed AUTHORITY-ITEMS rows live here.
 pub mod authority {
     /// P1-CLASSES-ALL-CRATES FENCE: reset the symbol writer thread-locals.
@@ -138,6 +158,22 @@ pub mod authority {
     /// `ProofEraFinishFailure` with this World's keeper.
     pub type WorldProofEraFinishFailure<'heap> =
         neovm_value::test_support::authority::ProofEraFinishFailure<'heap, Baton>;
+
+    /// C5 intern-growth JIT attribution probe (LEAD 05:3xZ).
+    ///
+    /// The value-layer C5 bridge records no function-epoch facts itself; the
+    /// evaluator owns the counter type. Callers pass this probe to
+    /// `neovm_value::test_support::authority::c5_intern_growth_for_test`; the
+    /// bridge calls it on each actor thread immediately before and after the
+    /// real intern operations, so a bump is attributed to the committing
+    /// thread. Without the JIT feature the historic shape has no counter.
+    ///
+    /// This fence delegates to the pub(crate) original at the test_support
+    /// module level: eval's own tests call the original (a crate may not name
+    /// its own fence; TA2_OWN_FENCE_REFERENCE).
+    pub fn c5_function_epoch_probe_for_test() -> Option<fn() -> u64> {
+        super::c5_function_epoch_probe()
+    }
 
     /// B1: the twelve symbol-fixture entry points stay in eval's gated
     /// `symbol_fixture` body; these delegators are the only cross-crate route.

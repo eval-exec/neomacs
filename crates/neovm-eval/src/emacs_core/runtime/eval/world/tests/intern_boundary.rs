@@ -42,7 +42,11 @@ impl Context {
         let receipt = self
             .admit_owned_proof_parallel(|projection| {
                 // No Context, bytecode borrow, compiled frame or World view enters.
-                let result = projection.era().c5_intern_relocating_for_test(holders);
+                let result = neovm_value::test_support::authority::c5_intern_relocating_for_test(
+                    projection.era(),
+                    holders,
+                    crate::test_support::c5_function_epoch_probe(),
+                );
                 let (collector, keeper) = projection
                     .finish()
                     .expect("C5 serial cache clean era finish");
@@ -51,19 +55,23 @@ impl Context {
             .expect("C5 serial cache owned admission")
             .expect("C5 growth after serial recovery");
         assert!(self.obarray.admission_matches_canonical());
-        assert!(receipt.after.chunks >= receipt.before.chunks + 2);
-        assert_eq!(receipt.after.chunks, receipt.after.sides);
+        assert!(receipt.after_chunks() >= receipt.before_chunks() + 2);
+        assert_eq!(receipt.after_chunks(), receipt.after_sides());
         assert_ne!(
-            receipt.before.spine_address, receipt.after.spine_address,
+            receipt.before_spine_address(),
+            receipt.after_spine_address(),
             "actual pointer-spine relocation required"
         );
         assert_eq!(
-            receipt.registry_after,
-            (receipt.registry_before.0 + 1, receipt.registry_before.1 + 1)
+            receipt.registry_after(),
+            (
+                receipt.registry_before().0 + 1,
+                receipt.registry_before().1 + 1
+            )
         );
         eprintln!(
             "P3SYM_C5_SERIAL_GROWTH relocated=1 chunks_added={} registry_delta=1",
-            receipt.after.chunks - receipt.before.chunks
+            receipt.after_chunks() - receipt.before_chunks()
         );
     }
 }

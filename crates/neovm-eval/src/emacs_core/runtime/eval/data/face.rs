@@ -1526,6 +1526,7 @@ pub struct FaceTable {
 /// to those definitions, retaining this handle cannot make their Rc::make_mut
 /// operations dissociate storage during later ordinary face mutations.
 /// Palette replacement always assigns a fresh Rc, never Rc::make_mut.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Debug)]
 pub(crate) struct FaceTableIdentity {
     tty_palette: std::rc::Weak<neomacs_display_protocol::TtyPalette>,
@@ -1602,8 +1603,14 @@ impl FaceTable {
     /// Capture existing native palette identity for an eligible Rows attempt.
     /// The consumer must also retain exact face count and realization epoch.
     /// No definition-storage Weak, source contents, roots or new stamp is kept.
+    ///
+    /// LEAD 09:3xZ X2: the only cross-crate caller is the display face oracle,
+    /// so the method shares FaceTableIdentity's test-support A-prime class; the
+    /// production surface stays pub(crate), and eval's own rows observation
+    /// stays in-crate.
     #[doc(hidden)]
-    pub fn rows_snapshot_identity(&self) -> FaceTableIdentity {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn rows_snapshot_identity(&self) -> FaceTableIdentity {
         FaceTableIdentity {
             tty_palette: std::rc::Rc::downgrade(&self.tty_palette),
         }

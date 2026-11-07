@@ -161,7 +161,13 @@ fn p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth_child() {
         let receipt = neovm_eval::test_support::authority::admit_owned_proof_parallel_for_test(
             &mut ctx,
             |projection| {
-                let receipt = projection.era().c5_intern_growth_for_test(holders);
+                // Value owns the C5 transaction; eval owns the JIT counter
+                // type, so the probe crosses as a plain function pointer.
+                let receipt = neovm_value::test_support::authority::c5_intern_growth_for_test(
+                    projection.era(),
+                    holders,
+                    neovm_eval::test_support::authority::c5_function_epoch_probe_for_test(),
+                );
                 let (collector, keeper) = projection.finish().expect("C5 pass clean era finish");
                 (collector, keeper, receipt)
             },
@@ -169,14 +175,17 @@ fn p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth_child() {
         .expect("C5 pass owned admission")
         .expect("C5 pass history after normal serial recovery");
         assert!(ctx.obarray_view().admission_matches_canonical());
-        assert!(receipt.after.chunks >= receipt.before.chunks + 2);
-        assert_eq!(receipt.after.chunks, receipt.after.sides);
-        assert!(receipt.after.sides > receipt.before.sides);
+        assert!(receipt.after_chunks() >= receipt.before_chunks() + 2);
+        assert_eq!(receipt.after_chunks(), receipt.after_sides());
+        assert!(receipt.after_sides() > receipt.before_sides());
         assert_eq!(
-            receipt.registry_after,
-            (receipt.registry_before.0 + 1, receipt.registry_before.1 + 1)
+            receipt.registry_after(),
+            (
+                receipt.registry_before().0 + 1,
+                receipt.registry_before().1 + 1
+            )
         );
-        assert!(receipt.registry_after.0 > pass_epoch);
+        assert!(receipt.registry_after().0 > pass_epoch);
         assert_eq!(
             pctx.dynamic_symbols.borrow().epoch,
             pass_epoch,
@@ -203,7 +212,7 @@ fn p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth_child() {
         );
         assert_eq!(
             pctx.dynamic_symbols.borrow().epoch,
-            receipt.registry_after.0
+            receipt.registry_after().0
         );
         reset_intern_calls();
         render_into(&mut ctx, &pctx, format, walker, &mut output);
@@ -233,10 +242,10 @@ fn p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth_child() {
             }),
             oracle[1]
         );
-        assert_eq!(ctx.variables().boundp(receipt.winner), oracle[2] == "t");
+        assert_eq!(ctx.variables().boundp(receipt.winner()), oracle[2] == "t");
         eprintln!(
             "P3SYM_C5_HELD_PASS walker={index} epoch_delta=1 ids_delta=1 chunks_added={} same_identity=1 output={rendered}",
-            receipt.after.chunks - receipt.before.chunks
+            receipt.after_chunks() - receipt.before_chunks()
         );
     }
 }
