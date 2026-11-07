@@ -497,8 +497,15 @@ pub(crate) fn defvaralias_impl(
     // recorded in ledger 183 rather than added: it calls `display-warning`,
     // which is Lisp, and 141 unit tests reach this primitive on a bare
     // `Context` where no Lisp is loaded.
-    if ctx.variable_value(old_symbol).is_none()
-        && let Some(alias_value) = ctx.variable_value(new_symbol)
+    // GNU's `Fboundp (base_variable)` and `find_symbol_value (new_alias)`
+    // (`src/eval.c:679-690`) are VISIBLE reads: Fboundp counts a
+    // buffer-local binding even when the default is void, and
+    // find_symbol_value sees the live dynamic binding. The buffer-blind
+    // default read made a base with a buffer-local binding but a void
+    // default look unbound, so the value was wrongly migrated into its
+    // default (GNU leaves it void).
+    if ctx.builtin_var_value(old_symbol).is_none()
+        && let Some(alias_value) = ctx.builtin_var_value(new_symbol)
     {
         let target = resolve_variable_alias_id_in_obarray(&ctx.obarray, old_symbol)?;
         ctx.store_variable(target, alias_value);

@@ -335,12 +335,24 @@ impl XdispContextExt for neovm_eval::emacs_core::eval::Context {
         else {
             return false;
         };
-        self.edit
+        // GNU reads `Vwindow_scroll_functions` after making the displayed
+        // buffer current (src/xdisp.c:19239): the C global holds that
+        // buffer's local binding AND any live dynamic `let`, so a `let`
+        // over a buffer-local nil must still count as a runnable hook.
+        // `buffer_local_value_id` is only the displayed buffer's own
+        // override; the visible read (`find_symbol_value` order) supplies
+        // the let and the default. Either being non-nil answers "may run";
+        // a false positive only costs a harmless suspension point, a false
+        // negative would silently skip the hook.
+        let hook_sym = WINDOW_SCROLL_FUNCTIONS.id();
+        let buffer_local = self
+            .edit
             .buffers
             .get(buffer_id)
-            .and_then(|buffer| buffer.buffer_local_value("window-scroll-functions"))
-            .or_else(|| self.variable_value_by_name("window-scroll-functions"))
-            .is_some_and(|hook| !hook.is_nil())
+            .and_then(|buffer| buffer.buffer_local_value_id(hook_sym));
+        let visible = hook_runtime::hook_value_by_id(self, hook_sym);
+        buffer_local.is_some_and(|hook| !hook.is_nil())
+            || visible.is_some_and(|hook| !hook.is_nil())
     }
 
     /// GNU `run_window_scroll_functions` (src/xdisp.c:19222) for a start

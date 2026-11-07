@@ -70,8 +70,15 @@ pub struct CasingPropertyControls {
 impl CasingPropertyControls {
     #[doc(hidden)]
     pub fn for_host<H: crate::emacs_core::edit_host::EditHost>(host: &H) -> Self {
-        let read =
-            |variable: TextPropertyControlVariable| host.variable_value(variable.symbol_id());
+        // GNU reads these three through the swapped C globals (the current
+        // buffer's binding plus a live `let`), never through the default:
+        // font-lock and enriched-mode setq-local two of them. The typed
+        // closure keeps the closed variable set, and the read is
+        // GNU `find_symbol_value` (`forwarded_variable_value`), not the
+        // buffer-blind `variable_value`.
+        let read = |variable: TextPropertyControlVariable| {
+            host.forwarded_variable_value(variable.symbol_id())
+        };
         Self {
             equality: if matches!(
                 host.symbol_mode(),

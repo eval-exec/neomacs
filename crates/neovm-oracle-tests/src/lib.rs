@@ -405,6 +405,7 @@ mod syntax;
 mod take;
 mod temporary_file_directory_strict_edge_semantics;
 mod text;
+mod textprop_control_vars;
 mod thing_at_point_api_semantics;
 mod thing_at_point_comprehensive;
 mod throw;
