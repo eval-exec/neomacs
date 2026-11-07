@@ -300,6 +300,9 @@ fn complete_row_program_uses_exact_captured_fonts_on_worker() {
         position = progress.end();
         slots.extend(progress.slots().iter().cloned());
         if let Some(newline) = newline {
+            // Supply this independent measurer's primary newline extents,
+            // just as the buffer reader and captured worker do. Without
+            // them, the finalizer keeps seeded rather than actual maxima.
             let _ = DisplayRowLineEndFinalizer::new(
                 newline,
                 FaceId::new(1),
@@ -310,6 +313,7 @@ fn complete_row_program_uses_exact_captured_fonts_on_worker() {
                 Default::default(),
                 Default::default(),
             )
+            .with_newline_font_metrics(minimum)
             .finalize(&mut expected, &faces);
         }
     }

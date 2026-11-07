@@ -20,6 +20,11 @@ fn commit_probe_backend(configured: Option<&str>) -> GuiBackend {
 
 /// Run a native commit-editing fixture and require its explicit success marker.
 fn run_commit_probe(probe: &str) {
+    run_fixture_probe(probe, "commit-editing.el");
+}
+
+/// Run an isolated native fixture, retaining diagnostics and checking its marker.
+fn run_fixture_probe(probe: &str, fixture: &str) {
     let root = neomacs_infra::crate_root!().join("../..");
     let configured = std::env::var("NEOMACS_GUI_TEST_BACKEND").ok();
     let backend = commit_probe_backend(configured.as_deref());
@@ -38,7 +43,7 @@ fn run_commit_probe(probe: &str) {
         &artifacts,
         GuiScenario::new(
             probe,
-            root.join("crates/neomacs-gui-tests/fixtures/commit-editing.el"),
+            root.join("crates/neomacs-gui-tests/fixtures").join(fixture),
         ),
     )
     .with_program(program)
@@ -103,4 +108,29 @@ fn overlay_separator_uses_its_small_font_height() {
 #[test]
 fn log_edit_separator_uses_its_small_font_height() {
     run_commit_probe("separator");
+}
+
+#[test]
+fn replacement_newline_uses_its_own_font_height() {
+    run_fixture_probe("replacement-newline", "newline-geometry.el");
+}
+
+#[test]
+fn tall_overlay_newline_grows_the_empty_row() {
+    run_fixture_probe("tall-overlay-newline", "newline-geometry.el");
+}
+
+#[test]
+fn short_newline_cursor_replay_uses_full_row_bounds() {
+    run_fixture_probe("short-newline-cursor", "newline-geometry.el");
+}
+
+#[test]
+fn raised_text_keeps_the_original_descent() {
+    run_fixture_probe("raised-text", "newline-geometry.el");
+}
+
+#[test]
+fn lowered_text_keeps_the_original_ascent() {
+    run_fixture_probe("lowered-text", "newline-geometry.el");
 }
