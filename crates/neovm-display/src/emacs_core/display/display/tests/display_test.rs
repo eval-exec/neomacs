@@ -3631,7 +3631,8 @@ fn window_system_ignores_the_frame_parameter_like_gnu() {
     eval.eval_str("(modify-frame-parameters nil '((window-system . x)))")
         .unwrap();
     assert_eq!(
-        eval.eval_str("(frame-parameter nil 'window-system)").unwrap(),
+        eval.eval_str("(frame-parameter nil 'window-system)")
+            .unwrap(),
         Value::symbol("x"),
         "the parameter write is stored, it just is not the output method"
     );

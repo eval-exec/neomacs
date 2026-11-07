@@ -15,13 +15,13 @@ use neovm_edit::buffer::{
 use neovm_edit::emacs_core::display_metrics::GuiFrameGeometryHints;
 use neovm_edit::emacs_core::display_metrics::{Rect, WindowId, WindowMargins};
 use neovm_edit::emacs_core::textprop::WindowBufferLookup;
+#[cfg(any(test, feature = "test-support"))]
+use neovm_value::display_vocab::WindowSystemKind;
 use neovm_value::display_vocab::{
     ChangeStamp, FRAME_ID_BASE, FrameId, FrameParam, FrameQueryParam, FrameVisibility,
     RenderFrameVisibility, SourcePreloadWindowRetirementRefusal, SplitDirection,
     WindowHistoryState, WindowLayoutVariable,
 };
-#[cfg(any(test, feature = "test-support"))]
-use neovm_value::display_vocab::WindowSystemKind;
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::intern::SymId;
 use neovm_value::intern::resolve_sym;
