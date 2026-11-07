@@ -289,7 +289,9 @@ fn emit_inline_dispatch(
     landings: &mut dyn SwitchLandings,
     epoch_check: EpochCheck,
 ) {
-    #[cfg(test)]
+    // The accessor below is test-support-visible; the counter must move in
+    // that build too (the moved switch tests read it when they exist).
+    #[cfg(any(test, feature = "test-support"))]
     INLINE_SITES.with(|sites| sites.set(sites.get() + 1));
     // The table is the compile-time constant the plan was read from: its
     // epoch is the plan's until something mutates it.

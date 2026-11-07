@@ -793,7 +793,9 @@ impl Drop for FusedScope {
 /// default; `NEOVM_JIT_INLINE=off` (or `0`/`false`/`no`) disables it, which is
 /// the A/B switch the measurements use.
 pub(crate) fn jit_inline_on() -> bool {
-    #[cfg(test)]
+    // Same rule as the override's own gate: the re-homed tests set this
+    // through the test-support surface, so the read must exist there too.
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(forced) = FORCE_INLINE.with(|f| f.get()) {
         return forced;
     }
