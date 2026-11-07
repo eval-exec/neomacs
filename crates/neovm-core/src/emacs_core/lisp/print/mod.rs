@@ -671,7 +671,8 @@ impl Drop for PrintEvaluationGuard<'_> {
 
 /// Owns roots while exclusively borrowing the caller's per-print state.
 /// The context cannot change until Drop restores the saved scope. Rooting is
-/// needed only on the evaluator path capable of invoking Lisp callbacks.
+/// needed on every evaluator path: quit polling can run Lisp signal/shutdown
+/// hooks even when no unreadable-object callback is installed.
 #[must_use = "dropping the guard releases temporary printer roots"]
 struct PrintValueRootsGuard<'s, 'a> {
     state: &'s mut PrintState<'a>,
@@ -687,19 +688,15 @@ impl std::fmt::Debug for PrintValueRootsGuard<'_, '_> {
 }
 impl<'s, 'a> PrintValueRootsGuard<'s, 'a> {
     fn new(state: &'s mut PrintState<'a>, values: impl IntoIterator<Item = Value>) -> Self {
-        let scope = if state.options.unreadable_function.is_some() {
-            match &mut state.context {
-                PrinterContext::Standalone(_) => None,
-                PrinterContext::Evaluator(context) => {
-                    let scope = context.save_specpdl_roots();
-                    for value in values {
-                        context.push_specpdl_root(value);
-                    }
-                    Some(scope)
+        let scope = match &mut state.context {
+            PrinterContext::Standalone(_) => None,
+            PrinterContext::Evaluator(context) => {
+                let scope = context.save_specpdl_roots();
+                for value in values {
+                    context.push_specpdl_root(value);
                 }
+                Some(scope)
             }
-        } else {
-            None
         };
         Self { state, scope }
     }
@@ -1670,6 +1667,17 @@ fn write_value_stateful_rooted(
     state: &mut PrintState,
 ) {
     if state.failure.is_some() {
+        return;
+    }
+    // GNU print.c checks maybe_quit before visiting each object. Keep control
+    // flow in the evaluator so inhibit-quit and pending shutdown retain their
+    // normal semantics, including after a Lisp printer callback.
+    let attention = match &mut state.context {
+        PrinterContext::Standalone(_) => Ok(()),
+        PrinterContext::Evaluator(context) => context.maybe_quit(),
+    };
+    if let Err(flow) = attention {
+        state.failure = Some(flow);
         return;
     }
     if let Err(error) = validate_live_number_table(value, state) {
