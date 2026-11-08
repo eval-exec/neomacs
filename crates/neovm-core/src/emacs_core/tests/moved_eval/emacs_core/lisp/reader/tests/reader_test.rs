@@ -2144,7 +2144,7 @@ fn activate_minibuffer_window_switches_displayed_buffer_and_restores_state() {
 
     let generation_while_active = ev.menu_bar_rebuild_generation();
 
-    {
+    let effect = {
         let (frames, buffers, minibuffer_selected_window, active_minibuffer_window) =
             ev.frame_manager_buffers_and_minibuffer_selection_mut();
         restore_minibuffer_window_in_state(
@@ -2153,8 +2153,11 @@ fn activate_minibuffer_window_switches_displayed_buffer_and_restores_state() {
             minibuffer_selected_window,
             active_minibuffer_window,
             saved,
-        );
-    }
+        )
+    };
+    // The split-borrow restore returns the redisplay obligation; the
+    // production callers apply it after releasing the borrows.
+    effect.apply(&mut ev);
 
     let frame = ev
         .frame_manager()

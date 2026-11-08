@@ -25,7 +25,7 @@ pub(crate) enum MinibufferWindowRestoreEffect {
 }
 
 impl MinibufferWindowRestoreEffect {
-    fn apply(self, eval: &mut crate::emacs_core::eval::Context) {
+    pub(crate) fn apply(self, eval: &mut crate::emacs_core::eval::Context) {
         if let Self::BufferRestored(window) = self {
             // GNU `set_window_buffer` calls `wset_update_mode_line`; after
             // `read_minibuf_unwind` has restored the caller's selection this
