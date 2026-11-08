@@ -120,15 +120,13 @@ fn a_site_holds_its_sources_weakly_and_releases_them() {
     let live = Arc::new(RuntimeState::new());
     let dead = Arc::new(RuntimeState::new());
     let s = site();
-    s.sources[0].store(
-        Weak::into_raw(Arc::downgrade(&live)).cast_mut(),
-        Ordering::Relaxed,
-    );
-    s.sources[1].store(
-        Weak::into_raw(Arc::downgrade(&dead)).cast_mut(),
-        Ordering::Relaxed,
-    );
-    s.state.store((2 << 3) | TAG_POLY, Ordering::Relaxed);
+    // SAFETY: this fresh site's source slots are null. Each word is
+    // Weak::into_raw of a live downgrade, and no concurrent reader runs.
+    unsafe {
+        s.install_source(0, Arc::downgrade(&live));
+        s.install_source(1, Arc::downgrade(&dead));
+    }
+    s.state_word().store((2 << 3) | TAG_POLY, Ordering::Relaxed);
     drop(dead);
     assert_eq!(sources_of(&s), vec![Arc::as_ptr(&live)]);
     drop(live);
