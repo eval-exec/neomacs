@@ -78,6 +78,12 @@ pub enum GnuBinding {
     /// GNU, and `cus-start.el`'s `native-p` test is what keeps the absence
     /// from erroring.  Nothing declares it, so it has no documentation either.
     UnboundHere,
+    /// GNU's reference build DOES declare it (the citation in
+    /// [`CusStartPlatformVariable::gnu`] names the HAVE_NS site), but this
+    /// port has no dump-time declaration yet, so a bare [`Context`] answers
+    /// `nil` to `boundp`.  The gap is the port's, not the reference build's:
+    /// recording it as `UnboundHere` would claim GNU leaves it void too.
+    GnuDeclaresNotNeo,
 }
 
 /// One `cus-start.el` platform name.
@@ -86,7 +92,15 @@ pub struct CusStartPlatformVariable {
     pub name: &'static str,
     /// Where GNU declares it and what it initializes it to, `file:line`.
     pub gnu: &'static str,
+    /// The answer on the X11 reference build; the Linux measurement this
+    /// table was written from.
     pub binding: GnuBinding,
+    /// The answer on the NS reference build when it differs.  GNU compiles
+    /// the nsterm.m/nsfns.m objects only under HAVE_NS and the
+    /// xterm.c/xfns.c/xselect.c ones only under HAVE_X_WINDOWS, so a name
+    /// that is declared on one surface cannot inherit the other's answer.
+    /// `None` means both surfaces agree.
+    pub(crate) ns_binding: Option<GnuBinding>,
 }
 
 const fn declared(
@@ -98,6 +112,7 @@ const fn declared(
         name,
         gnu,
         binding: GnuBinding::DeclaredInC { site },
+        ns_binding: None,
     }
 }
 
@@ -110,6 +125,7 @@ const fn declared_in_lisp(
         name,
         gnu,
         binding: GnuBinding::DeclaredInPreloadedLisp { site },
+        ns_binding: None,
     }
 }
 
@@ -118,8 +134,36 @@ const fn unbound(name: &'static str, gnu: &'static str) -> CusStartPlatformVaria
         name,
         gnu,
         binding: GnuBinding::UnboundHere,
+        ns_binding: None,
     }
 }
+
+impl CusStartPlatformVariable {
+    /// Record the NS reference build's answer when it differs from the X11
+    /// one.
+    pub(crate) const fn ns_binding(mut self, binding: GnuBinding) -> Self {
+        self.ns_binding = Some(binding);
+        self
+    }
+
+    /// The answer on `surface`; `false` selects the X11 measurement.
+    /// Production visibility is crate-internal; the moved forward-module
+    /// test reads it through the A' test-support widening.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn binding_on(&self, ns_surface: bool) -> GnuBinding {
+        if ns_surface {
+            self.ns_binding.unwrap_or(self.binding)
+        } else {
+            self.binding
+        }
+    }
+}
+
+/// GNU's NS objects declare the eleven `ns-*` names this port now binds at
+/// dump time -- seven `DEFVAR_LISP`s from `nsterm.m:11568-11657` seeded by
+/// the evaluator's NS surface module, and four `DEFVAR_BOOL`s from
+/// `nsterm.m:11657-11720` / `nsfns.m:4233` carried by `GNU_BOOL_VARIABLES`.
+const NS_C_SITE: &str = "eval // ns_surface.rs + defvar_bool table (NS surface)";
 
 pub static CUS_START_PLATFORM_VARIABLES: &[CusStartPlatformVariable] = &[
     // ---- Bound under GNU/Linux + X + GTK (7) ----
@@ -146,17 +190,25 @@ pub static CUS_START_PLATFORM_VARIABLES: &[CusStartPlatformVariable] = &[
         "x-gtk-use-system-tooltips",
         "term/x-win.el:1572 defvaralias -> frame.c:7725 DEFVAR_BOOL, true",
         "lisp/term/neo-preload.el",
-    ),
+    )
+    // loadup.el loads term/x-win.el only under (featurep 'x) (:304-309), so
+    // the NS dump never installs the alias.
+    .ns_binding(GnuBinding::UnboundHere),
     declared(
         "x-scroll-event-delta-factor",
         "xterm.c:32833 DEFVAR_LISP, make_float (1.0)",
         "eval.rs syms_of_xterm block",
-    ),
+    )
+    // xterm.c is compiled only under HAVE_X_WINDOWS, so the NS reference
+    // build leaves this one void.
+    .ns_binding(GnuBinding::UnboundHere),
     declared(
         "x-auto-preserve-selections",
         "xterm.c:32976 DEFVAR_LISP, list2 (QCLIPBOARD, QPRIMARY)",
         "eval.rs syms_of_xterm block",
-    ),
+    )
+    // X11-only for the same reason as x-scroll-event-delta-factor.
+    .ns_binding(GnuBinding::UnboundHere),
     // The C initializer is nil; `lisp/international/fontset.el:1266' is what
     // puts the regexp there, in both editors.
     declared(
@@ -180,21 +232,21 @@ pub static CUS_START_PLATFORM_VARIABLES: &[CusStartPlatformVariable] = &[
         "xwidget.c, a feature name, never a DEFVAR",
     ),
     // src/nsterm.m, src/nsfns.m -- `(featurep 'ns)'.
-    unbound("ns-control-modifier", "nsterm.m, HAVE_NS"),
-    unbound("ns-right-control-modifier", "nsterm.m, HAVE_NS"),
-    unbound("ns-command-modifier", "nsterm.m, HAVE_NS"),
-    unbound("ns-right-command-modifier", "nsterm.m, HAVE_NS"),
-    unbound("ns-alternate-modifier", "nsterm.m, HAVE_NS"),
-    unbound("ns-right-alternate-modifier", "nsterm.m, HAVE_NS"),
-    unbound("ns-function-modifier", "nsterm.m, HAVE_NS"),
-    unbound("ns-antialias-text", "nsterm.m, HAVE_NS"),
-    unbound("ns-auto-hide-menu-bar", "nsterm.m, HAVE_NS"),
-    unbound("ns-confirm-quit", "nsfns.m, HAVE_NS"),
-    unbound("ns-use-native-fullscreen", "nsterm.m, HAVE_NS"),
-    unbound("ns-use-fullscreen-animation", "nsterm.m, HAVE_NS"),
-    unbound("ns-use-srgb-colorspace", "nsterm.m, HAVE_NS"),
-    unbound("ns-scroll-event-delta-factor", "nsterm.m, HAVE_NS"),
-    unbound("ns-click-through", "nsterm.m, HAVE_NS"),
+    unbound("ns-control-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-right-control-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::GnuDeclaresNotNeo),
+    unbound("ns-command-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-right-command-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::GnuDeclaresNotNeo),
+    unbound("ns-alternate-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-right-alternate-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::GnuDeclaresNotNeo),
+    unbound("ns-function-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-antialias-text", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-auto-hide-menu-bar", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-confirm-quit", "nsfns.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-use-native-fullscreen", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-use-fullscreen-animation", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-use-srgb-colorspace", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-scroll-event-delta-factor", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::GnuDeclaresNotNeo),
+    unbound("ns-click-through", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
     // src/w32*.c -- `(eq system-type 'windows-nt)'.
     unbound("w32-follow-system-dark-mode", "w32fns.c, HAVE_NTGUI"),
     // src/msdos.c, src/dosfns.c -- `(eq system-type 'ms-dos)'.
@@ -224,9 +276,10 @@ pub static CUS_START_PLATFORM_VARIABLES: &[CusStartPlatformVariable] = &[
 /// in a build like this one -- which is what the unit tests below assert
 /// against and what a future author gets instead of re-deriving it.
 pub fn is_name_gnu_leaves_unbound_here(name: &str) -> bool {
-    CUS_START_PLATFORM_VARIABLES
-        .iter()
-        .any(|var| var.binding == GnuBinding::UnboundHere && var.name == name)
+    let ns_surface = cfg!(target_os = "macos");
+    CUS_START_PLATFORM_VARIABLES.iter().any(|var| {
+        var.name == name && matches!(var.binding_on(ns_surface), GnuBinding::UnboundHere)
+    })
 }
 
 #[cfg(test)]

@@ -260,15 +260,20 @@ fn x_only_lisp_variables_are_absent_because_this_build_does_not_provide_x() {
                      (setq n (1+ n))))
                n)))",
     );
-    assert_eq!(
-        result,
+    // The ten C callbacks are declarations of the X11 surface: GNU compiles
+    // syms_of_xterm only under HAVE_X_WINDOWS, so the NS reference dump binds
+    // none of them and this port's NS surface leaves them void too.
+    let expected = if neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns" {
+        "OK (nil nil nil nil 0 nil 0)"
+    } else {
         "OK (nil nil nil nil 0 \
          (\"x-dnd-disable-motif-drag\" \"x-dnd-disable-motif-protocol\" \
          \"x-dnd-fix-motif-leave\" \"x-dnd-movement-function\" \
          \"x-dnd-native-test-function\" \"x-dnd-preserve-selection-data\" \
          \"x-dnd-targets-list\" \"x-dnd-unsupported-drop-function\" \
          \"x-dnd-use-unsupported-drop\" \"x-dnd-wheel-function\") 0)"
-    );
+    };
+    assert_eq!(result, expected);
 }
 
 /// The rule ledger 179 fixed for one name, stated for all of them: **this
@@ -591,7 +596,17 @@ fn the_c_surface_carries_all_31_of_gnus_x_only_variables_and_29_of_the_31_shared
                  ;; not exist here.
                  (featurep 'x)))",
     );
-    assert_eq!(result, "OK (31 31 31 29 93 nil)");
+    // The split is GNU's own, applied to this build's surface: on the NS
+    // reference the 31 X-only names are void, and of the 31 "shared" names
+    // only the five both backends really declare survive (x-toolkit-scroll-
+    // bars, x-underline-at-descent-line, x-use-underline-position-properties,
+    // x-max-tooltip-size and the Lisp-bound x-pixel-size-width-font-regexp).
+    let expected = if neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns" {
+        "OK (31 0 31 5 30 nil)"
+    } else {
+        "OK (31 31 31 29 93 nil)"
+    };
+    assert_eq!(result, expected);
 }
 
 /// TEMACS-SHADOWED-SUBRS row: GNU defines the `display-*` predicate family

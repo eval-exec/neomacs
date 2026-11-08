@@ -174,6 +174,13 @@ pub struct ProvideCoupledVariable {
     /// Every `DEFVAR_*` GNU has for this name, `file:line`, space separated.
     pub gnu: &'static str,
     pub here: HereDecision,
+    /// This build's answer on the NS reference surface when it differs from
+    /// [`Self::here`] (the X11 answer).  GNU compiles the xterm.c/xfns.c/
+    /// xselect.c objects only under HAVE_X_WINDOWS and the nsterm.m/nsfns.m
+    /// objects only under HAVE_NS, so for a name that exists on one surface
+    /// the other surface's answer cannot be inherited from this build's X11
+    /// table row.  `None` means both surfaces agree.
+    pub(crate) ns_here: Option<HereDecision>,
 }
 
 const fn absent(
@@ -186,6 +193,7 @@ const fn absent(
         features,
         gnu,
         here: HereDecision::Absent,
+        ns_here: None,
     }
 }
 
@@ -200,6 +208,38 @@ const fn bound_by(
         features,
         gnu,
         here: HereDecision::BoundByPolicy { policy },
+        ns_here: None,
+    }
+}
+
+impl ProvideCoupledVariable {
+    /// GNU's NS build declares this name at the cited nsterm.m/nsfns.m site,
+    /// so the NS reference dump binds it while the X11 build never compiles
+    /// those objects (the mirror of an X-only row).
+    pub(crate) const fn ns_bound(mut self, policy: &'static str) -> Self {
+        self.ns_here = Some(HereDecision::BoundByPolicy { policy });
+        self
+    }
+
+    /// Neo's declaration site for this name is part of the X11 C surface
+    /// (the gated `syms_of_xterm`/`syms_of_xfns` family), so the NS
+    /// reference dump leaves it void even where GNU's coupling lists X.
+    pub(crate) const fn ns_absent(mut self) -> Self {
+        self.ns_here = Some(HereDecision::Absent);
+        self
+    }
+
+    /// This build's answer on the running reference surface.  The X11 answer
+    /// is the table's `here`; NS consults the per-row override and otherwise
+    /// inherits it.  Production visibility is crate-internal; the moved
+    /// runtime-surface test reads it through the A' test-support widening.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn here_on(&self, ns_surface: bool) -> HereDecision {
+        if ns_surface {
+            self.ns_here.unwrap_or(self.here)
+        } else {
+            self.here
+        }
     }
 }
 
@@ -221,6 +261,16 @@ const X_SURFACE: &str = "ledger 189: the X C surface is pinned against GNU+X by 
      defvar_bool_byte_boolean_vars.rs oracle_every_defvar_bool_variable_is_bound_and_canonical, \
      and lisp/cus-start.el:924,926 gates these on (fboundp 'x-create-frame) / \
      (fboundp 'x-selection-exists-p), which this build answers t";
+
+/// The NS half of the same split.
+///
+/// GNU's NS objects declare the `ns-*` family in `syms_of_nsterm` /
+/// `syms_of_nsfns`, which only a HAVE_NS build compiles (`emacs.c:2421-2426`),
+/// and the NS reference dump therefore binds them; the X11 build leaves them
+/// void.  Neo seeds them only when `platform_surface()` answers NS.
+const NS_SURFACE: &str = "ledger 189/199 surface split: GNU's HAVE_NS objects declare this at the \
+     cited nsterm.m/nsfns.m site and the NS reference dump binds it; the X11 build does not \
+     compile those objects";
 
 /// This port ships a real xwidget layer, so these variables are backed.
 ///
@@ -321,7 +371,7 @@ pub static PROVIDE_COUPLED_VARIABLES: &[ProvideCoupledVariable] = &[
     absent("dos-unsupported-char-glyph", &[MsDos], "msdos.c:4331"),
     absent("dos-version", &[MsDos], "dosfns.c:735"),
     absent("dos-windows-version", &[MsDos], "dosfns.c:739"),
-    bound_by("font-use-system-font", &[DynamicSetting], "haikufont.c:1459 xsettings.c:1395", XSETTINGS_ORACLE_PIN),
+    bound_by("font-use-system-font", &[DynamicSetting], "haikufont.c:1459 xsettings.c:1395", XSETTINGS_ORACLE_PIN).ns_absent(),
     absent("gtk-version-string", &[Cairo, Gtk], "pgtkfns.c:3788 xfns.c:10542"),
     absent("haiku-allowed-ui-colors", &[Haiku], "haikufns.c:3305"),
     absent("haiku-control-keysym", &[Haiku], "haikuterm.c:4852"),
@@ -339,15 +389,15 @@ pub static PROVIDE_COUPLED_VARIABLES: &[ProvideCoupledVariable] = &[
     absent("native-comp-eln-load-path", &[NativeCompile], "comp.c:5742"),
     absent("native-comp-enable-subr-trampolines", &[NativeCompile], "comp.c:5759"),
     absent("native-comp-jit-compilation", &[NativeCompile], "comp.c:5569"),
-    absent("ns-alternate-modifier", &[Ns], "nsterm.m:11563"),
-    absent("ns-antialias-text", &[Ns], "nsterm.m:11640"),
-    absent("ns-auto-hide-menu-bar", &[Ns], "nsterm.m:11652"),
-    absent("ns-click-through", &[Ns], "nsterm.m:11715"),
-    absent("ns-command-modifier", &[Ns], "nsterm.m:11584"),
-    absent("ns-confirm-quit", &[Ns], "nsterm.m:11648"),
-    absent("ns-control-modifier", &[Ns], "nsterm.m:11609"),
+    absent("ns-alternate-modifier", &[Ns], "nsterm.m:11563").ns_bound(NS_SURFACE),
+    absent("ns-antialias-text", &[Ns], "nsterm.m:11640").ns_bound(NS_SURFACE),
+    absent("ns-auto-hide-menu-bar", &[Ns], "nsterm.m:11652").ns_bound(NS_SURFACE),
+    absent("ns-click-through", &[Ns], "nsterm.m:11715").ns_bound(NS_SURFACE),
+    absent("ns-command-modifier", &[Ns], "nsterm.m:11584").ns_bound(NS_SURFACE),
+    absent("ns-confirm-quit", &[Ns], "nsterm.m:11648").ns_bound(NS_SURFACE),
+    absent("ns-control-modifier", &[Ns], "nsterm.m:11609").ns_bound(NS_SURFACE),
     absent("ns-drag-motion-function", &[Ns], "nsterm.m:11733"),
-    absent("ns-function-modifier", &[Ns], "nsterm.m:11630"),
+    absent("ns-function-modifier", &[Ns], "nsterm.m:11630").ns_bound(NS_SURFACE),
     absent("ns-icon-type-alist", &[Ns], "nsfns.m:4208"),
     absent("ns-input-file", &[Ns], "nsterm.m:11555"),
     absent("ns-input-font", &[Ns], "nsterm.m:11535"),
@@ -362,12 +412,12 @@ pub static PROVIDE_COUPLED_VARIABLES: &[ProvideCoupledVariable] = &[
     absent("ns-right-control-modifier", &[Ns], "nsterm.m:11619"),
     absent("ns-scroll-event-delta-factor", &[Ns], "nsterm.m:11727"),
     absent("ns-sent-selection-hooks", &[Ns], "nsselect.m:812"),
-    absent("ns-use-fullscreen-animation", &[Ns], "nsterm.m:11665"),
-    absent("ns-use-mwheel-acceleration", &[Ns], "nsterm.m:11677"),
-    absent("ns-use-mwheel-momentum", &[Ns], "nsterm.m:11689"),
-    absent("ns-use-native-fullscreen", &[Ns], "nsterm.m:11657"),
-    absent("ns-use-proxy-icon", &[Ns], "nsfns.m:4233"),
-    absent("ns-use-srgb-colorspace", &[Ns], "nsterm.m:11671"),
+    absent("ns-use-fullscreen-animation", &[Ns], "nsterm.m:11665").ns_bound(NS_SURFACE),
+    absent("ns-use-mwheel-acceleration", &[Ns], "nsterm.m:11677").ns_bound(NS_SURFACE),
+    absent("ns-use-mwheel-momentum", &[Ns], "nsterm.m:11689").ns_bound(NS_SURFACE),
+    absent("ns-use-native-fullscreen", &[Ns], "nsterm.m:11657").ns_bound(NS_SURFACE),
+    absent("ns-use-proxy-icon", &[Ns], "nsfns.m:4233").ns_bound(NS_SURFACE),
+    absent("ns-use-srgb-colorspace", &[Ns], "nsterm.m:11671").ns_bound(NS_SURFACE),
     absent("ns-use-thin-smoothing", &[Ns], "nsterm.m:11644"),
     absent("ns-version-string", &[Ns], "nsfns.m:4229"),
     absent("ns-working-text", &[Ns], "nsterm.m:11559"),
@@ -436,77 +486,77 @@ pub static PROVIDE_COUPLED_VARIABLES: &[ProvideCoupledVariable] = &[
     absent("w32-use-native-image-API", &[W32], "w32term.c:8355"),
     absent("w32-use-visible-system-caret", &[W32], "w32term.c:8306"),
     absent("w32-yes-no-dialog-show-cancel", &[W32], "w32term.c:8376"),
-    bound_by("x-allow-focus-stealing", &[X], "xterm.c:33013", X_SURFACE),
-    bound_by("x-alt-keysym", &[Android, Pgtk, X], "androidterm.c:7051 pgtkterm.c:7453 xterm.c:32763", X_SURFACE),
-    bound_by("x-auto-preserve-selections", &[X], "xterm.c:32976", X_SURFACE),
-    bound_by("x-color-cache-bucket-size", &[X], "xterm.c:32922", X_SURFACE),
-    bound_by("x-ctrl-keysym", &[Android, Pgtk, X], "androidterm.c:7047 pgtkterm.c:7449 xterm.c:32755", X_SURFACE),
-    bound_by("x-cursor-fore-pixel", &[Android, Cairo, Haiku, W32, X], "androidfns.c:3662 haikufns.c:3280 pgtkfns.c:3782 w32fns.c:11837 xfns.c:10432", X_SURFACE),
-    bound_by("x-detect-server-trust", &[X], "xterm.c:33054", X_SURFACE),
-    bound_by("x-dnd-disable-motif-drag", &[X], "xterm.c:32878", X_SURFACE),
-    bound_by("x-dnd-disable-motif-protocol", &[X], "xterm.c:32954", X_SURFACE),
-    bound_by("x-dnd-fix-motif-leave", &[X], "xterm.c:32870", X_SURFACE),
-    bound_by("x-dnd-movement-function", &[X], "xterm.c:32885", X_SURFACE),
-    bound_by("x-dnd-native-test-function", &[X], "xterm.c:32934", X_SURFACE),
-    bound_by("x-dnd-preserve-selection-data", &[X], "xterm.c:32947", X_SURFACE),
-    bound_by("x-dnd-targets-list", &[X], "xterm.c:32927", X_SURFACE),
-    bound_by("x-dnd-unsupported-drop-function", &[X], "xterm.c:32901", X_SURFACE),
-    bound_by("x-dnd-use-unsupported-drop", &[X], "xterm.c:32960", X_SURFACE),
-    bound_by("x-dnd-wheel-function", &[X], "xterm.c:32892", X_SURFACE),
-    bound_by("x-fast-protocol-requests", &[X], "xterm.c:32967", X_SURFACE),
-    bound_by("x-fast-selection-list", &[X], "xterm.c:33000", X_SURFACE),
-    bound_by("x-frame-normalize-before-maximize", &[X], "xterm.c:32812", X_SURFACE),
-    bound_by("x-gtk-file-dialog-help-text", &[Cairo, X], "pgtkfns.c:3880 xfns.c:10473", X_SURFACE),
-    bound_by("x-gtk-resize-child-frames", &[X], "xfns.c:10479", X_SURFACE),
-    bound_by("x-gtk-show-hidden-files", &[Cairo, X], "pgtkfns.c:3876 xfns.c:10467", X_SURFACE),
-    bound_by("x-gtk-use-native-input", &[X], "xterm.c:32839", X_SURFACE),
-    bound_by("x-gtk-use-old-file-dialog", &[Cairo, X], "pgtkfns.c:3872 xfns.c:10460", X_SURFACE),
-    bound_by("x-gtk-use-window-move", &[X], "xterm.c:32825", X_SURFACE),
-    bound_by("x-hourglass-pointer-shape", &[Android, Haiku, W32, X], "androidfns.c:3597 haikufns.c:3288 w32fns.c:11817 xfns.c:10341", X_SURFACE),
-    bound_by("x-hyper-keysym", &[Android, Pgtk, X], "androidterm.c:7055 pgtkterm.c:7457 xterm.c:32772", X_SURFACE),
-    bound_by("x-input-coding-function", &[X], "xterm.c:32993", X_SURFACE),
-    bound_by("x-input-coding-system", &[X], "xterm.c:32986", X_SURFACE),
-    bound_by("x-input-grab-touch-events", &[X], "xterm.c:32860", X_SURFACE),
-    bound_by("x-keysym-table", &[X], "xterm.c:32808", X_SURFACE),
-    bound_by("x-lax-frame-positioning", &[X], "xterm.c:33064", X_SURFACE),
-    bound_by("x-lost-selection-functions", &[X], "xselect.c:3397", X_SURFACE),
+    bound_by("x-allow-focus-stealing", &[X], "xterm.c:33013", X_SURFACE).ns_absent(),
+    bound_by("x-alt-keysym", &[Android, Pgtk, X], "androidterm.c:7051 pgtkterm.c:7453 xterm.c:32763", X_SURFACE).ns_absent(),
+    bound_by("x-auto-preserve-selections", &[X], "xterm.c:32976", X_SURFACE).ns_absent(),
+    bound_by("x-color-cache-bucket-size", &[X], "xterm.c:32922", X_SURFACE).ns_absent(),
+    bound_by("x-ctrl-keysym", &[Android, Pgtk, X], "androidterm.c:7047 pgtkterm.c:7449 xterm.c:32755", X_SURFACE).ns_absent(),
+    bound_by("x-cursor-fore-pixel", &[Android, Cairo, Haiku, W32, X], "androidfns.c:3662 haikufns.c:3280 pgtkfns.c:3782 w32fns.c:11837 xfns.c:10432", X_SURFACE).ns_absent(),
+    bound_by("x-detect-server-trust", &[X], "xterm.c:33054", X_SURFACE).ns_absent(),
+    bound_by("x-dnd-disable-motif-drag", &[X], "xterm.c:32878", X_SURFACE).ns_absent(),
+    bound_by("x-dnd-disable-motif-protocol", &[X], "xterm.c:32954", X_SURFACE).ns_absent(),
+    bound_by("x-dnd-fix-motif-leave", &[X], "xterm.c:32870", X_SURFACE).ns_absent(),
+    bound_by("x-dnd-movement-function", &[X], "xterm.c:32885", X_SURFACE).ns_absent(),
+    bound_by("x-dnd-native-test-function", &[X], "xterm.c:32934", X_SURFACE).ns_absent(),
+    bound_by("x-dnd-preserve-selection-data", &[X], "xterm.c:32947", X_SURFACE).ns_absent(),
+    bound_by("x-dnd-targets-list", &[X], "xterm.c:32927", X_SURFACE).ns_absent(),
+    bound_by("x-dnd-unsupported-drop-function", &[X], "xterm.c:32901", X_SURFACE).ns_absent(),
+    bound_by("x-dnd-use-unsupported-drop", &[X], "xterm.c:32960", X_SURFACE).ns_absent(),
+    bound_by("x-dnd-wheel-function", &[X], "xterm.c:32892", X_SURFACE).ns_absent(),
+    bound_by("x-fast-protocol-requests", &[X], "xterm.c:32967", X_SURFACE).ns_absent(),
+    bound_by("x-fast-selection-list", &[X], "xterm.c:33000", X_SURFACE).ns_absent(),
+    bound_by("x-frame-normalize-before-maximize", &[X], "xterm.c:32812", X_SURFACE).ns_absent(),
+    bound_by("x-gtk-file-dialog-help-text", &[Cairo, X], "pgtkfns.c:3880 xfns.c:10473", X_SURFACE).ns_absent(),
+    bound_by("x-gtk-resize-child-frames", &[X], "xfns.c:10479", X_SURFACE).ns_absent(),
+    bound_by("x-gtk-show-hidden-files", &[Cairo, X], "pgtkfns.c:3876 xfns.c:10467", X_SURFACE).ns_absent(),
+    bound_by("x-gtk-use-native-input", &[X], "xterm.c:32839", X_SURFACE).ns_absent(),
+    bound_by("x-gtk-use-old-file-dialog", &[Cairo, X], "pgtkfns.c:3872 xfns.c:10460", X_SURFACE).ns_absent(),
+    bound_by("x-gtk-use-window-move", &[X], "xterm.c:32825", X_SURFACE).ns_absent(),
+    bound_by("x-hourglass-pointer-shape", &[Android, Haiku, W32, X], "androidfns.c:3597 haikufns.c:3288 w32fns.c:11817 xfns.c:10341", X_SURFACE).ns_absent(),
+    bound_by("x-hyper-keysym", &[Android, Pgtk, X], "androidterm.c:7055 pgtkterm.c:7457 xterm.c:32772", X_SURFACE).ns_absent(),
+    bound_by("x-input-coding-function", &[X], "xterm.c:32993", X_SURFACE).ns_absent(),
+    bound_by("x-input-coding-system", &[X], "xterm.c:32986", X_SURFACE).ns_absent(),
+    bound_by("x-input-grab-touch-events", &[X], "xterm.c:32860", X_SURFACE).ns_absent(),
+    bound_by("x-keysym-table", &[X], "xterm.c:32808", X_SURFACE).ns_absent(),
+    bound_by("x-lax-frame-positioning", &[X], "xterm.c:33064", X_SURFACE).ns_absent(),
+    bound_by("x-lost-selection-functions", &[X], "xselect.c:3397", X_SURFACE).ns_absent(),
     bound_by("x-max-tooltip-size", &[Android, Cairo, Haiku, Ns, W32, X], "androidfns.c:3673 haikufns.c:3276 nsfns.m:4243 pgtkfns.c:3884 w32fns.c:11841 xfns.c:10436", X_SURFACE),
-    bound_by("x-meta-keysym", &[Android, Pgtk, X], "androidterm.c:7059 pgtkterm.c:7461 xterm.c:32780", X_SURFACE),
+    bound_by("x-meta-keysym", &[Android, Pgtk, X], "androidterm.c:7059 pgtkterm.c:7461 xterm.c:32780", X_SURFACE).ns_absent(),
     absent("x-mode-pointer-shape", &[Android, X], "androidfns.c:3652 xfns.c:10348"),
-    bound_by("x-mouse-click-focus-ignore-position", &[X], "xterm.c:32689", X_SURFACE),
-    bound_by("x-mouse-click-focus-ignore-time", &[X], "xterm.c:32704", X_SURFACE),
-    bound_by("x-no-window-manager", &[W32, X], "w32fns.c:11845 xfns.c:10441", X_SURFACE),
+    bound_by("x-mouse-click-focus-ignore-position", &[X], "xterm.c:32689", X_SURFACE).ns_absent(),
+    bound_by("x-mouse-click-focus-ignore-time", &[X], "xterm.c:32704", X_SURFACE).ns_absent(),
+    bound_by("x-no-window-manager", &[W32, X], "w32fns.c:11845 xfns.c:10441", X_SURFACE).ns_absent(),
     absent("x-nontext-pointer-shape", &[Android, X], "androidfns.c:3592 xfns.c:10334"),
     bound_by("x-pixel-size-width-font-regexp", &[W32, X], "w32fns.c:11851 xfns.c:10449", X_SURFACE),
-    bound_by("x-pointer-shape", &[Android, Haiku, W32, X], "androidfns.c:3587 haikufns.c:3284 w32fns.c:11809 xfns.c:10327", X_SURFACE),
-    bound_by("x-quit-keysym", &[X], "xterm.c:33076", X_SURFACE),
-    bound_by("x-scroll-event-delta-factor", &[X], "xterm.c:32833", X_SURFACE),
+    bound_by("x-pointer-shape", &[Android, Haiku, W32, X], "androidfns.c:3587 haikufns.c:3284 w32fns.c:11809 xfns.c:10327", X_SURFACE).ns_absent(),
+    bound_by("x-quit-keysym", &[X], "xterm.c:33076", X_SURFACE).ns_absent(),
+    bound_by("x-scroll-event-delta-factor", &[X], "xterm.c:32833", X_SURFACE).ns_absent(),
     bound_by("x-select-enable-clipboard-manager", &[X], "xselect.c:3419", X_SURFACE),
-    bound_by("x-selection-alias-alist", &[X], "xselect.c:3442", X_SURFACE),
-    bound_by("x-selection-timeout", &[X], "xselect.c:3427", X_SURFACE),
-    bound_by("x-sensitive-text-pointer-shape", &[Android, Haiku, W32, X], "androidfns.c:3601 haikufns.c:3292 w32fns.c:11821 xfns.c:10355", X_SURFACE),
-    bound_by("x-sent-selection-functions", &[X], "xselect.c:3405", X_SURFACE),
-    bound_by("x-session-id", &[X], "xsmfns.c:547", X_SURFACE),
-    bound_by("x-session-previous-id", &[X], "xsmfns.c:555", X_SURFACE),
-    bound_by("x-set-frame-visibility-more-laxly", &[X], "xterm.c:32845", X_SURFACE),
-    bound_by("x-super-keysym", &[Android, Pgtk, X], "androidterm.c:7063 pgtkterm.c:7465 xterm.c:32789", X_SURFACE),
+    bound_by("x-selection-alias-alist", &[X], "xselect.c:3442", X_SURFACE).ns_absent(),
+    bound_by("x-selection-timeout", &[X], "xselect.c:3427", X_SURFACE).ns_absent(),
+    bound_by("x-sensitive-text-pointer-shape", &[Android, Haiku, W32, X], "androidfns.c:3601 haikufns.c:3292 w32fns.c:11821 xfns.c:10355", X_SURFACE).ns_absent(),
+    bound_by("x-sent-selection-functions", &[X], "xselect.c:3405", X_SURFACE).ns_absent(),
+    bound_by("x-session-id", &[X], "xsmfns.c:547", X_SURFACE).ns_absent(),
+    bound_by("x-session-previous-id", &[X], "xsmfns.c:555", X_SURFACE).ns_absent(),
+    bound_by("x-set-frame-visibility-more-laxly", &[X], "xterm.c:32845", X_SURFACE).ns_absent(),
+    bound_by("x-super-keysym", &[Android, Pgtk, X], "androidterm.c:7063 pgtkterm.c:7465 xterm.c:32789", X_SURFACE).ns_absent(),
     bound_by("x-toolkit-scroll-bars", &[Android, Haiku, Ns, Pgtk, W32, X], "androidterm.c:7068 haikuterm.c:4829 nsterm.m:11695 pgtkterm.c:7479 w32term.c:8336 xterm.c:32711", X_SURFACE),
-    bound_by("x-treat-local-requests-remotely", &[X], "xselect.c:3434", X_SURFACE),
+    bound_by("x-treat-local-requests-remotely", &[X], "xselect.c:3434", X_SURFACE).ns_absent(),
     bound_by("x-underline-at-descent-line", &[Android, Haiku, Ns, Pgtk, W32, X], "androidterm.c:7021 haikuterm.c:4824 nsterm.m:11706 pgtkterm.c:7474 w32term.c:8330 xterm.c:32678", X_SURFACE),
-    bound_by("x-use-fast-mouse-position", &[X], "xterm.c:33039", X_SURFACE),
+    bound_by("x-use-fast-mouse-position", &[X], "xterm.c:33039", X_SURFACE).ns_absent(),
     bound_by("x-use-underline-position-properties", &[Android, Haiku, Ns, Pgtk, W32, X], "androidterm.c:7014 haikuterm.c:4819 nsterm.m:11699 pgtkterm.c:7469 w32term.c:8323 xterm.c:32667", X_SURFACE),
-    bound_by("x-wait-for-event-timeout", &[W32, X], "w32term.c:8270 xterm.c:32797", X_SURFACE),
-    bound_by("x-window-bottom-edge-cursor", &[Android, X], "androidfns.c:3646 xfns.c:10418", X_SURFACE),
-    bound_by("x-window-bottom-left-corner-cursor", &[Android, X], "androidfns.c:3657 xfns.c:10425", X_SURFACE),
-    bound_by("x-window-bottom-right-corner-cursor", &[Android, X], "androidfns.c:3641 xfns.c:10411", X_SURFACE),
-    bound_by("x-window-horizontal-drag-cursor", &[Android, W32, X], "androidfns.c:3606 w32fns.c:11826 xfns.c:10362", X_SURFACE),
-    bound_by("x-window-left-edge-cursor", &[Android, X], "androidfns.c:3616 xfns.c:10376", X_SURFACE),
-    bound_by("x-window-right-edge-cursor", &[Android, X], "androidfns.c:3636 xfns.c:10404", X_SURFACE),
-    bound_by("x-window-top-edge-cursor", &[Android, X], "androidfns.c:3626 xfns.c:10390", X_SURFACE),
-    bound_by("x-window-top-left-corner-cursor", &[Android, X], "androidfns.c:3621 xfns.c:10383", X_SURFACE),
-    bound_by("x-window-top-right-corner-cursor", &[Android, X], "androidfns.c:3631 xfns.c:10397", X_SURFACE),
-    bound_by("x-window-vertical-drag-cursor", &[Android, W32, X], "androidfns.c:3611 w32fns.c:11831 xfns.c:10369", X_SURFACE),
-    bound_by("xft-settings", &[DynamicSetting], "xsettings.c:1402", XSETTINGS_ORACLE_PIN),
+    bound_by("x-wait-for-event-timeout", &[W32, X], "w32term.c:8270 xterm.c:32797", X_SURFACE).ns_absent(),
+    bound_by("x-window-bottom-edge-cursor", &[Android, X], "androidfns.c:3646 xfns.c:10418", X_SURFACE).ns_absent(),
+    bound_by("x-window-bottom-left-corner-cursor", &[Android, X], "androidfns.c:3657 xfns.c:10425", X_SURFACE).ns_absent(),
+    bound_by("x-window-bottom-right-corner-cursor", &[Android, X], "androidfns.c:3641 xfns.c:10411", X_SURFACE).ns_absent(),
+    bound_by("x-window-horizontal-drag-cursor", &[Android, W32, X], "androidfns.c:3606 w32fns.c:11826 xfns.c:10362", X_SURFACE).ns_absent(),
+    bound_by("x-window-left-edge-cursor", &[Android, X], "androidfns.c:3616 xfns.c:10376", X_SURFACE).ns_absent(),
+    bound_by("x-window-right-edge-cursor", &[Android, X], "androidfns.c:3636 xfns.c:10404", X_SURFACE).ns_absent(),
+    bound_by("x-window-top-edge-cursor", &[Android, X], "androidfns.c:3626 xfns.c:10390", X_SURFACE).ns_absent(),
+    bound_by("x-window-top-left-corner-cursor", &[Android, X], "androidfns.c:3621 xfns.c:10383", X_SURFACE).ns_absent(),
+    bound_by("x-window-top-right-corner-cursor", &[Android, X], "androidfns.c:3631 xfns.c:10397", X_SURFACE).ns_absent(),
+    bound_by("x-window-vertical-drag-cursor", &[Android, W32, X], "androidfns.c:3611 w32fns.c:11831 xfns.c:10369", X_SURFACE).ns_absent(),
+    bound_by("xft-settings", &[DynamicSetting], "xsettings.c:1402", XSETTINGS_ORACLE_PIN).ns_absent(),
     bound_by("xwidget-list", &[XwidgetInternal], "xwidget.c:3988", XWIDGET_LAYER),
     bound_by("xwidget-view-list", &[XwidgetInternal], "xwidget.c:3992", XWIDGET_LAYER),
     bound_by("xwidget-webkit-disable-javascript", &[XwidgetInternal], "xwidget.c:3996", XWIDGET_LAYER),

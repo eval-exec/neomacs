@@ -153,8 +153,10 @@ impl GnuBoolVariable {
     }
 
     /// The declared value on `surface`; GNU ships one C file per case, so a
-    /// row with two declarations needs two answers.
-    fn value_on(&self, surface: PlatformSurface) -> bool {
+    /// row with two declarations needs two answers.  `main`-decided rows are
+    /// not special here: `register_bootstrap_vars` installs the declaration
+    /// and `apply_post_main_batch_defaults` applies the running value.
+    pub(crate) fn value_on(&self, surface: PlatformSurface) -> bool {
         match surface {
             PlatformSurface::Ns => self.ns_initial_value.unwrap_or(self.initial),
             PlatformSurface::X11 | PlatformSurface::W32 => self.initial,

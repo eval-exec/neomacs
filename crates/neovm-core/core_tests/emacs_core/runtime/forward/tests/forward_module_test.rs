@@ -335,10 +335,14 @@ fn defvar_bool_registration_lists_the_symbol_in_byte_boolean_vars_like_gnu() {
 #[test]
 fn byte_boolean_vars_holds_gnus_list_and_not_the_erased_ones() {
     let mut eval = ev();
+    let ns_surface =
+        neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
 
+    // GNU NS has 108 listed entries: 116 minus the 15 X11-only bools plus
+    // the 7 NS-only ones (nsterm.m/nsfns.m).
     assert_eq!(
         format_eval_result(&eval.eval_str("(length byte-boolean-vars)")),
-        "OK 116"
+        if ns_surface { "OK 108" } else { "OK 116" }
     );
     for name in [
         "visible-bell",
@@ -346,7 +350,6 @@ fn byte_boolean_vars_holds_gnus_list_and_not_the_erased_ones() {
         "indent-tabs-mode",
         "print-quoted",
         "noninteractive",
-        "font-use-system-font",
         "load-dangerous-libraries",
     ] {
         assert_eq!(
@@ -357,6 +360,27 @@ fn byte_boolean_vars_holds_gnus_list_and_not_the_erased_ones() {
             "{name} should be on byte-boolean-vars"
         );
     }
+    // The surface decides which family is on the list: font-use-system-font
+    // is xsettings.c (X11-only), ns-use-native-fullscreen is nsterm.m.
+    let (surface_listed, surface_absent) = if ns_surface {
+        ("ns-use-native-fullscreen", "font-use-system-font")
+    } else {
+        ("font-use-system-font", "ns-use-native-fullscreen")
+    };
+    assert_eq!(
+        format_eval_result(
+            &eval.eval_str(&format!("(and (memq '{surface_listed} byte-boolean-vars) t)"))
+        ),
+        "OK t",
+        "{surface_listed} should be on byte-boolean-vars"
+    );
+    assert_eq!(
+        format_eval_result(
+            &eval.eval_str(&format!("(and (memq '{surface_absent} byte-boolean-vars) t)"))
+        ),
+        "OK nil",
+        "{surface_absent} belongs to the other reference surface"
+    );
     for name in [
         "use-short-answers",
         "use-dialog-box",
@@ -385,13 +409,25 @@ fn byte_boolean_vars_holds_gnus_list_and_not_the_erased_ones() {
 #[test]
 fn byte_boolean_vars_is_in_gnus_reverse_declaration_order() {
     let mut eval = ev();
+    let ns_surface =
+        neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
 
+    // The car is the last DEFVAR_BOOL the reference build's `main` reaches:
+    // syms_of_xsettings ends the X arm (font-use-system-font), while the NS
+    // arm ends with syms_of_fontset's use-default-font-for-symbols.  The nth
+    // (length - 1) entry is the first declaration after syms_of_lread clears
+    // the list, which lread.c itself supplies on every surface.
+    let (car_expected, last_index) = if ns_surface {
+        ("OK use-default-font-for-symbols", 107)
+    } else {
+        ("OK font-use-system-font", 115)
+    };
     assert_eq!(
         format_eval_result(&eval.eval_str("(car byte-boolean-vars)")),
-        "OK font-use-system-font"
+        car_expected
     );
     assert_eq!(
-        format_eval_result(&eval.eval_str("(nth 115 byte-boolean-vars)")),
+        format_eval_result(&eval.eval_str(&format!("(nth {last_index} byte-boolean-vars)"))),
         "OK load-dangerous-libraries"
     );
 }
@@ -583,16 +619,31 @@ fn buffer_local_defvar_int_keeps_its_type_rule_like_gnu() {
 #[test]
 fn the_remaining_gnu_defvar_int_variables_are_declared_with_gnus_values() {
     let mut eval = ev();
+    let ns_surface =
+        neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
 
-    for (name, expected) in [
+    // The two xterm.c DEFVAR_INTs belong to the X11 C surface only.
+    let mut ints: Vec<(&str, &str)> = vec![
         ("large-hscroll-threshold", "OK 10000"),
         ("long-line-optimizations-bol-search-limit", "OK 128"),
         ("long-line-optimizations-region-size", "OK 500000"),
         ("max-redisplay-ticks", "OK 0"),
-        ("x-color-cache-bucket-size", "OK 128"),
-        ("x-mouse-click-focus-ignore-time", "OK 200"),
-    ] {
+    ];
+    if !ns_surface {
+        ints.push(("x-color-cache-bucket-size", "OK 128"));
+        ints.push(("x-mouse-click-focus-ignore-time", "OK 200"));
+    }
+    for (name, expected) in ints {
         assert_eq!(format_eval_result(&eval.eval_str(name)), expected, "{name}");
+    }
+    if ns_surface {
+        for name in ["x-color-cache-bucket-size", "x-mouse-click-focus-ignore-time"] {
+            assert_eq!(
+                format_eval_result(&eval.eval_str(&format!("(boundp '{name})"))),
+                "OK nil",
+                "{name} is declared by xterm.c, which the NS build does not compile"
+            );
+        }
     }
     assert_eq!(
         format_eval_result(
@@ -604,16 +655,19 @@ fn the_remaining_gnu_defvar_int_variables_are_declared_with_gnus_values() {
     assert_eq!(format_eval_result(&eval.eval_str("strings-consed")), "OK 0");
     // Each one is a real forwarder, not a plain cell that happens to hold an
     // integer: `(setq X "x")` is GNU's `wrong-type-argument`.
-    for name in [
+    let mut forwarders = vec![
         "command-line-max-length",
         "large-hscroll-threshold",
         "long-line-optimizations-bol-search-limit",
         "long-line-optimizations-region-size",
         "max-redisplay-ticks",
         "strings-consed",
-        "x-color-cache-bucket-size",
-        "x-mouse-click-focus-ignore-time",
-    ] {
+    ];
+    if !ns_surface {
+        forwarders.push("x-color-cache-bucket-size");
+        forwarders.push("x-mouse-click-focus-ignore-time");
+    }
+    for name in forwarders {
         let form = format!("(condition-case e (setq {name} \"x\") (error (car e)))");
         assert_eq!(
             format_eval_result(&eval.eval_str(&form)),
@@ -647,14 +701,17 @@ fn baud_rate_starts_at_the_c_globals_zero_like_gnu() {
 #[test]
 fn platform_variables_gnu_leaves_unbound_here_are_not_bound() {
     let mut eval = ev();
+    let ns_surface =
+        neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
 
+    // These are void in every GNU reference build, whichever window system
+    // the reference was configured with.
     for name in [
         "dos-hyper-key",
         "dos-super-key",
         "dos-keypad-mode",
         "imagemagick-render-type",
         "xwidget-internal",
-        "ns-antialias-text",
         "w32-follow-system-dark-mode",
         "haiku-use-system-tooltips",
     ] {
@@ -662,6 +719,27 @@ fn platform_variables_gnu_leaves_unbound_here_are_not_bound() {
             format_eval_result(&eval.eval_str(&format!("(boundp '{name})"))),
             "OK nil",
             "{name} is unbound under GNU on this platform"
+        );
+    }
+    // The surface split: the NS reference build binds the ns-* family and
+    // leaves the X11 C surface void; the X11 reference is the mirror.
+    for (name, expected) in if ns_surface {
+        [
+            ("ns-antialias-text", "OK t"),
+            ("x-dnd-disable-motif-drag", "OK nil"),
+            ("x-scroll-event-delta-factor", "OK nil"),
+        ]
+    } else {
+        [
+            ("ns-antialias-text", "OK nil"),
+            ("x-dnd-disable-motif-drag", "OK t"),
+            ("x-scroll-event-delta-factor", "OK t"),
+        ]
+    } {
+        assert_eq!(
+            format_eval_result(&eval.eval_str(&format!("(boundp '{name})"))),
+            expected,
+            "{name} must follow the reference build's surface"
         );
     }
     // The `cus-start.el` platform names GNU DOES bind here stay bound.
@@ -696,10 +774,12 @@ fn every_cus_start_platform_row_matches_its_declaration_claim() {
     use crate::emacs_core::cus_start_platform_vars::{CUS_START_PLATFORM_VARIABLES, GnuBinding};
 
     let mut eval = ev();
+    let ns_surface =
+        neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
 
     for var in CUS_START_PLATFORM_VARIABLES {
         let bound = format_eval_result(&eval.eval_str(&format!("(boundp '{})", var.name)));
-        match var.binding {
+        match var.binding_on(ns_surface) {
             GnuBinding::UnboundHere => {
                 assert_eq!(bound, "OK nil", "{} ({})", var.name, var.gnu);
                 // Nothing declares it, so nothing documents it either.
@@ -736,6 +816,16 @@ fn every_cus_start_platform_row_matches_its_declaration_claim() {
                     var.name, var.gnu
                 );
             }
+            GnuBinding::GnuDeclaresNotNeo => {
+                // GNU's reference build binds it, this port's dump does not
+                // yet; the row says so instead of claiming GNU leaves it void.
+                assert_eq!(
+                    bound, "OK nil",
+                    "{} is recorded as GNU-declared but Neo-missing; the port's \
+                     dump must not bind it until the declaration lands",
+                    var.name
+                );
+            }
         }
     }
 }
@@ -762,6 +852,8 @@ fn every_cus_start_platform_row_matches_its_declaration_claim() {
 #[test]
 fn the_x_platform_variables_hold_gnus_defaults_and_bind_dynamically() {
     let mut eval = ev();
+    let ns_surface =
+        neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
 
     let bitmap_path = crate::emacs_core::platform_facts::X_BITMAP_FILE_PATH;
     let bitmap_printed = if bitmap_path.is_empty() {
@@ -769,11 +861,14 @@ fn the_x_platform_variables_hold_gnus_defaults_and_bind_dynamically() {
     } else {
         format!("(\"{bitmap_path}\")")
     };
-    for (name, value) in [
-        ("x-bitmap-file-path", bitmap_printed.as_str()),
-        ("x-scroll-event-delta-factor", "1.0"),
-        ("x-auto-preserve-selections", "(CLIPBOARD PRIMARY)"),
-    ] {
+    // Of these three, `x-bitmap-file-path` is the only one GNU's NS build
+    // declares: image.c is WINDOW_SYSTEM_OBJ, while xterm.c is XOBJ.
+    let mut bindings: Vec<(&str, &str)> = vec![("x-bitmap-file-path", bitmap_printed.as_str())];
+    if !ns_surface {
+        bindings.push(("x-scroll-event-delta-factor", "1.0"));
+        bindings.push(("x-auto-preserve-selections", "(CLIPBOARD PRIMARY)"));
+    }
+    for (name, value) in bindings {
         assert_eq!(
             format_eval_result(&eval.eval_str(name)),
             format!("OK {value}"),
@@ -794,6 +889,16 @@ fn the_x_platform_variables_hold_gnus_defaults_and_bind_dynamically() {
             format!("OK {value}"),
             "{name} did not restore after the let"
         );
+    }
+    if ns_surface {
+        for name in ["x-scroll-event-delta-factor", "x-auto-preserve-selections"] {
+            assert_eq!(
+                format_eval_result(&eval.eval_str(&format!("(boundp '{name})"))),
+                "OK nil",
+                "{name} is declared only by the X11 C surface, so GNU's NS \
+                 build leaves it void"
+            );
+        }
     }
 }
 

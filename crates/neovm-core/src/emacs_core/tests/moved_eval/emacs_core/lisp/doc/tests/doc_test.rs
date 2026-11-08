@@ -1893,11 +1893,13 @@ fn the_snarf_leaves_no_documentation_on_a_variable_the_image_does_not_bind() {
 /// `oblookup` does not intern (`src/doc.c:596-600`): a DOC record whose name
 /// this build has no symbol for is skipped by `if (SYMBOLP (sym))`.
 ///
-/// The table is generated from ALL of GNU's `src/*.c`, so it names variables
-/// no build declares -- 132 of the 894 are unbound in GNU's own image.  A
-/// snarf that used `intern` would put every one of them in the obarray, which
-/// is a state GNU has zero of and which ledger 178's `mapatoms` diagonal is
-/// the check for.
+/// The table is generated from ALL of GNU's `src/*.c` and `src/*.m`, so it
+/// names variables no build declares -- most of the 926 are unbound in any
+/// one build.  A snarf that used `intern` would put every one of them in the
+/// obarray, which is a state GNU has zero of and which ledger 178's
+/// `mapatoms` diagonal is the check for.  The positive floor is surface-keyed
+/// because the X11 build binds the xterm.c/xfns.c family and the NS build
+/// binds the nsterm.m/nsfns.m family instead.
 #[test]
 fn snarfing_the_doc_image_interns_nothing() {
     crate::test_utils::init_test_tracing();
@@ -1911,7 +1913,12 @@ fn snarfing_the_doc_image_interns_nothing() {
             .obarray_view_mut()
             .with_legacy_value_write(neovm_eval::emacs_core::doc::snarf_variable_documentation)
     };
-    assert!(installed > 700, "installed {installed} records");
+    let floor = if neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns" {
+        650
+    } else {
+        700
+    };
+    assert!(installed > floor, "installed {installed} records");
     assert_eq!(evaluator.obarray().len(), before);
     assert!(
         neovm_value::intern::lookup_interned("w32-quit-key")
@@ -2011,7 +2018,15 @@ fn every_doc_image_record_round_trips_through_its_position() {
         );
         checked += 1;
     }
-    assert!(checked > 700, "checked {checked} records");
+    // The same surface-keyed positive floor as the snarf pin: the NS
+    // reference binds the nsterm.m/nsfns.m family and leaves the X11-only
+    // names void, so fewer records are bound there.
+    let floor = if neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns" {
+        650
+    } else {
+        700
+    };
+    assert!(checked > floor, "checked {checked} records");
 }
 
 // ---------------------------------------------------------------------------

@@ -256,31 +256,33 @@ fn erase_buffer_is_disabled_by_c_level_initialization() {
 
 #[test]
 fn x_selection_hooks_match_gnu_xselect_startup_bindings() {
-    let mut ev = crate::test_utils::new_context();
-    let result = ev
-        .eval_str(
-            r#"(list (boundp 'emacs-clipboard-manager-exit-hook)
+    neovm_eval::test_support::authority::with_platform_surface_for_test("x11", &mut || {
+        let mut ev = crate::test_utils::new_context();
+        let result = ev
+            .eval_str(
+                r#"(list (boundp 'emacs-clipboard-manager-exit-hook)
                      (boundp 'x-lost-selection-functions)
                      (boundp 'x-sent-selection-functions)
                      x-lost-selection-functions
                      x-sent-selection-functions
                      (special-variable-p 'x-lost-selection-functions)
                      (special-variable-p 'x-sent-selection-functions))"#,
-        )
-        .expect("x selection hook probe should evaluate");
+            )
+            .expect("x selection hook probe should evaluate");
 
-    assert_eq!(
-        result,
-        Value::list(vec![
-            Value::NIL,
-            Value::T,
-            Value::T,
-            Value::NIL,
-            Value::NIL,
-            Value::T,
-            Value::T,
-        ])
-    );
+        assert_eq!(
+            result,
+            Value::list(vec![
+                Value::NIL,
+                Value::T,
+                Value::T,
+                Value::NIL,
+                Value::NIL,
+                Value::T,
+                Value::T,
+            ])
+        );
+    });
 }
 
 #[test]

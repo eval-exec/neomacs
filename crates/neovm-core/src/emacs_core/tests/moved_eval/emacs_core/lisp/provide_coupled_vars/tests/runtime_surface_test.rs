@@ -90,10 +90,12 @@ fn the_obarray_agrees_with_every_row() {
         "the scan did not answer for every row: {result}"
     );
 
+    let ns_surface =
+        neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
     let mut wrong = Vec::new();
     for (var, bit) in PROVIDE_COUPLED_VARIABLES.iter().zip(bits.chars()) {
         let bound = bit == 't';
-        match (var.here, bound) {
+        match (var.here_on(ns_surface), bound) {
             (HereDecision::Absent, true) => wrong.push(format!(
                 "{} is BOUND but the table says Absent -- GNU declares it only at {} \
                  ({:?}), and this build provides none of those",
@@ -176,13 +178,20 @@ fn no_toolkit_coupled_variable_is_bound_and_the_gtk_named_survivors_are_gnus() {
                                          (push (symbol-name s) n))))
                     (sort n #'string<)))",
     );
-    assert_eq!(
-        result,
+    // The survivors are X11-surface names: the six C variables are X-only
+    // (two DEFVAR_BOOL families plus the xterm.c/xfns.c block) and the alias
+    // comes from term/x-win.el, which only the X dump loads.  GNU's NS build
+    // binds none of them either.
+    let expected = if neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns" {
+        // An empty `mapatoms` result prints as nil, not ().
+        "OK ((nil nil nil nil) nil)"
+    } else {
         "OK ((nil nil nil nil) (\"x-gtk-file-dialog-help-text\" \
          \"x-gtk-resize-child-frames\" \"x-gtk-show-hidden-files\" \
          \"x-gtk-use-native-input\" \"x-gtk-use-old-file-dialog\" \
          \"x-gtk-use-system-tooltips\" \"x-gtk-use-window-move\"))"
-    );
+    };
+    assert_eq!(result, expected);
 }
 
 /// `use-system-tooltips` stays, with GNU's `t`, and stays inert.

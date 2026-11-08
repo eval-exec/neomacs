@@ -65,7 +65,15 @@ pub mod authority {
         crate::emacs_core::defvar_bool::GNU_BOOL_VARIABLES
             .iter()
             .filter(|var| var.surfaces.contains(surface))
-            .map(|var| (var.name, var.main_value.unwrap_or(var.initial)))
+            .map(|var| {
+                (
+                    var.name,
+                    // A Context is past `main`, so a main-decided row shows
+                    // its running value; the rest show the surface's own
+                    // declaration value.
+                    var.main_value.unwrap_or_else(|| var.value_on(surface)),
+                )
+            })
             .collect()
     }
 
@@ -84,6 +92,19 @@ pub mod authority {
         let guard = test_override::install(surface);
         f();
         drop(guard);
+    }
+
+    /// platform-table fence (class (e), memq 11-08): the surface name the
+    /// production constructor is using right now ("x11" / "ns" / "w32").
+    /// `platform_surface()` stays `pub(crate)`; host-keyed expectations use
+    /// this to choose their arm on whatever host runs the test.
+    pub fn platform_surface_name_for_test() -> &'static str {
+        use crate::platform_surface::PlatformSurface;
+        match crate::platform_surface::platform_surface() {
+            PlatformSurface::X11 => "x11",
+            PlatformSurface::Ns => "ns",
+            PlatformSurface::W32 => "w32",
+        }
     }
 
     /// print_buffer F1 fence (lead 13:08Z): the prepare token is `Copy` so a

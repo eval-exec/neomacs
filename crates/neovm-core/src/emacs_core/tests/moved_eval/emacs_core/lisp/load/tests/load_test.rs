@@ -2970,13 +2970,14 @@ fn bootstrap_runtime_require_cl_lib_works() {
 
 #[test]
 fn bootstrap_runtime_require_icons_restores_cl_loaddefs_under_gui_features() {
-    init_test_tracing();
-    let mut eval =
-        create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
-    apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let rendered = eval_rendered(
-        &mut eval,
-        r#"(condition-case err
+    neovm_eval::test_support::authority::with_platform_surface_for_test("x11", &mut || {
+        init_test_tracing();
+        let mut eval =
+            create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
+        apply_runtime_startup_state(&mut eval).expect("runtime startup state");
+        let rendered = eval_rendered(
+            &mut eval,
+            r#"(condition-case err
                (progn
                  (require 'icons)
                  (list (featurep 'icons)
@@ -2985,8 +2986,9 @@ fn bootstrap_runtime_require_icons_restores_cl_loaddefs_under_gui_features() {
                        (autoloadp (symbol-function 'cl-every))
                        (not (null (get 'button 'icon--properties)))))
              (error (list 'error err)))"#,
-    );
-    assert_eq!(rendered, "OK (t t t t t)");
+        );
+        assert_eq!(rendered, "OK (t t t t t)");
+    });
 }
 
 #[test]
@@ -3014,13 +3016,14 @@ fn runtime_source_bootstrap_surface_tracks_icons_owned_surface() {
 
 #[test]
 fn bootstrap_runtime_gui_surface_matches_gnu_icons_residency() {
-    crate::test_utils::init_test_tracing();
-    let mut eval =
-        create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
-    apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let rendered = eval_rendered(
-        &mut eval,
-        r#"(list (featurep 'icons)
+    neovm_eval::test_support::authority::with_platform_surface_for_test("x11", &mut || {
+        crate::test_utils::init_test_tracing();
+        let mut eval =
+            create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
+        apply_runtime_startup_state(&mut eval).expect("runtime startup state");
+        let rendered = eval_rendered(
+            &mut eval,
+            r#"(list (featurep 'icons)
                  (get 'button 'icon--properties)
                  (fboundp 'icon-string)
                  (autoloadp (symbol-function 'icon-string))
@@ -3032,30 +3035,34 @@ fn bootstrap_runtime_gui_surface_matches_gnu_icons_residency() {
                  (featurep 'tab-bar)
                  (fboundp 'tab-bar-mode)
                  (autoloadp (symbol-function 'tab-bar-mode)))"#,
-    );
-    assert_eq!(rendered, "OK (nil nil nil nil nil nil nil t t t t nil)");
+        );
+        assert_eq!(rendered, "OK (nil nil nil nil nil nil nil t t t t nil)");
+    });
 }
 
 #[test]
 fn bootstrap_runtime_display_selections_p_is_true_under_neomacs_gui_surface() {
-    crate::test_utils::init_test_tracing();
-    let mut eval =
-        create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
-    let value = eval
-        .eval_str("(display-selections-p)")
-        .expect("display-selections-p");
-    assert_eq!(value, Value::T);
+    neovm_eval::test_support::authority::with_platform_surface_for_test("x11", &mut || {
+        crate::test_utils::init_test_tracing();
+        let mut eval =
+            create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
+        let value = eval
+            .eval_str("(display-selections-p)")
+            .expect("display-selections-p");
+        assert_eq!(value, Value::T);
+    });
 }
 
 #[test]
 fn bootstrap_runtime_require_cl_lib_works_under_gui_features() {
-    init_test_tracing();
-    let mut eval =
-        create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
-    apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let rendered = eval_rendered(
-        &mut eval,
-        r#"(condition-case err
+    neovm_eval::test_support::authority::with_platform_surface_for_test("x11", &mut || {
+        init_test_tracing();
+        let mut eval =
+            create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
+        apply_runtime_startup_state(&mut eval).expect("runtime startup state");
+        let rendered = eval_rendered(
+            &mut eval,
+            r#"(condition-case err
                (progn
                  (require 'cl-lib)
                  (list (featurep 'cl-lib)
@@ -3064,22 +3071,24 @@ fn bootstrap_runtime_require_cl_lib_works_under_gui_features() {
                        (autoloadp (symbol-function 'cl-reduce))
                        (autoloadp (symbol-function 'cl-subseq))))
              (error err))"#,
-    );
-    assert_eq!(rendered, "OK (t t t t t)");
+        );
+        assert_eq!(rendered, "OK (t t t t t)");
+    });
 }
 
 #[test]
 fn bootstrap_runtime_require_uses_live_features_variable_when_internal_cache_is_stale() {
-    crate::test_utils::init_test_tracing();
-    let mut eval =
-        create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
-    apply_runtime_startup_state(&mut eval).expect("runtime startup state");
+    neovm_eval::test_support::authority::with_platform_surface_for_test("x11", &mut || {
+        crate::test_utils::init_test_tracing();
+        let mut eval =
+            create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
+        apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
-    feature_insert_for_test(&mut eval, 0, intern("cl-lib"));
+        feature_insert_for_test(&mut eval, 0, intern("cl-lib"));
 
-    let rendered = eval_rendered(
-        &mut eval,
-        r#"(condition-case err
+        let rendered = eval_rendered(
+            &mut eval,
+            r#"(condition-case err
                (progn
                  (require 'cl-lib)
                  (list (featurep 'cl-lib)
@@ -3088,22 +3097,24 @@ fn bootstrap_runtime_require_uses_live_features_variable_when_internal_cache_is_
                        (autoloadp (symbol-function 'cl-reduce))
                        (autoloadp (symbol-function 'cl-subseq))))
              (error err))"#,
-    );
-    assert_eq!(rendered, "OK (t t t t t)");
+        );
+        assert_eq!(rendered, "OK (t t t t t)");
+    });
 }
 
 #[test]
 fn bootstrap_runtime_require_cl_lib_works_under_fresh_gui_features() {
-    init_test_tracing();
-    let mut eval =
-        create_bootstrap_evaluator_with_features(&["x", "neomacs"]).expect("fresh bootstrap");
-    let project_root = compile_time_project_root();
-    finalize_cached_bootstrap_eval(&mut eval, &project_root, RuntimeImageRole::Bootstrap)
-        .expect("finalize runtime surface");
-    apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let rendered = eval_rendered(
-        &mut eval,
-        r#"(condition-case err
+    neovm_eval::test_support::authority::with_platform_surface_for_test("x11", &mut || {
+        init_test_tracing();
+        let mut eval =
+            create_bootstrap_evaluator_with_features(&["x", "neomacs"]).expect("fresh bootstrap");
+        let project_root = compile_time_project_root();
+        finalize_cached_bootstrap_eval(&mut eval, &project_root, RuntimeImageRole::Bootstrap)
+            .expect("finalize runtime surface");
+        apply_runtime_startup_state(&mut eval).expect("runtime startup state");
+        let rendered = eval_rendered(
+            &mut eval,
+            r#"(condition-case err
                (progn
                  (require 'cl-lib)
                  (list (featurep 'cl-lib)
@@ -3112,19 +3123,21 @@ fn bootstrap_runtime_require_cl_lib_works_under_fresh_gui_features() {
                        (autoloadp (symbol-function 'cl-reduce))
                        (autoloadp (symbol-function 'cl-subseq))))
              (error err))"#,
-    );
-    assert_eq!(rendered, "OK (t t t t t)");
+        );
+        assert_eq!(rendered, "OK (t t t t t)");
+    });
 }
 
 #[test]
 fn bootstrap_runtime_tab_bar_mode_restores_cl_loaddefs_under_gui_features() {
-    init_test_tracing();
-    let mut eval =
-        create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
-    apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let rendered = eval_rendered(
-        &mut eval,
-        r#"(condition-case err
+    neovm_eval::test_support::authority::with_platform_surface_for_test("x11", &mut || {
+        init_test_tracing();
+        let mut eval =
+            create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
+        apply_runtime_startup_state(&mut eval).expect("runtime startup state");
+        let rendered = eval_rendered(
+            &mut eval,
+            r#"(condition-case err
                (progn
                  (require 'tab-bar)
                  (tab-bar-mode 1)
@@ -3134,19 +3147,21 @@ fn bootstrap_runtime_tab_bar_mode_restores_cl_loaddefs_under_gui_features() {
                        (fboundp 'cl-every)
                        (autoloadp (symbol-function 'cl-every))))
              (error (list 'error err)))"#,
-    );
-    assert_eq!(rendered, "OK (t t t t nil)");
+        );
+        assert_eq!(rendered, "OK (t t t t nil)");
+    });
 }
 
 #[test]
 fn bootstrap_runtime_tab_bar_make_keymap_supports_auto_width_hash_test() {
-    crate::test_utils::init_test_tracing();
-    let mut eval =
-        create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
-    apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let rendered = eval_rendered(
-        &mut eval,
-        r#"(condition-case err
+    neovm_eval::test_support::authority::with_platform_surface_for_test("x11", &mut || {
+        crate::test_utils::init_test_tracing();
+        let mut eval =
+            create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
+        apply_runtime_startup_state(&mut eval).expect("runtime startup state");
+        let rendered = eval_rendered(
+            &mut eval,
+            r#"(condition-case err
                (progn
                  (require 'tab-bar)
                  (setq tab-bar-show 1)
@@ -3156,63 +3171,65 @@ fn bootstrap_runtime_tab_bar_make_keymap_supports_auto_width_hash_test() {
                  (tab-bar-select-tab 1)
                  (and (string-match-p "\\*tb-2\\*" (prin1-to-string (tab-bar-make-keymap-1))) t))
              (error (list 'error err)))"#,
-    );
-    assert_eq!(rendered, "OK t");
+        );
+        assert_eq!(rendered, "OK t");
+    });
 }
 
 #[test]
 fn bootstrap_navigation_commands_publish_semantic_transition_direction() {
-    crate::test_utils::init_test_tracing();
-    let mut eval =
-        create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
-    apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let buffer = eval
-        .buffer_manager()
-        .current_buffer()
-        .expect("current buffer")
-        .id();
-    let frame = eval
-        .frame_manager_mut()
-        .create_frame("navigation-direction", 960, 640, buffer);
-    assert!(eval.frame_manager_mut().select_frame(frame));
-    let window = eval
-        .frame_manager()
-        .get(frame)
-        .expect("frame")
-        .selected_window;
-    eval.obarray_mut()
-        .set_symbol_value("navigation-direction-frame", Value::make_frame(frame.0));
+    neovm_eval::test_support::authority::with_platform_surface_for_test("x11", &mut || {
+        crate::test_utils::init_test_tracing();
+        let mut eval =
+            create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
+        apply_runtime_startup_state(&mut eval).expect("runtime startup state");
+        let buffer = eval
+            .buffer_manager()
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        let frame = eval
+            .frame_manager_mut()
+            .create_frame("navigation-direction", 960, 640, buffer);
+        assert!(eval.frame_manager_mut().select_frame(frame));
+        let window = eval
+            .frame_manager()
+            .get(frame)
+            .expect("frame")
+            .selected_window;
+        eval.obarray_mut()
+            .set_symbol_value("navigation-direction-frame", Value::make_frame(frame.0));
 
-    eval.eval_str(
-        r#"(progn
+        eval.eval_str(
+            r#"(progn
              (select-frame navigation-direction-frame)
              (switch-to-buffer (get-buffer-create "*navigation-a*"))
              (switch-to-buffer (get-buffer-create "*navigation-b*"))
              (switch-to-buffer (get-buffer-create "*navigation-c*"))
              (next-buffer))"#,
-    )
-    .expect("next-buffer");
-    let next_buffer_intent = eval
-        .frame_manager()
-        .pending_window_navigation_intent(window)
-        .expect("next-buffer navigation intent");
-    assert_eq!(
-        next_buffer_intent.direction(),
-        neomacs_display_protocol::TransitionDirection::Forward
-    );
-    eval.frame_manager_mut()
-        .acknowledge_window_navigation_intent(window, next_buffer_intent);
-
-    eval.eval_str("(previous-buffer)").expect("previous-buffer");
-    assert_eq!(
-        eval.frame_manager()
+        )
+        .expect("next-buffer");
+        let next_buffer_intent = eval
+            .frame_manager()
             .pending_window_navigation_intent(window)
-            .map(|intent| intent.direction()),
-        Some(neomacs_display_protocol::TransitionDirection::Backward)
-    );
+            .expect("next-buffer navigation intent");
+        assert_eq!(
+            next_buffer_intent.direction(),
+            neomacs_display_protocol::TransitionDirection::Forward
+        );
+        eval.frame_manager_mut()
+            .acknowledge_window_navigation_intent(window, next_buffer_intent);
 
-    eval.eval_str(
-        r#"(progn
+        eval.eval_str("(previous-buffer)").expect("previous-buffer");
+        assert_eq!(
+            eval.frame_manager()
+                .pending_window_navigation_intent(window)
+                .map(|intent| intent.direction()),
+            Some(neomacs_display_protocol::TransitionDirection::Backward)
+        );
+
+        eval.eval_str(
+            r#"(progn
              (require 'tab-bar)
              (tab-bar-mode 1)
              (switch-to-buffer (get-buffer-create "*navigation-tab-1*"))
@@ -3221,93 +3238,98 @@ fn bootstrap_navigation_commands_publish_semantic_transition_direction() {
              (tab-bar-new-tab)
              (switch-to-buffer (get-buffer-create "*navigation-tab-3*"))
              (tab-bar-select-tab 1))"#,
-    )
-    .expect("create three tabs and select first");
-    if let Some(intent) = eval.frame_manager().pending_frame_navigation_intent(frame) {
-        eval.frame_manager_mut()
-            .acknowledge_frame_navigation_intent(frame, intent);
-    }
-
-    let mut assert_tab_command_direction =
-        |form: &str, expected: neomacs_display_protocol::TransitionDirection| {
-            eval.eval_str(form).expect("tab navigation command");
-            let intent = eval
-                .frame_manager()
-                .pending_frame_navigation_intent(frame)
-                .expect("tab navigation intent");
-            assert_eq!(
-                intent.direction(),
-                expected,
-                "unexpected direction for {form}"
-            );
+        )
+        .expect("create three tabs and select first");
+        if let Some(intent) = eval.frame_manager().pending_frame_navigation_intent(frame) {
             eval.frame_manager_mut()
                 .acknowledge_frame_navigation_intent(frame, intent);
-        };
+        }
 
-    assert_tab_command_direction(
-        "(tab-bar-switch-to-next-tab)",
-        neomacs_display_protocol::TransitionDirection::Forward,
-    );
-    assert_tab_command_direction(
-        "(tab-bar-switch-to-prev-tab)",
-        neomacs_display_protocol::TransitionDirection::Backward,
-    );
-    assert_tab_command_direction(
-        "(tab-bar-switch-to-prev-tab)",
-        neomacs_display_protocol::TransitionDirection::Backward,
-    );
-    assert_tab_command_direction(
-        "(tab-bar-switch-to-next-tab)",
-        neomacs_display_protocol::TransitionDirection::Forward,
-    );
-    assert_tab_command_direction(
-        "(tab-bar-select-tab 3)",
-        neomacs_display_protocol::TransitionDirection::Forward,
-    );
-    assert_tab_command_direction(
-        "(tab-bar-select-tab 1)",
-        neomacs_display_protocol::TransitionDirection::Backward,
-    );
+        let mut assert_tab_command_direction =
+            |form: &str, expected: neomacs_display_protocol::TransitionDirection| {
+                eval.eval_str(form).expect("tab navigation command");
+                let intent = eval
+                    .frame_manager()
+                    .pending_frame_navigation_intent(frame)
+                    .expect("tab navigation intent");
+                assert_eq!(
+                    intent.direction(),
+                    expected,
+                    "unexpected direction for {form}"
+                );
+                eval.frame_manager_mut()
+                    .acknowledge_frame_navigation_intent(frame, intent);
+            };
+
+        assert_tab_command_direction(
+            "(tab-bar-switch-to-next-tab)",
+            neomacs_display_protocol::TransitionDirection::Forward,
+        );
+        assert_tab_command_direction(
+            "(tab-bar-switch-to-prev-tab)",
+            neomacs_display_protocol::TransitionDirection::Backward,
+        );
+        assert_tab_command_direction(
+            "(tab-bar-switch-to-prev-tab)",
+            neomacs_display_protocol::TransitionDirection::Backward,
+        );
+        assert_tab_command_direction(
+            "(tab-bar-switch-to-next-tab)",
+            neomacs_display_protocol::TransitionDirection::Forward,
+        );
+        assert_tab_command_direction(
+            "(tab-bar-select-tab 3)",
+            neomacs_display_protocol::TransitionDirection::Forward,
+        );
+        assert_tab_command_direction(
+            "(tab-bar-select-tab 1)",
+            neomacs_display_protocol::TransitionDirection::Backward,
+        );
+    });
 }
 
 #[test]
 fn bootstrap_runtime_cached_gui_surface_clears_transient_loader_state() {
-    crate::test_utils::init_test_tracing();
-    let eval = create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"])
-        .expect("bootstrap evaluator");
-    assert!(
-        eval.require_stack().is_empty(),
-        "require_stack leaked from bootstrap"
-    );
-    assert!(
-        eval.loads_in_progress().is_empty(),
-        "loads_in_progress leaked from bootstrap"
-    );
+    neovm_eval::test_support::authority::with_platform_surface_for_test("x11", &mut || {
+        crate::test_utils::init_test_tracing();
+        let eval = create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"])
+            .expect("bootstrap evaluator");
+        assert!(
+            eval.require_stack().is_empty(),
+            "require_stack leaked from bootstrap"
+        );
+        assert!(
+            eval.loads_in_progress().is_empty(),
+            "loads_in_progress leaked from bootstrap"
+        );
+    });
 }
 
 #[test]
 fn bootstrap_runtime_cached_gui_surface_restores_window_system_surface() {
-    crate::test_utils::init_test_tracing();
-    let mut eval = create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"])
-        .expect("bootstrap evaluator");
-    assert!(
-        eval.frame_manager().frame_list().is_empty(),
-        "cached GUI bootstrap should not synthesize a fallback frame before host bootstrap"
-    );
-    let rendered = eval_rendered(
-        &mut eval,
-        r#"(list (window-system)
+    neovm_eval::test_support::authority::with_platform_surface_for_test("x11", &mut || {
+        crate::test_utils::init_test_tracing();
+        let mut eval = create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"])
+            .expect("bootstrap evaluator");
+        assert!(
+            eval.frame_manager().frame_list().is_empty(),
+            "cached GUI bootstrap should not synthesize a fallback frame before host bootstrap"
+        );
+        let rendered = eval_rendered(
+            &mut eval,
+            r#"(list (window-system)
                  initial-window-system
                  (display-graphic-p)
                  (display-color-cells)
                  (display-visual-class))"#,
-    );
-    assert_eq!(rendered, "OK (neo neo t 16777216 true-color)");
-    assert!(
-        eval.frame_manager().frame_list().is_empty(),
-        "display queries should not synthesize a fallback frame before host bootstrap"
-    );
-    assert_gnu_runtime_window_sequence_after_preload(&mut eval);
+        );
+        assert_eq!(rendered, "OK (neo neo t 16777216 true-color)");
+        assert!(
+            eval.frame_manager().frame_list().is_empty(),
+            "display queries should not synthesize a fallback frame before host bootstrap"
+        );
+        assert_gnu_runtime_window_sequence_after_preload(&mut eval);
+    });
 }
 
 fn assert_gnu_runtime_window_sequence_after_preload(eval: &mut Context) -> crate::window::WindowId {
@@ -3377,54 +3399,56 @@ fn assert_gnu_runtime_window_sequence_after_preload(eval: &mut Context) -> crate
 
 #[test]
 fn bootstrap_runtime_source_preload_retires_window_sequences_without_reusing_identity() {
-    crate::test_utils::init_test_tracing();
-    let mut eval = create_bootstrap_evaluator_with_features(&["x", "neomacs"])
-        .expect("uncached source bootstrap");
-    activate_runtime_evaluator(&mut eval, RuntimeImageRole::Final)
-        .expect("activate source runtime");
-    assert!(
-        eval.frame_manager().frame_list().is_empty(),
-        "source preload must leave host frame creation to startup"
-    );
-    // The source preloader's root was #1. Its escaped native handle remains
-    // dead after the runtime root is created, as GNU's nilled dump object does.
-    let retired = Value::make_window(1);
-    eval.set_variable("source-preload-retired-window", retired);
-    assert!(
-        !eval
-            .frame_manager()
-            .is_live_window_id(crate::window::WindowId(1))
-    );
-    let root = assert_gnu_runtime_window_sequence_after_preload(&mut eval);
-    assert_ne!(
-        retired.as_window_id(),
-        Some(root.0),
-        "preload identity must not alias the runtime root"
-    );
-    assert!(
-        !eval
-            .frame_manager()
-            .is_live_window_id(crate::window::WindowId(1))
-    );
-    assert_eq!(
-        eval_rendered(
-            &mut eval,
-            "(list (window-live-p source-preload-retired-window) (eq source-preload-retired-window (selected-window)))"
-        ),
-        "OK (nil nil)"
-    );
-    assert_eq!(
-        crate::emacs_core::print_value_with_eval(&eval, &retired),
-        "#<window 0>"
-    );
-    assert_eq!(
-        crate::emacs_core::print_value_with_eval(&eval, &Value::make_window(root.0)),
-        "#<window 1 on *scratch*>"
-    );
-    assert_eq!(
-        crate::emacs_core::print_value_bytes_with_eval(&eval, &retired),
-        b"#<window 0>"
-    );
+    neovm_eval::test_support::authority::with_platform_surface_for_test("x11", &mut || {
+        crate::test_utils::init_test_tracing();
+        let mut eval = create_bootstrap_evaluator_with_features(&["x", "neomacs"])
+            .expect("uncached source bootstrap");
+        activate_runtime_evaluator(&mut eval, RuntimeImageRole::Final)
+            .expect("activate source runtime");
+        assert!(
+            eval.frame_manager().frame_list().is_empty(),
+            "source preload must leave host frame creation to startup"
+        );
+        // The source preloader's root was #1. Its escaped native handle remains
+        // dead after the runtime root is created, as GNU's nilled dump object does.
+        let retired = Value::make_window(1);
+        eval.set_variable("source-preload-retired-window", retired);
+        assert!(
+            !eval
+                .frame_manager()
+                .is_live_window_id(crate::window::WindowId(1))
+        );
+        let root = assert_gnu_runtime_window_sequence_after_preload(&mut eval);
+        assert_ne!(
+            retired.as_window_id(),
+            Some(root.0),
+            "preload identity must not alias the runtime root"
+        );
+        assert!(
+            !eval
+                .frame_manager()
+                .is_live_window_id(crate::window::WindowId(1))
+        );
+        assert_eq!(
+            eval_rendered(
+                &mut eval,
+                "(list (window-live-p source-preload-retired-window) (eq source-preload-retired-window (selected-window)))"
+            ),
+            "OK (nil nil)"
+        );
+        assert_eq!(
+            crate::emacs_core::print_value_with_eval(&eval, &retired),
+            "#<window 0>"
+        );
+        assert_eq!(
+            crate::emacs_core::print_value_with_eval(&eval, &Value::make_window(root.0)),
+            "#<window 1 on *scratch*>"
+        );
+        assert_eq!(
+            crate::emacs_core::print_value_bytes_with_eval(&eval, &retired),
+            b"#<window 0>"
+        );
+    });
 }
 
 #[test]
@@ -7564,28 +7588,46 @@ fn bootstrap_runtime_fontset_font_accepts_multibyte_character_ints() {
 #[test]
 fn bootstrap_x_runtime_prebinds_gnu_x_globals_before_x_win_initialization() {
     crate::test_utils::init_test_tracing();
-    let mut eval = create_bootstrap_evaluator_with_features(&["x"]).expect("x bootstrap evaluator");
-    let rendered = eval_rendered(
-        &mut eval,
-        r#"(list (hash-table-p x-keysym-table)
-                 (hash-table-test x-keysym-table)
-                 (gethash 160 x-keysym-table)
-                 x-toolkit-scroll-bars
-                 x-selection-timeout
-                 x-session-id
-                 x-session-previous-id
-                 x-lost-selection-functions
-                 x-sent-selection-functions
-                 x-ctrl-keysym
-                 x-alt-keysym
-                 x-hyper-keysym
-                 x-meta-keysym
-                 x-super-keysym)"#,
-    );
-    assert_eq!(
-        rendered,
-        "OK (t eql 160 gtk 0 nil nil nil nil nil nil nil nil nil)"
-    );
+    // The synthetic `x' feature stands in for the X reference build's loadup.
+    // The NS reference build provides no such feature (the NS dump loads
+    // term/ns-win.el instead, loadup.el:347-356), so the same pre-`x-win'
+    // seam prebinds the NS C surface there and the X11 names stay void.
+    let ns_surface = neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
+    let (features, form, expected): (&[&str], &str, &str) = if ns_surface {
+        (
+            &[],
+            r#"(list (boundp 'x-keysym-table)
+                     ns-alternate-modifier ns-command-modifier
+                     ns-control-modifier ns-function-modifier
+                     ns-antialias-text x-toolkit-scroll-bars
+                     x-max-tooltip-size x-use-underline-position-properties
+                     (boundp 'x-selection-timeout) (boundp 'x-session-id))"#,
+            "OK (nil meta super control none t t nil nil nil nil)",
+        )
+    } else {
+        (
+            &["x"],
+            r#"(list (hash-table-p x-keysym-table)
+                     (hash-table-test x-keysym-table)
+                     (gethash 160 x-keysym-table)
+                     x-toolkit-scroll-bars
+                     x-selection-timeout
+                     x-session-id
+                     x-session-previous-id
+                     x-lost-selection-functions
+                     x-sent-selection-functions
+                     x-ctrl-keysym
+                     x-alt-keysym
+                     x-hyper-keysym
+                     x-meta-keysym
+                     x-super-keysym)"#,
+            "OK (t eql 160 gtk 0 nil nil nil nil nil nil nil nil nil)",
+        )
+    };
+    let mut eval = create_bootstrap_evaluator_with_features(features)
+        .unwrap_or_else(|error| panic!("bootstrap evaluator: {error:?}"));
+    let rendered = eval_rendered(&mut eval, form);
+    assert_eq!(rendered, expected);
 }
 
 #[test]
@@ -7711,26 +7753,29 @@ fn describe_buffer_bindings_expands_autoloaded_prefix_keymaps_like_gnu() {
 
 #[test]
 fn bootstrap_neomacs_x_runtime_keeps_neo_term_layer_runtime_only() {
-    crate::test_utils::init_test_tracing();
-    let mut eval = create_bootstrap_evaluator_with_features(&["neomacs", "x"])
-        .expect("neomacs+x bootstrap evaluator");
-    assert!(eval.feature_present("neomacs"));
-    assert!(eval.feature_present("x"));
-    assert!(!eval.feature_present("neo-win"));
-    assert!(eval.feature_present("x-win"));
+    neovm_eval::test_support::authority::with_platform_surface_for_test("x11", &mut || {
+        crate::test_utils::init_test_tracing();
+        let mut eval = create_bootstrap_evaluator_with_features(&["neomacs", "x"])
+            .expect("neomacs+x bootstrap evaluator");
+        assert!(eval.feature_present("neomacs"));
+        assert!(eval.feature_present("x"));
+        assert!(!eval.feature_present("neo-win"));
+        assert!(eval.feature_present("x-win"));
+    });
 }
 
 #[test]
 fn bootstrap_neomacs_cursor_blink_setup_keeps_lisp_timers_stopped() {
-    crate::test_utils::init_test_tracing();
-    let mut eval = create_bootstrap_evaluator_with_features(&["neomacs", "x"])
-        .expect("neomacs+x bootstrap evaluator");
-    load_neomacs_gui_term_layer_for_test(&mut eval);
-    apply_runtime_startup_state(&mut eval).expect("runtime startup state");
+    neovm_eval::test_support::authority::with_platform_surface_for_test("x11", &mut || {
+        crate::test_utils::init_test_tracing();
+        let mut eval = create_bootstrap_evaluator_with_features(&["neomacs", "x"])
+            .expect("neomacs+x bootstrap evaluator");
+        load_neomacs_gui_term_layer_for_test(&mut eval);
+        apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
-    let rendered = eval_rendered(
-        &mut eval,
-        r#"(progn
+        let rendered = eval_rendered(
+            &mut eval,
+            r#"(progn
              (setq blink-cursor-mode t
                    blink-cursor-idle-timer nil
                    blink-cursor-timer nil)
@@ -7742,8 +7787,9 @@ fn bootstrap_neomacs_cursor_blink_setup_keeps_lisp_timers_stopped() {
              (list blink-cursor-idle-timer
                    blink-cursor-timer
                    (memq #'blink-cursor-end pre-command-hook)))"#,
-    );
-    assert_eq!(rendered, "OK (nil nil nil)");
+        );
+        assert_eq!(rendered, "OK (nil nil nil)");
+    });
 }
 
 #[test]
