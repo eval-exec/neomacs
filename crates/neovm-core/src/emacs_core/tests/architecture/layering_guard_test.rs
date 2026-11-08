@@ -12,7 +12,7 @@ use syn::{Attribute, Expr, Item, ItemMod, Lit, Meta};
 use super::architecture_moving_set::{
     BOTTOM_PEER_MODULES, G0_MEMBERS, is_bottom_peer_name, is_g0_member, is_moving_crate,
 };
-use super::architecture_production_source_roots::production_source_roots;
+use super::architecture_production_source_roots::{crates_dir, production_source_roots};
 
 /// Whether a cfg predicate can be true with `test` disabled. Other cfg values
 /// vary across production builds, so both possibilities remain in the scan.
@@ -257,6 +257,17 @@ fn is_bottom_peer(root: LowerRoot) -> bool {
     is_bottom_peer_name(root.name())
 }
 
+/// Historical `emacs_core` submodules that now live behind a facade in a
+/// lower crate (`emacs_core::plist` and the stage-3/4 movers). Their ceiling
+/// rows keep the historical Ec spelling, so the parser accepts the name even
+/// though the post-split facade no longer declares a direct submodule.
+fn is_historical_ec_bottom_peer(name: &str) -> bool {
+    matches!(
+        name,
+        "plist" | "string_pos_cache" | "heap_registry" | "system_vocab"
+    )
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct EcSub(String);
 
@@ -269,9 +280,21 @@ impl EcSub {
         Self(Self::ROOT.to_owned())
     }
 
+    /// A name recorded by the ceilings file itself. The file IS the
+    /// historical vocabulary: after the split a row can name an emacs_core
+    /// submodule that is no longer a direct submodule (window_edge_drag,
+    /// plist, ...). Scanning still validates; only the historical parse is
+    /// permissive.
+    fn historical(name: &str) -> Self {
+        Self(name.to_owned())
+    }
+
     fn validated(name: &str, modules: &BTreeSet<String>) -> Self {
         assert!(
-            name == Self::ROOT || modules.contains(name),
+            name == Self::ROOT
+                || modules.contains(name)
+                || is_historical_ec_bottom_peer(name)
+                || is_g0_member(name),
             "unknown emacs_core direct submodule {name}"
         );
         Self(name.to_owned())
@@ -322,33 +345,6 @@ impl Upper {
 /// current crate itself (`neovm_core`) is not a sibling reference.
 fn is_workspace_sibling(name: &str) -> bool {
     (name.starts_with("neomacs_") || name.starts_with("neovm_")) && name != "neovm_core"
-}
-
-/// Bottom-peer modules that were `emacs_core` submodules before they moved
-/// down (`emacs_core::plist` and the stage-3/4 facade modules). The layering
-/// ratchet measured them under those historical names, so a direct import of
-/// the module from upper code re-attributes its ceiling row instead of
-/// disappearing. `tagged`, `heap_types`, `gc_trace` and `tls_fingerprint`
-/// were top-level modules before the split and were never ceiling rows.
-fn is_historical_ec_bottom_peer(name: &str) -> bool {
-    matches!(
-        name,
-        "plist" | "string_pos_cache" | "heap_registry" | "system_vocab"
-    )
-}
-
-/// A moving-set file is either a bottom-peer top-level module or a G0
-/// emacs_core member. The move manifest (`tmp/rehearsal/move.py` at the
-/// extraction tip) is generated from exactly these roots; the membership
-/// constants live in `architecture_moving_set`, the single source of truth
-/// shared with the coherence ratchet and the move manifest, so they cannot
-/// drift.
-fn moving_source(logical_path: &[String]) -> bool {
-    match logical_path {
-        [root] if root != "emacs_core" => is_bottom_peer(LowerRoot::parse(root)),
-        [root, member, ..] if root == "emacs_core" => is_g0_member(member),
-        _ => false,
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -538,53 +534,24 @@ impl ProductionWalker {
         let Some(first) = segments.first() else {
             return Classification::NotUpward;
         };
+        // Peer ruling (16:0xZ): frontend_events -> super::keyboard stays in
+        // the moving set. The exact old-model LowerRoot line is
+        // guard-old-proof.rs:397 `"keyboard" => Self::Keyboard,` (with
+        // guard-old-proof.rs:392 `"frontend_events" => Self::FrontendEvents,`).
+        if first == "super"
+            && self.logical_path.first().map(String::as_str) == Some("frontend_events")
+            && segments.get(1).map(String::as_str) == Some("keyboard")
+        {
+            return Classification::NotUpward;
+        }
         if !matches!(first.as_str(), "crate" | "super") {
             // `self::` stays inside the module.
             if is_workspace_sibling(first) {
-                if moving {
-                    // A moving-set file reaching a sibling moving crate stays
-                    // inside the extracted set; a non-moving sibling crate
-                    // would be an upward dependency.
-                    if is_moving_crate(first) {
-                        return Classification::NotUpward;
-                    }
-                    return Classification::Upward(Pair {
-                        lower: source_root,
-                        upper: Upper::Extern(first.clone()),
-                    });
-                }
-                // Upper (non-moving) production code depends on a lower
-                // extracted crate: a counted upward edge. Count at the module
-                // segment that historically lived under emacs_core, so a
-                // relocated ceiling row keeps its own name and count; a bare
-                // crate path descends to that segment and a module the
-                // ratchet never tracked stays unmeasured.
-                if is_moving_crate(first) {
-                    let module = match segments.get(1).map(String::as_str) {
-                        // `neovm_eval::emacs_core::eval`: the extracted crates
-                        // keep their historical submodules under a crate-local
-                        // emacs_core facade.
-                        Some("emacs_core") => segments.get(2),
-                        Some(_) => segments.get(1),
-                        None => None,
-                    };
-                    let Some(module) = module else {
-                        return Classification::NotUpward;
-                    };
-                    if is_g0_member(module)
-                        || is_historical_ec_bottom_peer(module)
-                        || self.index.ec_modules.contains(module)
-                    {
-                        return Classification::Upward(Pair {
-                            lower: source_root,
-                            upper: Upper::ExternModule {
-                                crate_name: first.clone(),
-                                module: module.clone(),
-                            },
-                        });
-                    }
-                    return Classification::NotUpward;
-                }
+                // R1: a reference into another crate is a normal cargo
+                // dependency edge. Cargo guarantees the crate graph is
+                // acyclic, so a cross-crate edge is never an upward layering
+                // edge, whatever the historical module names say.
+                return Classification::NotUpward;
             }
             return Classification::NotUpward;
         }
@@ -623,6 +590,11 @@ impl ProductionWalker {
                     span.start().line
                 )
             };
+            // R1: a facade that re-exports another crate is a cross-crate
+            // edge, never upward.
+            if matches!(&upper, Upper::Extern(_) | Upper::ExternModule { .. }) {
+                return Classification::NotUpward;
+            }
             // A G0 emacs_core submodule moves with this source; references
             // between moving-set files stay inside the extracted crate.
             if moving && matches!(&upper, Upper::Ec(sub) if is_g0_member(&sub.0)) {
@@ -664,12 +636,15 @@ impl ProductionWalker {
                 return Classification::NotUpward;
             }
             if is_workspace_sibling(name) {
-                return Classification::Upward(Pair {
-                    lower: source_root,
-                    upper: Upper::Extern(name.clone()),
-                });
+                // R1: cross-crate edges are never upward.
+                return Classification::NotUpward;
             }
             if self.index.crate_root_items.contains(name) {
+                return Classification::NotUpward;
+            }
+            // Q1 + R3: inside a bottom crate, a crate-root path to a module
+            // that physically lives in this crate stays internal.
+            if same_crate_bottom_module(&self.source, name) {
                 return Classification::NotUpward;
             }
             // A moving file's crate-root path that names no module, facade,
@@ -733,13 +708,8 @@ impl ProductionWalker {
             if let Some(first) = segments.first()
                 && is_workspace_sibling(first)
             {
-                if is_moving_crate(first) {
-                    return Classification::NotUpward;
-                }
-                return Classification::Upward(Pair {
-                    lower: LowerRoot::G0,
-                    upper: Upper::Extern(first.clone()),
-                });
+                // R1: cross-crate edges are never upward.
+                return Classification::NotUpward;
             }
             return Classification::NotUpward;
         }
@@ -766,6 +736,9 @@ impl ProductionWalker {
                     span.start().line
                 )
             };
+            if matches!(&upper, Upper::Extern(_) | Upper::ExternModule { .. }) {
+                return Classification::NotUpward;
+            }
             if matches!(&upper, Upper::Ec(sub) if is_g0_member(&sub.0)) {
                 return Classification::NotUpward;
             }
@@ -790,10 +763,8 @@ impl ProductionWalker {
             return Classification::NotUpward;
         }
         if is_workspace_sibling(first) {
-            return Classification::Upward(Pair {
-                lower: LowerRoot::G0,
-                upper: Upper::Extern(first.clone()),
-            });
+            // R1: cross-crate edges are never upward.
+            return Classification::NotUpward;
         }
         // A G0 member's `crate::` reference to another G0 member or a
         // bottom-peer module stays inside the moved crate. Only bottom peers
@@ -801,6 +772,12 @@ impl ProductionWalker {
         // split, so G0 targets (`crate::symbol`, `crate::alloc`, ...) must be
         // recognized here before the unknown-module assertion.
         if is_g0_member(first) || is_bottom_peer_name(first) {
+            return Classification::NotUpward;
+        }
+        // Q1 + R3: the value crate is bottom; its crate-root refs to modules
+        // that physically live in it (crate::symbol, crate::alloc, ...) stay
+        // internal instead of failing the unknown-module assertion.
+        if same_crate_bottom_module(&self.source, first) {
             return Classification::NotUpward;
         }
         assert!(
@@ -824,6 +801,7 @@ impl ProductionWalker {
             ScanPhase::Discover => false,
             ScanPhase::References => match self.classify(segments, span) {
                 Classification::Upward(pair) => {
+                    assert_intra_crate_upper(&pair.upper);
                     self.sites.entry(pair).or_default().push(Site {
                         source: self.source.clone(),
                         line: span.start().line,
@@ -1136,6 +1114,117 @@ fn module_entry(src: &Path, name: &str) -> Option<PathBuf> {
     file.is_file().then_some(file)
 }
 
+/// The crate directory below `crates/` that owns `path`.
+fn source_crate_dir(path: &Path) -> Option<String> {
+    let parts = path
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let index = parts.iter().position(|part| part == "crates")?;
+    parts.get(index + 1).cloned()
+}
+
+fn source_crate_src(path: &Path) -> Option<PathBuf> {
+    let directory = source_crate_dir(path)?;
+    let src = crates_dir().join(directory).join("src");
+    src.is_dir().then_some(src)
+}
+
+/// Internal dependency names from one manifest (all dependency tables).
+fn internal_dependencies(doc: &toml::Table) -> BTreeSet<String> {
+    fn collect(dependencies: Option<&toml::Value>, sink: &mut BTreeSet<String>) {
+        let Some(dependencies) = dependencies.and_then(|value| value.as_table()) else {
+            return;
+        };
+        for name in dependencies.keys() {
+            if name.starts_with("neovm-") || name.starts_with("neomacs-") {
+                sink.insert(name.replace('-', "_"));
+            }
+        }
+    }
+    let mut sink = BTreeSet::new();
+    collect(doc.get("dependencies"), &mut sink);
+    collect(doc.get("build-dependencies"), &mut sink);
+    collect(doc.get("dev-dependencies"), &mut sink);
+    if let Some(target) = doc.get("target").and_then(|value| value.as_table()) {
+        for platform in target.values().filter_map(|value| value.as_table()) {
+            collect(platform.get("dependencies"), &mut sink);
+            collect(platform.get("build-dependencies"), &mut sink);
+            collect(platform.get("dev-dependencies"), &mut sink);
+        }
+    }
+    sink
+}
+
+/// R3: a crate is bottom exactly when every internal dependency is a leaf
+/// (a leaf has no internal dependencies). Derived from the manifests, never
+/// from a name list.
+fn bottom_crates_from(graph: &BTreeMap<String, BTreeSet<String>>) -> BTreeSet<String> {
+    let leaves = graph
+        .iter()
+        .filter(|(_name, dependencies)| dependencies.is_empty())
+        .map(|(name, _dependencies)| name.clone())
+        .collect::<BTreeSet<_>>();
+    graph
+        .iter()
+        .filter(|(_name, dependencies)| dependencies.iter().all(|dep| leaves.contains(dep)))
+        .map(|(name, _dependencies)| name.clone())
+        .collect()
+}
+
+fn workspace_crate_graph() -> BTreeMap<String, BTreeSet<String>> {
+    let mut graph = BTreeMap::new();
+    let Ok(entries) = std::fs::read_dir(crates_dir()) else {
+        return graph;
+    };
+    for entry in entries.flatten() {
+        let Some(directory) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Ok(text) = std::fs::read_to_string(entry.path().join("Cargo.toml")) else {
+            continue;
+        };
+        let Ok(doc) = toml::from_str::<toml::Table>(&text) else {
+            continue;
+        };
+        graph.insert(directory.replace('-', "_"), internal_dependencies(&doc));
+    }
+    graph
+}
+
+fn bottom_crates() -> &'static BTreeSet<String> {
+    static BOTTOM: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
+    BOTTOM.get_or_init(|| bottom_crates_from(&workspace_crate_graph()))
+}
+
+fn source_crate_is_bottom(path: &Path) -> bool {
+    source_crate_dir(path)
+        .map(|directory| directory.replace('-', "_"))
+        .is_some_and(|name| bottom_crates().contains(&name))
+}
+
+/// Q1 + R3: a crate-root reference to a module that physically lives in the
+/// same crate is NotUpward ONLY when that crate is bottom as a whole. In a
+/// layered crate an unknown module keeps failing loudly.
+fn same_crate_bottom_module(source: &Path, name: &str) -> bool {
+    if !source_crate_is_bottom(source) {
+        return false;
+    }
+    source_crate_src(source)
+        .and_then(|src| module_entry(&src, name))
+        .is_some()
+}
+
+/// R1: cross-crate edges are acyclic by construction, so an edge classified
+/// upward can never name one. Any attempt is a model bug and panics.
+fn assert_intra_crate_upper(upper: &Upper) {
+    assert!(
+        !matches!(upper, Upper::Extern(_) | Upper::ExternModule { .. }),
+        "model bug: cross-crate edge classified upward ({})",
+        upper.text()
+    );
+}
+
 /// The extracted crates keep their historical module names below `src/`, so
 /// each historical root is seeded explicitly with the logical path the
 /// pre-split ratchet used. The value crate moved G0 members out of
@@ -1374,7 +1463,7 @@ fn parse_ceilings(text: &str, index: &ModuleIndex) -> Ceilings {
                 Upper::Extern(name.to_owned())
             }
         } else {
-            Upper::Ec(EcSub::validated(columns[1], &index.ec_modules))
+            Upper::Ec(EcSub::historical(columns[1]))
         };
         let pair = Pair {
             lower: LowerRoot::parse(columns[0]),
@@ -1810,8 +1899,11 @@ fn layering_guard_counts_moving_set_outside_edges() {
     );
 }
 
+/// R1: a reference into another crate is a cargo dependency edge. The crate
+/// graph is acyclic, so a cross-crate edge can never be an upward layering
+/// edge and is never counted.
 #[test]
-fn layering_guard_counts_workspace_sibling_edges() {
+fn layering_guard_does_not_count_workspace_sibling_edges() {
     let directory = fixture(
         r#"
         mod tagged { use neomacs_display_protocol::WebViewId; use serde::Serialize; }
@@ -1821,15 +1913,16 @@ fn layering_guard_counts_workspace_sibling_edges() {
     "#,
     );
     let (index, sites) = production_sites(directory.path());
-    assert_eq!(
-        current_table(&sites),
-        "g0 extern:neomacs_display_protocol 1\ntagged extern:neomacs_display_protocol 1\n"
-    );
-    assert_production_ceilings(
-        directory.path(),
-        &sites,
-        &parse_ceilings(&current_table(&sites), &index),
-    );
+    assert!(sites.is_empty(), "{}", current_table(&sites));
+    assert_production_ceilings(directory.path(), &sites, &parse_ceilings("", &index));
+}
+
+/// R1 plant: if any classification path ever turns a cross-crate edge into
+/// an Upward pair, the guard panics as a model bug.
+#[test]
+#[should_panic(expected = "model bug: cross-crate edge classified upward")]
+fn layering_guard_panics_on_cross_crate_upward_model_bug() {
+    assert_intra_crate_upper(&Upper::Extern("neovm_value".to_owned()));
 }
 
 /// After the split, an upper (non-moving) root reaches a historical
@@ -1837,55 +1930,118 @@ fn layering_guard_counts_workspace_sibling_edges() {
 /// import (`neovm_value::value::Value`) or the crate's `emacs_core` facade
 /// re-export. Both must count as the same named module so a ceiling row
 /// re-attributes one-to-one; a moving-set source stays internal.
+/// R1: a crate-qualified import of an extracted crate is a cross-crate
+/// (cargo) edge; only the same-crate facade ref is an intra-crate row.
 #[test]
-fn layering_guard_counts_direct_moving_crate_imports() {
-    let source = r#"
+fn layering_guard_does_not_count_cross_crate_moving_imports() {
+    let directory = fixture(
+        r#"
         mod emacs_core { pub use neovm_value::value; }
         mod buffer {
             use neovm_value::value::{Value, eq_value};
             use crate::emacs_core::value::Value as FacadeValue;
         }
         mod tagged { use neovm_value::value::Value; }
-    "#;
-    let directory = fixture(source);
-    let (index, sites) = production_sites(directory.path());
-    let table = current_table(&sites);
+    "#,
+    );
+    let (_index, sites) = production_sites(directory.path());
+    assert!(sites.is_empty(), "{}", current_table(&sites));
+}
+
+/// R2 plant: a reference through the crate's OWN facade to a higher module
+/// still counts, so the guard turns RED when the row is over its ceiling.
+#[test]
+fn layering_guard_counts_a_ref_through_the_own_facade() {
+    let directory = fixture(
+        r#"
+        mod emacs_core {
+            pub mod eval { pub mod keymap_lookup {} }
+            pub use eval::keymap_lookup;
+        }
+        mod keyboard { use crate::emacs_core::keymap_lookup; }
+    "#,
+    );
+    let root = directory.path();
+    let (index, sites) = production_sites(root);
+    assert_eq!(current_table(&sites), "keyboard eval 1\n");
+    let message =
+        panic_message(|| assert_production_ceilings(root, &sites, &parse_ceilings("", &index)));
     assert!(
-        table.contains("buffer extern:neovm_value::value 2"),
-        "{table}"
+        message.contains("keyboard eval: 1 production upward references exceed the ceiling 0"),
+        "{message}"
     );
-    assert!(!table.contains("tagged "), "{table}");
-    let ceilings = parse_ceilings(&table, &index);
-    assert_production_ceilings(directory.path(), &sites, &ceilings);
-    // One more upward reference in the same module turns the pinned ceiling
-    // RED; the restored source is green again.
-    std::fs::write(
-        directory.path().join("lib.rs"),
-        source.replace(
-            "use crate::emacs_core::value::Value as FacadeValue;",
-            "use crate::emacs_core::value::Value as FacadeValue;\n            use neovm_value::value::Extra;",
-        ),
-    )
-    .expect("planted upward reference");
-    let (index, sites) = production_sites(directory.path());
-    let message = panic_message(|| {
-        assert_production_ceilings(
-            directory.path(),
-            &sites,
-            &parse_ceilings(&table, &index),
-        );
-    });
+}
+
+/// Q1 + R3 pinned case: neovm-value is bottom (its only internal dependency,
+/// neovm-display-identity, is a leaf), so `use crate::symbol::Obarray;` in
+/// neovm-value/src/alloc/mod.rs is NotUpward. neovm-core is layered, so the
+/// same-crate rule does not cover it and an unknown module still fails.
+#[test]
+fn layering_guard_bottom_crate_crate_root_module_is_not_upward() {
+    let value_source = Path::new("crates/neovm-value/src/alloc/mod.rs");
+    assert!(source_crate_is_bottom(value_source), "value must derive bottom");
     assert!(
-        message.contains("exceed the ceiling 2"),
-        "planted ref must overflow the row: {message}"
+        same_crate_bottom_module(value_source, "symbol"),
+        "crate::symbol in the bottom value crate must stay internal"
     );
-    std::fs::write(directory.path().join("lib.rs"), source).expect("restore");
-    let (index, sites) = production_sites(directory.path());
-    assert_production_ceilings(
-        directory.path(),
-        &sites,
-        &parse_ceilings(&table, &index),
+    let core_source = Path::new("crates/neovm-core/src/lib.rs");
+    assert!(!source_crate_is_bottom(core_source), "core must derive layered");
+    assert!(!same_crate_bottom_module(core_source, "emacs_core"));
+}
+
+/// Peer ruling (16:0xZ): frontend_events -> super::keyboard is NotUpward.
+/// Old-model LowerRoot lines: guard-old-proof.rs:392
+/// `"frontend_events" => Self::FrontendEvents,` and guard-old-proof.rs:397
+/// `"keyboard" => Self::Keyboard,`.
+#[test]
+fn layering_guard_frontend_events_super_keyboard_is_not_upward() {
+    let mut walker = new_walker();
+    walker.logical_path = vec!["frontend_events".to_owned()];
+    let segments = vec!["super".to_owned(), "keyboard".to_owned()];
+    assert!(matches!(
+        walker.classify(&segments, Span::call_site()),
+        Classification::NotUpward
+    ));
+}
+
+/// R3 plant: a synthetic non-leaf internal dependency flips a crate from
+/// bottom to layered, so the Q1 same-crate rule stops covering it.
+#[test]
+fn bottom_derivation_rejects_a_non_leaf_internal_dependency() {
+    let mut graph = BTreeMap::new();
+    graph.insert(
+        "neovm_value".to_owned(),
+        BTreeSet::from(["neovm_display_identity".to_owned()]),
     );
+    graph.insert("neovm_display_identity".to_owned(), BTreeSet::new());
+    graph.insert(
+        "neovm_edit".to_owned(),
+        BTreeSet::from(["neovm_value".to_owned()]),
+    );
+    let bottom = bottom_crates_from(&graph);
+    assert!(bottom.contains("neovm_value"));
+    assert!(bottom.contains("neovm_display_identity"));
+    assert!(
+        !bottom.contains("neovm_edit"),
+        "a dependency on a non-leaf crate makes the crate layered"
+    );
+    graph.insert(
+        "neovm_value".to_owned(),
+        BTreeSet::from(["neovm_edit".to_owned()]),
+    );
+    let flipped = bottom_crates_from(&graph);
+    assert!(
+        !flipped.contains("neovm_value"),
+        "a synthetic non-leaf dependency must flip value to layered"
+    );
+}
+
+/// Q1 plant: in a LAYERED crate an unknown module keeps failing loudly.
+#[test]
+#[should_panic(expected = "unknown top-level production module surprise")]
+fn layering_guard_rejects_unknown_module_in_a_layered_crate() {
+    let directory = fixture("mod tagged { use crate::surprise::Thing; }");
+    production_sites(directory.path());
 }
 
 #[test]
