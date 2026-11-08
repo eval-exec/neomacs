@@ -32,6 +32,15 @@
 ;; is what gives the name `use-system-tooltips' default of t, its docstring, and
 ;; the Boolean coercion the DEFVAR_BOOL slot performs -- a separate variable
 ;; here would have all three subtly wrong and would let the two names disagree.
-(defvaralias 'x-gtk-use-system-tooltips 'use-system-tooltips)
+;;
+;; It is an X-window-system name: loadup.el loads term/x-win.el only under
+;; `(featurep 'x)' (`lisp/loadup.el:304-309') and the NS dump loads
+;; term/ns-win.el instead (`:347-356'), so GNU's NS build leaves the alias
+;; unbound and `(boundp 'x-gtk-use-system-tooltips)' is nil there.
+;; `system-type' is the honest dump-time proxy: Neomacs answers `(featurep 'x)'
+;; and `(featurep 'ns)' nil on every host (c_features.rs), so feature-gating
+;; would delete the alias from the X11 dump as well.
+(unless (eq system-type 'darwin)
+  (defvaralias 'x-gtk-use-system-tooltips 'use-system-tooltips))
 
 ;;; neo-preload.el ends here
