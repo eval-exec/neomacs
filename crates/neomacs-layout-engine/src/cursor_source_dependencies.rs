@@ -13,11 +13,17 @@ use neovm_core::{
 };
 use std::{cell::RefCell, rc::Rc};
 
+/// Original allocation identity, not Lisp `equal`: equal-text strings may
+/// have different intervals and lifetimes. The matching roots keep these
+/// tagged addresses alive for the entire certificate/domain lifetime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct SourceStringIdentity(usize);
+
 #[derive(Debug)]
 struct Observation {
     reads: Vec<CollectionReads>,
     roots: Vec<OwnedRoots>,
-    strings: rustc_hash::FxHashSet<Value>,
+    strings: rustc_hash::FxHashSet<SourceStringIdentity>,
     retainer: OwnedRootRetainer,
     owner: Option<CollectionReads>,
     complete: bool,
@@ -34,7 +40,7 @@ enum DependencyAuthority {
         owner: CollectionReads,
         reads: Vec<CollectionReads>,
         _roots: Vec<OwnedRoots>,
-        strings: rustc_hash::FxHashSet<Value>,
+        strings: rustc_hash::FxHashSet<SourceStringIdentity>,
     },
     // Validate a partial walk with newly introduced sources for this frame,
     // then require a canonical walk. Never grow an unbounded history chain.
@@ -187,7 +193,8 @@ pub(crate) fn string_properties(
             observation.complete = false;
             return None;
         }
-        if !observation.strings.contains(&value) {
+        let identity = SourceStringIdentity(value.bits());
+        if !observation.strings.contains(&identity) {
             let Some(roots) = observation.retainer.retain([value]) else {
                 observation.complete = false;
                 return None;
@@ -195,7 +202,7 @@ pub(crate) fn string_properties(
             // Root each original object once, before its first projection.
             // Repeated projections must still record mutation observations.
             observation.roots.push(roots);
-            observation.strings.insert(value);
+            observation.strings.insert(identity);
         }
         Some(())
     });
