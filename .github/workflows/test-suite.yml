@@ -359,15 +359,15 @@ jobs:
         run: cargo fetch --locked
 
       # The runners are compiled only with the `contract-fixtures` feature
-      # (41eaff923a moved them off #[ignore]). Without it the four test
-      # targets build empty and nextest runs nothing, so the job also counts
+      # (41eaff923a moved them off #[ignore]). Without it the test targets
+      # build empty and nextest runs nothing, so the job also counts
       # the runners that actually passed: p0s3 1, p1rv 3, thread_safety 12
       # (its own, sole-owner, p2ht, pentry, nmjit N1, three host-effect
-      # tests, intern-shared, P15, split T2 and obarray_view_swap_compile_contracts)
-      # and chartable_write 1; check_compile_contracts.py enforces these
-      # per-target counts and the summary. The nmjit N1 runner drives the
-      # isolated nmjit-type-contracts workspace through its own nested
-      # nextest run.
+      # tests, intern-shared, P15, split T2 and obarray_view_swap_compile_contracts),
+      # chartable_write 1, and mint_seal 1 (the mint-seal trybuild fixtures);
+      # check_compile_contracts.py enforces these per-target counts and the
+      # summary. The nmjit N1 runner drives the isolated
+      # nmjit-type-contracts workspace through its own nested nextest run.
       # Every runner lives in these test targets: the job never builds the
       # opt-level-2 lib unit-test binary, and no runner hides in the `core`
       # binary, which no contract job builds with the feature.
@@ -382,7 +382,8 @@ jobs:
             # (2026-10-29: a red p1rv runner hid 4 stale thread_safety goldens).
             env -u TRYBUILD cargo nextest run -p neovm-core --features contract-fixtures --no-fail-fast \
               --test p0s3_contracts --test p1rv_contracts \
-              --test thread_safety_contracts --test chartable_write_contracts
+              --test thread_safety_contracts --test chartable_write_contracts \
+              --test mint_seal_contracts
           } 2>&1 | tee "$RUNNER_TEMP/contracts.log"
           python3 scripts/check_compile_contracts.py "$RUNNER_TEMP/contracts.log"
 
@@ -427,7 +428,8 @@ jobs:
           {
             env -u TRYBUILD cargo nextest run -p neovm-core --features contract-fixtures --no-fail-fast \
               --test p0s3_contracts --test p1rv_contracts \
-              --test thread_safety_contracts --test chartable_write_contracts
+              --test thread_safety_contracts --test chartable_write_contracts \
+              --test mint_seal_contracts
           } 2>&1 | tee "$RUNNER_TEMP/contracts.log"
           python3 scripts/check_compile_contracts.py "$RUNNER_TEMP/contracts.log"
 
