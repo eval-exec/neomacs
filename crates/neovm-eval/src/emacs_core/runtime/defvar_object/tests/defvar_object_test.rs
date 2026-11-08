@@ -18,7 +18,13 @@ use super::*;
 #[test]
 fn table_matches_gnu_counts() {
     let table = gnu_table::GNU_OBJECT_VARIABLES;
-    assert_eq!(table.len(), 577);
+    // 577 C rows (563 DEFVAR_LISP + 14 DEFVAR_KBOARD) plus the 25 NS-only
+    // DEFVAR_LISP names the generator now reaches in src/*.m
+    // (nsterm.m/nsfns.m/nsselect.m/nsfont.m): GNU builds its DOC from the
+    // objects a build compiles, and the NS objects carry these docstrings.
+    // Shared names keep their first (C) declaration, so the 25 are exactly
+    // the names no src/*.c file declares.
+    assert_eq!(table.len(), 602);
     assert_eq!(
         table
             .iter()
