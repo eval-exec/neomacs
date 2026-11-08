@@ -729,6 +729,7 @@ fn format_object_in_state(
             value,
             options,
             super::print::PrintSettingsSource::Globals,
+            accumulator.token(),
         )?;
         accumulator.finish(ctx, None)
     })();

@@ -535,6 +535,10 @@ pub(crate) struct PrintState<'a> {
     /// this render. When false, the accumulator cursor is untouched at 0 and
     /// the whole rendered buffer can be installed without a copy.
     world_sink_touched: bool,
+    /// The prepare token for this print's World accumulator when this print
+    /// owns it. Every accumulator operation requires it, so the renderer
+    /// cannot touch the accumulator without a prepare-minted proof.
+    world_active: Option<crate::emacs_core::eval::print_buffer::PrintActive>,
 }
 
 /// Select the bindings used by the print destination. Scratch/format targets
@@ -1055,7 +1059,7 @@ pub(crate) fn print_value_bytes_in_context(
     options: PrintOptions,
     settings_source: PrintSettingsSource,
 ) -> Result<Vec<u8>, neovm_value::error::Flow> {
-    print_value_bytes_in_context_inner(context, value, options, settings_source, false)
+    print_value_bytes_in_context_inner(context, value, options, settings_source, None)
 }
 
 /// [`print_value_bytes_in_context`] for a print that OWNS the World print
@@ -1073,8 +1077,9 @@ pub(crate) fn print_value_bytes_sinking_to_accumulator(
     value: &Value,
     options: PrintOptions,
     settings_source: PrintSettingsSource,
+    active: crate::emacs_core::eval::print_buffer::PrintActive,
 ) -> Result<Vec<u8>, neovm_value::error::Flow> {
-    print_value_bytes_in_context_inner(context, value, options, settings_source, true)
+    print_value_bytes_in_context_inner(context, value, options, settings_source, Some(active))
 }
 
 fn print_value_bytes_in_context_inner(
@@ -1082,7 +1087,7 @@ fn print_value_bytes_in_context_inner(
     value: &Value,
     mut options: PrintOptions,
     settings_source: PrintSettingsSource,
-    sink_to_accumulator: bool,
+    active: Option<crate::emacs_core::eval::print_buffer::PrintActive>,
 ) -> Result<Vec<u8>, neovm_value::error::Flow> {
     prepare_print_number_table(context, value, &mut options, settings_source)?;
     // Immediate values and property-free strings cannot invoke Lisp or reach
@@ -1103,15 +1108,15 @@ fn print_value_bytes_in_context_inner(
         }
     {
         let bytes = print_value_bytes_with_options(value, options);
-        if sink_to_accumulator {
-            if context.world_print().pending_len() == 0 {
+        if let Some(active) = active {
+            if context.world_print().pending_len(active) == 0 {
                 // No Lisp ran and the caller left the cursor at 0: install the
                 // rendered buffer as the accumulator content without a copy.
-                context.world_print().replace_pending_bytes(bytes);
+                context.world_print().replace_pending_bytes(active, bytes);
             } else {
                 // A caller pre-filled the accumulator (print's leading
                 // newline); append at the live cursor as GNU printchar does.
-                context.world_print().append(&bytes);
+                context.world_print().append(active, &bytes);
             }
             return Ok(Vec::new());
         }
@@ -1151,7 +1156,8 @@ fn print_value_bytes_in_context_inner(
     // A caller may pre-fill the accumulator before rendering (GNU Fprint
     // writes its leading newline there first). In that case the cursor is not
     // at 0 and the no-copy install path must not run.
-    let world_sink_prefilled = sink_to_accumulator && scope.context.world_print().pending_len() > 0;
+    let world_sink_prefilled = active
+        .is_some_and(|active| scope.context.world_print().pending_len(active) > 0);
     let mut state = PrintState {
         options,
         circle: (options.print_circle && number_table.is_none()).then_some(&mut circle),
@@ -1163,8 +1169,9 @@ fn print_value_bytes_in_context_inner(
         _mutator: std::marker::PhantomData,
         default_print_stack: Vec::new(),
         object_stack: Vec::new(),
-        world_sink_flushed: sink_to_accumulator.then_some(0),
+        world_sink_flushed: active.is_some().then_some(0),
         world_sink_touched: world_sink_prefilled,
+        world_active: active,
     };
     let mut output = StatefulPrintOutput::default();
     write_value_stateful(value, &mut output, &mut state);
@@ -1172,7 +1179,7 @@ fn print_value_bytes_in_context_inner(
     let flushed = state.world_sink_flushed.take();
     let touched = state.world_sink_touched;
     drop(state);
-    if failure.is_none() && sink_to_accumulator {
+    if failure.is_none() && let Some(active) = active {
         if touched {
             if let Some(already) = flushed
                 && output.len() > already
@@ -1182,7 +1189,7 @@ fn print_value_bytes_in_context_inner(
                 scope
                     .context
                     .world_print()
-                    .append(output.bytes_from(already));
+                    .append(active, output.bytes_from(already));
             }
         } else {
             // No callback interrupted the render: the accumulator cursor is
@@ -1190,7 +1197,7 @@ fn print_value_bytes_in_context_inner(
             scope
                 .context
                 .world_print()
-                .replace_pending_bytes(output.into_bytes());
+                .replace_pending_bytes(active, output.into_bytes());
             return scope.finish(Ok(Vec::new()));
         }
     }
@@ -1747,6 +1754,7 @@ pub(crate) fn print_value_stateful_bytes_with_buffers_indexed(
             object_stack: Vec::new(),
             world_sink_flushed: None,
             world_sink_touched: false,
+            world_active: None,
         };
         write_value_stateful(value, &mut out, &mut state);
     } else {
@@ -1763,6 +1771,7 @@ pub(crate) fn print_value_stateful_bytes_with_buffers_indexed(
             object_stack: Vec::new(),
             world_sink_flushed: None,
             world_sink_touched: false,
+            world_active: None,
         };
         write_value_stateful(value, &mut out, &mut state);
     }
@@ -1975,13 +1984,15 @@ fn flush_print_output_to_accumulator(
     out: &StatefulPrintOutput,
     flushed: &mut Option<usize>,
     touched: &mut bool,
+    active: Option<crate::emacs_core::eval::print_buffer::PrintActive>,
 ) {
     let Some(already) = flushed else {
         return;
     };
+    let active = active.expect("world sink without a prepare token");
     *touched = true;
     if out.len() > *already {
-        context.world_print().append(out.bytes_from(*already));
+        context.world_print().append(active, out.bytes_from(*already));
         *already = out.len();
     }
 }
@@ -2000,6 +2011,7 @@ fn write_value_stateful_inner(
                     out,
                     &mut state.world_sink_flushed,
                     &mut state.world_sink_touched,
+                    state.world_active,
                 );
                 call_unreadable_printer(context, *value, state.options, state.settings_source)
             }

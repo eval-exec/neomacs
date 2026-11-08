@@ -1181,6 +1181,10 @@ pub(crate) struct PrintAccumulatorScope {
     /// `SPECPDL_INDEX ()` from GNU `print_prepare`, captured before its
     /// accumulator unwind entry is pushed; `print_finish` unbinds to it.
     base: usize,
+    /// Type-level proof that this scope's prepare made the accumulator
+    /// Active. Every accumulator operation requires it; the scope carries it
+    /// across Lisp callbacks without borrowing the World.
+    active: crate::emacs_core::eval::print_buffer::PrintActive,
 }
 
 impl PrintAccumulatorScope {
@@ -1212,11 +1216,16 @@ impl PrintAccumulatorScope {
     fn prepare_accumulator(context: &mut crate::emacs_core::eval::Context) -> Self {
         // GNU print_prepare: specpdl_count BEFORE record_unwind_protect.
         let base = context.specpdl.len();
-        context.world_print().prepare();
+        let active = context.world_print().prepare();
         context.push_specpdl_with(|| crate::emacs_core::eval::SpecBinding::NativeUnwind {
             action: crate::emacs_core::eval::NativeUnwindAction::PrintBufferUnwind,
         });
-        Self { base }
+        Self { base, active }
+    }
+
+    /// The prepare token, for the sink renderer (`PrintActive` is `Copy`).
+    pub(crate) fn token(&self) -> crate::emacs_core::eval::print_buffer::PrintActive {
+        self.active
     }
 
     /// GNU `print_buffer`'s byte append; `append` advances `pos` by the
@@ -1224,7 +1233,7 @@ impl PrintAccumulatorScope {
     /// is re-taken per operation: the accumulator stays Active across a
     /// callback through its specpdl entry, never through a held borrow.
     pub(crate) fn append(&mut self, ctx: &mut crate::emacs_core::eval::Context, bytes: &[u8]) {
-        ctx.world_print().append(bytes);
+        ctx.world_print().append(self.active, bytes);
     }
 
     /// GNU `print_finish`: insert `buffer[0..pos]` into TARGET (when it has a
@@ -1237,7 +1246,7 @@ impl PrintAccumulatorScope {
         target: Option<Value>,
     ) -> Result<Vec<u8>, Flow> {
         // GNU inserts into the destination BEFORE unbind_to runs the unwind.
-        let pending = ctx.world_print().pending();
+        let pending = ctx.world_print().pending(self.active);
         if let Some(target) = target {
             write_print_bytes_to_target(ctx, target, &pending)?;
         }
@@ -1755,6 +1764,7 @@ fn prin1_to_lisp_string_value_in_state_with_overrides(
             value,
             options,
             super::print::PrintSettingsSource::Globals,
+            accumulator.token(),
         )?;
         let bytes = accumulator.finish(ctx, None)?;
         Ok(if bytes.is_ascii() {
@@ -1836,6 +1846,7 @@ pub(crate) fn builtin_princ_impl(
                 &args[0],
                 options,
                 settings_source,
+                accumulator.token(),
             )?;
             accumulator.finish(ctx, Some(target))?;
         } else {
@@ -1932,6 +1943,7 @@ pub(crate) fn builtin_prin1_impl(
                 &args[0],
                 options,
                 settings_source,
+                accumulator.token(),
             )?;
             accumulator.finish(ctx, Some(target))?;
         } else {
@@ -2041,6 +2053,7 @@ pub(crate) fn builtin_print_impl(
                 &args[0],
                 options,
                 settings_source,
+                scope.token(),
             )?
         } else {
             super::print::print_value_bytes_in_context(ctx, &args[0], options, settings_source)?

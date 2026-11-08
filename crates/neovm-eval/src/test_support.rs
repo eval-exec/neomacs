@@ -53,6 +53,64 @@ pub mod authority {
     pub fn next_print_number_index() -> i64 {
         crate::emacs_core::print::next_print_number_index()
     }
+
+    /// print_buffer F1 fence (lead 13:08Z): the prepare token is `Copy` so a
+    /// caller can retain it after its recorded unwind. Reusing it must fail
+    /// LOUDLY in every profile; the pre-fix path returned silently in release
+    /// (`debug_assert!(false); return`) and `pending` answered stale retained
+    /// bytes. The accumulator, its token and its operations stay `pub(crate)`;
+    /// this fixture is the one cross-crate route, called only by the
+    /// print-accumulator pin in neovm-core's moved print tests.
+    pub fn print_accumulator_stale_token_for_test(
+        context: &mut crate::emacs_core::eval::Context,
+    ) {
+        let active = context.world_print().prepare();
+        context.world_print().unwind(active);
+        // A stale `Copy` token after the unwind: post-fix the accumulator is
+        // Idle and the operation panics instead of silently dropping bytes.
+        context.world_print().append(active, b"x");
+    }
+
+    /// print_buffer F1-a fence (lead 13:58Z, ABA): a token from an EARLIER
+    /// prepare used while a NEWER print is Active must panic. The state's top
+    /// is an (epoch, depth) pair; "something is active" alone would let this
+    /// stale token corrupt the newer print's cursor.
+    pub fn print_accumulator_aba_stale_for_test(
+        context: &mut crate::emacs_core::eval::Context,
+    ) {
+        let first = context.world_print().prepare();
+        context.world_print().unwind(first);
+        let _second = context.world_print().prepare();
+        context.world_print().append(first, b"x");
+    }
+
+    /// print_buffer F1-a fence (lead 13:58Z): an OUTER token is rejected while
+    /// an inner `prepare` owns the cursor (the LIFO top is the inner epoch).
+    pub fn print_accumulator_outer_while_inner_active_for_test(
+        context: &mut crate::emacs_core::eval::Context,
+    ) {
+        let outer = context.world_print().prepare();
+        let _inner = context.world_print().prepare();
+        context.world_print().append(outer, b"x");
+    }
+
+    /// print_buffer F1-a fence (lead 13:58Z): the outer token must become
+    /// valid again once the inner print unwinds (GNU's `print_unwind` restores
+    /// the outer epoch). Returns the bytes pending under the outer token: with
+    /// the accumulator's GNU nested-save quirk the result is "oO".
+    pub fn print_accumulator_outer_after_inner_unwind_for_test(
+        context: &mut crate::emacs_core::eval::Context,
+    ) -> Vec<u8> {
+        let outer = context.world_print().prepare();
+        context.world_print().append(outer, b"o");
+        let inner = context.world_print().prepare();
+        context.world_print().append(inner, b"i");
+        context.world_print().unwind(inner);
+        context.world_print().append(outer, b"O");
+        let pending = context.world_print().pending(outer).to_vec();
+        context.world_print().unwind(outer);
+        pending
+    }
     /// P1 F1 FILE-NOTIFY FENCE (peer 12:57Z (c)): reset the file-notify
     /// thread-local registry.  A reset is a TLS write (N2); the fence is the
     /// only cross-crate route and the original stays `pub(crate)` with no

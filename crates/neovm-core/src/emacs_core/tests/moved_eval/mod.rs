@@ -328,6 +328,12 @@ mod emacs_core_lisp_print_tests_symbol_noescape_gnu_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/print/tests/frame_name_print_units.rs"]
 mod emacs_core_lisp_print_tests_frame_name_print_units_rs;
+// Core-authored regression pin (print_buffer F1): a stale `Copy` prepare
+// token reused after its recorded unwind must panic loudly, not drop output
+// silently in release. Calls the signed eval test-support authority fence.
+#[cfg(test)]
+#[path = "emacs_core/lisp/print/tests/print_accumulator_units.rs"]
+mod emacs_core_lisp_print_tests_print_accumulator_units_rs;
 // P1 EVAL wave F1: file_notify Linux driver oracle re-homed from eval
 // (booted Context through core test_utils; driver calls re-pointed to the
 // inotify-* Lisp subrs, TLS reset to the eval authority fence).  The

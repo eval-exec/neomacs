@@ -1484,7 +1484,7 @@ impl NativeUnwindAction {
                 // GNU print_unwind / print_free_buffer: the destination bytes
                 // are already inserted by print_finish; this is the partial
                 // restore of the accumulator only.
-                context.world_print().unwind();
+                context.world_print().unwind_recorded();
                 Ok(Value::NIL)
             }
         };

@@ -44,6 +44,11 @@ pub(crate) struct ActivePrintBuffer {
     pub(crate) pos: usize,
     /// GNU `print_buffer.pos_byte`: bytes written since `prepare`.
     pub(crate) pos_byte: usize,
+    /// Identity of the `prepare` that currently owns the cursor. A nested
+    /// `prepare` installs a fresh epoch; the outer one is restored by the
+    /// matching unwind. A `Copy` token from an earlier epoch must not touch
+    /// this state (the ABA hole a bare "is something active" check leaves).
+    epoch: u64,
 }
 
 /// One saved accumulator state: `print_prepare`'s
@@ -56,6 +61,9 @@ struct PrintBufferSave {
     /// memcpy's exactly this many BYTES (a GNU quirk that truncates a
     /// multibyte save; reproduced deliberately by design A1).
     chars: usize,
+    /// The outer print's epoch: restoring this save returns ownership of the
+    /// cursor to the `prepare` that made it.
+    epoch: u64,
 }
 
 /// GNU's `print_buffer` for one World: an explicit Idle/Active state instead
@@ -73,6 +81,26 @@ pub(crate) enum WorldPrintBuffer {
         buffer: ActivePrintBuffer,
         saves: Vec<PrintBufferSave>,
     },
+}
+
+/// Type-level proof that a print has `prepare`d the World accumulator.
+///
+/// Minted only by [`WorldPrintBuffer::prepare`] (the field is private), and
+/// required by every accumulator operation. A caller therefore cannot append,
+/// replace, read or unwind the accumulator while it is `Idle`: the misuse does
+/// not compile. The token deliberately does not borrow the World, so it can
+/// live in the per-print scope and across Lisp callbacks, exactly like GNU's
+/// `record_unwind_protect` entry.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PrintActive {
+    /// The epoch minted by the `prepare` that produced this token.
+    epoch: u64,
+    /// The nesting depth at that prepare (0 for the outermost print). Kept
+    /// alongside the epoch so every operation checks the token against the
+    /// CURRENT top: an outer token is rejected while an inner prepare owns
+    /// the cursor and becomes valid again once the inner unwind restores its
+    /// epoch.
+    depth: u64,
 }
 
 impl Default for WorldPrintBuffer {
@@ -94,17 +122,19 @@ impl WorldPrintBuffer {
     /// Steady-state Idle -> Active performs no allocation: the retained Vec
     /// is reused, matching GNU's pre-allocated first buffer.
     #[doc(hidden)]
-    pub(crate) fn prepare(&mut self) {
-        match self {
+    pub(crate) fn prepare(&mut self, epoch: u64) -> PrintActive {
+        let depth = match self {
             Self::Idle { retained } => {
                 *self = Self::Active {
                     buffer: ActivePrintBuffer {
                         bytes: std::mem::take(retained),
                         pos: 0,
                         pos_byte: 0,
+                        epoch,
                     },
                     saves: Vec::new(),
                 };
+                0
             }
             Self::Active { buffer, saves } => {
                 // GNU allocates the saved string here and only here
@@ -113,22 +143,28 @@ impl WorldPrintBuffer {
                 saves.push(PrintBufferSave {
                     bytes: buffer.bytes[..buffer.pos_byte].to_vec(),
                     chars: buffer.pos,
+                    epoch: buffer.epoch,
                 });
+                buffer.epoch = epoch;
                 buffer.pos = 0;
                 buffer.pos_byte = 0;
+                saves.len() as u64
             }
-        }
+        };
+        PrintActive { epoch, depth }
     }
 
     /// Append printed bytes (canonical Emacs internal encoding) at the
     /// current position, advancing `pos` by the CHARACTER count and
     /// `pos_byte` by the byte count.
     #[doc(hidden)]
-    pub(crate) fn append(&mut self, bytes: &[u8]) {
-        let Self::Active { buffer, .. } = self else {
-            debug_assert!(false, "print bytes appended outside print_prepare");
-            return;
+    pub(crate) fn append(&mut self, active: PrintActive, bytes: &[u8]) {
+        let Self::Active { buffer, saves } = self else {
+            unreachable!("print accumulator is Idle while a prepare token is live");
         };
+        if active.epoch != buffer.epoch || active.depth != saves.len() as u64 {
+            unreachable!("print accumulator token is stale (prepare epoch mismatch)");
+        }
         if bytes.is_empty() {
             return;
         }
@@ -144,12 +180,16 @@ impl WorldPrintBuffer {
     /// The bytes `print_finish` inserts into the destination:
     /// `buffer[0..pos_byte]`.
     #[doc(hidden)]
-    pub(crate) fn pending(&self) -> &[u8] {
+    pub(crate) fn pending(&self, active: PrintActive) -> &[u8] {
         match self {
-            Self::Active { buffer, .. } => &buffer.bytes[..buffer.pos_byte],
-            Self::Idle { retained } => {
-                debug_assert!(false, "print_finish outside print_prepare");
-                retained
+            Self::Active { buffer, saves } => {
+                if active.epoch != buffer.epoch || active.depth != saves.len() as u64 {
+                    unreachable!("print accumulator token is stale (prepare epoch mismatch)");
+                }
+                &buffer.bytes[..buffer.pos_byte]
+            }
+            Self::Idle { .. } => {
+                unreachable!("print accumulator is Idle while a prepare token is live")
             }
         }
     }
@@ -160,11 +200,13 @@ impl WorldPrintBuffer {
     /// `printchar` would have filled exactly these bytes. Avoids the
     /// render -> accumulator copy on the common path.
     #[doc(hidden)]
-    pub(crate) fn replace_active_bytes(&mut self, bytes: Vec<u8>) {
-        let Self::Active { buffer, .. } = self else {
-            debug_assert!(false, "print replace outside print_prepare");
-            return;
+    pub(crate) fn replace_active_bytes(&mut self, active: PrintActive, bytes: Vec<u8>) {
+        let Self::Active { buffer, saves } = self else {
+            unreachable!("print accumulator is Idle while a prepare token is live");
         };
+        if active.epoch != buffer.epoch || active.depth != saves.len() as u64 {
+            unreachable!("print accumulator token is stale (prepare epoch mismatch)");
+        }
         buffer.pos = count_chars(&bytes);
         buffer.pos_byte = bytes.len();
         buffer.bytes = bytes;
@@ -175,11 +217,13 @@ impl WorldPrintBuffer {
     /// or the outermost free (which leaves the retained capacity in place).
     /// `pos`/`pos_byte` are deliberately NOT restored.
     #[doc(hidden)]
-    pub(crate) fn unwind(&mut self) {
+    pub(crate) fn unwind(&mut self, active: PrintActive) {
         let Self::Active { buffer, saves } = self else {
-            debug_assert!(false, "print unwind without an active print");
-            return;
+            unreachable!("print accumulator is Idle while a prepare token is live");
         };
+        if active.epoch != buffer.epoch || active.depth != saves.len() as u64 {
+            unreachable!("print accumulator token is stale (prepare epoch mismatch)");
+        }
         match saves.pop() {
             Some(save) => {
                 // SCHARS (saved) BYTES, exactly as GNU's memcpy does.
@@ -187,6 +231,8 @@ impl WorldPrintBuffer {
                 if n != 0 {
                     buffer.bytes[..n].copy_from_slice(&save.bytes[..n]);
                 }
+                // The cursor returns to the prepare that recorded this save.
+                buffer.epoch = save.epoch;
             }
             None => {
                 let buffer = std::mem::take(buffer);
@@ -195,6 +241,25 @@ impl WorldPrintBuffer {
                 };
             }
         }
+    }
+
+    /// The recorded GNU `print_unwind` action (`record_unwind_protect`),
+    /// executed from the specpdl on every non-local exit. That path has no
+    /// token to carry: the entry was recorded by the only `prepare` that could
+    /// have made the accumulator Active. A missing Active state is a protocol
+    /// violation, so fail loudly in every profile instead of silently dropping
+    /// the partial restore (the pre-fix `debug_assert!(false); return` did
+    /// nothing in release).
+    #[doc(hidden)]
+    pub(crate) fn unwind_recorded(&mut self) {
+        let Self::Active { buffer, saves } = self else {
+            panic!("print accumulator unwind without an active print");
+        };
+        let active = PrintActive {
+            epoch: buffer.epoch,
+            depth: saves.len() as u64,
+        };
+        self.unwind(active);
     }
 
     /// True while a print is in progress (test/diagnostic probe).
@@ -227,6 +292,10 @@ impl WorldPrintBuffer {
 pub(crate) struct WorldPrintState {
     pub(crate) buffer: WorldPrintBuffer,
     number_index: std::sync::Arc<std::sync::atomic::AtomicI64>,
+    /// Monotonic per-World prepare counter; the epoch component of every
+    /// [`PrintActive`]. Never reset: a token from an earlier print must not
+    /// match a later one (the ABA check the lead required).
+    next_print_epoch: u64,
 }
 
 impl Default for WorldPrintState {
@@ -234,6 +303,7 @@ impl Default for WorldPrintState {
         Self {
             buffer: WorldPrintBuffer::new(),
             number_index: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            next_print_epoch: 0,
         }
     }
 }
@@ -242,6 +312,15 @@ impl WorldPrintState {
     #[doc(hidden)]
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// GNU `print_prepare`'s accumulator part: mint the next prepare epoch
+    /// and make the accumulator Active (nested prepares save the outer one).
+    #[doc(hidden)]
+    pub(crate) fn prepare(&mut self) -> PrintActive {
+        let epoch = self.next_print_epoch;
+        self.next_print_epoch += 1;
+        self.buffer.prepare(epoch)
     }
 
     /// A handle to GNU's `print_number_index` for one print. Cloning the Arc

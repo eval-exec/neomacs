@@ -199,30 +199,35 @@ pub(crate) struct WorldPrintAccess<'ctx> {
 static_assertions::assert_not_impl_any!(WorldPrintAccess<'static>: Send, Sync, Clone);
 
 impl WorldPrintAccess<'_> {
-    /// GNU `print_prepare`'s accumulator part.
+    /// GNU `print_prepare`'s accumulator part. The returned token is the
+    /// type-level proof every other accumulator operation requires.
     #[inline]
-    pub(crate) fn prepare(&mut self) {
-        self.context.global_state_mut().print_state.buffer.prepare();
+    pub(crate) fn prepare(&mut self) -> super::print_buffer::PrintActive {
+        self.context.global_state_mut().print_state.prepare()
     }
 
     /// GNU `print_buffer`'s byte append.
     #[inline]
-    pub(crate) fn append(&mut self, bytes: &[u8]) {
+    pub(crate) fn append(
+        &mut self,
+        active: super::print_buffer::PrintActive,
+        bytes: &[u8],
+    ) {
         self.context
             .global_state_mut()
             .print_state
             .buffer
-            .append(bytes);
+            .append(active, bytes);
     }
 
     /// The bytes `print_finish` inserts: `buffer[0..pos_byte]`.
     #[inline]
-    pub(crate) fn pending(&self) -> Vec<u8> {
+    pub(crate) fn pending(&self, active: super::print_buffer::PrintActive) -> Vec<u8> {
         self.context
             .global_state()
             .print_state
             .buffer
-            .pending()
+            .pending(active)
             .to_vec()
     }
 
@@ -231,30 +236,50 @@ impl WorldPrintAccess<'_> {
     /// (e.g. `print`'s leading newline) makes the "install without a copy"
     /// path unsafe.
     #[inline]
-    pub(crate) fn pending_len(&self) -> usize {
+    pub(crate) fn pending_len(&self, active: super::print_buffer::PrintActive) -> usize {
         self.context
             .global_state()
             .print_state
             .buffer
-            .pending()
+            .pending(active)
             .len()
     }
 
     /// Install a complete rendering as the accumulator content (no callback
     /// flushed during the render, so the cursor is untouched at 0).
     #[inline]
-    pub(crate) fn replace_pending_bytes(&mut self, bytes: Vec<u8>) {
+    pub(crate) fn replace_pending_bytes(
+        &mut self,
+        active: super::print_buffer::PrintActive,
+        bytes: Vec<u8>,
+    ) {
         self.context
             .global_state_mut()
             .print_state
             .buffer
-            .replace_active_bytes(bytes);
+            .replace_active_bytes(active, bytes);
     }
 
     /// GNU `print_finish`'s recorded unwind (`print_unwind`).
     #[inline]
-    pub(crate) fn unwind(&mut self) {
-        self.context.global_state_mut().print_state.buffer.unwind();
+    pub(crate) fn unwind(&mut self, active: super::print_buffer::PrintActive) {
+        self.context
+            .global_state_mut()
+            .print_state
+            .buffer
+            .unwind(active);
+    }
+
+    /// The specpdl-recorded `PrintBufferUnwind` action: no token exists at
+    /// that point (the entry was recorded by the only `prepare`), so the
+    /// accumulator checks the Active state and fails loudly if it is Idle.
+    #[inline]
+    pub(crate) fn unwind_recorded(&mut self) {
+        self.context
+            .global_state_mut()
+            .print_state
+            .buffer
+            .unwind_recorded();
     }
 
     /// A handle to GNU's `print_number_index` for one print; see
