@@ -4,7 +4,8 @@
 use super::*;
 use crate::emacs_core::eval::host_input::HostInputPublisher;
 use crate::emacs_core::eval::{ConditionFrame, Context, RedisplayHookPolicyGuard, ResumeTarget};
-use crate::window::{FrameId, WindowId};
+use neovm_edit::emacs_core::display_metrics::WindowId;
+use neovm_value::display_vocab::FrameId;
 
 // Native layout evidence is emitted before the semantic RED assertion and
 // has no behavioral side effects. It reads only type/probe facts of this build.
@@ -81,7 +82,7 @@ fn fixture() -> (Context, FrameId, WindowId, neovm_edit::buffer::BufferId) {
         .get(frame)
         .expect("frame")
         .find_window(mini)
-        .and_then(crate::window::Window::buffer_id)
+        .and_then(crate::emacs_core::eval::data::window_state::Window::buffer_id)
         .expect("inactive source");
     {
         let state = eval.frames.get_mut(frame).expect("frame");

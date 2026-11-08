@@ -22,7 +22,7 @@ fn run_teardown_and_collect(
     ev: &mut Context,
 ) -> (
     neovm_edit::buffer::BufferId,
-    crate::window::FrameId,
+    neovm_value::display_vocab::FrameId,
     f32,
     f32,
 ) {
