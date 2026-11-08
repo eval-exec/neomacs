@@ -688,19 +688,30 @@ impl LispSymbol {
         function: Value,
         plist: Value,
     ) -> Self {
-        let mut sym = Self::new(id);
-        sym.flags.set_trapped_write(flags.trapped_write);
-        sym.flags.set_interned(flags.interned);
-        sym.flags.set_declared_special(flags.declared_special);
-        // A detached symbol: no other thread can see it, so the cell is
-        // written without the seqlock or a pre-image note.
+        // Pre-split this called `Self::new` and then overwrote the empty-slot
+        // defaults (`neovm-core` `runtime/symbol/cell.rs`, `let mut sym =
+        // Self::new(id)`). Same-crate inlining dropped those stores. After the
+        // split `new` stays outlined, so each dumped symbol paid both. Build
+        // the final detached cell once. `new` is unchanged for a fresh symbol.
+        // Still no seqlock: no other thread can see the cell yet.
         let (redirect, word) = match cell {
             DumpedCell::Plain(value) => (SymbolRedirect::Plainval, CellWord::plain(value)),
             DumpedCell::Alias(target) => (SymbolRedirect::Varalias, CellWord::alias(target)),
         };
-        sym.flags.set_redirect(redirect);
-        sym.val = word;
-        sym.function = function.into();
+        let mut sym_flags = SymbolFlags::default();
+        sym_flags.set_trapped_write(flags.trapped_write);
+        sym_flags.set_interned(flags.interned);
+        sym_flags.set_declared_special(flags.declared_special);
+        sym_flags.set_redirect(redirect);
+        let mut sym = Self {
+            name: AtomicU32::new(symbol_name_id(id).0),
+            flags: sym_flags,
+            val: word,
+            function: function.into(),
+            plist: AtomicTaggedValue::new(Value::NIL),
+            interned_global: false,
+            function_unbound: false,
+        };
         store_plist_head(&mut sym, plist);
         sym
     }

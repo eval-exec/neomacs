@@ -245,13 +245,15 @@ fn a_dumped_cell_restores_its_tag_with_its_word() {
         declared_special: true,
     };
     let target = intern("cell-dump-target");
+    let alias_id = intern("cell-dump-alias");
     let alias = LispSymbol::from_dump(
-        intern("cell-dump-alias"),
+        alias_id,
         flags,
         DumpedCell::Alias(target),
         Value::NIL,
         Value::NIL,
     );
+    assert_eq!(alias.name(), LispSymbol::new(alias_id).name());
     assert_eq!(alias.redirect(), SymbolRedirect::Varalias);
     assert_eq!(alias.alias_target(), Some(target));
     assert_eq!(alias.trapped_write(), SymbolTrappedWrite::Trapped);
