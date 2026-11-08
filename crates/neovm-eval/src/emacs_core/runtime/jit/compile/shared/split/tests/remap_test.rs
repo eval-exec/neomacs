@@ -145,7 +145,7 @@ fn jit_bg_payload_names_imports_by_shim_and_remaps_by_name() {
 #[test]
 fn deferred_capture_returns_the_reserved_func_id() {
     let (mut module, shims) = module_with_padding(0);
-    let mut fbctx = FunctionBuilderContext::new();
+    let mut fbctx = Some(FunctionBuilderContext::new());
     let config = module.target_config();
     let mut sig = Signature::new(config.default_call_conv);
     sig.returns.push(AbiParam::new(types::I64));
