@@ -606,6 +606,21 @@ impl TuiSession {
         Self::spawn_launch_with_erase_char(Self::gnu_emacs_launch(extra_args), "GNU", erase)
     }
 
+    /// Spawn GNU Emacs in TUI mode with additional environment values.
+    ///
+    /// The per-launch values are applied after the canonical TUI environment,
+    /// so `TMPDIR` here replaces the ambient/session one.  A test that owns a
+    /// short temporary root uses this instead of inheriting a deep ambient
+    /// `TMPDIR`.
+    pub fn gnu_emacs_with_env(extra_args: &str, env: &[(&str, &std::ffi::OsStr)]) -> Self {
+        Self::spawn_launch_with_erase_char(
+            Self::gnu_emacs_launch(extra_args)
+                .envs(env.iter().map(|(name, value)| (*name, *value))),
+            "GNU",
+            PtyEraseChar::TerminalDefault,
+        )
+    }
+
     /// Spawn GNU Emacs on a terminal with explicit TERM and geometry.
     pub fn gnu_emacs_on_terminal(extra_args: &str, terminal: TuiTerminalConfig) -> Self {
         Self::spawn_launch_on_terminal(Self::gnu_emacs_launch(extra_args), "GNU", terminal)
@@ -638,6 +653,17 @@ impl TuiSession {
     /// Spawn Neomacs in TUI mode on a PTY whose ERASE character is ERASE.
     pub fn neomacs_with_erase_char(extra_args: &str, erase: PtyEraseChar) -> Self {
         Self::spawn_launch_with_erase_char(Self::neomacs_launch(extra_args), "NEO", erase)
+    }
+
+    /// Spawn Neomacs in TUI mode with additional environment values.
+    ///
+    /// See [`Self::gnu_emacs_with_env`] for the ordering guarantee.
+    pub fn neomacs_with_env(extra_args: &str, env: &[(&str, &std::ffi::OsStr)]) -> Self {
+        Self::spawn_launch_with_erase_char(
+            Self::neomacs_launch(extra_args).envs(env.iter().map(|(name, value)| (*name, *value))),
+            "NEO",
+            PtyEraseChar::TerminalDefault,
+        )
     }
 
     /// Spawn Neomacs on a terminal with explicit TERM and geometry.

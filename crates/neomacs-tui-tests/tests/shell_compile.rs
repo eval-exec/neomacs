@@ -579,13 +579,41 @@ fn grep_empty_prompt_multiple_del_keeps_prompt() {
 
 #[test]
 fn diff_buffer_with_file_via_mx_shows_unsaved_changes() {
-    let (mut gnu, mut neo) = boot_pair_editing_a_shared_file();
+    // `diff-buffer-with-file` displays BOTH the buffer's file and its
+    // `buffer-content-` temporary on the *Diff* command line.  Under a deep
+    // ambient TMPDIR that line wraps MID-MARKER ("buffer-cont" / "ent-XXXX"),
+    // so no rendered row contains the whole name and the marker scrape below
+    // cannot see it.  The pinned GNU oracle wraps identically under the same
+    // TMPDIR (verified with a 118-character TMPDIR: both grids split the
+    // marker at the same cell), so this is harness fragility, not a product
+    // divergence.  The test owns a SHORT root instead: the fixture lives
+    // there, and each editor gets a private short TMPDIR beneath it.  The
+    // root is recorded so a failing artifact names the environment it ran in.
+    let temp_root = tempfile::Builder::new()
+        .prefix("neo-tui-diff-")
+        .tempdir_in("/tmp")
+        .expect("create short test-owned TMPDIR root");
+    let gnu_tmp = temp_root.path().join("gnu");
+    let neo_tmp = temp_root.path().join("neo");
+    std::fs::create_dir_all(&gnu_tmp).expect("create GNU TMPDIR");
+    std::fs::create_dir_all(&neo_tmp).expect("create Neo TMPDIR");
+    eprintln!(
+        "diff_buffer_with_file_via_mx_shows_unsaved_changes: TMPDIR root={} gnu={} neo={}",
+        temp_root.path().display(),
+        gnu_tmp.display(),
+        neo_tmp.display()
+    );
+    let (mut gnu, mut neo) = boot_pair_editing_a_shared_file_with_envs(
+        &[("TMPDIR", gnu_tmp.as_os_str())],
+        &[("TMPDIR", neo_tmp.as_os_str())],
+    );
     // The diff runs through compilation mode, whose buffer records the wall
     // clock ("Diff started"/"Diff finished.  DATE"); the pair runs the two
     // editors' commands seconds apart, so fix the clock as the compile and
     // grep scenarios already do.
     use_deterministic_compilation_setup(&mut gnu, &mut neo);
-    let shared_path = write_shared_temp_file("diff-buffer-file.txt", "alpha\nbeta\n");
+    let shared_path =
+        write_shared_file_in(temp_root.path(), "diff-buffer-file.txt", "alpha\nbeta\n");
     open_shared_file(&mut gnu, &mut neo, &shared_path, "C-x C-f");
 
     send_both_raw(&mut gnu, &mut neo, b"changed\n");

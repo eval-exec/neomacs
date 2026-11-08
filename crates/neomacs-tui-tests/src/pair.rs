@@ -43,9 +43,30 @@ pub fn boot_pair_with_erase_char(
     extra_args: &str,
     erase: PtyEraseChar,
 ) -> (TuiSession, TuiSession) {
-    let mut gnu = TuiSession::gnu_emacs_with_erase_char(extra_args, erase);
-    let mut neo = TuiSession::neomacs_with_erase_char(extra_args, erase);
+    settle_started_pair(
+        TuiSession::gnu_emacs_with_erase_char(extra_args, erase),
+        TuiSession::neomacs_with_erase_char(extra_args, erase),
+    )
+}
 
+/// Boot a pair with per-editor environment overrides.
+///
+/// The values are applied after the canonical TUI environment; a test that
+/// owns a short temporary root passes `TMPDIR` here instead of inheriting
+/// the ambient one.
+pub fn boot_pair_with_envs(
+    extra_args: &str,
+    gnu_env: &[(&str, &std::ffi::OsStr)],
+    neo_env: &[(&str, &std::ffi::OsStr)],
+) -> (TuiSession, TuiSession) {
+    settle_started_pair(
+        TuiSession::gnu_emacs_with_env(extra_args, gnu_env),
+        TuiSession::neomacs_with_env(extra_args, neo_env),
+    )
+}
+
+/// Phase 1 (interleaved startup poll) and phase 2 (uncapped settle).
+fn settle_started_pair(mut gnu: TuiSession, mut neo: TuiSession) -> (TuiSession, TuiSession) {
     let startup_ready = |grid: &[String]| {
         grid.iter().any(|row| row.contains("*scratch*"))
             && grid
@@ -888,11 +909,30 @@ pub fn boot_pair_editing_a_shared_file() -> (TuiSession, TuiSession) {
     boot_pair("--eval=(set-default'create-lockfiles())")
 }
 
+/// [`boot_pair_editing_a_shared_file`] with per-editor environment overrides.
+pub fn boot_pair_editing_a_shared_file_with_envs(
+    gnu_env: &[(&str, &std::ffi::OsStr)],
+    neo_env: &[(&str, &std::ffi::OsStr)],
+) -> (TuiSession, TuiSession) {
+    boot_pair_with_envs("--eval=(set-default'create-lockfiles())", gnu_env, neo_env)
+}
+
 /// Write a file to a shared temp location and return its absolute path.
 /// Both GNU and Neo can open this same path, so diff headers etc. match.
 /// Uses a short directory name to avoid line-wrapping differences.
 pub fn write_shared_temp_file(name: &str, contents: &str) -> TuiTempFile {
     TuiTempFile::new("neomacs-tui-shared-", name, contents)
+}
+
+/// Write a shared fixture file into a directory the CALLER owns.
+///
+/// Use this when the fixture's path is itself displayed (for example on
+/// `diff-buffer-with-file`'s command line): a short caller-owned root keeps
+/// both displayed paths from depending on the ambient `TMPDIR` depth.
+pub fn write_shared_file_in(directory: &Path, name: &str, contents: &str) -> PathBuf {
+    let path = directory.join(name);
+    fs::write(&path, contents).expect("write shared TUI fixture file");
+    path
 }
 
 /// Open a file at an absolute path in both sessions.
