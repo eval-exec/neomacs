@@ -632,8 +632,11 @@ fn check_surface(scanned: &BTreeSet<Row>, baseline: &BTreeSet<Row>) -> Result<()
     if missing.is_empty() {
         return Ok(());
     }
+    // Report every row: the count below is `missing.len()`, so a truncated
+    // list hides rows the reviewer must see.  The verdict and the missing set
+    // are unchanged; only the report is complete.
     let mut detail = String::new();
-    for row in missing.iter().take(8) {
+    for row in &missing {
         detail.push_str(&format!("\n  {}: {} {}", row.0, row.1, row.2));
     }
     Err(format!(
@@ -744,17 +747,41 @@ fn ratchet(workspace: &Path, rows: usize, ceiling_path: &str) -> Result<(), Stri
     Ok(())
 }
 
-fn validate(workspace: &Path) -> Result<(), String> {
-    for (crate_dir, suffix) in CRATES {
-        let baseline_rel = format!("{ARCHITECTURE_DIR}/{PREFIX}{suffix}.tsv");
-        let baseline_path = workspace.join(&baseline_rel);
-        let baseline = parse_baseline(&baseline_path, &read(&baseline_path)?)?;
-        let ceiling_rel = format!("{ARCHITECTURE_DIR}/{PREFIX}{suffix}.ceiling");
-        ratchet(workspace, baseline.len(), &ceiling_rel)?;
-        let scanned = plain_pub_rows(workspace, crate_dir)?;
-        check_surface(&scanned, &baseline).map_err(|error| format!("{crate_dir}: {error}"))?;
+fn validate_crate(workspace: &Path, crate_dir: &str, suffix: &str) -> Result<(), String> {
+    let baseline_rel = format!("{ARCHITECTURE_DIR}/{PREFIX}{suffix}.tsv");
+    let baseline_path = workspace.join(&baseline_rel);
+    let baseline = parse_baseline(&baseline_path, &read(&baseline_path)?)?;
+    let ceiling_rel = format!("{ARCHITECTURE_DIR}/{PREFIX}{suffix}.ceiling");
+    ratchet(workspace, baseline.len(), &ceiling_rel)?;
+    let scanned = plain_pub_rows(workspace, crate_dir)?;
+    check_surface(&scanned, &baseline)
+}
+
+/// Join every crate's validation result.  The verdict is unchanged (`Err` iff
+/// any crate fails); the report carries every failing crate and every missing
+/// row instead of stopping at the first crate.
+fn aggregate_crate_errors<'a>(
+    results: impl IntoIterator<Item = (&'a str, Result<(), String>)>,
+) -> Result<(), String> {
+    let mut errors: Vec<String> = Vec::new();
+    for (crate_dir, result) in results {
+        if let Err(error) = result {
+            errors.push(format!("{crate_dir}: {error}"));
+        }
     }
-    Ok(())
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("\n"))
+    }
+}
+
+fn validate(workspace: &Path) -> Result<(), String> {
+    aggregate_crate_errors(
+        CRATES
+            .iter()
+            .map(|(crate_dir, suffix)| (*crate_dir, validate_crate(workspace, crate_dir, suffix))),
+    )
 }
 
 #[test]
@@ -842,6 +869,52 @@ impl S {
         let error = check_surface(&scanned, &baseline).expect_err("planted plain pub must fail");
         assert!(error.contains("fn planted"), "{error}");
         eprintln!("MUTATION RED: {error}");
+    }
+
+    #[test]
+    fn every_missing_row_of_every_crate_is_listed() {
+        // More than the old take(8) inside ONE crate, plus a second failing
+        // crate: the report must carry all 13 rows and both crate prefixes.
+        let baseline_a = rows(&[("a.rs", "fn", "fn a00")]);
+        let mut scanned_a = baseline_a.clone();
+        for index in 1..=10 {
+            scanned_a.insert((
+                "a.rs".to_owned(),
+                "fn".to_owned(),
+                format!("fn a{index:02}"),
+            ));
+        }
+        let baseline_b = rows(&[("b.rs", "fn", "fn b00")]);
+        let mut scanned_b = baseline_b.clone();
+        for index in 1..=3 {
+            scanned_b.insert((
+                "b.rs".to_owned(),
+                "fn".to_owned(),
+                format!("fn b{index:02}"),
+            ));
+        }
+        let error = aggregate_crate_errors([
+            ("crate_a", check_surface(&scanned_a, &baseline_a)),
+            ("crate_b", check_surface(&scanned_b, &baseline_b)),
+        ])
+        .expect_err("planted plain-pub growth must fail");
+        for index in 1..=10 {
+            let row = format!("a.rs: fn fn a{index:02}");
+            assert!(error.contains(&row), "{row} missing from: {error}");
+        }
+        for index in 1..=3 {
+            let row = format!("b.rs: fn fn b{index:02}");
+            assert!(error.contains(&row), "{row} missing from: {error}");
+        }
+        assert!(error.contains("crate_a:"), "{error}");
+        assert!(error.contains("crate_b:"), "{error}");
+        // The verdict and the checked set are unchanged: equal surfaces are
+        // green and removals stay tolerated (see removals_are_tolerated).
+        assert_eq!(
+            aggregate_crate_errors([("crate_a", check_surface(&scanned_a, &scanned_a))]),
+            Ok(())
+        );
+        eprintln!("PLAINPUB-TRUNC RED: {error}");
     }
 
     #[test]
