@@ -117,7 +117,7 @@ fn fixture() -> (Context, FrameId, WindowId, neovm_edit::buffer::BufferId) {
     )
     .expect("record hooks and exit keymap");
     eval.gnu_mark_frame_window_change(frame);
-    crate::emacs_core::builtins::run_redisplay_window_change_hooks(&mut eval)
+    crate::emacs_core::eval::lifecycle::run_redisplay_window_change_hooks(&mut eval)
         .expect("record inactive minibuffer");
     eval.redisplay_fn = Some(Box::new(
         crate::test_utils::mock_redisplay::accept_all_frames,
@@ -173,7 +173,7 @@ fn exercise_reader(restore_windows: bool, throw_inactive: bool, record_active: b
             assert_ne!(expired, Some(inactive));
             if record_active {
                 eval.gnu_mark_frame_window_change(frame);
-                crate::emacs_core::builtins::run_redisplay_window_change_hooks(eval)?;
+                crate::emacs_core::eval::lifecycle::run_redisplay_window_change_hooks(eval)?;
                 assert_ne!(
                     eval.frames.get(frame).expect("frame").change_stamp,
                     saved_stamp
@@ -242,7 +242,7 @@ fn exercise_reader(restore_windows: bool, throw_inactive: bool, record_active: b
     // The live shrink or configuration restore marks this in the TUI oracle.
     // Keep this epoch-focused native seam independent of glyph sizing.
     eval.gnu_mark_frame_window_change(frame);
-    crate::emacs_core::builtins::run_redisplay_window_change_hooks(&mut eval)
+    crate::emacs_core::eval::lifecycle::run_redisplay_window_change_hooks(&mut eval)
         .expect("first post-reader hook pass");
     let calls = eval
         .obarray
@@ -257,7 +257,7 @@ fn exercise_reader(restore_windows: bool, throw_inactive: bool, record_active: b
             vec![]
         }
     );
-    crate::emacs_core::builtins::run_redisplay_window_change_hooks(&mut eval)
+    crate::emacs_core::eval::lifecycle::run_redisplay_window_change_hooks(&mut eval)
         .expect("idle post-reader pass");
     let idle = eval
         .obarray
