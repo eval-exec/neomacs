@@ -180,6 +180,14 @@ impl Context {
         self.gnu_redisplay_hooks.dimensions.is_empty()
     }
 
+    /// Whether no frame-level redisplay mark is pending. The set itself stays
+    /// private; `frame_redisplay_pending` answers one frame.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn gnu_redisplay_hooks_redisplay_frames_empty(&self) -> bool {
+        self.gnu_redisplay_hooks.redisplay_frames.is_empty()
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn gnu_redisplay_hooks_windows_are_all(&self) -> bool {

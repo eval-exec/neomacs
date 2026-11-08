@@ -402,3 +402,10 @@ mod emacs_core_runtime_bytecode_tests_vm_process_builtin_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/pdump/tests/pdump_load_facade_test.rs"]
 mod emacs_core_runtime_pdump_tests_pdump_load_facade_test_rs;
+// Redisplay-hook tests whose fixture is the display window surface
+// (`window_cmds` and `crate::window`). Eval cannot name that crate. The
+// hook-ownership tests that only use eval state stay in eval. Assertions
+// are unchanged.
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/redisplay_hook_ownership_facade_test.rs"]
+mod emacs_core_runtime_eval_tests_redisplay_hook_ownership_facade_test_rs;
