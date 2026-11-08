@@ -4,18 +4,49 @@
 //! `^A`/NUL quoting, GNU's nil and "Cannot open" answers, the cross-form
 //! saved-`#@` block ring, the jka-compr compressed-load activator, and pdump
 //! fidelity of the converted unibyte docstring.
+//!
+//! The bootstrap evaluator is minted in core. The rendered-form helper is the
+//! same OK/ERR printer the load tests use. Assertions are unchanged.
 
-use super::*;
 use crate::emacs_core::eval::Context;
 use flate2::Compression;
 use flate2::write::GzEncoder;
+use neovm_value::error::EvalError;
+use neovm_value::intern::resolve_sym;
+use neovm_value::value::Value;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 use tempfile::tempdir;
 
+fn format_eval_error(eval: &Context, err: &EvalError) -> String {
+    match err {
+        EvalError::Signal { symbol, data, .. } => {
+            let mut items = Vec::with_capacity(data.len() + 1);
+            items.push(Value::symbol(resolve_sym(*symbol)));
+            items.extend(data.iter().copied());
+            crate::emacs_core::print::print_value_with_buffers(
+                &Value::list(items),
+                &eval.edit.buffers,
+            )
+        }
+        EvalError::UncaughtThrow { tag, value, .. } => format!(
+            "(throw {} {})",
+            crate::emacs_core::print::print_value_with_buffers(tag, &eval.edit.buffers),
+            crate::emacs_core::print::print_value_with_buffers(value, &eval.edit.buffers),
+        ),
+        EvalError::Shutdown(request) => format!("(kill-emacs {})", request.exit_code),
+    }
+}
+
 fn rendered(eval: &mut Context, form: &str) -> String {
-    super::tests::eval_rendered(eval, form)
+    match eval.eval_str(form) {
+        Ok(value) => format!(
+            "OK {}",
+            crate::emacs_core::print::print_value_with_buffers(&value, &eval.edit.buffers)
+        ),
+        Err(err) => format!("ERR {}", format_eval_error(eval, &err)),
+    }
 }
 
 fn assert_rendered(eval: &mut Context, form: &str, expected: &str) {
@@ -23,8 +54,9 @@ fn assert_rendered(eval: &mut Context, form: &str, expected: &str) {
 }
 
 fn bootstrap() -> Context {
-    let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap evaluator");
-    apply_runtime_startup_state(&mut eval).expect("runtime startup state");
+    let mut eval = crate::emacs_core::load_boot::create_bootstrap_evaluator_cached()
+        .expect("bootstrap evaluator");
+    crate::emacs_core::load::apply_runtime_startup_state(&mut eval).expect("runtime startup state");
     eval
 }
 
@@ -379,10 +411,11 @@ fn pdump_round_trip_preserves_the_converted_unibyte_docstring() {
     );
     assert_rendered(&mut eval, &load, "OK t");
 
+    let proof = eval.hooks_installed();
     let snapshot = crate::emacs_core::pdump::snapshot_evaluator(&eval);
     drop(eval);
     let mut restored =
-        crate::emacs_core::pdump::restore_snapshot(&snapshot).expect("restore the snapshot");
+        crate::emacs_core::pdump::restore_snapshot(&snapshot, proof).expect("restore the snapshot");
     assert_rendered(
         &mut restored,
         &probe_doc_check(),

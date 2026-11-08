@@ -47,6 +47,9 @@ mod emacs_core_runtime_eval_tests_eval_test_rs;
 mod emacs_core_lisp_load_tests_stale_bytecode_test_rs;
 
 #[cfg(test)]
+#[path = "emacs_core/lisp/load/tests/lazy_doc_test.rs"]
+mod emacs_core_lisp_load_tests_lazy_doc_test_rs;
+#[cfg(test)]
 #[path = "emacs_core/lisp/load/tests/load_test.rs"]
 mod emacs_core_lisp_load_tests_load_test_rs;
 

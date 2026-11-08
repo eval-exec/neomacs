@@ -7074,9 +7074,6 @@ mod bootstrap_error_tests;
 #[cfg(test)]
 #[path = "tests/eager_failure_test.rs"]
 mod eager_failure_tests;
-#[cfg(test)]
-#[path = "tests/lazy_doc_test.rs"]
-mod lazy_doc_tests;
 
 /// Carrier park: fresh eager-expansion failure policy.
 pub(crate) fn reset_carrier_tls() {
