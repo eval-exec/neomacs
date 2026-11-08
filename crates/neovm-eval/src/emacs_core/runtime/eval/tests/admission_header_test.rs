@@ -319,9 +319,10 @@ fn admission_header_dump_restore_initializes_surface_then_tracks_new_writers() {
     original
         .eval_str("(fset 'admission-header-restored '(lambda () 31))")
         .expect("install the dumped function");
+    let proof = original.hooks_installed();
     let snapshot = snapshot_active_evaluator(&mut original);
     drop(original);
-    let mut restored = restore_snapshot(&snapshot).expect("restore the serialized runtime");
+    let mut restored = restore_snapshot(&snapshot, proof).expect("restore the serialized runtime");
     coherent(&restored);
     assert_eq!(
         restored

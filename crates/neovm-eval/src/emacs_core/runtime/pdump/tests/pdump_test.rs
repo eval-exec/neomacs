@@ -85,10 +85,11 @@ fn dumped_gnu_bytecode_does_not_duplicate_derived_instructions() {
 #[test]
 fn restore_snapshot_rejects_non_keymap_selected_global_map() {
     crate::test_utils::init_test_tracing();
-    let mut snapshot = snapshot_evaluator(&Context::new(crate::test_utils::unit_runtime()));
+    let template = Context::new(crate::test_utils::unit_runtime());
+    let mut snapshot = snapshot_evaluator(&template);
     snapshot.current_global_map = types::DumpValue::Int(42);
 
-    let result = restore_snapshot(&snapshot);
+    let result = restore_snapshot(&snapshot, template.hooks_installed());
     match result {
         Err(DumpError::DeserializationError(message)) => {
             assert!(
@@ -237,7 +238,8 @@ fn pdump_round_trip_preserves_last_window_start_lisp_position() {
         .expect("dumped current buffer");
     assert_eq!(dumped.last_window_start, Some(7));
 
-    let loaded = restore_snapshot(&dump).expect("restore snapshot should succeed");
+    let loaded =
+        restore_snapshot(&dump, eval.hooks_installed()).expect("restore snapshot should succeed");
     let restored = loaded
         .edit
         .buffers
@@ -374,7 +376,8 @@ fn test_restore_snapshot_preserves_core_subr_callable_surface() {
     let template = Context::new(crate::test_utils::unit_runtime());
     let snapshot = snapshot_evaluator(&template);
 
-    let mut restored = restore_snapshot(&snapshot).expect("restored snapshot should succeed");
+    let mut restored = restore_snapshot(&snapshot, template.hooks_installed())
+        .expect("restored snapshot should succeed");
     let forms = crate::emacs_core::value_reader::read_all(
         r#"(list (funcall 'cons 1 2)
                  (funcall 'list 1 2 3)
@@ -405,7 +408,8 @@ fn test_restore_snapshot_preserves_lone_uninterned_symbol_identity() {
         .set_symbol_value("compat-pdump-uninterned-holder", Value::from_sym_id(solo));
     let snapshot = snapshot_evaluator(&template);
 
-    let restored = restore_snapshot(&snapshot).expect("restored snapshot should succeed");
+    let restored = restore_snapshot(&snapshot, template.hooks_installed())
+        .expect("restored snapshot should succeed");
     let held = restored
         .obarray
         .symbol_value_copied("compat-pdump-uninterned-holder")
@@ -441,7 +445,8 @@ fn test_restore_snapshot_preserves_raw_unibyte_symbol_name_storage() {
     template.obarray.ensure_interned_global_id(canonical);
     let snapshot = snapshot_evaluator(&template);
 
-    let restored = restore_snapshot(&snapshot).expect("restored snapshot should succeed");
+    let restored = restore_snapshot(&snapshot, template.hooks_installed())
+        .expect("restored snapshot should succeed");
 
     for (holder, should_be_canonical) in [
         ("compat-pdump-raw-uninterned-holder", false),
@@ -474,7 +479,8 @@ fn test_restore_snapshot_preserves_subr_name_identity_via_name_atoms() {
         .set_symbol_value("compat-pdump-subr-holder", subr);
     let snapshot = snapshot_evaluator(&template);
 
-    let restored = restore_snapshot(&snapshot).expect("restored snapshot should succeed");
+    let restored = restore_snapshot(&snapshot, template.hooks_installed())
+        .expect("restored snapshot should succeed");
     let held = restored
         .obarray
         .symbol_value_copied("compat-pdump-subr-holder")
@@ -504,7 +510,8 @@ fn test_restore_snapshot_does_not_report_file_based_pdump_session() {
         .expect("setup hook should evaluate");
     let snapshot = snapshot_evaluator(&template);
 
-    let mut restored = restore_snapshot(&snapshot).expect("restored snapshot should succeed");
+    let mut restored = restore_snapshot(&snapshot, template.hooks_installed())
+        .expect("restored snapshot should succeed");
     assert_eq!(
         restored
             .obarray
@@ -541,7 +548,8 @@ fn test_pdump_rejects_corrupt_runtime_managers_section() {
 #[test]
 fn test_restore_snapshot_rejects_duplicate_obarray_symbol_slots() {
     crate::test_utils::init_test_tracing();
-    let mut snapshot = snapshot_evaluator(&Context::new(crate::test_utils::unit_runtime()));
+    let template = Context::new(crate::test_utils::unit_runtime());
+    let mut snapshot = snapshot_evaluator(&template);
     let duplicate = snapshot
         .obarray
         .symbols
@@ -550,7 +558,7 @@ fn test_restore_snapshot_rejects_duplicate_obarray_symbol_slots() {
         .expect("snapshot should contain at least one symbol");
     snapshot.obarray.symbols.push(duplicate);
 
-    let result = restore_snapshot(&snapshot);
+    let result = restore_snapshot(&snapshot, template.hooks_installed());
     match result {
         Err(DumpError::DeserializationError(message)) => {
             assert!(
@@ -575,7 +583,7 @@ fn test_restore_snapshot_rejects_global_member_without_symbol_entry() {
     let mut snapshot = snapshot_evaluator(&template);
     snapshot.obarray.global_members.push(DumpSymId(dangling.0));
 
-    let result = restore_snapshot(&snapshot);
+    let result = restore_snapshot(&snapshot, template.hooks_installed());
     match result {
         Err(DumpError::DeserializationError(message)) => {
             assert!(
