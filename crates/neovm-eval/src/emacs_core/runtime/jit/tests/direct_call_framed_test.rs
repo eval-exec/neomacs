@@ -574,11 +574,11 @@ fn a_contained_framed_panic_detaches_three_args_before_gc_and_caller_healing() {
         assert_eq!(ev.depth, depth0 + 1, "pending panic leaves counted depth for caller healing");
         assert_eq!(super::super::direct_call::DIRECT_FRAMED_CALLS.load(Ordering::Relaxed), calls0 + 1);
         assert!(ev.specpdl.iter().all(|entry| !matches!(entry,
-            crate::emacs_core::eval::SpecBinding::BacktraceNative { args_ptr, .. } if *args_ptr == expired_span)),
+            crate::emacs_core::eval::SpecBinding::BacktraceNative { args_ptr, .. } if args_ptr == expired_span)),
             "no frame reads the expired three-word argument span");
         assert!(ev.specpdl[spec0..].iter().any(|entry| matches!(entry,
             crate::emacs_core::eval::SpecBinding::Backtrace { function, .. }
-                if *function == Value::symbol("neovm--fp-target"))),
+                if function == Value::symbol("neovm--fp-target"))),
             "the original called symbol remains on an owned detached frame before healing");
         let collected0 = ev.tagged_heap.gc_collections();
         ev.gc_collect_exact();
