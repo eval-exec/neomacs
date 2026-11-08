@@ -1052,8 +1052,6 @@ obarray_method_proxies! {
     pub fn unintern_name(name: &str) -> bool;
     pub fn unintern_lisp_string(name: &LispString) -> bool;
     pub fn unintern_id(id: SymId) -> bool;
-    #[cfg(test)]
-    pub(crate) fn set_function_epoch_for_test(epoch: u64);
 }
 
 obarray_method_proxies! {

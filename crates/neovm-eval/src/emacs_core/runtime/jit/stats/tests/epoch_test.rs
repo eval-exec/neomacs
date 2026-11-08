@@ -90,11 +90,11 @@ fn jit_fn_epoch_bumps_are_attributed_per_writer() {
 #[test]
 fn jit_fn_epoch_bump_still_skips_the_disarmed_sentinel() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
-    ev.obarray.set_function_epoch_for_test(u64::MAX - 1);
+    neovm_value::test_support::authority::exhaust_function_epoch_for_test(&mut ev.obarray);
     ev.obarray
         .invalidate_all_function_bindings(FunctionEpochBump::SubrRewrite);
     assert_eq!(ev.obarray.function_epoch(), 0);
-    ev.obarray.set_function_epoch_for_test(u64::MAX - 1);
+    neovm_value::test_support::authority::exhaust_function_epoch_for_test(&mut ev.obarray);
     crate::emacs_core::builtins::builtin_fset_2(
         &mut ev,
         Value::symbol("jit-epoch-test-wrap"),
