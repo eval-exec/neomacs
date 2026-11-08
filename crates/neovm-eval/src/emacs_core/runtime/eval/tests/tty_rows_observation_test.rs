@@ -390,7 +390,11 @@ fn tty_rows_observation_partial_gc_and_driver_obligations_remain_mandatory() {
         Err(RowsObservationRefusal::DriverActive)
     );
     context.gc_driver_active = false;
-    context.tagged_heap.begin_collection();
+    // SAFETY: this Context is the sole owner and no marker is running. The
+    // signed fence starts the major cycle the collector-busy refusal observes.
+    unsafe {
+        neovm_value::test_support::authority::begin_collection_for_test(&mut context.tagged_heap);
+    }
     assert_eq!(
         context.static_rows_observation_current(&epoch),
         Err(RowsObservationRefusal::CollectorBusy)
