@@ -51,7 +51,7 @@
 //! than re-derived per site.
 
 pub use neovm_value::symbol::ByteBooleanVars;
-use crate::platform_surface::{platform_surface, SurfaceSet};
+use crate::platform_surface::{platform_surface, PlatformSurface, SurfaceSet};
 use neovm_value::symbol::Obarray;
 
 /// One GNU `DEFVAR_BOOL' declaration.
@@ -64,6 +64,13 @@ pub struct GnuBoolVariable {
     /// `bool *': a `DEFVAR_BOOL' variable seeded with something that is not a
     /// Boolean is not a state either program can be in.
     pub initial: bool,
+    /// The value the NS reference build's own `DEFVAR_BOOL` leaves in the
+    /// slot, when it differs from [`Self::initial`] (the X11 value).  Both
+    /// backends declare `x-use-underline-position-properties`, but
+    /// `xterm.c:32667` starts it true while `nsterm.m:11704` starts it false;
+    /// reading one surface's value on the other is wrong in one direction or
+    /// the other.  `None` means the two declarations agree.
+    pub(crate) ns_initial_value: Option<bool>,
     /// `Some(running)` when GNU's `main` replaces the declared value after the
     /// declaration: `text_quoting_flag = using_utf8 ()` (`src/emacs.c:1656`)
     /// and `noninteractive1 = noninteractive` (`src/emacs.c:1953`).  `initial`
@@ -88,6 +95,7 @@ impl GnuBoolVariable {
         Self {
             name,
             initial,
+            ns_initial_value: None,
             main_value: None,
             byte_boolean_vars: ByteBooleanVars::Listed,
             surfaces: SurfaceSet::ALL,
@@ -99,6 +107,7 @@ impl GnuBoolVariable {
         Self {
             name,
             initial,
+            ns_initial_value: None,
             main_value: None,
             byte_boolean_vars: ByteBooleanVars::ErasedByLreadInit,
             surfaces: SurfaceSet::ALL,
@@ -112,6 +121,7 @@ impl GnuBoolVariable {
         Self {
             name,
             initial: declared,
+            ns_initial_value: None,
             main_value: Some(running),
             byte_boolean_vars: ByteBooleanVars::Listed,
             surfaces: SurfaceSet::ALL,
@@ -132,6 +142,23 @@ impl GnuBoolVariable {
     pub const fn ns_only(mut self) -> Self {
         self.surfaces = SurfaceSet::NS;
         self
+    }
+
+    /// The value the NS reference build's own declaration leaves in the slot,
+    /// for a row both backends declare with different initializers.
+    #[doc(hidden)]
+    pub const fn ns_initial(mut self, value: bool) -> Self {
+        self.ns_initial_value = Some(value);
+        self
+    }
+
+    /// The declared value on `surface`; GNU ships one C file per case, so a
+    /// row with two declarations needs two answers.
+    fn value_on(&self, surface: PlatformSurface) -> bool {
+        match surface {
+            PlatformSurface::Ns => self.ns_initial_value.unwrap_or(self.initial),
+            PlatformSurface::X11 | PlatformSurface::W32 => self.initial,
+        }
     }
 }
 
@@ -297,7 +324,7 @@ pub static GNU_BOOL_VARIABLES: &[GnuBoolVariable] = &[
     V::listed("xft-ignore-color-fonts", true),     // font.c:6039
     V::listed("query-all-font-backends", false),   // font.c:6046
     V::listed("cross-disabled-images", false),     // image.c:13259
-    V::listed("x-use-underline-position-properties", true), // xterm.c:32667
+    V::listed("x-use-underline-position-properties", true).ns_initial(false), // xterm.c:32667; nsterm.m:11704 declares it 0
     V::listed("x-underline-at-descent-line", false), // xterm.c:32678
     V::listed("x-mouse-click-focus-ignore-position", false).x11_only(), // xterm.c:32689
     V::listed("x-frame-normalize-before-maximize", false).x11_only(), // xterm.c:32812
@@ -350,7 +377,7 @@ pub fn register_bootstrap_vars(obarray: &mut Obarray) {
         if !var.surfaces.contains(surface) {
             continue;
         }
-        obarray.define_bool_variable(var.name, var.initial, var.byte_boolean_vars);
+        obarray.define_bool_variable(var.name, var.value_on(surface), var.byte_boolean_vars);
     }
 }
 

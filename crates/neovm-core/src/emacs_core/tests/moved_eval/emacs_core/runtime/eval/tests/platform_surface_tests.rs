@@ -122,6 +122,17 @@ fn ns_surface_binds_the_ns_c_family_and_omits_the_x11_c_family() {
         }
         assert_eq!(boundp(&mut eval, "x-max-tooltip-size"), "OK t");
         assert_eq!(boundp(&mut eval, "x-toolkit-scroll-bars"), "OK t");
+        // GNU's two per-surface initializers: nsterm.m:11700 sets
+        // x-toolkit-scroll-bars to t and nsterm.m:11704 starts
+        // x-use-underline-position-properties at 0.
+        assert_eq!(
+            value(&mut eval, "(symbol-value 'x-toolkit-scroll-bars)"),
+            "OK t"
+        );
+        assert_eq!(
+            value(&mut eval, "(symbol-value 'x-use-underline-position-properties)"),
+            "OK nil"
+        );
     });
 }
 
@@ -169,5 +180,15 @@ fn x11_surface_binds_the_x11_c_family_and_omits_the_ns_c_family() {
         }
         assert_eq!(boundp(&mut eval, "x-max-tooltip-size"), "OK t");
         assert_eq!(boundp(&mut eval, "x-toolkit-scroll-bars"), "OK t");
+        // The X11 values: xterm.c:32699 names the toolkit, and
+        // xterm.c:32667 starts x-use-underline-position-properties true.
+        assert_eq!(
+            value(&mut eval, "(symbol-value 'x-toolkit-scroll-bars)"),
+            "OK gtk"
+        );
+        assert_eq!(
+            value(&mut eval, "(symbol-value 'x-use-underline-position-properties)"),
+            "OK t"
+        );
     });
 }

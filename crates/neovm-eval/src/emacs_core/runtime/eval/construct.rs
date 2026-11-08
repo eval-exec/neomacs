@@ -1995,12 +1995,16 @@ impl Context {
         // stay below, outside the match: `x-toolkit-scroll-bars'
         // (xterm.c:32699, nsterm.m:11700) and `x-max-tooltip-size'
         // (xfns.c:10436, nsfns.m:4245).
+        // `xterm.c:32699' starts it at the toolkit symbol (`gtk' for this
+        // Linux reference build; motif/xaw3d/xaw are the other configure
+        // choices, Qnil without toolkit scroll bars), while `nsterm.m:11700'
+        // and w32term.c set Qt.  One declaration, host-keyed value.
         obarray.seed_value(
             "x-toolkit-scroll-bars",
-            if cfg!(target_os = "windows") {
-                Value::T
-            } else {
-                Value::symbol("gtk")
+            match crate::platform_surface::platform_surface() {
+                crate::platform_surface::PlatformSurface::X11 => Value::symbol("gtk"),
+                crate::platform_surface::PlatformSurface::Ns
+                | crate::platform_surface::PlatformSurface::W32 => Value::T,
             },
         );
         obarray.make_special("x-toolkit-scroll-bars");
