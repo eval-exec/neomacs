@@ -1,9 +1,10 @@
 //! Rust implementation of the closed lookup ABI for Miri, never a native
 //! compilation substitute in the feature manifest or native kernel tests.
-use super::*;
-use neovm_value::tagged::gc::{
-    ExecutionTestHomes, ExecutionTestSeed, PlainSymbolBacking, with_test_prepared_cell_execution,
+use super::super::execution_fixtures::{
+    ExecutionTestHomes, ExecutionTestSeed, with_test_prepared_cell_execution,
 };
+use super::*;
+use neovm_value::tagged::gc::PlainSymbolBacking;
 
 /// # Safety
 /// Pointers identify initialized ParallelRuntime and CellInput objects retained

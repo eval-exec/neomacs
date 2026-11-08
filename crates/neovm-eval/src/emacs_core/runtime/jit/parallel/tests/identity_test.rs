@@ -1,8 +1,8 @@
-use super::*;
-use neovm_value::tagged::gc::{
-    ExecutionTestHomes, ExecutionTestSeed, FunctionStep, PlainSymbolBacking,
-    with_test_prepared_cell_execution,
+use super::execution_fixtures::{
+    ExecutionTestHomes, ExecutionTestSeed, with_test_prepared_cell_execution,
 };
+use super::*;
+use neovm_value::tagged::gc::{FunctionStep, PlainSymbolBacking};
 use std::num::NonZeroU32;
 
 fn oracle() -> [&'static str; 8] {

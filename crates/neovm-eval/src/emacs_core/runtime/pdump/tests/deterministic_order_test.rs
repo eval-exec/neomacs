@@ -5,8 +5,7 @@
 //! Compare the real converter's section bytes AND heap descriptors, so sorting
 //! an already encoded manager cannot hide nondeterministic first-visit IDs.
 
-#[doc(hidden)]
-pub(crate) use super::{
+use super::{
     Context, autoloads_image, coding_system_image, convert, face_image, object_value_codec,
     runtime_managers_image, types,
 };

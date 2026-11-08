@@ -526,6 +526,77 @@ impl<'heap, K: EraKeeper> ParallelHeapEra<'heap, K> {
     ) -> Result<symbol_authority::PreparedUnaryFunction, FunctionError> {
         self.core.prepare_unary_function_symbol(key)
     }
+
+    /// Same preparation as [`Self::prepare_hof_builtin`]. The production
+    /// entry stays `pub(crate)`; this spelling is the cross-crate route for
+    /// the re-homed eval cohort fixture.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn prepare_hof_builtin_for_test(
+        &self,
+        operation: super::super::function_write_hooks::HofOperation,
+        key: &SymbolHandle,
+    ) -> Result<symbol_authority::PreparedHofBuiltin, FunctionError> {
+        self.prepare_hof_builtin(operation, key)
+    }
+
+    /// Same preparation as [`Self::prepare_unary_function_symbol`]. The
+    /// production entry stays `pub(crate)`.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn prepare_unary_function_symbol_for_test(
+        &self,
+        key: &SymbolHandle,
+    ) -> Result<symbol_authority::PreparedUnaryFunction, FunctionError> {
+        self.prepare_unary_function_symbol(key)
+    }
+
+    /// Copied publication census for the re-homed eval fixture. No registry,
+    /// table, or chunk reference escapes: heap id, first-chunk address,
+    /// registry `(epoch, count)`, table generation, retired count, slots,
+    /// chunk count, and chunk slots.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn publication_census_for_test(
+        &self,
+    ) -> Result<
+        (
+            crate::tagged::gc::HeapIdentity,
+            usize,
+            (u64, usize),
+            u64,
+            usize,
+            usize,
+            usize,
+            usize,
+        ),
+        RegistrationError,
+    > {
+        let registry = self.core.registry();
+        let view = registry.symbols.tables.view();
+        let table = view.table();
+        let (generation, retired) = registry
+            .symbols
+            .tables
+            .stats()
+            .map_err(crate::tagged::gc::symbol_table::publication_error)?
+            .copied_counts_for_test();
+        let first_chunk = table
+            .chunk(0usize.into())
+            .expect("seeded first chunk")
+            .as_ptr()
+            .addr();
+        Ok((
+            registry.heap,
+            first_chunk,
+            crate::intern::parallel::identity_census_for_test(),
+            generation,
+            retired,
+            table.slots().get(),
+            table.chunk_count().get(),
+            table.chunk_slots().get(),
+        ))
+    }
 }
 
 #[cfg(any(test, feature = "test-support"))]

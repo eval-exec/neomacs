@@ -286,15 +286,15 @@ static_assertions::assert_not_impl_any!(ParallelCompiledCode: Clone, Copy);
 static_assertions::assert_not_impl_any!(ParallelCompiledCode: Sync);
 static_assertions::assert_impl_all!(ScalarProgram: Send, Sync, Copy);
 
-#[cfg(test)]
-#[path = "parallel/tests/scalar_test.rs"]
-mod tests;
-
 /// Execution fixtures re-homed out of neovm-value: the cohort/hof builders
 /// and their inputs keep every assertion body; this module supplies the
 /// evaluator capabilities they need in-crate.
 #[cfg(test)]
 mod execution_fixtures;
+
+#[cfg(test)]
+#[path = "parallel/tests/scalar_test.rs"]
+mod tests;
 #[cfg(test)]
 pub(crate) use tests::compiled_entry_manifest as compiled_entry_manifest_for_test;
 

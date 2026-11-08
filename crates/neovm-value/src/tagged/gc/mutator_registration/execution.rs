@@ -146,6 +146,24 @@ impl ExecutionActivation<'_, '_, '_> {
         self.registry.symbols.tables.view()
     }
 
+    /// Copied `(slots, chunk count, chunk slots, first-chunk address)` of the
+    /// view [`Self::table_view`] returns. The table borrow does not escape.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn published_table_census_for_test(&self) -> (usize, usize, usize, Option<usize>) {
+        let view = self.table_view();
+        let table = view.table();
+        let first = table
+            .chunk(0usize.into())
+            .map(|chunk| chunk.as_ptr().addr());
+        (
+            table.slots().get(),
+            table.chunk_count().get(),
+            table.chunk_slots().get(),
+            first,
+        )
+    }
+
     /// The stack-confined consumer loads one immutable descriptor from this
     /// slot, never from the mutable backing spine. IN_SLICE covers all uses.
     #[doc(hidden)]
@@ -179,7 +197,6 @@ static_assertions::assert_not_impl_any!(ParallelExecutionAdmission<'static>: Clo
 static_assertions::assert_not_impl_any!(ExecutionActivation<'static, 'static, 'static>: Send, Sync, Clone, Copy);
 static_assertions::assert_impl_all!(ImmediateResult: Send, Sync, Copy);
 
-// Slim parent for the restored cohort/hof fixture files (LEAD 21:5xZ). The
-// execution fixture helper and its tests now live only in core's re-homed
-// execution/tests.rs; this module keeps the non-duplicated cohort/hof
-// fixtures, which remain the single home their eval consumers will use.
+// The cohort/hof fixtures that used to live here moved to eval. They name
+// the core crate's emacs_core module, which this crate does not have, and
+// their eval consumers are the only callers. Core keeps the separate cell fixture.

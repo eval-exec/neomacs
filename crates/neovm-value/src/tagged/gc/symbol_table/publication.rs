@@ -107,6 +107,13 @@ pub(crate) struct TableStatistics {
     pub(crate) retired: RetiredTableCount,
     pub(crate) retained_bytes: RetainedTableBytes,
 }
+impl TableStatistics {
+    /// Copied `(generation, retired)` scalars. The newtypes stay crate-private.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn copied_counts_for_test(self) -> (u64, usize) {
+        (self.generation.0.get(), self.retired.get())
+    }
+}
 
 #[cfg(feature = "test-support")]
 impl TableStatistics {

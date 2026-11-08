@@ -121,6 +121,16 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
             .map_err(super::super::super::symbol_table::publication_error)
     }
 
+    /// Copied `(generation, retired)` of the live publication ledger. The
+    /// `TableStatistics` newtypes stay inside value.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn table_statistics_counts_for_test(&self) -> Result<(u64, usize), RegistrationError> {
+        Ok(self
+            .initial_table_statistics_for_test()?
+            .copied_counts_for_test())
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn initial_fault_for_test(
         &mut self,

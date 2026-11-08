@@ -10,17 +10,26 @@
 //!
 //! This parent keeps only what the cohort/hof children need: the shared
 //! import preamble, `ActualMode` and the value-local `FixtureReceipt`.
+mod cell;
 mod cohort;
 mod hof;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::world::ParallelHeapEraWorldCollectExt;
+pub(crate) use crate::test_support::execution_fixtures::ExecutionTestHomes;
+#[allow(unused_imports)]
+pub(crate) use cell::{
+    ExecutionTestSeed, with_test_prepared_cell_execution, with_test_prepared_execution,
+};
 #[allow(unused_imports)]
 pub(crate) use cohort::{
     CohortPhase, CohortSize, PublicationFacts, PublicationInputs, prepared_hof_cohort,
-    prepared_publication_cohort,
+    prepared_hof_cohort as with_test_prepared_hof_cohort, prepared_publication_cohort,
+    prepared_publication_cohort as with_test_prepared_publication_cohort,
 };
 #[allow(unused_imports)]
-pub(crate) use hof::{HofTestInputs, prepared_hof_fixture};
+pub(crate) use hof::{
+    HofTestInputs, prepared_hof_fixture, prepared_hof_fixture as with_test_prepared_hof_execution,
+};
 use neovm_value::tagged::gc::mutator_registration::*;
 use neovm_value::tagged::gc::{Gen1Admission, Gen1AdmissionError, HeapIdentity};
 use neovm_value::tagged::value::{Fixnum, TaggedValue};
@@ -31,6 +40,10 @@ use neovm_value::test_support::authority::{
     registry_first_chunk_word_for_test, registry_publication_facts_for_test, rendezvous, retry,
     retry_owned, suppress_for_test, take_legacy_roots_for_test,
     with_registry_admission_gate_for_test,
+};
+#[allow(unused_imports)]
+pub(crate) use neovm_value::test_support::authority::{
+    Deadline as ExecutionTestDeadline, Retry as ExecutionTestRetry, retry as execution_test_retry,
 };
 // The retry helpers the consumers need are named directly at their
 // authority fence path (TA2: a rename must not resolve to a fence module).
@@ -51,3 +64,4 @@ pub(crate) enum FixtureReceipt {
     Gen1Completed,
     TelemetryRefused,
 }
+pub(crate) use FixtureReceipt as ExecutionFixtureReceipt;

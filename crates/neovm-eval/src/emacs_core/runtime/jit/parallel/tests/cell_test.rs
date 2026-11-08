@@ -1,7 +1,8 @@
-use super::*;
-use neovm_value::tagged::gc::{
-    ExecutionTestHomes, ExecutionTestSeed, PlainSymbolBacking, with_test_prepared_cell_execution,
+use super::execution_fixtures::{
+    ExecutionTestHomes, ExecutionTestSeed, with_test_prepared_cell_execution,
 };
+use super::*;
+use neovm_value::tagged::gc::PlainSymbolBacking;
 
 pub(super) fn with_cell(
     read: CellRead,

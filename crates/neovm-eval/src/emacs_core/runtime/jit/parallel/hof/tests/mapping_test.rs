@@ -1,10 +1,10 @@
 //! Real compiled manifest; Rust ABI controls remain separate Miri evidence.
-use super::*;
-use neovm_value::tagged::gc::RunAccessUnaryExt;
-use neovm_value::tagged::gc::{
-    ExecutionFixtureReceipt, ExecutionTestHomes, HofTestInputs, PlainSymbolBacking,
-    with_test_prepared_hof_execution,
+use super::super::execution_fixtures::{
+    ExecutionFixtureReceipt, ExecutionTestHomes, HofTestInputs, with_test_prepared_hof_execution,
 };
+use super::*;
+use neovm_value::tagged::gc::PlainSymbolBacking;
+use neovm_value::tagged::gc::RunAccessUnaryExt;
 use neovm_value::tagged::value::TaggedValue;
 
 fn oracle() -> [&'static str; 6] {

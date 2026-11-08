@@ -1,4 +1,9 @@
 //! Finite native readers, sealed writers and fresh names on the same real era.
+use super::execution_fixtures::{
+    CohortPhase, CohortSize, ExecutionFixtureReceipt, ExecutionTestDeadline, ExecutionTestHomes,
+    ExecutionTestRetry, PublicationInputs, execution_test_retry,
+    with_test_prepared_publication_cohort,
+};
 use super::owner_handoff_tests::{function, registration, retry};
 use super::*;
 use neovm_value::intern::{
@@ -6,11 +11,8 @@ use neovm_value::intern::{
     parallel::{identity_census_for_test, name_publication_for_test},
 };
 use neovm_value::tagged::gc::RunAccessUnaryExt;
-use neovm_value::tagged::gc::function_write_hooks::HofOperation;
 use neovm_value::tagged::gc::{
-    CohortPhase, CohortSize, ExecutionFixtureReceipt, ExecutionTestDeadline, ExecutionTestHomes,
-    ExecutionTestRetry, FunctionStep, GlobalError, InitialInternError, PlainSymbolBacking,
-    PublicationInputs, execution_test_retry, with_test_prepared_publication_cohort,
+    FunctionStep, GlobalError, HofOperation, InitialInternError, PlainSymbolBacking,
 };
 use neovm_value::tagged::value::TaggedValue;
 use std::cell::Cell;
@@ -502,22 +504,22 @@ fn verify_committed<'era>(
         census,
         "existing/soft lookups never bump the registry epoch"
     );
-    let after = execution_test_retry(
+    let (after_generation, after_retired) = execution_test_retry(
         ExecutionTestDeadline::contention(),
-        || run.initial_table_statistics_for_test(),
+        || run.table_statistics_counts_for_test(),
         registration,
     )
     .map_err(|error| format!("publication table statistics: {error:?}"))?;
-    assert_ne!(after.generation, inputs.facts.tables.generation);
-    assert!(after.retired.get() > inputs.facts.tables.retired.get());
+    assert_ne!(after_generation, inputs.facts.table_generation);
+    assert!(after_retired > inputs.facts.table_retired);
     admission
         .with_activation(run, home, |activation| {
-            let view = activation.table_view();
-            let table = view.table();
-            assert!(table.slots().get() > inputs.facts.slots.get());
-            assert!(table.chunk_count().get() >= inputs.facts.chunks.get() + 2);
-            assert_eq!(table.chunk_slots(), inputs.facts.chunk_slots);
-            assert!(inputs.facts.original_chunk_is_retained(table));
+            let (slots, chunk_count, chunk_slots, first_chunk) =
+                activation.published_table_census_for_test();
+            assert!(slots > inputs.facts.slots);
+            assert!(chunk_count >= inputs.facts.chunks + 2);
+            assert_eq!(chunk_slots, inputs.facts.chunk_slots);
+            assert!(inputs.facts.original_chunk_is_retained(first_chunk));
         })
         .map_err(|error| format!("publication descriptor view: {error:?}"))?;
     eprintln!(

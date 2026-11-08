@@ -368,6 +368,16 @@ impl QuiescentCollector<'_> {
         self.heap
     }
 
+    /// Copied generational-mode bit of this exclusive loan. The heap stays
+    /// inside the collector; callers only learn the mode the admission check
+    /// reads.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn generational_enabled_for_test(&mut self) -> bool {
+        self.registration_heap_mut()
+            .tagged_heap_generational_enabled()
+    }
+
     pub fn heap_identity(&self) -> HeapIdentity {
         self.heap.heap_identity()
     }

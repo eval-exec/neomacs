@@ -1,6 +1,7 @@
 use super::cell_tests::with_cell;
+use super::execution_fixtures::{ExecutionTestHomes, ExecutionTestSeed};
 use super::*;
-use neovm_value::tagged::gc::{ExecutionTestHomes, ExecutionTestSeed, PlainSymbolBacking};
+use neovm_value::tagged::gc::PlainSymbolBacking;
 
 fn oracle() -> [ImmediateResult; 6] {
     include_str!("fboundp_oracle.expected")

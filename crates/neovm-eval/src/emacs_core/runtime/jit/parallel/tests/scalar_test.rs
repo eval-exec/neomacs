@@ -1,5 +1,5 @@
+use super::execution_fixtures::{ExecutionTestHomes, with_test_prepared_execution};
 use super::*;
-use neovm_value::tagged::gc::{ExecutionTestHomes, with_test_prepared_execution};
 use neovm_value::tagged::value::{Fixnum, TaggedValue};
 
 fn with_scalar(

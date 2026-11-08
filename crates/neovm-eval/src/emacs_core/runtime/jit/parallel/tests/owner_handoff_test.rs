@@ -1,11 +1,10 @@
 //! Unique finalized code moves to each owner; rooted answers survive real stops.
-use super::*;
-use neovm_value::tagged::gc::function_write_hooks::HofOperation;
-use neovm_value::tagged::gc::{
+use super::execution_fixtures::{
     CohortPhase, CohortSize, ExecutionFixtureReceipt, ExecutionTestDeadline, ExecutionTestHomes,
-    ExecutionTestRetry, GlobalError, HofTestInputs, PlainSymbolBacking, execution_test_retry,
-    with_test_prepared_hof_cohort,
+    ExecutionTestRetry, HofTestInputs, execution_test_retry, with_test_prepared_hof_cohort,
 };
+use super::*;
+use neovm_value::tagged::gc::{GlobalError, HofOperation, PlainSymbolBacking};
 use neovm_value::tagged::value::TaggedValue;
 
 struct Kernels {
