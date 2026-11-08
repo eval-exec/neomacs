@@ -84,6 +84,12 @@ mod emacs_core_runtime_eval_tests_platform_surface_tests_rs;
 #[path = "emacs_core/runtime/eval/tests/attention_test.rs"]
 mod emacs_core_runtime_eval_tests_attention_test_rs;
 
+// The public profiler.el workflow needs the canonical boot image, which eval
+// cannot construct. The eval-internal profiler tests stayed in neovm-eval.
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/profiler_memory_workflow_test.rs"]
+mod emacs_core_runtime_eval_tests_profiler_memory_workflow_test_rs;
+
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/tests/coherence_hooks_test.rs"]
 mod emacs_core_runtime_eval_tests_coherence_hooks_test_rs;
