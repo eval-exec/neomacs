@@ -415,3 +415,8 @@ mod emacs_core_runtime_eval_tests_redisplay_hook_ownership_facade_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/bytecode/tests/vm_window_surface_test.rs"]
 mod emacs_core_runtime_bytecode_tests_vm_window_surface_test_rs;
+// VM tests whose fixture is the system host-input publisher or a display
+// window rect. Eval cannot name those crates. Assertions are unchanged.
+#[cfg(test)]
+#[path = "emacs_core/runtime/bytecode/tests/vm_display_host_test.rs"]
+mod emacs_core_runtime_bytecode_tests_vm_display_host_test_rs;
