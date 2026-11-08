@@ -16479,6 +16479,70 @@ fn a_readiness_publication_of_a_child_exit_forms_the_status_notify_visit_set() {
     );
 }
 
+/// The other half of the same guarantee: a status the INITIAL POLL discovers
+/// in its pre-read check must enter the tick-pair visit set too.
+///
+/// GNU's first pass over a wait runs `status_notify (NULL, wait_proc)` before
+/// it blocks (src/process.c:5540-5556), whose per-process guard is the tick
+/// pair (:7892).  This port's first pass runs `handle_child_signal`'s walk and
+/// that visit, then the readiness service's pre-read status check -- which is
+/// also GNU's already-delivered `raw_status_new` probe.  When a child exits
+/// between the walk and that probe, the probe is the first code to see it.
+/// This test forces exactly that ordering by letting the child die while no
+/// wait runs, then calling the initial-poll readiness service directly with
+/// `publish_status_before_readable_output = true` (the flag the first pass
+/// uses).  The status must be published by status_notify's visit, not settled
+/// per process outside it: before the pass-keyed fix the pre-read branch keyed
+/// on the publish flag alone, so this published the status and marked the tick
+/// notified with visited=0 -- the residual STATUS-NOTIFY-FLAKE window
+/// (6/200 runs at b556dcc5c7).
+#[cfg(unix)]
+#[test]
+fn an_initial_poll_readiness_discovery_forms_the_status_notify_visit_set() {
+    crate::test_utils::init_test_tracing();
+    crate::emacs_core::os_signal::install();
+    let sh = find_bin("sh");
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let process = eval
+        .eval_str(&format!(
+            r#"(make-process :name "pwinitial" :buffer nil :noquery t
+                              :connection-type 'pipe
+                              :command '("{sh}" "-c" "exit 0")
+                              :sentinel (lambda (_p _s)
+                                          (setq pw-initial-poll-sentinel t)))"#
+        ))
+        .expect("make-process");
+    let id = process.as_process_id().expect("real child process");
+    eval.obarray_mut()
+        .set_symbol_value("pw-initial-poll", process);
+    // Let the child exit before any wait service runs.  No process API is
+    // touched in between: the point is that nothing has harvested it, so the
+    // pre-read check below is the FIRST code to observe the exit.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let before = crate::emacs_core::process::child_status::status_notify_totals();
+    eval.poll_process_output_for_readiness(vec![id], None, true)
+        .expect("initial-poll readiness pass");
+    let after = crate::emacs_core::process::child_status::status_notify_totals();
+    let walks = after.0 - before.0;
+    let stamped = after.1 - before.1;
+    let visited = after.2 - before.2;
+    assert!(
+        visited > 0,
+        "the initial poll's child-exit publication bypassed GNU's tick-pair \
+         visit set: walks={walks} stamped={stamped} visited={visited}"
+    );
+    let observed = eval.eval_str(
+        r#"(list (process-live-p pw-initial-poll)
+                 (process-status pw-initial-poll)
+                 pw-initial-poll-sentinel)"#,
+    );
+    assert_eq!(
+        format_eval_result(&observed),
+        "OK (nil exit t)",
+        "the visit must publish the status and run the sentinel"
+    );
+}
+
 /// GNU's `child_signal_notify` exists for exactly one reason, and GNU writes
 /// it out above `deleted_pid_list` (src/process.c:7539-7547):
 ///

@@ -8768,19 +8768,26 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                         ProcessOutputDrainDisposition::Terminal => {}
                     }
                 }
-                if publish_status_before_readable_output {
-                    // status_notify's own pass: this process was already in
-                    // the visit list computed by the caller, so run its body.
+                if pass == ProcessOutputServicePass::StatusNotification {
+                    // status_notify's own pass over its visit list: the caller
+                    // (`notify_processes_with_unnotified_status_change`) has
+                    // already formed the tick-pair visit and marked it, so run
+                    // the per-process body.  Key on the PASS, not on
+                    // `publish_status_before_readable_output`: the initial-poll
+                    // READINESS pass also publishes before reading output
+                    // (GNU's already-delivered `raw_status_new`, :5540-5556),
+                    // and a change IT discovers has not been visited yet.
                     outcome.absorb(self.run_process_status_notification(pid, target_process)?);
                 } else {
-                    // A READINESS pass discovered the change (the pidfd woke
-                    // before the pipe became readable).  GNU has one
-                    // publication path for that too: the tick pair decides
-                    // membership in `status_notify`'s alist visit (:7892).
-                    // Settling it per process here was the third site of the
-                    // STATUS-NOTIFY-FLAKE race: a child whose exit was noticed
-                    // before its output stayed out of the visit set
-                    // (walks=80 stamped=0 visited=0 in the rare run).
+                    // A READINESS pass discovered the change: the initial poll,
+                    // or a readiness wake where the pidfd fired before the pipe
+                    // became readable.  GNU has one publication path for that
+                    // too: the tick pair decides membership in `status_notify`'s
+                    // alist visit (:7892).  Settling it per process here was the
+                    // remaining site of the STATUS-NOTIFY-FLAKE race: a child
+                    // whose exit was noticed before its output stayed out of the
+                    // visit set (walks=80 stamped=0 visited=0; the residual
+                    // 6/200 at b556dcc5c7 that the first cut left).
                     outcome.absorb(
                         self.notify_processes_with_unnotified_status_change(target_process)?,
                     );
