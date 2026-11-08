@@ -12,9 +12,7 @@
 //! grows, and a compile that misses a concurrent mark sees it on the next
 //! one (the same contract as the numeric feedback beside it).
 
-pub(crate) use neovm_value::value::jit_runtime::retreat::{
-    RetreatBit, SiteRetreat, SiteRetreatTable,
-};
+pub(crate) use neovm_value::value::jit_runtime::retreat::{RetreatBit, SiteRetreat};
 use std::sync::OnceLock;
 use std::sync::atomic::Ordering;
 
