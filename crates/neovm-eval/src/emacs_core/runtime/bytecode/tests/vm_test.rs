@@ -2,7 +2,9 @@ use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
-use crate::emacs_core::eval::{ConditionFrame, Context, GuiFrameHostSize, ResumeTarget};
+use crate::emacs_core::eval::{
+    ConditionFrame, Context, DisplayHost, GuiFrameHostRequest, GuiFrameHostSize, ResumeTarget,
+};
 use crate::emacs_core::jit::feedback::CallSiteFeedbackExt;
 use crate::emacs_core::jit::feedback::CallSitesExt;
 use crate::emacs_core::jit::feedback::RuntimeStateCallSitesExt;
@@ -4278,7 +4280,7 @@ fn vm_frame_parameter_and_resize_builtins_use_shared_runtime_state() {
 
 #[derive(Clone, Default)]
 struct VmRecordingDisplayHost {
-    realized: Rc<RefCell<Vec<crate::emacs_core::GuiFrameHostRequest>>>,
+    realized: Rc<RefCell<Vec<GuiFrameHostRequest>>>,
     primary_size: Option<GuiFrameHostSize>,
 }
 
@@ -4292,19 +4294,13 @@ impl VmRecordingDisplayHost {
     }
 }
 
-impl crate::emacs_core::DisplayHost for VmRecordingDisplayHost {
-    fn realize_gui_frame(
-        &mut self,
-        request: crate::emacs_core::GuiFrameHostRequest,
-    ) -> Result<(), String> {
+impl DisplayHost for VmRecordingDisplayHost {
+    fn realize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String> {
         self.realized.borrow_mut().push(request);
         Ok(())
     }
 
-    fn resize_gui_frame(
-        &mut self,
-        _request: crate::emacs_core::GuiFrameHostRequest,
-    ) -> Result<(), String> {
+    fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
 
