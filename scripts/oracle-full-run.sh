@@ -83,6 +83,15 @@ case "$mode" in
 esac
 
 export NEOVM_BINARY_PATH="$binary"
+# The oracle package also contains MELPA-support probes: the treesit grammar
+# family resolves its Neomacs runtime through neomacs_binary(), which reads
+# NEOMACS_BIN and falls back to <workspace>/target/release/neomacs.  The
+# recipe's release binary can live in an external CARGO_TARGET_DIR, outside
+# the workspace, so export the same artifact under that name as well; without
+# it those tests fail to spawn their editor (Launch NotFound) and never reach
+# a parity comparison.  NEOMACS_RUNTIME_ROOT mirrors the CI convention.
+export NEOMACS_BIN="$binary"
+export NEOMACS_RUNTIME_ROOT="$root"
 export NEOVM_FORCE_ORACLE_PATH="$oracle"
 export NEOVM_ORACLE_MODE="$mode"
 export TMPDIR="${TMPDIR:-/tmp}"
