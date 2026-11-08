@@ -3038,7 +3038,16 @@ fn pc2_rows_violation(
     text: &str,
     seams: &[Pc2Seam],
 ) -> Result<(), String> {
-    let files = pc2_source_files(workspace)?;
+    // pc2_source_files returns canonicalized paths (the module walker
+    // canonicalizes every file it visits). The workspace may be named through
+    // a symlinked temp root -- macOS /tmp and /var are symlinks to /private,
+    // and tempdir() keeps the $TMPDIR spelling -- so canonicalize it too, or
+    // strip_prefix below misses every file and a planted unnamed call site is
+    // silently GREEN.
+    let workspace = workspace
+        .canonicalize()
+        .map_err(|error| format!("B3_PC2_WORKSPACE {}: {error}", workspace.display()))?;
+    let files = pc2_source_files(&workspace)?;
     for (index, line) in text.lines().enumerate().skip(1) {
         let fields: Vec<&str> = line.split('\t').collect();
         if fields.len() != 6 || fields[1] != "pc2" {
@@ -3065,7 +3074,7 @@ fn pc2_rows_violation(
         let method_calls = pc2_method_takes_self(&ast.items, &target)?;
         let mut unnamed = BTreeSet::new();
         for file in &files {
-            let Ok(relative) = file.strip_prefix(workspace) else {
+            let Ok(relative) = file.strip_prefix(&workspace) else {
                 continue;
             };
             let relative = relative.to_string_lossy().replace('\\', "/");
@@ -3249,6 +3258,43 @@ fn architecture_mutation_pc2_unnamed_call_site_is_rejected() {
     let error = pc2_rows_violation(dir.path(), "PROMOTION-LEDGER-X.tsv", &missing, &[])
         .expect_err("missing declaration");
     assert!(error.contains("B3_PC2_MISSING_DECLARATION"), "{error}");
+}
+
+#[test]
+#[cfg(unix)]
+fn architecture_mutation_pc2_symlinked_workspace_still_detects_call_sites() {
+    // The module walker canonicalizes every source file it returns, while a
+    // workspace may be named through a symlinked temp root: macOS /tmp and
+    // /var are symlinks to /private, and tempdir() keeps the $TMPDIR spelling.
+    // If the workspace side is not canonicalized too, strip_prefix misses
+    // every file, the scan sees no call sites, and a planted unnamed caller
+    // is silently GREEN.
+    let dir = pc2_fixture_workspace();
+    let src = dir.path().join("crates/neovm-value/src");
+    std::fs::write(
+        src.join("lib.rs"),
+        "pub mod installer_mod;\npub mod probe;\n",
+    )
+    .unwrap();
+    std::fs::write(src.join("installer_mod.rs"), "pub fn installer() {}\n").unwrap();
+    std::fs::write(
+        src.join("probe.rs"),
+        "fn named_caller() { crate::installer_mod::installer(); }\nfn secret_caller() { crate::installer_mod::installer(); }\n",
+    )
+    .unwrap();
+    let alias_root = tempfile::tempdir().unwrap();
+    let alias = alias_root.path().join("workspace");
+    std::os::unix::fs::symlink(dir.path(), &alias).unwrap();
+    let header = "item\tkind\told_vis\tfile:line\tmodule\treason\n";
+    let row = format!(
+        "{header}installer\tpc2\t-\tcrates/neovm-value/src/installer_mod.rs:1\tm\texact caller named_caller only\n"
+    );
+    let error = pc2_rows_violation(&alias, "PROMOTION-LEDGER-X.tsv", &row, &[])
+        .expect_err("unnamed call site through a symlinked workspace");
+    assert!(
+        error.contains("B3_PC2_UNNAMED_CALL_SITE") && error.contains("secret_caller"),
+        "{error}"
+    );
 }
 
 #[test]
