@@ -298,7 +298,8 @@ fn gen0_native_two_store_leaf_closes_only_the_first_read_owner() {
     let _mode = ObservedMode;
     // No initial collection: both physical empty intervals come from this
     // retained bump sequence rather than unrelated recycled cells.
-    let mut context = crate::test_utils::with_legacy_gc(Context::new);
+    let mut context =
+        crate::test_utils::with_legacy_gc(|| Context::new(crate::test_utils::unit_runtime()));
     context.gc_stress = false;
     context.tagged_heap.set_gc_threshold(usize::MAX);
     assert!(!context.tagged_heap.tagged_heap_generational_enabled());

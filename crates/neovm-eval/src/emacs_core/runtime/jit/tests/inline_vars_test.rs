@@ -806,7 +806,9 @@ fn osr_into_a_let_unbinds_inline_what_the_interpreter_bound() {
         for knob in [OFF, ALL] {
             force_inline_vars_for_test(Some(knob));
             crate::emacs_core::jit::force_osr_for_test(true);
-            let mut ctx = crate::test_utils::with_legacy_gc(Context::new);
+            let mut ctx = crate::test_utils::with_legacy_gc(|| {
+                Context::new(crate::test_utils::unit_runtime())
+            });
             // This test requires the original inline bind/unbind counts.
             crate::emacs_core::jit::cache::clear();
             ctx.eval_str("(setq osr-bound 17)").unwrap();

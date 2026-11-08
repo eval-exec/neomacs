@@ -81,7 +81,7 @@ fn keep(eval: &mut Context, srcs: &[&str]) -> Vec<Value> {
 // Stage A deliberately widens the generational window until C2.8; its stores
 // and survival behavior are tested in gc_generational through real entry points.
 fn legacy_context() -> Context {
-    crate::test_utils::with_legacy_gc(Context::new)
+    crate::test_utils::with_legacy_gc(|| Context::new(crate::test_utils::unit_runtime()))
 }
 
 /// A GEN1 evaluator whose collection pacing is out of the way until a test
