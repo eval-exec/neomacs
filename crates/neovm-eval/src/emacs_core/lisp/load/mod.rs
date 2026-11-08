@@ -5008,12 +5008,17 @@ fn is_gnu_preloaded_builtin_type_property(name: &str, prop: &str) -> bool {
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn restore_gnu_stale_preloaded_face_doc_refs(eval: &mut super::eval::Context) {
-    // GNU's dumped image can preserve a compiled-doc reference from loadup even
-    // when the installed .elc later shifts by a byte or two.  doc.c then returns
-    // nil after its one reload attempt because `custom-declare-face' does not
-    // redeclare an already-created face.  The current GNU oracle has exactly
-    // that state for this preloaded simple.el face: the offset points into the
-    // #@ length header, not at the doc body.
+    // GNU's dumped image stores the preloaded simple.el face doc reference as
+    // ("simple.elc" . POS), POS being the byte offset of the doc BODY in the
+    // installed simple.elc (the reader sees "#@LEN " and doc.c reads the body
+    // at POS).  A loadup (no-pdump) boot records the absolute file name
+    // instead, because purify-flag is clear while it loads simple.elc.  This
+    // normalizes that reference to GNU's dumped shape; the offset itself is
+    // GNU's and must not move.  The pre-2026-07 mirror subtracted two bytes
+    // for an older GNU dump whose stale offset pointed into the "#@LEN"
+    // header; the current GNU 31.1 oracle stores the body offset and
+    // face-documentation answers the docstring, so the shift only made the
+    // loadup path return nil.
     let face = Value::symbol("blink-matching-paren-offscreen");
     let prop = Value::symbol("face-documentation");
     let Ok(current) = super::builtins::builtin_get(eval, vec![face, prop]) else {
@@ -5032,11 +5037,8 @@ pub(crate) fn restore_gnu_stale_preloaded_face_doc_refs(eval: &mut super::eval::
     let Some(position) = current.cons_cdr().as_int() else {
         return;
     };
-    let stale_ref = Value::cons(
-        Value::string("simple.elc"),
-        Value::fixnum(position.saturating_sub(2)),
-    );
-    let _ = super::builtins::builtin_put(eval, vec![face, prop, stale_ref]);
+    let normalized_ref = Value::cons(Value::string("simple.elc"), Value::fixnum(position));
+    let _ = super::builtins::builtin_put(eval, vec![face, prop, normalized_ref]);
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up

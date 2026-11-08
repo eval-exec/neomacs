@@ -475,8 +475,15 @@ fn startup_environment_snapshot_is_independent_from_process_policy() {
     );
 }
 
+/// The loadup (no-pdump) boot records the preloaded face's doc reference with
+/// an absolute file name; normalization must keep GNU's byte offset into
+/// simple.elc intact.  GNU 31.1 stores the doc BODY offset for this face
+/// (simple.elc's "#@157 Face ..." record has the body at 323099; the oracle's
+/// (face-documentation 'blink-matching-paren-offscreen) answers the
+/// docstring).  The pre-fix mirror subtracted two bytes, pointing into the
+/// "#@157" header, and doc.c then returned nil.
 #[test]
-fn stale_preloaded_face_doc_ref_restore_is_idempotent() {
+fn preloaded_face_doc_ref_normalization_preserves_the_gnu_offset() {
     let mut eval = crate::test_utils::new_context();
     let face = Value::symbol("blink-matching-paren-offscreen");
     let prop = Value::symbol("face-documentation");
@@ -487,7 +494,7 @@ fn stale_preloaded_face_doc_ref_restore_is_idempotent() {
             prop,
             Value::cons(
                 Value::string("/tmp/neomacs/lisp/simple.elc"),
-                Value::fixnum(100),
+                Value::fixnum(323099),
             ),
         ],
     )
@@ -503,7 +510,12 @@ fn stale_preloaded_face_doc_ref_restore_is_idempotent() {
             .map(|name| neovm_value::emacs_char::to_utf8_lossy(name.as_bytes())),
         Some("simple.elc".to_string())
     );
-    assert_eq!(restored.cons_cdr().as_int(), Some(98));
+    assert_eq!(
+        restored.cons_cdr().as_int(),
+        Some(323099),
+        "the doc-body offset GNU stores must survive normalization; shifting it \
+         into the #@LEN header makes face-documentation return nil"
+    );
 
     restore_gnu_stale_preloaded_face_doc_refs(&mut eval);
     let restored_again = crate::emacs_core::builtins::builtin_get(&mut eval, vec![face, prop])
@@ -515,7 +527,41 @@ fn stale_preloaded_face_doc_ref_restore_is_idempotent() {
             .map(|name| neovm_value::emacs_char::to_utf8_lossy(name.as_bytes())),
         Some("simple.elc".to_string())
     );
-    assert_eq!(restored_again.cons_cdr().as_int(), Some(98));
+    assert_eq!(
+        restored_again.cons_cdr().as_int(),
+        Some(323099),
+        "normalization is idempotent at GNU's offset"
+    );
+}
+
+/// The pdump path already stores GNU's ("simple.elc" . POS) reference; the
+/// normalization must leave it untouched.
+#[test]
+fn preloaded_face_doc_ref_relative_gnu_ref_is_untouched() {
+    let mut eval = crate::test_utils::new_context();
+    let face = Value::symbol("blink-matching-paren-offscreen");
+    let prop = Value::symbol("face-documentation");
+    crate::emacs_core::builtins::builtin_put(
+        &mut eval,
+        vec![
+            face,
+            prop,
+            Value::cons(Value::string("simple.elc"), Value::fixnum(323099)),
+        ],
+    )
+    .expect("put dumped doc ref");
+
+    restore_gnu_stale_preloaded_face_doc_refs(&mut eval);
+    let restored = crate::emacs_core::builtins::builtin_get(&mut eval, vec![face, prop])
+        .expect("get restored doc ref");
+    assert_eq!(
+        restored
+            .cons_car()
+            .as_lisp_string()
+            .map(|name| neovm_value::emacs_char::to_utf8_lossy(name.as_bytes())),
+        Some("simple.elc".to_string())
+    );
+    assert_eq!(restored.cons_cdr().as_int(), Some(323099));
 }
 
 fn load_neomacs_gui_term_layer_for_test(eval: &mut Context) {
