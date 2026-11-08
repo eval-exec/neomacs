@@ -760,7 +760,6 @@ crates/neovm-value/src/symbol/mod.rs	fn	fn impl BufferlessValue::any_arm
 crates/neovm-value/src/symbol/mod.rs	fn	fn impl BufferlessValue::global_only
 crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::all_symbols
 crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::blv
-crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::blv_mut
 crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::bool_forwarder
 crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::canonical_boundp
 crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::canonical_boundp_id
@@ -796,8 +795,6 @@ crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::forwarder
 crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::function_epoch
 crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::get
 crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::get_by_id
-crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::get_mut
-crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::get_mut_by_id
 crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::get_or_intern
 crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::get_property
 crates/neovm-value/src/symbol/mod.rs	fn	fn impl Obarray::has_per_buffer_binding

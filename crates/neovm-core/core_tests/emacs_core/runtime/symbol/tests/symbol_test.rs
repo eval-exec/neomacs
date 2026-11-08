@@ -467,9 +467,11 @@ fn swap_plain_untrapped_value_refuses_every_slow_shape() {
     // Watched (GNU SYMBOL_TRAPPED_WRITE): refused, cell untouched.
     let watched = intern("swap-watched");
     ob.set_symbol_value_id(watched, Value::fixnum(3));
-    if let Some(sym) = ob.get_mut_by_id(watched) {
-        sym.set_trapped_write(SymbolTrappedWrite::Trapped);
-    }
+    neovm_value::test_support::authority::set_symbol_trapped_write_for_test(
+        &mut ob,
+        watched,
+        SymbolTrappedWrite::Trapped,
+    );
     assert!(
         ob.swap_plain_untrapped_value_id(watched, Value::fixnum(4))
             .is_none()
@@ -1066,7 +1068,8 @@ fn bare_obarray_reads_absent_then_follows_a_late_defvar_bool() {
         "unresolved: reads armed, so the reader resolves"
     );
     assert!(
-        ob.debug_on_next_call_bool_fwd(id).is_none(),
+        neovm_value::test_support::authority::debug_on_next_call_bool_fwd_for_test(&mut ob, id)
+            .is_none(),
         "no DEFVAR_BOOL"
     );
     assert!(
@@ -1098,7 +1101,8 @@ fn a_reattached_localized_debug_cell_is_what_the_fast_read_follows() {
     let id = intern("debug-on-next-call");
     ob.make_symbol_localized(id, Value::T);
     assert!(
-        ob.debug_on_next_call_bool_fwd(id).is_none(),
+        neovm_value::test_support::authority::debug_on_next_call_bool_fwd_for_test(&mut ob, id)
+            .is_none(),
         "no descriptor yet"
     );
     assert!(!ob.debug_on_next_call_armed_fast());
@@ -1125,17 +1129,19 @@ fn cloned_obarray_resolves_its_own_debug_on_next_call_cell() {
     let id = intern("debug-on-next-call");
     ob.define_bool_variable("debug-on-next-call", false, ByteBooleanVars::Listed);
 
-    let source = ob
-        .debug_on_next_call_bool_fwd(id)
-        .expect("DEFVAR_BOOL just installed the descriptor");
+    let source =
+        neovm_value::test_support::authority::debug_on_next_call_bool_fwd_for_test(&mut ob, id)
+            .expect("DEFVAR_BOOL just installed the descriptor");
     source.set(true);
 
     // Cache is primed in the source; the clone must start unresolved and find
     // its own duplicated cell (same value, different address).
     let mut cloned_ob = ob.clone();
-    let cloned = cloned_ob
-        .debug_on_next_call_bool_fwd(id)
-        .expect("clone duplicated the stateful forwarder");
+    let cloned = neovm_value::test_support::authority::debug_on_next_call_bool_fwd_for_test(
+        &mut cloned_ob,
+        id,
+    )
+    .expect("clone duplicated the stateful forwarder");
     assert!(
         !std::ptr::eq(source, cloned),
         "clone must not share the source's cell"
@@ -1151,13 +1157,19 @@ fn cloned_obarray_resolves_its_own_debug_on_next_call_cell() {
     cloned.set(false);
     source.set(true);
     assert!(
-        !cloned_ob.debug_on_next_call_bool_fwd(id).unwrap().get(),
+        !neovm_value::test_support::authority::debug_on_next_call_bool_fwd_for_test(
+            &mut cloned_ob,
+            id,
+        )
+        .unwrap()
+        .get(),
         "re-arming the source must not re-arm the clone"
     );
 
     // The memoized read and the uncached slot walk agree on the same cell.
     assert!(std::ptr::eq(
-        ob.debug_on_next_call_bool_fwd(id).unwrap(),
+        neovm_value::test_support::authority::debug_on_next_call_bool_fwd_for_test(&mut ob, id)
+            .unwrap(),
         ob.bool_forwarder(id).unwrap()
     ));
 }

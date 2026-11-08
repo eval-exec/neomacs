@@ -591,6 +591,31 @@ pub fn restore_function_epoch_for_test(
 ) {
     obarray.restore_function_epoch_raw(snapshot.0);
 }
+
+/// B5/R6 privacy re-narrow: set one symbol's trapped-write flag for the moved
+/// symbol tests. `Obarray::get_mut_by_id` is crate-private; this fence is the
+/// only test route to that flag write.
+pub fn set_symbol_trapped_write_for_test(
+    obarray: &mut crate::symbol::Obarray,
+    id: crate::intern::SymId,
+    trapped_write: crate::symbol::SymbolTrappedWrite,
+) -> bool {
+    let Some(symbol) = obarray.get_mut_by_id(id) else {
+        return false;
+    };
+    symbol.set_trapped_write(trapped_write);
+    true
+}
+
+/// B5/R6 privacy re-narrow: read the `debug-on-next-call` descriptor through
+/// the signed test route. The raw resolver stays crate-private in every build
+/// (the lazy-resolver compile contract names it).
+pub fn debug_on_next_call_bool_fwd_for_test(
+    obarray: &mut crate::symbol::Obarray,
+    id: crate::intern::SymId,
+) -> Option<&'static crate::forward::LispBoolFwd> {
+    obarray.debug_on_next_call_bool_fwd(id)
+}
 /// Value-FENCE row (peer 16:44:46Z): typed serial-fixture hook arming or
 /// disarming the concurrent SATB barrier without a GC thread. The original
 /// method is `pub(crate) unsafe fn`; this delegate keeps its contract.

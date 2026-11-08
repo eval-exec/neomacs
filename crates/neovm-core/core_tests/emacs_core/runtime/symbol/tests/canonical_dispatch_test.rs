@@ -122,7 +122,13 @@ fn canonical_pair_follows_live_boolean_and_clone_owns_its_descriptor() {
     let mut obarray = Obarray::new();
     let id = intern("debug-on-next-call");
     assert!(obarray.debug_on_next_call_armed_fast());
-    assert!(obarray.debug_on_next_call_bool_fwd(id).is_none());
+    assert!(
+        neovm_value::test_support::authority::debug_on_next_call_bool_fwd_for_test(
+            &mut obarray,
+            id
+        )
+        .is_none()
+    );
     assert!(!obarray.debug_on_next_call_armed_fast());
     obarray.define_bool_variable("debug-on-next-call", false, ByteBooleanVars::Listed);
     let source = obarray.bool_forwarder(id).expect("installed Boolean cell");
@@ -130,9 +136,9 @@ fn canonical_pair_follows_live_boolean_and_clone_owns_its_descriptor() {
     assert!(obarray.debug_on_next_call_armed_fast());
     let mut cloned = obarray.clone();
     assert!(cloned.debug_on_next_call_armed_fast());
-    let clone_cell = cloned
-        .debug_on_next_call_bool_fwd(id)
-        .expect("clone resolves its own forwarded cell");
+    let clone_cell =
+        neovm_value::test_support::authority::debug_on_next_call_bool_fwd_for_test(&mut cloned, id)
+            .expect("clone resolves its own forwarded cell");
     assert!(!std::ptr::eq(source, clone_cell));
     clone_cell.set(false);
     assert!(obarray.debug_on_next_call_armed_fast());
@@ -156,7 +162,13 @@ fn canonical_pair_debugger_discovery_is_read_only_until_publication() {
     assert_eq!(obarray.admission_debugger_for_test(), before);
     assert!(obarray.debug_on_next_call_armed_fast());
 
-    assert!(obarray.debug_on_next_call_bool_fwd(id).is_none());
+    assert!(
+        neovm_value::test_support::authority::debug_on_next_call_bool_fwd_for_test(
+            &mut obarray,
+            id
+        )
+        .is_none()
+    );
     assert!(!obarray.debug_on_next_call_armed_fast());
     assert_ne!(obarray.admission_debugger_for_test(), before);
 }

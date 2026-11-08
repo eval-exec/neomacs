@@ -61,6 +61,23 @@ pub mod authority {
         crate::emacs_core::builtins::file_notify::reset_file_notify_thread_locals();
     }
 
+    /// CG-1 fence (peer 11-08): GNU `makunbound` on the context's obarray
+    /// through the audited writer proxy.  The adapter method is `pub(crate)`;
+    /// this fence is the only cross-crate test route.
+    pub fn makunbound_for_test(context: &mut Context, name: &str) {
+        context.obarray_mut().makunbound(name);
+    }
+
+    /// CG-1 fence (peer 11-08): raise the whole-table function clock through
+    /// the audited writer proxy.  The adapter method is `pub(crate)`; this
+    /// fence is the only cross-crate test route.
+    pub fn invalidate_all_function_bindings_for_test(
+        context: &mut Context,
+        why: FunctionEpochBump,
+    ) {
+        context.obarray_mut().invalidate_all_function_bindings(why);
+    }
+
     /// P1 F1 FILE-NOTIFY FENCES (peer 12:57Z (c)): the event-injection and
     /// thread-local-registry fixtures stay authority-only.  The
     /// implementations live in the owning module, where the private fields
@@ -83,7 +100,7 @@ pub mod authority {
     use crate::emacs_core::eval::{CconvMemoEvent, CconvMemoMode, TrustRefusal};
     use crate::host_effect::wake::{ControlNudgePublisher, ControlWake, HostSessionControl};
     use neovm_value::intern::SymId;
-    use neovm_value::symbol::Obarray;
+    use neovm_value::symbol::{FunctionEpochBump, Obarray};
     use neovm_value::tagged::gc::{
         AllStopped, FacadeEpochRetention, FacadeMarkExclusionError, FrozenLegacyRoots,
         PlainSymbolBacking, RegistrationError, RendezvousError,

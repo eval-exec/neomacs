@@ -521,15 +521,10 @@ impl Deref for ObarrayWriteAccess<'_> {
         self.view
     }
 }
-/// TEST-SUPPORT-VIS row: moved tests write through the adapter; the impl is
-/// absent from every product build.
-#[cfg(any(test, feature = "test-support"))]
-impl std::ops::DerefMut for ObarrayWriteAccess<'_> {
-    #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Obarray {
-        self.view
-    }
-}
+// There is deliberately no `DerefMut for ObarrayWriteAccess`: the adapter is
+// the closed, method-only view, and every write goes through an audited
+// operation. A mutable deref would hand out `&mut Obarray` (and with it the
+// raw symbol accessors), which is exactly what the compile contracts reject.
 impl<'ctx> ObarrayWriteAccess<'ctx> {
     #[inline(always)]
     #[doc(hidden)]
@@ -752,7 +747,9 @@ impl ObarrayWriteAccess<'_> {
     pub fn function_epoch(&self) -> u64 {
         self.view.function_epoch()
     }
-    #[cfg(test)]
+    // Audited closed operation, test-support surface: the core tests raise the
+    // function clock through this adapter method instead of a mutable deref.
+    #[cfg(any(test, feature = "test-support"))]
     #[inline(always)]
     pub(crate) fn invalidate_all_function_bindings(&mut self, why: FunctionEpochBump) {
         self.view.invalidate_all_function_bindings(why);
@@ -962,8 +959,10 @@ obarray_method_proxies! {
     #[cfg(test)]
     pub fn set_internal(id: SymId, value: Value);
     pub fn for_each_value_cell_mut(f: impl FnMut(&mut Value));
-    #[cfg(test)]
-    pub fn makunbound(name: &str);
+    // Audited closed operation, test-support surface: core tests unbind a
+    // fixture variable through this adapter method instead of a mutable deref.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn makunbound(name: &str);
     #[cfg(any(test, feature = "test-support"))]
     pub fn makunbound_id(id: SymId);
     pub fn makunbound_canonical_by_name(access: CanonicalAccess,

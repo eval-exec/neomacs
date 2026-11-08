@@ -5718,11 +5718,12 @@ pub(crate) fn load_obarray(
             // Restore non-redirect flags from the dump — make_symbol_localized
             // only sets the redirect bit, leaving trapped_write / interned /
             // declared_special as defaults.  Re-apply them from the dump.
-            if let Some(sym) = obarray.get_mut_by_id(*sym_id) {
-                sym.set_trapped_write(flags.trapped_write());
-                sym.set_interned(flags.interned());
-                sym.set_declared_special(sd.declared_special);
-            }
+            obarray.restore_dumped_symbol_flags(
+                *sym_id,
+                flags.trapped_write(),
+                flags.interned(),
+                sd.declared_special,
+            );
         }
     }
 

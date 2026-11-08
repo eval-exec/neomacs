@@ -225,8 +225,10 @@ fn whole_table_changes_raise_the_floor() {
     let mut ev = crate::test_utils::new_context();
     let id = bystander(&mut ev);
     let before = ev.obarray().function_epoch();
-    ev.obarray_mut()
-        .invalidate_all_function_bindings(FunctionEpochBump::SubrRewrite);
+    neovm_eval::test_support::authority::invalidate_all_function_bindings_for_test(
+        &mut ev,
+        FunctionEpochBump::SubrRewrite,
+    );
     let after = ev.obarray().function_epoch();
     assert!(!ev.obarray().fn_unchanged_since(id, before));
     assert!(ev.obarray().fn_unchanged_since(id, after));

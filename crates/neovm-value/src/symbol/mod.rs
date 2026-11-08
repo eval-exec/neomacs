@@ -2127,8 +2127,10 @@ impl Obarray {
         self.slot(id).filter(|sym| sym.interned_global)
     }
 
-    /// Get symbol data (mutable).
-    pub fn get_mut(&mut self, name: &str) -> Option<&mut LispSymbol> {
+    /// Get symbol data (mutable). Crate-private: cross-crate mutation goes
+    /// through the signed narrow routes (AUTHORITY-ITEMS), never a raw
+    /// borrow of the symbol cell.
+    pub(crate) fn get_mut(&mut self, name: &str) -> Option<&mut LispSymbol> {
         let id = lookup_interned(name)?;
         self.slot_mut(id).filter(|sym| sym.interned_global)
     }
@@ -2150,9 +2152,32 @@ impl Obarray {
         self.slot(id)
     }
 
-    /// Get mutable symbol data by identity.
-    pub fn get_mut_by_id(&mut self, id: SymId) -> Option<&mut LispSymbol> {
+    /// Get mutable symbol data by identity. Crate-private: cross-crate
+    /// mutation goes through [`Self::restore_dumped_symbol_flags`] or the
+    /// signed test-support fence, never a raw borrow of the symbol cell.
+    pub(crate) fn get_mut_by_id(&mut self, id: SymId) -> Option<&mut LispSymbol> {
         self.slot_mut(id)
+    }
+
+    /// Restore the dump-carried per-symbol flags without handing out the
+    /// symbol cell. This is the ONE cross-crate route for pdump restore
+    /// (`AUTHORITY-ITEMS.tsv`), and it can only set the three flags the image
+    /// carries; the raw by-id accessor stays crate-private.
+    #[doc(hidden)]
+    pub fn restore_dumped_symbol_flags(
+        &mut self,
+        id: SymId,
+        trapped_write: SymbolTrappedWrite,
+        interned: SymbolInterned,
+        declared_special: bool,
+    ) -> bool {
+        let Some(symbol) = self.get_mut_by_id(id) else {
+            return false;
+        };
+        symbol.set_trapped_write(trapped_write);
+        symbol.set_interned(interned);
+        symbol.set_declared_special(declared_special);
+        true
     }
 
     /// Copy the global value of a symbol.
@@ -2826,7 +2851,6 @@ impl Obarray {
             reason = "standalone manager resolver retained for its cold-owner and compile-fail contracts"
         )
     )]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn debug_on_next_call_bool_fwd(
         &mut self,
         id: SymId,
@@ -3201,8 +3225,9 @@ impl Obarray {
     }
 
     /// Mutable BLV access. Used by `set_internal` (Phase 5) and
-    /// `swap_in_symval_forwarding` (Phase 4).
-    pub fn blv_mut(&mut self, id: SymId) -> Option<&mut LispBufferLocalValue> {
+    /// `swap_in_symval_forwarding` (Phase 4). Crate-private: the closed
+    /// writer operations are the only cross-crate path to a BLV.
+    pub(crate) fn blv_mut(&mut self, id: SymId) -> Option<&mut LispBufferLocalValue> {
         let blv = self.slot(id)?.localized_blv()?;
         // Safety: same rationale as `blv`. The mutable borrow follows
         // from `&mut self`.
