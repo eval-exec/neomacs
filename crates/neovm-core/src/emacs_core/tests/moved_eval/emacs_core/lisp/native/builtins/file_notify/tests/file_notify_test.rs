@@ -79,11 +79,10 @@ impl FileNotifyEvent for LifecycleTestEvent {
 
 #[test]
 fn terminal_watch_stays_rooted_until_delivery_finishes() {
-    // Post-split re-point: a dependency crate has no cfg(test) fallback
-    // tagged heap, so fixtures that allocate Lisp values install a
-    // heap-owned one for the test thread (core's moved-value precedent).
-    let mut heap = neovm_value::tagged::gc::TaggedHeap::new();
-    neovm_value::tagged::gc::set_tagged_heap(&mut heap);
+    // Post-split re-point: no-Context Value fixtures install the canonical
+    // test-owned heap scope (the AUTHORITY fence's TestHeapScope::install);
+    // the scope restores/uninstalls the thread's heap on Drop.
+    let _heap = neovm_value::test_support::authority::TestHeapScope::install();
     let watch_id = WatchId::new(7, 3);
     let mut registry = WatchRegistry::default();
     registry.register(
@@ -169,9 +168,9 @@ fn terminal_delivery_values_survive_exact_gc_until_queued() {
 
 #[test]
 fn watch_registry_roots_every_lisp_object_needed_for_delivery() {
-    // Post-split re-point: heap-owned fixture heap for this test thread.
-    let mut heap = neovm_value::tagged::gc::TaggedHeap::new();
-    neovm_value::tagged::gc::set_tagged_heap(&mut heap);
+    // Post-split re-point: no-Context Value fixture -> the canonical
+    // test-owned heap scope (AUTHORITY fence `TestHeapScope::install`).
+    let _heap = neovm_value::test_support::authority::TestHeapScope::install();
     let watch_id = WatchId::new(8, 0);
     let callback = Value::symbol("file-notify-test-callback");
     let file_name = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
