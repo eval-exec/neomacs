@@ -1,9 +1,9 @@
 //! Core-only partial TTY receipts. Actual Layout callback/coverage seals remain
 //! separate; these tests never manufacture a reusable geometry certificate.
 use super::*;
-use crate::emacs_core::display_host::{DisplayHost, InertRowsHostAuthority};
+use crate::emacs_core::eval::data::face::BasicFace;
+use crate::emacs_core::eval::protocol::{DisplayHost, InertRowsHostAuthority};
 use crate::emacs_core::terminal::pure::{self, TerminalRuntimeConfig};
-use crate::face::realization::BasicFace;
 use neovm_value::tagged::collection_reads::{capture, capture_normalized};
 use neovm_value::value::Value;
 
@@ -47,7 +47,7 @@ fn ready() -> (Context, FrameId, RestoreTerminal) {
         .create_frame("real-termcap-rows", 120, 40, source);
     assert!(context.frame_is_tty_face_target(frame));
     assert!(
-        crate::face::realization::enabled(),
+        crate::emacs_core::eval::data::face::enabled(),
         "this positive family requires the default lifecycle"
     );
     context.sync_runtime_faces_for_frame(frame);
@@ -100,12 +100,15 @@ impl DisplayHost for UnknownHost {
     ) -> Result<(), String> {
         Ok(())
     }
-    fn image_catalog(&self) -> Option<&dyn crate::emacs_core::image_catalog::ImageCatalog> {
+    fn image_catalog(
+        &self,
+    ) -> Option<&dyn crate::emacs_core::eval::protocol::image_catalog::ImageCatalog> {
         panic!("an unknown host must not be probed to establish authority")
     }
     fn image_catalog_shared(
         &self,
-    ) -> Option<std::rc::Rc<dyn crate::emacs_core::image_catalog::ImageCatalog>> {
+    ) -> Option<std::rc::Rc<dyn crate::emacs_core::eval::protocol::image_catalog::ImageCatalog>>
+    {
         panic!("an unknown host must not be probed to establish authority")
     }
 }
@@ -263,7 +266,7 @@ fn tty_rows_observation_table_replacement_rejects_same_cache_epoch() {
     let counter = context.face_change_count;
     let cache = &mut context.frames.get_mut(frame).unwrap().face_realization;
     let realization = cache.realization_epoch().unwrap();
-    cache.replace_definitions(crate::face::FaceTable::new());
+    cache.replace_definitions(crate::emacs_core::eval::data::face::FaceTable::new());
     assert!(cache.retains_epoch(&realization));
     assert_eq!(context.face_change_count, counter);
     assert_eq!(
@@ -446,7 +449,7 @@ fn tty_rows_observation_same_palette_faces_clone_full_prepare_retires_epoch() {
     let (source, paint) = cache.basic(BasicFace::Default).unwrap().clone();
     replacement.define(
         "rows-cloned-definitions",
-        crate::face::Face::new("rows-cloned-definitions"),
+        crate::emacs_core::eval::data::face::Face::new("rows-cloned-definitions"),
     );
     cache.prepare(counter, replacement);
     cache.insert_basic(BasicFace::Default, source, paint);
@@ -547,7 +550,8 @@ fn tty_rows_observation_reentrant_global_merge_rejects_by_palette_at_equal_count
         .unwrap();
     }
     context.sync_runtime_faces_for_frame(frame);
-    let opened = font::build_font_object(&crate::face::Face::new("default"));
+    let opened =
+        font::build_font_object(&crate::emacs_core::eval::data::face::Face::new("default"));
     let gstring = composite::composition_get_gstring(
         &mut context,
         vec![
