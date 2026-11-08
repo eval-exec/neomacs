@@ -89,26 +89,36 @@ fn line<'a>(text: &'a str, key: &str) -> &'a str {
         .unwrap_or_else(|| panic!("no `{key}` line in\n{text}"))
 }
 
-/// tmp/v10x/probes/j2pf/probe-t11.el: GNU 31.1 prints
-/// `overflow: (error "Bytecode stack overflow")`, `reached: 74884 levels`
-/// and `after: 500`.
+/// GNU 31.1's depth for the form below, measured live on the pinned
+/// `a360712c9d27` (`overflow: (error "Bytecode stack overflow")`,
+/// `reached: 74887`). GNU's bytecode stack is 4 MiB (`BC_STACK_SIZE`,
+/// src/bytecode.c:337); each frame costs its 32-byte header plus 8 bytes per
+/// declared stack word, and the startup's byte-compiled frames are charged
+/// too.
+const GNU_BYTECODE_STACK_DEPTH: u64 = 74_887;
+
+/// The T11 form: a byte-compiled self-recursion under an unbounded
+/// `max-lisp-eval-depth`. It must end where GNU ends, in every tier.
+const TIER_FORM: &str = "(progn
+   (defvar neovm--sg-reached 0)
+   (defun neovm--sg-deep (n)
+     (setq neovm--sg-reached n)
+     (if (= n 0) 0 (1+ (neovm--sg-deep (1- n)))))
+   (byte-compile 'neovm--sg-deep)
+   (dotimes (_ 40) (neovm--sg-deep 100))
+   (message \"overflow: %S\"
+            (let ((max-lisp-eval-depth most-positive-fixnum))
+              (condition-case err (neovm--sg-deep 100000000) (error err))))
+   (message \"reached: %d\" (- 100000000 neovm--sg-reached))
+   (message \"after: %S\" (neovm--sg-deep 500)))";
+
+/// T11 pinned to GNU 31.1: the deep byte-compiled recursion signals GNU's
+/// `Bytecode stack overflow` at GNU's exact depth, in the unrandomized main
+/// stack layout where the pre-ruling-2 build died.
 #[test]
 #[cfg(feature = "release-pdump-tests")]
 fn batch_deep_compiled_recursion_signals_without_randomization() {
-    let Some(output) = run_unrandomized(
-        "(progn
-           (defvar neovm--sg-reached 0)
-           (defun neovm--sg-deep (n)
-             (setq neovm--sg-reached n)
-             (if (= n 0) 0 (1+ (neovm--sg-deep (1- n)))))
-           (byte-compile 'neovm--sg-deep)
-           (dotimes (_ 40) (neovm--sg-deep 100))
-           (message \"overflow: %S\"
-                    (let ((max-lisp-eval-depth most-positive-fixnum))
-                      (condition-case err (neovm--sg-deep 100000000) (error err))))
-           (message \"reached: %d\" (- 100000000 neovm--sg-reached))
-           (message \"after: %S\" (neovm--sg-deep 500)))",
-    ) else {
+    let Some(output) = run_unrandomized(TIER_FORM) else {
         return;
     };
     let text = messages(&output);
@@ -118,7 +128,98 @@ fn batch_deep_compiled_recursion_signals_without_randomization() {
     );
     assert_eq!(line(&text, "after: "), "500");
     let reached: u64 = line(&text, "reached: ").parse().expect("a count");
-    assert!(reached > 100_000, "ran on the 127 MiB main stack: {text}");
+    assert_eq!(reached, GNU_BYTECODE_STACK_DEPTH, "{text}");
+}
+
+/// Run `neomacs -Q --batch --eval FORM` with `envs` set.
+fn run_with_env(form: &str, envs: &[(&str, &str)]) -> Output {
+    let mut cmd = Command::new(binary());
+    cmd.current_dir(root())
+        .env("RUST_LOG", "off")
+        .args(["-Q", "--batch", "--eval", form]);
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
+    cmd.output()
+        .unwrap_or_else(|error| panic!("run {}: {error}", binary().display()))
+}
+
+/// Ruling 2's bar: the bytecode-stack overflow depth is IDENTICAL across the
+/// execution tiers (interpreter, JIT with direct calls, the shim's fast path,
+/// the forced slow-spec and forced-deopt harnesses) and equal to GNU 31.1's
+/// live measurement of the same `--eval` form.
+#[test]
+#[cfg(feature = "release-pdump-tests")]
+fn batch_bytecode_stack_depth_is_tier_independent_and_gnu_exact() {
+    let tiers: [(&str, &[(&str, &str)]); 5] = [
+        ("jit-off", &[("NEOVM_JIT", "0")]),
+        ("jit-on", &[]),
+        ("direct-call-off", &[("NEOVM_JIT_DIRECT_CALL", "off")]),
+        ("slow-spec", &[("NEOVM_JIT_FORCE_SLOW_SPEC", "1")]),
+        ("deopt", &[("NEOVM_JIT_FORCE_DEOPT", "1")]),
+    ];
+    for (tier, envs) in tiers {
+        let output = run_with_env(TIER_FORM, envs);
+        let text = messages(&output);
+        assert_eq!(
+            line(&text, "overflow: "),
+            "(error \"Bytecode stack overflow\")",
+            "{tier}: {text}"
+        );
+        assert_eq!(line(&text, "after: "), "500", "{tier}: {text}");
+        let reached: u64 = line(&text, "reached: ").parse().expect("a count");
+        assert_eq!(
+            reached, GNU_BYTECODE_STACK_DEPTH,
+            "{tier}: the bytecode-stack depth must be GNU's: {text}"
+        );
+    }
+    if let Some((gnu_reached, gnu_overflow)) = gnu_live_probe() {
+        assert_eq!(
+            gnu_reached, GNU_BYTECODE_STACK_DEPTH,
+            "the pinned GNU reference's depth moved"
+        );
+        assert_eq!(
+            gnu_overflow, "(error \"Bytecode stack overflow\")",
+            "the pinned GNU reference's error identity moved"
+        );
+    } else {
+        eprintln!(
+            "the live GNU reference was not run (set GNU_EMACS_SOURCE to the pinned \
+             emacs-31.1 checkout or GNU_EMACS_BINARY to its executable): the pinned \
+             depth {GNU_BYTECODE_STACK_DEPTH} is asserted instead"
+        );
+    }
+}
+
+/// The pinned GNU 31.1 reference's answers for [`TIER_FORM`], when it is
+/// available: `GNU_EMACS_SOURCE` names its checkout (`src/emacs`), or
+/// `GNU_EMACS_BINARY` its executable.
+fn gnu_live_probe() -> Option<(u64, String)> {
+    fn gnu_binary() -> Option<PathBuf> {
+        if let Some(binary) = std::env::var_os("GNU_EMACS_BINARY") {
+            let binary = PathBuf::from(binary);
+            return binary.is_file().then_some(binary);
+        }
+        let source = PathBuf::from(std::env::var_os("GNU_EMACS_SOURCE")?);
+        let binary = source.join("src").join("emacs");
+        binary.is_file().then_some(binary)
+    }
+    let binary = gnu_binary()?;
+    let output = Command::new(&binary)
+        .args(["-Q", "--batch", "--eval", TIER_FORM])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        eprintln!(
+            "the GNU reference run failed ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stderr).into_owned();
+    let reached = line(&text, "reached: ").parse().ok()?;
+    Some((reached, line(&text, "overflow: ").to_owned()))
 }
 
 /// The tree walker recurses on the main stack until stacker's probe moves

@@ -63,10 +63,14 @@ pub(crate) const JIT_SLOW_PATH_SEGMENT: usize = 2 * 1024 * 1024;
 /// measures the remaining stack; the delta since the previous probe is the
 /// interval's consumption.  Frame sizes do not change across stacker
 /// segments, so a switch keeps the last measurement (the delta computed on
-/// the fresh segment is zero).  The effective reserve is the base red zone
-/// plus twice the measured consumption, capped at half the segment so a
-/// probe on a fresh segment still proceeds instead of growing on every
-/// sample.  State lives on the Context: no new TLS.
+/// the fresh segment is zero).  The effective reserve is the larger of the
+/// site's red zone and [`JIT_STACK_RED_ZONE`] -- a compiled leaf can be
+/// entered between two samples and its own entry guard raises GNU's error
+/// below that threshold, so the sampled probe must grow before it -- plus
+/// twice the measured consumption.  The growth segment is sized to hold the
+/// following interval and at least twice the reserve, so a probe on a fresh
+/// segment always proceeds instead of growing on every sample.  State lives
+/// on the Context: no new TLS.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct NativeStackProbe {
     /// Remaining stack measured at the previous probe; 0 before the first,
@@ -125,15 +129,20 @@ pub(crate) fn maybe_grow_tracking_jit_limit<T: ?Sized, R>(
                     probe.interval_consumption = consumed;
                 }
                 probe.last_remaining = remaining;
+                // The reserve must also stay above the *compiled leaf* entry
+                // guard's threshold ([`JIT_STACK_RED_ZONE`]): a recursion
+                // that enters compiled leaves between two samples would
+                // otherwise meet that guard's error before this probe grows.
                 // The growth segment must hold the interval that follows the
                 // probe: size it from the measured consumption when that is
                 // larger than the site's default (debug frames can consume
-                // megabytes between samples), then cap the reserve at half
-                // the segment so the body proceeds on a fresh segment.
-                let grow_segment = segment.max(probe.interval_consumption.saturating_mul(4));
-                let reserve = red_zone
-                    .saturating_add(probe.interval_consumption.saturating_mul(2))
-                    .min(grow_segment / 2);
+                // megabytes between samples), and keep it at least twice the
+                // reserve so the body proceeds on a fresh segment.
+                let base = red_zone.max(JIT_STACK_RED_ZONE);
+                let reserve = base.saturating_add(probe.interval_consumption.saturating_mul(2));
+                let grow_segment = segment
+                    .max(probe.interval_consumption.saturating_mul(4))
+                    .max(reserve.saturating_mul(2));
                 (reserve, grow_segment)
             };
             if remaining >= reserve {

@@ -3305,6 +3305,36 @@ pub(crate) fn run_resolved_leaf(
     leaf: &CompiledLeaf,
     args: &[Value],
 ) -> Result<Option<usize>, Flow> {
+    // The owned-args native entry charges and releases as
+    // `run_resolved_leaf_native` does; an over-budget frame falls back to the
+    // interpreter entry, which raises GNU's error.
+    if ctx.is_null() {
+        return run_resolved_leaf_inner(ctx, func, func_value, leaf, args);
+    }
+    // SAFETY: the seam-provided Context is dormant for this native call.
+    let charged = {
+        let ctx_ref = unsafe { &mut *ctx };
+        crate::emacs_core::bytecode::vm::charge_bytecode_frame(ctx_ref, func.max_stack.get())
+    };
+    let Some(frame_bytes) = charged else {
+        return Ok(None);
+    };
+    let outcome = run_with_bytecode_stack_probe(ctx, |ctx| {
+        run_resolved_leaf_inner(ctx, func, func_value, leaf, args)
+    });
+    // SAFETY: as above; valid for this whole call.
+    let ctx_ref = unsafe { &mut *ctx };
+    crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, frame_bytes);
+    outcome
+}
+
+fn run_resolved_leaf_inner(
+    ctx: *mut Context,
+    func: &ByteCodeFunction,
+    func_value: Value,
+    leaf: &CompiledLeaf,
+    args: &[Value],
+) -> Result<Option<usize>, Flow> {
     super::stats::record_native_entry();
     finish_native_run(
         ctx,
@@ -3326,6 +3356,78 @@ pub(crate) fn run_resolved_leaf(
 /// them (the spec fast path's `maybe_quit`-returned-Ok window).
 #[inline(always)]
 pub(crate) fn run_resolved_leaf_native(
+    ctx: *mut Context,
+    func: &ByteCodeFunction,
+    func_value: Value,
+    leaf: &CompiledLeaf,
+    args_ptr: *const i64,
+) -> NativeCallOutcome {
+    // GNU's bytecode stack (`setup_frame`, src/bytecode.c:496-516): charge
+    // the callee's DECLARED stack depth at every native entry, the same rule
+    // `execute_from_stack_args` applies to the interpreter tier. The frame
+    // is released once the native run -- including a precise-deopt resume,
+    // which continues this same frame -- has finished; a fallback releases
+    // before returning so the interpreter entry charges the frame once.
+    if ctx.is_null() {
+        return run_resolved_leaf_native_inner(ctx, func, func_value, leaf, args_ptr);
+    }
+    // SAFETY: the seam-provided Context is dormant for this native call.
+    let charged = {
+        let ctx_ref = unsafe { &mut *ctx };
+        crate::emacs_core::bytecode::vm::charge_bytecode_frame(ctx_ref, func.max_stack.get())
+    };
+    let Some(frame_bytes) = charged else {
+        // Over budget: the interpreter fallback enters through
+        // `execute_from_stack_args`, which raises GNU's error.
+        return NativeCallOutcome::Fallback;
+    };
+    // The native run itself can recurse through this entry; grow the native
+    // stack at the same sampled depths the interpreter entries use, so a
+    // compiled leaf entered between samples never meets its own entry guard
+    // before the bytecode budget is exhausted (the guard's threshold is
+    // inside the probe reserve, see `maybe_grow_tracking_jit_limit`).
+    let outcome = run_with_bytecode_stack_probe(ctx, |ctx| {
+        run_resolved_leaf_native_inner(ctx, func, func_value, leaf, args_ptr)
+    });
+    // SAFETY: as above; valid for this whole call.
+    let ctx_ref = unsafe { &mut *ctx };
+    crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, frame_bytes);
+    outcome
+}
+
+/// Run one native byte-compiled entry under the sampled native-stack probe:
+/// every [`VM_STACK_GROWTH_PROBE_INTERVAL`] Lisp levels (from
+/// [`VM_STACK_GROWTH_PROBE_START_DEPTH`]), grow a stacker segment when the
+/// remaining stack is inside the reserve, as `execute_from_stack_args` and
+/// the other interpreter sites do. Below the sampling depth the entry runs
+/// straight through: the shallow recursion is bounded by `max-lisp-eval-depth`
+/// long before the stack matters.
+#[inline(always)]
+pub(crate) fn run_with_bytecode_stack_probe<R>(
+    ctx: *mut Context,
+    run: impl FnOnce(*mut Context) -> R,
+) -> R {
+    // SAFETY: the seam-provided Context is dormant for the whole entry.
+    let depth = unsafe { (*ctx).depth };
+    if depth < crate::emacs_core::bytecode::vm::VM_STACK_GROWTH_PROBE_START_DEPTH
+        || !depth.is_multiple_of(crate::emacs_core::bytecode::vm::VM_STACK_GROWTH_PROBE_INTERVAL)
+    {
+        return run(ctx);
+    }
+    // SAFETY: as above; `maybe_grow_tracking_jit_limit` keeps the Context's
+    // guard limit on the segment the callback runs on.
+    let ctx_ref = unsafe { &mut *ctx };
+    crate::emacs_core::eval::native_stack::maybe_grow_tracking_jit_limit(
+        ctx_ref,
+        |ctx| ctx.jit_stack_limit_mut(),
+        |ctx| ctx.native_stack_probe_mut(),
+        crate::emacs_core::bytecode::vm::VM_STACK_RED_ZONE,
+        crate::emacs_core::bytecode::vm::VM_STACK_SEGMENT,
+        |ctx| run(ctx as *mut Context),
+    )
+}
+
+fn run_resolved_leaf_native_inner(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,

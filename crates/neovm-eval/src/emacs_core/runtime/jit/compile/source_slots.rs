@@ -388,6 +388,16 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
         return source_slot_declined();
     }
     rt.bump_heat();
+    // GNU's bytecode stack (`setup_frame`, src/bytecode.c:496-516): this
+    // fast path runs the leaf without the Rust entry, so it charges the
+    // callee's DECLARED stack depth here by the same rule
+    // `execute_from_stack_args` applies. An over-budget frame declines to
+    // the generic call, whose entry charges it and raises GNU's error.
+    let Some(frame_bytes) =
+        crate::emacs_core::bytecode::vm::charge_bytecode_frame(ctx_ref, bc.max_stack.get())
+    else {
+        return source_slot_declined();
+    };
     #[cfg(any(test, debug_assertions))]
     SOURCE_SLOT_FAST_CALLS.fetch_add(1, Ordering::Relaxed);
     // Remember this leaf (and its epoch) in the slot, with its direct
@@ -422,6 +432,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
         if status == STATUS_OK {
             if ctx_ref.pop_native_backtrace_frame(bt_count) {
                 ctx_ref.depth -= 1;
+                crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, frame_bytes);
                 // SAFETY: `out` is the generated code's result stack slot.
                 unsafe { *out = bits };
                 return STATUS_OK;
@@ -440,6 +451,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
             NativeRun::Ok(bits) => {
                 if ctx_ref.pop_native_backtrace_frame(bt_count) {
                     ctx_ref.depth -= 1;
+                    crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, frame_bytes);
                     // SAFETY: as above.
                     unsafe { *out = bits as i64 };
                     return STATUS_OK;
@@ -454,12 +466,23 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
             NativeRun::Signal if shim_panic_pending() => {
                 // SAFETY: `args_ptr` is the caller's live call-args slot.
                 unsafe { ctx_ref.detach_native_frames_into(args_ptr) };
+                crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, frame_bytes);
                 return STATUS_SIGNAL;
             }
             other => FastRun::Framed(other),
         }
     };
-    call_spec_finish(ctx, callee, leaf, args_ptr, nargs, out, bt_count, run)
+    call_spec_finish(
+        ctx,
+        callee,
+        leaf,
+        args_ptr,
+        nargs,
+        out,
+        bt_count,
+        run,
+        frame_bytes,
+    )
 }
 
 /// Remember `leaf`, the source's current armed leaf, in a source site's

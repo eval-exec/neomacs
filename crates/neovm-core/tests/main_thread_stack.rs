@@ -23,6 +23,16 @@
 
 const TEST: &str = "deep_compiled_recursion_signals_on_the_main_thread";
 
+/// Ruling 2's bar: the bytecode-stack overflow depth is IDENTICAL across the
+/// execution tiers (interpreter, JIT with direct calls, shim fast path, the
+/// forced slow-spec and forced-deopt harnesses) and equal to GNU 31.1's.
+const TEST_TIERS: &str = "bytecode_stack_overflow_depth_is_tier_independent";
+
+/// Coverage the 4 MiB bytecode-stack budget does NOT bound: interpreted
+/// recursion with a raised `max-lisp-eval-depth` must end in a clean Lisp
+/// depth error on the process's main thread, never in a native signal.
+const TEST_INTERPRETED: &str = "interpreted_recursion_ends_in_a_depth_error_on_the_main_thread";
+
 /// `neomacs`'s `RLIMIT_STACK` target (`increase_stack_limit`).
 const TARGET_STACK: usize = 128 * 1024 * 1024;
 
@@ -40,7 +50,9 @@ fn main() {
     let flag = |name: &str| args.iter().any(|a| a == name);
     if flag("--list") {
         if !flag("--ignored") {
-            println!("{TEST}: test");
+            for test in [TEST, TEST_TIERS, TEST_INTERPRETED] {
+                println!("{test}: test");
+            }
         }
         return;
     }
@@ -55,21 +67,44 @@ fn main() {
             a => filters.push(a),
         }
     }
-    let selected = filters.is_empty()
-        || filters.iter().any(|f| {
-            if flag("--exact") {
-                *f == TEST
-            } else {
-                TEST.contains(f)
-            }
-        });
-    if !selected || flag("--ignored") {
+    let selected = |test: &str| {
+        !flag("--ignored")
+            && (filters.is_empty()
+                || filters.iter().any(|f| {
+                    if flag("--exact") {
+                        *f == test
+                    } else {
+                        test.contains(f)
+                    }
+                }))
+    };
+    let mut ran = false;
+    #[cfg(target_os = "linux")]
+    {
+        if selected(TEST) {
+            linux::parent();
+            ran = true;
+        }
+        if selected(TEST_TIERS) {
+            linux::parent_tiers();
+            ran = true;
+        }
+        if selected(TEST_INTERPRETED) {
+            linux::parent_interpreted();
+            ran = true;
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = &selected;
+    if !ran {
         println!("running 0 tests");
         return;
     }
-    #[cfg(target_os = "linux")]
-    linux::parent();
-    println!("test {TEST} ... ok");
+    for test in [TEST, TEST_TIERS, TEST_INTERPRETED] {
+        if selected(test) {
+            println!("test {test} ... ok");
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -127,6 +162,145 @@ mod linux {
             });
         }
         check("no-aslr", unrandomized);
+    }
+
+    /// Ruling 2's bar: every execution tier ends the byte-compiled recursion
+    /// at GNU's bytecode-stack depth, with GNU's error. Each tier runs in a
+    /// fresh child because the knobs are read once per process.
+    pub fn parent_tiers() {
+        let exe = std::env::current_exe().expect("current_exe");
+        // The forced-deopt tier is NOT run here: ending the recursion at the
+        // bytecode budget's depth makes every level deopt into a nested
+        // interpreter entry, and in a DEBUG build those frames need more live
+        // native stack than the test memory wrapper's 8 GiB address-space
+        // limit (the release CLI test covers the deopt tier; release frames
+        // are an order of magnitude smaller).
+        let tiers: [(&str, &[(&str, &str)]); 4] = [
+            ("tier-jit-off", &[("NEOVM_JIT", "0")]),
+            ("tier-jit-on", &[]),
+            ("tier-direct-call-off", &[("NEOVM_JIT_DIRECT_CALL", "off")]),
+            ("tier-slow-spec", &[("NEOVM_JIT_FORCE_SLOW_SPEC", "1")]),
+        ];
+        // The exact GNU depth is pinned by the CLI test
+        // (`crates/neomacs/tests/main_stack_overflow.rs`), whose bootstrap is
+        // GNU's `--eval` environment. This in-process evaluator keeps a
+        // different set of byte-compiled startup frames live, so the BAR here
+        // is that every tier ends at the SAME depth -- and that the depth is
+        // set by the bytecode budget, not by the native stack.
+        let mut depths: Vec<(&str, u64)> = Vec::new();
+        for (scenario, envs) in tiers {
+            let mut cmd = Command::new(&exe);
+            cmd.env(SCENARIO_ENV, scenario);
+            for (key, value) in envs {
+                cmd.env(key, value);
+            }
+            start_from_the_default_stack_limit(&mut cmd);
+            if let Some(reached) = check_tier(scenario, cmd) {
+                depths.push((scenario, reached));
+            }
+        }
+        let Some(&(first_scenario, first)) = depths.first() else {
+            return;
+        };
+        for &(scenario, reached) in &depths[1..] {
+            assert_eq!(
+                reached, first,
+                "{scenario} reached {reached} but {first_scenario} reached {first}: \
+                 the bytecode-stack depth must be tier-independent"
+            );
+        }
+        eprintln!(
+            "all {} tiers reached the bytecode-stack depth {first}",
+            depths.len()
+        );
+    }
+
+    /// The coverage the 4 MiB budget does NOT bound: interpreted recursion
+    /// with a raised `max-lisp-eval-depth` on the main thread ends in GNU's
+    /// Lisp depth error, never a native signal.
+    pub fn parent_interpreted() {
+        let exe = std::env::current_exe().expect("current_exe");
+        let mut cmd = Command::new(&exe);
+        cmd.env(SCENARIO_ENV, "interpreted");
+        start_from_the_default_stack_limit(&mut cmd);
+        check_interpreted(cmd);
+    }
+
+    fn check_tier(scenario: &str, cmd: Command) -> Option<u64> {
+        let (stdout, _stderr) = run_child(scenario, cmd)?;
+        let line = |key: &str| {
+            stdout
+                .lines()
+                .find_map(|l| l.strip_prefix(key))
+                .unwrap_or_else(|| panic!("{scenario}: no `{key}` line in\n{stdout}"))
+        };
+        assert_eq!(
+            line("overflow: "),
+            "OK (error \"Bytecode stack overflow\")",
+            "{scenario}: {stdout}"
+        );
+        assert_eq!(line("after: "), "OK 500", "{scenario}: {stdout}");
+        let reached: u64 = line("reached: ").parse().expect("reached is a count");
+        assert!(
+            reached > 10_000,
+            "{scenario}: the bytecode stack, not the native stack, ended the \
+             recursion: {stdout}"
+        );
+        eprintln!(
+            "{scenario}: reached {reached}; {}",
+            stdout.trim().replace('\n', "; ")
+        );
+        Some(reached)
+    }
+
+    fn check_interpreted(cmd: Command) {
+        let scenario = "interpreted";
+        let Some((stdout, _stderr)) = run_child(scenario, cmd) else {
+            return;
+        };
+        let line = |key: &str| {
+            stdout
+                .lines()
+                .find_map(|l| l.strip_prefix(key))
+                .unwrap_or_else(|| panic!("{scenario}: no `{key}` line in\n{stdout}"))
+        };
+        assert!(
+            line("overflow: ").starts_with("OK (excessive-lisp-nesting "),
+            "{scenario}: expected a clean Lisp depth error: {stdout}"
+        );
+        assert_eq!(line("after: "), "OK 500", "{scenario}: {stdout}");
+        eprintln!("{scenario}: {}", stdout.trim().replace('\n', "; "));
+    }
+
+    /// Run one child; SKIP exits are reported as test skips (`None`), signals
+    /// as failures (the regression this target exists to catch).
+    fn run_child(scenario: &str, mut cmd: Command) -> Option<(String, String)> {
+        let output = match cmd.output() {
+            Ok(output) => output,
+            Err(error) => panic!("{scenario}: spawn failed: {error}"),
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let tail: String = {
+            let lines: Vec<&str> = stderr.lines().collect();
+            lines[lines.len().saturating_sub(20)..].join("\n")
+        };
+        if output.status.code() == Some(SKIP) {
+            eprintln!("skipping {scenario}: {stdout}");
+            return None;
+        }
+        if let Some(signal) = output.status.signal() {
+            panic!(
+                "{scenario}: the main thread died of signal {signal} -- the stack \
+                 ended before the Lisp error.\nstdout:\n{stdout}\nstderr tail:\n{tail}"
+            );
+        }
+        assert!(
+            output.status.success(),
+            "{scenario}: {:?}\nstdout:\n{stdout}\nstderr tail:\n{tail}",
+            output.status
+        );
+        Some((stdout, stderr))
     }
 
     /// Exec the child under the usual 8 MiB `RLIMIT_STACK`, which sizes the
@@ -206,9 +380,13 @@ mod linux {
             line("stacker: ");
         }
         let reached: u64 = line("reached: ").parse().expect("reached is a count");
+        // The exact GNU depth is pinned by the CLI test (the `--eval`
+        // environment GNU was measured in); this harness's in-process
+        // bootstrap keeps a different set of startup frames charged.
         assert!(
             reached > 10_000,
-            "{scenario}: the recursion ran natively deep: {stdout}"
+            "{scenario}: the recursion was ended by the bytecode budget, not \
+             the native stack: {stdout}"
         );
         eprintln!("{scenario}: {}", stdout.trim().replace('\n', "; "));
     }
@@ -330,6 +508,27 @@ mod linux {
         ("after: ", "(neovm--sg-deep 500)"),
     ];
 
+    /// The #92 coverage: interpreted (NOT byte-compiled) recursion, which the
+    /// 4 MiB bytecode-stack budget does not bound. A raised but finite
+    /// `max-lisp-eval-depth` must end it in the clean Lisp depth error on this
+    /// thread, in debug and release alike.
+    const INTERPRETED_PROBE: &[(&str, &str)] = &[
+        ("", "(defvar neovm--sg-reached 0)"),
+        (
+            "",
+            "(defun neovm--sg-walk (n)
+               (setq neovm--sg-reached n)
+               (if (= n 0) 0 (1+ (neovm--sg-walk (1- n)))))",
+        ),
+        ("", "(dotimes (_ 40) (neovm--sg-walk 100))"),
+        (
+            "overflow: ",
+            "(let ((max-lisp-eval-depth 300000))
+               (condition-case err (neovm--sg-walk 400000) (error err)))",
+        ),
+        ("after: ", "(neovm--sg-walk 500)"),
+    ];
+
     /// Runs on this process's main thread: set up the layout, raise the
     /// limit as `neomacs` does, and run the batch probe
     /// (tmp/v10x/probes/j2pf/probe-t11.el) and the stacker descent.
@@ -347,26 +546,36 @@ mod linux {
             println!("{why}");
             return SKIP;
         }
-        let Some(((_, top), below)) = stack_and_below() else {
-            println!("no [stack] in /proc/self/maps");
-            return SKIP;
-        };
-        if top - below > TARGET_STACK {
-            // Randomized, and nothing planted: the limit binds, the layout
-            // under test is not there.
-            println!(
-                "the mapping below the stack is {} MiB down",
-                (top - below) >> 20
-            );
-            return SKIP;
+        let lisp_limit_scenario = scenario.starts_with("tier-") || scenario == "interpreted";
+        if lisp_limit_scenario {
+            // These pin Lisp-visible limits (GNU's bytecode-stack budget and
+            // the depth limit), which are independent of the native layout;
+            // the same `RLIMIT_STACK` policy as `neomacs` still applies.
+            neovm_core::emacs_core::eval::raise_main_stack_rlimit(TARGET_STACK);
+        } else {
+            let Some(((_, top), below)) = stack_and_below() else {
+                println!("no [stack] in /proc/self/maps");
+                return SKIP;
+            };
+            if top - below > TARGET_STACK {
+                // Randomized, and nothing planted: the limit binds, the layout
+                // under test is not there.
+                println!(
+                    "the mapping below the stack is {} MiB down",
+                    (top - below) >> 20
+                );
+                return SKIP;
+            }
+            neovm_core::emacs_core::eval::raise_main_stack_rlimit(TARGET_STACK);
         }
-        neovm_core::emacs_core::eval::raise_main_stack_rlimit(TARGET_STACK);
 
         let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
         apply_runtime_startup_state(&mut eval).expect("runtime startup");
         eval.set_lexical_binding(true);
         let probe: &[(&str, &str)] = if scenario.starts_with("cramped") {
             CRAMPED_PROBE
+        } else if scenario == "interpreted" {
+            INTERPRETED_PROBE
         } else {
             PROBE
         };
@@ -385,7 +594,10 @@ mod linux {
         // TARGET_STACK layout.  The cramped layout deliberately reports an
         // end past where the clamped stack actually stops, so descending to
         // it would fault in the harness, not in the product; skip it there.
-        if !scenario.starts_with("cramped") {
+        if !scenario.starts_with("cramped")
+            && !scenario.starts_with("tier-")
+            && scenario != "interpreted"
+        {
             let frames = descend_to_the_reported_end();
             println!("stacker: {frames} frames of 4 KiB down to its reported end");
         }

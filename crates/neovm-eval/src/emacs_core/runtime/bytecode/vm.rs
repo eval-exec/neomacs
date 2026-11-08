@@ -2470,10 +2470,58 @@ fn copy_frame_arguments(buffer: &mut Vec<Value>, args_start: usize, copied: usiz
 // Match the evaluator's coarse stack-growth policy so deeply recursive
 // bytecode/macroexpansion paths don't exhaust the native thread stack before
 // `max-lisp-eval-depth` handling can fire.
-const VM_STACK_RED_ZONE: usize = 128 * 1024;
-const VM_STACK_SEGMENT: usize = 2 * 1024 * 1024;
-const VM_STACK_GROWTH_PROBE_START_DEPTH: usize = 16;
-const VM_STACK_GROWTH_PROBE_INTERVAL: usize = 16;
+pub(crate) const VM_STACK_RED_ZONE: usize = 128 * 1024;
+pub(crate) const VM_STACK_SEGMENT: usize = 2 * 1024 * 1024;
+pub(crate) const VM_STACK_GROWTH_PROBE_START_DEPTH: usize = 16;
+pub(crate) const VM_STACK_GROWTH_PROBE_INTERVAL: usize = 16;
+
+/// GNU's bytecode stack (`BC_STACK_SIZE`, src/bytecode.c:337): 512K
+/// Lisp_Objects, 4 MiB on 64-bit.  Byte-compiled frames are charged against
+/// it in every tier; overflow raises setup_frame's `Bytecode stack overflow`
+/// (src/bytecode.c:514-515).
+pub(crate) const BC_STACK_SIZE: usize = 512 * 1024 * std::mem::size_of::<Value>();
+
+/// `struct bc_frame` header (src/bytecode.c:366-378): saved_fp, saved_top,
+/// saved_pc and fun, four pointers before the frame's `next_stack` data.
+pub(crate) const BC_FRAME_HEADER_BYTES: usize = 4 * std::mem::size_of::<usize>();
+
+/// The bytes one byte-compiled frame occupies: the header plus the
+/// function's data stack (`CLOSURE_STACK_DEPTH` words).
+#[inline(always)]
+pub(crate) fn bytecode_frame_bytes(max_stack: usize) -> usize {
+    BC_FRAME_HEADER_BYTES + max_stack * std::mem::size_of::<Value>()
+}
+
+/// Charge one byte-compiled frame of a callee declaring `max_stack` against
+/// GNU's bytecode stack. `None` when the frame does not fit: the caller must
+/// take its reference path, which enters through [`charge_bytecode_frame`]
+/// itself and raises GNU's `Bytecode stack overflow` there. Every tier's
+/// byte-compiled entry calls this same rule ([`bytecode_frame_bytes`] over
+/// the function object's declared depth), so the depth at which the budget
+/// ends is tier-independent.
+#[inline(always)]
+pub(crate) fn charge_bytecode_frame(
+    ctx: &mut crate::emacs_core::eval::Context,
+    max_stack: usize,
+) -> Option<usize> {
+    let frame_bytes = bytecode_frame_bytes(max_stack);
+    let used = ctx.bytecode_stack_used.saturating_add(frame_bytes);
+    if used > BC_STACK_SIZE {
+        return None;
+    }
+    ctx.bytecode_stack_used = used;
+    Some(frame_bytes)
+}
+
+/// Release a charge taken by [`charge_bytecode_frame`]: the frame it counted
+/// has returned or unwound.
+#[inline(always)]
+pub(crate) fn release_bytecode_frame(
+    ctx: &mut crate::emacs_core::eval::Context,
+    frame_bytes: usize,
+) {
+    ctx.bytecode_stack_used = ctx.bytecode_stack_used.saturating_sub(frame_bytes);
+}
 
 impl<'a> crate::emacs_core::hook_runtime::HookRuntime for Vm<'a> {
     fn hook_context(&self) -> &crate::emacs_core::eval::Context {
@@ -3098,6 +3146,17 @@ impl<'a> Vm<'a> {
         nargs: usize,
         func_value: Value,
     ) -> EvalResult {
+        // GNU's bytecode-stack accounting (src/bytecode.c:337 BC_STACK_SIZE,
+        // setup_frame :496-516): every byte-compiled frame costs the
+        // bc_frame header plus the function's declared data stack.  Charge on
+        // entry, checking the budget by the one rule every tier uses
+        // ([`charge_bytecode_frame`]), and restore the previous depth on
+        // every exit (normal return, signal, throw); a contained panic
+        // restores it from the module-boundary snapshot.
+        let saved_used = self.ctx.bytecode_stack_used;
+        let Some(_frame_bytes) = charge_bytecode_frame(self.ctx, func.max_stack.get()) else {
+            return Err(self.bytecode_stack_overflow());
+        };
         // Flattened native-stack probe: the common shallow call pays two
         // integer compares straight through to the body — no FnOnce
         // combinator whose two consumption sites (fast path + the stacker
@@ -3106,12 +3165,25 @@ impl<'a> Vm<'a> {
         // stacker path (INTERVAL is a power of two — the is_multiple_of
         // folds to a mask).
         let depth = self.ctx.depth;
-        if depth >= VM_STACK_GROWTH_PROBE_START_DEPTH
+        let result = if depth >= VM_STACK_GROWTH_PROBE_START_DEPTH
             && depth.is_multiple_of(VM_STACK_GROWTH_PROBE_INTERVAL)
         {
-            return self.execute_from_stack_args_grown(func, args_start, nargs, func_value);
-        }
-        self.execute_from_stack_args_body(func, args_start, nargs, func_value)
+            self.execute_from_stack_args_grown(func, args_start, nargs, func_value)
+        } else {
+            self.execute_from_stack_args_body(func, args_start, nargs, func_value)
+        };
+        self.ctx.bytecode_stack_used = saved_used;
+        result
+    }
+
+    /// GNU `setup_frame`'s bytecode-stack overflow (src/bytecode.c:514-515):
+    /// the frame being installed does not fit `BC_STACK_SIZE`.  GNU checks
+    /// before installing the frame; the caller's depth protocol already
+    /// counted the rejected call.
+    #[cold]
+    #[inline(never)]
+    fn bytecode_stack_overflow(&mut self) -> Flow {
+        signal("error", vec![Value::string("Bytecode stack overflow")])
     }
 
     /// Cold stacker arm of [`Vm::execute_from_stack_args`]: grow the native
@@ -3974,6 +4046,15 @@ impl<'a> Vm<'a> {
             return result;
         }
         let cleanup = frame.cleanup;
+        // Release the bytecode-stack charge taken when this frame was
+        // installed; the entry frame's charge belongs to the caller that
+        // entered the driver through execute_from_stack_args.
+        let frame_bytes = bytecode_frame_bytes(frame.function.code().max_stack.get());
+        debug_assert!(
+            self.ctx.bytecode_stack_used >= frame_bytes,
+            "an installed bytecode frame was charged before this release"
+        );
+        release_bytecode_frame(self.ctx, frame_bytes);
         #[cfg(debug_assertions)]
         debug_assert!(
             lexenv_tail_reachable(self.ctx.lexenv, frame.entry_lexenv),
@@ -4094,9 +4175,13 @@ impl<'a> Vm<'a> {
 
         // Read everything needed from the ACTIVE frame before popping it: after
         // `leave_callee` the top of the stack is the caller, not this frame.
-        let (cleanup, frame_base) = {
+        let (cleanup, frame_base, returning_frame_bytes) = {
             let current = callers.active();
-            (current.cleanup, current.frame_base)
+            (
+                current.cleanup,
+                current.frame_base,
+                bytecode_frame_bytes(current.function.code().max_stack.get()),
+            )
         };
         #[cfg(debug_assertions)]
         let entry_lexenv = callers.active().entry_lexenv;
@@ -4140,6 +4225,10 @@ impl<'a> Vm<'a> {
         // only when there is no suspended caller, which the guard above already
         // rejected. The old unchecked pop existed because the caller frame had
         // to be COPIED back into `current`; there is nothing to copy any more.
+        // The charge taken when this callee was installed is released here on
+        // the fast Breturn path too: release must ride every exit (normal,
+        // signal/throw); the slow path releases in finish_interpreter_frame.
+        release_bytecode_frame(self.ctx, returning_frame_bytes);
         let continuation = callers
             .leave_callee()
             .expect("a suspended caller was proven above");
@@ -5446,6 +5535,30 @@ impl<'a> Vm<'a> {
                             let backtrace = self
                                 .ctx
                                 .push_backtrace_frame_from_bc_stack(func_val, args_start, n);
+                            // GNU records the callee (bytecode.c:792-796) and
+                            // then setup_frame (:496-516) checks the bytecode
+                            // stack; the rejected frame is not installed.
+                            if charge_bytecode_frame(self.ctx, callee_code.max_stack.get())
+                                .is_none()
+                            {
+                                let result = Err(signal(
+                                    "error",
+                                    vec![Value::string("Bytecode stack overflow")],
+                                ));
+                                let result = self.ctx.dispatch_signal_result_if_needed(result);
+                                let result = self
+                                    .ctx
+                                    .pop_bytecode_backtrace_token_fast_or_slow(backtrace, result);
+                                self.leave_bytecode_call_depth();
+                                debug_assert!(result.is_err());
+                                publish_phase!();
+                                match result {
+                                    Err(flow) => resume_flow!(flow),
+                                    Ok(_) => {
+                                        unreachable!("a bytecode-stack overflow cannot complete")
+                                    }
+                                }
+                            }
                             callers
                                 .active_mut()
                                 .save_execution_state(pc_local, osr_tried);
@@ -5494,6 +5607,37 @@ impl<'a> Vm<'a> {
                                     nargs,
                                     backtrace,
                                 } => {
+                                    // GNU records the callee (bytecode.c:792-796)
+                                    // and then setup_frame (:496-516) checks the
+                                    // bytecode stack; the rejected frame is not
+                                    // installed.  The cursor is still published,
+                                    // so the overflow resumes through the normal
+                                    // nonlocal-flow machinery.
+                                    if charge_bytecode_frame(
+                                        self.ctx,
+                                        callee.code().max_stack.get(),
+                                    )
+                                    .is_none()
+                                    {
+                                        let result = Err(signal(
+                                            "error",
+                                            vec![Value::string("Bytecode stack overflow")],
+                                        ));
+                                        let result =
+                                            self.ctx.dispatch_signal_result_if_needed(result);
+                                        let result =
+                                            self.ctx.pop_bytecode_backtrace_token_fast_or_slow(
+                                                backtrace, result,
+                                            );
+                                        self.leave_bytecode_call_depth();
+                                        debug_assert!(result.is_err());
+                                        match result {
+                                            Err(flow) => resume_flow!(flow),
+                                            Ok(_) => unreachable!(
+                                                "a bytecode-stack overflow cannot complete"
+                                            ),
+                                        }
+                                    }
                                     // Uncached ByteCode targets route through
                                     // the tier dispatcher (heat/feedback) and
                                     // may still enter iteratively; the cursor

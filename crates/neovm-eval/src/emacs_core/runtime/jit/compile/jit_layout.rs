@@ -165,6 +165,11 @@ pub(crate) fn emit_dispatch_cells_base(fb: &mut FunctionBuilder, vmctx: ClifValu
 }
 /// `Context::jit_stack_limit`, the native stack guard's floor.
 pub(crate) const CONTEXT_JIT_STACK_LIMIT_OFFSET: usize = offset_of!(Context, jit_stack_limit);
+/// `Context::bytecode_stack_used`: GNU's `BC_STACK_SIZE` accounting (bytes
+/// charged by the byte-compiled frames now live), which generated direct
+/// calls charge and release in place like `depth`.
+pub(crate) const CONTEXT_BYTECODE_STACK_USED_OFFSET: usize =
+    offset_of!(Context, bytecode_stack_used);
 /// `Context::owner`: the owner's slab of dynamic bindings of projected
 /// variables (Phase 0 step 2), the former reserved opcode-epoch word. No
 /// generated code reads it yet; the AOT tag pins its offset.
@@ -286,6 +291,13 @@ const _: () = {
 /// From the untagged address of a byte-code object, its `ByteCodeFunction`.
 pub(crate) const BYTECODE_OBJ_DATA_OFFSET: usize =
     offset_of!(neovm_value::tagged::header::ByteCodeObj, data);
+
+/// From the untagged address of a byte-code object, its declared bytecode
+/// stack depth (`CLOSURE_STACK_DEPTH`, GNU closure slot 3; `setup_frame`
+/// reads it at every entry, src/bytecode.c:496-516). The stored value is a
+/// `StackDepth`, a `#[repr(transparent)] usize`.
+pub(crate) const BYTECODE_MAX_STACK_OFFSET: usize =
+    BYTECODE_OBJ_DATA_OFFSET + offset_of!(crate::emacs_core::bytecode::ByteCodeFunction, max_stack);
 
 /// From the untagged address of a byte-code object, the one word of its
 /// `runtime: Option<Runtime>` (the tiering handle every `make-closure`

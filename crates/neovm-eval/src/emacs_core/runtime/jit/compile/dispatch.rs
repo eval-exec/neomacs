@@ -1557,6 +1557,24 @@ macro_rules! spec_call_body {
                 Value::from_bits($expected as usize)
             };
             let $nargs = $nargs as usize;
+            // GNU's bytecode stack (`setup_frame`, src/bytecode.c:496-516):
+            // this fast path runs the leaf without the Rust entry, so it
+            // charges the callee's DECLARED stack depth here by the same rule
+            // `execute_from_stack_args` applies. A frame that does not fit
+            // takes the slow half, whose entry charges it (and raises GNU's
+            // error); a stub is never armed but resolves on the slow half.
+            let Some(bc) = callee.bytecode_data_if_materialized() else {
+                return call_spec_slow(
+                    $ctx, $sym_bits, $expected, slot_ref, $args_ptr, $nargs, $out,
+                );
+            };
+            let Some(frame_bytes) =
+                crate::emacs_core::bytecode::vm::charge_bytecode_frame(ctx_ref, bc.max_stack.get())
+            else {
+                return call_spec_slow(
+                    $ctx, $sym_bits, $expected, slot_ref, $args_ptr, $nargs, $out,
+                );
+            };
             let bt_count = ctx_ref.specpdl.len();
             // SAFETY: args_ptr addresses `nargs` valid tagged words (the caller's
             // call-args slot). The frame records the called SYMBOL, as GNU's
@@ -1625,6 +1643,10 @@ macro_rules! spec_call_body {
                     crate::emacs_core::jit::cache::NATIVE_OK_COUNT.fetch_add(1, Ordering::Relaxed);
                     if ctx_ref.pop_native_backtrace_frame(bt_count) {
                         ctx_ref.depth -= 1;
+                        crate::emacs_core::bytecode::vm::release_bytecode_frame(
+                            ctx_ref,
+                            frame_bytes,
+                        );
                         // SAFETY: `out` is the generated code's result stack slot.
                         unsafe { *$out = bits };
                         return STATUS_OK;
@@ -1649,6 +1671,10 @@ macro_rules! spec_call_body {
                     crate::emacs_core::jit::cache::NATIVE_OK_COUNT.fetch_add(1, Ordering::Relaxed);
                     if ctx_ref.pop_native_backtrace_frame(bt_count) {
                         ctx_ref.depth -= 1;
+                        crate::emacs_core::bytecode::vm::release_bytecode_frame(
+                            ctx_ref,
+                            frame_bytes,
+                        );
                         // SAFETY: `out` is the generated code's result stack slot.
                         unsafe { *$out = ret.value };
                         return STATUS_OK;
@@ -1673,6 +1699,10 @@ macro_rules! spec_call_body {
                             .fetch_add(1, Ordering::Relaxed);
                         if ctx_ref.pop_native_backtrace_frame(bt_count) {
                             ctx_ref.depth -= 1;
+                            crate::emacs_core::bytecode::vm::release_bytecode_frame(
+                                ctx_ref,
+                                frame_bytes,
+                            );
                             // SAFETY: as above.
                             unsafe { *$out = bits as i64 };
                             return STATUS_OK;
@@ -1693,12 +1723,31 @@ macro_rules! spec_call_body {
                     NativeRun::Signal if shim_panic_pending() => {
                         // SAFETY: `args_ptr` is the caller's live call-args slot.
                         unsafe { ctx_ref.detach_native_frames_into($args_ptr) };
+                        // The callee is gone; the frame's charge is released
+                        // here even on the caller's healing exit.
+                        crate::emacs_core::bytecode::vm::release_bytecode_frame(
+                            ctx_ref,
+                            frame_bytes,
+                        );
                         return STATUS_SIGNAL;
                     }
                     other => FastRun::Framed(other),
                 }
             };
-            return call_spec_finish($ctx, callee, leaf, $args_ptr, $nargs, $out, bt_count, run);
+            // The cold exit owns the rest of this frame's life: it releases
+            // the charge after any precise-deopt resume (which continues the
+            // frame) and before an interpreter rerun, whose entry charges it.
+            return call_spec_finish(
+                $ctx,
+                callee,
+                leaf,
+                $args_ptr,
+                $nargs,
+                $out,
+                bt_count,
+                run,
+                frame_bytes,
+            );
         }
         call_spec_slow(
             $ctx,
@@ -1891,6 +1940,7 @@ pub(super) fn call_spec_finish(
     out: *mut i64,
     bt_count: usize,
     run: FastRun,
+    charged: usize,
 ) -> i64 {
     jit_shim_contain!(detach args_ptr, ctx, STATUS_SIGNAL, {
         use crate::emacs_core::jit::cache::{self, NativeCallOutcome};
@@ -1911,6 +1961,12 @@ pub(super) fn call_spec_finish(
                 cache::finish_framed_run(ctx_ptr, bc, callee, leaf, outcome)
             }
         };
+        // The native run is over, including any precise-deopt resume it
+        // handed to the interpreter (that resume continues THIS frame, so
+        // its charge was still held). An interpreter RERUN below is a
+        // fresh entry through `execute_from_stack_args`, which charges the
+        // frame itself.
+        crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx, charged);
         let outcome = match outcome {
             NativeCallOutcome::Fallback => {
                 Vm::interp_fallback_native(ctx_ptr, bc, callee, args_ptr, nargs)
