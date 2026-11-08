@@ -120,7 +120,7 @@ fn parked_roots_equal_full_census_without_world_plus_parked_tls() {
     let mut private = Vec::new();
     let mut world = Vec::new();
     owner.trace_roots(
-        owner.tagged_heap.identity(),
+        owner.tagged_heap.tagged_heap_identity(),
         |roots| {
             neovm_value::tagged::transport::collect_shared_root_gc_roots(&owner.tagged_heap, roots)
         },
@@ -137,7 +137,7 @@ fn parked_roots_equal_full_census_without_world_plus_parked_tls() {
     let mut stats = Vec::new();
     collect_thread_local_gc_roots(
         &mut tls,
-        owner.tagged_heap.identity(),
+        owner.tagged_heap.tagged_heap_identity(),
         owner.tagged_heap.gc_collections(),
         CacheRootScan::Parked,
         &mut stats,

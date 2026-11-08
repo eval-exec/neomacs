@@ -35,7 +35,7 @@ impl Drop for Settings {
 
 fn reloc_count(ctx: &Context, word: usize) -> usize {
     let mut roots = Vec::new();
-    cache::collect_jit_reloc_gc_roots_for_heap(&mut roots, ctx.tagged_heap.identity());
+    cache::collect_jit_reloc_gc_roots_for_heap(&mut roots, ctx.tagged_heap.tagged_heap_identity());
     roots.iter().filter(|value| value.bits() == word).count()
 }
 

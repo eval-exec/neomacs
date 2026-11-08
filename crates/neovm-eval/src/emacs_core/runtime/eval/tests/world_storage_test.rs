@@ -93,7 +93,7 @@ fn world_storage_cold_constructor_reads_its_own_canonical_cells() {
 #[test]
 fn world_storage_factory_reinstalls_final_heap_before_lisp_allocates() {
     let mut context = Context::new(crate::test_utils::unit_runtime());
-    let identity = context.tagged_heap.identity();
+    let identity = context.tagged_heap.tagged_heap_identity();
     assert_eq!(
         neovm_value::tagged::gc::current_tagged_heap_identity(),
         Some(identity)

@@ -1823,7 +1823,7 @@ fn parking_traces_private_roots_without_world_cells() {
     ev.eval_temp_roots.push(private);
     let mut full = Vec::new();
     ev.trace_roots(
-        ev.tagged_heap.identity(),
+        ev.tagged_heap.tagged_heap_identity(),
         |roots| {
             neovm_value::tagged::transport::collect_shared_root_gc_roots(&ev.tagged_heap, roots)
         },
@@ -1838,7 +1838,7 @@ fn parking_traces_private_roots_without_world_cells() {
     let is_world = std::cell::Cell::new(false);
     let mut expected = Vec::new();
     ev.trace_roots(
-        ev.tagged_heap.identity(),
+        ev.tagged_heap.tagged_heap_identity(),
         |roots| {
             neovm_value::tagged::transport::collect_shared_root_gc_roots(&ev.tagged_heap, roots)
         },

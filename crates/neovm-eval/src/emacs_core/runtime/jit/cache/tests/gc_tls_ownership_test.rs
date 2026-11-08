@@ -31,7 +31,7 @@ fn cache_payload() -> Value {
 
 fn roots_for(ctx: &Context) -> Vec<Value> {
     let mut roots = Vec::new();
-    collect_jit_reloc_gc_roots_for_heap(&mut roots, ctx.tagged_heap.identity());
+    collect_jit_reloc_gc_roots_for_heap(&mut roots, ctx.tagged_heap.tagged_heap_identity());
     roots
 }
 

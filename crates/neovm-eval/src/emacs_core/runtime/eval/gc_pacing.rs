@@ -143,7 +143,7 @@ impl Context {
     pub fn private_root_group_names(&self) -> Vec<&'static str> {
         let mut names = Vec::new();
         self.trace_root_groups::<false>(
-            self.tagged_heap.identity(),
+            self.tagged_heap.tagged_heap_identity(),
             |_| {},
             &mut |name| names.push(name),
             &mut |_| {},

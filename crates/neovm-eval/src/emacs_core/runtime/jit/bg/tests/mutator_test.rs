@@ -70,7 +70,7 @@ fn mutator(role: usize, commands: Receiver<Command>, reports: Sender<Report>) {
     ctx.gc_collect_exact();
     ctx.gc_collect_exact();
     let mut roots = Vec::new();
-    let heap = ctx.tagged_heap.identity();
+    let heap = ctx.tagged_heap.tagged_heap_identity();
     cache::collect_jit_reloc_gc_roots_for_heap(&mut roots, heap);
     assert!(roots.iter().any(|value| value.bits() == expected_bits));
     assert!(cache::compiled_cache_probe().1 >= 1);
