@@ -409,3 +409,9 @@ mod emacs_core_runtime_pdump_tests_pdump_load_facade_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/tests/redisplay_hook_ownership_facade_test.rs"]
 mod emacs_core_runtime_eval_tests_redisplay_hook_ownership_facade_test_rs;
+// VM tests whose fixture is the display window surface, the terminal frame
+// surface, or the minibuffer command surface. Eval cannot name those crates.
+// The rest of vm_test.rs stays in eval. Assertions are unchanged.
+#[cfg(test)]
+#[path = "emacs_core/runtime/bytecode/tests/vm_window_surface_test.rs"]
+mod emacs_core_runtime_bytecode_tests_vm_window_surface_test_rs;
