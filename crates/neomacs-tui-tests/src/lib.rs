@@ -330,6 +330,10 @@ pub struct TuiSession {
     // 1,000 babel-stable names there and cleans it from kill-emacs-hook. A
     // shared pool makes parallel/repeated tests contend on that finite space.
     _tmp: SessionDirectory,
+    /// The child's transport closed (exit or EOF on the PTY). A waiting
+    /// observer must fail loudly instead of spinning out its whole budget on
+    /// a screen that can no longer change.
+    finished: bool,
     pub name: SessionName,
 }
 
@@ -550,6 +554,7 @@ impl TuiSession {
             recording_delay: recording.delay(),
             home,
             _tmp: tmp,
+            finished: false,
             name: SessionName::new(name, startup),
         }
     }
@@ -708,13 +713,17 @@ impl TuiSession {
                                 last_activity.map_or(observed_at, |last| last.max(observed_at)),
                             );
                         }
-                        PtyReadProgress::Finished => return,
+                        PtyReadProgress::Finished => {
+                            self.finished = true;
+                            return;
+                        }
                     },
                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                         self.terminal
                             .require_owner_closed()
                             .expect("PTY owner disconnected without closure");
+                        self.finished = true;
                         return;
                     }
                 }
@@ -738,13 +747,17 @@ impl TuiSession {
                         last_activity =
                             Some(last_activity.map_or(observed_at, |last| last.max(observed_at)));
                     }
-                    PtyReadProgress::Finished => return,
+                    PtyReadProgress::Finished => {
+                        self.finished = true;
+                        return;
+                    }
                 },
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                     self.terminal
                         .require_owner_closed()
                         .expect("PTY owner disconnected without closure");
+                    self.finished = true;
                     return;
                 }
             }
@@ -854,12 +867,17 @@ impl TuiSession {
             if predicate(&self.text_grid(), self.screen()) {
                 break;
             }
+            assert!(
+                !self.finished,
+                "{} exited while waiting for a screen state:\n{}",
+                self.name,
+                self.text_grid().join("\n")
+            );
             if Instant::now() >= deadline {
                 break;
             }
         }
     }
-
 
     /// Drain the PTY while the child runs, stopping when it exits or when the
     /// supplied budget is exhausted.
