@@ -357,6 +357,9 @@ jobs:
       - name: Fetch locked crates for trybuild's offline builds
         run: cargo fetch --locked
 
+      - name: Self-test the contract result parser
+        run: python3 scripts/check_compile_contracts.py --self-test
+
       # The runners are compiled only with the `contract-fixtures` feature
       # (41eaff923a moved them off #[ignore]). Without it the four test
       # targets build empty and `cargo test` reports 0 passed, so the job
@@ -377,10 +380,11 @@ jobs:
               --test p0s3_contracts --test p1rv_contracts \
               --test thread_safety_contracts --test chartable_write_contracts
           } 2>&1 | tee "$RUNNER_TEMP/contracts.log"
-          ran=$(grep -oE 'test result: ok\. [0-9]+ passed' "$RUNNER_TEMP/contracts.log" \
-            | awk '{s += $4} END {print s + 0}')
-          echo "compile-fail contract runners passed: $ran"
-          test "$ran" -ge 17
+          rc=${PIPESTATUS[0]}
+          # Attribute each result line to its cargo-test target; nested
+          # trybuild `ok. 1` lines must not be able to mask a FAILED runner.
+          python3 scripts/check_compile_contracts.py "$RUNNER_TEMP/contracts.log"
+          test "$rc" -eq 0 || { echo "cargo test exited $rc"; exit 1; }
 
   # The same contracts on the arm64 macOS toolchain. rustc on aarch64-apple-darwin
   # orders and caps its E0277/E0599 notes differently, so the suite keeps
@@ -413,6 +417,9 @@ jobs:
       - name: Fetch locked crates for trybuild's offline builds
         run: cargo fetch --locked
 
+      - name: Self-test the contract result parser
+        run: python3 scripts/check_compile_contracts.py --self-test
+
       - name: Run the compile-fail contracts
         run: |
           set -o pipefail
@@ -421,10 +428,11 @@ jobs:
               --test p0s3_contracts --test p1rv_contracts \
               --test thread_safety_contracts --test chartable_write_contracts
           } 2>&1 | tee "$RUNNER_TEMP/contracts.log"
-          ran=$(grep -oE 'test result: ok\. [0-9]+ passed' "$RUNNER_TEMP/contracts.log" \
-            | awk '{s += $4} END {print s + 0}')
-          echo "compile-fail contract runners passed: $ran"
-          test "$ran" -ge 17
+          rc=${PIPESTATUS[0]}
+          # Attribute each result line to its cargo-test target; nested
+          # trybuild `ok. 1` lines must not be able to mask a FAILED runner.
+          python3 scripts/check_compile_contracts.py "$RUNNER_TEMP/contracts.log"
+          test "$rc" -eq 0 || { echo "cargo test exited $rc"; exit 1; }
 
   gnu-emacs-oracle:
     name: GNU Emacs oracle (linux x86_64)
