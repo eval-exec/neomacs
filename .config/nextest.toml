@@ -156,17 +156,26 @@ slow-timeout = { period = "120s", terminate-after = 1 }
 filter = 'package(neovm-core) and (test(expanded_cache_replay_preserves_nadvice_eval_and_compile_helpers) or test(expanded_cache_replay_preserves_oclosure_define_class_registration))'
 slow-timeout = { period = "1200s", terminate-after = 1 }
 
-# Each inlined_call_semantics test runs the full engine matrix: both GNU and
-# Neomacs evaluate every ~40 env row, so one test is ~80 subprocess runs.
-# Measured alone they take 17-23s; a fully parallel oracle run starves them
-# past the 60s single-form watchdog (four of them timed out in a 12-thread run
-# on a loaded machine, then all passed in isolation).  They are heavy, not
-# hung: run them without parallel contention and keep the 120s ceiling of the
-# other heavy oracle families.
+# The inlined-call matrix tests run the full engine matrix: GNU once and
+# Neomacs once per ~39 env row, so one test is ~40 subprocess runs.  Six of
+# those rows set NEOVM_GC_STRESS=1, and stress mode collects at EVERY
+# allocation-bearing safe point.  That is inherently expensive: a trivial
+# `(byte-compile ...)` executes ~279k such safe points at ~0.7 ms per
+# collection (~135s of it just loading bytecomp.el), independent of lambda
+# size, compile count, JIT on/off and JIT threshold.  Measured end to end with
+# the release pdump binary in VERIFY mode: one whole test takes 857s.  The old
+# 120s ceiling predates the GC-stress rows and now guarantees a timeout.
+# 2400s keeps a bounded watchdog with ~2.8x headroom over the measured worst.
+# `threads-required` still isolates these tests from contention in the default
+# profile; scripts/oracle-full-run.sh runs the same 15 tests as a bounded slow
+# group under the `oracle-slow` profile instead of serializing them.
+# The filter covers every test that calls inlined_call_semantics::check: the
+# inlined_call_semantics module, backtrace_frame_semantics' oracle_inline_o1/
+# o2, and debug_on_next_call's oracle_inline_o3/o4.
 [[profile.default.overrides]]
-filter = 'package(neovm-oracle-tests) and test(inlined_call_semantics::)'
+filter = 'package(neovm-oracle-tests) and (test(inlined_call_semantics::) or test(backtrace_frame_semantics::oracle_inline_) or test(debug_on_next_call::oracle_inline_))'
 threads-required = "num-test-threads"
-slow-timeout = { period = "120s", terminate-after = 1 }
+slow-timeout = { period = "2400s", terminate-after = 1 }
 
 # A handful of subprocess probes are timing sensitive rather than divergent:
 # `process_attributes_running_child` reads `process-running-child-p' while a
@@ -284,3 +293,19 @@ threads-required = "num-test-threads"
 [[profile.default.overrides]]
 filter = 'package(neovm-core) and test(=emacs_core::process::tests::call_process_program_resolution_errors_match_gnu_report_file_error)'
 slow-timeout = { period = "30s", terminate-after = 1, grace-period = "0s" }
+
+# The whole-host oracle recipe (scripts/oracle-full-run.sh) runs the 15
+# GC-stress matrix tests as a separate slow group.  Same evidence-based 2400s
+# watchdog as the default-profile override, but with a bounded 2-slot
+# reservation (up to 12 concurrent tests on the 24-thread pool) instead of the
+# whole pool, so the measured 15 x 857s group finishes in tens of minutes
+# rather than hours.  Only the recipe selects this profile; a plain
+# `cargo nextest run` keeps the default-profile behavior.
+[profile.oracle-slow]
+test-threads = 24
+slow-timeout = { period = "2400s", terminate-after = 1, grace-period = "0s" }
+
+[[profile.oracle-slow.overrides]]
+filter = 'package(neovm-oracle-tests) and (test(inlined_call_semantics::) or test(backtrace_frame_semantics::oracle_inline_) or test(debug_on_next_call::oracle_inline_))'
+threads-required = 2
+slow-timeout = { period = "2400s", terminate-after = 1 }
