@@ -57,3 +57,31 @@ mod nmjit_n1;
 
 #[path = "thread_soak.rs"]
 mod thread_soak;
+
+// Fast-track regression for the eval-split self-recursion in
+// EditHost::sync_window_positions: a buffer edit must refresh the window
+// position caches instead of overflowing the stack.
+#[path = "sync_window_positions_regression.rs"]
+mod sync_window_positions_regression;
+
+// Warn-delta P2 oracle: minibuffer exit restores the previous mini-window
+// buffer/start/point under the GNU redisplay-hooks policy (GNU minibuf.c
+// minibuffer_unwind / read_minibuf_unwind).
+#[path = "warn_delta_minibuffer_restore.rs"]
+mod warn_delta_minibuffer_restore;
+
+// Warn-delta P2 row 4 oracles: file-user-uid / file-group-gid are GNU Lisp
+// functions (simple.el:4826/:4838), not subrs.
+#[path = "warn_delta_identity.rs"]
+mod warn_delta_identity;
+
+// Re-homed display host/boot tests (P1 B1): they need system host-input,
+// core boot or core display entries.  They are folded here like every other
+// core suite.  The moved bodies spell their original display-crate paths
+// (`crate::window`, `crate::host_input`, `crate::test_utils`,
+// `crate::emacs_core`) against the test-binary root, so the facade modules
+// are re-exported at the root to keep those bodies byte-identical.
+#[path = "moved_display_host.rs"]
+mod moved_display_host;
+
+pub use moved_display_host::{emacs_core, host_input, test_utils, window};
