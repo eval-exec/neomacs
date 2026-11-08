@@ -1013,9 +1013,6 @@ mod collection_scalar_tests;
 #[cfg(test)]
 mod cons_allocation_tests;
 
-#[cfg(test)]
-mod slice_tests;
-
 #[cfg(all(test, not(feature = "test-support")))]
 mod a8_probes;
 #[cfg(feature = "test-support")]

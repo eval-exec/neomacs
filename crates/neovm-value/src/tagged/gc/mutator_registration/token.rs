@@ -296,6 +296,13 @@ impl<'era> Mutator<'era> {
         Arc::clone(&self.entry)
     }
 
+    /// Same admission word `MutatorEntry::admitted` reads. The entry stays private.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn entry_admitted_for_test(&self) -> bool {
+        self.entry.admitted()
+    }
+
     /// Lock-free slice admission (the safepoint poll): zero RMWs on shared
     /// lines — one plain store to the owner-private admission word, one
     /// full fence, one plain load of the read-mostly phase word.

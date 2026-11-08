@@ -247,6 +247,15 @@ impl<'heap, K: EraKeeper> ProofEra<'heap, K> {
         self.core.registry()
     }
 
+    /// Same park word `Registry::poison` publishes. The flag stays private.
+    #[doc(hidden)]
+    pub fn registry_poisoned_for_test(&self) -> bool {
+        self.registry()
+            .park
+            .poisoned
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
     #[doc(hidden)]
     pub fn with_stopped_heap_for_test<R>(
         &self,

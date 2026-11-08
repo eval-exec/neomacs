@@ -38,6 +38,13 @@ pub(crate) mod era_fixtures;
 #[path = "../../../core_tests/tagged/gc/mutator_registration/root_slot_tests.rs"]
 mod root_slot_tests;
 
+/// Slice-boundary tests re-homed out of value. They name the evaluator's
+/// collection era. Assertions are unchanged; private park, admission, and
+/// owner-census reads go through the existing copied observers.
+#[cfg(test)]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/slice_tests.rs"]
+mod slice_tests;
+
 /// MEMQ-TAIL-SHAPES (3): the lifecycle refusal tests re-homed out of value.
 /// The value fields stay private; the tests use the copied entry observers and
 /// the three C3 seed fences (`test_support::authority`).

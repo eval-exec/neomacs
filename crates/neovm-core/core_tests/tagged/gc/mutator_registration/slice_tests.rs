@@ -2,9 +2,14 @@
 #![cfg(not(feature = "gc-memory-telemetry"))]
 use super::*;
 use crate::emacs_core::eval::Context;
-use crate::tagged::gc::ProofEra as ParallelHeapEra;
+use crate::tagged::gc::mutator_registration::era_fixtures::EraFixtureExt;
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue as Value;
+use neovm_eval::test_support::authority::WorldProofEra as ParallelHeapEra;
+use neovm_value::tagged::header::ConsCell;
+use neovm_value::test_support::authority::{
+    begin_restore_retry_for_test, poison_registry_for_test,
+};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, mpsc};
 use std::thread;
@@ -14,12 +19,12 @@ fn seeds(context: &mut Context) -> (SharedRoot, SharedRoot) {
     // SAFETY: immediate values belong to this genuine serial source heap.
     unsafe {
         (
-            SharedRoot::new(&context.tagged_heap, Value::fixnum(8123)),
-            SharedRoot::new(&context.tagged_heap, Value::NIL),
+            SharedRoot::new(context.tagged_heap(), Value::fixnum(8123)),
+            SharedRoot::new(context.tagged_heap(), Value::NIL),
         )
     }
 }
-fn owner<'era, K: EraKeeper>(era: &'era ParallelHeapEra<'_, K>, id: u64) -> Mutator<'era> {
+fn owner<'era>(era: &'era ParallelHeapEra<'_>, id: u64) -> Mutator<'era> {
     era.register(id, 2)
         .unwrap()
         .activate(era.heap_identity(), id)
@@ -34,22 +39,23 @@ fn with_run<'era, R>(
     run.close_cons_region().unwrap();
     result
 }
-fn finish<K: EraKeeper>(era: ParallelHeapEra<'_, K>) {
+fn finish(era: ParallelHeapEra<'_>) {
     let (collector, keeper) = era.finish().unwrap();
     drop(collector);
     drop(keeper);
 }
-fn retire<const N: usize, K: EraKeeper>(
-    era: &ParallelHeapEra<'_, K>,
-    mut owners: [Mutator<'_>; N],
-) {
+fn retire<const N: usize>(era: &ParallelHeapEra<'_>, mut owners: [Mutator<'_>; N]) {
     for owner in &mut owners {
         with_run(owner, |run| run.clear_root_slots().unwrap());
         owner.enter_native(&[]).unwrap();
     }
     let mut stopped = era.stop().unwrap();
     era.return_cons_storage(&stopped).unwrap();
-    era.collect_stopped(&mut stopped).unwrap();
+    era.collect_stopped(
+        &mut stopped,
+        neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
+    )
+    .unwrap();
     stopped.complete().unwrap();
     for owner in owners {
         owner.retire_rooted(&[]).unwrap();
@@ -58,7 +64,7 @@ fn retire<const N: usize, K: EraKeeper>(
 
 #[test]
 fn slice_bind_refuses_wrong_owner_heap_and_stale_homes_before_allocation() {
-    let foreign_heap = super::super::TaggedHeap::new();
+    let foreign_heap = crate::tagged::gc::TaggedHeap::new();
     // SAFETY: NIL is immediate, with a real different heap registration.
     let foreign = unsafe { SharedRoot::new(&foreign_heap, Value::NIL) };
     Context::with_test_collection_era(seeds, |era, (car, nil)| {
@@ -75,11 +81,8 @@ fn slice_bind_refuses_wrong_owner_heap_and_stale_homes_before_allocation() {
                 run.root_slot(&foreign),
                 Err(RegistrationError::WrongHeap)
             ));
-            let allocated = run.state().hot.allocated_count;
-            let bank = (
-                run.state().root_scratch.len(),
-                run.state().root_scratch.capacity(),
-            );
+            let allocated = run.allocated_count_for_test();
+            let bank = run.root_bank_for_test();
             let before = era.cons_catalog_snapshot_for_test().unwrap();
             run.with_slice(|slice| {
                 assert!(matches!(
@@ -96,14 +99,8 @@ fn slice_bind_refuses_wrong_owner_heap_and_stale_homes_before_allocation() {
                 let _ = slice.bind(&head).unwrap();
             })
             .unwrap();
-            assert_eq!(run.state().hot.allocated_count, allocated);
-            assert_eq!(
-                (
-                    run.state().root_scratch.len(),
-                    run.state().root_scratch.capacity()
-                ),
-                bank
-            );
+            assert_eq!(run.allocated_count_for_test(), allocated);
+            assert_eq!(run.root_bank_for_test(), bank);
             assert!(run.cons_region_for_test().is_none());
             assert_eq!(era.cons_catalog_snapshot_for_test().unwrap(), before);
         });
@@ -136,10 +133,10 @@ fn forgetting_callback_reference_still_closes_slice_and_roots_the_alias_chain() 
             })
             .unwrap();
             assert!(run.cons_region_for_test().is_none());
-            assert_eq!(run.state().hot.allocated_count, 260);
+            assert_eq!(run.allocated_count_for_test(), 260);
             head.word_for_test(run)
         });
-        assert!(!era.registry().park.poisoned.load(Ordering::Acquire));
+        assert!(!era.registry_poisoned_for_test());
         // The closed slice left its tail lent to this owner: the charge is
         // exactly what the ACK below must publish back.
         assert!(era.cons_catalog_snapshot_for_test().unwrap().active_regions >= 1);
@@ -150,9 +147,17 @@ fn forgetting_callback_reference_still_closes_slice_and_roots_the_alias_chain() 
         );
         let mut stopped = era.stop().unwrap();
         era.return_cons_storage(&stopped).unwrap();
-        assert!(era.collect_stopped(&mut stopped).unwrap().major);
+        assert!(
+            era.collect_stopped(
+                &mut stopped,
+                neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
+            )
+            .unwrap()
+            .major
+        );
         era.with_stopped_heap_for_test(&stopped, |heap| {
-            let mut cursor = Value::from_bits(word);
+            // SAFETY: `word` is the stopped owner's canonical chain head.
+            let mut cursor = unsafe { Value::from_bits(word) };
             for _ in 0..260 {
                 assert!(heap.owns_heap_value_for_test(cursor));
                 // SAFETY: exact stopped collection retained this canonical
@@ -183,7 +188,7 @@ fn poisoned_slice_entry_never_invokes_callback_or_changes_bank() {
             let mut run = owner.run_access().unwrap();
             let home = run.root_slot(&car).unwrap();
             let before = home.word_for_test(&run);
-            era.registry().poison();
+            poison_registry_for_test(&era);
             let mut invoked = false;
             assert_eq!(
                 run.with_slice(|_| invoked = true),
@@ -192,7 +197,7 @@ fn poisoned_slice_entry_never_invokes_callback_or_changes_bank() {
             assert!(!invoked);
             assert_eq!(home.word_for_test(&run), before);
             assert!(run.cons_region_for_test().is_none());
-            assert_eq!(run.state().hot.allocated_count, 0);
+            assert_eq!(run.allocated_count_for_test(), 0);
         }
         assert_eq!(owner.enter_native(&[]), Err(RendezvousError::Poisoned));
         drop(owner);
@@ -223,7 +228,7 @@ fn abandoned_slice_retains_committed_cursor(panic_body: bool) {
                     if panic_body {
                         panic!("intentional slice body panic");
                     }
-                    era.registry().poison();
+                    poison_registry_for_test(&era);
                 })
             }));
             if panic_body {
@@ -235,19 +240,20 @@ fn abandoned_slice_retains_committed_cursor(panic_body: bool) {
             } else {
                 assert_eq!(result.unwrap(), Err(RegistrationError::Poisoned));
             }
-            assert!(era.registry().park.poisoned.load(Ordering::Acquire));
+            assert!(era.registry_poisoned_for_test());
             let (start, end, unused) = run
                 .cons_region_for_test()
                 .expect("retained canonical grant");
             assert!(unused > 0);
-            let pointer = Value::from_bits(head.word_for_test(&run))
+            // SAFETY: the word is this owner's live root slot, read before drop.
+            let pointer = unsafe { Value::from_bits(head.word_for_test(&run)) }
                 .as_cons_ptr()
                 .unwrap()
                 .addr();
             assert!(pointer >= start && pointer < end);
             assert_eq!(
-                end - unused * std::mem::size_of::<super::super::ConsCell>(),
-                pointer + std::mem::size_of::<super::super::ConsCell>(),
+                end - unused * std::mem::size_of::<ConsCell>(),
+                pointer + std::mem::size_of::<ConsCell>(),
                 "Drop/failed finish committed the last initialized cell"
             );
             let before = era.cons_catalog_snapshot_for_test().unwrap();
@@ -255,11 +261,11 @@ fn abandoned_slice_retains_committed_cursor(panic_body: bool) {
             assert_eq!(run.close_cons_region(), Err(RegistrationError::Poisoned));
             assert_eq!(era.cons_catalog_snapshot_for_test().unwrap(), before);
         }
-        assert!(owner.entry.admitted());
+        assert!(owner.entry_admitted_for_test());
         assert_eq!(owner.enter_native(&[]), Err(RendezvousError::Poisoned));
         drop(owner);
         assert_eq!(
-            era.finish().unwrap_err().reason,
+            era.finish().unwrap_err().reason(),
             RegistrationError::OpenRegion
         );
         // An abandoned fixture must never resume its suspended Context.
@@ -326,11 +332,11 @@ fn two_owner_branded_slice_allocator_stress() {
             .recv_timeout(Duration::from_secs(30))
             .expect("branded-slice actor boundary")
     }
-    struct Abort<'a>(&'a Registry);
-    impl Drop for Abort<'_> {
+    struct Abort<'a, 'heap>(&'a ParallelHeapEra<'heap>);
+    impl Drop for Abort<'_, '_> {
         fn drop(&mut self) {
             if thread::panicking() {
-                self.0.poison();
+                poison_registry_for_test(self.0);
             }
         }
     }
@@ -345,7 +351,7 @@ fn two_owner_branded_slice_allocator_stress() {
         let (ready_tx, ready_rx) = mpsc::channel();
         let (result_tx, result_rx) = mpsc::channel();
         thread::scope(|scope| {
-            let _abort = Abort(era.registry());
+            let _abort = Abort(&era);
             let mut commands = Vec::new();
             for (index, mut permit) in permits.into_iter().enumerate() {
                 let ready = ready_tx.clone();
@@ -404,7 +410,7 @@ fn two_owner_branded_slice_allocator_stress() {
                         results.send((index, phase, owner.key(), head)).unwrap();
                         let epoch = retry(|| owner.wait_request());
                         retry(|| owner.acknowledge(epoch, &[]));
-                        let mut image = owner.begin_restore_retry(false).unwrap();
+                        let mut image = begin_restore_retry_for_test(&mut owner, false).unwrap();
                         let deadline = Instant::now() + Duration::from_secs(30);
                         loop {
                             match image.apply() {
@@ -458,8 +464,8 @@ fn two_owner_branded_slice_allocator_stress() {
                 for &(_, observed_phase, key, _) in &responses {
                     assert_eq!(observed_phase, phase);
                     retry(|| {
-                        stopped.with_owner_image(key, |image| {
-                            assert_eq!(image.summary().root_words, 2)
+                        stopped.with_owner_image_for_test(key, |image| {
+                            assert_eq!(image.root_words_for_test(), 2)
                         })
                     });
                     retry(|| {
@@ -471,12 +477,21 @@ fn two_owner_branded_slice_allocator_stress() {
                         })
                     });
                 }
-                assert!(retry(|| era.collect_stopped(&mut stopped)).major);
+                assert!(
+                    retry(|| {
+                        era.collect_stopped(
+                            &mut stopped,
+                            neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
+                        )
+                    })
+                    .major
+                );
                 retry(|| {
                     era.with_stopped_heap_for_test(&stopped, |heap| {
                         let mut addresses = HashSet::new();
                         for &(_, _, _, head) in &responses {
-                            let mut cursor = Value::from_bits(head);
+                            // SAFETY: `head` is the stopped image's canonical chain word.
+                            let mut cursor = unsafe { Value::from_bits(head) };
                             for _ in 0..(phase + 1) * PER_OWNER {
                                 assert!(heap.owns_heap_value_for_test(cursor));
                                 assert!(
