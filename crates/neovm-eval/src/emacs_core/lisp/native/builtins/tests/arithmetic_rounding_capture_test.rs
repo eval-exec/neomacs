@@ -3,6 +3,7 @@
 //! these cases check which operands remain captured, including error paths.
 
 use super::*;
+use neovm_value::error::IntoConditionSym;
 use neovm_value::tagged::collection_reads::capture;
 use neovm_value::tagged::mutate::LispCollectionRevision;
 
@@ -22,7 +23,7 @@ fn operands() -> (Value, Value) {
 fn assert_condition(result: EvalResult, condition: LispCondition, data: &[Value]) {
     let flow = result.expect_err("the rounding error path must signal");
     let signal = flow.as_signal().expect("a Lisp condition");
-    assert_eq!(signal.symbol, intern(condition.name()));
+    assert_eq!(signal.symbol, condition.condition_sym());
     assert_eq!(signal.data.as_slice(), data);
 }
 
