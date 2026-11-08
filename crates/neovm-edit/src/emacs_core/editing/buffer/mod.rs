@@ -2312,6 +2312,21 @@ pub(crate) fn builtin_goto_char<H: EditHost>(host: &mut H, args: Vec<Value>) -> 
 
 #[doc(hidden)]
 pub fn builtin_goto_char_1<H: EditHost>(host: &mut H, arg: Value) -> EvalResult {
+    // GNU `Fgoto_char` (editfns.c:217-222) dispatches on MARKERP/FIXNUMP
+    // directly and refuses everything else, bignums included:
+    //   if (MARKERP (position)) ... else if (FIXNUMP (position)) ...
+    //   else wrong_type_argument (Qinteger_or_marker_p, position);
+    // It does NOT go through `fix_position` (buffer.c:147-156), which is the
+    // clamping coercion `char-after`/`position-bytes` use and which folds a
+    // bignum to MOST_POSITIVE/NEGATIVE_FIXNUM.  Binding goto-char to that
+    // clamping extractor made `(goto-char (1+ most-positive-fixnum))` succeed
+    // where GNU signals wrong-type-argument integer-or-marker-p.
+    if !arg.is_fixnum() && !arg.is_marker() {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("integer-or-marker-p"), arg],
+        ));
+    }
     // GNU returns POSITION itself (a marker stays a marker), so the raw
     // arg survives extraction; the typed position carries the coordinate.
     let pos = {
