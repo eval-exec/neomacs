@@ -4,23 +4,26 @@ use crate::tagged::gc::ProofEra as ParallelHeapEra;
 
 #[test]
 fn p3sym_c5_function_executor_cannot_admit_intern_even_if_unreachable() {
-    Context::with_test_symbol_functions_era(PlainSymbolBacking::Unprojected, |era, ids| {
-        let tape = source(
-            vec![
-                Op::Jump { target: 2 },
-                Op::Intern(InternOp::InitialInternSoft { name: 0, dst: 0 }),
-            ],
-            1,
-        );
-        assert!(matches!(
-            Session::admit(&era, &ids, &[tape]),
-            Err(AdmissionError::Program(Reject::Excluded("initial obarray")))
-        ));
-        era.admit_plain_symbol(ids[0]).unwrap();
-        let (collector, keeper) = era.finish().unwrap();
-        drop(collector);
-        drop(keeper);
-    });
+    Context::with_test_symbol_functions_era(
+        PlainSymbolBacking::Unprojected,
+        |era, ids: Vec<crate::intern::SymId>| {
+            let tape = source(
+                vec![
+                    Op::Jump { target: 2 },
+                    Op::Intern(InternOp::InitialInternSoft { name: 0, dst: 0 }),
+                ],
+                1,
+            );
+            assert!(matches!(
+                Session::admit(&era, &ids, &[tape]),
+                Err(AdmissionError::Program(Reject::Excluded("initial obarray")))
+            ));
+            era.admit_plain_symbol(ids[0]).unwrap();
+            let (collector, keeper) = era.finish().unwrap();
+            drop(collector);
+            drop(keeper);
+        },
+    );
 }
 
 pub(super) fn source(ops: Vec<Op>, nslots: usize) -> Source {
@@ -44,18 +47,19 @@ fn p3sym_c4_executor_accepts_rooted_function_tapes_before_activation() {
         PlainSymbolBacking::Unprojected,
         PlainSymbolBacking::Projected,
     ] {
-        let accepted = Context::with_test_symbol_functions_era(kind, |era, ids| {
-            let tape = source(
-                vec![Op::Function(FunctionOp::Function { symbol: 0, dst: 0 })],
-                1,
-            );
-            let accepted = Session::admit(&era, &ids, &[tape]).map(|_| ());
-            let (collector, keeper) = era.finish().unwrap();
-            drop(collector);
-            drop(keeper);
-            eprintln!("P3SYM_C4_EXECUTOR_ADMISSION_TEARDOWN_OK");
-            accepted
-        });
+        let accepted =
+            Context::with_test_symbol_functions_era(kind, |era, ids: Vec<crate::intern::SymId>| {
+                let tape = source(
+                    vec![Op::Function(FunctionOp::Function { symbol: 0, dst: 0 })],
+                    1,
+                );
+                let accepted = Session::admit(&era, &ids, &[tape]).map(|_| ());
+                let (collector, keeper) = era.finish().unwrap();
+                drop(collector);
+                drop(keeper);
+                eprintln!("P3SYM_C4_EXECUTOR_ADMISSION_TEARDOWN_OK");
+                accepted
+            });
         assert_eq!(accepted, Ok(()), "missing function executor admission");
     }
 }
@@ -333,102 +337,108 @@ fn p3sym_c4_executor_busy_and_yield_preserve_instruction_and_answer() {
 
 #[test]
 fn p3sym_c4_executor_gate_checks_every_tape_and_activation_lifecycle() {
-    Context::with_test_symbol_functions_era(PlainSymbolBacking::Unprojected, |era, ids| {
-        let valid = source(vec![begin(), call(0)], 1);
-        let mut outcomes = Vec::new();
-        for op in [
-            Op::SetCar { cell: 0, value: 0 },
-            Op::SetCdr { cell: 0, value: 0 },
-            Op::HtCount { table: 0, dst: 0 },
-            Op::Cons {
-                dst: 0,
-                car: 0,
-                cdr: 0,
-            },
-            Op::Function(FunctionOp::Function { symbol: 2, dst: 0 }),
-            Op::Function(FunctionOp::Fset {
-                symbol: 0,
-                src: 1,
-                dst: 0,
-            }),
-            Op::Function(FunctionOp::Fmakunbound { symbol: 0, dst: 1 }),
-            Op::Function(FunctionOp::CallBegin { symbol: 2 }),
-            Op::Function(FunctionOp::CallStep {
-                dst: 1,
-                fuel: NonZeroU32::MIN,
-            }),
-        ] {
-            let hidden = source(vec![Op::Jump { target: 2 }, op], 1);
-            outcomes.push(Session::admit(&era, &ids, &[valid.clone(), hidden]).err());
-        }
-        let unselected = Session::admit(&era, &ids, &[source(vec![call(0)], 1)]).err();
-        let repeated = Session::admit(&era, &ids, &[source(vec![begin(), begin()], 1)]).err();
-        let overflow = Session::admit(&era, &ids, &[source(vec![], usize::MAX)]).err();
-        let legacy = prevalidate(&[begin()], 1, 0, STEP_CAP);
-        let global = prevalidate_inner(
-            &[begin()],
-            1,
-            0,
-            STEP_CAP,
-            &[],
-            TapeCapabilities::Globals { symbols: ids.len() },
-        );
-        let (collector, keeper) = era.finish().unwrap();
-        drop(collector);
-        drop(keeper);
-        for (index, actual) in outcomes.into_iter().enumerate() {
-            let reject = match index {
-                0..=2 => Reject::Excluded("global session mutation/table"),
-                3 => Reject::Excluded("function session allocation"),
-                _ => Reject::Slot,
-            };
-            assert_eq!(actual, Some(AdmissionError::Program(reject)));
-        }
-        for actual in [unselected, repeated] {
-            assert_eq!(actual, Some(AdmissionError::Program(Reject::RejectedType)));
-        }
-        assert_eq!(overflow, Some(AdmissionError::Program(Reject::Slot)));
-        assert_eq!(legacy, Err(Reject::Excluded("function handles")));
-        assert_eq!(global, Err(Reject::Excluded("function handles")));
-    });
+    Context::with_test_symbol_functions_era(
+        PlainSymbolBacking::Unprojected,
+        |era, ids: Vec<crate::intern::SymId>| {
+            let valid = source(vec![begin(), call(0)], 1);
+            let mut outcomes = Vec::new();
+            for op in [
+                Op::SetCar { cell: 0, value: 0 },
+                Op::SetCdr { cell: 0, value: 0 },
+                Op::HtCount { table: 0, dst: 0 },
+                Op::Cons {
+                    dst: 0,
+                    car: 0,
+                    cdr: 0,
+                },
+                Op::Function(FunctionOp::Function { symbol: 2, dst: 0 }),
+                Op::Function(FunctionOp::Fset {
+                    symbol: 0,
+                    src: 1,
+                    dst: 0,
+                }),
+                Op::Function(FunctionOp::Fmakunbound { symbol: 0, dst: 1 }),
+                Op::Function(FunctionOp::CallBegin { symbol: 2 }),
+                Op::Function(FunctionOp::CallStep {
+                    dst: 1,
+                    fuel: NonZeroU32::MIN,
+                }),
+            ] {
+                let hidden = source(vec![Op::Jump { target: 2 }, op], 1);
+                outcomes.push(Session::admit(&era, &ids, &[valid.clone(), hidden]).err());
+            }
+            let unselected = Session::admit(&era, &ids, &[source(vec![call(0)], 1)]).err();
+            let repeated = Session::admit(&era, &ids, &[source(vec![begin(), begin()], 1)]).err();
+            let overflow = Session::admit(&era, &ids, &[source(vec![], usize::MAX)]).err();
+            let legacy = prevalidate(&[begin()], 1, 0, STEP_CAP);
+            let global = prevalidate_inner(
+                &[begin()],
+                1,
+                0,
+                STEP_CAP,
+                &[],
+                TapeCapabilities::Globals { symbols: ids.len() },
+            );
+            let (collector, keeper) = era.finish().unwrap();
+            drop(collector);
+            drop(keeper);
+            for (index, actual) in outcomes.into_iter().enumerate() {
+                let reject = match index {
+                    0..=2 => Reject::Excluded("global session mutation/table"),
+                    3 => Reject::Excluded("function session allocation"),
+                    _ => Reject::Slot,
+                };
+                assert_eq!(actual, Some(AdmissionError::Program(reject)));
+            }
+            for actual in [unselected, repeated] {
+                assert_eq!(actual, Some(AdmissionError::Program(Reject::RejectedType)));
+            }
+            assert_eq!(overflow, Some(AdmissionError::Program(Reject::Slot)));
+            assert_eq!(legacy, Err(Reject::Excluded("function handles")));
+            assert_eq!(global, Err(Reject::Excluded("function handles")));
+        },
+    );
 }
 
 #[test]
 fn p3sym_c4_executor_private_home_capacity_refusal_cleans_up() {
-    Context::with_test_symbol_functions_era(PlainSymbolBacking::Unprojected, |era, ids| {
-        let session = Session::admit(&era, &ids, &[source(vec![begin(), call(0)], 1)]).unwrap();
-        let capacity = session.root_capacity(0).unwrap();
-        let mut stopped = era.stop().unwrap();
-        let nil = era
-            .with_stopped_heap_for_test(&stopped, |heap| unsafe {
-                // SAFETY: matching stopped heap, immediate NIL seed.
-                SharedRoot::new(heap, TaggedValue::NIL)
-            })
-            .unwrap();
-        stopped.trace(|_, _| Ok(())).unwrap();
-        stopped.complete().unwrap();
-        let mut owner = era
-            .register(1, capacity - 1)
-            .unwrap()
-            .activate(era.heap_identity(), 1)
-            .unwrap();
-        let error = session.seed(&mut owner, 0, &nil).err();
-        // Even a partial NIL-home seed must be total to clear and retire.
-        must(with_run(&mut owner, |run| {
-            run.clear_root_slots()?;
-            Ok(())
-        }));
-        owner.retire_rooted(&[]).unwrap();
-        drop(nil);
-        let (collector, keeper) = era.finish().unwrap();
-        drop(collector);
-        drop(keeper);
-        assert_eq!(capacity, 3);
-        assert_eq!(
-            error,
-            Some(ExecError::Registration(RegistrationError::Capacity))
-        );
-    });
+    Context::with_test_symbol_functions_era(
+        PlainSymbolBacking::Unprojected,
+        |era, ids: Vec<crate::intern::SymId>| {
+            let session = Session::admit(&era, &ids, &[source(vec![begin(), call(0)], 1)]).unwrap();
+            let capacity = session.root_capacity(0).unwrap();
+            let mut stopped = era.stop().unwrap();
+            let nil = era
+                .with_stopped_heap_for_test(&stopped, |heap| unsafe {
+                    // SAFETY: matching stopped heap, immediate NIL seed.
+                    SharedRoot::new(heap, TaggedValue::NIL)
+                })
+                .unwrap();
+            stopped.trace(|_, _| Ok(())).unwrap();
+            stopped.complete().unwrap();
+            let mut owner = era
+                .register(1, capacity - 1)
+                .unwrap()
+                .activate(era.heap_identity(), 1)
+                .unwrap();
+            let error = session.seed(&mut owner, 0, &nil).err();
+            // Even a partial NIL-home seed must be total to clear and retire.
+            must(with_run(&mut owner, |run| {
+                run.clear_root_slots()?;
+                Ok(())
+            }));
+            owner.retire_rooted(&[]).unwrap();
+            drop(nil);
+            let (collector, keeper) = era.finish().unwrap();
+            drop(collector);
+            drop(keeper);
+            assert_eq!(capacity, 3);
+            assert_eq!(
+                error,
+                Some(ExecError::Registration(RegistrationError::Capacity))
+            );
+        },
+    );
 }
 
 #[test]

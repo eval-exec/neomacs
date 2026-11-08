@@ -353,18 +353,22 @@ fn cohort(
     for spelling in &spellings {
         assert!(crate::intern::lookup_interned(spelling).is_none());
     }
-    Context::with_test_symbol_intern_race_era(kind, &spellings, |era, ids| {
-        let receipt = exercise(&era, &ids, scenario, partial_seed);
-        let (collector, keeper) = era
-            .finish()
-            .expect("C5 executor cohort after root/owner/catalog teardown");
-        drop(collector);
-        drop(keeper);
-        eprintln!(
-            "P3SYM_C5_EXECUTOR_COHORT_TEARDOWN_OK {scenario:?} {kind:?} owners={count} partial_seed={partial_seed}"
-        );
-        receipt
-    })
+    Context::with_test_symbol_intern_race_era(
+        kind,
+        &spellings,
+        |era, ids: Vec<crate::intern::SymId>| {
+            let receipt = exercise(&era, &ids, scenario, partial_seed);
+            let (collector, keeper) = era
+                .finish()
+                .expect("C5 executor cohort after root/owner/catalog teardown");
+            drop(collector);
+            drop(keeper);
+            eprintln!(
+                "P3SYM_C5_EXECUTOR_COHORT_TEARDOWN_OK {scenario:?} {kind:?} owners={count} partial_seed={partial_seed}"
+            );
+            receipt
+        },
+    )
 }
 fn histories(scenario: Scenario) {
     let oracle: Vec<_> = include_str!("../../../symbol_intern_oracle.expected")
