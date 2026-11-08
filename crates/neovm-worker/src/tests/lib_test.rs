@@ -223,7 +223,11 @@ fn elisp_factory_constructs_context_only_on_its_owner() {
                 .lock()
                 .expect("owner records")
                 .push(thread::current().id());
-            Ok(Box::new(Context::new()))
+            // Same public boot path as production: `eval_hook_installers::install_eval_hooks`
+            // mints the proof, and `Context::new` takes it by value.
+            Ok(Box::new(Context::new(
+                neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
+            )))
         })),
     );
     assert!(constructed_on.lock().expect("owner records").is_empty());
