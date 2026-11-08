@@ -350,13 +350,13 @@ fn resize_mini_windows_mode_for_buffer(
     evaluator: &neovm_core::emacs_core::Context,
     buffer_id: neovm_core::buffer::BufferId,
 ) -> ResizeMiniWindowsMode {
-    let value = evaluator
-        .buffer_manager()
-        .get(buffer_id)
-        .and_then(|buffer| {
-            buffer.buffer_local_value_id(crate::fixed_symbols::RESIZE_MINI_WINDOWS.id())
-        })
-        .or_else(|| evaluator.default_value_only(crate::fixed_symbols::RESIZE_MINI_WINDOWS.id()));
+    // GNU `resize_mini_window` reads Vresize_mini_windows from the C global
+    // with the mini window's buffer current (xdisp.c:13308-13407).
+    let value = crate::neovm_bridge::visible_display_value(
+        evaluator,
+        buffer_id,
+        crate::fixed_symbols::RESIZE_MINI_WINDOWS.id(),
+    );
     ResizeMiniWindowsMode::from_lisp_value(value.as_ref())
 }
 
@@ -364,20 +364,12 @@ fn uses_adhoc_minibuffer_resize_scroll(
     evaluator: &neovm_core::emacs_core::Context,
     buffer_id: neovm_core::buffer::BufferId,
 ) -> bool {
-    evaluator
-        .buffer_manager()
-        .get(buffer_id)
-        .and_then(|buffer| {
-            buffer.buffer_local_value_id(
-                crate::fixed_symbols::REDISPLAY_ADHOC_SCROLL_IN_RESIZE_MINI_WINDOWS.id(),
-            )
-        })
-        .or_else(|| {
-            evaluator.default_value_only(
-                crate::fixed_symbols::REDISPLAY_ADHOC_SCROLL_IN_RESIZE_MINI_WINDOWS.id(),
-            )
-        })
-        .is_none_or(|value| !value.is_nil())
+    crate::neovm_bridge::visible_display_value(
+        evaluator,
+        buffer_id,
+        crate::fixed_symbols::REDISPLAY_ADHOC_SCROLL_IN_RESIZE_MINI_WINDOWS.id(),
+    )
+    .is_none_or(|value| !value.is_nil())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -601,14 +593,14 @@ fn window_source_has_fontification_callbacks(
     evaluator: &neovm_core::emacs_core::Context,
     buffer_id: u64,
 ) -> bool {
-    evaluator
-        .buffer_manager()
-        .get(neovm_core::buffer::BufferId(buffer_id))
-        .and_then(|buffer| buffer.buffer_local_value("fontification-functions"))
-        .or_else(|| {
-            evaluator.default_value_only(crate::fixed_symbols::FONTIFICATION_FUNCTIONS.id())
-        })
-        .is_some_and(|value| !value.is_nil())
+    // GNU reads Vfontification_functions with the window's buffer current
+    // (xdisp.c:4681-4697).
+    crate::neovm_bridge::visible_display_value(
+        evaluator,
+        neovm_core::buffer::BufferId(buffer_id),
+        crate::fixed_symbols::FONTIFICATION_FUNCTIONS.id(),
+    )
+    .is_some_and(|value| !value.is_nil())
 }
 
 /// Canonical live inputs for one leaf at a Lisp-visible layout boundary.
@@ -767,21 +759,23 @@ fn max_mini_window_lines_for_window(
     } else {
         neovm_core::buffer::BufferId(params.buffer_id)
     };
-    let raw = evaluator
-        .buffer_manager()
-        .get(buf_id)
-        .and_then(|buffer| {
-            buffer.buffer_local_value_id(crate::fixed_symbols::MAX_MINI_WINDOW_HEIGHT.id())
-        })
-        .or_else(|| evaluator.default_value_only(crate::fixed_symbols::MAX_MINI_WINDOW_HEIGHT.id()))
-        .unwrap_or_else(|| Value::make_float(0.25));
+    let raw = crate::neovm_bridge::visible_display_value(
+        evaluator,
+        buf_id,
+        crate::fixed_symbols::MAX_MINI_WINDOW_HEIGHT.id(),
+    )
+    .unwrap_or_else(|| Value::make_float(0.25));
     max_mini_window_lines_from_value(raw, frame_rows)
 }
 
 fn tab_bar_button_relief_geometry(evaluator: &neovm_core::emacs_core::Context) -> (f32, f32, f32) {
-    let margin = evaluator
-        .default_value_only(crate::fixed_symbols::TAB_BAR_BUTTON_MARGIN.id())
-        .unwrap_or_else(|| Value::fixnum(1));
+    // Global defcustoms (no make-local in GNU lisp); the C global read sees a
+    // live `let`.
+    let margin = crate::neovm_bridge::visible_value(
+        evaluator,
+        crate::fixed_symbols::TAB_BAR_BUTTON_MARGIN.id(),
+    )
+    .unwrap_or_else(|| Value::fixnum(1));
     let (horizontal_margin, vertical_margin) = if let Some(value) = margin.as_int() {
         let value = value.max(0) as f32;
         (value, value)
@@ -793,10 +787,12 @@ fn tab_bar_button_relief_geometry(evaluator: &neovm_core::emacs_core::Context) -
     } else {
         (1.0, 1.0)
     };
-    let configured_thickness = evaluator
-        .default_value_only(crate::fixed_symbols::TAB_BAR_BUTTON_RELIEF.id())
-        .and_then(Value::as_int)
-        .unwrap_or(1);
+    let configured_thickness = crate::neovm_bridge::visible_value(
+        evaluator,
+        crate::fixed_symbols::TAB_BAR_BUTTON_RELIEF.id(),
+    )
+    .and_then(Value::as_int)
+    .unwrap_or(1);
     let thickness = if configured_thickness < 0 {
         1.0
     } else {
@@ -1869,11 +1865,15 @@ impl LayoutEngine {
         let font_selection_changed = if let Some(font_metrics) = self.font_metrics.as_mut() {
             font_metrics.set_device_scale(device_scale);
             let font_catalog_changed = font_metrics.synchronize_font_catalog().changed();
-            let use_primary_font = evaluator
-                .default_value_only(crate::fixed_symbols::USE_DEFAULT_FONT_FOR_SYMBOLS.id())
-                .is_none_or(|value| !value.is_nil());
-            let char_script_table =
-                evaluator.default_value_only(crate::fixed_symbols::CHAR_SCRIPT_TABLE.id());
+            let use_primary_font = crate::neovm_bridge::visible_value(
+                evaluator,
+                crate::fixed_symbols::USE_DEFAULT_FONT_FOR_SYMBOLS.id(),
+            )
+            .is_none_or(|value| !value.is_nil());
+            let char_script_table = crate::neovm_bridge::visible_value(
+                evaluator,
+                crate::fixed_symbols::CHAR_SCRIPT_TABLE.id(),
+            );
             let symbol_policy_changed = font_metrics
                 .synchronize_symbol_font_policy(use_primary_font, char_script_table)
                 .changed();
@@ -2023,7 +2023,11 @@ impl LayoutEngine {
         // before gathering pixels, never from commands that finish mid-layout.
         let input_checkpoint = evaluator.input_progress.checkpoint();
         self.load_retained_frame(frame_id);
-        if !scroll_coverage::inactive_overlay_arrows(evaluator) {
+        let arrow_buffer = purpose
+            .query_window()
+            .and_then(|window_id| evaluator.frame_manager().get(frame_id)?.find_window(window_id))
+            .and_then(|window| window.buffer_id());
+        if !scroll_coverage::inactive_overlay_arrows(evaluator, arrow_buffer) {
             self.scroll_coverage.cancel();
             self.prepared_viewports = PreparedViewports::default();
         } else if query_window.is_none() {
@@ -2442,11 +2446,11 @@ impl LayoutEngine {
                     frame_alpha: {
                         let mut alpha = frame.frame_alpha;
                         let limit = neovm_core::window::frame_alpha::lower_limit(
-                            evaluator
-                                .default_value_only(
-                                    crate::fixed_symbols::FRAME_ALPHA_LOWER_LIMIT.id(),
-                                )
-                                .unwrap_or(Value::fixnum(20)),
+                            crate::neovm_bridge::visible_value(
+                                evaluator,
+                                crate::fixed_symbols::FRAME_ALPHA_LOWER_LIMIT.id(),
+                            )
+                            .unwrap_or(Value::fixnum(20)),
                         );
                         for value in &mut alpha {
                             if *value >= 0.0 && (0.0..=1.0).contains(&limit) {
@@ -3814,8 +3818,13 @@ impl LayoutEngine {
                     return None;
                 }
             };
-        frame_display_state.scroll_input_policy.x11_delta_factor = evaluator
-            .default_value_only(crate::fixed_symbols::X_SCROLL_EVENT_DELTA_FACTOR.id())
+        // xterm.c reads Vx_scroll_event_delta_factor from the C global in
+        // the event path (xterm.c:22802); a live `let` is visible.
+        frame_display_state.scroll_input_policy.x11_delta_factor =
+            crate::neovm_bridge::visible_value(
+                evaluator,
+                crate::fixed_symbols::X_SCROLL_EVENT_DELTA_FACTOR.id(),
+            )
             .and_then(|value| value.as_number_f64())
             .filter(|factor| factor.is_finite())
             .unwrap_or(1.0);
@@ -4444,14 +4453,12 @@ impl LayoutEngine {
         if !mode.should_grow() {
             return Ok(Value::NIL);
         }
-        let raw_maximum = evaluator
-            .buffer_manager()
-            .get(request.buffer)
-            .and_then(|buffer| buffer.buffer_local_value("max-mini-window-height"))
-            .or_else(|| {
-                evaluator.default_value_only(crate::fixed_symbols::MAX_MINI_WINDOW_HEIGHT.id())
-            })
-            .unwrap_or_else(|| Value::make_float(0.25));
+        let raw_maximum = crate::neovm_bridge::visible_display_value(
+            evaluator,
+            request.buffer,
+            crate::fixed_symbols::MAX_MINI_WINDOW_HEIGHT.id(),
+        )
+        .unwrap_or_else(|| Value::make_float(0.25));
         let max_lines = max_mini_window_lines_from_value(raw_maximum, frame_rows);
         self.mini_preparation_height = None;
         self.query_body_cache_state = QueryBodyCacheState::Disabled;
@@ -4988,9 +4995,11 @@ impl LayoutEngine {
                 .buffer_manager()
                 .get(neovm_core::buffer::BufferId(params.buffer_id))?;
             if !crate::incremental_layout::face_overlay_aliases_supported(
-                buffer
-                    .buffer_local_value("char-property-alias-alist")
-                    .or_else(|| evaluator.default_value_only_by_name("char-property-alias-alist")),
+                crate::neovm_bridge::visible_display_value(
+                    evaluator,
+                    neovm_core::buffer::BufferId(params.buffer_id),
+                    crate::neovm_bridge::LayoutVar::CharPropertyAliasAlist.sym_id(),
+                ),
             ) {
                 return None;
             }
@@ -5136,8 +5145,11 @@ impl LayoutEngine {
                 // An alias can give an ordinary face overlay a structural
                 // meaning (for example, a display-property fallback).
                 || !crate::incremental_layout::face_overlay_aliases_supported(
-                    buffer.buffer_local_value("char-property-alias-alist")
-                        .or_else(|| evaluator.default_value_only_by_name("char-property-alias-alist")),
+                    crate::neovm_bridge::visible_display_value(
+                        evaluator,
+                        neovm_core::buffer::BufferId(params.buffer_id),
+                        crate::neovm_bridge::LayoutVar::CharPropertyAliasAlist.sym_id(),
+                    ),
                 )
             {
                 return None;
@@ -5711,7 +5723,7 @@ impl LayoutEngine {
             && !params.is_minibuffer()
             && !params.show_trailing_whitespace
             && !params.display_line_numbers.enabled()
-            && scroll_coverage::inactive_overlay_arrows(evaluator);
+            && scroll_coverage::inactive_overlay_arrows(evaluator, Some(buf_id));
         let display_when = if display_when_reuse {
             crate::display_when::DisplayWhenConditions::reused_without_evaluation(
                 neovm_core::emacs_core::value::Value::make_buffer(buf_id),

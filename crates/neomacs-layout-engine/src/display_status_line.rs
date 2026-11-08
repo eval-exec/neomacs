@@ -1716,10 +1716,17 @@ fn eval_status_line_format_output(
                 .get(BufferId(buffer_id))
                 .and_then(|buf| buf.buffer_local_value_id(format_var.id()))
                 .unwrap_or_else(|| {
-                    // Fall back to the global default
-                    evaluator
-                        .default_value_only(format_var.id())
-                        .unwrap_or(Value::NIL)
+                    // GNU's display_mode_line falls back to `BVAR
+                    // (current_buffer, mode_line_format)` with the window's
+                    // buffer current (xdisp.c:28088-28095); the visible read
+                    // gives that buffer's slot, a live `let`, then the
+                    // default.
+                    crate::neovm_bridge::visible_display_value(
+                        evaluator,
+                        BufferId(buffer_id),
+                        format_var.id(),
+                    )
+                    .unwrap_or(Value::NIL)
                 })
         });
     // GNU `display_mode_line` (xdisp.c:27911) runs the mode-line
@@ -2605,9 +2612,13 @@ pub(crate) fn build_tab_bar_display(
 }
 
 pub(crate) fn max_mini_window_lines(evaluator: &Context, frame_rows: f32) -> f32 {
-    let raw = evaluator
-        .default_value_only(crate::fixed_symbols::MAX_MINI_WINDOW_HEIGHT.id())
-        .unwrap_or_else(|| Value::make_float(0.25));
+    // GNU reads Vmax_mini_window_height from the C global (xdisp.c:13340), so
+    // a live `let` is visible.
+    let raw = crate::neovm_bridge::visible_value(
+        evaluator,
+        crate::fixed_symbols::MAX_MINI_WINDOW_HEIGHT.id(),
+    )
+    .unwrap_or_else(|| Value::make_float(0.25));
     max_mini_window_lines_from_value(raw, frame_rows)
 }
 
@@ -2617,7 +2628,12 @@ pub(crate) fn max_mini_window_lines_for_buffer<B: LayoutBufferView>(
     frame_rows: f32,
 ) -> f32 {
     let raw = buffer_local_value(buffer, LayoutVar::MaxMiniWindowHeight)
-        .or_else(|| evaluator.default_value_only(crate::fixed_symbols::MAX_MINI_WINDOW_HEIGHT.id()))
+        .or_else(|| {
+            crate::neovm_bridge::visible_value(
+                evaluator,
+                crate::fixed_symbols::MAX_MINI_WINDOW_HEIGHT.id(),
+            )
+        })
         .unwrap_or_else(|| Value::make_float(0.25));
     max_mini_window_lines_from_value(raw, frame_rows)
 }

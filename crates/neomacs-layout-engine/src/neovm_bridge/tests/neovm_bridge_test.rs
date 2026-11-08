@@ -231,6 +231,114 @@ fn collect_layout_params_reads_nobreak_char_display_global() {
     );
 }
 
+/// LD-1 pin (i): the helper's buffer-local arm.  GNU reads
+/// Vnobreak_char_display from the C global with the buffer current
+/// (xdisp.c:8522), so a buffer-local binding decides even when the default is
+/// t.
+#[test]
+fn collect_layout_params_reads_the_buffers_local_nobreak_char_display() {
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = evaluator.buffer_manager_mut().create_buffer("*nobreak-local*");
+    evaluator.buffer_manager_mut().set_current(buf_id);
+    let frame_id = evaluator
+        .frame_manager_mut()
+        .create_frame("nobreak-local-frame", 800, 600, buf_id);
+    evaluator.store_variable_by_name("nobreak-char-display", Value::T);
+    evaluator
+        .eval_str("(set (make-local-variable 'nobreak-char-display) nil)")
+        .expect("buffer-local nobreak-char-display");
+    let (_, wps) = collect_layout_params(&evaluator, frame_id, None).expect("layout params");
+    assert_eq!(
+        wps[0].nobreak_char_display,
+        crate::types::NobreakDisplayMode::Literal,
+        "the buffer-local nil must win over the global t"
+    );
+}
+
+/// LD-1 pin (ii): the helper's live dynamic-let arm.  The variable is made
+/// buffer-local first, then a `let`-style dynamic binding is installed; a
+/// default-only read answers the default `t` and renders HighlightOriginal,
+/// while GNU's visible read answers the bound nil and renders Literal.
+#[test]
+fn collect_layout_params_honours_a_live_let_on_nobreak_char_display() {
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = evaluator.buffer_manager_mut().create_buffer("*nobreak-let*");
+    evaluator.buffer_manager_mut().set_current(buf_id);
+    let frame_id = evaluator
+        .frame_manager_mut()
+        .create_frame("nobreak-let-frame", 800, 600, buf_id);
+    evaluator.store_variable_by_name("nobreak-char-display", Value::T);
+    evaluator
+        .eval_str("(make-local-variable 'nobreak-char-display)")
+        .expect("make-local nobreak-char-display");
+    let scope = evaluator.specpdl().len();
+    evaluator
+        .specbind_uncached(
+            neovm_core::emacs_core::intern::intern("nobreak-char-display"),
+            Value::NIL,
+        )
+        .expect("dynamic nobreak-char-display binding");
+    let (_, wps) = collect_layout_params(&evaluator, frame_id, None).expect("layout params");
+    evaluator.unbind_to(scope);
+    assert_eq!(
+        wps[0].nobreak_char_display,
+        crate::types::NobreakDisplayMode::Literal,
+        "the live let must reach the display read"
+    );
+}
+
+/// LD-1 capture pin (i): the layout-variable capture reads this buffer's
+/// local `char-property-alias-alist` (textprop.c:2403 DEFVAR_LISP, made local
+/// by font-core.el; read with the window's buffer current).
+#[test]
+fn layout_var_capture_reads_the_buffers_local_alias_alist() {
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = evaluator.buffer_manager_mut().create_buffer("*alias-local*");
+    evaluator.buffer_manager_mut().set_current(buf_id);
+    let expected = evaluator
+        .eval_str(
+            "(set (make-local-variable 'char-property-alias-alist) \
+                  '((face . font-lock-face)))",
+        )
+        .expect("buffer-local alias alist");
+    let buffer = evaluator.buffer_manager().get(buf_id).expect("buffer");
+    let snapshot =
+        LayoutBufferSnapshot::from_buffer_with_obarray(buffer, evaluator.variables());
+    assert_eq!(
+        snapshot.layout_buffer_local_value(LayoutVar::CharPropertyAliasAlist),
+        Some(expected)
+    );
+}
+
+/// LD-1 capture pin (ii): a live dynamic binding of the same variable reaches
+/// the capture through the visible fallback rather than the default-only cell.
+#[test]
+fn layout_var_capture_honours_a_live_let_on_the_alias_alist() {
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = evaluator.buffer_manager_mut().create_buffer("*alias-let*");
+    evaluator.buffer_manager_mut().set_current(buf_id);
+    let bound = evaluator
+        .eval_str("'((face . font-lock-face))")
+        .expect("bound value");
+    let scope = evaluator.specpdl().len();
+    evaluator
+        .specbind_uncached(
+            neovm_core::emacs_core::intern::intern("char-property-alias-alist"),
+            bound,
+        )
+        .expect("dynamic alias-alist binding");
+    let snapshot = {
+        let buffer = evaluator.buffer_manager().get(buf_id).expect("buffer");
+        LayoutBufferSnapshot::from_buffer_with_obarray(buffer, evaluator.variables())
+    };
+    evaluator.unbind_to(scope);
+    assert_eq!(
+        snapshot.layout_buffer_local_value(LayoutVar::CharPropertyAliasAlist),
+        Some(bound),
+        "the live let must reach the captured layout variable"
+    );
+}
+
 #[test]
 fn test_frame_params_from_neovm() {
     let runtime = neovm_core::emacs_core::eval_hook_installers::new_context();

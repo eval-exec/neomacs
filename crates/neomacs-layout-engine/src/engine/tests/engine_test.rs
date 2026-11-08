@@ -33591,6 +33591,190 @@ fn tty_overlay_arrow_moves_empty_line_cursor_past_appended_arrow_cells() {
     );
 }
 
+/// GNU reads `overlay-arrow-variable-list` and the listed marker symbols with
+/// the window's buffer current: `overlay_arrow_in_current_buffer_p` walks the
+/// list with `find_symbol_value` (xdisp.c:17074-17083), and redisplay has
+/// already run `set_buffer_internal` for that window.  A BUFFER-LOCAL
+/// `overlay-arrow-position` is therefore the value that draws; the global
+/// default stays nil here, so a default-only read sees no arrow at all.
+#[test]
+fn tty_overlay_arrow_reads_the_window_buffers_local_position() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert("alpha\nbeta\ngamma\n");
+    }
+    let default = eval
+        .eval_str(
+            "(progn (set (make-local-variable 'overlay-arrow-position) \
+                          (copy-marker 7)) \
+                    (default-value 'overlay-arrow-position))",
+        )
+        .expect("buffer-local overlay-arrow-position");
+    assert!(
+        default.is_nil(),
+        "the test is vacuous unless the global default stays nil: {default:?}"
+    );
+
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("tty-arrow-local", 400, 200, buf_id);
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let entry = state
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == selected_window.0 as i64)
+        .expect("window matrix entry");
+    let beta = entry
+        .matrix
+        .rows
+        .iter()
+        .find(|row| row.enabled && row.role == GlyphRowRole::Text && row.start_charpos == 6)
+        .unwrap_or_else(|| panic!("no beta row: {:#?}", entry.matrix.rows));
+    let text = row_text(&beta.glyphs[GlyphArea::Text.index()]);
+    assert!(
+        text.starts_with("=>ta"),
+        "GNU draws the buffer-local marker's arrow; got {text:?}"
+    );
+}
+
+/// The same GNU read covers `overlay-arrow-string`: `term/calc.el:1362` makes
+/// it buffer-local, and `overlay_arrow_string_or_property` falls back to
+/// `Voverlay_arrow_string` with the window's buffer current
+/// (xdisp.c:17057-17065), so the local spelling is the one drawn.
+#[test]
+fn tty_overlay_arrow_reads_the_window_buffers_local_string() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert("alpha\nbeta\ngamma\n");
+    }
+    eval.eval_str(
+        "(progn (set (make-local-variable 'overlay-arrow-string) \">>\") \
+                (setq overlay-arrow-position (copy-marker 7)))",
+    )
+    .expect("buffer-local overlay-arrow-string");
+
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("tty-arrow-local-string", 400, 200, buf_id);
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let entry = state
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == selected_window.0 as i64)
+        .expect("window matrix entry");
+    let beta = entry
+        .matrix
+        .rows
+        .iter()
+        .find(|row| row.enabled && row.role == GlyphRowRole::Text && row.start_charpos == 6)
+        .unwrap_or_else(|| panic!("no beta row: {:#?}", entry.matrix.rows));
+    let text = row_text(&beta.glyphs[GlyphArea::Text.index()]);
+    assert!(
+        text.starts_with(">>ta"),
+        "GNU draws the buffer-local arrow string; got {text:?}"
+    );
+}
+
+/// A live dynamic binding is visible too: GNU's C global read sees a
+/// `specbind` (`find_symbol_value`), and `overlay-arrow-string` is an ordinary
+/// DEFVAR_LISP, so a `let` around redisplay changes the drawn arrow without
+/// touching any buffer.
+#[test]
+fn tty_overlay_arrow_honours_a_dynamic_let_on_the_string() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert("alpha\nbeta\ngamma\n");
+    }
+    // Make the string buffer-local first: the `let' then has to reach the
+    // buffer's binding (the case a default-only read loses), and the global
+    // default "=>" must not be what gets drawn.
+    eval.eval_str(
+        "(progn (make-local-variable 'overlay-arrow-string) \
+                (setq overlay-arrow-position (copy-marker 7)) nil)",
+    )
+    .expect("overlay-arrow-position");
+
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("tty-arrow-let-string", 400, 200, buf_id);
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+
+    let scope = eval.specpdl().len();
+    eval.specbind_uncached(
+        neovm_core::emacs_core::intern::intern("overlay-arrow-string"),
+        Value::string(">>"),
+    )
+    .expect("dynamic overlay-arrow-string binding");
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    eval.unbind_to(scope);
+
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let entry = state
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == selected_window.0 as i64)
+        .expect("window matrix entry");
+    let beta = entry
+        .matrix
+        .rows
+        .iter()
+        .find(|row| row.enabled && row.role == GlyphRowRole::Text && row.start_charpos == 6)
+        .unwrap_or_else(|| panic!("no beta row: {:#?}", entry.matrix.rows));
+    let text = row_text(&beta.glyphs[GlyphArea::Text.index()]);
+    assert!(
+        text.starts_with(">>ta"),
+        "GNU draws the dynamically bound arrow string; got {text:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // P4.3g: glyph-level shadows for TRUNCATED rows.
 //

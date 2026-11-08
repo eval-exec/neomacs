@@ -542,6 +542,38 @@ impl LayoutBufferView for Buffer {
     }
 }
 
+/// GNU's read of a `DEFVAR_*` global from display code: `find_symbol_value`
+/// with `buffer_id` current.  xdisp.c calls `set_buffer_internal` before the
+/// reads that decide what to draw, so the buffer's slot/local binding, a live
+/// specpdl `let`, and the default cell are all visible; the default-only
+/// accessor sees neither of the first two.
+pub(crate) fn visible_display_value(
+    evaluator: &neovm_core::emacs_core::Context,
+    buffer_id: neovm_core::buffer::BufferId,
+    id: neovm_core::emacs_core::SymId,
+) -> Option<Value> {
+    evaluator.variable_value_in_buffer(evaluator.buffer_manager().get(buffer_id), id)
+}
+
+/// [`visible_value`] starting from the variable's name (interned per call;
+/// menu/chrome paths resolve caller-named symbols this way).
+pub(crate) fn visible_value_by_name(
+    evaluator: &neovm_core::emacs_core::Context,
+    name: &str,
+) -> Option<Value> {
+    evaluator.builtin_var_value_by_name(name)
+}
+
+/// The current-context visible read (`find_symbol_value` in whatever buffer
+/// and dynamic extent the caller runs in), for globals read from the command
+/// or startup path rather than from a specific displayed buffer.
+pub(crate) fn visible_value(
+    evaluator: &neovm_core::emacs_core::Context,
+    id: neovm_core::emacs_core::SymId,
+) -> Option<Value> {
+    evaluator.builtin_var_value(id)
+}
+
 pub(crate) fn buffer_local_value<B: LayoutBufferView + ?Sized>(
     buffer: &B,
     var: LayoutVar,
@@ -559,9 +591,11 @@ fn effective_buffer_value(
     vars: VariableView<'_>,
     var: LayoutVar,
 ) -> Option<Value> {
-    buffer
-        .buffer_local_value_id(var.sym_id())
-        .or_else(|| vars.value(var.sym_id()))
+    // GNU's display read is `find_symbol_value` with this buffer current: the
+    // buffer's slot/local binding, a live `let`, then the default.  The old
+    // two-step read (buffer-local, else `vars.value`) answered the DEFAULT
+    // cell for a buffer-local variable, so a dynamic binding was invisible.
+    vars.value_in_buffer(Some(buffer), var.sym_id())
 }
 
 fn frame_fixed_parameter_int(

@@ -464,9 +464,13 @@ pub(super) fn resolve_layout_vars(
             buffer.buffer_local_value_id(var.sym_id())
         };
         vars[*var as usize] = local.or_else(|| {
-            info.captures_default
-                .then(|| variables?.default_value(var.sym_id()))
-                .flatten()
+            if !info.captures_default {
+                return None;
+            }
+            // The fallback is GNU's visible read with this buffer current,
+            // not the default-only cell: a dynamic binding of a display
+            // variable must reach the captured value (LD-1).
+            variables?.value_in_buffer(Some(buffer), var.sym_id())
         });
     }
     vars

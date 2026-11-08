@@ -24,12 +24,17 @@
 //!     runs after print_prepare's destination-buffer switch
 //!     (src/print.c:143-151). The printer_settings_gnu_*_local_callback
 //!     fixtures require it.
-//! - `neomacs-layout-engine` 30 and `neomacs` 11 -- UNAUDITED display-side
-//!   callers. They are frozen at their pre-rename counts here and are NOT
-//!   allowed: they are the queued, push-blocking P2-CORE-BACKLOG row
-//!   "DISPLAY-SIDE DEFAULT-ONLY READS", which classifies each against GNU and
-//!   migrates it to the visible read (overlay-arrow, mode/header-line and
-//!   menu-bar variables are likely visible-binding).
+//! - `neomacs-layout-engine` and `neomacs` -- AUDITED by the
+//!   P2-CORE-BACKLOG "DISPLAY-SIDE DEFAULT-ONLY READS" row: all 41 callers
+//!   were classified against GNU and migrated
+//!   (integ-inbox/LAYOUT-DEFAULT-READS-AUDIT.md): 17 are `find_symbol_value`
+//!   with the displayed buffer current (V-BUF, now
+//!   `VariableView::value_in_buffer`), 24 are C-global reads from the
+//!   command/startup context (V-CUR, now `builtin_var_value`).  The helper
+//!   escapes `neovm_bridge::effective_buffer_value` and
+//!   `resolve_layout_vars`'s captures_default fallback read the same visible
+//!   path, pinned under a buffer-local binding and a live dynamic `let`.
+//!   Their counts are 0 today.
 //! - every other crate 0.
 //!
 //! The audited crates' total is 3 today. It may only DECREASE (the
@@ -48,20 +53,22 @@ const BASELINE: &[(&str, usize)] = &[
     ("neovm-system", 0),
     ("neovm-eval", 3),
     ("neovm-core", 0),
-    // UNAUDITED display-side callers, frozen; see the module docs. These are
-    // NOT allowed: P2-CORE-BACKLOG "DISPLAY-SIDE DEFAULT-ONLY READS" owns
-    // classifying and migrating them.
-    ("neomacs-layout-engine", 30),
-    ("neomacs", 11),
+    // Audited by LAYOUT-DEFAULT-READS; all 41 callers migrated to the
+    // visible read (see the module docs and the audit document).
+    ("neomacs-layout-engine", 0),
+    ("neomacs", 0),
 ];
 
-/// The five crates the default-reads audit covered.
+/// The seven crates the default-reads audit covered (the C1/C3/C2 wave plus
+/// LAYOUT-DEFAULT-READS).
 const AUDITED: &[&str] = &[
     "neovm-edit",
     "neovm-display",
     "neovm-system",
     "neovm-eval",
     "neovm-core",
+    "neomacs-layout-engine",
+    "neomacs",
 ];
 
 fn workspace_root() -> PathBuf {

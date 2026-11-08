@@ -393,8 +393,10 @@ fn prepare_tty_tree_before_activation(
 /// (src/term.c:362-372); its default is 1, so an unbound variable reads
 /// as non-nil here too.  One variable read per redisplay.
 pub(crate) fn very_visible_cursor(evaluator: &Context) -> bool {
+    // term.c:5246 DEFVAR_BOOL, read from the C global in tty_show_cursor
+    // (term.c:362-372); a live `let` is visible there.
     evaluator
-        .default_value_only(neovm_core::emacs_core::intern::WellKnown::VisibleCursor.id())
+        .builtin_var_value(neovm_core::emacs_core::intern::WellKnown::VisibleCursor.id())
         .is_none_or(|value| value.is_truthy())
 }
 
