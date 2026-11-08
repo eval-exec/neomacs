@@ -653,46 +653,6 @@ impl Context {
             // undo-outer-limit is registered (with its GNU src/undo.c init and
             // the src/emacs.c batch override) by undo::register_bootstrap_vars.
             "window-combination-resize",
-            // Mouse pointer shapes — GNU defines these in
-            // src/xfns.c (and parallel files w32fns.c, pgtkfns.c,
-            // haikufns.c, androidfns.c) as integer Lisp_Object
-            // variables that hold X cursor font codes. neomacs has
-            // no native window-system bindings for these yet, so
-            // they default to nil. Cursor audit Finding 9 in
-            // drafts/cursor-audit.md flagged the symbols as
-            // missing entirely; Lisp code that tried
-            // (setq x-pointer-shape ...) hit void-variable.
-            //
-            // `x-nontext-pointer-shape' and `x-mode-pointer-shape' are NOT in
-            // this list, and the omission is the point.  Every `DEFVAR_LISP'
-            // GNU has for either is inside
-            // `#if false /* This doesn't really do anything.  */' --
-            // `src/xfns.c:10333-10338' and `10347-10352', and the same pair in
-            // `src/androidfns.c'; `w32fns.c' and `haikufns.c' do not declare
-            // them at all.  A declaration in a dead preprocessor branch is not
-            // a declaration, so no GNU build binds the symbol and
-            // `(boundp 'x-mode-pointer-shape)' is nil under GNU 31.0.90.
-            // Seeding one here is entry 138's invented existence, reached
-            // through a case that is not about a platform: the C global
-            // `Vx_mode_pointer_shape' still exists and is still assigned
-            // `Qnil' on the line after the `#endif', which is what makes the
-            // seed look justified from the C side.  Nothing in GNU's `lisp/',
-            // this tree's `lisp/', or either editor's own sources reads
-            // either name.  (Ledger 168.)
-            "x-pointer-shape",
-            "x-sensitive-text-pointer-shape",
-            "x-hourglass-pointer-shape",
-            "x-window-horizontal-drag-cursor",
-            "x-window-vertical-drag-cursor",
-            "x-window-left-edge-cursor",
-            "x-window-top-left-corner-cursor",
-            "x-window-top-edge-cursor",
-            "x-window-top-right-corner-cursor",
-            "x-window-right-edge-cursor",
-            "x-window-bottom-right-corner-cursor",
-            "x-window-bottom-edge-cursor",
-            "x-window-bottom-left-corner-cursor",
-            "x-cursor-fore-pixel",
         ] {
             obarray.seed_value(name, Value::NIL);
             obarray.make_special(name);
@@ -2025,13 +1985,16 @@ impl Context {
         // DEFVAR_LISP, default nil.
         obarray.define_c_hook_variable("mouse-leave-buffer-hook");
 
-        // --- src/xterm.c: syms_of_xterm / src/pgtkterm.c: syms_of_pgtkterm ---
-        // GNU defines these from the compiled window-system backend before
-        // Lisp loadup.  `lisp/loadup.el' deliberately checks only `boundp' for
-        // some of them, and `term/x-win.el' mutates `x-keysym-table' while
-        // installing the X keysym map.
-        obarray.seed_value("x-keysym-table", Value::hash_table(HashTableTest::Eql));
-        obarray.make_special("x-keysym-table");
+        // --- Window-system C surface: the reference build decides it ------
+        // GNU compiles src/xterm.c, xfns.c, xselect.c and xsettings.c only
+        // under HAVE_X_WINDOWS (configure.ac:7221-7227; src/emacs.c:2373-2385)
+        // and the nsterm.m/nsfns.m family only under HAVE_NS
+        // (configure.ac:2938; src/emacs.c:2421-2426).  The reference build
+        // therefore fixes which family exists before Lisp loadup
+        // (MACOS_PRODUCT_DIVERGENCES rows 87-99).  Two names are shared and
+        // stay below, outside the match: `x-toolkit-scroll-bars'
+        // (xterm.c:32699, nsterm.m:11700) and `x-max-tooltip-size'
+        // (xfns.c:10436, nsfns.m:4245).
         obarray.seed_value(
             "x-toolkit-scroll-bars",
             if cfg!(target_os = "windows") {
@@ -2041,6 +2004,86 @@ impl Context {
             },
         );
         obarray.make_special("x-toolkit-scroll-bars");
+        // `src/xfns.c:10436' / `src/nsfns.m:4245' both DEFVAR_LISP this one;
+        // both initializers are nil.
+        obarray.define_special_variable("x-max-tooltip-size", Value::NIL);
+        match crate::platform_surface::platform_surface() {
+            crate::platform_surface::PlatformSurface::X11 => {
+                Self::seed_x11_c_level_defvars(obarray)
+            }
+            crate::platform_surface::PlatformSurface::Ns => {
+                super::ns_surface::register_ns_c_level_defvars(obarray)
+            }
+            // The w32 family (w32term/w32fns/w32font/w32proc) is registered
+            // by the host-gated bootstrap call in `new_inner'; this crate
+            // seeds none of its DEFVARs for another surface.
+            crate::platform_surface::PlatformSurface::W32 => {}
+        }
+        // --- src/ccl.c: syms_of_ccl ---
+        // `ccl.c:2378' DEFVAR_LISP, `make_nil_vector (16)'.  A 16-slot vector,
+        // not nil: `Fregister_code_conversion_map' and `ccl.el' index into it
+        // and grow it, and `aset' on nil signals.
+        obarray.define_special_variable(
+            "code-conversion-map-vector",
+            Value::vector(vec![Value::NIL; 16]),
+        );
+        // --- src/doc.c: syms_of_doc ---
+        // `doc.c:691' / `695' DEFVAR_LISP, both `Qnil' at declaration time.
+        // `Fsnarf_documentation' is what gives either one a value, and it does
+        // so only when there is a DOC file: `Vbuild_files' is filled from
+        // `buildobj.h' (`doc.c:542-553') and `Vdoc_file_name = filename' is
+        // assigned *after* `doc_open' succeeds (`doc.c:555-566'), so a failed
+        // open signals and leaves the name alone.  This port has no
+        // `make-docfile', no `buildobj.h' and no `etc/DOC' -- `doc.rs''s
+        // `Snarf-documentation' is a shim that opens nothing -- so nil is what
+        // is true here as well as what GNU's declaration ships.  Writing "DOC"
+        // would name a file that does not exist.
+        obarray.define_special_variable("internal-doc-file-name", Value::NIL);
+        obarray.define_special_variable("build-files", Value::NIL);
+        // --- src/syntax.c: syms_of_syntax ---
+        // `syntax.c:3747' DEFVAR_LISP, `Vcomment_use_syntax_ppss = Qt' at
+        // `3749'.  t, not nil, and the two readers take opposite branches on
+        // it: `find_defun_start' calls out to `syntax-ppss' only while it is
+        // non-nil (`syntax.c:600'), and `back_comment' honours
+        // `open-paren-in-column-0-is-defun-start' only while it is nil
+        // (`syntax.c:889').  So nil is a different parser, not a disabled one.
+        // Neomacs's `forward-comment' does not read it yet.
+        obarray.define_special_variable("comment-use-syntax-ppss", Value::T);
+        // --- src/keymap.c: syms_of_keymap ---
+        // `keymap.c:3400' DEFVAR_LISP, `Qnil'.
+        obarray.define_special_variable("describe-bindings-check-shadowing-in-ranges", Value::NIL);
+        // --- src/textconv.c: syms_of_textconv ---
+        // `textconv.c:2593' DEFVAR_LISP `Qnil', and `2631' DEFVAR_LISP
+        // `Qunderline' -- a face NAME, so nil would mean "no face" rather than
+        // GNU's underline.  `overriding-text-conversion-style', the third name
+        // in this file, is declared above.
+        obarray.define_special_variable("text-conversion-edits", Value::NIL);
+        obarray.define_special_variable("text-conversion-face", Value::symbol("underline"));
+        // --- src/menu.c: syms_of_menu ---
+        // `menu.c:1629' DEFVAR_LISP, `Qnil'.  `x-pre-popup-menu-hook', the only
+        // other name in `menu.c', is already declared here.
+        obarray.define_special_variable("x-popup-menu-function", Value::NIL);
+        // --- src/dispnew.c: syms_of_display ---
+        // `dispnew.c:7567' DEFVAR_LISP, `make_fixnum (5)'.  Spelled `x-' but
+        // declared in `dispnew.o', which is in GNU's unconditional `base_obj'.
+        obarray.define_special_variable("x-show-tooltip-timeout", Value::fixnum(5));
+    }
+
+    /// The C DEFVAR family of the X11 reference build.
+    ///
+    /// GNU compiles src/xterm.c, src/xfns.c, src/xselect.c and
+    /// src/xsettings.c only under HAVE_X_WINDOWS (configure.ac:7221-7227;
+    /// src/emacs.c:2373-2385), so no NS build binds any of these names.
+    /// `x-toolkit-scroll-bars' and `x-max-tooltip-size' are shared with the
+    /// NS backend and are seeded by `seed_c_level_defvars' itself.
+    fn seed_x11_c_level_defvars(obarray: &mut Obarray) {
+        // --- src/xterm.c: syms_of_xterm / src/pgtkterm.c: syms_of_pgtkterm ---
+        // GNU defines these from the compiled window-system backend before
+        // Lisp loadup.  `lisp/loadup.el' deliberately checks only `boundp' for
+        // some of them, and `term/x-win.el' mutates `x-keysym-table' while
+        // installing the X keysym map.
+        obarray.seed_value("x-keysym-table", Value::hash_table(HashTableTest::Eql));
+        obarray.make_special("x-keysym-table");
         // `gtk-version-string' and `cairo-version-string' used to be declared
         // here, holding the literals "3.24.51" and "1.18.4".  Ledger 199
         // removed them: GNU declares each one INSIDE the same conditional
@@ -2136,16 +2179,14 @@ impl Context {
             obarray.define_special_variable(name, Value::NIL);
         }
         // --- src/xfns.c: syms_of_xfns ---
-        // The three `syms_of_xfns' names this port was short of; of the 23
-        // names GNU binds from that file it already declares 20.  All three
-        // are `Qnil' in C:
-        // `xfns.c:10479' (`x_gtk_resize_child_frames'), `10436'
-        // (`Vx_max_tooltip_size') and `10441' (`Vx_no_window_manager', whose
-        // own comment reads "We don't have any way to find this out, so set it
-        // to nil and maybe the user would like to set it to t").
+        // `xfns.c:10479' (`x_gtk_resize_child_frames') and `10441'
+        // (`Vx_no_window_manager', whose own comment reads "We don't have any
+        // way to find this out, so set it to nil and maybe the user would like
+        // to set it to t") are `Qnil' in C.  The third `syms_of_xfns' name
+        // this port was short of, `x-max-tooltip-size' (`10436'), is shared
+        // with `nsfns.m:4245' and is seeded in the common path.
         for name in [
             "x-gtk-resize-child-frames",
-            "x-max-tooltip-size",
             "x-no-window-manager",
         ] {
             obarray.define_special_variable(name, Value::NIL);
@@ -2169,54 +2210,51 @@ impl Context {
         // and `xsettings.el' passes it to `read'.  The other name in this file,
         // `font-use-system-font', is already declared here.
         obarray.define_special_variable("xft-settings", Value::unibyte_string(""));
-        // --- src/ccl.c: syms_of_ccl ---
-        // `ccl.c:2378' DEFVAR_LISP, `make_nil_vector (16)'.  A 16-slot vector,
-        // not nil: `Fregister_code_conversion_map' and `ccl.el' index into it
-        // and grow it, and `aset' on nil signals.
-        obarray.define_special_variable(
-            "code-conversion-map-vector",
-            Value::vector(vec![Value::NIL; 16]),
-        );
-        // --- src/doc.c: syms_of_doc ---
-        // `doc.c:691' / `695' DEFVAR_LISP, both `Qnil' at declaration time.
-        // `Fsnarf_documentation' is what gives either one a value, and it does
-        // so only when there is a DOC file: `Vbuild_files' is filled from
-        // `buildobj.h' (`doc.c:542-553') and `Vdoc_file_name = filename' is
-        // assigned *after* `doc_open' succeeds (`doc.c:555-566'), so a failed
-        // open signals and leaves the name alone.  This port has no
-        // `make-docfile', no `buildobj.h' and no `etc/DOC' -- `doc.rs''s
-        // `Snarf-documentation' is a shim that opens nothing -- so nil is what
-        // is true here as well as what GNU's declaration ships.  Writing "DOC"
-        // would name a file that does not exist.
-        obarray.define_special_variable("internal-doc-file-name", Value::NIL);
-        obarray.define_special_variable("build-files", Value::NIL);
-        // --- src/syntax.c: syms_of_syntax ---
-        // `syntax.c:3747' DEFVAR_LISP, `Vcomment_use_syntax_ppss = Qt' at
-        // `3749'.  t, not nil, and the two readers take opposite branches on
-        // it: `find_defun_start' calls out to `syntax-ppss' only while it is
-        // non-nil (`syntax.c:600'), and `back_comment' honours
-        // `open-paren-in-column-0-is-defun-start' only while it is nil
-        // (`syntax.c:889').  So nil is a different parser, not a disabled one.
-        // Neomacs's `forward-comment' does not read it yet.
-        obarray.define_special_variable("comment-use-syntax-ppss", Value::T);
-        // --- src/keymap.c: syms_of_keymap ---
-        // `keymap.c:3400' DEFVAR_LISP, `Qnil'.
-        obarray.define_special_variable("describe-bindings-check-shadowing-in-ranges", Value::NIL);
-        // --- src/textconv.c: syms_of_textconv ---
-        // `textconv.c:2593' DEFVAR_LISP `Qnil', and `2631' DEFVAR_LISP
-        // `Qunderline' -- a face NAME, so nil would mean "no face" rather than
-        // GNU's underline.  `overriding-text-conversion-style', the third name
-        // in this file, is declared above.
-        obarray.define_special_variable("text-conversion-edits", Value::NIL);
-        obarray.define_special_variable("text-conversion-face", Value::symbol("underline"));
-        // --- src/menu.c: syms_of_menu ---
-        // `menu.c:1629' DEFVAR_LISP, `Qnil'.  `x-pre-popup-menu-hook', the only
-        // other name in `menu.c', is already declared here.
-        obarray.define_special_variable("x-popup-menu-function", Value::NIL);
-        // --- src/dispnew.c: syms_of_display ---
-        // `dispnew.c:7567' DEFVAR_LISP, `make_fixnum (5)'.  Spelled `x-' but
-        // declared in `dispnew.o', which is in GNU's unconditional `base_obj'.
-        obarray.define_special_variable("x-show-tooltip-timeout", Value::fixnum(5));
+            // Mouse pointer shapes — GNU defines these in
+            // src/xfns.c (and parallel files w32fns.c, pgtkfns.c,
+            // haikufns.c, androidfns.c) as integer Lisp_Object
+            // variables that hold X cursor font codes. neomacs has
+            // no native window-system bindings for these yet, so
+            // they default to nil. Cursor audit Finding 9 in
+            // drafts/cursor-audit.md flagged the symbols as
+            // missing entirely; Lisp code that tried
+            // (setq x-pointer-shape ...) hit void-variable.
+            //
+            // `x-nontext-pointer-shape' and `x-mode-pointer-shape' are NOT in
+            // this list, and the omission is the point.  Every `DEFVAR_LISP'
+            // GNU has for either is inside
+            // `#if false /* This doesn't really do anything.  */' --
+            // `src/xfns.c:10333-10338' and `10347-10352', and the same pair in
+            // `src/androidfns.c'; `w32fns.c' and `haikufns.c' do not declare
+            // them at all.  A declaration in a dead preprocessor branch is not
+            // a declaration, so no GNU build binds the symbol and
+            // `(boundp 'x-mode-pointer-shape)' is nil under GNU 31.0.90.
+            // Seeding one here is entry 138's invented existence, reached
+            // through a case that is not about a platform: the C global
+            // `Vx_mode_pointer_shape' still exists and is still assigned
+            // `Qnil' on the line after the `#endif', which is what makes the
+            // seed look justified from the C side.  Nothing in GNU's `lisp/',
+            // this tree's `lisp/', or either editor's own sources reads
+            // either name.  (Ledger 168.)
+        for name in [
+            "x-pointer-shape",
+            "x-sensitive-text-pointer-shape",
+            "x-hourglass-pointer-shape",
+            "x-window-horizontal-drag-cursor",
+            "x-window-vertical-drag-cursor",
+            "x-window-left-edge-cursor",
+            "x-window-top-left-corner-cursor",
+            "x-window-top-edge-cursor",
+            "x-window-top-right-corner-cursor",
+            "x-window-right-edge-cursor",
+            "x-window-bottom-right-corner-cursor",
+            "x-window-bottom-edge-cursor",
+            "x-window-bottom-left-corner-cursor",
+            "x-cursor-fore-pixel",
+        ] {
+            obarray.seed_value(name, Value::NIL);
+            obarray.make_special(name);
+        }
     }
 
     /// A Context over the World views READY, with SEED's execution state

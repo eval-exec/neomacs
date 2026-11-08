@@ -1,7 +1,8 @@
-//! Per-host platform tables (MACOS_PRODUCT_DIVERGENCES rows 87-99), class
-//! (a): the `DEFVAR_BOOL` surface is keyed by the GNU REFERENCE BUILD, not by
-//! the running kernel. The X11 build declares xterm.c/xfns.c/xsettings.c
-//! bools and not the nsterm.m/nsfns.m ones; the NS build is the mirror.
+//! Per-host platform tables (MACOS_PRODUCT_DIVERGENCES rows 87-99): the
+//! `DEFVAR_BOOL` and C `DEFVAR` surfaces are keyed by the GNU REFERENCE
+//! BUILD, not by the running kernel. The X11 build declares the
+//! xterm.c/xfns.c/xsettings.c names and not the nsterm.m/nsfns.m ones; the NS
+//! build is the mirror.
 //!
 //! The scoped override comes from the signed eval test-support authority
 //! fence; production derives the surface once from the host cfg and never
@@ -12,6 +13,10 @@ use crate::emacs_core::format_eval_result;
 
 fn boundp(eval: &mut Context, name: &str) -> String {
     format_eval_result(&eval.eval_str(&format!("(boundp '{name})")))
+}
+
+fn value(eval: &mut Context, expr: &str) -> String {
+    format_eval_result(&eval.eval_str(expr))
 }
 
 fn surface_rows() -> usize {
@@ -48,5 +53,121 @@ fn x11_surface_binds_x11_bools_and_omits_ns_bools() {
         assert_eq!(boundp(&mut eval, "ns-use-native-fullscreen"), "OK nil");
         assert_eq!(boundp(&mut eval, "ns-click-through"), "OK nil");
         assert_eq!(surface_rows(), 147);
+    });
+}
+
+/// Class (b): the C DEFVAR families are gated by the reference surface, not
+/// by the running kernel.  GNU's NS build binds the `syms_of_nsterm` names
+/// (`src/nsterm.m:11568-11657`) and leaves the `xterm.c`/`xfns.c`/`xselect.c`/
+/// `xsettings.c` family void; the X11 build is the mirror.  Two names are
+/// declared in both backends: `x-max-tooltip-size` (`xfns.c:10436`,
+/// `nsfns.m:4245`) and `x-toolkit-scroll-bars` (`xterm.c:32699`,
+/// `nsterm.m:11700`).
+#[test]
+fn ns_surface_binds_the_ns_c_family_and_omits_the_x11_c_family() {
+    crate::test_utils::init_test_tracing();
+    neovm_eval::test_support::authority::with_platform_surface_for_test("ns", &mut || {
+        let mut eval = crate::test_utils::new_context();
+        assert_eq!(
+            value(&mut eval, "(symbol-value 'ns-alternate-modifier)"),
+            "OK meta"
+        );
+        assert_eq!(
+            value(&mut eval, "(symbol-value 'ns-command-modifier)"),
+            "OK super"
+        );
+        assert_eq!(
+            value(&mut eval, "(symbol-value 'ns-control-modifier)"),
+            "OK control"
+        );
+        assert_eq!(
+            value(&mut eval, "(symbol-value 'ns-function-modifier)"),
+            "OK none"
+        );
+        assert_eq!(
+            value(&mut eval, "(symbol-value 'ns-antialias-text)"),
+            "OK t"
+        );
+        assert_eq!(boundp(&mut eval, "ns-confirm-quit"), "OK t");
+        assert_eq!(
+            value(&mut eval, "(symbol-value 'ns-confirm-quit)"),
+            "OK nil"
+        );
+        assert_eq!(boundp(&mut eval, "ns-auto-hide-menu-bar"), "OK t");
+        assert_eq!(
+            value(&mut eval, "(symbol-value 'ns-auto-hide-menu-bar)"),
+            "OK nil"
+        );
+        for name in [
+            "x-keysym-table",
+            "x-selection-timeout",
+            "x-pointer-shape",
+            "x-sensitive-text-pointer-shape",
+            "x-scroll-event-delta-factor",
+            "x-no-window-manager",
+            "x-allow-focus-stealing",
+            "x-dnd-movement-function",
+            "x-session-id",
+            "x-wait-for-event-timeout",
+            "xft-settings",
+            "x-gtk-resize-child-frames",
+            "x-auto-preserve-selections",
+            "x-ctrl-keysym",
+        ] {
+            assert_eq!(
+                boundp(&mut eval, name),
+                "OK nil",
+                "{name} is X11-only and must be void on the NS surface"
+            );
+        }
+        assert_eq!(boundp(&mut eval, "x-max-tooltip-size"), "OK t");
+        assert_eq!(boundp(&mut eval, "x-toolkit-scroll-bars"), "OK t");
+    });
+}
+
+#[test]
+fn x11_surface_binds_the_x11_c_family_and_omits_the_ns_c_family() {
+    crate::test_utils::init_test_tracing();
+    neovm_eval::test_support::authority::with_platform_surface_for_test("x11", &mut || {
+        let mut eval = crate::test_utils::new_context();
+        for name in [
+            "x-keysym-table",
+            "x-selection-timeout",
+            "x-pointer-shape",
+            "x-sensitive-text-pointer-shape",
+            "x-scroll-event-delta-factor",
+            "x-no-window-manager",
+            "x-allow-focus-stealing",
+            "x-dnd-movement-function",
+            "x-session-id",
+            "x-wait-for-event-timeout",
+            "xft-settings",
+            "x-gtk-resize-child-frames",
+            "x-auto-preserve-selections",
+            "x-ctrl-keysym",
+        ] {
+            assert_eq!(
+                boundp(&mut eval, name),
+                "OK t",
+                "{name} belongs to the X11 C surface"
+            );
+        }
+        for name in [
+            "ns-alternate-modifier",
+            "ns-command-modifier",
+            "ns-control-modifier",
+            "ns-function-modifier",
+            "ns-antialias-text",
+            "ns-confirm-quit",
+            "ns-auto-hide-menu-bar",
+        ] {
+            assert_eq!(
+                boundp(&mut eval, name),
+                "OK nil",
+                "{name} is NS-only and must be void on the X11 surface"
+            );
+        }
+        assert_eq!(boundp(&mut eval, "x-max-tooltip-size"), "OK t");
+        assert_eq!(boundp(&mut eval, "x-toolkit-scroll-bars"), "OK t");
     });
 }
