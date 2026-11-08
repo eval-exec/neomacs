@@ -88,11 +88,12 @@ fn rooted_admission_rejects_real_capture_from_another_heap_and_returns_capabilit
     .unwrap();
     let failure = ParallelHeapEra::admit_rooted(collector, keeper, frozen).unwrap_err();
     assert_eq!(*failure.reason(), RegistrationError::WrongHeap);
-    assert_eq!(failure.collector.heap_identity(), second_heap);
-    assert_eq!(failure.keeper.parallel_heap_identity(), second_heap);
-    assert!(failure.keeper.held_here());
-    drop(failure.collector);
-    drop(failure.keeper);
+    let (_reason, collector, keeper) = failure.into_parts();
+    assert_eq!(collector.heap_identity(), second_heap);
+    assert_eq!(keeper.parallel_heap_identity(), second_heap);
+    assert!(keeper.held_here());
+    drop(collector);
+    drop(keeper);
     drop(first_keeper);
 }
 
@@ -126,13 +127,14 @@ fn assert_fixture_refuses_before_registration(
     .unwrap();
     let failure = ParallelHeapEra::admit_rooted(collector, keeper, frozen).unwrap_err();
     assert_eq!(*failure.reason(), RegistrationError::Publication);
-    assert_eq!(failure.collector.heap_identity(), expected);
-    assert_eq!(failure.keeper.parallel_heap_identity(), expected);
-    assert!(failure.keeper.held_here());
+    let (_reason, collector, keeper) = failure.into_parts();
+    assert_eq!(collector.heap_identity(), expected);
+    assert_eq!(keeper.parallel_heap_identity(), expected);
+    assert!(keeper.held_here());
     // No era was admitted, so no registration/activation could precede this
     // refusal. Both input capabilities return intact for serial recovery.
-    drop(failure.collector);
-    drop(failure.keeper);
+    drop(collector);
+    drop(keeper);
     assert!(context.tagged_heap.owns_heap_value_for_test(unsupported));
     context.lexenv = TaggedValue::NIL;
 }
