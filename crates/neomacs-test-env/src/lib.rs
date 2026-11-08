@@ -1021,6 +1021,8 @@ fn lisp_string_quote(value: &str) -> String {
     quoted
 }
 
+pub mod fresh_build_stamp;
+
 #[cfg(test)]
 #[path = "canonical_env_test.rs"]
 mod tests;

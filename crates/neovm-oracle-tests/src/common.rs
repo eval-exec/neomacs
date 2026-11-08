@@ -444,12 +444,44 @@ fn oracle_emacs_available() -> bool {
 }
 
 pub(crate) fn neomacs_binary_path() -> String {
-    std::env::var("NEOVM_BINARY_PATH").unwrap_or_else(|_| {
+    let path = std::env::var("NEOVM_BINARY_PATH").unwrap_or_else(|_| {
         oracle_sandbox::project_root()
             .join("target/release/neomacs")
             .to_string_lossy()
             .into_owned()
-    })
+    });
+    ensure_fresh_build_attested(&path);
+    path
+}
+
+/// Refuse to measure an editor whose binary and Lisp tree did not come from
+/// the same `cargo xtask fresh-build` run.
+///
+/// A stale tree silently measures a source bootstrap instead of the product:
+/// a remote lane lost its `.elc` files to an rsync `--delete` after the build
+/// and six tests "diverged" from GNU until a fresh build was run.  The check
+/// itself lives in `neomacs_test_env::fresh_build_stamp` so the TUI oracle
+/// harness and the recipe use the same implementation; it performs one full
+/// content verification per nextest run (the result is cached by stamp SHA and
+/// `NEXTEST_RUN_ID`) and fails fast for the remaining test processes.
+///
+/// `NEOVM_SKIP_FRESH_BUILD_STAMP=<non-empty>` is the one documented override;
+/// its value is echoed to stderr by the verifier.
+fn ensure_fresh_build_attested(binary: &str) {
+    static ATTESTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    ATTESTED.get_or_init(|| {
+        let lisp_root = project_lisp_dir();
+        match neomacs_test_env::fresh_build_stamp::verify(
+            std::path::Path::new(binary),
+            &lisp_root,
+        ) {
+            Ok(neomacs_test_env::fresh_build_stamp::StampVerdict::Verified { .. }) => {}
+            Ok(neomacs_test_env::fresh_build_stamp::StampVerdict::Overridden { .. }) => {
+                // `verify` already echoed the override; the run is unattested.
+            }
+            Err(message) => panic!("{message}"),
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------

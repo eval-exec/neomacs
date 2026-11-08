@@ -2,6 +2,7 @@ mod canonical_subr_plan_command;
 mod compile_wave;
 mod dependency_coherence;
 mod gc_stress;
+mod oracle_preflight_command;
 mod pentry_inventory_command;
 mod pgo;
 mod production_capabilities;
@@ -469,6 +470,13 @@ fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Re
     ) {
         args.next();
         return canonical_subr_plan_command::run(&repo_root, args);
+    }
+    if matches!(
+        args.peek().and_then(|arg| arg.to_str()),
+        Some("oracle-preflight")
+    ) {
+        args.next();
+        return oracle_preflight_command::run(&repo_root, args);
     }
     if matches!(
         args.peek().and_then(|arg| arg.to_str()),
@@ -978,6 +986,23 @@ fn run_fresh_build_pipeline(
         Some(UnchangedSourceMtimes::capture(&paths.lisp_root)?)
     };
 
+    // lisp/ldefs-boot.el is the ONE tracked file this pipeline overwrites: it
+    // is the bootstrap fallback `(load "ldefs-boot.el")` used while loaddefs.el
+    // does not exist yet, and GNU's comment in loadup.el keeps the tracked copy
+    // as the repository's bootstrap autoload snapshot
+    // (`admin/update_autogen` refreshes it periodically, not every build).
+    // The final dump runs loadup AFTER loaddefs.el exists, so it loads the
+    // generated loaddefs.el, not this file; restoring the tracked bytes after
+    // the dump cannot change the runtime.  The local build scripts restored
+    // this file with `git checkout --` after fresh-build, which would make the
+    // fresh-build stamp's manifest stale; the restore belongs here, before the
+    // stamp, and needs no `.git` (a remote lane copy has none).
+    let tracked_ldefs_boot = if options.dry_run {
+        None
+    } else {
+        fs::read(&ldefs_boot).ok()
+    };
+
     // GNU's bootstrap-clean removes Lisp bytecode before building
     // bootstrap-emacs.  Keep primary loaddefs sources available for
     // pbootstrap/COMPILE_FIRST; GNU removes loaddefs.el later, in
@@ -1232,6 +1257,34 @@ fn run_fresh_build_pipeline(
     // loaded into the final pdump before the broad Lisp byte-compile pass.
     if !options.no_byte_compile {
         run_compile_main(options, &paths, &envs)?;
+    }
+
+    // Put the tracked bootstrap autoloads back BEFORE the stamp hashes the
+    // tree.  The final dump above ran loadup with loaddefs.el present, so it
+    // consumed the generated autoloads; ldefs-boot.el is only the bootstrap
+    // fallback, and the tree the stamp describes must be the checkout's.
+    if let Some(original) = &tracked_ldefs_boot {
+        if restore_tracked_ldefs_boot(original, &ldefs_boot)? {
+            print_synthetic_step("restore the tracked lisp/ldefs-boot.el bytes");
+            println!(
+                "  INFO  the dump loaded the generated loaddefs.el; the tracked bootstrap autoloads are restored before the stamp"
+            );
+        }
+    }
+
+    // The fresh-build stamp attests this binary to the Lisp tree it was built
+    // with.  The oracle harnesses and `scripts/oracle-full-run.sh` refuse to
+    // measure an editor whose tree was synced, stripped or regenerated after
+    // the build; a remote lane lost its .elc files that way and every Lisp
+    // file loaded as source.  Written last, after the final dump and the
+    // compile-main pass, so both the binary and every .elc are final.
+    if !options.dry_run {
+        print_synthetic_step("write the fresh-build stamp (binary sha256 + generated-Lisp manifest)");
+        let stamp = neomacs_test_env::fresh_build_stamp::write_stamp(
+            &paths.final_bin,
+            &paths.lisp_root,
+        )?;
+        println!("  INFO  stamp {}", stamp.display());
     }
 
     let mode = options.profile.as_name();
@@ -4325,57 +4378,17 @@ fn parse_compile_first_sources(
     ))
 }
 
+/// The loadup preloaded list, from the single implementation shared with the
+/// oracle attestation (`neomacs-test-env`): GNU's own `src/Makefile.in` rule.
 fn parse_preloaded_lisp_sources(loadup: &Path, lisp_root: &Path) -> Result<Vec<PathBuf>> {
-    let contents = fs::read_to_string(loadup)?;
-    Ok(parse_preloaded_lisp_sources_from_str(&contents, lisp_root))
+    Ok(neomacs_test_env::fresh_build_stamp::parse_preloaded_sources(
+        loadup, lisp_root,
+    )?)
 }
 
+#[cfg(test)]
 fn parse_preloaded_lisp_sources_from_str(contents: &str, lisp_root: &Path) -> Vec<PathBuf> {
-    let mut targets = BTreeSet::new();
-
-    // GNU src/Makefile.in generates src/lisp.mk with:
-    //   sed -n 's/^[ \t]*(load "\([^"]*\)".*/\1/p' loadup.el |
-    //     sed -e 's/$/.elc \\/' -e 's/\.el\.elc/.el/'
-    for line in contents.lines() {
-        let trimmed = line.trim_start_matches([' ', '\t']);
-        let Some(rest) = trimmed.strip_prefix("(load \"") else {
-            continue;
-        };
-        let Some((library, _)) = rest.split_once('"') else {
-            continue;
-        };
-        let target = if library.ends_with(".el") {
-            library.to_string()
-        } else {
-            format!("{library}.elc")
-        };
-        targets.insert(target);
-    }
-
-    targets.remove("leim/leim-list.el");
-    targets.remove("site-load.elc");
-    targets.remove("site-init.elc");
-    targets.insert("loaddefs.elc".to_string());
-
-    let mut sources = Vec::new();
-    push_preloaded_lisp_source("loaddefs.elc", lisp_root, &mut sources);
-    for target in targets {
-        if target == "loaddefs.elc" {
-            continue;
-        }
-        push_preloaded_lisp_source(&target, lisp_root, &mut sources);
-    }
-    sources
-}
-
-fn push_preloaded_lisp_source(target: &str, lisp_root: &Path, out: &mut Vec<PathBuf>) {
-    let Some(source) = target.strip_suffix(".elc") else {
-        return;
-    };
-    let source = lisp_root.join(format!("{source}.el"));
-    if source.is_file() && !source_has_no_byte_compile_marker(&source).unwrap_or(false) {
-        out.push(source);
-    }
+    neomacs_test_env::fresh_build_stamp::parse_preloaded_sources_from_str(contents, lisp_root)
 }
 
 fn parse_compile_first_sources_from_str(
@@ -4549,6 +4562,21 @@ fn write_ldefs_boot(loaddefs_el: &Path, ldefs_boot: &Path) -> Result<()> {
     let output = inject_no_byte_compile(&input);
     fs::write(ldefs_boot, output)?;
     Ok(())
+}
+
+/// Restore the tracked `lisp/ldefs-boot.el` bytes captured before the
+/// generators ran.  Returns whether the file had to be rewritten.
+///
+/// The restore is deliberately a saved-bytes write rather than
+/// `git checkout --`: a remote lane copy can be `.git`-less (or carry the
+/// seed's `.git`, whose HEAD is a different tree), and the bytes the build
+/// started from ARE the checkout's tracked bytes in a clean tree.
+fn restore_tracked_ldefs_boot(original: &[u8], path: &Path) -> Result<bool> {
+    if fs::read(path).ok().as_deref() == Some(original) {
+        return Ok(false);
+    }
+    fs::write(path, original)?;
+    Ok(true)
 }
 
 const LOADDEFS_END_BOUNDARY: &str = "\n\x0c\n;;; End of scraped data";

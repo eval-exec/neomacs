@@ -1150,6 +1150,28 @@ fn usage_places_preloaded_lisp_compile_before_final_pdump() {
     assert!(pdump < compile_main);
 }
 
+/// The peer ruling for the fresh-build stamp: lisp/ldefs-boot.el is the one
+/// tracked file the pipeline regenerates, and fresh-build restores its
+/// pre-build bytes BEFORE stamping the tree.  Pin both directions: a changed
+/// file is rewritten, an identical one is left alone (and reported as not
+/// rewritten, so the pipeline only prints its INFO line when it acted).
+#[test]
+fn tracked_ldefs_boot_restore_rewrites_only_a_changed_file() {
+    let tempdir = tempdir();
+    let path = tempdir.join("ldefs-boot.el");
+    let tracked = b";; tracked bootstrap autoloads\n";
+    fs::write(&path, b";; regenerated from loaddefs.el\n").unwrap();
+    assert!(
+        restore_tracked_ldefs_boot(tracked, &path).unwrap(),
+        "a regenerated file must be restored"
+    );
+    assert_eq!(fs::read(&path).unwrap(), tracked);
+    assert!(
+        !restore_tracked_ldefs_boot(tracked, &path).unwrap(),
+        "an already-tracked file must not be rewritten"
+    );
+}
+
 #[test]
 fn parse_preloaded_lisp_sources_matches_gnu_lisp_mk_shape() {
     let tempdir = tempdir();

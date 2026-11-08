@@ -637,9 +637,14 @@ jobs:
           test -f lisp/international/charscript.el
           test -f lisp/international/charprop.el
           test -d etc/charsets
+          # The fresh-build stamp attests the binary to the Lisp tree; the
+          # oracle harnesses refuse a runtime without it.  Package it with the
+          # pair it belongs to.
+          test -f target/release/neomacs.fresh-build-stamp
           tar czf neomacs-test-runtime-linux-x86_64.tar.gz \
             target/release/neomacs \
             target/release/neomacs.pdump \
+            target/release/neomacs.fresh-build-stamp \
             lisp \
             etc
 
@@ -769,6 +774,7 @@ jobs:
           chmod +x target/release/neomacs
           test -f lisp/international/charscript.el
           test -f lisp/international/charprop.el
+          test -f target/release/neomacs.fresh-build-stamp
 
       - &download_workspace_test_archive
         name: Download workspace test archive

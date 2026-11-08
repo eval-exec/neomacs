@@ -246,6 +246,7 @@ pub fn assert_neomacs_dumped_runtime(program: &Path) {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     if output.status.success() && stdout.contains("NEOMACS-PDUMPED") {
+        assert_fresh_build_stamp(program);
         return;
     }
     let tail = |text: &str| {
@@ -268,6 +269,37 @@ pub fn assert_neomacs_dumped_runtime(program: &Path) {
         tail(&stdout),
         tail(&stderr)
     );
+}
+
+/// Refuse an editor whose binary and Lisp tree did not come from the same
+/// `cargo xtask fresh-build` run.
+///
+/// Same attestation as the Elisp oracle harness
+/// (`neomacs_test_env::fresh_build_stamp`): the binary's SHA-256 and the
+/// generated-Lisp manifest must match the stamp beside the binary, and every
+/// preloaded `.el` from `loadup.el` must have its `.elc`.  A pdumped binary
+/// over a tree whose bytecode was deleted still boots, but it loads sources
+/// and the comparison measures the bootstrap.  One full check runs per nextest
+/// run; later test processes reuse the cached verdict.
+///
+/// `NEOVM_SKIP_FRESH_BUILD_STAMP=<non-empty>` is the documented override and
+/// its value is echoed by the verifier.
+fn assert_fresh_build_stamp(program: &Path) {
+    static ATTESTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    ATTESTED.get_or_init(|| {
+        // The Lisp tree under test is the runtime root's, not necessarily the
+        // workspace's: a staged install or an out-of-tree runtime is selected
+        // with NEOMACS_RUNTIME_ROOT, and the spawned editor reads that tree.
+        let runtime_root = std::env::var_os("NEOMACS_RUNTIME_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(crate::workspace_root);
+        let lisp_root = runtime_root.join("lisp");
+        match neomacs_test_env::fresh_build_stamp::verify(program, &lisp_root) {
+            Ok(neomacs_test_env::fresh_build_stamp::StampVerdict::Verified { .. }) => {}
+            Ok(neomacs_test_env::fresh_build_stamp::StampVerdict::Overridden { .. }) => {}
+            Err(message) => panic!("{message}"),
+        }
+    });
 }
 
 #[cfg(test)]

@@ -159,23 +159,25 @@ slow-timeout = { period = "1200s", terminate-after = 1 }
 # The inlined-call matrix tests run the full engine matrix: GNU once and
 # Neomacs once per ~39 env row, so one test is ~40 subprocess runs.  Six of
 # those rows set NEOVM_GC_STRESS=1, and stress mode collects at EVERY
-# allocation-bearing safe point.  That is inherently expensive: a trivial
-# `(byte-compile ...)` executes ~279k such safe points at ~0.7 ms per
-# collection (~135s of it just loading bytecomp.el), independent of lambda
-# size, compile count, JIT on/off and JIT threshold.  Measured end to end with
-# the release pdump binary in VERIFY mode: one whole test takes 857s.  The old
-# 120s ceiling predates the GC-stress rows and now guarantees a timeout.
-# 2400s keeps a bounded watchdog with ~2.8x headroom over the measured worst.
-# `threads-required` still isolates these tests from contention in the default
-# profile; scripts/oracle-full-run.sh runs the same 15 tests as a bounded slow
-# group under the `oracle-slow` profile instead of serializing them.
-# The filter covers every test that calls inlined_call_semantics::check: the
-# inlined_call_semantics module, backtrace_frame_semantics' oracle_inline_o1/
-# o2, and debug_on_next_call's oracle_inline_o3/o4.
+# allocation-bearing safe point, so those rows cost the number of Lisp safe
+# points the form executes (~0.7 ms per collection).  The cost is therefore a
+# property of the TREE, not of the test: on a correctly fresh-built tree
+# (byte-compiled Lisp -- the fresh-build attestation refuses anything else)
+# the 15 tests measured 28.8-48.2s each on treeroot, 15/15 in 100.2s at six
+# concurrent; on a source-only tree the same tests take 850s+ because loading
+# bytecomp.el executes ~279k extra safe points.  240s is 5x the measured
+# fresh-built worst, with room for contention and slower hosts; the old 120s
+# ceiling predates the GC-stress rows and was sized against a tree state the
+# attestation now refuses.  `threads-required` isolates these tests in the
+# default profile; scripts/oracle-full-run.sh runs the same 15 as a bounded
+# slow group under `oracle-slow` instead of serializing them.  The filter
+# covers every test that calls inlined_call_semantics::check: the module
+# itself, backtrace_frame_semantics' oracle_inline_o1/o2, and
+# debug_on_next_call's oracle_inline_o3/o4.
 [[profile.default.overrides]]
 filter = 'package(neovm-oracle-tests) and (test(inlined_call_semantics::) or test(backtrace_frame_semantics::oracle_inline_) or test(debug_on_next_call::oracle_inline_))'
 threads-required = "num-test-threads"
-slow-timeout = { period = "2400s", terminate-after = 1 }
+slow-timeout = { period = "240s", terminate-after = 1 }
 
 # A handful of subprocess probes are timing sensitive rather than divergent:
 # `process_attributes_running_child` reads `process-running-child-p' while a
@@ -295,17 +297,17 @@ filter = 'package(neovm-core) and test(=emacs_core::process::tests::call_process
 slow-timeout = { period = "30s", terminate-after = 1, grace-period = "0s" }
 
 # The whole-host oracle recipe (scripts/oracle-full-run.sh) runs the 15
-# GC-stress matrix tests as a separate slow group.  Same evidence-based 2400s
+# GC-stress matrix tests as a separate slow group.  Same evidence-based 240s
 # watchdog as the default-profile override, but with a bounded 2-slot
 # reservation (up to 12 concurrent tests on the 24-thread pool) instead of the
-# whole pool, so the measured 15 x 857s group finishes in tens of minutes
-# rather than hours.  Only the recipe selects this profile; a plain
-# `cargo nextest run` keeps the default-profile behavior.
+# whole pool, so the measured 100.2s group stays well inside one batch.  Only
+# the recipe selects this profile; a plain `cargo nextest run` keeps the
+# default-profile behavior.
 [profile.oracle-slow]
 test-threads = 24
-slow-timeout = { period = "2400s", terminate-after = 1, grace-period = "0s" }
+slow-timeout = { period = "240s", terminate-after = 1, grace-period = "0s" }
 
 [[profile.oracle-slow.overrides]]
 filter = 'package(neovm-oracle-tests) and (test(inlined_call_semantics::) or test(backtrace_frame_semantics::oracle_inline_) or test(debug_on_next_call::oracle_inline_))'
 threads-required = 2
-slow-timeout = { period = "2400s", terminate-after = 1 }
+slow-timeout = { period = "240s", terminate-after = 1 }

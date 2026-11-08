@@ -90,6 +90,26 @@ export RUST_LOG="${RUST_LOG:-error}"
 
 slow_filter='package(neovm-oracle-tests) and (test(inlined_call_semantics::) or test(backtrace_frame_semantics::oracle_inline_) or test(debug_on_next_call::oracle_inline_))'
 
+# --- fresh-build attestation ----------------------------------------------
+# The binary and the Lisp tree it loads must come from the SAME
+# `cargo xtask fresh-build --release` run.  A sync can silently strip the
+# built .elc files (rsync --delete removes build outputs that are not in the
+# source worktree), and the editor then loads Lisp sources instead of the
+# compiled product: macroexpansion order, gensym counters, docstring
+# references and preloaded state all change.  The preflight verifies the
+# binary's sha256 and the whole generated-Lisp manifest against the stamp the
+# build wrote beside the binary, and requires a .elc for every .el that
+# loadup.el preloads.  The test harnesses enforce the same attestation at
+# their startup; this run makes the refusal happen once, before anything is
+# measured.  NEOVM_SKIP_FRESH_BUILD_STAMP=<non-empty> is the one override.
+echo "# fresh-build preflight"
+cargo xtask oracle-preflight --binary "$binary" --lisp-root "$root/lisp" \
+    2>&1 | tee "$logdir/preflight.log"
+preflight_rc=${PIPESTATUS[0]}
+if [ "$preflight_rc" -ne 0 ]; then
+    die "fresh-build preflight refused (see $logdir/preflight.log): the binary and the Lisp tree are not from the same fresh build. Run 'cargo xtask fresh-build --release' for this binary."
+fi
+
 {
     echo "# oracle-full-run"
     echo "# start   $(date -u +%FT%TZ)"
