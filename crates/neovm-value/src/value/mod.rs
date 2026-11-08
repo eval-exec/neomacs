@@ -5794,6 +5794,7 @@ fn lexenv_binding_symbol_matches(value: Value, sym_id: SymId) -> bool {
     bits != Value::UNBOUND.bits() && bits == (sym_id.0 as usize) << TAG_BITS
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn lexenv_binding_symbol_value(sym_id: SymId) -> Value {
     TaggedValue::from_sym_id(sym_id)
 }

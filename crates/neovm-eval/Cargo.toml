@@ -116,6 +116,10 @@ neovm-value = { path = "../neovm-value", default-features = false, features = ["
 # value's test-support exposes CacheRootScan::Snapshot, so text must compile
 # its matching arm in the same test build (A1 consumer gate, downward only).
 neovm-text = { path = "../neovm-text", default-features = false, features = ["test-support"] }
+# E3: the redisplay-policy selectors and the edit authority fences are
+# crate-private in production; this dev edge enables edit's test-support
+# surface for eval's own unit tests (downward only; never a product edge).
+neovm-edit = { path = "../neovm-edit", default-features = false, features = ["test-support"] }
 # The A' gate on fence-routed items is cfg(any(test, feature = "test-support"))
 # to match the fence module's cfg (peer P1-HOOKS-2). The optional `visibility`
 # dependency is tied to the test-support feature, so this dev-dependency makes

@@ -11260,7 +11260,7 @@ fn vm_plain_nil_varref_does_not_probe_buffer_local_storage() {
     let ordinary_nil = intern("vm-ordinary-nil-global");
     eval.obarray.set_symbol_value_id(ordinary_nil, Value::NIL);
 
-    neovm_edit::buffer::buffer::reset_buffer_local_value_lookup_probes();
+    neovm_edit::test_support::authority::reset_buffer_local_value_lookup_probes();
     let value = new_vm(&mut eval)
         .fast_path_var_ref(ordinary_nil)
         .expect("a bound plain nil variable should be readable");

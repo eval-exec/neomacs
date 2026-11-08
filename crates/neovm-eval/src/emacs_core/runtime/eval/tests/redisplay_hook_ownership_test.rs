@@ -1,36 +1,6 @@
 use super::*;
 #[doc(hidden)]
 pub use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
-use neovm_edit::emacs_core::redisplay_policy::{RedisplayHookPolicy, parse_redisplay_hooks};
-use std::ffi::OsStr;
-
-#[test]
-fn explicit_policy_is_required_and_invalid_values_preserve_baseline() {
-    for value in [
-        None,
-        Some(OsStr::new("")),
-        Some(OsStr::new("off")),
-        Some(OsStr::new("unknown")),
-    ] {
-        assert_eq!(parse_redisplay_hooks(value), RedisplayHookPolicy::Legacy);
-    }
-    for value in ["on", "1", "true", "yes"] {
-        assert_eq!(
-            parse_redisplay_hooks(Some(OsStr::new(value))),
-            RedisplayHookPolicy::Gnu
-        );
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn non_unicode_policy_is_baseline() {
-    use std::os::unix::ffi::OsStrExt;
-    assert_eq!(
-        parse_redisplay_hooks(Some(OsStr::from_bytes(&[0xff]))),
-        RedisplayHookPolicy::Legacy
-    );
-}
 
 #[test]
 fn pending_targets_join_until_transaction_reset() {

@@ -104,7 +104,8 @@ fn restored_owner_retirement_leaves_cooperative_sweep_pending() {
 
 #[test]
 fn a_busy_recycle_failure_is_explicitly_finished_without_abandoning_its_lease() {
-    use neovm_value::tagged::transport::{RootBatchError, with_root_table_lock_for_test};
+    use neovm_value::tagged::transport::RootBatchError;
+    use neovm_value::test_support::authority::with_root_table_lock_for_test;
     use std::sync::{Arc, Condvar, Mutex};
 
     let mut owner = green();
