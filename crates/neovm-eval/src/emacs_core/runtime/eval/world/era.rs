@@ -100,7 +100,14 @@ impl<'heap> WorldProofEraExt<'heap>
         keeper: Baton,
     ) -> Result<Self, gc::EraAdmissionFailure<'heap, Baton>> {
         // SAFETY: fixture retains the same original World and checked keeper.
-        unsafe { Self::admit_with(collector, keeper, prepare_keeper_backing) }
+        // The signed fence is the cross-crate route; ProofEra::admit_with stays pub(crate).
+        unsafe {
+            neovm_value::test_support::authority::admit_for_test(
+                collector,
+                keeper,
+                prepare_keeper_backing,
+            )
+        }
     }
     #[cold]
     fn admit_rooted(
@@ -109,7 +116,15 @@ impl<'heap> WorldProofEraExt<'heap>
         roots: gc::FrozenLegacyRoots,
     ) -> Result<Self, gc::EraAdmissionFailure<'heap, Baton>> {
         // SAFETY: same original keeper and sealed suspended private census.
-        unsafe { Self::admit_rooted_with(collector, keeper, roots, prepare_keeper_backing) }
+        // The signed fence is the cross-crate route; ProofEra::admit_rooted_with stays pub(crate).
+        unsafe {
+            neovm_value::test_support::authority::admit_rooted_for_test(
+                collector,
+                keeper,
+                roots,
+                prepare_keeper_backing,
+            )
+        }
     }
     #[cold]
     fn admit_rooted_with_weak_tables_for_test(
