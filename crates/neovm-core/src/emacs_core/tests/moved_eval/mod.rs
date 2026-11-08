@@ -427,3 +427,15 @@ mod emacs_core_runtime_bytecode_tests_vm_display_host_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/bytecode/tests/vm_bootstrap_runtime_test.rs"]
 mod emacs_core_runtime_bytecode_tests_vm_bootstrap_runtime_test_rs;
+// String, equal-including-properties, and eager-expansion tests whose only
+// missing piece is the runtime-startup image. The rest of each origin file
+// stays in eval. Assertions are unchanged.
+#[cfg(test)]
+#[path = "emacs_core/lisp/load/tests/eager_failure_runtime_test.rs"]
+mod emacs_core_lisp_load_tests_eager_failure_runtime_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/strings_runtime_startup_test.rs"]
+mod emacs_core_lisp_native_builtins_tests_strings_runtime_startup_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/fns/tests/fns_runtime_startup_test.rs"]
+mod emacs_core_lisp_native_fns_tests_fns_runtime_startup_test_rs;
