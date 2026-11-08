@@ -275,7 +275,10 @@ fn jit_bg_pending_leaf_roots_its_constants_across_gc() {
         .expect("no signal")
         .expect("installed and run");
     assert_eq!(bits, list.bits(), "the same object");
-    let got = Value::from_bits(bits);
+    let got = unsafe {
+        /* SAFETY: the compiled-call Ok word is a real Value's tagged bits */
+        Value::from_bits(bits)
+    };
     assert_eq!(
         crate::emacs_core::print::print_value(&got),
         "(jit-bg-a \"xxx\" (1 . 2))",

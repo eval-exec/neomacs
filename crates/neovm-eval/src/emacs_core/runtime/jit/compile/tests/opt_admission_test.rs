@@ -79,7 +79,10 @@ fn tier0(ctx: &mut Context, f: &ByteCodeFunction, args: &[Value]) -> Value {
 
 fn native(ctx: &mut Context, leaf: &CompiledLeaf, f: &ByteCodeFunction, args: &[Value]) -> Value {
     match leaf.call_consts(ctx as *mut Context as *mut u8, f.constants.as_ptr(), args) {
-        NativeRun::Ok(bits) => Value::from_bits(bits),
+        NativeRun::Ok(bits) => unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        },
         other => panic!("admitted body must finish natively: {other:?}"),
     }
 }

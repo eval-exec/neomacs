@@ -51,13 +51,19 @@ fn stopped_collection(ctx: &mut Context, old_word: usize) -> (CollectionReport, 
                 let mut stopped = era.stop().map_err(|e| format!("GC stop: {e:?}"))?;
                 let before = era
                     .with_stopped_heap_for_test(&stopped, |heap| {
-                        heap.owns_heap_value_for_test(Value::from_bits(old_word))
+                        heap.owns_heap_value_for_test(unsafe {
+                            /* SAFETY: inverse of Value::bits on this live value */
+                            Value::from_bits(old_word)
+                        })
                     })
                     .map_err(|e| format!("before GC membership: {e:?}"))?;
                 let collected = ParallelHeapEraWorldCollectExt::collect_stopped(era, &mut stopped);
                 let after = era.with_stopped_heap_for_test(&stopped, |heap| {
                     // Allocation membership only; never decode an old payload.
-                    heap.owns_heap_value_for_test(Value::from_bits(old_word))
+                    heap.owns_heap_value_for_test(unsafe {
+                        /* SAFETY: inverse of Value::bits on this live value */
+                        Value::from_bits(old_word)
+                    })
                 });
                 let completed = stopped.complete();
                 let report = collected.map_err(|e| format!("stopped GC: {e:?}"))?;
@@ -139,7 +145,10 @@ fn history(named: bool) {
     assert_eq!(retained.frozen_owners, 0);
     assert!(before_gc && after_gc, "old definition remains rooted");
     coherent(&ctx, clock + 1);
-    let old_answer = direct(&mut ctx, Value::from_bits(old_word));
+    let old_answer = direct(&mut ctx, unsafe {
+        /* SAFETY: inverse of Value::bits on this live value */
+        Value::from_bits(old_word)
+    });
     let current_answer = direct(&mut ctx, Value::from_sym_id(ids[0]));
     assert_eq!(
         format!("({old_answer} {first_after} {current_answer})"),

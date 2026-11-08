@@ -63,7 +63,10 @@ fn immediate(home: &OwnerRootSlot<'_>, run: &RunAccess<'_, '_>) -> String {
     }
 }
 fn mapped(home: &OwnerRootSlot<'_>, run: &RunAccess<'_, '_>) -> String {
-    let value = TaggedValue::from_bits(ExecutionTestHomes::word(home, run));
+    let value = unsafe {
+        /* SAFETY: word_for_test returns Value::bits of the stored root */
+        TaggedValue::from_bits(ExecutionTestHomes::word(home, run))
+    };
     assert!(value.is_cons());
     assert!(value.cons_cdr_unobserved().is_nil());
     format!(
@@ -152,9 +155,12 @@ struct Program {
 static_assertions::assert_impl_all!(Program: Send);
 static_assertions::assert_not_impl_any!(Program: Sync, Clone, Copy);
 fn id(home: &OwnerRootSlot<'_>, run: &RunAccess<'_, '_>) -> SymId {
-    TaggedValue::from_bits(ExecutionTestHomes::word(home, run))
-        .as_bare_symbol_id()
-        .expect("intern returns a symbol")
+    unsafe {
+        /* SAFETY: word_for_test returns Value::bits of the stored root */
+        TaggedValue::from_bits(ExecutionTestHomes::word(home, run))
+    }
+    .as_bare_symbol_id()
+    .expect("intern returns a symbol")
 }
 #[derive(Clone, Copy)]
 enum NameClass {

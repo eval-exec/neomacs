@@ -94,7 +94,14 @@ fn call(ctx: *mut Context, f: &ByteCodeFunction, x: i64) -> Option<i64> {
     // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
     unsafe { try_run_compiled(ctx, f, Value::NIL, &[Value::make_int(x)]) }
         .expect("no signal")
-        .map(|bits| Value::from_bits(bits).as_fixnum().expect("fixnum"))
+        .map(|bits| {
+            unsafe {
+                /* SAFETY: the compiled-call Ok word is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }
+            .as_fixnum()
+            .expect("fixnum")
+        })
 }
 
 /// `f` run by the interpreter: a fresh copy (a clone would share `f`'s

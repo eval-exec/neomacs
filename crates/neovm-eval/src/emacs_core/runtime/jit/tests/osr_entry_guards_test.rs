@@ -114,7 +114,13 @@ fn osr_entry_guard_checks_each_snapshot_before_effects_and_keeps_unknown_heap_sl
     else {
         panic!("compatible seed must run the native body");
     };
-    assert_eq!(Value::from_bits(bits), payload);
+    assert_eq!(
+        unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        },
+        payload
+    );
     assert_eq!(ctx.specpdl.len(), borrowed);
     assert_eq!(ctx.jit_bind_stack, [outer]);
     assert_eq!(ctx.jit_root_stack_top, 0);
@@ -192,7 +198,10 @@ fn osr_entry_guard_keeps_heap_operands_through_native_and_resumed_watched_store_
                     )
                     .unwrap()
             }
-            Some(NativeRun::Ok(bits)) if !guard_fails => Value::from_bits(bits),
+            Some(NativeRun::Ok(bits)) if !guard_fails => unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            },
             other => panic!("unexpected native outcome, guard_fails={guard_fails}: {other:?}"),
         };
         assert_eq!(

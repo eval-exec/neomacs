@@ -172,7 +172,10 @@ fn osr_raw_switch_backedges_root_heap_payloads_and_preserve_quit_cadence() {
         assert_eq!(bytecode_branch_poll_count(), polls);
         assert!(ctx.tagged_heap.gc_collections() >= before + polls);
         assert_eq!(ctx.jit_root_stack_top, 0);
-        let mut list = Value::from_bits(bits);
+        let mut list = unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        };
         for expected in 1..=n {
             assert!(list.is_cons(), "missing cell {expected}");
             assert_eq!(list.cons_car(), Value::make_int(expected));
@@ -332,7 +335,10 @@ fn osr_raw_varref_preserves_loop_slots_on_inline_and_fallback_reads() {
             panic!("{name}: {result:?}")
         };
         assert_eq!(
-            crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+            crate::emacs_core::print::print_value(&unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
             format!("(0 {})", 1024 * value)
         );
         assert_eq!(

@@ -303,7 +303,14 @@ fn census_counts_a_direct_path_deopt_once() {
     let before = census();
     match leaf.call(ctx, &[Value::make_float(5.0)]) {
         crate::emacs_core::jit::compile::NativeRun::Ok(bits) => {
-            assert_eq!(Value::from_bits(bits).as_float(), Some(4.0))
+            assert_eq!(
+                unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                }
+                .as_float(),
+                Some(4.0)
+            )
         }
         other => panic!("expected the resumed result, got {other:?}"),
     }
@@ -476,12 +483,25 @@ fn ceiling_generic_takes_the_fallback_and_never_deopts() {
         NativeRun::Ok(Value::make_int(5).bits())
     );
     match leaf.call(ctx, &[Value::make_float(1.5), Value::make_int(2)]) {
-        NativeRun::Ok(bits) => assert_eq!(Value::from_bits(bits).as_float(), Some(3.5)),
+        NativeRun::Ok(bits) => assert_eq!(
+            unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }
+            .as_float(),
+            Some(3.5)
+        ),
         other => panic!("the generic fallback runs floats natively: {other:?}"),
     }
     let big = bignum();
     match leaf.call(ctx, &[big, Value::make_int(1)]) {
-        NativeRun::Ok(bits) => assert!(!Value::from_bits(bits).is_fixnum()),
+        NativeRun::Ok(bits) => assert!(
+            !unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }
+            .is_fixnum()
+        ),
         other => panic!("the generic fallback runs bignums natively: {other:?}"),
     }
     match leaf.call(
@@ -491,7 +511,14 @@ fn ceiling_generic_takes_the_fallback_and_never_deopts() {
             Value::make_int(1),
         ],
     ) {
-        NativeRun::Ok(bits) => assert!(!Value::from_bits(bits).is_fixnum(), "promoted"),
+        NativeRun::Ok(bits) => assert!(
+            !unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }
+            .is_fixnum(),
+            "promoted"
+        ),
         other => panic!("an overflow takes the fallback, not a deopt: {other:?}"),
     }
     assert_eq!(leaf.obs.deopt_at.get() + leaf.obs.deopt_rerun.get(), 0);

@@ -526,7 +526,10 @@ fn aot_symbol_const_relocs_by_name_not_baked_sym_id() {
     // the rebuilt symbol must be the live obarray's 'aot-yes/'aot-no.
     let ctx_ptr = &mut eval as *mut crate::emacs_core::eval::Context as *mut u8;
     let call = |arg: Value| match aot_leaf.call(ctx_ptr, &[arg]) {
-        crate::emacs_core::jit::compile::NativeRun::Ok(b) => Value::from_bits(b),
+        crate::emacs_core::jit::compile::NativeRun::Ok(b) => unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(b)
+        },
         other => panic!("not Ok: {other:?}"),
     };
     // (consp '(1)) → 'yes ; (consp 5) → 'no.
@@ -646,7 +649,10 @@ fn aot_reloc_bearing_leaf_rebuilds_string_const() {
         crate::emacs_core::jit::compile::NativeRun::Ok(b) => b,
         other => panic!("AOT reloc leaf not Ok: {other:?}"),
     };
-    let result = Value::from_bits(bits);
+    let result = unsafe {
+        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+        Value::from_bits(bits)
+    };
     // Audit #A: the AOT result is EQ-IDENTICAL to the source constant (same
     // object) — exactly what interp/JIT return, so `eq` against the literal
     // would agree. (Before #A this was a fresh recipe-rebuilt copy → eq nil.)
@@ -712,7 +718,10 @@ fn aot_two_reloc_consts_rebuild_in_index_order() {
     // And each branch returns the right rebuilt string.
     let ctx_ptr = &mut eval as *mut crate::emacs_core::eval::Context as *mut u8;
     let call = |arg: Value| match aot_leaf.call(ctx_ptr, &[arg]) {
-        crate::emacs_core::jit::compile::NativeRun::Ok(b) => Value::from_bits(b),
+        crate::emacs_core::jit::compile::NativeRun::Ok(b) => unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(b)
+        },
         other => panic!("not Ok: {other:?}"),
     };
     assert_eq!(

@@ -95,9 +95,10 @@ fn opt_sqrt_binding_shared_static_reader_declines_busy_writer_and_observes_rewri
     let (reply, result) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
         let mut reader = Context::new(crate::test_utils::unit_runtime());
-        reader
-            .obarray
-            .set_symbol_function_id(symbol, Value::from_bits(original_bits as usize));
+        reader.obarray.set_symbol_function_id(symbol, unsafe {
+            /* SAFETY: inverse of Value::bits on the symbol's function value. */
+            Value::from_bits(original_bits as usize)
+        });
         let epoch = reader.obarray.function_epoch();
         reply.send(None).unwrap();
         while let Ok(Probe::Check) = receive.recv() {

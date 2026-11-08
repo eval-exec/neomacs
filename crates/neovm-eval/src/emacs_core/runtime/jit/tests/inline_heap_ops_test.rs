@@ -59,7 +59,10 @@ fn interpret(eval: &mut Context, f: &ByteCodeFunction, args: Vec<Value>) -> Stri
 
 fn native(ctx_ptr: *mut u8, leaf: &CompiledLeaf, args: &[Value], what: &str) -> String {
     match leaf.call(ctx_ptr, args) {
-        NativeRun::Ok(bits) => print_value(&Value::from_bits(bits)),
+        NativeRun::Ok(bits) => print_value(&unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
         NativeRun::Signal => flow_text(take_pending_flow().expect("flow stashed")),
         other => panic!("{what} must not leave native code: {other:?}"),
     }
@@ -708,7 +711,10 @@ fn a_store_loop_survives_collections_at_every_safe_point() {
         let cell = eval.eval_str("(cons nil nil)").expect("cell");
         match leaf.call(ctx_ptr, &[cell, Value::make_int(N)]) {
             NativeRun::Ok(bits) => {
-                let cell = Value::from_bits(bits);
+                let cell = unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                };
                 check_counted_list(cell.cons_car(), N, &format!("round {round}"));
             }
             other => panic!("the loop must run natively: {other:?}"),
@@ -1292,7 +1298,10 @@ fn a_cons_loop_allocates_inline_and_counts_exactly() {
 
         let before = conses_counted();
         let got = match leaf.call(ctx_ptr, &[Value::make_int(N)]) {
-            NativeRun::Ok(bits) => Value::from_bits(bits),
+            NativeRun::Ok(bits) => unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            },
             other => panic!("{what}: the loop must run natively: {other:?}"),
         };
         let native_delta = conses_counted() - before;
@@ -1323,7 +1332,14 @@ fn osr_into_a_cons_loop_allocates_inline() {
     let Some(NativeRun::Ok(bits)) = run else {
         panic!("the OSR transfer must run the loop natively: {run:?}");
     };
-    check_counted_list(Value::from_bits(bits), 500, "osr");
+    check_counted_list(
+        unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        },
+        500,
+        "osr",
+    );
     assert_eq!(conses_counted() - before, 500);
     assert_eq!(ctx.jit_root_stack_top, 0);
 }
@@ -1415,7 +1431,10 @@ fn float_boxes_are_inline_and_counted_once() {
         let b = Value::make_float(2.0);
         let before = floats_counted();
         let product = match leaf.call(ctx_ptr, &[a, b]) {
-            NativeRun::Ok(bits) => Value::from_bits(bits),
+            NativeRun::Ok(bits) => unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            },
             other => panic!("{mode:?}: must run natively: {other:?}"),
         };
         assert_eq!(product.xfloat(), 3.0, "{mode:?}");
@@ -1452,7 +1471,14 @@ fn the_inline_alloc_knob_turns_inline_allocation_off() {
     }) else {
         panic!("the loop must run natively");
     };
-    check_counted_list(Value::from_bits(bits), 300, "knob off");
+    check_counted_list(
+        unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        },
+        300,
+        "knob off",
+    );
     assert_eq!(conses_counted() - before, 300);
 }
 

@@ -169,7 +169,10 @@ fn run(ev: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> (String, Shims)
     let before = shims();
     let ctx = ev as *mut Context as *mut u8;
     let answer = match leaf.call(ctx, args) {
-        NativeRun::Ok(bits) => print_value(&Value::from_bits(bits)),
+        NativeRun::Ok(bits) => print_value(&unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
         NativeRun::Signal => flow_text(take_pending_flow().expect("flow stashed")),
         other => panic!("must not leave native code: {other:?}"),
     };

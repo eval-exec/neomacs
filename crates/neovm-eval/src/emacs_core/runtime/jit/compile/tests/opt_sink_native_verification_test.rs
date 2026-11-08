@@ -156,7 +156,10 @@ fn independent(
     let NativeRun::Ok(bits) = outcome else {
         panic!("actual native source success required: {outcome:?}")
     };
-    let actual = Value::from_bits(bits);
+    let actual = unsafe {
+        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+        Value::from_bits(bits)
+    };
     roots.add(&[actual]);
     assert_eq!(pair(actual), expected);
     assert_eq!(ctx.gc_count - before, 1);

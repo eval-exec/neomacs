@@ -77,7 +77,10 @@ fn interpret(eval: &mut Context, f: &ByteCodeFunction, args: Vec<Value>) -> Stri
 
 fn native(ctx_ptr: *mut u8, leaf: &CompiledLeaf, args: &[Value], what: &str) -> String {
     match leaf.call(ctx_ptr, args) {
-        NativeRun::Ok(bits) => show(Value::from_bits(bits)),
+        NativeRun::Ok(bits) => show(unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
         NativeRun::Signal => flow_text(take_pending_flow().expect("flow stashed")),
         other => panic!("{what} must not leave native code: {other:?}"),
     }

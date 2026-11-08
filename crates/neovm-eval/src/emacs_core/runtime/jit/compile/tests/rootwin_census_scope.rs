@@ -151,7 +151,13 @@ fn assert_successor_census(entry: NativeEntry) {
     ) else {
         panic!("the successor must finish natively")
     };
-    assert_eq!(Value::from_bits(bits), expected);
+    assert_eq!(
+        unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        },
+        expected
+    );
 }
 
 #[test]

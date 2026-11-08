@@ -521,7 +521,10 @@ fn a_subr_spec_site_under_compiler_overrides_takes_the_generic_call() {
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
     let arg = Value::symbol("zzz");
     let run = || match leaf.call(ctx, &[arg]) {
-        NativeRun::Ok(bits) => crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+        NativeRun::Ok(bits) => crate::emacs_core::print::print_value(&unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
         other => format!("{other:?}"),
     };
     let counts = || {

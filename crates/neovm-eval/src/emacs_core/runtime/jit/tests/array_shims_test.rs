@@ -90,7 +90,10 @@ fn interpret(eval: &mut Context, f: &ByteCodeFunction, args: Vec<Value>) -> Stri
 
 fn native(ctx_ptr: *mut u8, leaf: &CompiledLeaf, args: &[Value], what: &str) -> String {
     match leaf.call(ctx_ptr, args) {
-        NativeRun::Ok(bits) => print_value(&Value::from_bits(bits)),
+        NativeRun::Ok(bits) => print_value(&unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
         NativeRun::Signal => flow_text(take_pending_flow().expect("flow stashed")),
         other => panic!("{what} must not leave native code: {other:?}"),
     }
@@ -339,7 +342,10 @@ fn array_signals_are_caught_by_a_leaf_local_handler() {
         let v = eval.eval_str("(vector 7 8)").expect("v");
         match leaf.call(ctx_ptr, &[v, Value::make_int(9)]) {
             NativeRun::Ok(bits) => assert_eq!(
-                print_value(&Value::from_bits(bits)),
+                print_value(&unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                }),
                 "(caught (args-out-of-range [7 8] 9))",
                 "{op:?}"
             ),
@@ -347,7 +353,10 @@ fn array_signals_are_caught_by_a_leaf_local_handler() {
         }
         match leaf.call(ctx_ptr, &[v, Value::make_int(1)]) {
             NativeRun::Ok(bits) => assert_eq!(
-                print_value(&Value::from_bits(bits)),
+                print_value(&unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                }),
                 if extra.is_some() { "1" } else { "8" },
                 "{op:?}"
             ),
@@ -392,7 +401,10 @@ fn array_site_edges_keep_the_residual_alive() {
         )
         .expect("hook");
         let check = |bits: usize, what: &str| {
-            let h = Value::from_bits(bits);
+            let h = unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            };
             assert!(h.is_cons(), "{what}: h survived (got {h:?})");
             assert_eq!(h.cons_car(), Value::make_int(1), "{what}: car intact");
             assert_eq!(h.cons_cdr(), Value::make_int(2), "{what}: cdr intact");
@@ -638,7 +650,10 @@ fn a_later_call_site_roots_what_only_the_aset_fallback_stored() {
         let v = eval.eval_str("(vector 0 0)").expect("v");
         match leaf.call(ctx_ptr, &[v]) {
             NativeRun::Ok(bits) => {
-                let h = Value::from_bits(bits);
+                let h = unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                };
                 assert!(h.is_cons(), "h survived the collection (got {h:?})");
                 assert_eq!(h.cons_car(), Value::make_int(1), "car intact");
                 assert_eq!(h.cons_cdr(), Value::make_int(2), "cdr intact");

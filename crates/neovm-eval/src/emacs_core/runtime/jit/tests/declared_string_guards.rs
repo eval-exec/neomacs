@@ -78,15 +78,24 @@ fn declared_multibyte_high_bytes_miss_jit_raw_byte_aref_and_aset_guards() {
     let name = declared_name();
     let args = [name, Value::fixnum(0)];
     assert_eq!(
-        Value::from_bits(
-            // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
-            unsafe { neovm_jit_aref(context_ptr, args[0].bits() as i64, args[1].bits() as i64) }
-                as usize
-        ),
+        unsafe {
+            /* SAFETY: the shim success word is Value::bits; the signal word is not decoded */
+            Value::from_bits(
+                // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
+                unsafe { neovm_jit_aref(context_ptr, args[0].bits() as i64, args[1].bits() as i64) }
+                    as usize,
+            )
+        },
         Value::fixnum(0xaaa9),
     );
     match aref.call(context_ptr, &args) {
-        NativeRun::Ok(bits) => assert_eq!(Value::from_bits(bits), Value::fixnum(0xaaa9)),
+        NativeRun::Ok(bits) => assert_eq!(
+            unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            },
+            Value::fixnum(0xaaa9)
+        ),
         other => panic!("bounded decoder should return a character: {other:?}"),
     }
     let replacement = Value::fixnum(65);
@@ -121,7 +130,13 @@ fn declared_multibyte_high_bytes_miss_jit_raw_byte_aref_and_aset_guards() {
     ] {
         let array = Value::heap_string(string);
         match aref.call(context_ptr, &[array, Value::fixnum(0)]) {
-            NativeRun::Ok(bits) => assert_eq!(Value::from_bits(bits), Value::fixnum(expected)),
+            NativeRun::Ok(bits) => assert_eq!(
+                unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                },
+                Value::fixnum(expected)
+            ),
             other => panic!("ordinary string access changed: {other:?}"),
         }
     }

@@ -100,7 +100,10 @@ fn check_all(force_deopt: bool) {
                     };
                     let direct0 = crate::emacs_core::bytecode::vm::arith_integer_fast_count();
                     let got = match leaf.call(ctx_ptr, &args) {
-                        NativeRun::Ok(bits) => print_value(&Value::from_bits(bits)),
+                        NativeRun::Ok(bits) => print_value(&unsafe {
+                            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                            Value::from_bits(bits)
+                        }),
                         other if force_deopt => {
                             // The harness may send the whole leaf to the
                             // interpreter; its answer must still agree.

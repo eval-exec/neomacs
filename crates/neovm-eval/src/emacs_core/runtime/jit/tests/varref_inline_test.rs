@@ -53,7 +53,10 @@ fn native(ctx_ptr: *mut u8, f: &ByteCodeFunction) -> (String, usize) {
     let leaf = compile_bytecode_function(f).expect("compiles");
     VARREF_SHIM_CALLS.with(|c| c.set(0));
     let answer = match leaf.call(ctx_ptr, &[]) {
-        NativeRun::Ok(bits) => print_value(&Value::from_bits(bits)),
+        NativeRun::Ok(bits) => print_value(&unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
         NativeRun::Signal => flow_text(take_pending_flow().expect("flow stashed")),
         other => panic!("must not leave native code: {other:?}"),
     };
@@ -165,7 +168,13 @@ fn reads_survive_obarray_growth_and_absent_symbols() {
     eval_ok(&mut eval, "(setq vri-grow 'after)");
     VARREF_SHIM_CALLS.with(|c| c.set(0));
     match leaf.call(ctx_ptr, &[]) {
-        NativeRun::Ok(bits) => assert_eq!(print_value(&Value::from_bits(bits)), "after"),
+        NativeRun::Ok(bits) => assert_eq!(
+            print_value(&unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
+            "after"
+        ),
         other => panic!("{other:?}"),
     }
     assert_eq!(VARREF_SHIM_CALLS.with(|c| c.get()), 0, "still inline");
@@ -193,14 +202,23 @@ fn a_void_variable_reaches_a_leaf_local_handler() {
     let leaf = compile_bytecode_function(&f).expect("compiles");
     match leaf.call(ctx_ptr, &[]) {
         NativeRun::Ok(bits) => assert_eq!(
-            print_value(&Value::from_bits(bits)),
+            print_value(&unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
             "(caught (void-variable vri-void))"
         ),
         other => panic!("{other:?}"),
     }
     eval_ok(&mut eval, "(setq vri-void 5)");
     match leaf.call(ctx_ptr, &[]) {
-        NativeRun::Ok(bits) => assert_eq!(print_value(&Value::from_bits(bits)), "5"),
+        NativeRun::Ok(bits) => assert_eq!(
+            print_value(&unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
+            "5"
+        ),
         other => panic!("{other:?}"),
     }
 }
@@ -244,7 +262,10 @@ fn a_later_call_site_roots_what_only_the_varref_shim_stored() {
     for _ in 0..3 {
         match leaf.call(ctx_ptr, &[]) {
             NativeRun::Ok(bits) => {
-                let h = Value::from_bits(bits);
+                let h = unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                };
                 assert!(h.is_cons(), "h survived the collection (got {h:?})");
                 assert_eq!(h.cons_car(), Value::fixnum(1));
                 assert_eq!(h.cons_cdr(), Value::fixnum(2));
@@ -327,7 +348,10 @@ fn raw_varref_signal_handler_receives_tagged_residual_values() {
         panic!("{result:?}")
     };
     assert_eq!(
-        print_value(&Value::from_bits(bits)),
+        print_value(&unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
         "(0 (void-variable raw-vri-void))"
     );
     assert_eq!(eval.jit_root_stack_top, 0);
@@ -336,7 +360,13 @@ fn raw_varref_signal_handler_receives_tagged_residual_values() {
     let NativeRun::Ok(bits) = result else {
         panic!("{result:?}")
     };
-    assert_eq!(print_value(&Value::from_bits(bits)), "(0 5)");
+    assert_eq!(
+        print_value(&unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
+        "(0 5)"
+    );
     assert_eq!(eval.jit_root_stack_top, 0);
 }
 
@@ -384,7 +414,13 @@ fn raw_varref_keeps_heap_roots_live_at_a_later_collecting_call() {
             let NativeRun::Ok(bits) = result else {
                 panic!("{name}: {result:?}")
             };
-            assert_eq!(print_value(&Value::from_bits(bits)), "(42 (1 . 2))");
+            assert_eq!(
+                print_value(&unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                }),
+                "(42 (1 . 2))"
+            );
             assert_eq!(eval.jit_root_stack_top, 0);
         }
         assert!(eval.tagged_heap.gc_collections() >= before + 3);
@@ -407,7 +443,10 @@ fn reused_alias_reader_observes_retargeting_and_contextual_values() {
         assert_eq!(want, expected);
         VARREF_SHIM_CALLS.with(|c| c.set(0));
         let got = match leaf.call(eval as *mut Context as *mut u8, &[]) {
-            NativeRun::Ok(bits) => print_value(&Value::from_bits(bits)),
+            NativeRun::Ok(bits) => print_value(&unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
             NativeRun::Signal => flow_text(take_pending_flow().expect("flow stashed")),
             other => panic!("alias read left native code: {other:?}"),
         };
@@ -506,7 +545,13 @@ fn aliases_of_buffer_identities_keep_original_name_context() {
         );
         assert_eq!(interpret(&mut eval, &f), expected);
         match leaf.call(&mut eval as *mut Context as *mut u8, &[]) {
-            NativeRun::Ok(bits) => assert_eq!(print_value(&Value::from_bits(bits)), expected),
+            NativeRun::Ok(bits) => assert_eq!(
+                print_value(&unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                }),
+                expected
+            ),
             other => panic!("contextual alias read: {other:?}"),
         }
     }
@@ -528,7 +573,10 @@ fn reused_local_reader_observes_cache_misses_writes_and_unbinding() {
         // Run native first: interpretation would otherwise warm the cache and
         // hide the native miss after a buffer/structural-epoch change.
         let got = match leaf.call(eval as *mut Context as *mut u8, &[]) {
-            NativeRun::Ok(bits) => print_value(&Value::from_bits(bits)),
+            NativeRun::Ok(bits) => print_value(&unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
             NativeRun::Signal => flow_text(take_pending_flow().expect("flow stashed")),
             other => panic!("localized read left native code: {other:?}"),
         };

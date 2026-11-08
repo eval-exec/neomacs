@@ -203,7 +203,10 @@ fn osr_poll_switch_siblings_preserve_cadence_and_native_list_roots() {
         let NativeRun::Ok(bits) = result else {
             panic!("{result:?}");
         };
-        let mut list = Value::from_bits(bits);
+        let mut list = unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        };
         for expected in 1..=n {
             assert!(list.is_cons(), "missing cell {expected}");
             assert_eq!(list.cons_car(), Value::make_int(expected));
@@ -247,7 +250,10 @@ fn osr_poll_unconditional_edge_keeps_native_list_alive_across_gc() {
     let NativeRun::Ok(bits) = result else {
         panic!("{result:?}");
     };
-    let mut list = Value::from_bits(bits);
+    let mut list = unsafe {
+        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+        Value::from_bits(bits)
+    };
     for n in 1..=1024 {
         assert!(list.is_cons(), "missing cell {n}");
         assert_eq!(list.cons_car(), Value::make_int(n));

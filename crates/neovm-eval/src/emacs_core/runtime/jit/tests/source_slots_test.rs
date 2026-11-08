@@ -103,7 +103,10 @@ fn compile(ev: &Context, f: &ByteCodeFunction) -> CompiledLeaf {
 
 fn run(ev: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> Result<Value, String> {
     match leaf.call(ev as *mut Context as *mut u8, args) {
-        NativeRun::Ok(bits) => Ok(Value::from_bits(bits)),
+        NativeRun::Ok(bits) => Ok(unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
         NativeRun::Signal => Err(match take_pending_flow().expect("a flow").into_kind() {
             neovm_value::error::FlowKind::Signal(sig) => format!(
                 "signal {} {:?}",

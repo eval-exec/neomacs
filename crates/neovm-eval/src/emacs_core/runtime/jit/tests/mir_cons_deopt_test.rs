@@ -238,7 +238,10 @@ fn mir_singleton_escaping_lists_preserve_freshness_elements_and_mutation() {
         let NativeRun::Ok(bits) = leaf.call(ctx, &[element]) else {
             panic!("singleton construction must run natively")
         };
-        let list = Value::from_bits(bits);
+        let list = unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        };
         assert!(list.is_cons());
         assert_eq!(list.cons_car().bits(), element.bits());
         assert!(list.cons_cdr().is_nil());
@@ -265,7 +268,10 @@ fn mir_singleton_escaping_lists_preserve_freshness_elements_and_mutation() {
     let NativeRun::Ok(bits) = leaf.call(ctx, &[Value::NIL, element]) else {
         panic!("mutating an escaping singleton must run natively")
     };
-    let list = Value::from_bits(bits);
+    let list = unsafe {
+        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+        Value::from_bits(bits)
+    };
     assert_eq!(list.cons_car().bits(), element.bits());
     assert!(list.cons_cdr().is_nil());
 }

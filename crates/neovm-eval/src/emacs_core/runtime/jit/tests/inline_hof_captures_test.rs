@@ -217,7 +217,13 @@ fn inline_hof_captures_empty_mapping_skips_the_witness() {
     let NativeRun::Ok(bits) = leaf.call(&mut ctx as *mut Context as *mut u8, &[Value::NIL]) else {
         panic!("empty mapping has no callback or capture witness")
     };
-    assert_eq!(Value::from_bits(bits), Value::NIL);
+    assert_eq!(
+        unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        },
+        Value::NIL
+    );
     assert_eq!(ctx.depth, 0);
     assert!(ctx.specpdl.is_empty());
 }
@@ -348,7 +354,10 @@ fn inline_hof_flags_keep_conditional_captured_count_and_boundaries() {
         panic!("fixnum conditional capture fixture must run natively");
     };
     assert_eq!(
-        print_value(&Value::from_bits(bits)),
+        print_value(&unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
         print_value(&reference)
     );
     assert_eq!(cell.cons_car().as_int(), Some(4));
@@ -413,7 +422,10 @@ fn inline_hof_flags_keep_all_four_branch_stack_effects() {
         // Ordinary mapcar independently exercises the callback stack effects;
         // ElsePop's taken path returns the retained exact Lisp T or NIL.
         assert_eq!(
-            print_value(&Value::from_bits(bits)),
+            print_value(&unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
             print_value(&reference),
             "{branch:?}",
         );
@@ -502,8 +514,11 @@ fn assert_flag_mapping_native(
     let NativeRun::Ok(bits) = leaf.call(ctx as *mut Context as *mut u8, &[sequence]) else {
         panic!("the successful flag fixture must execute its native HOF path");
     };
-    let actual = neovm_value::value::list_to_vec(&Value::from_bits(bits))
-        .expect("mapcar returns a proper list");
+    let actual = neovm_value::value::list_to_vec(&unsafe {
+        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+        Value::from_bits(bits)
+    })
+    .expect("mapcar returns a proper list");
     assert_eq!(actual.len(), expected.len());
     for (&actual, &expected) in actual.iter().zip(expected) {
         if let Some(expected_float) = expected.as_float() {
@@ -1059,7 +1074,13 @@ fn inline_hof_flags_signal_cleanup_allows_next_mapping() {
     let NativeRun::Ok(bits) = leaf.call(&mut ctx as *mut Context as *mut u8, &[valid]) else {
         panic!("a handled callback signal must leave the next valid mapping usable");
     };
-    assert_eq!(print_value(&Value::from_bits(bits)), "(777)");
+    assert_eq!(
+        print_value(&unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
+        "(777)"
+    );
     assert_eq!(cell.cons_car().as_int(), Some(3));
     assert_eq!(ctx.depth, 0);
     assert!(ctx.specpdl.is_empty() && ctx.bc_buf.is_empty() && ctx.bc_frames.is_empty());

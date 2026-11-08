@@ -214,7 +214,10 @@ fn run(ev: &mut Context, engine: Engine, prog: &Prog, var: &str, args: &[Value])
             .expect("program lowers");
             let ctx = ev as *mut Context as *mut u8;
             match leaf.call(ctx, args) {
-                NativeRun::Ok(bits) => print_value(&Value::from_bits(bits)),
+                NativeRun::Ok(bits) => print_value(&unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                }),
                 NativeRun::Signal => flow_text(take_pending_flow().expect("flow stashed")),
                 other => format!("ERR unexpected {other:?}"),
             }

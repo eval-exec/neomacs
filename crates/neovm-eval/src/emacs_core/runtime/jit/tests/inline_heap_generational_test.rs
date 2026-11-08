@@ -91,7 +91,10 @@ fn store_function(op: Op) -> ByteCodeFunction {
 
 fn native(context: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> Value {
     match leaf.call(context as *mut Context as *mut u8, args) {
-        NativeRun::Ok(bits) => Value::from_bits(bits),
+        NativeRun::Ok(bits) => unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        },
         other => panic!("the leaf must complete natively: {other:?}"),
     }
 }

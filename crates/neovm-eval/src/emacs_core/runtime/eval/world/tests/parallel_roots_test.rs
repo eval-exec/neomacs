@@ -274,7 +274,10 @@ fn a6_owned_admission_pins_shell_census_and_restores_empty_weak_table() {
                         .major
                 );
                 era.with_stopped_heap_for_test(&stopped, |heap| {
-                    let shell = TaggedValue::from_bits(shell_bits);
+                    let shell = unsafe {
+                        /* SAFETY: inverse of Value::bits on this live value */
+                        TaggedValue::from_bits(shell_bits)
+                    };
                     assert!(heap.owns_heap_value_for_test(shell));
                     assert_eq!(shell.cons_car_unobserved().as_fixnum(), Some(11));
                     assert_eq!(shell.cons_cdr_unobserved().as_fixnum(), Some(13));

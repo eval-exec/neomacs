@@ -180,7 +180,10 @@ impl Probe {
         )
         .expect("no signal")
         .expect("the caller runs native");
-        let got = Value::from_bits(bits);
+        let got = unsafe {
+            /* SAFETY: the compiled-call Ok word is a real Value's tagged bits */
+            Value::from_bits(bits)
+        };
         assert_eq!(print_value(&got), want, "native vs interp");
         let callee = self.callee();
         finish_pending(&mut self.ev, callee, got);
@@ -414,7 +417,14 @@ fn closure_instances_share_the_reopt_state() {
     );
     let fl = || Value::make_float(3.0); // made per run (GC note)
     let got = run(&f2, v2, fl()).expect("a precise resume returns the value");
-    assert_eq!(Value::from_bits(got).as_float(), Some(27.0));
+    assert_eq!(
+        unsafe {
+            /* SAFETY: the compiled-call Ok word is a real Value's tagged bits. */
+            Value::from_bits(got)
+        }
+        .as_float(),
+        Some(27.0)
+    );
     assert_eq!(cache_entry_kind_for_test(id), "deferred-reopt");
     assert_eq!(f1.jit_runtime().reopt_count(), 1, "seen through instance 1");
     assert_eq!(run(&f1, v1, fl()), None, "interpreted during the window");
@@ -896,7 +906,10 @@ fn inline_epoch_moved_recompiles_once() {
             crate::emacs_core::jit::test_support::run_compiled(ctx, &f, v, &[Value::make_int(n)])
                 .expect("no signal")
                 .expect("precise: resumed, not rerun");
-        Value::from_bits(bits)
+        unsafe {
+            /* SAFETY: the compiled-call Ok word is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }
     };
     assert_eq!(run(4), Value::make_int(14)); // 0 + 1 + 4 + 9
     let leaf = cached_leaf(&f).expect("compiled");
@@ -982,7 +995,13 @@ fn backoff_climbs_to_generic_then_interpreter() {
         if let Some(bits) = crate::emacs_core::jit::test_support::run_compiled(ctx, &f, v, &args)
             .expect("no signal")
         {
-            assert_eq!(print_value(&Value::from_bits(bits)), want);
+            assert_eq!(
+                print_value(&unsafe {
+                    /* SAFETY: the compiled-call Ok word is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                }),
+                want
+            );
         }
     };
     run([one; 4]);

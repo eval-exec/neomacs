@@ -793,7 +793,13 @@ fn retired_leaf_is_marked_and_its_constants_stay_rooted() {
             .expect("runs");
     let id = f.jit_runtime().compiled_id().expect("compiled");
     assert!(is_compiled_for_test(id), "the body compiles");
-    assert!(got.is_some_and(|bits| Value::from_bits(bits).is_string()));
+    assert!(got.is_some_and(|bits| {
+        unsafe {
+            /* SAFETY: the compiled-call Ok word is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }
+        .is_string()
+    }));
     let leaf = compiled_leaf_ptr_for_test(id).expect("cached");
     // SAFETY: the cache holds the leaf (and, after the eviction, its retired list).
     let leaf = unsafe { &*leaf };

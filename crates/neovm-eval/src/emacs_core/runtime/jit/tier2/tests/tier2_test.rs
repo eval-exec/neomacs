@@ -95,7 +95,10 @@ fn run(ctx: &mut Context, f: &ByteCodeFunction, args: &[Value]) -> Option<Value>
     let fv = Value::NIL;
     crate::emacs_core::jit::test_support::run_compiled(ctx, f, fv, args)
         .expect("no signal")
-        .map(|bits| Value::from_bits(bits))
+        .map(|bits| unsafe {
+            /* SAFETY: the compiled-call Ok word is a real Value's tagged bits */
+            Value::from_bits(bits)
+        })
 }
 
 /// The current leaf of `f` on this thread.

@@ -125,7 +125,10 @@ pub(super) fn native_result(
     args: &[Value],
 ) -> Result<Value, Flow> {
     match leaf.call_consts(ctx as *mut Context as *mut u8, f.constants.as_ptr(), args) {
-        NativeRun::Ok(bits) => Ok(Value::from_bits(bits)),
+        NativeRun::Ok(bits) => Ok(unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
         NativeRun::DeoptAt(exit) => resume(ctx, f, &exit),
         NativeRun::Signal => Err(super::super::shims::take_pending_flow()
             .expect("native signal carries its actual pending Flow")),

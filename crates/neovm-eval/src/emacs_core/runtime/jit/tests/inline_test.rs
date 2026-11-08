@@ -179,9 +179,12 @@ fn an_inlined_call_runs_and_deopts_as_the_interpreter_does() {
     let caller_value = Value::make_bytecode(caller);
     crate::emacs_core::eval::push_scratch_gc_root(caller_value);
     let leaf = crate::emacs_core::jit::compile::compile_bytecode_function_with(
-        Value::from_bits(caller_value.bits())
-            .get_bytecode_data()
-            .expect("bytecode"),
+        unsafe {
+            /* SAFETY: inverse of Value::bits on this live value */
+            Value::from_bits(caller_value.bits())
+        }
+        .get_bytecode_data()
+        .expect("bytecode"),
         Some(&ev.obarray),
     )
     .expect("the fused caller compiles");
@@ -267,9 +270,12 @@ fn a_deopt_after_a_spliced_region_resumes_the_original_body() {
         "the splice has to shift the caller's tail for this test to mean anything"
     );
     crate::emacs_core::jit::compile::compile_bytecode_function_with(
-        Value::from_bits(caller_value.bits())
-            .get_bytecode_data()
-            .expect("bytecode"),
+        unsafe {
+            /* SAFETY: inverse of Value::bits on this live value */
+            Value::from_bits(caller_value.bits())
+        }
+        .get_bytecode_data()
+        .expect("bytecode"),
         Some(&ev.obarray),
     )
     .expect("the fused caller compiles");
@@ -332,9 +338,12 @@ fn a_spliced_region_rechecks_the_callee_it_speculated_on() {
     let caller_value = Value::make_bytecode(caller);
     crate::emacs_core::eval::push_scratch_gc_root(caller_value);
     crate::emacs_core::jit::compile::compile_bytecode_function_with(
-        Value::from_bits(caller_value.bits())
-            .get_bytecode_data()
-            .expect("bytecode"),
+        unsafe {
+            /* SAFETY: inverse of Value::bits on this live value */
+            Value::from_bits(caller_value.bits())
+        }
+        .get_bytecode_data()
+        .expect("bytecode"),
         Some(&ev.obarray),
     )
     .expect("the fused caller compiles");
@@ -510,9 +519,12 @@ fn a_caller_handler_catches_in_the_original_body_after_a_deopt() {
     let caller_value = Value::make_bytecode(caller);
     crate::emacs_core::eval::push_scratch_gc_root(caller_value);
     crate::emacs_core::jit::compile::compile_bytecode_function_with(
-        Value::from_bits(caller_value.bits())
-            .get_bytecode_data()
-            .expect("bytecode"),
+        unsafe {
+            /* SAFETY: inverse of Value::bits on this live value */
+            Value::from_bits(caller_value.bits())
+        }
+        .get_bytecode_data()
+        .expect("bytecode"),
         Some(&ev.obarray),
     )
     .expect("the fused caller compiles");

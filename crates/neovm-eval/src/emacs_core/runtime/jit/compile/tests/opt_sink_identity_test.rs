@@ -276,7 +276,10 @@ fn native(
         source.jit_constant_base(),
         args,
     ) {
-        NativeRun::Ok(bits) => Value::from_bits(bits),
+        NativeRun::Ok(bits) => unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        },
         other => panic!("actual native success required: {other:?}"),
     }
 }

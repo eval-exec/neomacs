@@ -135,7 +135,10 @@ fn mutator(role: usize, commands: Receiver<Command>, reports: Sender<Report>) {
                 .expect("ready private leaf installs");
             assert_eq!(bits, expected_bits);
             assert_eq!(cache::cache_entry_kind_for_test(id), "compiled");
-            let value = crate::emacs_core::print::print_value(&Value::from_bits(bits));
+            let value = crate::emacs_core::print::print_value(&unsafe {
+                /* SAFETY: the compiled-call Ok word is a real Value's tagged bits */
+                Value::from_bits(bits)
+            });
             reports
                 .send(Report::Installed {
                     role,

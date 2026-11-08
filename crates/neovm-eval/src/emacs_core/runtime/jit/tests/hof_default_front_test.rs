@@ -104,7 +104,13 @@ fn default_front_inlines_an_admitted_mapcar_callback() {
     let NativeRun::Ok(bits) = leaf.call(&mut ctx as *mut Context as *mut u8, &[list]) else {
         panic!("an all-fixnum list maps natively");
     };
-    assert_eq!(print_value(&Value::from_bits(bits)), "(2 42)");
+    assert_eq!(
+        print_value(&unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
+        "(2 42)"
+    );
 }
 
 #[test]

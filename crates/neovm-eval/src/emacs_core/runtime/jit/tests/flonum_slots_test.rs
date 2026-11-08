@@ -67,7 +67,10 @@ fn run_counting(ev: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> (Nativ
 
 fn ok_value(run: NativeRun) -> Value {
     match run {
-        NativeRun::Ok(bits) => Value::from_bits(bits),
+        NativeRun::Ok(bits) => unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        },
         other => panic!("expected a native result, got {other:?}"),
     }
 }

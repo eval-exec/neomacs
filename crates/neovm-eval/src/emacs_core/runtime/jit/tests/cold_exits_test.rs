@@ -400,7 +400,13 @@ fn cold_exits_run_the_corpus_unchanged() {
     // Fresh objects differ in identity between two runs: compare printed.
     let describe = |run: crate::emacs_core::jit::compile::NativeRun| match run {
         crate::emacs_core::jit::compile::NativeRun::Ok(bits) => {
-            format!("ok {}", print_value(&Value::from_bits(bits)))
+            format!(
+                "ok {}",
+                print_value(&unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                })
+            )
         }
         crate::emacs_core::jit::compile::NativeRun::DeoptAt(resume) => format!(
             "deopt-at {} {:?}",

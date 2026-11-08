@@ -357,7 +357,11 @@ fn mir_inline_keeps_a_callees_non_fixnum_feedback_on_the_native_call_path() {
             panic!("{feedback:?}: {result:?}")
         };
         assert_eq!(
-            Value::from_bits(bits).as_float(),
+            unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }
+            .as_float(),
             Some(if literal { 3.0 } else { 16.0 })
         );
         assert_eq!(ev.jit_root_stack_top, 0);

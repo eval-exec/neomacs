@@ -97,7 +97,10 @@ fn run(ev: &mut Context, leaf: &CompiledLeaf) -> (String, usize) {
     VARREF_SHIM_CALLS.with(|c| c.set(0));
     let ctx = ev as *mut Context as *mut u8;
     let got = match leaf.call(ctx, &[]) {
-        NativeRun::Ok(bits) => print_value(&Value::from_bits(bits)),
+        NativeRun::Ok(bits) => print_value(&unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
         NativeRun::Signal => answer(Err(take_pending_flow().expect("flow stashed"))),
         other => panic!("must not leave native code: {other:?}"),
     };

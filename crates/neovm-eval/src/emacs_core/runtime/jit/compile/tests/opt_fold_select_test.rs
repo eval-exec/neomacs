@@ -195,7 +195,13 @@ fn opt_fold_select_mixed_local_and_incoming_bool_materializes_gnu_boolean() {
                     else {
                         panic!("native Bool Select must return")
                     };
-                    assert_eq!(Value::from_bits(bits), expected);
+                    assert_eq!(
+                        unsafe {
+                            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                            Value::from_bits(bits)
+                        },
+                        expected
+                    );
                 }
             }
         }

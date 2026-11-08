@@ -226,7 +226,10 @@ fn jit_bg_worker_installs_under_a_collection_per_allocation() {
                 unsafe { crate::emacs_core::jit::try_run_compiled(ctx, bc, Value::NIL, &[]) }
                     .expect("no signal");
             let value = match bits {
-                Some(bits) => Value::from_bits(bits),
+                Some(bits) => unsafe {
+                    /* SAFETY: the compiled-call Ok word is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                },
                 // Interpreted this call (cold, or pending).
                 None => ev
                     .apply(Value::symbol(symbol), vec![])

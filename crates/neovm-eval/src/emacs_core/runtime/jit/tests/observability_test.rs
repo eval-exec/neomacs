@@ -102,7 +102,15 @@ fn jit_obs_tier_up_seam_deopt_is_counted_on_the_cached_leaf() {
     assert_eq!(before.id, id, "the cache stamps the leaf with its id");
     assert_eq!(before.deopt_at + before.deopt_rerun, 0);
     if let Some(out) = run(Value::make_float(1.5)) {
-        assert_eq!(Value::from_bits(out).as_float(), Some(2.5), "resumed");
+        assert_eq!(
+            unsafe {
+                /* SAFETY: the compiled-call Ok word is a real Value's tagged bits */
+                Value::from_bits(out)
+            }
+            .as_float(),
+            Some(2.5),
+            "resumed"
+        );
     }
     let after = row_for(id, cache::LeafState::Live).obs;
     assert_eq!(after.deopt_at + after.deopt_rerun, 1, "{after:?}");
@@ -210,7 +218,14 @@ fn jit_obs_direct_path_deopt_counted_once() {
     assert_eq!(base.deopt_at + base.deopt_rerun, 0);
     for _ in 0..2 {
         match leaf.call(ctx, &[Value::make_float(5.0)]) {
-            NativeRun::Ok(bits) => assert_eq!(Value::from_bits(bits).as_float(), Some(4.0)),
+            NativeRun::Ok(bits) => assert_eq!(
+                unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                }
+                .as_float(),
+                Some(4.0)
+            ),
             other => panic!("expected the resumed result, got {other:?}"),
         }
     }

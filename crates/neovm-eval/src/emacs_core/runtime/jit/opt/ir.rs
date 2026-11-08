@@ -57,7 +57,10 @@ impl ValueBits {
     #[cfg(test)]
     #[doc(hidden)]
     pub fn to_value(self) -> LispValue {
-        LispValue::from_bits(self.0 as usize)
+        unsafe {
+            /* SAFETY: ValueBits::from_value stored Value::bits */
+            LispValue::from_bits(self.0 as usize)
+        }
     }
 }
 

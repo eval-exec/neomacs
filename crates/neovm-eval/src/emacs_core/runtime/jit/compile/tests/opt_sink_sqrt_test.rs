@@ -112,7 +112,10 @@ fn native_ok(
     else {
         panic!("actual native positive case")
     };
-    Value::from_bits(bits)
+    unsafe {
+        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+        Value::from_bits(bits)
+    }
 }
 fn cold(
     ctx: &mut Context,

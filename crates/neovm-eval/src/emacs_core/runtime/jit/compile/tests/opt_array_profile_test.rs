@@ -117,7 +117,10 @@ fn native(ctx: &mut Context, f: &ByteCodeFunction, leaf: &CompiledLeaf, arg: Val
     else {
         panic!("recording preserves baseline native Aref success")
     };
-    print_value(&Value::from_bits(bits))
+    print_value(&unsafe {
+        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+        Value::from_bits(bits)
+    })
 }
 
 #[test]
@@ -272,7 +275,13 @@ fn opt_array_native_kind_transition_rearms_stable_version_but_samples_do_not() {
         let bits = unsafe { cache::try_run_compiled(ctx, &f, Value::NIL, &[arg]) }
             .unwrap()
             .unwrap();
-        assert_eq!(print_value(&Value::from_bits(bits)), answer);
+        assert_eq!(
+            print_value(&unsafe {
+                /* SAFETY: the compiled-call Ok word is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
+            answer
+        );
     };
     run(&mut ctx, vector, &a);
     run(&mut ctx, vector, &a);
@@ -359,7 +368,13 @@ fn opt_array_native_observed_dynamic_arefs_upgrade_and_serve_normal_entries() {
         let bits = unsafe { cache::try_run_compiled(&mut ctx, &f, Value::NIL, &[arg]) }
             .unwrap()
             .expect("ordinary cache entry ran natively");
-        assert_eq!(print_value(&Value::from_bits(bits)), answer);
+        assert_eq!(
+            print_value(&unsafe {
+                /* SAFETY: the compiled-call Ok word is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
+            answer
+        );
     }
     let id = f.jit_runtime().compiled_id().unwrap();
     let ptr = cache::compiled_leaf_ptr_for_test(id).unwrap();
@@ -398,7 +413,13 @@ fn opt_array_native_observed_dynamic_arefs_upgrade_and_serve_normal_entries() {
         let bits = unsafe { cache::try_run_compiled(&mut ctx, &f, Value::NIL, &[arg]) }
             .unwrap()
             .unwrap();
-        assert_eq!(print_value(&Value::from_bits(bits)), answer);
+        assert_eq!(
+            print_value(&unsafe {
+                /* SAFETY: the compiled-call Ok word is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
+            answer
+        );
     }
     assert_eq!(
         sites.site_at(2).unwrap().samples(),

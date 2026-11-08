@@ -129,7 +129,10 @@ fn tier0(ctx: &mut Context, source: &ByteCodeFunction, args: &[Value]) -> Result
 
 fn native_ok(ctx: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> Value {
     match leaf.call(ctx as *mut Context as *mut u8, args) {
-        NativeRun::Ok(bits) => Value::from_bits(bits),
+        NativeRun::Ok(bits) => unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        },
         other => panic!("recorded numeric site must finish natively without deopt: {other:?}"),
     }
 }

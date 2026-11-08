@@ -100,7 +100,10 @@ fn invoke(ctx: &mut Context, f: &ByteCodeFunction, sequence: Value) -> Result<Va
         compile::compile_bytecode_function_with(f, Some(&ctx.obarray)).expect("HOF compiles");
     let _ = ctx.debug_on_next_call_is_armed();
     match leaf.call(ctx as *mut Context as *mut u8, &[sequence]) {
-        NativeRun::Ok(bits) => Ok(Value::from_bits(bits)),
+        NativeRun::Ok(bits) => Ok(unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
         NativeRun::DeoptAt(resume) => {
             compile::resumed_chain::resume_deopt(ctx, f, Value::NIL, &leaf, *resume)
         }
@@ -348,7 +351,10 @@ fn inline_hof_runtime_native_mapc_mapcar_preserve_allocation_deltas() {
                     },
                     "{kind:?} length {len}: GNU-style bounded branch polls"
                 );
-                let value = Value::from_bits(bits);
+                let value = unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                };
                 ctx.push_vm_frame_root(value);
                 let native_delta = std::array::from_fn::<_, 7, _>(|i| {
                     Value::memory_use_counts_snapshot()[i] - before[i]

@@ -138,7 +138,10 @@ fn native(ctx: &mut Context, f: &ByteCodeFunction, leaf: &CompiledLeaf, args: &[
     else {
         panic!("successful source array case must finish NativeRun::Ok")
     };
-    Value::from_bits(bits)
+    unsafe {
+        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+        Value::from_bits(bits)
+    }
 }
 fn parity(
     ctx: &mut Context,
@@ -380,7 +383,10 @@ fn opt_range_native_actual_vector_record_arefs_elide_current_bounds_and_keep_err
                 );
             }
             NativeRun::Ok(bits) => assert_eq!(
-                print_value(&Value::from_bits(bits)),
+                print_value(&unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                }),
                 print_value(expected.as_ref().unwrap())
             ),
             other => panic!("baseline Aref outcome must be its ordinary success/signal: {other:?}"),

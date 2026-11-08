@@ -178,7 +178,10 @@ const SHAPES: &str = r#"(progn
 
 fn outcome(ev: &mut Context, run: NativeRun) -> String {
     match run {
-        NativeRun::Ok(bits) => crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+        NativeRun::Ok(bits) => crate::emacs_core::print::print_value(&unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
         NativeRun::Deopt => "deopt".into(),
         NativeRun::DeoptAt(resume) => format!("deopt-at {}", resume.pc),
         NativeRun::Signal => {

@@ -321,7 +321,13 @@ fn jit_arith_generic_results_and_frameless_signal() {
     let want = rooted(eval.eval_str("(* (expt 7 60) 12)").unwrap());
     match leaf.call(ctx_ptr, &[big, Value::fixnum(12)]) {
         NativeRun::Ok(bits) => {
-            assert_eq!(print_value(&Value::from_bits(bits)), print_value(&want))
+            assert_eq!(
+                print_value(&unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                }),
+                print_value(&want)
+            )
         }
         other => panic!("the generic site must answer natively: {other:?}"),
     }

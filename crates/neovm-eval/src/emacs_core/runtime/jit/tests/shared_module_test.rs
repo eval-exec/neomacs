@@ -67,8 +67,14 @@ fn compile_cached(ctx: *mut Context, f: &ByteCodeFunction) -> &'static CompiledL
 }
 
 fn call1(leaf: &CompiledLeaf, x: i64) -> Option<i64> {
-    leaf.call_for_test(&[Value::make_int(x)])
-        .map(|bits| Value::from_bits(bits).as_fixnum().expect("fixnum result"))
+    leaf.call_for_test(&[Value::make_int(x)]).map(|bits| {
+        unsafe {
+            /* SAFETY: the compiled-call Ok word is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }
+        .as_fixnum()
+        .expect("fixnum result")
+    })
 }
 
 fn is_shared(leaf: &CompiledLeaf) -> bool {
@@ -316,7 +322,13 @@ fn jit_shared_same_label_recompiles_and_osr_coexist() {
         Value::make_int(4).bits() as i64,
     ];
     match osr.call_premarshaled(ctx as *mut u8, seeded.as_ptr()) {
-        NativeRun::Ok(bits) => assert_eq!(Value::from_bits(bits), Value::make_int(9)),
+        NativeRun::Ok(bits) => assert_eq!(
+            unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            },
+            Value::make_int(9)
+        ),
         other => panic!("OSR run: {other:?}"),
     }
     assert_eq!(
@@ -426,7 +438,12 @@ fn jit_shared_leaf_constants_survive_gc() {
     }
     let bits = leaf.call_for_test(&[]).expect("runs");
     assert_eq!(
-        Value::from_bits(bits).as_runtime_string_owned().as_deref(),
+        unsafe {
+            /* SAFETY: the compiled-call Ok word is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }
+        .as_runtime_string_owned()
+        .as_deref(),
         Some(text)
     );
 }

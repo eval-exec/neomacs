@@ -430,7 +430,10 @@ fn native_ok(ctx: &mut Context, value: Value, leaf: &CompiledLeaf, args: &[Value
         source(value).jit_constant_base(),
         args,
     ) {
-        NativeRun::Ok(bits) => Value::from_bits(bits),
+        NativeRun::Ok(bits) => unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        },
         other => panic!("each measured call must finish in the retained native leaf: {other:?}"),
     }
 }

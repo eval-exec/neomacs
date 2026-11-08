@@ -175,7 +175,10 @@ fn mir_call_predicate_and_bytecode_fallbacks_preserve_live_heap_roots() {
             let NativeRun::Ok(bits) = leaf.call(&mut ev as *mut Context as *mut u8, &[]) else {
                 panic!("call must return the live pair")
             };
-            let pair = Value::from_bits(bits);
+            let pair = unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            };
             assert!(pair.is_cons());
             assert_eq!(pair.cons_car(), Value::make_int(7));
             assert_eq!(pair.cons_cdr(), Value::make_int(9));
@@ -325,7 +328,10 @@ fn mir_call_observability_matches_the_interpreter() {
             }
             let outcome = if native {
                 match leaf.call(&mut ev as *mut Context as *mut u8, &[]) {
-                    NativeRun::Ok(bits) => Ok(Value::from_bits(bits)),
+                    NativeRun::Ok(bits) => Ok(unsafe {
+                        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                        Value::from_bits(bits)
+                    }),
                     NativeRun::Signal => Err(take_pending_flow().unwrap()),
                     other => panic!("{variable}: {other:?}"),
                 }

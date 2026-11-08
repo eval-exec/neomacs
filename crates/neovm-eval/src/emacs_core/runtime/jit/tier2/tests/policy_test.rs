@@ -76,11 +76,14 @@ fn run(
     f: &crate::emacs_core::bytecode::ByteCodeFunction,
     args: &[Value],
 ) -> Value {
-    Value::from_bits(
-        crate::emacs_core::jit::test_support::run_compiled(ctx, f, Value::NIL, args)
-            .unwrap()
-            .unwrap(),
-    )
+    unsafe {
+        /* SAFETY: the compiled-call Ok word is a real Value's tagged bits */
+        Value::from_bits(
+            crate::emacs_core::jit::test_support::run_compiled(ctx, f, Value::NIL, args)
+                .unwrap()
+                .unwrap(),
+        )
+    }
 }
 #[test]
 fn tier2_policy_budget_counts_reservations_and_floor() {

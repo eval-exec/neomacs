@@ -84,7 +84,10 @@ fn native(
     what: &str,
 ) -> Result<Value, Flow> {
     match leaf.call(ctx_ptr, args) {
-        NativeRun::Ok(bits) => Ok(Value::from_bits(bits)),
+        NativeRun::Ok(bits) => Ok(unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
         NativeRun::Signal => Err(take_pending_flow().expect("flow stashed")),
         other => panic!("{what} must not leave native code: {other:?}"),
     }
@@ -102,7 +105,10 @@ fn shim(op: bool, ctx_ptr: *mut u8, target: Value, list: Value) -> Result<Value,
     if word == VALUE_SHIM_SIGNAL {
         Err(take_pending_flow().expect("flow stashed"))
     } else {
-        Ok(Value::from_bits(word as usize))
+        Ok(unsafe {
+            /* SAFETY: the shim success word is Value::bits; the signal word is not decoded */
+            Value::from_bits(word as usize)
+        })
     }
 }
 

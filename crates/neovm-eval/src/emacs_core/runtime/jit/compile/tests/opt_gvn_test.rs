@@ -188,7 +188,10 @@ fn reference(ctx: &mut Context, plan: &ir::Func, args: &[Value]) -> Value {
 }
 fn native(ctx: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> Value {
     match leaf.call(ctx as *mut Context as *mut u8, args) {
-        NativeRun::Ok(bits) => Value::from_bits(bits),
+        NativeRun::Ok(bits) => unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        },
         other => panic!("GVN success fixture must run natively: {other:?}"),
     }
 }

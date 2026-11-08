@@ -126,7 +126,10 @@ fn finish(
     run: NativeRun,
 ) -> Result<Value, Flow> {
     match run {
-        NativeRun::Ok(bits) => Ok(Value::from_bits(bits)),
+        NativeRun::Ok(bits) => Ok(unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
         NativeRun::DeoptAt(resume) => {
             compile::resumed_chain::resume_deopt(ctx, f, Value::NIL, leaf, *resume)
         }

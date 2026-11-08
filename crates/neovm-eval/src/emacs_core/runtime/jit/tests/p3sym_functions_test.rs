@@ -83,7 +83,10 @@ fn native(ctx: &mut Context, source: Value) -> Result<usize, neovm_value::error:
     }
 }
 fn printed(bits: usize) -> String {
-    crate::emacs_core::print_value(&Value::from_bits(bits))
+    crate::emacs_core::print_value(&unsafe {
+        /* SAFETY: native() returns the compiled-call Ok word, a real Value's tagged bits. */
+        Value::from_bits(bits)
+    })
 }
 fn direct(ctx: &mut Context, function: Value) -> String {
     crate::emacs_core::print_value(&ctx.apply0(function).expect("serial GNU twin call"))

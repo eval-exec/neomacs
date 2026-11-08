@@ -280,7 +280,13 @@ fn backtrace_templates_match_the_shim_and_decode_in_rust() {
             .backtrace_entry_values(&ev.specpdl[0])
             .expect("the JIT frame is inspectable");
         assert_eq!(f, function);
-        let want: Vec<Value> = args.iter().map(|&b| Value::from_bits(b as usize)).collect();
+        let want: Vec<Value> = args
+            .iter()
+            .map(|&b| unsafe {
+                /* SAFETY: inverse of Value::bits on this live value */
+                Value::from_bits(b as usize)
+            })
+            .collect();
         assert_eq!(a.as_slice(), want.as_slice(), "nargs {nargs}");
         assert!(!debug && !unevalled);
         assert!(

@@ -78,7 +78,10 @@ fn run(ctx: &mut Context, f: &ByteCodeFunction, args: &[Value]) -> Value {
     let bits = unsafe { cache::try_run_compiled(ctx, f, Value::NIL, args) }
         .expect("no signal")
         .expect("the caller ran natively");
-    Value::from_bits(bits)
+    unsafe {
+        /* SAFETY: the compiled-call Ok word is a real Value's tagged bits */
+        Value::from_bits(bits)
+    }
 }
 
 fn leaf(f: &ByteCodeFunction) -> &'static CompiledLeaf {

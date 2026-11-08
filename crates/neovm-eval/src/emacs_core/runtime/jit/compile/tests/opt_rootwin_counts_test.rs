@@ -111,7 +111,13 @@ fn assert_native_parity(ctx: &mut Context, f: &ByteCodeFunction, leaf: &Compiled
     else {
         panic!("the emitted leaf must finish natively")
     };
-    assert_eq!(Value::from_bits(bits), expected);
+    assert_eq!(
+        unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        },
+        expected
+    );
 }
 
 #[test]

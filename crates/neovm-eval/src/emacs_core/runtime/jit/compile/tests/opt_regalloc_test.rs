@@ -186,7 +186,10 @@ fn assert_native_parity(ctx: &mut Context, f: &ByteCodeFunction, leaf: &Compiled
         };
         let actual =
             match leaf.call_consts(ctx as *mut Context as *mut u8, f.constants.as_ptr(), &args) {
-                NativeRun::Ok(bits) => Value::from_bits(bits),
+                NativeRun::Ok(bits) => unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                },
                 other => panic!("the allocator-selected leaf must stay native: {other:?}"),
             };
         assert_eq!(actual, expected, "both joined call edges retain GNU values");

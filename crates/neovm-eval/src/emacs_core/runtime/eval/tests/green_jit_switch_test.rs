@@ -312,7 +312,10 @@ fn worker_deopt(context: &mut Context) -> EvalResult {
             ],
         ));
     };
-    let value = Value::from_bits(bits);
+    let value = unsafe {
+        /* SAFETY: the compiled-call Ok word is a real Value's tagged bits */
+        Value::from_bits(bits)
+    };
     let after = crate::emacs_core::jit::stats::compile_stats_snapshot().deopts();
     let precise_after = cache::native_run_counters().2;
     if after <= before
@@ -845,7 +848,13 @@ fn green_jit_switch_osr_entry_yields_with_its_own_native_roots() {
         }
         .expect("the exact header snapshot enters a real OSR leaf");
         match run {
-            NativeRun::Ok(bits) => assert_eq!(Value::from_bits(bits), Value::fixnum(3)),
+            NativeRun::Ok(bits) => assert_eq!(
+                unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                },
+                Value::fixnum(3)
+            ),
             NativeRun::Deopt | NativeRun::DeoptAt(_) | NativeRun::Signal => {
                 panic!("OSR yield should return normally: {run:?}");
             }

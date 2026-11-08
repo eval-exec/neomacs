@@ -138,7 +138,10 @@ fn native(ctx: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> Value {
     let NativeRun::Ok(bits) = leaf.call(ctx as *mut Context as *mut u8, args) else {
         panic!("native must return")
     };
-    Value::from_bits(bits)
+    unsafe {
+        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+        Value::from_bits(bits)
+    }
 }
 
 fn opaque_count(plan: &ir::Func) -> usize {

@@ -15,7 +15,10 @@ fn oracle() -> [&'static str; 6] {
         .expect("six refreshed GNU mapping rows")
 }
 fn list(word: usize) -> String {
-    let value = TaggedValue::from_bits(word);
+    let value = unsafe {
+        /* SAFETY: word_for_test returns Value::bits of the stored root */
+        TaggedValue::from_bits(word)
+    };
     assert!(value.is_cons());
     assert!(value.cons_cdr_unobserved().is_nil());
     format!(

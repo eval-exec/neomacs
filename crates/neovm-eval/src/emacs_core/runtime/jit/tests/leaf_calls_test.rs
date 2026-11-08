@@ -63,7 +63,10 @@ fn interpret(eval: &mut Context, f: &ByteCodeFunction, args: Vec<Value>) -> Stri
 
 fn native(ctx_ptr: *mut u8, leaf: &CompiledLeaf, args: &[Value], what: &str) -> String {
     match leaf.call(ctx_ptr, args) {
-        NativeRun::Ok(bits) => print_value(&Value::from_bits(bits)),
+        NativeRun::Ok(bits) => print_value(&unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
         NativeRun::Signal => flow_text(take_pending_flow().expect("flow stashed")),
         other => panic!("{what} must not leave native code: {other:?}"),
     }
@@ -430,7 +433,14 @@ fn leaf_signals_are_caught_by_a_leaf_local_handler() {
         );
         match leaf.call(ctx_ptr, &[a, b]) {
             NativeRun::Ok(bits) => {
-                assert_eq!(print_value(&Value::from_bits(bits)), want, "{op:?}")
+                assert_eq!(
+                    print_value(&unsafe {
+                        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                        Value::from_bits(bits)
+                    }),
+                    want,
+                    "{op:?}"
+                )
             }
             other => panic!("{op:?}: the handler must catch natively, got {other:?}"),
         }
@@ -473,7 +483,10 @@ fn leaf_site_signal_edge_keeps_the_residual_alive() {
         let l = eval.eval_str("(cons 'a 'b)").expect("improper");
         match leaf.call(ctx_ptr, &[Value::fixnum(3), l]) {
             NativeRun::Ok(bits) => {
-                let h = Value::from_bits(bits);
+                let h = unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                };
                 assert!(h.is_cons(), "h survived");
                 assert_eq!(h.cons_car(), Value::make_int(1));
                 assert_eq!(h.cons_cdr(), Value::make_int(2));
@@ -851,7 +864,10 @@ fn a_bcall_leaf_signal_edge_keeps_the_residual_alive() {
     for _ in 0..3 {
         match leaf.call(ctx_ptr, &[Value::fixnum(1), Value::fixnum(5)]) {
             NativeRun::Ok(bits) => {
-                let r = Value::from_bits(bits);
+                let r = unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                };
                 assert!(r.is_cons(), "r survived");
                 assert_eq!(r.cons_car(), Value::make_int(1));
                 assert_eq!(r.cons_cdr(), Value::make_int(2));

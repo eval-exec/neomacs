@@ -326,7 +326,11 @@ fn a_changed_table_is_answered_by_the_shim() {
     let leaf = dispatch_leaf(table, 3);
     assert_eq!(inline_switch_sites_for_test(), before + 1);
     let answer = |arg: Value| match leaf.call(ctx_ptr, &[arg]) {
-        NativeRun::Ok(bits) => Value::from_bits(bits).as_fixnum(),
+        NativeRun::Ok(bits) => unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }
+        .as_fixnum(),
         other => panic!("expected a native answer, got {other:?}"),
     };
     let put = |key: Value, target: Value| {

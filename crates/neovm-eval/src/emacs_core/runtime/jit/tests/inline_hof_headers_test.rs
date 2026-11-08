@@ -107,7 +107,13 @@ fn inline_hof_headers_refresh_captured_cell_after_a_serviced_poll() {
     let NativeRun::Ok(bits) = leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence]) else {
         panic!("guarded capture stores remain native across a serviced poll")
     };
-    assert_eq!(Value::from_bits(bits), sequence);
+    assert_eq!(
+        unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        },
+        sequence
+    );
     assert_eq!(bytecode_branch_poll_count(), 1);
     assert_eq!(cell.cons_car(), Value::make_int(1045));
     assert_eq!(ctx.depth, 0);

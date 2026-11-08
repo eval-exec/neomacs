@@ -97,7 +97,10 @@ pub(super) fn retry<T>(
         .map_err(|error| format!("native owner entry: {error:?}"))
 }
 fn list(home: &OwnerRootSlot<'_>, run: &RunAccess<'_, '_>) -> String {
-    let value = TaggedValue::from_bits(ExecutionTestHomes::word(home, run));
+    let value = unsafe {
+        /* SAFETY: word_for_test returns Value::bits of the stored root */
+        TaggedValue::from_bits(ExecutionTestHomes::word(home, run))
+    };
     assert!(value.is_cons());
     assert!(value.cons_cdr_unobserved().is_nil());
     format!(

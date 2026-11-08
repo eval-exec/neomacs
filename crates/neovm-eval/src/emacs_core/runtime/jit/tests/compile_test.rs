@@ -974,7 +974,10 @@ fn mir_rooting_skip_on_an_inferred_fixnum_param_across_an_allocating_call() {
         let NativeRun::Ok(bits) = leaf.call(ctx as *mut u8, &[c]) else {
             panic!("F(list) must run natively");
         };
-        let p = Value::from_bits(bits);
+        let p = unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        };
         assert!(p.is_cons());
         let c2 = p.cons_car();
         assert!(c2.is_cons(), "c survived the collection (got {c2:?})");
@@ -988,7 +991,10 @@ fn mir_rooting_skip_on_an_inferred_fixnum_param_across_an_allocating_call() {
     let NativeRun::Ok(bits) = leaf.call(ctx as *mut u8, &[Value::NIL]) else {
         panic!("F(nil) must run natively");
     };
-    let p = Value::from_bits(bits);
+    let p = unsafe {
+        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+        Value::from_bits(bits)
+    };
     assert!(p.cons_car().is_nil() && p.cons_cdr() == Value::make_int(2));
 }
 
@@ -1415,7 +1421,11 @@ fn mir_allocates_escaping_cons() {
     match leaf.call(ctx as *mut u8, &[Value::make_int(3), Value::make_int(5)]) {
         NativeRun::Ok(bits) => assert!(
             matches!(
-                Value::from_bits(bits).kind(),
+                unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                }
+                .kind(),
                 neovm_value::value::ValueKind::Cons
             ),
             "(cons 3 5) allocates a cons"
@@ -1626,7 +1636,10 @@ fn mir_loop_keeps_native_list_alive_across_exact_gc() {
     };
     assert!(ev.tagged_heap.gc_collections() >= before + 4);
     assert_eq!(ev.jit_root_stack_top, 0);
-    let mut list = Value::from_bits(bits);
+    let mut list = unsafe {
+        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+        Value::from_bits(bits)
+    };
     for n in 1..=1024 {
         assert!(list.is_cons(), "missing list cell {n}");
         assert_eq!(list.cons_car(), Value::make_int(n));
@@ -2087,7 +2100,14 @@ fn compiles_direct_builtin_ops() {
     ) else {
         panic!("memq must succeed");
     };
-    assert_eq!(Value::from_bits(tail).cons_car(), bsym);
+    assert_eq!(
+        unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(tail)
+        }
+        .cons_car(),
+        bsym
+    );
 
     // equal on structurally-equal fresh lists -> t.
     let l1 = Value::cons(
@@ -2305,7 +2325,10 @@ fn arith_intrinsic_bitops_jit_match_interp_and_deopt() {
         let NativeRun::Ok(bits) = leaf.call(ctx, &[int(1), int(100)]) else {
             panic!("(ash 1 100) must return Ok (a bignum via generic)");
         };
-        let got = Value::from_bits(bits);
+        let got = unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        };
         let interp = ev.eval_str("(ash 1 100)").expect("interp ash");
         assert!(
             neovm_value::value::equal_value(&got, &interp, 0),
@@ -2473,7 +2496,10 @@ fn osr_entry_resumes_loop_from_seeded_stack() {
         let args = [Value::make_int(seed).bits() as i64];
         match leaf.call_premarshaled(ctx, args.as_ptr()) {
             NativeRun::Ok(bits) => assert_eq!(
-                Value::from_bits(bits),
+                unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                },
                 Value::make_int(want),
                 "OSR resume from i={seed} must return {want}"
             ),
@@ -2800,7 +2826,10 @@ fn mir_pure_lowering_matches_interpreter() {
 
         match leaf.call_for_test(&args) {
             Some(bits) => assert_eq!(
-                Value::from_bits(bits),
+                unsafe {
+                    /* SAFETY: the compiled-call Ok word is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                },
                 want,
                 "MIR-lowered native result must equal the interpreter for {ops:?}"
             ),
@@ -2948,7 +2977,10 @@ fn mir_hoists_the_root_window_across_shim_sites() {
         let NativeRun::Ok(bits) = leaf.call(ctx, &[l]) else {
             panic!("must run natively");
         };
-        let h = Value::from_bits(bits);
+        let h = unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        };
         assert!(h.is_cons(), "h survived the exact collection (got {h:?})");
         assert_eq!(h.cons_car(), Value::make_int(1), "car intact");
         assert_eq!(h.cons_cdr(), Value::make_int(2), "cdr intact");
@@ -3420,7 +3452,13 @@ fn gc_free_unary_builtin_sites_root_no_residual() {
     let NativeRun::Ok(bits) = leaf.call(ctx, &[l]) else {
         panic!("length must run natively");
     };
-    assert_eq!(Value::from_bits(bits), Value::make_int(3));
+    assert_eq!(
+        unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        },
+        Value::make_int(3)
+    );
 }
 
 /// A GC-free builtin site roots nothing: two `memq` sites with a live
@@ -3454,7 +3492,10 @@ fn gc_free_builtin_sites_root_no_residual() {
         panic!("memq must run natively");
     };
     assert_eq!(
-        crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+        crate::emacs_core::print::print_value(&unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
         "(2 3)"
     );
 }
@@ -3508,7 +3549,10 @@ fn compiled_aset_matches_the_builtin() {
             args.cons_cdr().cons_cdr().cons_car(),
         );
         let native = match leaf.call(ctx, &[a, i, v]) {
-            NativeRun::Ok(bits) => Ok(Value::from_bits(bits)),
+            NativeRun::Ok(bits) => Ok(unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
             NativeRun::Signal => {
                 match take_pending_flow().map(neovm_value::error::Flow::into_kind) {
                     Some(FlowKind::Signal(sig)) => Err(format!("signal {}", sig.symbol_name())),
@@ -3570,7 +3614,10 @@ fn redefined_aset_cannot_reenter_through_an_opcode() {
     let NativeRun::Ok(bits) = leaf.call(ctx, &[v]) else {
         panic!("aset must run natively");
     };
-    let h = Value::from_bits(bits);
+    let h = unsafe {
+        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+        Value::from_bits(bits)
+    };
     assert_eq!(h.cons_car(), Value::make_int(1));
     assert_eq!(crate::emacs_core::print::print_value(&v), "[9 0]");
     // The collecting replacement must never run from this opcode.
@@ -3581,7 +3628,10 @@ fn redefined_aset_cannot_reenter_through_an_opcode() {
         let NativeRun::Ok(bits) = leaf.call(ctx, &[v]) else {
             panic!("Baset must still run");
         };
-        let h = Value::from_bits(bits);
+        let h = unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        };
         assert!(
             h.is_cons(),
             "h remains intact across the primitive (got {h:?})"
@@ -3835,7 +3885,10 @@ fn mir_cons_only_body_does_not_hoist() {
     let NativeRun::Ok(bits) = leaf.call(ctx, &[Value::make_int(1), Value::make_int(2)]) else {
         panic!("a cons-only body runs natively");
     };
-    let c = Value::from_bits(bits);
+    let c = unsafe {
+        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+        Value::from_bits(bits)
+    };
     assert_eq!(c.cons_car().bits(), Value::make_int(1).bits());
     assert_eq!(c.cons_cdr().bits(), Value::make_int(2).bits());
 }
@@ -3935,7 +3988,10 @@ fn mir_adapter_sizes_the_args_slot_for_a_wide_list() {
     let NativeRun::Ok(bits) = leaf.call(ctx, &[Value::make_int(9)]) else {
         panic!("(list a a a a a) must run natively");
     };
-    let mut l = Value::from_bits(bits);
+    let mut l = unsafe {
+        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+        Value::from_bits(bits)
+    };
     for _ in 0..5 {
         assert!(l.is_cons(), "a 5-list");
         assert_eq!(l.cons_car().bits(), Value::make_int(9).bits());
@@ -3986,7 +4042,10 @@ fn mir_adapter_keeps_conses_real_across_a_shim() {
         let NativeRun::Ok(bits) = leaf.call(ctx, &[Value::make_int(42), Value::NIL]) else {
             panic!("must run natively");
         };
-        let l = Value::from_bits(bits);
+        let l = unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        };
         assert!(l.is_cons(), "(car p) is the fresh list (got {l:?})");
         assert_eq!(
             l.cons_car(),
@@ -4094,7 +4153,13 @@ fn list_and_slice_builtins_run_natively() {
     let NativeRun::Ok(bits) = leaf.call(ctx_ptr, &[]) else {
         panic!("native list failed");
     };
-    assert_eq!(print_value(&Value::from_bits(bits)), "(1 2 3)");
+    assert_eq!(
+        print_value(&unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
+        "(1 2 3)"
+    );
 
     // (concat "foo" "bar")
     let leaf = lower_nullary_leaf(
@@ -4105,7 +4170,13 @@ fn list_and_slice_builtins_run_natively() {
     let NativeRun::Ok(bits) = leaf.call(ctx_ptr, &[]) else {
         panic!("native concat failed");
     };
-    assert_eq!(print_value(&Value::from_bits(bits)), "\"foobar\"");
+    assert_eq!(
+        print_value(&unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
+        "\"foobar\""
+    );
 
     // (substring "hello" 1 3)
     let leaf = lower_nullary_leaf(
@@ -4126,7 +4197,13 @@ fn list_and_slice_builtins_run_natively() {
     let NativeRun::Ok(bits) = leaf.call(ctx_ptr, &[]) else {
         panic!("native substring failed");
     };
-    assert_eq!(print_value(&Value::from_bits(bits)), "\"el\"");
+    assert_eq!(
+        print_value(&unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
+        "\"el\""
+    );
 
     // (nconc (list 1 2) (list 3)) — built natively end-to-end.
     let leaf = lower_nullary_leaf(
@@ -4145,7 +4222,13 @@ fn list_and_slice_builtins_run_natively() {
     let NativeRun::Ok(bits) = leaf.call(ctx_ptr, &[]) else {
         panic!("native nconc failed");
     };
-    assert_eq!(print_value(&Value::from_bits(bits)), "(1 2 3)");
+    assert_eq!(
+        print_value(&unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }),
+        "(1 2 3)"
+    );
 
     // Signal path: (substring 5 0 1) is a wrong-type-argument.
     let leaf = lower_nullary_leaf(
@@ -4969,7 +5052,13 @@ fn handler_body_compiles_and_runs_catch_throw_natively() {
     let base = ev.condition_stack.len();
     match leaf.call(ctx_ptr, &[]) {
         NativeRun::Ok(bits) => {
-            assert_eq!(Value::from_bits(bits), Value::make_int(42));
+            assert_eq!(
+                unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                },
+                Value::make_int(42)
+            );
         }
         other => panic!("expected native catch, got {other:?}"),
     }
@@ -5062,7 +5151,10 @@ fn compiles_varbind_unbind_with_full_unwind_semantics() {
     let global_now = |ev: &mut crate::emacs_core::eval::Context| {
         let p = ev as *mut crate::emacs_core::eval::Context as *mut u8;
         match read.call(p, &[]) {
-            NativeRun::Ok(bits) => Value::from_bits(bits),
+            NativeRun::Ok(bits) => unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            },
             other => panic!("global read failed: {other:?}"),
         }
     };
@@ -5517,7 +5609,10 @@ fn compiles_cons() {
     let NativeRun::Ok(bits) = leaf.call(ctx, &[]) else {
         panic!("cons runs");
     };
-    let cell = Value::from_bits(bits);
+    let cell = unsafe {
+        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+        Value::from_bits(bits)
+    };
     assert!(cell.is_cons());
     assert_eq!(cell.cons_car(), Value::make_int(1));
     assert_eq!(cell.cons_cdr(), Value::make_int(2));
@@ -5545,7 +5640,10 @@ fn compiles_nested_cons_list() {
     let NativeRun::Ok(bits) = leaf.call(ctx, &[]) else {
         panic!("nested cons runs");
     };
-    let result = Value::from_bits(bits);
+    let result = unsafe {
+        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+        Value::from_bits(bits)
+    };
     assert_eq!(result.cons_car(), Value::make_int(7));
     let tail = result.cons_cdr();
     assert!(tail.is_cons());
@@ -6116,7 +6214,10 @@ fn compiles_rest_param_as_list() {
     ) else {
         panic!("rest call must succeed");
     };
-    let xs = Value::from_bits(bits);
+    let xs = unsafe {
+        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+        Value::from_bits(bits)
+    };
     assert_eq!(xs.cons_car(), Value::make_int(10));
     assert_eq!(xs.cons_cdr().cons_car(), Value::make_int(20));
     assert!(xs.cons_cdr().cons_cdr().is_nil());
@@ -6575,7 +6676,13 @@ fn fuzz_straightline_bodies_match_interpreter() {
                     panic!("seed {seed}: JIT Ok but interpreter erred ({e:?}): {ops:?}")
                 });
                 assert!(
-                    same(Value::from_bits(bits), *want),
+                    same(
+                        unsafe {
+                            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                            Value::from_bits(bits)
+                        },
+                        *want
+                    ),
                     "seed {seed}: JIT/interpreter mismatch on {ops:?}"
                 );
             }
@@ -6637,7 +6744,13 @@ fn fuzz_straightline_bodies_match_interpreter() {
                 NativeRun::Ok(bits) => {
                     if let Ok(want) = &interp {
                         assert!(
-                            same(Value::from_bits(bits), *want),
+                            same(
+                                unsafe {
+                                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                                    Value::from_bits(bits)
+                                },
+                                *want
+                            ),
                             "seed {seed}: MIR/interpreter mismatch on {ops:?}"
                         );
                     }
@@ -7619,7 +7732,10 @@ fn contained_shim_panic_is_caught_by_leaf_local_condition_case() {
     let NativeRun::Ok(bits) = leaf.call(ctx_ptr, &[]) else {
         panic!("expected the leaf-local handler to catch the contained panic");
     };
-    let err = Value::from_bits(bits);
+    let err = unsafe {
+        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+        Value::from_bits(bits)
+    };
     assert_eq!(
         err.cons_car().as_bare_symbol_name(),
         Some("error"),
@@ -7699,7 +7815,10 @@ fn contained_shim_panic_with_leaked_callee_handler_still_matches_leaf_handler() 
         let NativeRun::Ok(bits) = leaf.call(ctx_ptr, &[]) else {
             panic!("leaf handler must catch the contained panic");
         };
-        let err = Value::from_bits(bits);
+        let err = unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        };
         assert_eq!(
             err.cons_car().as_bare_symbol_name(),
             Some("error"),
@@ -8429,7 +8548,10 @@ fn a_pure_body_with_a_float_feedback_site_is_rejected_from_the_mir_tier() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let got = match leaf.call(ctx_ptr, &[Value::make_float(1.5), Value::make_float(2.5)]) {
-        NativeRun::Ok(bits) => Value::from_bits(bits),
+        NativeRun::Ok(bits) => unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        },
         other => panic!("the baseline leaf must run the float path natively, got {other:?}"),
     };
     assert!(
@@ -8442,7 +8564,10 @@ fn a_pure_body_with_a_float_feedback_site_is_rejected_from_the_mir_tier() {
     // FIXNUM 5 — and it must run natively (no deopt) or every fixnum call
     // after a single float pair pays a rerun. Mixed operands promote.
     let fix = match leaf.call(ctx_ptr, &[Value::make_int(2), Value::make_int(3)]) {
-        NativeRun::Ok(bits) => Value::from_bits(bits),
+        NativeRun::Ok(bits) => unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        },
         other => panic!("fixnum operands at a Float site must run natively, got {other:?}"),
     };
     assert_eq!(
@@ -8451,7 +8576,10 @@ fn a_pure_body_with_a_float_feedback_site_is_rejected_from_the_mir_tier() {
         "(+ 2 3) is the fixnum 5, not 5.0"
     );
     let mixed = match leaf.call(ctx_ptr, &[Value::make_int(2), Value::make_float(0.5)]) {
-        NativeRun::Ok(bits) => Value::from_bits(bits),
+        NativeRun::Ok(bits) => unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        },
         other => panic!("mixed operands at a Float site must promote natively, got {other:?}"),
     };
     assert!(matches!(mixed.kind(), neovm_value::value::ValueKind::Float));
@@ -8682,7 +8810,10 @@ fn generic_arith_sites_match_the_interpreter_without_deopting() {
                         };
                         let want = interp(&mut eval, op, nargs, args.clone());
                         let got = match leaf.call(ctx_ptr, &args) {
-                            NativeRun::Ok(bits) => print_value(&Value::from_bits(bits)),
+                            NativeRun::Ok(bits) => print_value(&unsafe {
+                                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                                Value::from_bits(bits)
+                            }),
                             NativeRun::Signal => {
                                 outcome_of_flow(take_pending_flow().expect("flow stashed"))
                             }
@@ -8741,7 +8872,10 @@ fn a_generic_site_result_is_not_a_known_fixnum_across_a_block_edge() {
         match leaf.call(ctx_ptr, &[two40, two40, c]) {
             NativeRun::Ok(bits) => panic!(
                 "(1+ bignum) at a FixnumOnly site cannot finish natively; got bits {bits:#x} ({})",
-                crate::emacs_core::print::print_value(&Value::from_bits(bits))
+                crate::emacs_core::print::print_value(&unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                })
             ),
             NativeRun::Deopt | NativeRun::DeoptAt(_) => {}
             other => panic!("unexpected {other:?}"),
@@ -8830,14 +8964,20 @@ fn a_generic_arith_signal_is_caught_by_a_leaf_local_handler() {
     let big = eval.eval_str("(expt 2 70)").expect("big");
     match leaf.call(ctx_ptr, &[big, Value::symbol("oops")]) {
         NativeRun::Ok(bits) => assert_eq!(
-            crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+            crate::emacs_core::print::print_value(&unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
             "(caught (wrong-type-argument number-or-marker-p oops))"
         ),
         other => panic!("the handler must catch natively, got {other:?}"),
     }
     match leaf.call(ctx_ptr, &[big, Value::make_int(1)]) {
         NativeRun::Ok(bits) => assert_eq!(
-            crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+            crate::emacs_core::print::print_value(&unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
             "1180591620717411303425"
         ),
         other => panic!("bignum + fixnum must run natively, got {other:?}"),
@@ -8892,7 +9032,10 @@ fn generic_arith_fallbacks_keep_the_residual_rooted() {
             .expect("operands");
         match leaf.call(ctx_ptr, &[pair.cons_car(), pair.cons_cdr()]) {
             NativeRun::Ok(bits) => {
-                let h = Value::from_bits(bits);
+                let h = unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                };
                 assert!(h.is_cons(), "h survived (got {h:?})");
                 assert_eq!(h.cons_car(), Value::make_int(1));
                 assert_eq!(h.cons_cdr(), Value::make_int(2));
@@ -8952,7 +9095,10 @@ fn a_generic_arith_signal_hook_that_collects_keeps_the_residual_alive() {
         let big = eval.eval_str("(expt 2 70)").expect("big");
         match leaf.call(ctx_ptr, &[big, Value::symbol("oops")]) {
             NativeRun::Ok(bits) => {
-                let h = Value::from_bits(bits);
+                let h = unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                };
                 assert!(h.is_cons(), "h survived the hook's collection (got {h:?})");
                 assert_eq!(h.cons_car(), Value::make_int(1), "car intact");
                 assert_eq!(h.cons_cdr(), Value::make_int(2), "cdr intact");
@@ -9085,7 +9231,10 @@ fn a_record_type_of_site_answers_inline() {
         // Resolve the memoized debug-on-next-call cell the inline test reads.
         let _ = ev.debug_on_next_call_is_armed();
         let run = |item: Value| match leaf.call(ctx, &[item]) {
-            NativeRun::Ok(bits) => crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+            NativeRun::Ok(bits) => crate::emacs_core::print::print_value(&unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
             other => format!("{other:?}"),
         };
         for &item in &items {
@@ -9277,7 +9426,10 @@ fn fboundp_call_sites_answer_as_the_builtin_on_the_fast_path() {
             &mut ev, *item,
         ));
         let got = match leaf.call(ctx, &[*item]) {
-            NativeRun::Ok(bits) => crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+            NativeRun::Ok(bits) => crate::emacs_core::print::print_value(&unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
             NativeRun::Signal => outcome(Err(take_pending_flow().expect("stashed flow"))),
             other => panic!(
                 "(fboundp {}) : {other:?}",
@@ -9320,7 +9472,10 @@ fn fboundp_call_sites_answer_as_the_builtin_on_the_fast_path() {
     ev.depth = 99;
     match leaf.call(ctx, &[Value::symbol("car")]) {
         NativeRun::Ok(bits) => assert_eq!(
-            crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+            crate::emacs_core::print::print_value(&unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
             "t",
             "one below the limit"
         ),
@@ -9338,7 +9493,10 @@ fn fboundp_call_sites_answer_as_the_builtin_on_the_fast_path() {
         .expect("fset");
     match leaf.call(ctx, &[Value::symbol("car")]) {
         NativeRun::Ok(bits) => assert_eq!(
-            crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+            crate::emacs_core::print::print_value(&unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
             "redefined"
         ),
         other => panic!("redefined fboundp: {other:?}"),
@@ -9347,7 +9505,10 @@ fn fboundp_call_sites_answer_as_the_builtin_on_the_fast_path() {
         .set_symbol_function_id(intern("fboundp"), original);
     match leaf.call(ctx, &[Value::symbol("car")]) {
         NativeRun::Ok(bits) => assert_eq!(
-            crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+            crate::emacs_core::print::print_value(&unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
             "t"
         ),
         other => panic!("restored fboundp: {other:?}"),
@@ -9422,7 +9583,10 @@ fn fboundp_sites_use_the_dedicated_shim() {
     let count0 = FBOUNDP_SPEC_COUNT.load(Ordering::Relaxed);
     match fboundp_leaf.call(ctx, &[Value::symbol("car")]) {
         NativeRun::Ok(bits) => assert_eq!(
-            crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+            crate::emacs_core::print::print_value(&unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
             "t"
         ),
         other => panic!("after an unrelated epoch bump: {other:?}"),
@@ -9559,7 +9723,10 @@ fn autoload_do_load_call_sites_answer_as_the_builtin_on_the_fast_path() {
             ));
             let got = match leaf.call(ctx, &[*item]) {
                 NativeRun::Ok(bits) => {
-                    crate::emacs_core::print::print_value(&Value::from_bits(bits))
+                    crate::emacs_core::print::print_value(&unsafe {
+                        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                        Value::from_bits(bits)
+                    })
                 }
                 NativeRun::Signal => outcome(Err(take_pending_flow().expect("stashed flow"))),
                 other => panic!(
@@ -9608,7 +9775,10 @@ fn autoload_do_load_call_sites_answer_as_the_builtin_on_the_fast_path() {
         .expect("fset");
     match leaf.call(ctx, &[Value::make_int(1)]) {
         NativeRun::Ok(bits) => assert_eq!(
-            crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+            crate::emacs_core::print::print_value(&unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
             "redefined"
         ),
         other => panic!("redefined autoload-do-load: {other:?}"),
@@ -9617,7 +9787,10 @@ fn autoload_do_load_call_sites_answer_as_the_builtin_on_the_fast_path() {
         .set_symbol_function_id(intern("autoload-do-load"), original);
     match leaf.call(ctx, &[Value::make_int(1)]) {
         NativeRun::Ok(bits) => assert_eq!(
-            crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+            crate::emacs_core::print::print_value(&unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
             "1"
         ),
         other => panic!("restored autoload-do-load: {other:?}"),
@@ -9680,7 +9853,10 @@ fn type_tag_predicate_sites_answer_inline() {
             let shim0 = SUBR_SPEC_COUNT.load(Ordering::Relaxed);
             for &item in &items {
                 let got = match leaf.call(ctx, &[item]) {
-                    NativeRun::Ok(bits) => Value::from_bits(bits),
+                    NativeRun::Ok(bits) => unsafe {
+                        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                        Value::from_bits(bits)
+                    },
                     other => panic!(
                         "({name} {}) inline={inline}: {other:?}",
                         crate::emacs_core::print::print_value(&item)
@@ -9765,7 +9941,14 @@ fn type_tag_predicate_sites_answer_inline() {
         ev.depth = 99;
         match leaf.call(ctx, &[record]) {
             NativeRun::Ok(bits) => {
-                assert_eq!(Value::from_bits(bits), expected, "{name}: one below")
+                assert_eq!(
+                    unsafe {
+                        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                        Value::from_bits(bits)
+                    },
+                    expected,
+                    "{name}: one below"
+                )
             }
             other => panic!("({name}) one below the limit: {other:?}"),
         }
@@ -9778,7 +9961,10 @@ fn type_tag_predicate_sites_answer_inline() {
             .expect("fset");
         match leaf.call(ctx, &[record]) {
             NativeRun::Ok(bits) => assert_eq!(
-                crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+                crate::emacs_core::print::print_value(&unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                }),
                 "redefined",
                 "{name} redefined"
             ),
@@ -9786,7 +9972,14 @@ fn type_tag_predicate_sites_answer_inline() {
         }
         ev.obarray.set_symbol_function_id(intern(name), original);
         match leaf.call(ctx, &[record]) {
-            NativeRun::Ok(bits) => assert_eq!(Value::from_bits(bits), expected, "{name} restored"),
+            NativeRun::Ok(bits) => assert_eq!(
+                unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                },
+                expected,
+                "{name} restored"
+            ),
             other => panic!("restored {name}: {other:?}"),
         }
     }
@@ -9857,7 +10050,10 @@ fn autoload_do_load_sites_answer_non_autoload_inline() {
             let ctx = &mut ev as *mut Context as *mut u8;
             let got = match leaf.call(ctx, &[item]) {
                 NativeRun::Ok(bits) => {
-                    crate::emacs_core::print::print_value(&Value::from_bits(bits))
+                    crate::emacs_core::print::print_value(&unsafe {
+                        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                        Value::from_bits(bits)
+                    })
                 }
                 NativeRun::Signal => outcome(Err(take_pending_flow().expect("stashed flow"))),
                 other => panic!(
@@ -9916,7 +10112,10 @@ fn autoload_do_load_sites_answer_non_autoload_inline() {
         let shim0 = SUBR_SPEC_COUNT.load(Ordering::Relaxed);
         let ctx = &mut ev as *mut Context as *mut u8;
         let got = match leaf.call(ctx, &[item]) {
-            NativeRun::Ok(bits) => crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+            NativeRun::Ok(bits) => crate::emacs_core::print::print_value(&unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
             NativeRun::Signal => outcome(Err(take_pending_flow().expect("stashed flow"))),
             other => panic!("(autoload-do-load swp): {other:?}"),
         };
@@ -9942,7 +10141,10 @@ fn autoload_do_load_sites_answer_non_autoload_inline() {
         .expect("fset");
     match leaf.call(ctx, &[Value::make_int(1)]) {
         NativeRun::Ok(bits) => assert_eq!(
-            crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+            crate::emacs_core::print::print_value(&unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
             "redefined"
         ),
         other => panic!("redefined autoload-do-load: {other:?}"),
@@ -9951,7 +10153,10 @@ fn autoload_do_load_sites_answer_non_autoload_inline() {
         .set_symbol_function_id(intern("autoload-do-load"), original);
     match leaf.call(ctx, &[Value::make_int(1)]) {
         NativeRun::Ok(bits) => assert_eq!(
-            crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+            crate::emacs_core::print::print_value(&unsafe {
+                /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                Value::from_bits(bits)
+            }),
             "1"
         ),
         other => panic!("restored autoload-do-load: {other:?}"),
@@ -10014,7 +10219,10 @@ fn type_of_call_sites_answer_as_the_builtin_on_the_fast_path() {
             .expect("builtin answers");
             match leaf.call(ctx, &[*item]) {
                 NativeRun::Ok(bits) => assert_eq!(
-                    crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+                    crate::emacs_core::print::print_value(&unsafe {
+                        /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                        Value::from_bits(bits)
+                    }),
                     crate::emacs_core::print::print_value(&want),
                     "({name} {})",
                     crate::emacs_core::print::print_value(item)
@@ -10037,7 +10245,10 @@ fn type_of_call_sites_answer_as_the_builtin_on_the_fast_path() {
             .expect("fset");
         match leaf.call(ctx, &[Value::make_int(1)]) {
             NativeRun::Ok(bits) => assert_eq!(
-                crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+                crate::emacs_core::print::print_value(&unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                }),
                 "redefined",
                 "{name} redefined"
             ),
