@@ -394,7 +394,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
     // the generic call, whose entry charges it and raises GNU's error. The
     // charge comes before the heat moves: a call the budget rejects must
     // not count as a fast-path run for tiering.
-    let Some(frame_bytes) =
+    let Some(saved_budget) =
         crate::emacs_core::bytecode::vm::charge_bytecode_frame(ctx_ref, bc.max_stack.get())
     else {
         return source_slot_declined();
@@ -434,7 +434,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
         if status == STATUS_OK {
             if ctx_ref.pop_native_backtrace_frame(bt_count) {
                 ctx_ref.depth -= 1;
-                crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, frame_bytes);
+                crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, saved_budget);
                 // SAFETY: `out` is the generated code's result stack slot.
                 unsafe { *out = bits };
                 return STATUS_OK;
@@ -453,7 +453,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
             NativeRun::Ok(bits) => {
                 if ctx_ref.pop_native_backtrace_frame(bt_count) {
                     ctx_ref.depth -= 1;
-                    crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, frame_bytes);
+                    crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, saved_budget);
                     // SAFETY: as above.
                     unsafe { *out = bits as i64 };
                     return STATUS_OK;
@@ -468,7 +468,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
             NativeRun::Signal if shim_panic_pending() => {
                 // SAFETY: `args_ptr` is the caller's live call-args slot.
                 unsafe { ctx_ref.detach_native_frames_into(args_ptr) };
-                crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, frame_bytes);
+                crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, saved_budget);
                 return STATUS_SIGNAL;
             }
             other => FastRun::Framed(other),
@@ -483,7 +483,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
         out,
         bt_count,
         run,
-        frame_bytes,
+        saved_budget,
     )
 }
 

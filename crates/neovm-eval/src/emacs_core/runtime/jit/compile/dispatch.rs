@@ -1565,7 +1565,7 @@ macro_rules! spec_call_body {
                     $ctx, $sym_bits, $expected, slot_ref, $args_ptr, $nargs, $out,
                 );
             };
-            let Some(frame_bytes) =
+            let Some(saved_budget) =
                 crate::emacs_core::bytecode::vm::charge_bytecode_frame(ctx_ref, bc.max_stack.get())
             else {
                 return call_spec_slow(
@@ -1647,7 +1647,7 @@ macro_rules! spec_call_body {
                         ctx_ref.depth -= 1;
                         crate::emacs_core::bytecode::vm::release_bytecode_frame(
                             ctx_ref,
-                            frame_bytes,
+                            saved_budget,
                         );
                         // SAFETY: `out` is the generated code's result stack slot.
                         unsafe { *$out = bits };
@@ -1675,7 +1675,7 @@ macro_rules! spec_call_body {
                         ctx_ref.depth -= 1;
                         crate::emacs_core::bytecode::vm::release_bytecode_frame(
                             ctx_ref,
-                            frame_bytes,
+                            saved_budget,
                         );
                         // SAFETY: `out` is the generated code's result stack slot.
                         unsafe { *$out = ret.value };
@@ -1703,7 +1703,7 @@ macro_rules! spec_call_body {
                             ctx_ref.depth -= 1;
                             crate::emacs_core::bytecode::vm::release_bytecode_frame(
                                 ctx_ref,
-                                frame_bytes,
+                                saved_budget,
                             );
                             // SAFETY: as above.
                             unsafe { *$out = bits as i64 };
@@ -1729,7 +1729,7 @@ macro_rules! spec_call_body {
                         // here even on the caller's healing exit.
                         crate::emacs_core::bytecode::vm::release_bytecode_frame(
                             ctx_ref,
-                            frame_bytes,
+                            saved_budget,
                         );
                         return STATUS_SIGNAL;
                     }
@@ -1748,7 +1748,7 @@ macro_rules! spec_call_body {
                 $out,
                 bt_count,
                 run,
-                frame_bytes,
+                saved_budget,
             );
         }
         call_spec_slow(
@@ -1942,7 +1942,7 @@ pub(super) fn call_spec_finish(
     out: *mut i64,
     bt_count: usize,
     run: FastRun,
-    charged: usize,
+    budget_restore: usize,
 ) -> i64 {
     jit_shim_contain!(detach args_ptr, ctx, STATUS_SIGNAL, {
         use crate::emacs_core::jit::cache::{self, NativeCallOutcome};
@@ -1967,8 +1967,12 @@ pub(super) fn call_spec_finish(
         // handed to the interpreter (that resume continues THIS frame, so
         // its charge was still held). An interpreter RERUN below is a
         // fresh entry through `execute_from_stack_args`, which charges the
-        // frame itself.
-        crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx, charged);
+        // frame itself. Zero means this call never charged (its budget
+        // check failed and the frame was rejected); a real restore value is
+        // always at least the smallest frame cost, so it is never zero.
+        if budget_restore != 0 {
+            crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx, budget_restore);
+        }
         let outcome = match outcome {
             NativeCallOutcome::Fallback => {
                 Vm::interp_fallback_native(ctx_ptr, bc, callee, args_ptr, nargs)

@@ -1191,8 +1191,23 @@ struct InterpreterCallerReturn(usize);
 impl InterpreterCallerReturn {
     #[doc(hidden)]
     pub const OWNED_BACKTRACE_ARGS_FLAG: usize = 1usize << (usize::BITS - 1);
+    /// Shift of the saved bytecode-stack budget this word also carries: the
+    /// remaining budget the callee frame found when it was charged
+    /// (GNU `BC_STACK_SIZE` is 4 MiB, so 24 bits suffice). Restoring it on
+    /// return is one store -- the LIFO release.
     #[doc(hidden)]
-    pub const VALUE_SLOT_MASK: usize = !Self::OWNED_BACKTRACE_ARGS_FLAG;
+    pub const SAVED_BUDGET_SHIFT: u32 = 32;
+    #[doc(hidden)]
+    pub const SAVED_BUDGET_BITS: u32 = 24;
+    #[doc(hidden)]
+    pub const SAVED_BUDGET_MASK: usize =
+        ((1usize << Self::SAVED_BUDGET_BITS) - 1) << Self::SAVED_BUDGET_SHIFT;
+    /// The saved value's domain, before the shift.
+    #[doc(hidden)]
+    pub const SAVED_BUDGET_LIMIT_MASK: usize = (1usize << Self::SAVED_BUDGET_BITS) - 1;
+    /// The low bits: the consumed call operand's `bc_buf` index.
+    #[doc(hidden)]
+    pub const VALUE_SLOT_MASK: usize = (1usize << Self::SAVED_BUDGET_SHIFT) - 1;
 
     /// The entry frame's word. Nothing reads it: `leave_callee` refuses to
     /// pop the entry frame, and popping is the only way a frame's word
@@ -1203,12 +1218,33 @@ impl InterpreterCallerReturn {
     #[inline(always)]
     #[doc(hidden)]
     pub fn new(value_slot: ConsumedCallOperandRootSlot, owns_backtrace_args: bool) -> Self {
+        Self::with_saved_budget(value_slot, owns_backtrace_args, 0)
+    }
+
+    /// [`Self::new`] plus the remaining bytecode-stack budget the callee
+    /// frame found when it was charged; see [`Self::saved_bytecode_remaining`].
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn with_saved_budget(
+        value_slot: ConsumedCallOperandRootSlot,
+        owns_backtrace_args: bool,
+        saved_bytecode_remaining: usize,
+    ) -> Self {
         debug_assert_eq!(
-            value_slot.0 & Self::OWNED_BACKTRACE_ARGS_FLAG,
+            value_slot.0 & !Self::VALUE_SLOT_MASK,
             0,
-            "a bc_buf index cannot occupy the backtrace-ownership bit"
+            "a bc_buf index must fit the continuation's low 32 bits"
         );
-        Self(value_slot.0 | (usize::from(owns_backtrace_args) * Self::OWNED_BACKTRACE_ARGS_FLAG))
+        debug_assert_eq!(
+            saved_bytecode_remaining & !Self::SAVED_BUDGET_LIMIT_MASK,
+            0,
+            "the remaining bytecode-stack budget must fit its 24 bits"
+        );
+        Self(
+            value_slot.0
+                | (saved_bytecode_remaining << Self::SAVED_BUDGET_SHIFT)
+                | (usize::from(owns_backtrace_args) * Self::OWNED_BACKTRACE_ARGS_FLAG),
+        )
     }
 
     #[inline(always)]
@@ -1221,6 +1257,14 @@ impl InterpreterCallerReturn {
     #[doc(hidden)]
     pub fn owns_backtrace_args(self) -> bool {
         self.0 & Self::OWNED_BACKTRACE_ARGS_FLAG != 0
+    }
+
+    /// The remaining bytecode-stack budget this frame found when it was
+    /// charged; restoring it releases the frame's charge (one store).
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn saved_bytecode_remaining(self) -> usize {
+        (self.0 & Self::SAVED_BUDGET_MASK) >> Self::SAVED_BUDGET_SHIFT
     }
 }
 
@@ -2485,42 +2529,55 @@ pub(crate) const BC_STACK_SIZE: usize = 512 * 1024 * std::mem::size_of::<Value>(
 /// saved_pc and fun, four pointers before the frame's `next_stack` data.
 pub(crate) const BC_FRAME_HEADER_BYTES: usize = 4 * std::mem::size_of::<usize>();
 
+/// GNU's stack state before any byte-compiled frame is entered: the whole
+/// budget minus the dummy bottom header `init_bc_thread` parks at its base
+/// (src/bytecode.c:382-385).
+pub(crate) const BC_STACK_INITIAL_REMAINING: usize = BC_STACK_SIZE - BC_FRAME_HEADER_BYTES;
+
 /// The bytes one byte-compiled frame occupies: the header plus the
-/// function's data stack (`CLOSURE_STACK_DEPTH` words).
+/// function's data stack (`CLOSURE_STACK_DEPTH` words). Saturating, because
+/// `max_stack` comes from the closure's slot 3 and a hostile value must not
+/// wrap the cost to something a frame could fit into.
 #[inline(always)]
 pub(crate) fn bytecode_frame_bytes(max_stack: usize) -> usize {
-    BC_FRAME_HEADER_BYTES + max_stack * std::mem::size_of::<Value>()
+    BC_FRAME_HEADER_BYTES.saturating_add(max_stack.saturating_mul(std::mem::size_of::<Value>()))
 }
 
 /// Charge one byte-compiled frame of a callee declaring `max_stack` against
-/// GNU's bytecode stack. `None` when the frame does not fit: the caller must
-/// take its reference path, which enters through [`charge_bytecode_frame`]
-/// itself and raises GNU's `Bytecode stack overflow` there. Every tier's
-/// byte-compiled entry calls this same rule ([`bytecode_frame_bytes`] over
-/// the function object's declared depth), so the depth at which the budget
-/// ends is tier-independent.
+/// GNU's bytecode stack, whose state is held as the REMAINING bytes
+/// (`Context::bytecode_stack_remaining`): the charge is one subtraction and
+/// the overflow test is its sign. `Some(saved_remaining)` is the value the
+/// frame must restore when it returns or unwinds ([`release_bytecode_frame`],
+/// a plain store); `None` when the frame does not fit, and the caller must
+/// take its reference path, which raises GNU's `Bytecode stack overflow`.
+/// Every tier's byte-compiled entry calls this same rule over the function
+/// object's declared depth, so the depth at which the budget ends is
+/// tier-independent.
 #[inline(always)]
 pub(crate) fn charge_bytecode_frame(
     ctx: &mut crate::emacs_core::eval::Context,
     max_stack: usize,
 ) -> Option<usize> {
     let frame_bytes = bytecode_frame_bytes(max_stack);
-    let used = ctx.bytecode_stack_used.saturating_add(frame_bytes);
-    if used > BC_STACK_SIZE {
+    let remaining = ctx.bytecode_stack_remaining;
+    // Unsigned borrow: `frame_bytes > remaining`. The condition is the
+    // subtraction's carry, no separate compare.
+    let after = remaining.wrapping_sub(frame_bytes);
+    if after > remaining {
         return None;
     }
-    ctx.bytecode_stack_used = used;
-    Some(frame_bytes)
+    ctx.bytecode_stack_remaining = after;
+    Some(remaining)
 }
 
-/// Release a charge taken by [`charge_bytecode_frame`]: the frame it counted
-/// has returned or unwound.
+/// Release a charge taken by [`charge_bytecode_frame`]: restore the remaining
+/// budget the frame found. One store; a plain LIFO restore cannot drift.
 #[inline(always)]
 pub(crate) fn release_bytecode_frame(
     ctx: &mut crate::emacs_core::eval::Context,
-    frame_bytes: usize,
+    saved_remaining: usize,
 ) {
-    ctx.bytecode_stack_used = ctx.bytecode_stack_used.saturating_sub(frame_bytes);
+    ctx.bytecode_stack_remaining = saved_remaining;
 }
 
 impl<'a> crate::emacs_core::hook_runtime::HookRuntime for Vm<'a> {
@@ -3153,8 +3210,7 @@ impl<'a> Vm<'a> {
         // ([`charge_bytecode_frame`]), and restore the previous depth on
         // every exit (normal return, signal, throw); a contained panic
         // restores it from the module-boundary snapshot.
-        let saved_used = self.ctx.bytecode_stack_used;
-        let Some(_frame_bytes) = charge_bytecode_frame(self.ctx, func.max_stack.get()) else {
+        let Some(saved_budget) = charge_bytecode_frame(self.ctx, func.max_stack.get()) else {
             return Err(self.bytecode_stack_overflow());
         };
         // Flattened native-stack probe: the common shallow call pays two
@@ -3172,7 +3228,7 @@ impl<'a> Vm<'a> {
         } else {
             self.execute_from_stack_args_body(func, args_start, nargs, func_value)
         };
-        self.ctx.bytecode_stack_used = saved_used;
+        self.ctx.bytecode_stack_remaining = saved_budget;
         result
     }
 
@@ -3184,6 +3240,32 @@ impl<'a> Vm<'a> {
     #[inline(never)]
     fn bytecode_stack_overflow(&mut self) -> Flow {
         signal("error", vec![Value::string("Bytecode stack overflow")])
+    }
+
+    /// The one cold handler of a rejected iterative Bcall frame: the drive
+    /// arms call it when [`charge_bytecode_frame`] reports the frame does not
+    /// fit, so their hot bodies carry only the subtraction and its branch.
+    /// The rejected frame was never installed: pop the backtrace token the
+    /// caller recorded (GNU records the callee before `setup_frame` checks,
+    /// bytecode.c:792-796 then :496-516), release the call depth, and let the
+    /// signal flow through the caller's nonlocal machinery.
+    #[cold]
+    #[inline(never)]
+    fn reject_bytecode_frame_for_budget(&mut self, backtrace: BytecodeBacktraceFrame) -> Flow {
+        let result = Err(signal(
+            "error",
+            vec![Value::string("Bytecode stack overflow")],
+        ));
+        let result = self.ctx.dispatch_signal_result_if_needed(result);
+        let result = self
+            .ctx
+            .pop_bytecode_backtrace_token_fast_or_slow(backtrace, result);
+        self.leave_bytecode_call_depth();
+        debug_assert!(result.is_err());
+        match result {
+            Err(flow) => flow,
+            Ok(_) => unreachable!("a bytecode-stack overflow cannot complete"),
+        }
     }
 
     /// Cold stacker arm of [`Vm::execute_from_stack_args`]: grow the native
@@ -3917,8 +3999,9 @@ impl<'a> Vm<'a> {
     ///
     /// `backtrace` is the token the caller's Bcall opened for this call. It is
     /// parked in the returned frame together with the caller's resume slot
-    /// (the consumed operand `root_slot`), which is the whole continuation
-    /// `Breturn` needs.
+    /// (the consumed operand `root_slot`) and `saved_bytecode_remaining`, the
+    /// bytecode-stack budget the caller found before charging this frame;
+    /// `Breturn` restores it with one store.
     #[doc(hidden)]
     pub fn install_iterative_interpreter_frame(
         &mut self,
@@ -3927,6 +4010,7 @@ impl<'a> Vm<'a> {
         root_slot: ConsumedCallOperandRootSlot,
         nargs: usize,
         backtrace: BytecodeBacktraceFrame,
+        saved_bytecode_remaining: usize,
     ) -> InstalledCalleeFrame {
         // Every stack mutation below goes through the LIVE cursor (GNU's
         // setup_frame works on its register `top` the same way); the context
@@ -4029,7 +4113,11 @@ impl<'a> Vm<'a> {
                 condition_stack_base,
                 specpdl_base,
             },
-            caller_return: InterpreterCallerReturn::new(root_slot, owns_backtrace_args),
+            caller_return: InterpreterCallerReturn::with_saved_budget(
+                root_slot,
+                owns_backtrace_args,
+                saved_bytecode_remaining,
+            ),
             #[cfg(debug_assertions)]
             entry_lexenv: self.ctx.lexenv,
         })
@@ -4047,14 +4135,11 @@ impl<'a> Vm<'a> {
         }
         let cleanup = frame.cleanup;
         // Release the bytecode-stack charge taken when this frame was
-        // installed; the entry frame's charge belongs to the caller that
-        // entered the driver through execute_from_stack_args.
-        let frame_bytes = bytecode_frame_bytes(frame.function.code().max_stack.get());
-        debug_assert!(
-            self.ctx.bytecode_stack_used >= frame_bytes,
-            "an installed bytecode frame was charged before this release"
-        );
-        release_bytecode_frame(self.ctx, frame_bytes);
+        // installed by restoring the remaining budget it found: one store,
+        // and a LIFO restore cannot drift. The entry frame's charge belongs
+        // to the caller that entered the driver through
+        // execute_from_stack_args.
+        release_bytecode_frame(self.ctx, frame.caller_return.saved_bytecode_remaining());
         #[cfg(debug_assertions)]
         debug_assert!(
             lexenv_tail_reachable(self.ctx.lexenv, frame.entry_lexenv),
@@ -4175,12 +4260,12 @@ impl<'a> Vm<'a> {
 
         // Read everything needed from the ACTIVE frame before popping it: after
         // `leave_callee` the top of the stack is the caller, not this frame.
-        let (cleanup, frame_base, returning_frame_bytes) = {
+        let (cleanup, frame_base, saved_budget) = {
             let current = callers.active();
             (
                 current.cleanup,
                 current.frame_base,
-                bytecode_frame_bytes(current.function.code().max_stack.get()),
+                current.caller_return.saved_bytecode_remaining(),
             )
         };
         #[cfg(debug_assertions)]
@@ -4228,7 +4313,7 @@ impl<'a> Vm<'a> {
         // The charge taken when this callee was installed is released here on
         // the fast Breturn path too: release must ride every exit (normal,
         // signal/throw); the slow path releases in finish_interpreter_frame.
-        release_bytecode_frame(self.ctx, returning_frame_bytes);
+        release_bytecode_frame(self.ctx, saved_budget);
         let continuation = callers
             .leave_callee()
             .expect("a suspended caller was proven above");
@@ -5537,28 +5622,16 @@ impl<'a> Vm<'a> {
                                 .push_backtrace_frame_from_bc_stack(func_val, args_start, n);
                             // GNU records the callee (bytecode.c:792-796) and
                             // then setup_frame (:496-516) checks the bytecode
-                            // stack; the rejected frame is not installed.
-                            if charge_bytecode_frame(self.ctx, callee_code.max_stack.get())
-                                .is_none()
-                            {
-                                let result = Err(signal(
-                                    "error",
-                                    vec![Value::string("Bytecode stack overflow")],
-                                ));
-                                let result = self.ctx.dispatch_signal_result_if_needed(result);
-                                let result = self
-                                    .ctx
-                                    .pop_bytecode_backtrace_token_fast_or_slow(backtrace, result);
-                                self.leave_bytecode_call_depth();
-                                debug_assert!(result.is_err());
+                            // stack; the rejected frame is not installed. The
+                            // cold handler is shared by every tier and lives
+                            // out of line, so this arm stays small.
+                            let Some(saved_budget) =
+                                charge_bytecode_frame(self.ctx, callee_code.max_stack.get())
+                            else {
+                                let flow = self.reject_bytecode_frame_for_budget(backtrace);
                                 publish_phase!();
-                                match result {
-                                    Err(flow) => resume_flow!(flow),
-                                    Ok(_) => {
-                                        unreachable!("a bytecode-stack overflow cannot complete")
-                                    }
-                                }
-                            }
+                                resume_flow!(flow)
+                            };
                             callers
                                 .active_mut()
                                 .save_execution_state(pc_local, osr_tried);
@@ -5584,6 +5657,7 @@ impl<'a> Vm<'a> {
                                 root_slot,
                                 n,
                                 backtrace,
+                                saved_budget,
                             );
                             callers.enter_callee(callee_frame);
                             continue 'frame;
@@ -5613,31 +5687,13 @@ impl<'a> Vm<'a> {
                                     // installed.  The cursor is still published,
                                     // so the overflow resumes through the normal
                                     // nonlocal-flow machinery.
-                                    if charge_bytecode_frame(
+                                    let Some(saved_budget) = charge_bytecode_frame(
                                         self.ctx,
                                         callee.code().max_stack.get(),
-                                    )
-                                    .is_none()
-                                    {
-                                        let result = Err(signal(
-                                            "error",
-                                            vec![Value::string("Bytecode stack overflow")],
-                                        ));
-                                        let result =
-                                            self.ctx.dispatch_signal_result_if_needed(result);
-                                        let result =
-                                            self.ctx.pop_bytecode_backtrace_token_fast_or_slow(
-                                                backtrace, result,
-                                            );
-                                        self.leave_bytecode_call_depth();
-                                        debug_assert!(result.is_err());
-                                        match result {
-                                            Err(flow) => resume_flow!(flow),
-                                            Ok(_) => unreachable!(
-                                                "a bytecode-stack overflow cannot complete"
-                                            ),
-                                        }
-                                    }
+                                    ) else {
+                                        let flow = self.reject_bytecode_frame_for_budget(backtrace);
+                                        resume_flow!(flow)
+                                    };
                                     // Uncached ByteCode targets route through
                                     // the tier dispatcher (heat/feedback) and
                                     // may still enter iteratively; the cursor
@@ -5661,6 +5717,7 @@ impl<'a> Vm<'a> {
                                         root_slot,
                                         nargs,
                                         backtrace,
+                                        saved_budget,
                                     );
                                     callers.enter_callee(callee_frame);
                                     continue 'frame;

@@ -3690,10 +3690,13 @@ pub struct Context {
     /// consumed. Thread-confined like the Context; no TLS.
     pub(crate) native_stack_probe: native_stack::NativeStackProbe,
     /// GNU's bytecode stack (`BC_STACK_SIZE`, src/bytecode.c:337) as used by
-    /// the byte-compiled frames active on this thread: charged on frame
-    /// entry and released on exit, starting at the dummy bottom header
-    /// (src/bytecode.c:382-385). Thread-confined like the Context.
-    pub(crate) bytecode_stack_used: usize,
+    /// the byte-compiled frames active on this thread, held as REMAINING
+    /// bytes: a frame's charge is one subtraction whose unsigned borrow is
+    /// setup_frame's overflow test, and a return restores the value the
+    /// frame found (one LIFO store). Starts at the budget minus the dummy
+    /// bottom header (src/bytecode.c:382-385). Thread-confined like the
+    /// Context.
+    pub(crate) bytecode_stack_remaining: usize,
     /// Where that guard's cold side parks a leaf's entry parameters after
     /// the vmctx across its measuring call.
     pub(crate) jit_stack_scratch: [usize; native_stack::JIT_STACK_SCRATCH_WORDS],
@@ -4524,7 +4527,7 @@ pub struct ModuleBoundarySnapshot {
     vm_root_frames_len: usize,
     scratch_gc_roots_len: usize,
     depth: usize,
-    bytecode_stack_used: usize,
+    bytecode_stack_remaining: usize,
     lexenv: Value,
     macro_expansion_scope_depth: usize,
 }
@@ -4603,7 +4606,7 @@ impl Context {
             vm_root_frames_len: self.vm_root_frames.len(),
             scratch_gc_roots_len: save_scratch_gc_roots(),
             depth: self.depth,
-            bytecode_stack_used: self.bytecode_stack_used,
+            bytecode_stack_remaining: self.bytecode_stack_remaining,
             lexenv: self.lexenv,
             macro_expansion_scope_depth: self.macro_expansion_scope_depth,
         }
@@ -4657,7 +4660,7 @@ impl Context {
         // depth is exact. Safe direction: extra roots only ever pin.
         restore_scratch_gc_roots(snap.scratch_gc_roots_len);
         self.depth = snap.depth;
-        self.bytecode_stack_used = snap.bytecode_stack_used;
+        self.bytecode_stack_remaining = snap.bytecode_stack_remaining;
         self.lexenv = snap.lexenv;
         self.macro_expansion_scope_depth = snap.macro_expansion_scope_depth;
         self.lexenv_assq_cache.clear();
@@ -4750,7 +4753,7 @@ impl Context {
             .truncate(snap.sequence_temp_root_frames_len);
         self.vm_root_frames.truncate(snap.vm_root_frames_len);
         self.depth = snap.depth;
-        self.bytecode_stack_used = snap.bytecode_stack_used;
+        self.bytecode_stack_remaining = snap.bytecode_stack_remaining;
         self.lexenv = snap.lexenv;
         self.macro_expansion_scope_depth = snap.macro_expansion_scope_depth;
         self.lexenv_assq_cache.clear();

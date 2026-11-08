@@ -3316,7 +3316,7 @@ pub(crate) fn run_resolved_leaf(
         let ctx_ref = unsafe { &mut *ctx };
         crate::emacs_core::bytecode::vm::charge_bytecode_frame(ctx_ref, func.max_stack.get())
     };
-    let Some(frame_bytes) = charged else {
+    let Some(saved_budget) = charged else {
         return Ok(None);
     };
     let outcome = run_with_bytecode_stack_probe(ctx, |ctx| {
@@ -3324,7 +3324,7 @@ pub(crate) fn run_resolved_leaf(
     });
     // SAFETY: as above; valid for this whole call.
     let ctx_ref = unsafe { &mut *ctx };
-    crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, frame_bytes);
+    crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, saved_budget);
     outcome
 }
 
@@ -3376,7 +3376,7 @@ pub(crate) fn run_resolved_leaf_native(
         let ctx_ref = unsafe { &mut *ctx };
         crate::emacs_core::bytecode::vm::charge_bytecode_frame(ctx_ref, func.max_stack.get())
     };
-    let Some(frame_bytes) = charged else {
+    let Some(saved_budget) = charged else {
         // Over budget: the interpreter fallback enters through
         // `execute_from_stack_args`, which raises GNU's error.
         return NativeCallOutcome::Fallback;
@@ -3391,7 +3391,7 @@ pub(crate) fn run_resolved_leaf_native(
     });
     // SAFETY: as above; valid for this whole call.
     let ctx_ref = unsafe { &mut *ctx };
-    crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, frame_bytes);
+    crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, saved_budget);
     outcome
 }
 

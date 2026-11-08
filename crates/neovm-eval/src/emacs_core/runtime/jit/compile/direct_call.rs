@@ -44,7 +44,7 @@
 
 use super::jit_layout::{
     BYTECODE_MAX_STACK_OFFSET, BacktraceLayout, CONTEXT_ATTENTION_OFFSET,
-    CONTEXT_BYTECODE_STACK_USED_OFFSET, CONTEXT_DEPTH_OFFSET, CONTEXT_MAX_DEPTH_OFFSET,
+    CONTEXT_BYTECODE_STACK_REMAINING_OFFSET, CONTEXT_DEPTH_OFFSET, CONTEXT_MAX_DEPTH_OFFSET,
     CONTEXT_SPECPDL_OFFSET, DISPATCH_DEBUG_FWD_OFFSET, DISPATCH_FUNCTION_EPOCH_OFFSET,
     EntryTemplate, VecOffsets,
 };
@@ -57,7 +57,7 @@ use super::spec_slot::{
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
-use crate::emacs_core::bytecode::vm::{BC_FRAME_HEADER_BYTES, BC_STACK_SIZE};
+use crate::emacs_core::bytecode::vm::BC_FRAME_HEADER_BYTES;
 use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use std::sync::atomic::AtomicU64;
 
@@ -202,6 +202,11 @@ enum DirectSiteEntry {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DirectSite {
     expected: u64,
+    /// GNU's frame cost of the callee (`setup_frame`: the 32-byte bc_frame
+    /// header plus 8 bytes per declared stack word), baked as an immediate
+    /// in the emitted charge. 0 for a closure-source site, whose callee is
+    /// only known at run time.
+    frame_bytes: u64,
     /// The call's own argument count: what its frame records.
     nargs: usize,
     /// How the call enters the callee's argument words.
@@ -332,6 +337,8 @@ impl DirectSite {
         rt.direct_sites.set(rt.direct_sites.get() + 1);
         Some(DirectSite {
             expected,
+            frame_bytes: crate::emacs_core::bytecode::vm::bytecode_frame_bytes(bc.max_stack.get())
+                as u64,
             nargs,
             callee,
             entry: if framed {
@@ -371,6 +378,7 @@ impl DirectSite {
         rt.direct_sites.set(rt.direct_sites.get() + 1);
         Some(DirectSite {
             expected: 0,
+            frame_bytes: 0,
             nargs,
             callee: CalleeShape::exact(nargs),
             entry: if jit_direct_memory_on() && !jit_register_abi_on() {
@@ -740,40 +748,38 @@ pub(crate) fn emit_direct_bytecode_call(
         // `execute_from_stack_args` applies. A frame that does not fit goes
         // to the shim, whose slow half enters through the Rust entry and
         // raises GNU's `Bytecode stack overflow` there.
-        let callee_object = match callee {
-            DirectCallee::Symbol { exp_v, .. } => exp_v,
-            DirectCallee::Source { callee } => callee,
+        // The frame's cost: an immediate for a named site (the callee's
+        // declared depth is a compile-time fact), a load for a closure
+        // source (the object varies). The budget is held as REMAINING bytes,
+        // so the charge is one subtraction and the overflow test is its
+        // unsigned borrow -- no separate compare.
+        let frame_bytes = match callee {
+            DirectCallee::Symbol { .. } => fb.ins().iconst(types::I64, site.frame_bytes as i64),
+            DirectCallee::Source { callee } => {
+                let object = super::lowering::band_imm_p(fb, callee, !(TAG_MASK as i64));
+                let declared =
+                    fb.ins()
+                        .load(types::I64, flags, object, BYTECODE_MAX_STACK_OFFSET as i32);
+                let data = ishl_imm_p(fb, declared, 3);
+                iadd_imm_p(fb, data, BC_FRAME_HEADER_BYTES as i64)
+            }
         };
-        let callee_object = super::lowering::band_imm_p(fb, callee_object, !(TAG_MASK as i64));
-        let declared = fb.ins().load(
-            types::I64,
-            flags,
-            callee_object,
-            BYTECODE_MAX_STACK_OFFSET as i32,
-        );
-        let frame_bytes = {
-            let data = ishl_imm_p(fb, declared, 3);
-            iadd_imm_p(fb, data, BC_FRAME_HEADER_BYTES as i64)
-        };
-        let used = fb.ins().load(
+        let remaining = fb.ins().load(
             types::I64,
             flags,
             vmctx,
-            CONTEXT_BYTECODE_STACK_USED_OFFSET as i32,
+            CONTEXT_BYTECODE_STACK_REMAINING_OFFSET as i32,
         );
-        let charged = fb.ins().iadd(used, frame_bytes);
-        let over_budget = icmp_imm_p(
-            fb,
-            IntCC::UnsignedGreaterThan,
-            charged,
-            BC_STACK_SIZE as i64,
-        );
+        let after = fb.ins().isub(remaining, frame_bytes);
+        // `after > remaining` is the subtraction's borrow: the frame does
+        // not fit. The shim's slow half raises GNU's error on entry.
+        let over_budget = fb.ins().icmp(IntCC::UnsignedGreaterThan, after, remaining);
         next(fb, over_budget);
         fb.ins().store(
             flags,
-            charged,
+            after,
             vmctx,
-            CONTEXT_BYTECODE_STACK_USED_OFFSET as i32,
+            CONTEXT_BYTECODE_STACK_REMAINING_OFFSET as i32,
         );
         let (value, status) = if matches!(
             site.entry,
@@ -860,21 +866,15 @@ pub(crate) fn emit_direct_bytecode_call(
         let depth3 = iadd_imm_p(fb, depth2, -1);
         fb.ins()
             .store(flags, depth3, vmctx, CONTEXT_DEPTH_OFFSET as i32);
-        // The callee has returned: release the bytecode-stack charge taken
-        // at its call. (Non-OK exits release inside the finish, after any
-        // precise-deopt resume of this same frame.)
-        let used2 = fb.ins().load(
-            types::I64,
-            flags,
-            vmctx,
-            CONTEXT_BYTECODE_STACK_USED_OFFSET as i32,
-        );
-        let used3 = fb.ins().isub(used2, frame_bytes);
+        // The callee has returned: LIFO-restore the remaining budget the
+        // call found (one store; the value is this site's live SSA word).
+        // Non-OK exits restore it inside the finish, after any precise-deopt
+        // resume of this same frame.
         fb.ins().store(
             flags,
-            used3,
+            remaining,
             vmctx,
-            CONTEXT_BYTECODE_STACK_USED_OFFSET as i32,
+            CONTEXT_BYTECODE_STACK_REMAINING_OFFSET as i32,
         );
         fb.def_var(result, value);
         match hot_done {
@@ -924,7 +924,7 @@ pub(crate) fn emit_direct_bytecode_call(
                 args_c,
                 nargs_c,
                 out_c,
-                frame_bytes,
+                remaining,
             ],
         );
         let finished = fb.inst_results(finish)[0];
@@ -1050,7 +1050,7 @@ fn finish_signature(call_conv: cranelift_codegen::isa::CallConv, ptr_ty: types::
         ptr_ty,     // args (null: read them from the frame)
         types::I64, // nargs
         ptr_ty,     // out
-        types::I64, // bytecode-stack bytes charged at the call (0: none)
+        types::I64, // remaining bytecode-stack budget the call found (0: none charged)
     ] {
         sig.params.push(AbiParam::new(ty));
     }
@@ -1085,7 +1085,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_finish(
     args: *const i64,
     nargs: i64,
     out: *mut i64,
-    charged: i64,
+    budget_restore: i64,
 ) -> i64 {
     DIRECT_COLD_EXITS.fetch_add(1, Ordering::Relaxed);
     let bt_count = bt_count as usize;
@@ -1130,7 +1130,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_finish(
         out,
         bt_count,
         run,
-        charged as usize,
+        budget_restore as usize,
     )
 }
 

@@ -69,7 +69,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_framed(
         // the callee's DECLARED stack depth here, by the same rule. Over
         // budget raises GNU's error through the reference finish, which
         // unwinds the frame and depth the site already pushed.
-        let frame_bytes = match callee.bytecode_data_if_materialized() {
+        let saved_budget = match callee.bytecode_data_if_materialized() {
             Some(bc) => {
                 // SAFETY: the seam's dormant Context (the shim contract).
                 let ctx_ref = unsafe { &mut *(ctx as *mut Context) };
@@ -77,7 +77,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_framed(
                     ctx_ref,
                     bc.max_stack.get(),
                 ) {
-                    Some(frame_bytes) => frame_bytes,
+                    Some(saved_budget) => saved_budget,
                     None => {
                         super::super::shims::stash_pending_flow(neovm_value::error::signal(
                             "error",
@@ -111,14 +111,14 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_framed(
         if shim_panic_pending() {
             // SAFETY: the caller's argument slot is still live here.
             unsafe { ctx_ref.detach_native_frames_into(args_ptr) };
-            crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, frame_bytes);
+            crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, saved_budget);
             return STATUS_SIGNAL;
         }
         let run = match outcome {
             NativeRun::Ok(bits) => {
                 if ctx_ref.pop_native_backtrace_frame(bt_count) {
                     ctx_ref.depth -= 1;
-                    crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, frame_bytes);
+                    crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, saved_budget);
                     // SAFETY: the generated code's result stack slot.
                     unsafe { *out = bits as i64 };
                     return STATUS_OK;
@@ -146,7 +146,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_framed(
             out,
             bt_count,
             run,
-            frame_bytes,
+            saved_budget,
         )
     }
 }
