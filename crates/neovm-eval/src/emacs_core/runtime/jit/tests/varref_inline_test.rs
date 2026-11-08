@@ -315,7 +315,14 @@ fn raw_varref_preserves_integer_values_across_inline_and_fallback_reads() {
             let NativeRun::Ok(bits) = result else {
                 panic!("{name} {n}: {result:?}")
             };
-            assert_eq!(print_value(&Value::from_bits(bits)), want, "{name} {n}");
+            assert_eq!(
+                print_value(&unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                }),
+                want,
+                "{name} {n}"
+            );
             assert_eq!(VARREF_SHIM_CALLS.with(|c| c.get()), usize::from(!inline));
             assert_eq!(eval.jit_root_stack_top, 0);
         }

@@ -230,7 +230,10 @@ fn arithmetic_shape_dynamic_native_and_precise_deopt_match_gnu() {
         let result = match leaves[case.operation].call(ctx_ptr, &args) {
             NativeRun::Ok(bits) => {
                 native_answers += 1;
-                Ok(Value::from_bits(bits))
+                Ok(unsafe {
+                    /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+                    Value::from_bits(bits)
+                })
             }
             NativeRun::Signal => Err(take_pending_flow().expect("native arithmetic signal")),
             NativeRun::Deopt => {
