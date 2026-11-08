@@ -387,17 +387,19 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
     {
         return source_slot_declined();
     }
-    rt.bump_heat();
     // GNU's bytecode stack (`setup_frame`, src/bytecode.c:496-516): this
     // fast path runs the leaf without the Rust entry, so it charges the
     // callee's DECLARED stack depth here by the same rule
     // `execute_from_stack_args` applies. An over-budget frame declines to
-    // the generic call, whose entry charges it and raises GNU's error.
+    // the generic call, whose entry charges it and raises GNU's error. The
+    // charge comes before the heat moves: a call the budget rejects must
+    // not count as a fast-path run for tiering.
     let Some(frame_bytes) =
         crate::emacs_core::bytecode::vm::charge_bytecode_frame(ctx_ref, bc.max_stack.get())
     else {
         return source_slot_declined();
     };
+    rt.bump_heat();
     #[cfg(any(test, debug_assertions))]
     SOURCE_SLOT_FAST_CALLS.fetch_add(1, Ordering::Relaxed);
     // Remember this leaf (and its epoch) in the slot, with its direct

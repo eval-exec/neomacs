@@ -1542,11 +1542,6 @@ macro_rules! spec_call_body {
             }
             && ctx_ref.depth < ctx_ref.max_depth
         {
-            #[cfg(any(test, debug_assertions, feature = "test-support"))]
-            {
-                SPEC_FAST_CALL_COUNT.fetch_add(1, Ordering::Relaxed);
-                SPEC_SHIM_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
-            }
             // SAFETY: a non-null slot leaf names a live or retired cache leaf
             // (`resolve_compiled_leaf_ptr`'s invariant), and `direct_consts` is
             // the constant base of the object the slot was armed for, which the
@@ -1563,6 +1558,8 @@ macro_rules! spec_call_body {
             // `execute_from_stack_args` applies. A frame that does not fit
             // takes the slow half, whose entry charges it (and raises GNU's
             // error); a stub is never armed but resolves on the slow half.
+            // Counting a fast-path run only after the charge keeps a budget
+            // decline out of the engagement/call census.
             let Some(bc) = callee.bytecode_data_if_materialized() else {
                 return call_spec_slow(
                     $ctx, $sym_bits, $expected, slot_ref, $args_ptr, $nargs, $out,
@@ -1575,6 +1572,11 @@ macro_rules! spec_call_body {
                     $ctx, $sym_bits, $expected, slot_ref, $args_ptr, $nargs, $out,
                 );
             };
+            #[cfg(any(test, debug_assertions, feature = "test-support"))]
+            {
+                SPEC_FAST_CALL_COUNT.fetch_add(1, Ordering::Relaxed);
+                SPEC_SHIM_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
+            }
             let bt_count = ctx_ref.specpdl.len();
             // SAFETY: args_ptr addresses `nargs` valid tagged words (the caller's
             // call-args slot). The frame records the called SYMBOL, as GNU's

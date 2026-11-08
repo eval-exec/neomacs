@@ -243,3 +243,69 @@ fn batch_deep_interpreted_recursion_leaves_the_main_stack_in_time() {
         "{text}"
     );
 }
+
+/// The Lisp-thread kind of the #92 coverage in the release binary: a
+/// `make-thread` body's interpreted recursion (which the bytecode budget
+/// does not bound) ends in the clean Lisp depth error through `thread-join`.
+#[test]
+#[cfg(feature = "release-pdump-tests")]
+fn make_thread_interpreted_recursion_ends_in_a_depth_error() {
+    let output = run_with_env(
+        "(progn
+           (defun neovm--sg-walk-thread (n)
+             (if (= n 0) 0 (1+ (neovm--sg-walk-thread (1- n)))))
+           (message \"thread: %S\"
+                    (thread-join
+                     (make-thread
+                      (lambda ()
+                        (let ((max-lisp-eval-depth 300000))
+                          (condition-case err (neovm--sg-walk-thread 400000)
+                            (error err))))))))",
+        &[],
+    );
+    let text = messages(&output);
+    assert!(
+        line(&text, "thread: ").starts_with("(excessive-lisp-nesting "),
+        "{text}"
+    );
+}
+
+/// The dynamic (`-l` of a file without a lexical-binding cookie) form has no
+/// GNU reference -- GNU 31.1 itself overflows its C stack on it -- so Neo is
+/// pinned only to "clean Lisp error, no signal", with NO depth assertion.
+#[test]
+#[cfg(feature = "release-pdump-tests")]
+fn dynamic_l_file_deep_recursion_ends_in_a_clean_lisp_error() {
+    let dir = std::env::temp_dir().join(format!("neomacs-dynamic-l-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let probe = dir.join("probe.el");
+    std::fs::write(
+        &probe,
+        "(progn
+           (defvar neovm--sg-reached 0)
+           (defun neovm--sg-deep (n)
+             (setq neovm--sg-reached n)
+             (if (= n 0) 0 (1+ (neovm--sg-deep (1- n)))))
+           (byte-compile 'neovm--sg-deep)
+           (dotimes (_ 40) (neovm--sg-deep 100))
+           (message \"overflow: %S\"
+                    (let ((max-lisp-eval-depth most-positive-fixnum))
+                      (condition-case err (neovm--sg-deep 100000000) (error err))))
+           (message \"after: %S\" (neovm--sg-deep 500)))",
+    )
+    .expect("write probe");
+    let mut cmd = Command::new(binary());
+    cmd.current_dir(root())
+        .env("RUST_LOG", "off")
+        .args(["-Q", "--batch", "-l"])
+        .arg(&probe);
+    let output = cmd.output().expect("run neomacs");
+    let _ = std::fs::remove_dir_all(&dir);
+    let text = messages(&output);
+    assert_eq!(
+        line(&text, "overflow: "),
+        "(error \"Bytecode stack overflow\")",
+        "{text}"
+    );
+    assert_eq!(line(&text, "after: "), "500", "{text}");
+}

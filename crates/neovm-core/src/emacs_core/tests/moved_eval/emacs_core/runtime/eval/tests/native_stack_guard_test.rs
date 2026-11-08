@@ -59,3 +59,27 @@ fn interpreted_recursion_ends_at_max_depth_not_at_the_thread_stack() {
         "expected a clean depth error, got {rendered}"
     );
 }
+
+/// The Lisp-thread kind of the same #92 coverage: a `make-thread` body runs
+/// interpreted recursion on its own execution context, which the 4 MiB
+/// bytecode-stack budget does not bound either. The clean Lisp depth error
+/// must arrive through `thread-join`, never a native signal.
+#[test]
+fn interpreted_recursion_in_a_lisp_thread_ends_at_max_depth() {
+    let mut ev = crate::test_utils::runtime_startup_context();
+    let result = ev.eval_str(
+        r#"(progn
+             (defun nsg-walk-thread (n)
+               (if (= n 0) 0 (1+ (nsg-walk-thread (1- n)))))
+             (thread-join
+              (make-thread
+               (lambda ()
+                 (let ((max-lisp-eval-depth 300000))
+                   (condition-case err (nsg-walk-thread 400000) (error err)))))))"#,
+    );
+    let rendered = format_eval_result(&result);
+    assert!(
+        rendered.starts_with("(excessive-lisp-nesting "),
+        "expected a clean depth error from the Lisp thread, got {rendered}"
+    );
+}
