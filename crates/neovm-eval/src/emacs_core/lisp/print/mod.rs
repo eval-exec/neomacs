@@ -117,7 +117,7 @@ impl StatefulPrintOutput {
     }
 
     #[doc(hidden)]
-    pub fn bytes_from(&self, start: usize) -> &[u8] {
+    pub(crate) fn bytes_from(&self, start: usize) -> &[u8] {
         &self.bytes[start..]
     }
 }

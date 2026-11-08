@@ -136,7 +136,7 @@ impl GlobalState {
     /// image carries is still assigned by the caller through its normal
     /// visibility; the private print state keeps its fresh value.
     #[doc(hidden)]
-    pub fn fresh_then(
+    pub(crate) fn fresh_then(
         command_loop: crate::emacs_core::eval::data::command_loop::CommandLoop,
         apply: impl FnOnce(&mut Self),
     ) -> Self {
@@ -357,7 +357,7 @@ impl Context {
     /// printer). The handle never borrows the Context.
     #[inline]
     #[doc(hidden)]
-    pub fn print_number_index_handle(&self) -> std::sync::Arc<std::sync::atomic::AtomicI64> {
+    pub(crate) fn print_number_index_handle(&self) -> std::sync::Arc<std::sync::atomic::AtomicI64> {
         self.global_state().print_state.number_index_handle()
     }
 
@@ -366,7 +366,7 @@ impl Context {
     /// World view is already held by the caller.
     #[inline]
     #[doc(hidden)]
-    pub fn reset_print_number_index_world(&self) {
+    pub(crate) fn reset_print_number_index_world(&self) {
         self.global_state().print_state.reset_number_index();
     }
 
@@ -381,7 +381,7 @@ impl Context {
     /// across a Lisp callback, carried by its specpdl unwind entry, never by
     /// a borrow of the Context.
     #[doc(hidden)]
-    pub fn world_print(&mut self) -> WorldPrintAccess<'_> {
+    pub(crate) fn world_print(&mut self) -> WorldPrintAccess<'_> {
         WorldPrintAccess { context: self }
     }
 

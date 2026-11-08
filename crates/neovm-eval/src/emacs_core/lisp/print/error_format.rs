@@ -749,7 +749,7 @@ pub fn format_value_bytes_in_state_with_options(
 /// [`format_value_in_state_indexed`] for why only the top-level stateful
 /// branch needs it.
 #[doc(hidden)]
-pub fn format_value_bytes_in_state_with_options_indexed(
+pub(crate) fn format_value_bytes_in_state_with_options_indexed(
     obarray: &neovm_value::symbol::Obarray,
     buffers: &neovm_edit::buffer::BufferManager,
     frames: &crate::emacs_core::eval::data::window_state::FrameManager,
