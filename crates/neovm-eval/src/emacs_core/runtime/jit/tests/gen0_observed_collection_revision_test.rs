@@ -236,9 +236,11 @@ fn check_mapped_blv_binding() {
     let directory = tempfile::tempdir().expect("private dump fixture");
     let image = directory.path().join("mapped-blv.pdump");
     crate::emacs_core::pdump::dump_to_file(&source, &image).expect("dump the localized symbol");
+    let proof = source.hooks_installed();
     drop(source);
     let mut context = crate::test_utils::with_legacy_gc(|| {
-        crate::emacs_core::pdump::load_from_dump(&image).expect("map the localized symbol")
+        crate::emacs_core::pdump::load_from_dump_with_proof(&image, proof)
+            .expect("map the localized symbol")
     });
     set_tagged_heap(&mut context.tagged_heap);
     context.specpdl.reserve(16);

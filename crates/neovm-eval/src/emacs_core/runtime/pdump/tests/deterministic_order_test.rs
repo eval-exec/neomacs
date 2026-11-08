@@ -417,7 +417,8 @@ fn deterministic_order_restart_gc_stats_exclude_history_without_mutating_live_st
         "complete restart image bytes, including heap/obarray, must not retain producer GC history"
     );
 
-    let loaded = super::load_from_dump(&second).expect("load normalized restart image");
+    let loaded = super::load_from_dump_with_proof(&second, eval.hooks_installed())
+        .expect("load normalized restart image");
     assert_eq!(
         loaded
             .obarray
@@ -517,7 +518,7 @@ fn deterministic_order_overlay_serials_survive_dump_and_resume_the_counter() {
         "serials are part of the image and must dump deterministically"
     );
 
-    let mut loaded = super::load_from_dump(&second).unwrap();
+    let mut loaded = super::load_from_dump_with_proof(&second, eval.hooks_installed()).unwrap();
     let a = loaded
         .obarray
         .symbol_value_copied("pdump-overlay-detached")

@@ -677,7 +677,7 @@ fn classic_fuser_no_call_switch_still_hydrates_parked_table() {
 #[test]
 fn classic_fuser_header_scan_keeps_unused_pdump_bytecode_lazy() {
     use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
-    use crate::emacs_core::pdump::{dump_to_file, load_from_dump};
+    use crate::emacs_core::pdump::{dump_to_file, load_from_dump_with_proof};
 
     let mut ev = Context::new();
     let mut callee = lexical_fn(
@@ -697,8 +697,9 @@ fn classic_fuser_header_scan_keeps_unused_pdump_bytecode_lazy() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("fuser-lazy.pdump");
     dump_to_file(&ev, &path).expect("dump bytecode fixture");
+    let proof = ev.hooks_installed();
     drop(ev);
-    let loaded = load_from_dump(&path).expect("load mapped bytecode fixture");
+    let loaded = load_from_dump_with_proof(&path, proof).expect("load mapped bytecode fixture");
     let unused = loaded
         .obarray
         .symbol_value_copied("fuser-unused-lazy-bytecode")
