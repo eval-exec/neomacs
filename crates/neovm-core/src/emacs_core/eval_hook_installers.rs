@@ -191,3 +191,156 @@ pub fn new_context() -> Context {
     let proof = install_eval_hooks();
     Context::new(proof)
 }
+
+#[cfg(test)]
+mod concurrent_boot_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// Concurrent boot of several Contexts must not conflict with itself.
+    ///
+    /// The eval-side `publish` (neovm-eval
+    /// `emacs_core/runtime/eval/hooks_proof.rs`) checks `slot.get()` and then
+    /// calls `slot.set(table)`; the two are not atomic together, so two boots
+    /// can both observe the empty slot.  The loser of `set` receives the
+    /// winner's identical descriptor, but it was mapped unconditionally to
+    /// `DifferentTable`, so this constructor panicked "a different eval hook
+    /// set is already installed" whenever two threads booted at once.
+    ///
+    /// The spin barrier releases all workers together (std's futex barrier
+    /// would stagger the wakeups past the publication window), so they enter
+    /// `install_eval_hooks` simultaneously.  The first boot is the only one
+    /// that can race: publication is process-permanent.
+    #[test]
+    fn concurrent_first_boot_of_contexts_does_not_conflict_with_itself() {
+        const THREADS: usize = 16;
+        let arrived = Arc::new(AtomicUsize::new(0));
+        let go = Arc::new(AtomicBool::new(false));
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..THREADS)
+                .map(|_| {
+                    let arrived = Arc::clone(&arrived);
+                    let go = Arc::clone(&go);
+                    scope.spawn(move || {
+                        arrived.fetch_add(1, Ordering::SeqCst);
+                        while !go.load(Ordering::SeqCst) {
+                            std::hint::spin_loop();
+                        }
+                        // A panic in install_eval_hooks fails this join, which
+                        // is exactly the regression under test.
+                        drop(new_context());
+                        // The documented idempotent re-run path as well.
+                        install_eval_hooks();
+                    })
+                })
+                .collect();
+            while arrived.load(Ordering::SeqCst) != THREADS {
+                std::hint::spin_loop();
+            }
+            go.store(true, Ordering::SeqCst);
+            for handle in handles {
+                handle.join().unwrap();
+            }
+        });
+    }
+
+    /// Build the canonical eval hook set with WAIT as the wait-service table.
+    fn set_with_wait(wait: &'static WaitServiceHooks) -> EvalHookSet {
+        EvalHookSet::new(
+            crate::emacs_core::lifecycle_hooks::canonical_lifecycle_hooks(),
+            crate::emacs_core::process_hooks::canonical_process_hooks(),
+            crate::emacs_core::input_hooks::canonical_input_hooks(),
+            crate::emacs_core::interactive::canonical_call_interactively_hooks(),
+            crate::emacs_core::casetab_entries::canonical_case_table_hooks(),
+            crate::emacs_core::buffer_ops::canonical_buffer_kill_hooks(),
+            crate::emacs_core::kmacro::canonical_kmacro_hooks(),
+            crate::emacs_core::xdisp::canonical_display_query_hooks(),
+            crate::emacs_core::perf_trace::canonical_perf_enabled(),
+            crate::emacs_core::perf_trace::canonical_perf_hooks(),
+            crate::emacs_core::builtins::init_builtins,
+            install_sqlite_finalizer_hook_for_eval_hooks,
+            wait,
+            &CANONICAL_TIMER_SERVICE,
+            &CANONICAL_FRONTEND_SERVICE,
+            &CANONICAL_DISPLAY_SERVICE,
+            &CANONICAL_FILE_NOTIFY_QUERIES,
+        )
+    }
+
+    /// A race between two DIFFERENT descriptor tables must refuse the loser,
+    /// never silently mint the proof for the winner's table.
+    ///
+    /// `OnceLock::set`'s `Err` payload is the rejected ARGUMENT, not the
+    /// resident value, so a fix that compares that payload with the caller's
+    /// own table always answers "same" and masks a genuine conflict.  This
+    /// test offers two distinct wait tables (same callbacks, different
+    /// address: publication identity is the address) from a spin barrier.
+    /// Exactly one table may win; every caller offering the winner's table is
+    /// accepted, and every caller offering the loser's table receives the
+    /// typed refusal.  RED on the masked-fix commit.
+    #[test]
+    fn racing_two_different_tables_never_mints_a_masked_proof() {
+        use crate::emacs_core::eval::hooks_proof::install_eval_hooks as install_with_set;
+
+        const THREADS: usize = 16;
+        let canonical_wait: &'static WaitServiceHooks = &CANONICAL_WAIT_SERVICE;
+        let alternate_wait: &'static WaitServiceHooks = Box::leak(Box::new(CANONICAL_WAIT_SERVICE));
+        assert!(!std::ptr::eq(canonical_wait, alternate_wait));
+        let set_a: &'static EvalHookSet = Box::leak(Box::new(set_with_wait(canonical_wait)));
+        let set_b: &'static EvalHookSet = Box::leak(Box::new(set_with_wait(alternate_wait)));
+
+        let arrived = Arc::new(AtomicUsize::new(0));
+        let go = Arc::new(AtomicBool::new(false));
+        let results: Vec<(bool, Result<(), HookInstallError>)> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..THREADS)
+                .map(|index| {
+                    let offers_b = index % 2 == 1;
+                    let arrived = Arc::clone(&arrived);
+                    let go = Arc::clone(&go);
+                    scope.spawn(move || {
+                        arrived.fetch_add(1, Ordering::SeqCst);
+                        while !go.load(Ordering::SeqCst) {
+                            std::hint::spin_loop();
+                        }
+                        let set = if offers_b { set_b } else { set_a };
+                        (offers_b, install_with_set(set).map(|_proof| ()))
+                    })
+                })
+                .collect();
+            while arrived.load(Ordering::SeqCst) != THREADS {
+                std::hint::spin_loop();
+            }
+            go.store(true, Ordering::SeqCst);
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect()
+        });
+
+        let a_results: Vec<_> = results.iter().filter(|(b, _)| !*b).map(|(_, r)| *r).collect();
+        let b_results: Vec<_> = results.iter().filter(|(b, _)| *b).map(|(_, r)| *r).collect();
+        let a_any_ok = a_results.contains(&Ok(()));
+        let b_any_ok = b_results.contains(&Ok(()));
+        assert_ne!(
+            a_any_ok, b_any_ok,
+            "exactly one offered table must win the slot: {results:?}"
+        );
+        let (winner, loser, loser_name) = if a_any_ok {
+            (&a_results, &b_results, "alternate")
+        } else {
+            (&b_results, &a_results, "canonical")
+        };
+        assert!(
+            winner.iter().all(|result| result.is_ok()),
+            "a caller re-publishing the winning table was refused: {results:?}"
+        );
+        assert!(
+            loser
+                .iter()
+                .all(|result| *result == Err(HookInstallError::DifferentTable)),
+            "a caller offering the losing {loser_name} table was not refused \
+             (masked conflict): {results:?}"
+        );
+    }
+}

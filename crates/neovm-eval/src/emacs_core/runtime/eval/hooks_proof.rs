@@ -268,15 +268,19 @@ fn publish<T: 'static>(
     slot: &'static OnceLock<&'static T>,
     table: &'static T,
 ) -> Result<(), HookInstallError> {
-    if let Some(existing) = slot.get() {
-        return if std::ptr::eq(*existing, table) {
-            Ok(())
-        } else {
-            Err(HookInstallError::DifferentTable)
-        };
+    // `OnceLock::set` cannot answer a conflict: its `Err` payload is the
+    // REJECTED ARGUMENT (this caller's own table), not the resident value.
+    // `get_or_init` serializes concurrent first publications and returns the
+    // winner, so the identity comparison below sees what the cell actually
+    // holds.  Same contract as `hook_publication::publish`'s identity check:
+    // re-publishing the same descriptor is idempotent, a different descriptor
+    // is the typed refusal.
+    let selected = slot.get_or_init(|| table);
+    if std::ptr::eq(*selected, table) {
+        Ok(())
+    } else {
+        Err(HookInstallError::DifferentTable)
     }
-    slot.set(table)
-        .map_err(|_| HookInstallError::DifferentTable)
 }
 
 fn installed() -> &'static EvalHookSet {
