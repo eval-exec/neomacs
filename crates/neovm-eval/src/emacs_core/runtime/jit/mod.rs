@@ -599,7 +599,9 @@ pub fn size_unit() -> u32 {
 /// is deferred by (× [`hot_threshold`]); `0` = refuse forever, as before.
 /// Defaults to [`RuntimeState::PROFIT_DEFER_FACTOR`].
 pub fn profit_defer_factor() -> u32 {
-    #[cfg(test)]
+    // Settable through the test-support surface; read it there too (see
+    // `jit_opt_mode`).
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(forced) = PROFIT_DEFER_TEST_OVERRIDE.with(|c| c.get()) {
         return forced;
     }

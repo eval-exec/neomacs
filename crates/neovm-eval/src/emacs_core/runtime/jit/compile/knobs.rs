@@ -903,7 +903,9 @@ pub(crate) fn force_inline_arith_for_test(on: bool) {
 /// always keeps the shim (its loader owns arm/disarm — an inline op has no
 /// per-site epoch).
 pub(crate) fn jit_inline_arith_on() -> bool {
-    #[cfg(test)]
+    // Settable through the test-support surface; read it there too (see
+    // `jit_opt_mode`).
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(o) = INLINE_ARITH_TEST_OVERRIDE.with(|c| c.get()) {
         return o;
     }
@@ -1774,7 +1776,13 @@ impl OptMode {
     }
 }
 pub(crate) fn jit_opt_mode() -> OptMode {
-    #[cfg(test)]
+    // The override is set through `force_opt_for_test` and
+    // `opt_mode_scope_for_test`, both of which the test-support surface
+    // exposes to dependent crates (P1 re-home).  Read it in that build too:
+    // a cfg(test)-only read silently ignored the forced backend there, so a
+    // moved exact-tier test (install_exact_tier_for_test) selected the
+    // process profile's tier instead of the one it asked for.
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(mode) = OPT_TEST_OVERRIDE.with(|v| v.get()) {
         return mode;
     }
