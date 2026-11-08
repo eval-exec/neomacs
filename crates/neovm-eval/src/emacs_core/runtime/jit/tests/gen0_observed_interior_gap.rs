@@ -230,7 +230,8 @@ fn gen0_native_exact_cons_and_large_gap_both_survive_alternating_stores() {
     let old_address = owners[1].bits() & !TAG_MASK;
     let initial = compiled_observation_gate(context.tagged_heap.collection_dump_window());
     assert_eq!(
-        initial.single_cons, old_address,
+        initial.single_cons_for_test(),
+        old_address,
         "the first tiny-gap miss prepares an exact exemption"
     );
     assert_eq!(
@@ -241,7 +242,8 @@ fn gen0_native_exact_cons_and_large_gap_both_survive_alternating_stores() {
     native(&mut context, &setcdr, &[owners[5], Value::make_int(12)]);
     let learned = compiled_observation_gate(context.tagged_heap.collection_dump_window());
     assert_eq!(
-        learned.single_cons, old_address,
+        learned.single_cons_for_test(),
+        old_address,
         "the large-gap miss preserves the exact exemption"
     );
     assert_eq!(
@@ -363,7 +365,7 @@ fn gen0_native_two_store_leaf_closes_only_the_first_read_owner() {
         Value::make_int(12)
     );
     let learned = compiled_observation_gate(context.tagged_heap.collection_dump_window());
-    assert_eq!(learned.single_cons, owners[1].bits() & !TAG_MASK);
+    assert_eq!(learned.single_cons_for_test(), owners[1].bits() & !TAG_MASK);
     assert!(
         learned
             .excluded
