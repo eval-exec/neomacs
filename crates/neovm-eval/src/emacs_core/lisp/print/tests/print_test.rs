@@ -657,20 +657,6 @@ fn print_recursive_closure_uses_backreference() {
 }
 
 #[test]
-fn print_terminal_handle_special_form() {
-    crate::test_utils::init_test_tracing();
-    let list = super::super::terminal::pure::builtin_terminal_list(vec![]).unwrap();
-    let items = list_to_vec(&list).expect("terminal-list should return a list");
-    let handle = items
-        .first()
-        .expect("terminal-list should contain one handle");
-
-    let printed = print_value(handle);
-    assert!(printed.starts_with("#<terminal "));
-    assert!(printed.contains("on initial_terminal>"));
-}
-
-#[test]
 fn print_frame_handles_use_oracle_style_f_prefix() {
     crate::test_utils::init_test_tracing();
     let f1 = Value::make_frame(neovm_value::display_vocab::FRAME_ID_BASE);

@@ -455,3 +455,8 @@ mod emacs_core_lisp_native_builtins_tests_replace_region_contents_runtime_startu
 #[cfg(test)]
 #[path = "emacs_core/runtime/value_reader/tests/mod.rs"]
 mod emacs_core_runtime_value_reader_tests_runtime_startup_escapes_rs;
+
+// The terminal-handle printer row. terminal::pure lives in neovm-display.
+#[cfg(test)]
+#[path = "emacs_core/lisp/print/tests/print_terminal_test.rs"]
+mod emacs_core_lisp_print_tests_print_terminal_test_rs;
