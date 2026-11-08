@@ -2529,6 +2529,7 @@ pub(crate) fn load_file_with_requested_and_found_options(
     let result = super::eval::native_stack::maybe_grow_tracking_jit_limit(
         eval,
         super::eval::Context::jit_stack_limit_mut,
+        super::eval::Context::native_stack_probe_mut,
         128 * 1024,
         2 * 1024 * 1024,
         |eval| load_file_body(eval, path, requested, found, options),

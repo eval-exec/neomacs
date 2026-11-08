@@ -135,10 +135,15 @@ pub unsafe extern "C" fn neovm_jit_stack_check(ctx: *mut u8) -> i64 {
     if !crate::emacs_core::eval::native_stack::native_stack_exhausted() {
         return ctx as i64;
     }
-    stash_pending_flow(signal(
-        "error",
-        vec![Value::string("Bytecode stack overflow")],
-    ));
+    // Construct the signal on a fresh stacker segment: this shim runs with
+    // less than the red zone left, and the error path's own frames must not
+    // turn the Lisp error into a second overflow (ruling 1, 2026-11-08).
+    let flow = stacker::maybe_grow(
+        crate::emacs_core::eval::native_stack::JIT_STACK_RED_ZONE,
+        crate::emacs_core::eval::native_stack::JIT_SLOW_PATH_SEGMENT,
+        || signal("error", vec![Value::string("Bytecode stack overflow")]),
+    );
+    stash_pending_flow(flow);
     0
 }
 

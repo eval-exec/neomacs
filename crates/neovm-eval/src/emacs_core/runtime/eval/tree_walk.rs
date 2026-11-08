@@ -36,6 +36,7 @@ impl Context {
         super::native_stack::maybe_grow_tracking_jit_limit(
             self,
             Context::jit_stack_limit_mut,
+            Context::native_stack_probe_mut,
             EVAL_STACK_RED_ZONE,
             EVAL_STACK_SEGMENT,
             |ctx| ctx.eval_lambda_body_forms(body),
@@ -127,13 +128,12 @@ impl Context {
     pub fn eval_cons_dispatch(&mut self, form: Value) -> EvalResult {
         self.enter_interpreted_eval_depth()?;
 
-        // The depth-sampled stack probe is the rare arm; its enough-stack
-        // half runs the body directly, so a sampled form pays one predicate
-        // instead of the grow wrapper when the stack has room.
+        // The depth-sampled stack probe is the rare arm; the wrapper it
+        // enters measures the remaining stack and adapts its reserve to the
+        // stack consumed since the previous sample.
         let depth = self.depth;
         let result = if depth < STACK_GROWTH_PROBE_START_DEPTH
             || !depth.is_multiple_of(STACK_GROWTH_PROBE_INTERVAL)
-            || native_stack::stack_has_room(EVAL_STACK_RED_ZONE)
         {
             self.eval_cons_form(form)
         } else {
@@ -151,6 +151,7 @@ impl Context {
         super::native_stack::maybe_grow_tracking_jit_limit(
             self,
             Context::jit_stack_limit_mut,
+            Context::native_stack_probe_mut,
             EVAL_STACK_RED_ZONE,
             EVAL_STACK_SEGMENT,
             |ctx| ctx.eval_cons_form(form),

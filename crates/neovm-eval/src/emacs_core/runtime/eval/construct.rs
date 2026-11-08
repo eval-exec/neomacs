@@ -2404,6 +2404,7 @@ impl Context {
             jit_root_stack_top: 0,
             jit_root_stack_cap: 0,
             jit_stack_limit: 0,
+            native_stack_probe: Default::default(),
             jit_stack_scratch: [0; super::native_stack::JIT_STACK_SCRATCH_WORDS],
             bc_frames: Vec::new(),
             condition_stack: Vec::new(),

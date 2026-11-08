@@ -155,6 +155,10 @@ mod gd_b_signal_room;
 mod depth_floor_visible;
 
 #[cfg(test)]
+#[path = "native_stack_guard_test.rs"]
+mod native_stack_guard_test;
+
+#[cfg(test)]
 #[path = "gd_b_signals.rs"]
 mod gd_b_signals;
 

@@ -3129,6 +3129,7 @@ impl<'a> Vm<'a> {
         crate::emacs_core::eval::native_stack::maybe_grow_tracking_jit_limit(
             self,
             |vm| vm.ctx.jit_stack_limit_mut(),
+            |vm| vm.ctx.native_stack_probe_mut(),
             VM_STACK_RED_ZONE,
             VM_STACK_SEGMENT,
             |vm| vm.execute_from_stack_args_body(func, args_start, nargs, func_value),

@@ -47,6 +47,35 @@ use super::Context;
 /// segments only below 128 KiB.
 pub(crate) const JIT_STACK_RED_ZONE: usize = 1024 * 1024;
 
+/// Stack segment for the guard's error path: the cold side runs the signal
+/// construction on a fresh segment so a thin remaining margin cannot turn
+/// the Lisp error into a native stack overflow.
+pub(crate) const JIT_SLOW_PATH_SEGMENT: usize = 2 * 1024 * 1024;
+
+/// Per-Context adaptation of the sampled native-stack probes.
+///
+/// The probes run at sampled Lisp depths (every 16 levels today), so the
+/// stack consumed between two probes is what the red zone must cover.
+/// Debug frames are large enough that one interval can exceed a fixed
+/// 128 KiB red zone: the sample sees too much room left, the next interval
+/// crosses the kernel/Rust guard page, and the process dies of SIGSEGV or
+/// SIGABRT with no Lisp error (ruling 1, 2026-11-08).  Each probe therefore
+/// measures the remaining stack; the delta since the previous probe is the
+/// interval's consumption.  Frame sizes do not change across stacker
+/// segments, so a switch keeps the last measurement (the delta computed on
+/// the fresh segment is zero).  The effective reserve is the base red zone
+/// plus twice the measured consumption, capped at half the segment so a
+/// probe on a fresh segment still proceeds instead of growing on every
+/// sample.  State lives on the Context: no new TLS.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct NativeStackProbe {
+    /// Remaining stack measured at the previous probe; 0 before the first,
+    /// so the first delta is zero.
+    last_remaining: usize,
+    /// Stack consumed by the most recent measured inter-probe interval.
+    interval_consumption: usize,
+}
+
 /// Words of [`Context::jit_stack_scratch`]: an entry's parameters after the
 /// vmctx, the memory ABI's three (`args`, `out`, `sidecar`) or the register
 /// ABI's `aux` and up to six arguments.
@@ -76,28 +105,45 @@ pub(crate) fn native_stack_exhausted() -> bool {
 
 /// `stacker::maybe_grow(red_zone, segment, ..)` over `owner`, keeping the
 /// Context's `jit_stack_limit` (reached through `limit`) on the segment the
-/// callback runs on. The enough-stack branch is `stacker::maybe_grow`'s.
+/// callback runs on, and adapting the effective reserve to the stack the
+/// sampled probes actually consume between calls (see [`NativeStackProbe`]).
 #[inline(always)]
 pub(crate) fn maybe_grow_tracking_jit_limit<T: ?Sized, R>(
     owner: &mut T,
     limit: fn(&mut T) -> &mut usize,
+    probe: fn(&mut T) -> &mut NativeStackProbe,
     red_zone: usize,
     segment: usize,
     f: impl FnOnce(&mut T) -> R,
 ) -> R {
     match stacker::remaining_stack() {
-        Some(remaining) if remaining >= red_zone => f(owner),
+        Some(remaining) => {
+            let (reserve, grow_segment) = {
+                let probe = probe(owner);
+                let consumed = probe.last_remaining.saturating_sub(remaining);
+                if consumed != 0 {
+                    probe.interval_consumption = consumed;
+                }
+                probe.last_remaining = remaining;
+                // The growth segment must hold the interval that follows the
+                // probe: size it from the measured consumption when that is
+                // larger than the site's default (debug frames can consume
+                // megabytes between samples), then cap the reserve at half
+                // the segment so the body proceeds on a fresh segment.
+                let grow_segment = segment.max(probe.interval_consumption.saturating_mul(4));
+                let reserve = red_zone
+                    .saturating_add(probe.interval_consumption.saturating_mul(2))
+                    .min(grow_segment / 2);
+                (reserve, grow_segment)
+            };
+            if remaining >= reserve {
+                f(owner)
+            } else {
+                grow_tracking_jit_limit(owner, limit, grow_segment, f)
+            }
+        }
         _ => grow_tracking_jit_limit(owner, limit, segment, f),
     }
-}
-
-/// The enough-stack predicate behind [`maybe_grow_tracking_jit_limit`], for
-/// callers that want to run their body directly when the stack has room and
-/// enter the growing wrapper only on the rare arm. Unknown bounds answer
-/// `false` (the growing arm), exactly like the wrapper's `_` match.
-#[inline(always)]
-pub(crate) fn stack_has_room(red_zone: usize) -> bool {
-    stacker::remaining_stack().is_some_and(|remaining| remaining >= red_zone)
 }
 
 /// The growing branch of [`maybe_grow_tracking_jit_limit`]: run `f` on a
@@ -239,6 +285,13 @@ impl Context {
     #[doc(hidden)]
     pub fn jit_stack_limit_mut(&mut self) -> &mut usize {
         &mut self.jit_stack_limit
+    }
+
+    /// The adaptive probe state [`maybe_grow_tracking_jit_limit`] measures
+    /// the inter-probe stack consumption into (see [`NativeStackProbe`]).
+    #[doc(hidden)]
+    pub fn native_stack_probe_mut(&mut self) -> &mut NativeStackProbe {
+        &mut self.native_stack_probe
     }
 }
 

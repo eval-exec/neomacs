@@ -3684,6 +3684,11 @@ pub struct Context {
     /// can re-enter Lisp is entered, or 0 for no guard. Read by generated
     /// code via a compile-time field offset.
     pub(crate) jit_stack_limit: usize,
+    /// The adaptive sampled-probe state of the same guard (see
+    /// [`native_stack::NativeStackProbe`]): the remaining stack measured at
+    /// the previous probe and the stack the last inter-probe interval
+    /// consumed. Thread-confined like the Context; no TLS.
+    pub(crate) native_stack_probe: native_stack::NativeStackProbe,
     /// Where that guard's cold side parks a leaf's entry parameters after
     /// the vmctx across its measuring call.
     pub(crate) jit_stack_scratch: [usize; native_stack::JIT_STACK_SCRATCH_WORDS],
@@ -4814,6 +4819,7 @@ impl Context {
         native_stack::maybe_grow_tracking_jit_limit(
             self,
             Self::jit_stack_limit_mut,
+            Self::native_stack_probe_mut,
             EVAL_STACK_RED_ZONE,
             EVAL_STACK_SEGMENT,
             callback,
@@ -4828,6 +4834,7 @@ impl Context {
         native_stack::maybe_grow_tracking_jit_limit(
             self,
             Self::jit_stack_limit_mut,
+            Self::native_stack_probe_mut,
             EVAL_STACK_RED_ZONE,
             EVAL_STACK_SEGMENT,
             callback,

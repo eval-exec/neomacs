@@ -26,6 +26,11 @@ const TEST: &str = "deep_compiled_recursion_signals_on_the_main_thread";
 /// `neomacs`'s `RLIMIT_STACK` target (`increase_stack_limit`).
 const TARGET_STACK: usize = 128 * 1024 * 1024;
 
+/// The exec-time `RLIMIT_STACK` the child inherits (8 MiB): the kernel
+/// reserves only this much below the stack, so the loader can sit just
+/// below it and the editor's raise clamps there (the cramped layout).
+const CRAMPED_RESERVE: usize = 8 * 1024 * 1024;
+
 fn main() {
     #[cfg(target_os = "linux")]
     if let Ok(scenario) = std::env::var(linux::SCENARIO_ENV) {
@@ -69,7 +74,7 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use super::TARGET_STACK;
+    use super::{CRAMPED_RESERVE, TARGET_STACK};
     use neovm_core::emacs_core::format_eval_result_with_eval;
     use neovm_core::emacs_core::load::apply_runtime_startup_state;
     use neovm_core::emacs_core::load_boot::create_bootstrap_evaluator_cached;
@@ -88,6 +93,23 @@ mod linux {
         planted.env(SCENARIO_ENV, "planted");
         start_from_the_default_stack_limit(&mut planted);
         check("planted", planted);
+
+        // Ruling-1 cramped layout: the kernel's exec reserve is the 8 MiB
+        // RLIMIT, so the loader sits just below it and the editor's raise
+        // clamps there instead of reaching TARGET_STACK.  Debug frames
+        // consume more than the sampled probes' red zone between samples;
+        // the child must still end in a clean Lisp error, never a signal.
+        // `cramped-jit-off` repeats it with the JIT kill switch on.
+        let mut cramped = Command::new(&exe);
+        cramped.env(SCENARIO_ENV, "cramped");
+        start_from_the_default_stack_limit(&mut cramped);
+        check("cramped", cramped);
+
+        let mut cramped_jit_off = Command::new(&exe);
+        cramped_jit_off.env(SCENARIO_ENV, "cramped-jit-off");
+        cramped_jit_off.env("NEOVM_JIT", "0");
+        start_from_the_default_stack_limit(&mut cramped_jit_off);
+        check("cramped-jit-off", cramped_jit_off);
 
         let mut unrandomized = Command::new(&exe);
         unrandomized.env(SCENARIO_ENV, "no-aslr");
@@ -165,13 +187,24 @@ mod linux {
                 .find_map(|l| l.strip_prefix(key))
                 .unwrap_or_else(|| panic!("{scenario}: no `{key}` line in\n{stdout}"))
         };
-        assert_eq!(
-            line("overflow: "),
-            "OK (error \"Bytecode stack overflow\")",
-            "{scenario}: {stdout}"
-        );
+        let overflow = line("overflow: ");
+        if scenario.starts_with("cramped") {
+            // The cramped layout's probe is finite: the depth limit must be
+            // reached on grown segments, not the thread stack's end.
+            assert!(
+                overflow.starts_with("OK (error \"Lisp nesting exceeds"),
+                "{scenario}: expected a clean depth error: {stdout}"
+            );
+        } else {
+            assert_eq!(
+                overflow, "OK (error \"Bytecode stack overflow\")",
+                "{scenario}: {stdout}"
+            );
+        }
         assert_eq!(line("after: "), "OK 500", "{scenario}: {stdout}");
-        line("stacker: ");
+        if !scenario.starts_with("cramped") {
+            line("stacker: ");
+        }
         let reached: u64 = line("reached: ").parse().expect("reached is a count");
         assert!(
             reached > 10_000,
@@ -203,13 +236,15 @@ mod linux {
         Some((stack, below))
     }
 
-    /// Map one readable page ending exactly `TARGET_STACK` below the stack's
-    /// top: where the loader sits without randomization. Readable, because
-    /// the kernel keeps its guard gap only above an accessible mapping.
-    fn plant_mapping_at_the_stack_reserve() -> Result<(), String> {
+    /// Map one readable page ending exactly `distance` below the stack's
+    /// top: where the loader sits without randomization (TARGET_STACK) or
+    /// where the 8 MiB exec reserve puts it (CRAMPED_RESERVE). Readable,
+    /// because the kernel keeps its guard gap only above an accessible
+    /// mapping.
+    fn plant_mapping_below_the_stack(distance: usize) -> Result<(), String> {
         let ((_, top), _) = stack_and_below().ok_or("no [stack] in /proc/self/maps")?;
         let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
-        let at = top - TARGET_STACK - page;
+        let at = top - distance - page;
         // SAFETY: MAP_FIXED_NOREPLACE never replaces an existing mapping.
         let got = unsafe {
             libc::mmap(
@@ -271,12 +306,43 @@ mod linux {
         ("after: ", "(neovm--sg-deep 500)"),
     ];
 
+    /// The cramped scenarios' probe: a byte-compiled recursion under a
+    /// finite `max-lisp-eval-depth`, so the growth itself is what is under
+    /// test (the deep probe's unbounded depth would keep growing segments
+    /// forever with the JIT off).  Expected: the clean depth error, after
+    /// the stack has been grown far past the cramped main stack.
+    const CRAMPED_PROBE: &[(&str, &str)] = &[
+        ("", "(defvar neovm--sg-reached 0)"),
+        (
+            "",
+            "(defun neovm--sg-deep (n)
+               (setq neovm--sg-reached n)
+               (if (= n 0) 0 (1+ (neovm--sg-deep (1- n)))))",
+        ),
+        ("", "(byte-compile 'neovm--sg-deep)"),
+        ("", "(dotimes (_ 40) (neovm--sg-deep 100))"),
+        (
+            "overflow: ",
+            "(let ((max-lisp-eval-depth 40000))
+               (condition-case err (neovm--sg-deep 40000) (error err)))",
+        ),
+        ("reached: ", "(- 40000 neovm--sg-reached)"),
+        ("after: ", "(neovm--sg-deep 500)"),
+    ];
+
     /// Runs on this process's main thread: set up the layout, raise the
     /// limit as `neomacs` does, and run the batch probe
     /// (tmp/v10x/probes/j2pf/probe-t11.el) and the stacker descent.
     pub fn child(scenario: &str) -> i32 {
-        if scenario == "planted"
-            && let Err(why) = plant_mapping_at_the_stack_reserve()
+        let planted = match scenario {
+            "planted" => Some(TARGET_STACK),
+            // The cramped layout: force the mapping below the stack to sit
+            // at the exec-time 8 MiB reserve, so the editor's raise clamps.
+            "cramped" | "cramped-jit-off" => Some(CRAMPED_RESERVE),
+            _ => None,
+        };
+        if let Some(distance) = planted
+            && let Err(why) = plant_mapping_below_the_stack(distance)
         {
             println!("{why}");
             return SKIP;
@@ -299,7 +365,12 @@ mod linux {
         let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
         apply_runtime_startup_state(&mut eval).expect("runtime startup");
         eval.set_lexical_binding(true);
-        for (label, form) in PROBE {
+        let probe: &[(&str, &str)] = if scenario.starts_with("cramped") {
+            CRAMPED_PROBE
+        } else {
+            PROBE
+        };
+        for (label, form) in probe {
             let result = eval.eval_str(form);
             let printed = format_eval_result_with_eval(&eval, &result);
             if label.is_empty() {
@@ -310,8 +381,14 @@ mod linux {
                 println!("{label}{printed}");
             }
         }
-        let frames = descend_to_the_reported_end();
-        println!("stacker: {frames} frames of 4 KiB down to its reported end");
+        // The descent proves stacker's reported end is real stack for the
+        // TARGET_STACK layout.  The cramped layout deliberately reports an
+        // end past where the clamped stack actually stops, so descending to
+        // it would fault in the harness, not in the product; skip it there.
+        if !scenario.starts_with("cramped") {
+            let frames = descend_to_the_reported_end();
+            println!("stacker: {frames} frames of 4 KiB down to its reported end");
+        }
         0
     }
 }

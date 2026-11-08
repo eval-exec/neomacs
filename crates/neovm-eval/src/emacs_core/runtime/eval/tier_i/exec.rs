@@ -198,9 +198,14 @@ impl Context {
         {
             return self.ti_body_forms(act, body, seq);
         }
-        stacker::maybe_grow(EVAL_STACK_RED_ZONE, EVAL_STACK_SEGMENT, || {
-            self.ti_body_forms(act, body, seq)
-        })
+        super::super::native_stack::maybe_grow_tracking_jit_limit(
+            self,
+            Self::jit_stack_limit_mut,
+            Self::native_stack_probe_mut,
+            EVAL_STACK_RED_ZONE,
+            EVAL_STACK_SEGMENT,
+            |ctx| ctx.ti_body_forms(act, body, seq),
+        )
     }
 
     /// `eval_lambda_body_forms`: GNU `funcall_lambda` evaluates the body with
