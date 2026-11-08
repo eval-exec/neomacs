@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
-"""Validate a compile-fail contract runner log.
+"""Validate a compile-fail contract runner log produced by cargo nextest.
 
-The CI step used to sum every `test result: ok. N passed` line in the log.
-trybuild compiles and runs each fixture through a nested cargo invocation, so
-those nested harnesses print `test result: ok. ...` lines too; a FAILED line
-from a top-level runner could be masked by nested passes ("a nested `ok. 1`
-masked thread_safety's FAILED line", 2026-11-07).
+CI runs the four contract targets under `cargo nextest run` (B5: Rust tests
+only under nextest).  Nextest reports one status line per test function:
 
-This parser attributes result lines to the cargo-test target section that
-contains them and requires each expected target's OWN final result to be
-`ok` with exactly its expected passed count.  The nested-pass total is still
-checked (it proves the nested nmjit runner ran), but it can only add to the
-count, never hide a failure.
+        PASS [   0.011s] ( 1/17) neovm-core::p0s3_contracts <test>
+
+and one summary line:
+
+     Summary [  123.456s] 17 tests run: 17 passed, 0 skipped
+
+The old cargo-test parser summed every `test result: ok. N passed` line; a
+nested trybuild harness could print `ok. 1` and mask a FAILED runner.  Here the
+per-test status lines are authoritative: any non-PASS status fails, every
+expected target must contribute exactly its expected runner count, and the
+summary must report at least 17 tests run with zero failed, timed out or
+skipped.
 
 Usage: check_compile_contracts.py <contracts.log>
        check_compile_contracts.py --self-test
@@ -23,156 +27,147 @@ import sys
 EXPECTED = {
     "p0s3_contracts": 1,
     "p1rv_contracts": 3,
-    "thread_safety_contracts": 11,
+    "thread_safety_contracts": 12,
     "chartable_write_contracts": 1,
 }
-# The nested nmjit fixture runner is additional to the four target results.
-EXPECTED_TOTAL_OK = sum(EXPECTED.values()) + 1
+EXPECTED_TOTAL = sum(EXPECTED.values())  # 17 nextest test functions
 
-RUNNING = re.compile(r"^\s*Running (?:unittests )?tests/(?P<name>[A-Za-z0-9_]+)\.rs\b")
-RESULT = re.compile(
-    r"^test result: (?P<status>ok|FAILED)\. (?P<passed>\d+) passed; (?P<failed>\d+) failed"
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+STATUS = re.compile(
+    r"^\s+(?P<status>PASS|FAIL|SKIP|IGNORED|TIMEOUT|LEAK)\s+"
+    r"\[\s*[^\]]*\]\s+\(\s*(?P<index>\d+)/(?P<total>\d+)\)\s+"
+    r"(?P<binary>\S+)\s+(?P<test>\S+)\s*$"
 )
-OK_LINE = re.compile(r"test result: ok\. (?P<passed>\d+) passed")
-
-
-def per_target_results(text):
-    """Map each expected target to its OWN result inside its section.
-
-    A section contains the target's libtest summary plus any nested trybuild
-    harness results.  Layout is not trustworthy (captured failure output can
-    be printed after the summary), so a FAILED line anywhere in the section is
-    authoritative, and an `ok` line must carry the target's expected passed
-    count (nested harnesses print `ok. 1`).
-    """
-    results = {name: [] for name in EXPECTED}
-    current = None
-    for line in text.splitlines():
-        running = RUNNING.search(line)
-        if running:
-            name = running.group("name")
-            current = name if name in EXPECTED else None
-            continue
-        result = RESULT.match(line)
-        if result and current is not None:
-            results[current].append(
-                (
-                    result.group("status"),
-                    int(result.group("passed")),
-                    int(result.group("failed")),
-                )
-            )
-    resolved = {}
-    for name, lines in results.items():
-        failed = next((line for line in lines if line[0] == "FAILED"), None)
-        if failed is not None:
-            resolved[name] = failed
-            continue
-        ok = next(
-            (line for line in reversed(lines) if line[0] == "ok" and line[1] == EXPECTED[name]),
-            None,
-        )
-        resolved[name] = ok
-    return resolved
-
-
-def total_ok_passes(text):
-    return sum(int(m.group("passed")) for m in OK_LINE.finditer(text))
+SUMMARY = re.compile(
+    r"Summary \[[^\]]*\]\s+(?P<run>\d+) tests run:\s+(?P<passed>\d+) passed"
+    r"(?:,\s*(?P<failed>\d+) failed)?"
+    r"(?:,\s*(?P<timedout>\d+) timed out)?"
+    r"(?:,\s*(?P<skipped>\d+) skipped)?"
+)
 
 
 def check(text):
-    """Return (ok, lines).  ok is True iff every expected target is green."""
-    results = per_target_results(text)
+    """Return (ok, lines).  ok is True iff the nextest log proves every runner ran green."""
+    text = ANSI.sub("", text)
     out = []
     ok = True
-    for name, expected in EXPECTED.items():
-        result = results[name]
-        if result is None:
-            out.append(f"MISSING {name}: no result line in its own section")
-            ok = False
+    counts = {name: 0 for name in EXPECTED}
+    bad = []
+    seen = 0
+    for line in text.splitlines():
+        match = STATUS.match(line)
+        if match is None:
             continue
-        status, passed, failed = result
-        out.append(f"{name}: {status} {passed} passed {failed} failed (expected {expected} passed)")
-        if status != "ok" or failed != 0 or passed != expected:
+        seen += 1
+        target = match.group("binary").rsplit("::", 1)[-1]
+        if target in counts:
+            counts[target] += 1
+        if match.group("status") != "PASS":
+            bad.append(
+                f"{match.group('status')} {match.group('binary')} {match.group('test')}"
+            )
+    for line in bad:
+        out.append("NON-PASS " + line)
+    if bad:
+        ok = False
+    for name, expected in EXPECTED.items():
+        out.append(f"{name}: {counts[name]} runners (expected {expected})")
+        if counts[name] != expected:
             ok = False
-    total = total_ok_passes(text)
-    out.append(f"nested+target ok passes: {total} (need >= {EXPECTED_TOTAL_OK})")
-    if total < EXPECTED_TOTAL_OK:
+    summaries = list(SUMMARY.finditer(text))
+    if not summaries:
+        out.append("MISSING nextest Summary line")
+        ok = False
+    else:
+        summary = summaries[-1]
+        run = int(summary.group("run"))
+        passed = int(summary.group("passed"))
+        failed = int(summary.group("failed") or 0)
+        timedout = int(summary.group("timedout") or 0)
+        skipped = int(summary.group("skipped") or 0)
+        out.append(
+            f"summary: {run} tests run: {passed} passed, {failed} failed, "
+            f"{timedout} timed out, {skipped} skipped"
+        )
+        if run < EXPECTED_TOTAL:
+            out.append(f"MISSING run floor {EXPECTED_TOTAL}: summary reports {run}")
+            ok = False
+        if passed < EXPECTED_TOTAL:
+            ok = False
+        if failed or timedout:
+            ok = False
+        if skipped:
+            out.append("SKIPPED runners are not evidence")
+            ok = False
+    if seen < EXPECTED_TOTAL:
+        out.append(f"status lines seen {seen} (need >= {EXPECTED_TOTAL})")
         ok = False
     return ok, out
 
 
+def _nextest_log(counts=None, overrides=None, extra="", summary_run=None):
+    """Build a synthetic nextest log; overrides keys are (target, index)."""
+    counts = dict(EXPECTED if counts is None else counts)
+    overrides = overrides or {}
+    rows = []
+    index = 0
+    total = sum(counts.values())
+    for target, count in counts.items():
+        package = {
+            "p0s3_contracts": "neovm-core::p0s3_contracts",
+            "p1rv_contracts": "neovm-core::p1rv_contracts",
+            "thread_safety_contracts": "neovm-core::thread_safety_contracts",
+            "chartable_write_contracts": "neovm-core::chartable_write_contracts",
+        }[target]
+        for offset in range(count):
+            index += 1
+            status = overrides.get((target, offset), "PASS")
+            rows.append(
+                f"        {status} [   0.01s] ( {index:2d}/{total}) {package} {target}_case_{offset}"
+            )
+    failed = sum(1 for (target, offset), status in overrides.items() if status == "FAIL"
+                 and offset < counts.get(target, 0))
+    timedout = sum(1 for (target, offset), status in overrides.items() if status == "TIMEOUT"
+                   and offset < counts.get(target, 0))
+    run = total if summary_run is None else summary_run
+    passed = max(run - failed - timedout, 0)
+    summary = f"     Summary [  12.3s] {run} tests run: {passed} passed"
+    if failed:
+        summary += f", {failed} failed"
+    if timedout:
+        summary += f", {timedout} timed out"
+    summary += ", 0 skipped"
+    lines = ([extra] if extra else []) + rows + [summary]
+    return "\n".join(lines) + "\n"
+
+
 SELF_TEST_CASES = {
-    "green": (
+    "green": (True, _nextest_log()),
+    "nested-ok-alone-is-ignored": (
         True,
-        """\
-     Running tests/p0s3_contracts.rs (target/debug/deps/p0s3_contracts-1)
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
-     Running tests/p1rv_contracts.rs (target/debug/deps/p1rv_contracts-2)
-test result: ok. 1 passed; 0 failed
-test result: ok. 1 passed; 0 failed
-test result: ok. 1 passed; 0 failed
-test result: ok. 3 passed; 0 failed
-     Running tests/thread_safety_contracts.rs (target/debug/deps/thread_safety_contracts-3)
-    nested nmjit runner
-test result: ok. 1 passed; 0 failed
-test result: ok. 11 passed; 0 failed
-     Running tests/chartable_write_contracts.rs (target/debug/deps/chartable_write_contracts-4)
-test result: ok. 1 passed; 0 failed
-""",
+        _nextest_log(extra="test result: ok. 1 passed; 0 failed"),
     ),
-    # The old parser summed every ok line: 1 + 3 + 12 nested + 1 = 17, so it
-    # passed even though thread_safety's own result is FAILED.  The fixed
-    # parser must reject this log.
-    "nested-passes-mask-a-failed-runner": (
+    "failed-runner": (False, _nextest_log(overrides={("thread_safety_contracts", 0): "FAIL"})),
+    "nested-ok-cannot-mask-a-failed-runner": (
         False,
-        """\
-     Running tests/p0s3_contracts.rs (target/debug/deps/p0s3_contracts-1)
-test result: ok. 1 passed; 0 failed
-     Running tests/p1rv_contracts.rs (target/debug/deps/p1rv_contracts-2)
-test result: ok. 3 passed; 0 failed
-     Running tests/thread_safety_contracts.rs (target/debug/deps/thread_safety_contracts-3)
-test result: ok. 1 passed; 0 failed
-test result: ok. 1 passed; 0 failed
-test result: ok. 1 passed; 0 failed
-test result: ok. 1 passed; 0 failed
-test result: ok. 1 passed; 0 failed
-test result: ok. 1 passed; 0 failed
-test result: ok. 1 passed; 0 failed
-test result: ok. 1 passed; 0 failed
-test result: ok. 1 passed; 0 failed
-test result: ok. 1 passed; 0 failed
-test result: ok. 1 passed; 0 failed
-test result: ok. 1 passed; 0 failed
-test result: FAILED. 5 passed; 6 failed
-     Running tests/chartable_write_contracts.rs (target/debug/deps/chartable_write_contracts-4)
-test result: ok. 1 passed; 0 failed
-""",
+        _nextest_log(
+            overrides={("thread_safety_contracts", 0): "FAIL"},
+            extra="test result: ok. 1 passed; 0 failed",
+        ),
     ),
+    "timeout-runner": (False, _nextest_log(overrides={("p1rv_contracts", 0): "TIMEOUT"})),
     "missing-runner": (
         False,
-        """\
-     Running tests/p0s3_contracts.rs (target/debug/deps/p0s3_contracts-1)
-test result: ok. 1 passed; 0 failed
-     Running tests/p1rv_contracts.rs (target/debug/deps/p1rv_contracts-2)
-test result: ok. 3 passed; 0 failed
-     Running tests/chartable_write_contracts.rs (target/debug/deps/chartable_write_contracts-4)
-test result: ok. 1 passed; 0 failed
-test result: ok. 1 passed; 0 failed
-""",
+        _nextest_log(counts={**EXPECTED, "chartable_write_contracts": 0}),
     ),
-    "wrong-pass-count": (
+    "wrong-per-target-count": (
         False,
-        """\
-     Running tests/p0s3_contracts.rs (target/debug/deps/p0s3_contracts-1)
-test result: ok. 0 passed; 0 failed
-     Running tests/p1rv_contracts.rs (target/debug/deps/p1rv_contracts-2)
-test result: ok. 3 passed; 0 failed
-     Running tests/thread_safety_contracts.rs (target/debug/deps/thread_safety_contracts-3)
-test result: ok. 11 passed; 0 failed
-     Running tests/chartable_write_contracts.rs (target/debug/deps/chartable_write_contracts-4)
-test result: ok. 1 passed; 0 failed
-""",
+        _nextest_log(counts={**EXPECTED, "thread_safety_contracts": 11}),
+    ),
+    "summary-below-floor": (False, _nextest_log(summary_run=16)),
+    "ansi-colored-green": (
+        True,
+        "\x1b[32;1m" + _nextest_log().replace("PASS", "\x1b[32;1mPASS\x1b[0m") + "\x1b[0m",
     ),
 }
 
