@@ -3439,11 +3439,11 @@ crates/neovm-eval/src/emacs_core/runtime/eval/subr_abi.rs	type	type SubrFnMany
 crates/neovm-eval/src/emacs_core/runtime/eval/subr_abi.rs	type	type SubrFnManyNoContext
 crates/neovm-eval/src/emacs_core/runtime/eval/subr_abi.rs	type	type SubrFnManySlice
 crates/neovm-eval/src/emacs_core/runtime/eval/tree_walk.rs	fn	fn impl Context::eval_sub
+crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl Context::default_value_only
+crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl Context::default_value_only_by_name
 crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl Context::makunbound_variable
 crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl Context::store_variable
 crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl Context::store_variable_by_name
-crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl Context::variable_value
-crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl Context::variable_value_by_name
 crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl Context::variable_value_in_buffer
 crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl Context::variable_value_in_current_buffer
 crates/neovm-eval/src/emacs_core/runtime/eval/variable_access.rs	fn	fn impl Context::variable_value_or_nil
