@@ -431,8 +431,9 @@ mod emacs_core_runtime_bytecode_tests_vm_window_surface_test_rs;
 mod emacs_core_runtime_bytecode_tests_vm_display_host_test_rs;
 
 // VM tests whose harness is the runtime-startup image. The canonical hook
-// proof is minted in core. The lexenv macroexpand test stays in eval.
-// Assertions are unchanged.
+// proof is minted in core. The lexical-binding macroexpand test writes
+// Context::lexenv through the signed test-support surface and lives in the
+// bootstrap file. Assertions are unchanged.
 #[cfg(test)]
 #[path = "emacs_core/runtime/bytecode/tests/vm_bootstrap_runtime_test.rs"]
 mod emacs_core_runtime_bytecode_tests_vm_bootstrap_runtime_test_rs;
@@ -448,6 +449,11 @@ mod emacs_core_lisp_native_builtins_tests_strings_runtime_startup_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/native/fns/tests/fns_runtime_startup_test.rs"]
 mod emacs_core_lisp_native_fns_tests_fns_runtime_startup_test_rs;
+// save-current-buffer needs the runtime-startup image. Buffer identity goes
+// through the public edit buffer manager. The rest of misc_test.rs stays.
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/misc/tests/save_current_buffer_test.rs"]
+mod emacs_core_lisp_native_misc_tests_save_current_buffer_test_rs;
 
 // Tests whose harness is minted in core: runtime_startup_eval_all,
 // runtime_startup_eval_one, or the GNU refresh command. Direct builtin

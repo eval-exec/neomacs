@@ -8,10 +8,11 @@
 //! use `new_context` here because eval's unit-runtime module stays
 //! `cfg(test)`. Assertions are unchanged.
 //!
-//! The lexical-binding macroexpand test stays in eval: it writes
-//! `Context`'s `lexenv` field. The save-window-excursion opcode test moved
-//! with the other window-surface tests; `Vm` is public and the split trait
-//! lives in display.
+//! The lexical-binding macroexpand test sets `Context::lexenv` through
+//! `set_lexenv_for_test`. That field stays private. The signed setter is
+//! why the test lives here.
+//! The save-window-excursion opcode test moved with the other window-surface
+//! tests; `Vm` is public and the split trait lives in display.
 
 use neovm_value::error::EvalError;
 use neovm_value::value::Value;
@@ -1219,4 +1220,27 @@ fn vm_documentation_and_property_respect_raw_substitute_command_keys_semantics()
         ),
         "OK (t t t t)"
     );
+}
+
+#[test]
+fn vm_macroexpand_preserves_visible_lexical_binding_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::runtime_startup_context();
+    eval.eval_str(
+        "(progn
+           (require 'bytecomp)
+           (defalias 'vm-lb-macro
+             (cons 'macro
+                   (byte-compile
+                    (lambda (&rest _)
+                      lexical-binding)))))",
+    )
+    .expect("install compiled macro expander");
+
+    let _ = eval
+        .try_set_runtime_binding_by_id(neovm_value::intern::intern("lexical-binding"), Value::T);
+    neovm_eval::test_support::authority::set_lexenv_for_test(&mut eval, Value::NIL);
+
+    let result = eval.eval_str("(list (macroexpand '(vm-lb-macro)) lexical-binding)");
+    assert_eq!(crate::emacs_core::format_eval_result(&result), "OK (t t)");
 }

@@ -1177,23 +1177,6 @@ fn backtrace_frame_internal_tracks_runtime_funcall_interactively_marker() {
     );
 }
 
-// ----- special form: save-current-buffer -----
-
-#[test]
-fn sf_save_current_buffer_restores() {
-    crate::test_utils::init_test_tracing();
-    let mut ev = crate::test_utils::runtime_startup_context();
-    // Create a buffer and make it current
-    let buf_id = ev.buffers.create_buffer("*test*");
-    ev.buffers.set_current(buf_id);
-
-    // save-current-buffer with body that just returns 42
-    let result = ev.eval_str("(save-current-buffer 42)").unwrap();
-    assert!(eq_value(&result, &Value::fixnum(42)));
-    // Current buffer should still be *test*
-    assert_eq!(ev.buffers.current_buffer().unwrap().id, buf_id);
-}
-
 // ----- with-syntax-table (Elisp macro in GNU subr.el:6394) -----
 
 #[test]

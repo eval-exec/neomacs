@@ -4457,29 +4457,6 @@ fn vm_macroexpand_environment_lambda_uses_localized_shared_callbacks() {
 }
 
 #[test]
-fn vm_macroexpand_preserves_visible_lexical_binding_like_gnu() {
-    crate::test_utils::init_test_tracing();
-    let mut eval = crate::test_utils::runtime_startup_context();
-    eval.eval_str(
-        "(progn
-           (require 'bytecomp)
-           (defalias 'vm-lb-macro
-             (cons 'macro
-                   (byte-compile
-                    (lambda (&rest _)
-                      lexical-binding)))))",
-    )
-    .expect("install compiled macro expander");
-
-    let _ = eval
-        .try_set_runtime_binding_by_id(neovm_value::intern::intern("lexical-binding"), Value::T);
-    eval.lexenv = Value::NIL;
-
-    let result = eval.eval_str("(list (macroexpand '(vm-lb-macro)) lexical-binding)");
-    assert_eq!(crate::emacs_core::format_eval_result(&result), "OK (t t)");
-}
-
-#[test]
 fn vm_raw_lambda_and_closure_callability_matches_gnu() {
     crate::test_utils::init_test_tracing();
     assert_eq!(vm_eval_str(r#"(funcall '(lambda (x) x) 7)"#), "OK 7");
