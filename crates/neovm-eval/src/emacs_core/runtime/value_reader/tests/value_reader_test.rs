@@ -4,9 +4,6 @@ use neovm_value::intern::resolve_sym;
 use neovm_value::symbol::CanonicalAccess;
 use neovm_value::value::{Value, ValueKind};
 
-#[cfg(test)]
-mod old_unicode_names_gnu;
-
 /// Helper: read one form from a string, panic on error.
 fn read1(input: &str) -> Value {
     let ob = neovm_value::symbol::Obarray::new();

@@ -439,3 +439,19 @@ mod emacs_core_lisp_native_builtins_tests_strings_runtime_startup_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/native/fns/tests/fns_runtime_startup_test.rs"]
 mod emacs_core_lisp_native_fns_tests_fns_runtime_startup_test_rs;
+
+// Tests whose harness is minted in core: runtime_startup_eval_all,
+// runtime_startup_eval_one, or the GNU refresh command. Direct builtin
+// tests stay in eval. Assertions are unchanged.
+#[cfg(test)]
+#[path = "emacs_core/lisp/cl_lib/tests/cl_lib_runtime_startup_test.rs"]
+mod emacs_core_lisp_cl_lib_tests_cl_lib_runtime_startup_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins_extra/tests/builtins_extra_runtime_startup_test.rs"]
+mod emacs_core_lisp_native_builtins_extra_tests_builtins_extra_runtime_startup_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/replace_region_contents_runtime_startup_test.rs"]
+mod emacs_core_lisp_native_builtins_tests_replace_region_contents_runtime_startup_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/runtime/value_reader/tests/mod.rs"]
+mod emacs_core_runtime_value_reader_tests_runtime_startup_escapes_rs;

@@ -402,33 +402,6 @@ fn replace_region_contents_undo_source(orig: &str, new: &str, form: &str) -> Str
 }
 
 #[test]
-fn replace_region_contents_undo_restores_the_original_text() {
-    // DIVERGENCES.md 47 (data-loss class): undoing a `replace-region-contents`
-    // whose Myers diff produces two adjacent insertion runs used to give back
-    // "grmet" -- neither the original nor the replacement.  GNU restores
-    // "greet" exactly.  The other rows are the single-hunk shapes that already
-    // worked and must stay working.
-    for (orig, new) in [
-        (r#""greet""#, r#""welcome""#),
-        (r#""abc""#, r#""xyz""#),
-        (r#""abcde""#, r#""aZcYe""#),
-        (r#""abcde""#, r#""aZZcYYe""#),
-        (r#""abc""#, r#""aXbYc""#),
-    ] {
-        // Replaying the records is lisp/simple.el's `primitive-undo', which
-        // has no Rust implementation (GNU has no C one either), so this row
-        // is asked of the loaded runtime rather than of a bare evaluator.
-        let restored =
-            crate::test_utils::runtime_startup_eval_one(&replace_region_contents_undo_source(
-                orig,
-                new,
-                "(progn (primitive-undo 1 buffer-undo-list) (buffer-string))",
-            ));
-        assert_eq!(restored, format!("OK {orig}"), "undoing {orig} -> {new}");
-    }
-}
-
-#[test]
 fn replace_region_contents_undo_list_shape_matches_gnu() {
     // The undo-list shape is the stronger pin: text can come back right by
     // accident, but only GNU's exact record sequence proves the recording
