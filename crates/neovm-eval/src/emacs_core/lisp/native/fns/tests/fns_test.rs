@@ -1921,8 +1921,8 @@ fn collate_lessp_ignore_case() {
 /// Darwin's libc -- LOCALE is neither read nor type-checked, so these
 /// tests pin each platform's own GNU behavior.
 fn collation_reads_the_locale() -> bool {
-    crate::emacs_core::platform_facts::STRING_COLLATION
-        == crate::emacs_core::platform_facts::StringCollation::LocaleAware
+    neovm_value::system_vocab::platform_facts::STRING_COLLATION
+        == neovm_value::system_vocab::platform_facts::StringCollation::LocaleAware
 }
 
 #[test]
