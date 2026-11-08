@@ -57,8 +57,8 @@ fn obarray_view_swap_contract() {
 #[cfg(feature = "contract-fixtures")]
 fn sole_owner_compile_contracts() {
     let cases = trybuild::TestCases::new();
-    cases.pass("src/emacs_core/runtime/eval/tests/sole_owner_pass/*.rs");
-    cases.compile_fail("src/emacs_core/runtime/eval/tests/sole_owner_ui/*.rs");
+    cases.pass("../neovm-eval/src/emacs_core/runtime/eval/tests/sole_owner_pass/*.rs");
+    cases.compile_fail("../neovm-eval/src/emacs_core/runtime/eval/tests/sole_owner_ui/*.rs");
 }
 
 // The parallel-Lisp contract runners below lived in the `core` binary, which

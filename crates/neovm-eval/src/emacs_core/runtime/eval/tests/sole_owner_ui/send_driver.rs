@@ -3,7 +3,7 @@ mod sole_owner;
 
 use sole_owner::{SoleContextConstruction, SoleOwnerDriver};
 
-#[path = "../../../../../../tests/thread_safety_ui/support/thread_bounds.rs"]
+#[path = "../../../../../../../neovm-core/tests/thread_safety_ui/support/thread_bounds.rs"]
 mod thread_bounds;
 use thread_bounds::ThreadTransfer;
 

@@ -1,6 +1,6 @@
 #[path = "../p15_threading_support/actual_payload.rs"]
 mod actual_payload;
-use actual_payload::{tagged, threading};
+use actual_payload::{tagged, threading, value};
 
 #[path = "../p15_threading_support/actual_completion.rs"]
 mod actual_completion;

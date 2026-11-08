@@ -1,6 +1,6 @@
 #[path = "../p15_threading_support/actual_payload.rs"]
 mod actual_payload;
-use actual_payload::{emacs_core, tagged, threading};
+use actual_payload::{emacs_core, tagged, threading, value};
 use tagged::value::TaggedValue;
 
 fn main() {
