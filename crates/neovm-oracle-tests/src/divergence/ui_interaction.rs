@@ -37,7 +37,13 @@ fn divergence_mouse_event_functions() {
 fn divergence_drag_n_drop() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK (t t)""#]];
+    // Both pinned GNU reference builds bind x-begin-drag: the XOBJ DEFUN on
+    // linux-gtk3 and Lisp preload on the NS build (live macro-expansion dump,
+    // a360712c9d27), so the answer is attested per host even though it agrees.
+    let expect = crate::common::host_expect!(
+        LinuxGnu => r#""OK (t t)""#,
+        MacosDarwin => r#""OK (t t)""#,
+    );
     crate::common::assert_oracle_parity_expect(
         r#"(list
   (fboundp 'x-begin-drag)
@@ -45,13 +51,72 @@ fn divergence_drag_n_drop() {
         expect,
     );
 
-    let expect = expect_test::expect![[r#""OK (t t)""#]];
+    let expect = crate::common::host_expect!(
+        LinuxGnu => r#""OK (t t)""#,
+        MacosDarwin => r#""OK (t t)""#,
+    );
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (require 'x-dnd)
   (list
     (fboundp 'x-dnd-handle-drag-n-drop-event)
     (featurep 'x-dnd)))"#,
+        expect,
+    );
+}
+
+/// MAC-X11-SUBRS: the 36 X11-only subrs that Neo registers must be bound on
+/// the X11 reference and void on the NS reference, exactly like GNU.  The
+/// names are the live fboundp dump intersection: XOBJ DEFUNs the pinned NS
+/// build leaves void, minus x-begin-drag (Lisp-bound on NS) and x-file-dialog
+/// (not registered by Neo).
+#[test]
+fn divergence_mac_x11_only_subrs_are_void_on_ns() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = crate::common::host_expect!(
+        LinuxGnu => r#""OK (36 36)""#,
+        MacosDarwin => r#""OK (36 0)""#,
+    );
+    crate::common::assert_oracle_parity_expect(
+        r#"(let ((names '(font-get-system-font
+                   font-get-system-normal-font
+                   handle-save-session
+                   tool-bar-get-system-style
+                   x-backspace-delete-keys-p
+                   x-change-window-property
+                   x-delete-window-property
+                   x-disown-selection-internal
+                   x-display-monitor-attributes-list
+                   x-display-set-last-user-time
+                   x-double-buffered-p
+                   x-export-frames
+                   x-frame-edges
+                   x-frame-geometry
+                   x-frame-list-z-order
+                   x-frame-restack
+                   x-get-atom-name
+                   x-get-local-selection
+                   x-get-modifier-masks
+                   x-get-selection-internal
+                   x-internal-focus-input-context
+                   x-menu-bar-open-internal
+                   x-mouse-absolute-pixel-position
+                   x-own-selection-internal
+                   x-register-dnd-atom
+                   x-selection-exists-p
+                   x-selection-owner-p
+                   x-send-client-message
+                   x-server-input-extension-version
+                   x-set-mouse-absolute-pixel-position
+                   x-synchronize
+                   x-translate-coordinates
+                   x-uses-old-gtk-dialog
+                   x-window-property
+                   x-window-property-attributes
+                   x-wm-set-size-hint)))
+  (list (length names)
+        (length (delq nil (mapcar #'fboundp names)))))"#,
         expect,
     );
 }
