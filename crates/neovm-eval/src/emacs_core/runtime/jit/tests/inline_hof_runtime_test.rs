@@ -1125,7 +1125,7 @@ fn inline_hof_runtime_native_cache_call_preserves_mid_map_deopt_floor_and_prefix
     );
     assert_eq!(
         observations.chain_pcs,
-        vec![(callback.get_bytecode_data().unwrap().source_id, 7, 1)],
+        vec![(callback.get_bytecode_data().unwrap().source_id(), 7, 1)],
         "the first result was committed before the second callback's guard"
     );
     assert_eq!(

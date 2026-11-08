@@ -151,7 +151,7 @@ fn make_closure_instance_patches_the_prefix_and_keeps_every_other_slot() {
             p.constants.as_slice().as_ptr()
         );
         // Every other slot is the prototype's.
-        assert_eq!(i.source_id, p.source_id);
+        assert_eq!(i.source_id(), p.source_id());
         assert_eq!(i.arglist, p.arglist);
         assert_eq!(i.lexical, p.lexical);
         assert_eq!(i.max_stack, p.max_stack);
@@ -169,10 +169,10 @@ fn make_closure_instance_patches_the_prefix_and_keeps_every_other_slot() {
         assert_eq!(i.interactive, p.interactive);
         assert_eq!(i.closure_slot_count, p.closure_slot_count);
         assert_eq!(i.extra_slots, p.extra_slots);
-        assert_eq!(i.ops_sealed, p.ops_sealed);
-        assert_eq!(i.stack_verified, p.stack_verified);
-        assert_eq!(i.lazy_gnu_code.is_some(), p.lazy_gnu_code.is_some());
-        if let (Some(il), Some(pl)) = (&i.lazy_gnu_code, &p.lazy_gnu_code) {
+        assert_eq!(i.ops_sealed(), p.ops_sealed());
+        assert_eq!(i.stack_verified(), p.stack_verified());
+        assert_eq!(i.lazy_gnu_code().is_some(), p.lazy_gnu_code().is_some());
+        if let (Some(il), Some(pl)) = (i.lazy_gnu_code(), p.lazy_gnu_code()) {
             assert!(std::sync::Arc::ptr_eq(il, pl), "one deferred decode");
         }
         #[cfg(feature = "jit")]

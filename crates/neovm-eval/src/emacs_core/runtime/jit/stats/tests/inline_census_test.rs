@@ -96,7 +96,7 @@ fn inline_census_recognizes_an_in_unit_map_closure() {
     assert_eq!(rows[1].shape, CensusShape::Hof);
     assert_eq!(
         rows[1].target_source,
-        Some(target.get_bytecode_data().unwrap().source_id)
+        Some(target.get_bytecode_data().unwrap().source_id())
     );
     assert!(rows[1].v2.is_ok(), "{:?}", rows[1].v2);
     assert!(rows[1].replay.is_err());
@@ -108,7 +108,7 @@ fn inline_census_recognizes_an_in_unit_map_closure() {
 fn inline_census_callbacks_are_opt_in_and_share_source_identity() {
     let _ev = Context::new(crate::test_utils::unit_runtime());
     let f = function(1, vec![Op::StackRef(0), Op::Return], vec![]);
-    let source = f.source_id;
+    let source = f.source_id();
     let instance = Value::make_bytecode(f.clone());
     let target = Value::make_bytecode(f);
     FORCE_ENABLED.with(|on| on.set(Some(false)));
@@ -143,7 +143,7 @@ fn inline_census_callback_entries_include_quit_and_depth_refusals() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let _roots = ev.save_vm_roots();
     let f = function(1, vec![Op::StackRef(0), Op::Return], vec![]);
-    let source = f.source_id;
+    let source = f.source_id();
     let target = Value::make_bytecode(f);
     ev.push_vm_frame_root(target);
     assert!(ev.maybe_quit_hot_ok());
@@ -191,7 +191,7 @@ fn inline_census_refreshes_verdicts_and_records_compile_refusals() {
     FORCE_ENABLED.with(|on| on.set(Some(true)));
     note_compile(&caller, Some(&ev.obarray));
     assert_eq!(
-        snapshot().sources[&caller.source_id].sites[0].v2,
+        snapshot().sources[&caller.source_id()].sites[0].v2,
         Err("cold".into())
     );
     target
@@ -202,7 +202,7 @@ fn inline_census_refreshes_verdicts_and_records_compile_refusals() {
     note_compile(&caller, Some(&ev.obarray));
     note_compile_outcome(&caller, &Err(CompileError::NotProfitable));
     let snapshot = snapshot();
-    let source = &snapshot.sources[&caller.source_id];
+    let source = &snapshot.sources[&caller.source_id()];
     assert_eq!(source.compiles, 2);
     assert!(source.sites[0].v2.is_ok());
     assert_eq!(source.outcome.name(), "not_profitable");

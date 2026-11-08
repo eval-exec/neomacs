@@ -99,8 +99,8 @@ fn cloning_deferred_gnu_code_shares_the_decoded_ir() {
     );
     assert!(
         std::sync::Arc::ptr_eq(
-            func.lazy_gnu_code.as_ref().unwrap(),
-            cloned.lazy_gnu_code.as_ref().unwrap()
+            func.lazy_gnu_code().as_ref().unwrap(),
+            cloned.lazy_gnu_code().as_ref().unwrap()
         ),
         "one decode cell per source"
     );

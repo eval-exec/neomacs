@@ -574,7 +574,7 @@ fn make_byte_code_decodes_lazily_at_first_execution() {
     for f in neovm_value::value::list_to_vec(&made).unwrap() {
         let data = f.get_bytecode_data().unwrap();
         assert!(data.ops.is_empty());
-        assert!(data.lazy_gnu_code.is_some());
+        assert!(data.lazy_gnu_code().is_some());
     }
 
     assert_eq!(

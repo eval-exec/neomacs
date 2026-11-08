@@ -139,7 +139,7 @@ fn inline_chain_deopt_readback_splits_binds_and_preserves_cross_frame_cons_alias
     assert_eq!(leaf.obs.snapshot().chain_deopts, 1);
     assert_eq!(
         leaf.obs.snapshot().chain_pcs,
-        vec![(f.get_bytecode_data().unwrap().source_id, 0, 1)]
+        vec![(f.get_bytecode_data().unwrap().source_id(), 0, 1)]
     );
 }
 
