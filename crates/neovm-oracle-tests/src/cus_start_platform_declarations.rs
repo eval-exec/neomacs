@@ -1,5 +1,7 @@
-//! Oracle guards for the seven `lisp/cus-start.el` platform names GNU DOES
-//! bind in a build like this one -- the residual entry 138 handed to entry 141.
+//! Oracle guards for the seven `lisp/cus-start.el` platform names an X11 GNU
+//! build binds -- the residual entry 138 handed to entry 141.  The pinned NS
+//! reference binds the X11-only names differently, so the stored answer is
+//! keyed by reference host (`host_expect!`).
 //!
 //! Entry 138 answered the *existence* question for these names and stopped
 //! there, seeding each one to nil.  A `DEFVAR_LISP` is not a nil cell: it
@@ -20,12 +22,16 @@
 //!    lexical binding a `let` over a plain obarray cell makes a LEXICAL
 //!    binding, so `symbol-value` inside the `let` still answers the global.
 //!    That is the probe every case here ends with.
-//! 3. **`x-gtk-use-system-tooltips` is not a variable in any GNU build.**  It
-//!    is `(defvaralias 'x-gtk-use-system-tooltips 'use-system-tooltips)` in
-//!    `lisp/term/x-win.el:1572`, onto the `DEFVAR_BOOL` at `src/frame.c:7725`,
-//!    so it must answer `indirect-variable`, inherit the target's `t`, and
-//!    coerce like a Boolean slot.  A separate Rust cell reproduces none of
-//!    those and lets the two names drift apart.
+//! 3. **`x-gtk-use-system-tooltips` is not its own C variable in any GNU
+//!    build.**  It is `(defvaralias 'x-gtk-use-system-tooltips
+//!    'use-system-tooltips)` in `lisp/term/x-win.el:1572`, onto the
+//!    `DEFVAR_BOOL` at `src/frame.c:7725`, so it must answer
+//!    `indirect-variable`, inherit the target's `t`, and coerce like a
+//!    Boolean slot.  A separate Rust cell reproduces none of those and lets
+//!    the two names drift apart.  The alias lives in `lisp/term/x-win.el`,
+//!    which an NS build never loads, so on the pinned NS reference the name
+//!    is void and the map below signals `void-variable
+//!    x-gtk-use-system-tooltips` before it can return.
 
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
@@ -43,9 +49,21 @@ fn oracle_cus_start_platform_names_gnu_binds_here_carry_gnus_declaration() {
         '(window-combination-limit void-text-area-pointer x-bitmap-file-path
           x-gtk-use-system-tooltips x-scroll-event-delta-factor
           x-auto-preserve-selections vertical-centering-font-regexp))"#;
-    let expect = expect_test::expect![[
-        r#""OK ((window-combination-limit t window-size t t nil) (void-text-area-pointer t arrow t t nil) (x-bitmap-file-path t (\"/usr/include/X11/bitmaps\") t t nil) (x-gtk-use-system-tooltips t t t t nil) (x-scroll-event-delta-factor t 1.0 t t nil) (x-auto-preserve-selections t (CLIPBOARD PRIMARY) t t nil) (vertical-centering-font-regexp t \"gb2312\\\\|gbk\\\\|gb18030\\\\|jisx0208\\\\|jisx0212\\\\|ksc5601\\\\|cns11643\\\\|big5\" t t nil))""#
-    ]];
+    // The pinned reference hosts answer differently.  linux-gtk3 binds all
+    // seven names and keeps configure's `bitmapdir` default.  The NS oracle
+    // is configured `--with-ns --without-x`
+    // (scripts/ci/build-gnu-oracle.sh:189-218): autoconf leaves
+    // x_includes=NONE, so configure.ac:2754-2769 accumulates an empty
+    // bitmapdir -- x-bitmap-file-path is (".") -- and the X-only
+    // declarations are absent, so `(symbol-value 'x-gtk-use-system-tooltips)`
+    // signals before the map is returned.  Record GNU's real per-host
+    // answer.  Neo still returning the map on a mac reference is the
+    // per-host platform-table divergence tracked in
+    // MACOS_PRODUCT_DIVERGENCES.md (rows 87-99), not an expectation drift.
+    let expect = crate::common::host_expect!(
+        LinuxGnu => r#""OK ((window-combination-limit t window-size t t nil) (void-text-area-pointer t arrow t t nil) (x-bitmap-file-path t (\"/usr/include/X11/bitmaps\") t t nil) (x-gtk-use-system-tooltips t t t t nil) (x-scroll-event-delta-factor t 1.0 t t nil) (x-auto-preserve-selections t (CLIPBOARD PRIMARY) t t nil) (vertical-centering-font-regexp t \"gb2312\\\\|gbk\\\\|gb18030\\\\|jisx0208\\\\|jisx0212\\\\|ksc5601\\\\|cns11643\\\\|big5\" t t nil))""#,
+        MacosDarwin => r#""ERR (void-variable x-gtk-use-system-tooltips)""#,
+    );
     // `x-bitmap-file-path` is configure-time `bitmapdir`, not a probe of the
     // running system (src/epaths.in:67, configure.ac:2754-2769), so its value
     // is a host input of the reference build.  The build manifest records the
