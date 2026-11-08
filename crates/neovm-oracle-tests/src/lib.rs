@@ -16,6 +16,7 @@ mod append_nconc_semantics;
 mod apply;
 mod aref_aset;
 mod arithmetic;
+mod arity_kinds;
 mod ash_logand_logior_patterns;
 mod assoc;
 mod assq;
