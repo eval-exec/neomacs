@@ -98,6 +98,24 @@ fn ns_surface_binds_the_ns_c_family_and_omits_the_x11_c_family() {
             value(&mut eval, "(symbol-value 'ns-auto-hide-menu-bar)"),
             "OK nil"
         );
+        // The right-hand modifier twins default to `left' -- "use the value
+        // of ns-<x>-modifier instead" (nsterm.m:11587/11612/11633) -- and
+        // ns-scroll-event-delta-factor is make_float (1.0) (nsterm.m:11736).
+        for name in [
+            "ns-right-alternate-modifier",
+            "ns-right-command-modifier",
+            "ns-right-control-modifier",
+        ] {
+            assert_eq!(
+                value(&mut eval, &format!("(symbol-value '{name})")),
+                "OK left",
+                "{name}"
+            );
+        }
+        assert_eq!(
+            value(&mut eval, "(symbol-value 'ns-scroll-event-delta-factor)"),
+            "OK 1.0"
+        );
         for name in [
             "x-keysym-table",
             "x-selection-timeout",
@@ -168,6 +186,10 @@ fn x11_surface_binds_the_x11_c_family_and_omits_the_ns_c_family() {
             "ns-command-modifier",
             "ns-control-modifier",
             "ns-function-modifier",
+            "ns-right-alternate-modifier",
+            "ns-right-command-modifier",
+            "ns-right-control-modifier",
+            "ns-scroll-event-delta-factor",
             "ns-antialias-text",
             "ns-confirm-quit",
             "ns-auto-hide-menu-bar",

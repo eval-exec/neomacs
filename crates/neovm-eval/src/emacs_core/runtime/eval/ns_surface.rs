@@ -20,7 +20,7 @@
 use neovm_value::symbol::Obarray;
 use neovm_value::value::Value;
 
-/// Register the NS-only `DEFVAR_LISP` names; `src/nsterm.m:11568-11657`.
+/// Register the NS-only `DEFVAR_LISP` names; `src/nsterm.m:11568-11736`.
 pub(crate) fn register_ns_c_level_defvars(obarray: &mut Obarray) {
     // The four modifier descriptions: `nsterm.m:11568`, `11589`, `11614`,
     // `11635`.  Under `NS_IMPL_COCOA` -- the macOS reference build -- the
@@ -34,9 +34,21 @@ pub(crate) fn register_ns_c_level_defvars(obarray: &mut Obarray) {
     ] {
         obarray.define_special_variable(name, Value::symbol(value));
     }
+    // The right-hand twins (`nsterm.m:11578`, `11603`, `11624`), all `Qleft`:
+    // "use the value of `ns-<x>-modifier' instead" (`11587`, `11612`, `11633`).
+    for name in [
+        "ns-right-alternate-modifier",
+        "ns-right-command-modifier",
+        "ns-right-control-modifier",
+    ] {
+        obarray.define_special_variable(name, Value::symbol("left"));
+    }
     // `nsterm.m:11645` DEFVAR_LISP, `ns_antialias_text = Qt`.
     obarray.define_special_variable("ns-antialias-text", Value::T);
     // `nsterm.m:11653` / `11657` DEFVAR_LISP, both `Qnil`.
     obarray.define_special_variable("ns-confirm-quit", Value::NIL);
     obarray.define_special_variable("ns-auto-hide-menu-bar", Value::NIL);
+    // `nsterm.m:11732` DEFVAR_LISP, `make_float (1.0)` -- a float, like the
+    // X11 twin `x-scroll-event-delta-factor` (xterm.c:32834).
+    obarray.define_special_variable("ns-scroll-event-delta-factor", Value::make_float(1.0));
 }

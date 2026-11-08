@@ -78,12 +78,6 @@ pub enum GnuBinding {
     /// GNU, and `cus-start.el`'s `native-p` test is what keeps the absence
     /// from erroring.  Nothing declares it, so it has no documentation either.
     UnboundHere,
-    /// GNU's reference build DOES declare it (the citation in
-    /// [`CusStartPlatformVariable::gnu`] names the HAVE_NS site), but this
-    /// port has no dump-time declaration yet, so a bare [`Context`] answers
-    /// `nil` to `boundp`.  The gap is the port's, not the reference build's:
-    /// recording it as `UnboundHere` would claim GNU leaves it void too.
-    GnuDeclaresNotNeo,
 }
 
 /// One `cus-start.el` platform name.
@@ -159,8 +153,8 @@ impl CusStartPlatformVariable {
     }
 }
 
-/// GNU's NS objects declare the eleven `ns-*` names this port now binds at
-/// dump time -- seven `DEFVAR_LISP`s from `nsterm.m:11568-11657` seeded by
+/// GNU's NS objects declare the fifteen `ns-*` names this port now binds at
+/// dump time -- eleven `DEFVAR_LISP`s from `nsterm.m:11568-11736` seeded by
 /// the evaluator's NS surface module, and four `DEFVAR_BOOL`s from
 /// `nsterm.m:11657-11720` / `nsfns.m:4233` carried by `GNU_BOOL_VARIABLES`.
 const NS_C_SITE: &str = "eval // ns_surface.rs + defvar_bool table (NS surface)";
@@ -233,11 +227,11 @@ pub static CUS_START_PLATFORM_VARIABLES: &[CusStartPlatformVariable] = &[
     ),
     // src/nsterm.m, src/nsfns.m -- `(featurep 'ns)'.
     unbound("ns-control-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
-    unbound("ns-right-control-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::GnuDeclaresNotNeo),
+    unbound("ns-right-control-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
     unbound("ns-command-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
-    unbound("ns-right-command-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::GnuDeclaresNotNeo),
+    unbound("ns-right-command-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
     unbound("ns-alternate-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
-    unbound("ns-right-alternate-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::GnuDeclaresNotNeo),
+    unbound("ns-right-alternate-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
     unbound("ns-function-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
     unbound("ns-antialias-text", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
     unbound("ns-auto-hide-menu-bar", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
@@ -245,7 +239,7 @@ pub static CUS_START_PLATFORM_VARIABLES: &[CusStartPlatformVariable] = &[
     unbound("ns-use-native-fullscreen", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
     unbound("ns-use-fullscreen-animation", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
     unbound("ns-use-srgb-colorspace", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
-    unbound("ns-scroll-event-delta-factor", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::GnuDeclaresNotNeo),
+    unbound("ns-scroll-event-delta-factor", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
     unbound("ns-click-through", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
     // src/w32*.c -- `(eq system-type 'windows-nt)'.
     unbound("w32-follow-system-dark-mode", "w32fns.c, HAVE_NTGUI"),

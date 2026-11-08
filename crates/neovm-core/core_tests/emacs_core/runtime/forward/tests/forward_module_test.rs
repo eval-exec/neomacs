@@ -816,16 +816,6 @@ fn every_cus_start_platform_row_matches_its_declaration_claim() {
                     var.name, var.gnu
                 );
             }
-            GnuBinding::GnuDeclaresNotNeo => {
-                // GNU's reference build binds it, this port's dump does not
-                // yet; the row says so instead of claiming GNU leaves it void.
-                assert_eq!(
-                    bound, "OK nil",
-                    "{} is recorded as GNU-declared but Neo-missing; the port's \
-                     dump must not bind it until the declaration lands",
-                    var.name
-                );
-            }
         }
     }
 }

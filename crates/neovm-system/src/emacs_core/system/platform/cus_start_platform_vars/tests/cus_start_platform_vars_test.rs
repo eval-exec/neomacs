@@ -3,34 +3,24 @@ use super::*;
 /// Measured under GNU Emacs 31.0.90 on GNU/Linux, `-Q --batch`: of the 32
 /// platform names Neomacs used to seed, GNU binds 7 and leaves 25 unbound.
 /// The NS reference build is the same table read through `binding_on(true)`:
-/// all 15 `ns-*` rows plus the four cross-surface names are GNU-bound there
-/// (19), and four of the `ns-*` rows are recorded as GNU-declared but
-/// Neo-missing (`GnuDeclaresNotNeo`), so this port's own NS dump binds 15.
+/// all 15 `ns-*` rows plus the four cross-surface names are bound there (19),
+/// and this port's NS dump declares all 19 of them.
 #[test]
 fn table_matches_gnu_measurement() {
     assert_eq!(CUS_START_PLATFORM_VARIABLES.len(), 32);
     let ns_surface = cfg!(target_os = "macos");
-    let mut gnu_bound = 0;
-    let mut neo_bound = 0;
-    let mut gnu_only = 0;
+    let mut bound = 0;
     for var in CUS_START_PLATFORM_VARIABLES {
         match var.binding_on(ns_surface) {
             GnuBinding::UnboundHere => {}
-            GnuBinding::GnuDeclaresNotNeo => {
-                gnu_bound += 1;
-                gnu_only += 1;
-            }
             GnuBinding::DeclaredInC { .. } | GnuBinding::DeclaredInPreloadedLisp { .. } => {
-                gnu_bound += 1;
-                neo_bound += 1;
+                bound += 1;
             }
         }
     }
-    if ns_surface {
-        assert_eq!((gnu_bound, neo_bound, gnu_only), (19, 15, 4));
-    } else {
-        assert_eq!((gnu_bound, neo_bound, gnu_only), (7, 7, 0));
-    }
+    // GNU's NS build binds all 15 ns-* names plus the four cross-surface
+    // ones; the X11 measurement keeps its 7.
+    assert_eq!(bound, if ns_surface { 19 } else { 7 });
 }
 
 #[test]
@@ -56,7 +46,7 @@ fn every_row_cites_gnu_and_every_bound_row_cites_its_site() {
             GnuBinding::DeclaredInC { site } | GnuBinding::DeclaredInPreloadedLisp { site } => {
                 assert!(!site.is_empty(), "{} has no declaration site", var.name);
             }
-            GnuBinding::UnboundHere | GnuBinding::GnuDeclaresNotNeo => {}
+            GnuBinding::UnboundHere => {}
         }
     }
 }
