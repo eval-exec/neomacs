@@ -6161,7 +6161,13 @@ fn fire_pending_timers_requests_redisplay_after_callbacks() {
     ]);
     ev.set_variable("timer-list", Value::list(vec![timer]));
 
-    let _ = neovm_eval::test_support::authority::service_pending_timers_for_test(&mut ev);
+    // The original test entry was `fire_pending_timers`, the system timer
+    // trait's with-redisplay service (timer/mod.rs).  The P1 re-home mapped
+    // it to the without-redisplay inner service, which is what the keyboard
+    // loop uses and then redisplays itself.  Use the live with-redisplay
+    // method directly; its trait is already imported in this module.
+    ev.service_timers_with_redisplay()
+        .expect("service timers with redisplay");
 
     assert_eq!(*redisplay_calls.borrow(), vec![Value::symbol("done")]);
 }
