@@ -13,7 +13,7 @@ fn publish(baton: &Baton, heap: &TaggedHeap) -> RootBatchLease {
     // slice stays live with no GC, callback or handoff through publication.
     unsafe { prepared.finalize(&[]) }
         .unwrap()
-        .publish()
+        .publish_finalized_root_batch()
         .unwrap()
 }
 
@@ -1092,7 +1092,7 @@ fn retained_flow_keeps_selected_handler_and_private_backtrace_on_requester() {
         vec![Value::symbol("listp"), bad_operand],
     )
     .with_bytecode_error_backtrace(InlineErrorOp::Car, &[bad_operand]);
-    let original = flow.as_signal_mut().unwrap();
+    let mut original = flow.as_signal_mut().unwrap();
     assert!(original.bytecode_error_backtrace().is_some());
     neovm_value::test_support::authority::set_signal_search_complete_for_test(&mut original, true);
     neovm_value::test_support::authority::set_signal_selected_resume_for_test(

@@ -114,7 +114,7 @@ fn interruption_keeps_claimed_owner_roots(origin: InterruptionOrigin) {
         // heap's Baton is held, without a collection or ownership handoff.
         let parked = unsafe { prepared.finalize(&[]) }
             .unwrap()
-            .publish()
+            .publish_finalized_root_batch()
             .unwrap();
         roots.insert(ThreadKey::Main, parked);
         let registry = roots.hosts();
@@ -407,7 +407,7 @@ fn late_actor_observation_cannot_reopen_a_native_settled_parent() {
         // under its held heap Baton, without collection or handoff.
         let parked = unsafe { prepared.finalize(&[]) }
             .unwrap()
-            .publish()
+            .publish_finalized_root_batch()
             .unwrap();
         roots.insert(ThreadKey::Main, parked);
         // SAFETY: the empty host payload is live for the whole no-callback

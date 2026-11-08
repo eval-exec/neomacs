@@ -48,7 +48,7 @@ fn restored_owner_retirement_leaves_cooperative_sweep_pending() {
     // frame; filling and publication cannot collect or hand the Baton off.
     let publication = unsafe { prepared.finalize(&[root]) }
         .unwrap()
-        .publish()
+        .publish_finalized_root_batch()
         .unwrap();
     if owner.tagged_heap.tagged_heap_generational_enabled() {
         assert!(!owner.tagged_heap.value_is_old_for_test(root));
@@ -115,7 +115,7 @@ fn a_busy_recycle_failure_is_explicitly_finished_without_abandoning_its_lease() 
     // no allocation, collection or handoff can occur during publication.
     let publication = unsafe { prepared.finalize(&[]) }
         .unwrap()
-        .publish()
+        .publish_finalized_root_batch()
         .unwrap();
     let heap = owner.tagged_heap.heap_identity();
     let handshake = Arc::new((Mutex::new((false, false)), Condvar::new()));
@@ -340,7 +340,7 @@ fn final_world_drop_explicitly_finishes_residual_registry_entries() {
     // neither operation can collect or hand ownership to another mutator.
     let publication = unsafe { prepared.finalize(&[root]) }
         .expect("finalize the terminated owner's roots")
-        .publish()
+        .publish_finalized_root_batch()
         .expect("publish the terminated owner's roots");
     owner.with_green_runtime(|runtime| {
         assert!(

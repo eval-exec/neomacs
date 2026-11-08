@@ -39,7 +39,7 @@ fn published(baton: &Baton, heap: &TaggedHeap, roots: &[Value]) -> RootBatchLeas
     // no GC, callback or handoff occurs while publishing the live root slice.
     unsafe { prepared.finalize(roots) }
         .unwrap()
-        .publish()
+        .publish_finalized_root_batch()
         .unwrap()
 }
 
