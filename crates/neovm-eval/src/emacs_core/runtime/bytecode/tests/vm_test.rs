@@ -3152,8 +3152,6 @@ fn vm_switch_equal_table_with_cons_keys() {
         table
             .as_hash_table()
             .expect("a hash table")
-            .data
-            .switch_plan
             .shape()
             .is_some(),
         "tier-0 dispatch planned the jump table"

@@ -4927,7 +4927,11 @@ fn switch_equal_cons_table_dispatches_natively() {
     });
     let leaf = lower_switch_on_arg(table);
     let answer = |arg: Value| match leaf.call(ctx_ptr, &[arg]) {
-        NativeRun::Ok(bits) => Value::from_bits(bits).as_fixnum(),
+        NativeRun::Ok(bits) => unsafe {
+            /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
+            Value::from_bits(bits)
+        }
+        .as_fixnum(),
         other => panic!("expected a native answer for {arg:?}, got {other:?}"),
     };
     for _ in 0..4 {
@@ -4942,8 +4946,6 @@ fn switch_equal_cons_table_dispatches_natively() {
         table
             .as_hash_table()
             .expect("a hash table")
-            .data
-            .switch_plan
             .shape()
             .is_some(),
         "native dispatch planned the jump table"
