@@ -87,7 +87,7 @@ fn rooted_admission_rejects_real_capture_from_another_heap_and_returns_capabilit
     }
     .unwrap();
     let failure = ParallelHeapEra::admit_rooted(collector, keeper, frozen).unwrap_err();
-    assert_eq!(failure.reason, RegistrationError::WrongHeap);
+    assert_eq!(*failure.reason(), RegistrationError::WrongHeap);
     assert_eq!(failure.collector.heap_identity(), second_heap);
     assert_eq!(failure.keeper.parallel_heap_identity(), second_heap);
     assert!(failure.keeper.held_here());
@@ -125,7 +125,7 @@ fn assert_fixture_refuses_before_registration(
     }
     .unwrap();
     let failure = ParallelHeapEra::admit_rooted(collector, keeper, frozen).unwrap_err();
-    assert_eq!(failure.reason, RegistrationError::Publication);
+    assert_eq!(*failure.reason(), RegistrationError::Publication);
     assert_eq!(failure.collector.heap_identity(), expected);
     assert_eq!(failure.keeper.parallel_heap_identity(), expected);
     assert!(failure.keeper.held_here());

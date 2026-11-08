@@ -347,7 +347,7 @@ fn treesit_read_buffer(
 fn parser_input_for_test(eval: &super::eval::Context, parser_id: u64) -> Option<LispString> {
     let parser = eval.treesit.parser(parser_id)?;
     let tree = parser.tree()?;
-    let buffer = eval.edit.buffers.get(parser.orig_buffer_id)?;
+    let buffer = eval.edit.buffers.get(parser.orig_buffer_id())?;
     Some(buffer.buffer_substring_lisp_string_no_properties_range(tree.visible()))
 }
 

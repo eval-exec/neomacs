@@ -279,7 +279,7 @@ fn tier2_deopt_reverts_and_preserves_retreat_and_ban() {
     );
     assert!(
         f.jit_runtime()
-            .site_retreat
+            .site_retreat()
             .has(1, super::super::super::retreat::RetreatBit::Invalidated)
     );
     assert_eq!(

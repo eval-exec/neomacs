@@ -112,7 +112,7 @@ fn tier2_inline_epoch_moved_does_not_count_as_feedback_failure() {
     assert_eq!(f.jit_runtime().t2_reopts.load(Ordering::Relaxed), 0);
     assert!(
         !f.jit_runtime()
-            .site_retreat
+            .site_retreat()
             .has(CALL_PC, RetreatBit::Invalidated)
     );
     let id = f.jit_runtime().compiled_id().unwrap();
@@ -147,7 +147,7 @@ fn tier2_inline_epoch_moved_does_not_count_as_feedback_failure() {
     );
     assert!(
         !f.jit_runtime()
-            .site_retreat
+            .site_retreat()
             .has(CALL_PC, RetreatBit::Invalidated)
     );
     assert!(t2.retired.get());

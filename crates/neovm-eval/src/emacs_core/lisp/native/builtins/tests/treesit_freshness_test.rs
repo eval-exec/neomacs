@@ -88,7 +88,7 @@ fn tracked_character_edit_reparses_once_and_updates_source() {
         eval.treesit
             .parser(parser_id)
             .expect("parser entry")
-            .freshness,
+            .freshness(),
         ParserFreshness::ReparsePending(_)
     ));
 
@@ -100,7 +100,7 @@ fn tracked_character_edit_reparses_once_and_updates_source() {
             .as_bytes(),
         br##"{"key": 10}"##
     );
-    assert!(matches!(entry.freshness, ParserFreshness::Clean(_)));
+    assert!(matches!(entry.freshness(), ParserFreshness::Clean(_)));
     assert_eq!(
         treesit_reparse_count(),
         2,
@@ -126,7 +126,7 @@ fn inhibited_modification_hooks_do_not_hide_character_edits_from_parser() {
         eval.treesit
             .parser(parser_id)
             .expect("parser entry")
-            .freshness,
+            .freshness(),
         ParserFreshness::ReparsePending(_)
     ));
     builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("incremental reparse");
@@ -168,7 +168,7 @@ fn untracked_character_edit_forces_safe_full_reparse() {
             .as_bytes(),
         br##"{"key": 1}0"##
     );
-    assert!(matches!(entry.freshness, ParserFreshness::Clean(_)));
+    assert!(matches!(entry.freshness(), ParserFreshness::Clean(_)));
     assert_eq!(treesit_reparse_count(), 2);
 }
 
@@ -185,8 +185,7 @@ fn a_new_restriction_moves_the_parser_window_and_forces_a_reparse() {
         eval.treesit
             .parser(parser_id)
             .expect("parser entry")
-            .tree
-            .as_ref()
+            .tree()
             .expect("a parsed tree")
             .visible(),
         EmacsByteRange::from_usize(0, 12)
@@ -212,7 +211,7 @@ fn a_new_restriction_moves_the_parser_window_and_forces_a_reparse() {
         br##"{"key": 1}"##
     );
     assert_eq!(
-        entry.tree.as_ref().expect("a parsed tree").visible(),
+        entry.tree().expect("a parsed tree").visible(),
         EmacsByteRange::from_usize(1, 11),
         "the tree's window follows the buffer restriction"
     );
@@ -249,7 +248,7 @@ hidden"##,
         eval.treesit
             .parser(parser_id)
             .expect("parser entry")
-            .freshness,
+            .freshness(),
         ParserFreshness::ReparsePending(_)
     ));
     let root = builtin_treesit_parser_root_node(&mut eval, vec![parser])
@@ -317,7 +316,7 @@ fn an_edit_inside_a_temporary_narrowing_keeps_the_tree_and_its_changed_region_sm
         br##"{"a": 1, "b": 20, "c": 3}"##
     );
     assert_eq!(
-        entry.tree.as_ref().expect("a surviving tree").visible(),
+        entry.tree().expect("a surviving tree").visible(),
         EmacsByteRange::from_usize(0, 25),
         "the tree survived the narrowing and its window followed the widening"
     );

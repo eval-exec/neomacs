@@ -294,7 +294,7 @@ impl Context {
         let era =
             crate::emacs_core::eval::world::WorldProofEra::admit_rooted(collector, keeper, frozen)
                 .unwrap_or_else(|failure| {
-                    panic!("collection fixture admission: {:?}", failure.reason)
+                    panic!("collection fixture admission: {:?}", failure.reason())
                 });
         body(era, input)
     }
@@ -339,7 +339,7 @@ impl Context {
         let era =
             crate::emacs_core::eval::world::WorldProofEra::admit_rooted(collector, keeper, frozen)
                 .unwrap_or_else(|failure| {
-                    panic!("collection fixture admission: {:?}", failure.reason)
+                    panic!("collection fixture admission: {:?}", failure.reason())
                 });
         let (collector, keeper, output) = body(era, input);
         assert_eq!(collector.heap_identity(), expected_heap);
