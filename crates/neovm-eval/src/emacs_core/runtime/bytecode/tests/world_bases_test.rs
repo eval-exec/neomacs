@@ -104,7 +104,7 @@ fn world_bases_cursor_reacquires_after_publication_gc_and_manager_replacement() 
             .edit
             .buffers
             .current_buffer()
-            .and_then(|buffer| buffer.name.as_str_owned())
+            .and_then(|buffer| buffer.name_value().as_str_owned())
             .as_deref(),
         Some(" *world-bases-returning-owner*")
     );
@@ -351,7 +351,7 @@ fn world_bases_native_callback_rejoins_with_current_buffer_storage_and_selection
             .edit
             .buffers
             .current_buffer()
-            .and_then(|buffer| buffer.name.as_str_owned())
+            .and_then(|buffer| buffer.name_value().as_str_owned())
             .as_deref(),
         Some(" *world-bases-returning-owner*")
     );

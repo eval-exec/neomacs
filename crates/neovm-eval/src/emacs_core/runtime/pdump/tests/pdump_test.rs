@@ -226,7 +226,7 @@ fn pdump_round_trip_preserves_last_window_start_lisp_position() {
         .buffers
         .get_mut(current)
         .expect("current buffer mut")
-        .last_window_start = LispCharPos1::from_one_based_usize(7);
+        .set_last_window_start(LispCharPos1::from_one_based_usize(7));
 
     let dump = crate::emacs_core::pdump::convert::dump_evaluator(&eval);
     let dumped = dump
@@ -246,7 +246,7 @@ fn pdump_round_trip_preserves_last_window_start_lisp_position() {
         .get(current)
         .expect("restored current buffer");
     assert_eq!(
-        restored.last_window_start,
+        restored.last_window_start(),
         LispCharPos1::from_one_based_usize(7)
     );
 }

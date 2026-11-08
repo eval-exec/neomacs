@@ -133,7 +133,7 @@ fn every_context_free_reader_refuses_a_projected_variable() {
         let current = ev.edit.buffers.current_buffer().expect("a current buffer");
         let slot_read = buf_fwd.value_in(
             Some(&current.slots()[..]),
-            current.local_flags,
+            current.local_flags(),
             Some(&ev.edit.buffers.buffer_defaults[..]),
         );
         assert!(slot_read.is_unbound(), "{name}: value_in");

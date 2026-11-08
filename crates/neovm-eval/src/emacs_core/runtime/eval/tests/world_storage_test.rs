@@ -35,13 +35,16 @@ fn world_storage_shutdown_rejects_an_escaped_buffer_view() {
         .edit
         .buffers
         .current_buffer()
-        .map(|b| b.name.clone());
+        .map(|b| b.name_value().clone());
     let escaped = std::mem::replace(&mut context.edit.buffers, BufferManager::new());
     match context.shutdown() {
         Err(ContextShutdownError::OutstandingViews(count)) => assert_eq!(count.0.get(), 1),
         other => panic!("expected an outstanding storage view: {other:?}"),
     }
-    assert_eq!(escaped.current_buffer().map(|b| b.name.clone()), name);
+    assert_eq!(
+        escaped.current_buffer().map(|b| b.name_value().clone()),
+        name
+    );
     drop(escaped);
 }
 
