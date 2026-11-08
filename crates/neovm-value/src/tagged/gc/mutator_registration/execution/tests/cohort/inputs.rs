@@ -1,9 +1,10 @@
 //! Publication-only cold operands; the small handoff fixture allocates none.
+use super::super::super::super::EraKeeper;
 use super::*;
-use crate::emacs_core::eval::world::WorldEra as ParallelHeapEra;
 use crate::intern::SymId;
 use crate::symbol::Obarray;
 use crate::tagged::gc::FunctionActivation;
+use crate::tagged::gc::ParallelHeapEra;
 use crate::tagged::gc::symbol_table::publication::TableStatistics;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -163,7 +164,7 @@ impl Scenario {
     }
 }
 impl ScenarioSeed {
-    pub(super) fn prepare(self, era: &ParallelHeapEra<'_>) -> PreparedInputs {
+    pub(super) fn prepare<K: EraKeeper>(self, era: &ParallelHeapEra<'_, K>) -> PreparedInputs {
         match self {
             Self::Handoff => PreparedInputs::Handoff,
             Self::Publication(cold) => {

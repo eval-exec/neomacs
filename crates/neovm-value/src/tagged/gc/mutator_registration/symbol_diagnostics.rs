@@ -233,7 +233,7 @@ fn worker<'era>(
     let cleanup = std::mem::replace(&mut *cleanup.borrow_mut(), Cleanup::Pending);
     Receipt::Retired { body, cleanup }
 }
-fn census(era: &ParallelHeapEra<'_>) -> Collections {
+fn census<K: EraKeeper>(era: &ParallelHeapEra<'_, K>) -> Collections {
     let mut stopped = contention::retry(
         Deadline::contention(),
         || era.stop(),

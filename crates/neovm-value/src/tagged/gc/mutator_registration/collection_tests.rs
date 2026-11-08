@@ -83,7 +83,12 @@ fn graph(context: &mut Context, n: i64) -> (SharedRoot, [usize; 2], MarkWord) {
     let root = unsafe { SharedRoot::new(&context.tagged_heap, head) };
     (root, [head.bits(), child.bits()], MarkWord::of(head))
 }
-fn assert_owned(era: &ParallelHeapEra<'_>, stop: &AllStopped<'_>, words: &[usize], expected: bool) {
+fn assert_owned<K: EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
+    stop: &AllStopped<'_>,
+    words: &[usize],
+    expected: bool,
+) {
     retry(|| {
         era.with_stopped_heap_for_test(stop, |heap| {
             for &word in words {

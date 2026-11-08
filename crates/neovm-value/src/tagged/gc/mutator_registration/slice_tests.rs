@@ -19,7 +19,7 @@ fn seeds(context: &mut Context) -> (SharedRoot, SharedRoot) {
         )
     }
 }
-fn owner<'era>(era: &'era ParallelHeapEra<'_>, id: u64) -> Mutator<'era> {
+fn owner<'era, K: EraKeeper>(era: &'era ParallelHeapEra<'_, K>, id: u64) -> Mutator<'era> {
     era.register(id, 2)
         .unwrap()
         .activate(era.heap_identity(), id)
@@ -34,12 +34,15 @@ fn with_run<'era, R>(
     run.close_cons_region().unwrap();
     result
 }
-fn finish(era: ParallelHeapEra<'_>) {
+fn finish<K: EraKeeper>(era: ParallelHeapEra<'_, K>) {
     let (collector, keeper) = era.finish().unwrap();
     drop(collector);
     drop(keeper);
 }
-fn retire<const N: usize>(era: &ParallelHeapEra<'_>, mut owners: [Mutator<'_>; N]) {
+fn retire<const N: usize, K: EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
+    mut owners: [Mutator<'_>; N],
+) {
     for owner in &mut owners {
         with_run(owner, |run| run.clear_root_slots().unwrap());
         owner.enter_native(&[]).unwrap();

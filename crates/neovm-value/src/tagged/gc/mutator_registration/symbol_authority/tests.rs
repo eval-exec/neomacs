@@ -1,10 +1,11 @@
+use super::super::EraKeeper;
 use super::*;
 use crate::emacs_core::eval::Context;
 use crate::intern::intern;
 use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::value::Value;
 
-fn finish(era: ParallelHeapEra<'_>) {
+fn finish<K: EraKeeper>(era: ParallelHeapEra<'_, K>) {
     let (collector, keeper) = era.finish().unwrap();
     drop(collector);
     drop(keeper);

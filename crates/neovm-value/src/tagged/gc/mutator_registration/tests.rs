@@ -11,7 +11,7 @@ use crate::tagged::value::TaggedValue;
 fn epoch(n: u64) -> NonZeroU64 {
     NonZeroU64::new(n).unwrap()
 }
-fn finish(era: ParallelHeapEra<'_>) {
+fn finish<K: EraKeeper>(era: ParallelHeapEra<'_, K>) {
     let (collector, keeper) = era.finish().unwrap();
     drop(collector);
     drop(keeper);

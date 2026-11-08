@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use super::super::EraKeeper;
 use super::*;
 use crate::emacs_core::eval::Context;
 use crate::tagged::gc::ProofEra as ParallelHeapEra;
@@ -164,7 +165,7 @@ fn trace_owners(stopped: &mut AllStopped<'_>, keys: &[MutatorKey]) -> Vec<Vec<us
     })
 }
 
-fn finish_era(era: ParallelHeapEra<'_>) {
+fn finish_era<K: EraKeeper>(era: ParallelHeapEra<'_, K>) {
     let (collector, keeper) = era.finish().unwrap();
     drop(collector);
     drop(keeper);
