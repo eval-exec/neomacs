@@ -1,22 +1,72 @@
 //! GNU's character upcase rules in buffer-aware string comparison.
 
 use super::super::{builtin_compare_strings, compare_strings_in_state_with_parity};
-use crate::emacs_core::{casetab, chartable, eval::Context};
+use crate::emacs_core::eval::Context;
+use neovm_text::emacs_core::casetab::{
+    current_case_table_for_buffer_in_state_with_symbols,
+    ensure_case_table_derived_slots_with_symbols,
+    ensure_standard_case_table_object_in_state_with_symbols, is_case_table_with_symbols,
+    set_current_case_table_for_buffer_in_state,
+};
+use neovm_text::emacs_core::chartable::{copy_char_table, ct_set_single};
+use neovm_value::error::{EvalResult, LispCondition, signal};
 use neovm_value::heap_types::LispString;
 use neovm_value::{emacs_char, string_pos_cache, value::Value};
+
+/// `(standard-case-table)`: the core entry is this text helper under the
+/// audited legacy value write.
+fn standard_case_table(ctx: &mut Context) -> EvalResult {
+    let mode = ctx.symbol_mode();
+    // SAFETY: lazy standard-table creation only reads and stores a variable
+    // value. It does not call Lisp or publish canonical dispatch metadata.
+    unsafe {
+        ctx.obarray_view_mut().with_legacy_value_write(|obarray| {
+            ensure_standard_case_table_object_in_state_with_symbols(obarray, mode)
+        })
+    }
+}
+
+/// `(set-case-table TABLE)`: the same check, standard-table ensure, derived
+/// slots, and buffer-slot write the core entry performs.
+fn set_case_table(ctx: &mut Context, table: Value) -> EvalResult {
+    let mode = ctx.symbol_mode();
+    if !is_case_table_with_symbols(&table, mode) {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("case-table-p"), table],
+        ));
+    }
+    let _ = standard_case_table(ctx)?;
+    ensure_case_table_derived_slots_with_symbols(table, mode)?;
+    set_current_case_table_for_buffer_in_state(&mut ctx.edit.buffers, table)?;
+    Ok(table)
+}
+
+/// `(current-case-table)`: the core entry's split borrow of the buffer
+/// manager and the obarray view.
+fn current_case_table(ctx: &mut Context) -> EvalResult {
+    let mode = ctx.symbol_mode();
+    let (buffers, mut obarray_view) = ctx.buffers_and_obarray_view_mut();
+    // SAFETY: this selects and seeds case-table values and the buffer slot.
+    // It does not call Lisp or change function metadata.
+    unsafe {
+        obarray_view.with_legacy_value_write(|obarray| {
+            current_case_table_for_buffer_in_state_with_symbols(obarray, buffers, mode)
+        })
+    }
+}
 
 fn context_with_mappings(mappings: &[(u32, u32)]) -> Context {
     crate::test_utils::init_test_tracing();
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
-    let standard = casetab::builtin_standard_case_table(&mut ctx, vec![]).unwrap();
-    let table = chartable::copy_char_table(standard).unwrap();
-    let up = chartable::copy_char_table(table.as_char_table_obj().unwrap().extras.as_slice()[0])
-        .unwrap();
+    let standard = standard_case_table(&mut ctx).unwrap();
+    let table = copy_char_table(standard).unwrap();
+    let up = copy_char_table(table.as_char_table_obj().unwrap().extras.as_slice()[0]).unwrap();
     for &(code, mapped) in mappings {
-        chartable::ct_set_single(&up, code as i64, Value::fixnum(mapped as i64));
+        ct_set_single(&up, code as i64, Value::fixnum(mapped as i64));
     }
     table.with_char_table_mut(|obj| obj.set_extra(0, up));
-    casetab::builtin_set_case_table(&mut ctx, vec![table]).unwrap();
+    set_case_table(&mut ctx, table).unwrap();
     ctx
 }
 
@@ -95,20 +145,20 @@ fn compare_case_table_missing_entry_does_not_fall_back_to_unicode() {
 fn compare_case_table_standard_object_mutations_are_observed() {
     crate::test_utils::init_test_tracing();
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
-    let table = casetab::builtin_standard_case_table(&mut ctx, vec![]).unwrap();
+    let table = standard_case_table(&mut ctx).unwrap();
     let up = table.as_char_table_obj().unwrap().extras.as_slice()[0];
-    chartable::ct_set_single(&up, b'a' as i64, Value::fixnum(b'X' as i64));
+    ct_set_single(&up, b'a' as i64, Value::fixnum(b'X' as i64));
     assert_eq!(compare(&mut ctx, "a", "X"), Value::T);
 }
 
 #[test]
 fn compare_case_table_ascii_parent_fallback_is_observed() {
     let mut ctx = context_with_mappings(&[]);
-    let table = casetab::builtin_current_case_table(&mut ctx, vec![]).unwrap();
+    let table = current_case_table(&mut ctx).unwrap();
     let up = table.as_char_table_obj().unwrap().extras.as_slice()[0];
     let parent = Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3);
-    chartable::ct_set_single(&parent, b'a' as i64, Value::fixnum(b'X' as i64));
-    chartable::ct_set_single(&up, b'a' as i64, Value::NIL);
+    ct_set_single(&parent, b'a' as i64, Value::fixnum(b'X' as i64));
+    ct_set_single(&up, b'a' as i64, Value::NIL);
     up.with_char_table_mut(|obj| obj.set_parent(parent));
     assert_eq!(compare(&mut ctx, "a", "X"), Value::T);
 }

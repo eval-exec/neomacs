@@ -23,7 +23,34 @@ fn gc_tls_ownership_regex_reentry_keeps_evicted_compiled_translation_alive() {
     )
     .unwrap();
     let custom = Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3);
-    neovm_text::emacs_core::casetab::builtin_set_case_table(&mut ctx, vec![custom]).unwrap();
+    let mode = ctx.symbol_mode();
+    // Same install as `(set-case-table)`: refuse a non-table, ensure the
+    // standard table, fill derived slots, then write the buffer slot.
+    (|| -> neovm_value::error::EvalResult {
+        if !neovm_text::emacs_core::casetab::is_case_table_with_symbols(&custom, mode) {
+            return Err(neovm_value::error::signal(
+                neovm_value::error::LispCondition::WrongTypeArgument,
+                vec![Value::symbol("case-table-p"), custom],
+            ));
+        }
+        // SAFETY: the standard-table ensure only reads and stores a variable value.
+        let _ = unsafe {
+            ctx.obarray_view_mut().with_legacy_value_write(|obarray| {
+                neovm_text::emacs_core::casetab::ensure_standard_case_table_object_in_state_with_symbols(
+                    obarray, mode,
+                )
+            })
+        }?;
+        neovm_text::emacs_core::casetab::ensure_case_table_derived_slots_with_symbols(
+            custom, mode,
+        )?;
+        neovm_text::emacs_core::casetab::set_current_case_table_for_buffer_in_state(
+            &mut ctx.edit.buffers,
+            custom,
+        )?;
+        Ok(custom)
+    })()
+    .unwrap();
     let canon = neovm_text::emacs_core::casetab::buffer_case_canon_table(
         ctx.edit.buffers.current_buffer().unwrap(),
     )
