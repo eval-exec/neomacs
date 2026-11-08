@@ -13,7 +13,11 @@ fn context() -> Context {
     }
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let buffer = eval.buffers.current_buffer_id().expect("current buffer");
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     eval.frames.create_frame("mode-line-flow", 640, 384, buffer);
     eval
 }
@@ -21,26 +25,38 @@ fn context() -> Context {
 #[test]
 fn redisplay_mode_line_exit_restores_restrictions_and_callback() {
     let mut eval = context();
-    let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
-    eval.buffers
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.edit
+        .buffers
         .get_mut(buffer_id)
         .expect("buffer")
         .insert("abcdef");
-    let _ = eval.buffers.internal_labeled_narrow_to_emacs_byte_range(
-        buffer_id,
-        EmacsByteRange::from_usize(1, 5),
-        Value::symbol("outer"),
-    );
-    let _ = eval.buffers.internal_labeled_narrow_to_emacs_byte_range(
-        buffer_id,
-        EmacsByteRange::from_usize(2, 4),
-        Value::symbol("inner"),
-    );
+    let _ = eval
+        .edit
+        .buffers
+        .internal_labeled_narrow_to_emacs_byte_range(
+            buffer_id,
+            EmacsByteRange::from_usize(1, 5),
+            Value::symbol("outer"),
+        );
+    let _ = eval
+        .edit
+        .buffers
+        .internal_labeled_narrow_to_emacs_byte_range(
+            buffer_id,
+            EmacsByteRange::from_usize(2, 4),
+            Value::symbol("inner"),
+        );
     let roots = eval.save_specpdl_roots();
     let expected = Value::string("first mode-line exit");
     eval.push_specpdl_root(expected);
     eval.redisplay_fn = Some(Box::new(move |eval| {
         let buffer = eval
+            .edit
             .buffers
             .get(buffer_id)
             .expect("buffer during redisplay");
@@ -63,7 +79,11 @@ fn redisplay_mode_line_exit_restores_restrictions_and_callback() {
     assert!(!eval.has_mode_line_display_flow());
     assert!(eval.redisplay_fn.is_some());
     assert!(eval.last_redisplay_signature.is_none());
-    let buffer = eval.buffers.get(buffer_id).expect("buffer after redisplay");
+    let buffer = eval
+        .edit
+        .buffers
+        .get(buffer_id)
+        .expect("buffer after redisplay");
     assert_eq!(buffer.point_min_emacs_byte_pos().get(), 2);
     assert_eq!(buffer.point_max_emacs_byte_pos().get(), 4);
     eval.restore_specpdl_roots(roots);

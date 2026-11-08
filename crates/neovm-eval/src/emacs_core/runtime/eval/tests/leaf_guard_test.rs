@@ -98,7 +98,8 @@ fn witnesses_catch_an_undeclared_buffer_write() {
     // Moving point is a buffer write `gethash` does not declare. (Straight
     // through the buffer: `goto-char` would be an `eval` the guard refuses.)
     let active = LeafActive::enter(gethash_spec(), &ctx);
-    ctx.buffers
+    ctx.edit
+        .buffers
         .current_buffer_mut()
         .expect("a current buffer")
         .goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(1));

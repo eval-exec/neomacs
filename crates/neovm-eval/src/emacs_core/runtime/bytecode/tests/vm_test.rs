@@ -769,9 +769,9 @@ fn vm_internal_labeled_restriction_builtins_use_shared_buffer_state() {
                        (progn (internal--labeled-widen 'outer-tag)
                               (list (point-min) (point-max)))))"#,
             |eval| {
-                let buffer_id = eval.buffers.create_buffer("vm-labeled-restriction");
-                eval.buffers.set_current(buffer_id);
-                let _ = eval.buffers.insert_into_buffer(buffer_id, "abcdef");
+                let buffer_id = eval.edit.buffers.create_buffer("vm-labeled-restriction");
+                eval.edit.buffers.set_current(buffer_id);
+                let _ = eval.edit.buffers.insert_into_buffer(buffer_id, "abcdef");
             },
         ),
         "OK (2 5 (2 5) (1 7))"
@@ -794,9 +794,12 @@ fn vm_save_restriction_restores_labeled_restrictions_and_widen_semantics() {
                        (progn (internal--labeled-widen 'tag)
                               (list (point-min) (point-max)))))"#,
             |eval| {
-                let buffer_id = eval.buffers.create_buffer("vm-saved-labeled-restriction");
-                eval.buffers.set_current(buffer_id);
-                let _ = eval.buffers.insert_into_buffer(buffer_id, "abcdef");
+                let buffer_id = eval
+                    .edit
+                    .buffers
+                    .create_buffer("vm-saved-labeled-restriction");
+                eval.edit.buffers.set_current(buffer_id);
+                let _ = eval.edit.buffers.insert_into_buffer(buffer_id, "abcdef");
             },
         ),
         "OK (2 5 (1 7) 2 5 (2 5) (1 7))"
@@ -814,9 +817,9 @@ fn vm_save_excursion_restores_point_on_normal_exit() {
                    (goto-char 6))
                  (point))"#,
             |eval| {
-                let buffer_id = eval.buffers.create_buffer("vm-save-excursion");
-                eval.buffers.set_current(buffer_id);
-                let _ = eval.buffers.insert_into_buffer(buffer_id, "abcdef");
+                let buffer_id = eval.edit.buffers.create_buffer("vm-save-excursion");
+                eval.edit.buffers.set_current(buffer_id);
+                let _ = eval.edit.buffers.insert_into_buffer(buffer_id, "abcdef");
             },
         ),
         "OK 3"
@@ -836,9 +839,9 @@ fn vm_save_excursion_marker_survives_exact_gc() {
                    (insert "XXX"))
                  (list (point) (buffer-string)))"#,
             |eval| {
-                let buffer_id = eval.buffers.create_buffer("vm-save-excursion-gc");
-                eval.buffers.set_current(buffer_id);
-                let _ = eval.buffers.insert_into_buffer(buffer_id, "abcdef");
+                let buffer_id = eval.edit.buffers.create_buffer("vm-save-excursion-gc");
+                eval.edit.buffers.set_current(buffer_id);
+                let _ = eval.edit.buffers.insert_into_buffer(buffer_id, "abcdef");
             },
         ),
         "OK (10 \"abXXXcdef\")"
@@ -1142,7 +1145,7 @@ fn execute_manual_vm_built<T>(
     // minimal harness only registers std errors and lacks the full
     // subr surface.
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let (func, init_state) = build(&mut eval.buffers);
+    let (func, init_state) = build(&mut eval.edit.buffers);
 
     let result = {
         let mut vm = new_vm(&mut eval);
@@ -1150,7 +1153,7 @@ fn execute_manual_vm_built<T>(
             .expect("manual bytecode should execute")
     };
 
-    let buffers = std::mem::take(&mut eval.buffers);
+    let buffers = std::mem::take(&mut eval.edit.buffers);
     (result, buffers, init_state)
 }
 
@@ -2791,8 +2794,8 @@ fn vm_unbind_restores_saved_excursion_point() {
 fn vm_save_window_excursion_restores_selected_window() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let buffer_id = eval.buffers.create_buffer("*vm-save-window*");
-    eval.buffers.set_current(buffer_id);
+    let buffer_id = eval.edit.buffers.create_buffer("*vm-save-window*");
+    eval.edit.buffers.set_current(buffer_id);
     let frame_id = eval.frames.create_frame("F1", 960, 640, buffer_id);
     assert!(eval.frames.select_frame(frame_id));
     let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
@@ -4068,12 +4071,17 @@ i")
                   nil
                   (vector evt)))"#,
             |eval| {
-                let current = eval.buffers.current_buffer_id().expect("current buffer");
-                let _ = eval.buffers.replace_buffer_contents(current, "abcd");
+                let current = eval
+                    .edit
+                    .buffers
+                    .current_buffer_id()
+                    .expect("current buffer");
+                let _ = eval.edit.buffers.replace_buffer_contents(current, "abcd");
                 let _ = eval
+                    .edit
                     .buffers
                     .goto_buffer_emacs_byte_pos(current, neovm_edit::buffer::EmacsBytePos::new(2));
-                let _ = eval.buffers.set_buffer_mark_emacs_byte_pos(
+                let _ = eval.edit.buffers.set_buffer_mark_emacs_byte_pos(
                     current,
                     neovm_edit::buffer::EmacsBytePos::new(1),
                 );
@@ -4225,12 +4233,17 @@ fn vm_call_interactively_handles_r_capital_spec_via_use_region_p_on_shared_runti
                    (call-interactively
                     '(lambda (beg end) (interactive "R") (list beg end)))))"#,
             |eval| {
-                let current = eval.buffers.current_buffer_id().expect("current buffer");
-                let _ = eval.buffers.replace_buffer_contents(current, "abcd");
+                let current = eval
+                    .edit
+                    .buffers
+                    .current_buffer_id()
+                    .expect("current buffer");
+                let _ = eval.edit.buffers.replace_buffer_contents(current, "abcd");
                 let _ = eval
+                    .edit
                     .buffers
                     .goto_buffer_emacs_byte_pos(current, neovm_edit::buffer::EmacsBytePos::new(2));
-                let _ = eval.buffers.set_buffer_mark_emacs_byte_pos(
+                let _ = eval.edit.buffers.set_buffer_mark_emacs_byte_pos(
                     current,
                     neovm_edit::buffer::EmacsBytePos::new(1),
                 );
@@ -4289,10 +4302,11 @@ fn vm_hash_and_collection_tail_use_shared_and_direct_paths() {
                (sleep-for 0))",
             |eval| {
                 let current = eval
+                    .edit
                     .buffers
                     .current_buffer_id()
                     .expect("current buffer should exist");
-                let _ = eval.buffers.insert_into_buffer(current, "abc");
+                let _ = eval.edit.buffers.insert_into_buffer(current, "abc");
             },
         ),
         "OK (42 (b . 2) (:b 2) (1 2) \"900150983cd24fb0d6963f7d28e17f72\" \"a9993e364706816aba3e25717850c26c9cd0d89d\" nil nil)"
@@ -4427,10 +4441,12 @@ fn vm_eval_and_macroexpand_tail_use_localized_shared_paths() {
             "(progn (setq vm-eval-buffer-target nil) (eval-buffer (current-buffer)) vm-eval-buffer-target)",
             |eval| {
                 let current = eval
+                    .edit
                     .buffers
                     .current_buffer_id()
                     .expect("current buffer should exist");
-                eval.buffers
+                eval.edit
+                    .buffers
                     .replace_buffer_contents(current, "(setq vm-eval-buffer-target 17)\n");
             },
         ),
@@ -4452,10 +4468,13 @@ fn vm_eval_and_macroexpand_tail_use_localized_shared_paths() {
     assert_eq!(
         vm_eval_with_init_str(&region_form, |eval| {
             let current = eval
+                .edit
                 .buffers
                 .current_buffer_id()
                 .expect("current buffer should exist");
-            eval.buffers.replace_buffer_contents(current, region_source);
+            eval.edit
+                .buffers
+                .replace_buffer_contents(current, region_source);
         }),
         "OK (23 nil)"
     );
@@ -4984,8 +5003,12 @@ fn vm_current_buffer_query_builtins_use_shared_runtime_state() {
                      (char-after)
                      (char-before))"#,
             |eval| {
-                let current = eval.buffers.current_buffer_id().expect("scratch buffer");
-                let buffer = eval.buffers.get_mut(current).expect("scratch buffer");
+                let current = eval
+                    .edit
+                    .buffers
+                    .current_buffer_id()
+                    .expect("scratch buffer");
+                let buffer = eval.edit.buffers.get_mut(current).expect("scratch buffer");
                 buffer.insert("hello");
                 let start = buffer
                     .lisp_pos_to_emacs_byte_pos(LispCharPos1::new(2))
@@ -5034,8 +5057,12 @@ fn vm_navigation_predicates_and_line_positions_use_shared_narrowed_buffer_state(
                        (list (bobp) (eobp) (bolp) (eolp)
                              (line-beginning-position) (line-end-position))))"#,
             |eval| {
-                let current = eval.buffers.current_buffer_id().expect("scratch buffer");
-                let buffer = eval.buffers.get_mut(current).expect("scratch buffer");
+                let current = eval
+                    .edit
+                    .buffers
+                    .current_buffer_id()
+                    .expect("scratch buffer");
+                let buffer = eval.edit.buffers.get_mut(current).expect("scratch buffer");
                 buffer.insert("wx\nab\ncd");
                 let start = buffer
                     .lisp_pos_to_emacs_byte_pos(LispCharPos1::new(4))
@@ -5247,7 +5274,7 @@ fn vm_reader_message_and_completion_builtins_use_shared_runtime_entry() {
                   (read-from-string "(a . b)")
                   (read "(1 2)")))"#,
             |eval| {
-                eval.buffers.create_buffer("vm-message-buffer");
+                eval.edit.buffers.create_buffer("vm-message-buffer");
                 // GNU populates `current-message` only on the interactive
                 // echo-area path (xdisp.c `message3_frame_nolog`); the default
                 // VM test Context is noninteractive.
@@ -5531,12 +5558,16 @@ fn vm_undo_boundary_uses_shared_buffer_state() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     {
-        let buffer = eval.buffers.current_buffer_mut().expect("scratch buffer");
+        let buffer = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("scratch buffer");
         buffer.insert("x");
     }
     let result = eval.eval_str("(undo-boundary)");
     assert!(matches!(result, Ok(value) if value.is_nil()));
-    let buffer = eval.buffers.current_buffer().expect("scratch buffer");
+    let buffer = eval.edit.buffers.current_buffer().expect("scratch buffer");
     let ul = buffer.get_undo_list();
     assert!(neovm_edit::buffer::undo_list_has_trailing_boundary(&ul));
 }
@@ -5700,7 +5731,7 @@ fn vm_make_thread_restores_caller_current_buffer() {
               (eq (thread-join worker) vm-thread-target-buffer)
               (eq (current-buffer) orig)))"#,
         |eval| {
-            let target = eval.buffers.create_buffer("vm-thread-target-buffer");
+            let target = eval.edit.buffers.create_buffer("vm-thread-target-buffer");
             eval.set_variable("vm-thread-target-buffer", Value::make_buffer(target));
         },
     );
@@ -5881,8 +5912,13 @@ fn vm_buffer_identity_builtins_use_shared_runtime_state() {
     );
 
     let result = vm_eval_with_init_str(&form, |eval| {
-        let current = eval.buffers.current_buffer_id().expect("scratch buffer");
-        eval.buffers
+        let current = eval
+            .edit
+            .buffers
+            .current_buffer_id()
+            .expect("scratch buffer");
+        eval.edit
+            .buffers
             .set_buffer_file_name(current, Value::string(file.clone()))
             .expect("current buffer should accept file name");
     });
@@ -5921,8 +5957,13 @@ fn vm_fileio_builtins_use_shared_default_directory_state() {
              (length (file-system-info ".")))"#,
         |eval| {
             eval.set_variable("default-directory", Value::string("/tmp/neovm-global/"));
-            let current = eval.buffers.current_buffer_id().expect("current buffer");
-            eval.buffers
+            let current = eval
+                .edit
+                .buffers
+                .current_buffer_id()
+                .expect("current buffer");
+            eval.edit
+                .buffers
                 .set_buffer_local_property(current, "default-directory", Value::string(&base_str))
                 .expect("buffer local default-directory should set");
         },
@@ -5958,8 +5999,13 @@ fn vm_fileio_mutation_builtins_use_shared_default_directory_state() {
              (progn (delete-directory-internal "made") (file-directory-p "made")))"#,
         |eval| {
             eval.set_variable("default-directory", Value::string("/tmp/neovm-global/"));
-            let current = eval.buffers.current_buffer_id().expect("current buffer");
-            eval.buffers
+            let current = eval
+                .edit
+                .buffers
+                .current_buffer_id()
+                .expect("current buffer");
+            eval.edit
+                .buffers
                 .set_buffer_local_property(current, "default-directory", Value::string(&base_str))
                 .expect("buffer local default-directory should set");
         },
@@ -5991,8 +6037,13 @@ fn vm_insert_file_contents_and_write_region_use_shared_runtime_state() {
 
     let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     eval.set_variable("default-directory", Value::string("/tmp/neovm-global/"));
-    let current = eval.buffers.current_buffer_id().expect("current buffer");
-    eval.buffers
+    let current = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.edit
+        .buffers
         .set_buffer_local_property(current, "default-directory", Value::string(&base_str))
         .expect("buffer local default-directory should set");
 
@@ -6003,7 +6054,7 @@ fn vm_insert_file_contents_and_write_region_use_shared_runtime_state() {
     let insert_parts = neovm_value::value::list_to_vec(&insert_result).expect("insert return list");
     assert_eq!(insert_parts[0].as_utf8_str(), Some(alpha.as_str()));
     assert_eq!(insert_parts[1], Value::fixnum(6));
-    let buf = eval.buffers.current_buffer().expect("current buffer");
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
     assert_eq!(buf.buffer_string(), "abcdef");
     assert_eq!(
         buf.file_name_runtime_string_owned().as_deref(),
@@ -6018,7 +6069,7 @@ fn vm_insert_file_contents_and_write_region_use_shared_runtime_state() {
     .expect("write-region should execute");
 
     assert_eq!(std::fs::read_to_string(&out).expect("read out"), "abXYe");
-    let buf = eval.buffers.current_buffer().expect("current buffer");
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
     assert_eq!(
         buf.file_name_runtime_string_owned().as_deref(),
         Some(visit.as_str())
@@ -6073,8 +6124,13 @@ fn vm_dired_builtins_use_shared_default_directory_state() {
              (find-file-name-handler "fixtures/alpha.txt" 'insert-file-contents))"#,
         |eval| {
             eval.set_variable("default-directory", Value::string("/tmp/neovm-global/"));
-            let current = eval.buffers.current_buffer_id().expect("current buffer");
-            eval.buffers
+            let current = eval
+                .edit
+                .buffers
+                .current_buffer_id()
+                .expect("current buffer");
+            eval.edit
+                .buffers
                 .set_buffer_local_property(current, "default-directory", Value::string(&base_str))
                 .expect("buffer local default-directory should set");
         },
@@ -6113,8 +6169,13 @@ fn vm_file_name_completion_callable_predicate_uses_shared_runtime_callback() {
                    seen))"#,
         |eval| {
             eval.set_variable("default-directory", Value::string("/tmp/neovm-global/"));
-            let current = eval.buffers.current_buffer_id().expect("current buffer");
-            eval.buffers
+            let current = eval
+                .edit
+                .buffers
+                .current_buffer_id()
+                .expect("current buffer");
+            eval.edit
+                .buffers
                 .set_buffer_local_property(current, "default-directory", Value::string(&base_str))
                 .expect("buffer local default-directory should set");
         },
@@ -6149,11 +6210,17 @@ fn vm_file_metadata_builtins_use_shared_runtime_state() {
              (set-visited-file-modtime nil))"#,
         |eval| {
             eval.set_variable("default-directory", Value::string("/tmp/neovm-global/"));
-            let current = eval.buffers.current_buffer_id().expect("current buffer");
-            eval.buffers
+            let current = eval
+                .edit
+                .buffers
+                .current_buffer_id()
+                .expect("current buffer");
+            eval.edit
+                .buffers
                 .set_buffer_local_property(current, "default-directory", Value::string(&base_str))
                 .expect("buffer local default-directory should set");
-            eval.buffers
+            eval.edit
+                .buffers
                 .set_buffer_file_name(current, Value::string(alpha_abs.clone()))
                 .expect("buffer file name should set");
         },
@@ -6191,8 +6258,13 @@ fn vm_file_metadata_tail_and_coding_scan_builtins_use_direct_dispatch() {
                (set-default-file-modes orig)))"#,
         |eval| {
             eval.set_variable("default-directory", Value::string("/tmp/neovm-global/"));
-            let current = eval.buffers.current_buffer_id().expect("current buffer");
-            eval.buffers
+            let current = eval
+                .edit
+                .buffers
+                .current_buffer_id()
+                .expect("current buffer");
+            eval.edit
+                .buffers
                 .set_buffer_local_property(current, "default-directory", Value::string(&base_str))
                 .expect("buffer local default-directory should set");
         },
@@ -6224,8 +6296,13 @@ fn vm_file_setters_and_display_stubs_use_direct_dispatch() {
                (internal-show-cursor-p (selected-window))))"#,
         |eval| {
             eval.set_variable("default-directory", Value::string("/tmp/neovm-global/"));
-            let current = eval.buffers.current_buffer_id().expect("current buffer");
-            eval.buffers
+            let current = eval
+                .edit
+                .buffers
+                .current_buffer_id()
+                .expect("current buffer");
+            eval.edit
+                .buffers
                 .set_buffer_local_property(current, "default-directory", Value::string(&base_str))
                 .expect("buffer local default-directory should set");
         },
@@ -7634,8 +7711,12 @@ fn vm_indentation_builtins_use_buffer_local_current_buffer_state() {
                        (move-to-column 3))
                      (current-column))"#,
             |eval| {
-                let current = eval.buffers.current_buffer_id().expect("scratch buffer");
-                let buffer = eval.buffers.get_mut(current).expect("scratch buffer");
+                let current = eval
+                    .edit
+                    .buffers
+                    .current_buffer_id()
+                    .expect("scratch buffer");
+                let buffer = eval.edit.buffers.get_mut(current).expect("scratch buffer");
                 buffer.set_buffer_local("tab-width", Value::fixnum(4));
                 buffer.insert("\tb");
                 buffer.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(3));
@@ -7807,8 +7888,13 @@ fn vm_insert_byte_and_buffer_undo_toggles_use_shared_runtime_state() {
                  (insert-byte 200 1)
                  (append (buffer-string) nil))"#,
             |eval| {
-                let current = eval.buffers.current_buffer_id().expect("scratch buffer");
-                eval.buffers
+                let current = eval
+                    .edit
+                    .buffers
+                    .current_buffer_id()
+                    .expect("scratch buffer");
+                eval.edit
+                    .buffers
                     .set_buffer_multibyte_flag(current, false)
                     .expect("set-buffer-multibyte should accept scratch buffer");
             },
@@ -7875,8 +7961,12 @@ fn vm_char_primitives_and_buffer_substring_use_narrowed_current_buffer_state() {
                          (buffer-substring-no-properties 0 1)
                        (error (car err))))"#,
             |eval| {
-                let current = eval.buffers.current_buffer_id().expect("scratch buffer");
-                let buffer = eval.buffers.get_mut(current).expect("scratch buffer");
+                let current = eval
+                    .edit
+                    .buffers
+                    .current_buffer_id()
+                    .expect("scratch buffer");
+                let buffer = eval.edit.buffers.get_mut(current).expect("scratch buffer");
                 buffer.insert("Hello, 世界");
                 let start = buffer
                     .lisp_pos_to_emacs_byte_pos(LispCharPos1::new(3))
@@ -7924,8 +8014,13 @@ fn vm_byte_position_and_get_byte_use_shared_runtime_state() {
                          (get-byte 3)
                        (error (car err)))))"#,
             |eval| {
-                let current = eval.buffers.current_buffer_id().expect("scratch buffer");
-                eval.buffers
+                let current = eval
+                    .edit
+                    .buffers
+                    .current_buffer_id()
+                    .expect("scratch buffer");
+                eval.edit
+                    .buffers
                     .set_buffer_multibyte_flag(current, false)
                     .expect("set-buffer-multibyte should accept scratch buffer");
             },
@@ -7997,8 +8092,12 @@ fn vm_buffer_local_and_binding_builtins_use_shared_state() {
                        (local-variable-if-set-p 'vm-vm-lvis-alias)
                        (local-variable-if-set-p 'vm-vm-lvis-base)))"#,
             |eval| {
-                let current = eval.buffers.current_buffer_id().expect("scratch buffer");
-                let buffer = eval.buffers.get_mut(current).expect("scratch buffer");
+                let current = eval
+                    .edit
+                    .buffers
+                    .current_buffer_id()
+                    .expect("scratch buffer");
+                let buffer = eval.edit.buffers.get_mut(current).expect("scratch buffer");
                 buffer.set_buffer_local("vm-vm-base", Value::fixnum(3));
             },
         ),
@@ -8498,7 +8597,11 @@ fn vm_variable_lookup_builtins_use_shared_dynamic_and_buffer_local_state() {
                     (list (boundp 'vm-vm-base)
                           (symbol-value 'vm-vm-base)))))"#,
             |eval| {
-                let current = eval.buffers.current_buffer_id().expect("current buffer");
+                let current = eval
+                    .edit
+                    .buffers
+                    .current_buffer_id()
+                    .expect("current buffer");
                 eval.set_buffer_local_binding_by_id(
                     current,
                     neovm_value::intern::intern("vm-vm-base"),
@@ -9124,9 +9227,14 @@ fn vm_mark_marker_uses_shared_buffer_mark_state() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
         vm_eval_with_init_str("(marker-position (mark-marker))", |eval| {
-            let current = eval.buffers.current_buffer_id().expect("current buffer");
-            let _ = eval.buffers.replace_buffer_contents(current, "abcd");
+            let current = eval
+                .edit
+                .buffers
+                .current_buffer_id()
+                .expect("current buffer");
+            let _ = eval.edit.buffers.replace_buffer_contents(current, "abcd");
             let _ = eval
+                .edit
                 .buffers
                 .set_buffer_mark_emacs_byte_pos(current, neovm_edit::buffer::EmacsBytePos::new(2));
         }),
@@ -9344,12 +9452,18 @@ fn vm_region_bounds_use_shared_mark_state() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
         vm_eval_with_init_str("(list (region-beginning) (region-end))", |eval| {
-            let current = eval.buffers.current_buffer_id().expect("current buffer");
-            let _ = eval.buffers.replace_buffer_contents(current, "abcdef");
+            let current = eval
+                .edit
+                .buffers
+                .current_buffer_id()
+                .expect("current buffer");
+            let _ = eval.edit.buffers.replace_buffer_contents(current, "abcdef");
             let _ = eval
+                .edit
                 .buffers
                 .goto_buffer_emacs_byte_pos(current, neovm_edit::buffer::EmacsBytePos::new(2));
             let _ = eval
+                .edit
                 .buffers
                 .set_buffer_mark_emacs_byte_pos(current, neovm_edit::buffer::EmacsBytePos::new(4));
         }),

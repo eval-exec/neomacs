@@ -31,8 +31,12 @@ fn world_storage_views_keep_exact_allocations_and_canonical_identity() {
 #[test]
 fn world_storage_shutdown_rejects_an_escaped_buffer_view() {
     let mut context = Box::new(Context::new(crate::test_utils::unit_runtime()));
-    let name = context.buffers.current_buffer().map(|b| b.name.clone());
-    let escaped = std::mem::replace(&mut context.buffers, BufferManager::new());
+    let name = context
+        .edit
+        .buffers
+        .current_buffer()
+        .map(|b| b.name.clone());
+    let escaped = std::mem::replace(&mut context.edit.buffers, BufferManager::new());
     match context.shutdown() {
         Err(ContextShutdownError::OutstandingViews(count)) => assert_eq!(count.0.get(), 1),
         other => panic!("expected an outstanding storage view: {other:?}"),
@@ -44,7 +48,7 @@ fn world_storage_shutdown_rejects_an_escaped_buffer_view() {
 #[test]
 fn world_storage_shutdown_succeeds_after_extracted_view_retirement() {
     let mut context = Box::new(Context::new(crate::test_utils::unit_runtime()));
-    let escaped = std::mem::replace(&mut context.buffers, BufferManager::new());
+    let escaped = std::mem::replace(&mut context.edit.buffers, BufferManager::new());
     drop(escaped);
     context
         .shutdown()

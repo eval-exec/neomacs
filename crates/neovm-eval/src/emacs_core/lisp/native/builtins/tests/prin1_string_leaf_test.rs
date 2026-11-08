@@ -39,7 +39,7 @@ fn prin1_string_leaf_binds_default_bool_without_saved_buffer_and_restores_it() {
     let mut ctx = leaf_context();
     let escape = intern("print-escape-nonascii");
     assert!(ctx.obarray.bool_forwarder(escape).is_some());
-    let origin = ctx.buffers.current_buffer_id();
+    let origin = ctx.edit.buffers.current_buffer_id();
     let depth = ctx.specpdl.len();
     let mut scope = super::super::print::PrintEvaluationGuard::new(&mut ctx);
     let prepared = prepare_prin1_string(
@@ -62,7 +62,7 @@ fn prin1_string_leaf_binds_default_bool_without_saved_buffer_and_restores_it() {
     scope.finish(Ok(())).unwrap();
     assert_eq!(ctx.specpdl.len(), depth);
     assert_eq!(ctx.obarray.symbol_value_id_or_nil(escape), Value::NIL);
-    assert_eq!(ctx.buffers.current_buffer_id(), origin);
+    assert_eq!(ctx.edit.buffers.current_buffer_id(), origin);
 }
 
 #[test]
@@ -169,7 +169,7 @@ fn prin1_string_circle_fallback_saves_before_cached_let() {
     // Built-in printer BOOLs are forwarded and cannot become aliases. A real
     // circle-enabled call must preserve Save-before-Let cleanup ordering.
     ctx.obarray.set_symbol_value_id(circle, Value::T);
-    let origin = ctx.buffers.current_buffer_id().unwrap();
+    let origin = ctx.edit.buffers.current_buffer_id().unwrap();
     let depth = ctx.specpdl.len();
     let mut scope = super::super::print::PrintEvaluationGuard::new(&mut ctx);
     let prepared = prepare_prin1_string(
@@ -195,14 +195,14 @@ fn prin1_string_circle_fallback_saves_before_cached_let() {
     assert_eq!(ctx.specpdl.len(), depth);
     assert_eq!(ctx.obarray.symbol_value_id_or_nil(escape), Value::NIL);
     assert_eq!(ctx.obarray.symbol_value_id_or_nil(circle), Value::T);
-    assert_eq!(ctx.buffers.current_buffer_id(), Some(origin));
+    assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(origin));
 }
 
 #[test]
 fn prin1_string_watched_bind_refusal_keeps_unlet_in_watchers_buffer() {
     fn watch_escape(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
         if args.get(2) == Some(&Value::symbol("let")) {
-            let origin = ctx.buffers.current_buffer_id().unwrap();
+            let origin = ctx.edit.buffers.current_buffer_id().unwrap();
             ctx.obarray
                 .set_symbol_value_id(intern("leaf-bind-seen-buffer"), Value::make_buffer(origin));
             let other = ctx
@@ -212,7 +212,7 @@ fn prin1_string_watched_bind_refusal_keeps_unlet_in_watchers_buffer() {
                 .unwrap();
             ctx.set_current_buffer_unrecorded(other)?;
         } else if args.get(2) == Some(&Value::symbol("unlet")) {
-            let current = ctx.buffers.current_buffer_id().unwrap();
+            let current = ctx.edit.buffers.current_buffer_id().unwrap();
             ctx.obarray.set_symbol_value_id(
                 intern("leaf-unlet-seen-buffer"),
                 Value::make_buffer(current),
@@ -224,8 +224,8 @@ fn prin1_string_watched_bind_refusal_keeps_unlet_in_watchers_buffer() {
     // let sees the caller; unlet sees the watcher-selected buffer; Save then
     // restores the caller. Moving Save after Let would break the second step.
     let mut ctx = leaf_context();
-    let origin = ctx.buffers.current_buffer_id().unwrap();
-    let other = ctx.buffers.create_buffer("leaf-watcher-buffer");
+    let origin = ctx.edit.buffers.current_buffer_id().unwrap();
+    let other = ctx.edit.buffers.create_buffer("leaf-watcher-buffer");
     let escape = intern("print-escape-nonascii");
     ctx.obarray.set_symbol_value_id(
         intern("leaf-watcher-other-buffer"),
@@ -263,7 +263,7 @@ fn prin1_string_watched_bind_refusal_keeps_unlet_in_watchers_buffer() {
             .symbol_value_id_or_nil(intern("leaf-unlet-seen-buffer")),
         Value::make_buffer(other)
     );
-    assert_eq!(ctx.buffers.current_buffer_id(), Some(origin));
+    assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(origin));
     assert_eq!(ctx.obarray.symbol_value_id_or_nil(escape), Value::NIL);
     assert_eq!(ctx.specpdl.len(), depth);
 }
@@ -272,7 +272,7 @@ fn prin1_string_watched_bind_refusal_keeps_unlet_in_watchers_buffer() {
 fn prin1_string_leaf_panic_keeps_native_restore_without_saved_buffer() {
     let mut ctx = leaf_context();
     let escape = intern("print-escape-nonascii");
-    let origin = ctx.buffers.current_buffer_id();
+    let origin = ctx.edit.buffers.current_buffer_id();
     let depth = ctx.specpdl.len();
     let table = intern("neovm--standard-case-table-object");
     ctx.obarray.makunbound_id(table);
@@ -294,6 +294,6 @@ fn prin1_string_leaf_panic_keeps_native_restore_without_saved_buffer() {
     assert!(caught.is_err());
     assert_eq!(ctx.specpdl.len(), depth);
     assert_eq!(ctx.obarray.symbol_value_id_or_nil(escape), Value::NIL);
-    assert_eq!(ctx.buffers.current_buffer_id(), origin);
+    assert_eq!(ctx.edit.buffers.current_buffer_id(), origin);
     assert!(ctx.obarray.symbol_value_id_copied(table).is_none());
 }

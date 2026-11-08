@@ -13,7 +13,7 @@ fn context_with_remembered_echo() -> (
     Rc<RefCell<Vec<RedisplayMiniGeometryRequest>>>,
 ) {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let buffer = eval.buffers.current_buffer_id().expect("root buffer");
+    let buffer = eval.edit.buffers.current_buffer_id().expect("root buffer");
     let frame = eval.frames.create_frame("mini-source", 80, 25, buffer);
     let window = eval
         .frames
@@ -49,8 +49,9 @@ fn remembered_cleared_echo_does_not_displace_selected_active_mini_preparation() 
     crate::test_utils::init_test_tracing();
     let _policy = RedisplayHookPolicyGuard::gnu();
     let (mut eval, frame, window, echo_buffer, requests) = context_with_remembered_echo();
-    let active = eval.buffers.create_buffer(" *Minibuf-1*");
-    eval.buffers
+    let active = eval.edit.buffers.create_buffer(" *Minibuf-1*");
+    eval.edit
+        .buffers
         .get_mut(active)
         .expect("active buffer")
         .set_buffer_local("resize-mini-windows", Value::T);
@@ -80,7 +81,7 @@ fn remembered_cleared_echo_does_not_displace_selected_active_mini_preparation() 
         (frame, window, active)
     );
     assert!(!observed[0].exact);
-    assert_eq!(eval.buffers.current_buffer_id(), Some(active));
+    assert_eq!(eval.edit.buffers.current_buffer_id(), Some(active));
     assert_eq!(eval.gnu_redisplay_hooks.echo_geometry_window, None);
     assert!(eval.redisplay_prepare_fn.is_some());
     assert!(!eval.gnu_redisplay_hooks.active.is_active());

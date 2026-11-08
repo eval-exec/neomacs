@@ -186,7 +186,7 @@ fn reserve_canonical(mut context: Context, storage: CanonicalDepthStorage, switc
     let assert_canonical = |context: &Context| {
         for id in ids {
             let projection = context.obarray.thread_projection_of(id).unwrap();
-            let channel = access_channel(&context.buffers, id, projection);
+            let channel = access_channel(&context.edit.buffers, id, projection);
             assert!(
                 context
                     .owner

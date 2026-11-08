@@ -170,8 +170,13 @@ fn test_restore_active_runtime_after_clone_reinstalls_live_charset_registry() {
 fn test_dump_buffers_use_symbol_ids_for_buffer_local_bindings() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let current = eval.buffers.current_buffer_id().expect("current buffer");
-    eval.buffers
+    let current = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.edit
+        .buffers
         .get_mut(current)
         .expect("current buffer mut")
         .set_buffer_local("fill-column", Value::fixnum(80));
@@ -211,8 +216,13 @@ fn test_dump_buffers_use_symbol_ids_for_buffer_local_bindings() {
 fn pdump_round_trip_preserves_last_window_start_lisp_position() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let current = eval.buffers.current_buffer_id().expect("current buffer");
-    eval.buffers
+    let current = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.edit
+        .buffers
         .get_mut(current)
         .expect("current buffer mut")
         .last_window_start = LispCharPos1::from_one_based_usize(7);
@@ -229,6 +239,7 @@ fn pdump_round_trip_preserves_last_window_start_lisp_position() {
 
     let loaded = restore_snapshot(&dump).expect("restore snapshot should succeed");
     let restored = loaded
+        .edit
         .buffers
         .get(current)
         .expect("restored current buffer");
@@ -379,7 +390,7 @@ fn test_restore_snapshot_preserves_core_subr_callable_surface() {
         .eval_sub(forms[0])
         .expect("restored runtime subrs should be callable");
     assert_eq!(
-        crate::emacs_core::print_value_with_buffers(&result, &restored.buffers),
+        crate::emacs_core::print_value_with_buffers(&result, &restored.edit.buffers),
         "((1 . 2) (1 2 3) compat-pdump-subr-probe \"pdump-ok\")"
     );
 }

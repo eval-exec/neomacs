@@ -10,7 +10,7 @@ fn fixture() -> (Context, FrameId, WindowId, Rc<Cell<f32>>, Rc<Cell<usize>>) {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("noninteractive", Value::NIL);
-    let buffer = eval.buffers.current_buffer_id().expect("root buffer");
+    let buffer = eval.edit.buffers.current_buffer_id().expect("root buffer");
     let frame = eval.frames.create_frame("message-mini", 80, 25, buffer);
     let mini = {
         let state = eval.frames.get_mut(frame).expect("frame");
@@ -39,7 +39,7 @@ fn fixture() -> (Context, FrameId, WindowId, Rc<Cell<f32>>, Rc<Cell<usize>>) {
     let measured = desired.clone();
     eval.redisplay_prepare_fn = Some(Box::new(move |eval, request| {
         assert_eq!(request.source, RedisplayMiniGeometrySource::EchoArea);
-        assert_eq!(eval.buffers.current_buffer_id(), Some(request.buffer));
+        assert_eq!(eval.edit.buffers.current_buffer_id(), Some(request.buffer));
         let resized = {
             let state = eval.frames.get_mut(request.frame).expect("live frame");
             if let Some(plan) = state.plan_mini_window_resize(measured.get(), 3.0) {
@@ -167,7 +167,7 @@ fn gnu_same_height_and_inhibited_messages_do_not_run_complete_redisplay() {
 fn gnu_message_sizing_throw_restores_source_callback_and_propagates_flow() {
     let _policy = RedisplayHookPolicyGuard::gnu();
     let (mut eval, frame, mini, _, paints) = fixture();
-    let caller = eval.buffers.current_buffer_id();
+    let caller = eval.edit.buffers.current_buffer_id();
     let source = eval
         .frames
         .get(frame)
@@ -185,7 +185,7 @@ fn gnu_message_sizing_throw_restores_source_callback_and_propagates_flow() {
         .eval_str(r#"(catch 'message-sizing (message "first\nsecond\nthird") 'not-thrown)"#)
         .expect("caught sizing transfer");
     assert_eq!(transferred, Value::symbol("interrupted"));
-    assert_eq!(eval.buffers.current_buffer_id(), caller);
+    assert_eq!(eval.edit.buffers.current_buffer_id(), caller);
     assert_eq!(
         eval.frames
             .get(frame)

@@ -10,9 +10,16 @@ use neovm_value::value::Value;
 fn print_stream_target_kind_rejects_strings_even_when_the_named_buffer_exists() {
     crate::test_utils::init_test_tracing();
     let mut context = Context::new(crate::test_utils::unit_runtime());
-    let buffer = context.buffers.create_buffer("terpri-state-named-stream");
-    let marker =
-        make_registered_buffer_marker(&mut context.buffers, buffer, LispCharPos1::new(1), false);
+    let buffer = context
+        .edit
+        .buffers
+        .create_buffer("terpri-state-named-stream");
+    let marker = make_registered_buffer_marker(
+        &mut context.edit.buffers,
+        buffer,
+        LispCharPos1::new(1),
+        false,
+    );
     assert!(!print_target_is_direct(Value::string(
         "terpri-state-named-stream"
     )));

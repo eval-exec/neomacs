@@ -67,8 +67,8 @@ fn printer_evaluation_body_panic_restores_storage_without_lisp_or_table_seeding(
     }
     for saved_table in [None, Some(Value::fixnum(99))] {
         let mut ctx = Context::new(crate::test_utils::unit_runtime());
-        let original = ctx.buffers.current_buffer_id().unwrap();
-        let other = ctx.buffers.create_buffer("printer-body-panic-other");
+        let original = ctx.edit.buffers.current_buffer_id().unwrap();
+        let other = ctx.edit.buffers.create_buffer("printer-body-panic-other");
         let symbol = intern("printer-body-panic-binding");
         let table = intern("neovm--standard-case-table-object");
         ctx.obarray.set_symbol_value_id(symbol, Value::fixnum(10));
@@ -124,7 +124,7 @@ fn printer_evaluation_body_panic_restores_storage_without_lisp_or_table_seeding(
             ctx.obarray.symbol_value_id_or_nil(symbol),
             Value::fixnum(10)
         );
-        assert_eq!(ctx.buffers.current_buffer_id(), Some(original));
+        assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(original));
         assert_eq!(
             ctx.threads
                 .thread_current_buffer(ctx.threads.current_thread_id()),
@@ -153,8 +153,8 @@ fn printer_evaluation_finish_watcher_panic_restores_remaining_scope() {
     }
     for finish_value in [false, true] {
         let mut ctx = Context::new(crate::test_utils::unit_runtime());
-        let original = ctx.buffers.current_buffer_id().unwrap();
-        let other = ctx.buffers.create_buffer("printer-finish-panic-other");
+        let original = ctx.edit.buffers.current_buffer_id().unwrap();
+        let other = ctx.edit.buffers.create_buffer("printer-finish-panic-other");
         let symbol = intern("printer-finish-panic-binding");
         ctx.obarray.set_symbol_value_id(symbol, Value::fixnum(10));
         ctx.register_subr(SubrSpec::new(
@@ -200,7 +200,7 @@ fn printer_evaluation_finish_watcher_panic_restores_remaining_scope() {
             ctx.obarray.symbol_value_id_or_nil(symbol),
             Value::fixnum(10)
         );
-        assert_eq!(ctx.buffers.current_buffer_id(), Some(original));
+        assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(original));
         assert_eq!(ctx.specpdl.len(), depth);
         assert_eq!(
             ctx.vm_frame_root_slots_checked(0, 0).is_some(),
@@ -214,8 +214,11 @@ fn printer_evaluation_finish_watcher_panic_restores_remaining_scope() {
 fn printer_settings_buffer_panic_preserves_absent_or_invalid_standard_table() {
     for saved_table in [None, Some(Value::fixnum(99))] {
         let mut ctx = Context::new(crate::test_utils::unit_runtime());
-        let original = ctx.buffers.current_buffer_id().unwrap();
-        let other = ctx.buffers.create_buffer("printer-settings-panic-other");
+        let original = ctx.edit.buffers.current_buffer_id().unwrap();
+        let other = ctx
+            .edit
+            .buffers
+            .create_buffer("printer-settings-panic-other");
         let table = intern("neovm--standard-case-table-object");
         let mut allocations = None;
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -229,7 +232,7 @@ fn printer_settings_buffer_panic_preserves_absent_or_invalid_standard_table() {
             panic!("contained Rust panic in temporary printer selection");
         }));
         assert!(caught.is_err());
-        assert_eq!(ctx.buffers.current_buffer_id(), Some(original));
+        assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(original));
         assert_eq!(
             ctx.threads
                 .thread_current_buffer(ctx.threads.current_thread_id()),
@@ -245,15 +248,18 @@ fn printer_settings_buffer_panic_preserves_absent_or_invalid_standard_table() {
 #[test]
 fn printer_settings_buffer_finish_restores_runtime_on_flow_error() {
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
-    let original = ctx.buffers.current_buffer_id().unwrap();
-    let other = ctx.buffers.create_buffer("printer-settings-flow-other");
+    let original = ctx.edit.buffers.current_buffer_id().unwrap();
+    let other = ctx
+        .edit
+        .buffers
+        .create_buffer("printer-settings-flow-other");
     let table = intern("neovm--standard-case-table-object");
     let mut scope = PrintSettingsBufferGuard::new(&mut ctx);
     scope.select(other).unwrap();
     scope.context.obarray.makunbound_id(table);
     let result = scope.finish(Err::<(), _>(neovm_value::error::signal("error", vec![])));
     assert!(result.is_err());
-    assert_eq!(ctx.buffers.current_buffer_id(), Some(original));
+    assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(original));
     assert_eq!(
         ctx.threads
             .thread_current_buffer(ctx.threads.current_thread_id()),

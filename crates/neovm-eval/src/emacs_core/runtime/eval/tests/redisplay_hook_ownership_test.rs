@@ -24,7 +24,7 @@ fn callback_and_active_guard_restore_during_rust_unwind() {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         eval.gnu_redisplay_hooks.active = RedisplayActiveOwner::RedisplayTransaction;
         let binding_count = eval.specpdl.len();
-        let restrictions = eval.buffers.reset_outermost_restrictions();
+        let restrictions = eval.edit.buffers.reset_outermost_restrictions();
         let callback = eval.redisplay_fn.take();
         let _guard = RedisplayTransaction {
             eval: &mut eval,

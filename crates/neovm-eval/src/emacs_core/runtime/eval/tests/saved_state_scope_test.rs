@@ -5,9 +5,17 @@ fn same_buffer_excursion_finish_does_not_allocate_a_vm_root_frame() {
     use neovm_edit::buffer::EmacsBytePos;
 
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
-    let buffer = ctx.buffers.current_buffer_id().expect("current buffer");
-    ctx.buffers.replace_buffer_contents(buffer, "abcd").unwrap();
-    ctx.buffers
+    let buffer = ctx
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    ctx.edit
+        .buffers
+        .replace_buffer_contents(buffer, "abcd")
+        .unwrap();
+    ctx.edit
+        .buffers
         .goto_buffer_emacs_byte_pos(buffer, EmacsBytePos::new(1))
         .unwrap();
     let count = ctx.specpdl.len();
@@ -16,13 +24,14 @@ fn same_buffer_excursion_finish_does_not_allocate_a_vm_root_frame() {
     let mut scope = ExcursionScope::enter(&mut ctx);
     scope
         .context()
+        .edit
         .buffers
         .goto_buffer_emacs_byte_pos(buffer, EmacsBytePos::new(3))
         .unwrap();
     scope.finish(Ok(Value::NIL)).expect("scope finish");
     assert_eq!(ctx.specpdl.len(), count);
     assert_eq!(
-        ctx.buffers.get(buffer).unwrap().point_emacs_byte_pos(),
+        ctx.edit.buffers.get(buffer).unwrap().point_emacs_byte_pos(),
         EmacsBytePos::new(1)
     );
     assert!(ctx.vm_root_frames.is_empty());

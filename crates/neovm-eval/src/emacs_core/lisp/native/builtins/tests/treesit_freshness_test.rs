@@ -2,7 +2,8 @@ use super::*;
 
 pub(super) fn eval_with_json_parser(text: &str) -> (super::super::eval::Context, Value) {
     let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
-    eval.buffers
+    eval.edit
+        .buffers
         .current_buffer_mut()
         .expect("current buffer")
         .insert(text);
@@ -146,7 +147,8 @@ fn untracked_character_edit_forces_safe_full_reparse() {
 
     // Direct Buffer mutation deliberately bypasses the semantic edit pipeline.
     // The O(1) revision comparison must detect it without trusting a stale tree.
-    eval.buffers
+    eval.edit
+        .buffers
         .current_buffer_mut()
         .expect("current buffer")
         .insert("0");
@@ -190,8 +192,13 @@ fn a_new_restriction_moves_the_parser_window_and_forces_a_reparse() {
         EmacsByteRange::from_usize(0, 12)
     );
 
-    let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
-    eval.buffers
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.edit
+        .buffers
         .narrow_buffer_to_emacs_byte_range(buffer_id, EmacsByteRange::from_usize(1, 11))
         .expect("narrow to the JSON object");
 
@@ -219,10 +226,15 @@ fn character_edit_in_narrowed_buffer_uses_visible_relative_coordinates() {
 x{"key": 1}y
 hidden"##,
     );
-    let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     // Restrict parser input to the JSON object, whose first byte is not the
     // first byte of the backing buffer.
-    eval.buffers
+    eval.edit
+        .buffers
         .narrow_buffer_to_emacs_byte_range(buffer_id, EmacsByteRange::from_usize(8, 18))
         .expect("narrow to the JSON object");
     builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("initial narrowed parse");
@@ -271,17 +283,23 @@ fn an_edit_inside_a_temporary_narrowing_keeps_the_tree_and_its_changed_region_sm
     let (mut eval, parser) = eval_with_json_parser(r##"{"a": 1, "b": 2, "c": 3}"##);
     builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("initial whole-buffer parse");
 
-    let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     // Bytes 9..15 are `"b": 2`, the way `comment-with-narrowing` restricts the
     // buffer to exactly the region a commenting command is about to edit.
-    eval.buffers
+    eval.edit
+        .buffers
         .narrow_buffer_to_emacs_byte_range(buffer_id, EmacsByteRange::from_usize(9, 15))
         .expect("narrow to the middle pair");
     neovm_edit::emacs_core::buffer::builtin_goto_char(&mut eval, vec![Value::fixnum(16)])
         .expect("move to the end of the narrowed region");
     neovm_edit::emacs_core::buffer::builtin_insert(&mut eval, vec![Value::string("0")])
         .expect("insert inside the narrowing");
-    eval.buffers
+    eval.edit
+        .buffers
         .current_buffer_mut()
         .expect("current buffer")
         .widen();

@@ -64,7 +64,7 @@ fn gc_preserves_condition_variable_name_interval_plists() {
 #[test]
 fn thread_current_buffer_survives_gc_through_registry_seed() {
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
-    let buffer_id = ctx.buffers.create_buffer("thread-current-buffer-root");
+    let buffer_id = ctx.edit.buffers.create_buffer("thread-current-buffer-root");
     let canonical = Value::make_buffer(buffer_id);
     let thread_id = ctx.threads.current_thread_id();
     assert!(
@@ -105,7 +105,7 @@ fn p15_native_thread_updates_do_not_record_lisp_writes() {
         crate::test_utils::unit_runtime(),
     );
     ctx.gc_collect_exact();
-    let buffer = ctx.buffers.create_buffer("p15-native-state");
+    let buffer = ctx.edit.buffers.create_buffer("p15-native-state");
     let child = Value::vector(vec![Value::fixnum(25)]);
     let native = ctx.threads.create_thread(child, ThreadName::UNNAMED);
     ctx.gc_collect_exact();
@@ -575,9 +575,13 @@ fn test_main_thread_variable_matches_current_thread() {
 fn test_main_thread_tracks_current_buffer() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let original = eval.buffers.current_buffer_id().expect("current buffer");
+    let original = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     assert_eq!(eval.threads.thread_current_buffer(0), Some(original));
-    let other = eval.buffers.create_buffer("thread-main-other");
+    let other = eval.edit.buffers.create_buffer("thread-main-other");
     eval.switch_current_buffer(other)
         .expect("switch current buffer");
     assert_eq!(eval.threads.thread_current_buffer(0), Some(other));
@@ -1269,8 +1273,12 @@ fn test_builtin_thread_set_buffer_disposition_rejects_non_nil_main_thread_value(
 fn test_builtin_make_thread_preserves_caller_current_buffer() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let main_buffer = eval.buffers.current_buffer_id().expect("current buffer");
-    let worker_buffer = eval.buffers.create_buffer("thread-worker-buffer");
+    let main_buffer = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    let worker_buffer = eval.edit.buffers.create_buffer("thread-worker-buffer");
 
     eval.set_function(
         "thread-switch-buffer",
@@ -1295,7 +1303,7 @@ fn test_builtin_make_thread_preserves_caller_current_buffer() {
     let joined = builtin_thread_join(&mut eval, vec![thread]).expect("thread-join");
 
     assert_eq!(joined, Value::make_buffer(worker_buffer));
-    assert_eq!(eval.buffers.current_buffer_id(), Some(main_buffer));
+    assert_eq!(eval.edit.buffers.current_buffer_id(), Some(main_buffer));
     assert_eq!(
         eval.threads.thread_current_buffer_for_value(thread),
         Some(worker_buffer)

@@ -215,13 +215,18 @@ fn string_designator_honors_positioned_symbol_dynamic_view() {
 fn number_or_marker_reads_live_marker_position() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    eval.buffers
+    eval.edit
+        .buffers
         .current_buffer_mut()
         .expect("current buffer")
         .insert("abcdef");
-    let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     let marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         buffer_id,
         LispCharPos1::new(4),
         false,
@@ -246,13 +251,18 @@ fn lisp_char_pos_accepts_fixnums_and_markers() {
         LispCharPos1::from_value(&mut eval, Value::fixnum(3)).unwrap(),
         LispCharPos1::new(3)
     );
-    eval.buffers
+    eval.edit
+        .buffers
         .current_buffer_mut()
         .expect("current buffer")
         .insert("abcdef");
-    let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     let marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         buffer_id,
         LispCharPos1::new(5),
         false,

@@ -86,6 +86,7 @@ fn resume_retires_a_binding_whose_buffer_died() {
     let mut ev = projected(&["tom-auto"]);
     let id: SymId = intern("tom-auto");
     let other = ev
+        .edit
         .buffers
         .find_buffer_by_name(" tom-other")
         .expect("tom-other");
@@ -107,7 +108,7 @@ fn resume_retires_a_binding_whose_buffer_died() {
     eval(&mut ev, &format!("(set-buffer {home})"));
     let parked = ev.park_owner();
     assert!(
-        ev.buffers.kill_buffer(other),
+        ev.edit.buffers.kill_buffer(other),
         "another owner kills the buffer"
     );
     // The returning continuation validates the owner's local bindings.
@@ -219,7 +220,7 @@ fn a_buffer_slot_binding_lives_in_the_slot_and_parks_in_the_slab() {
         "(progn (set-buffer (get-buffer-create \" tom-slot\"))
                 (setq fill-column 50) (setq mode-name \"outer\"))",
     );
-    let buffer = ev.buffers.current_buffer_id().expect("current buffer");
+    let buffer = ev.edit.buffers.current_buffer_id().expect("current buffer");
     let fill = intern("fill-column");
     let mode = intern("mode-name");
     let count = ev.specpdl.len();

@@ -84,7 +84,7 @@ fn world_bases_admission_does_not_steal_forwarded_unbound_as_control() {
 fn world_bases_admission_dedicated_nil_keeps_the_no_current_buffer_result() {
     crate::test_utils::init_test_tracing();
     let mut context = Context::new(crate::test_utils::unit_runtime());
-    context.buffers = neovm_edit::buffer::BufferManager::new();
+    context.edit.buffers = neovm_edit::buffer::BufferManager::new();
     let undo = intern("buffer-undo-list");
     let mut code = ByteCodeFunction::new(LambdaParams::simple(vec![]));
     code.ops = vec![Op::VarRef(0), Op::Return];

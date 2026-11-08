@@ -128,7 +128,11 @@ fn fixture() -> (Context, FrameId, WindowId, neovm_edit::buffer::BufferId) {
 fn exercise_reader(restore_windows: bool, throw_inactive: bool, record_active: bool) {
     let _policy = RedisplayHookPolicyGuard::gnu();
     let (mut eval, frame, mini, inactive) = fixture();
-    let caller = eval.buffers.current_buffer_id().expect("caller buffer");
+    let caller = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("caller buffer");
     let selected = eval.frames.get(frame).expect("frame").selected_window;
     let saved_stamp = eval.frames.get(frame).expect("frame").change_stamp;
     eval.obarray.set_symbol_value(
@@ -210,7 +214,7 @@ fn exercise_reader(restore_windows: bool, throw_inactive: bool, record_active: b
                 .is_some_and(|error| error.symbol_name() == "error")
         );
     }
-    assert_eq!(eval.buffers.current_buffer_id(), Some(caller));
+    assert_eq!(eval.edit.buffers.current_buffer_id(), Some(caller));
     assert_eq!(
         eval.frames.get(frame).expect("frame").selected_window,
         selected

@@ -170,8 +170,13 @@ fn treesit_query_match_is_case_sensitive_even_when_case_fold_search_is_true() {
 #[test]
 fn treesit_query_match_uses_parser_buffer_point_for_at_point_anchor() {
     let (mut eval, parser) = eval_with_json_parser(r#"["doc"]"#);
-    let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
-    eval.buffers
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.edit
+        .buffers
         .goto_buffer_emacs_byte_pos(buffer_id, neovm_edit::buffer::EmacsBytePos::new(1));
     let query = string_capture_query(Value::list(vec![
         Value::keyword(":match"),
@@ -220,7 +225,10 @@ fn treesit_query_predicate_runs_in_parser_buffer_and_restores_current_buffer() {
                  (treesit-parser-buffer (treesit-node-parser node)))))",
     )
     .expect("predicate function");
-    let other_buffer = eval.buffers.create_buffer(" *treesit-predicate-other*");
+    let other_buffer = eval
+        .edit
+        .buffers
+        .create_buffer(" *treesit-predicate-other*");
     eval.set_current_buffer_unrecorded(other_buffer)
         .expect("switch current buffer");
     let query = string_capture_query(Value::list(vec![
@@ -230,14 +238,18 @@ fn treesit_query_predicate_runs_in_parser_buffer_and_restores_current_buffer() {
     ]));
 
     assert_eq!(captured_texts(&mut eval, parser, query), vec![r#""first""#]);
-    assert_eq!(eval.buffers.current_buffer_id(), Some(other_buffer));
+    assert_eq!(eval.edit.buffers.current_buffer_id(), Some(other_buffer));
 }
 
 #[test]
 fn treesit_query_predicate_restores_parser_buffer_after_callback_switches_away() {
     let (mut eval, parser) = eval_with_json_parser(r#"["first"]"#);
-    let parser_buffer = eval.buffers.current_buffer_id().expect("parser buffer");
-    eval.buffers.create_buffer(" *treesit-predicate-away*");
+    let parser_buffer = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("parser buffer");
+    eval.edit.buffers.create_buffer(" *treesit-predicate-away*");
     eval.eval_str(
         "(defalias 'neomacs--treesit-switch-buffer-p
            (lambda (node) (set-buffer \" *treesit-predicate-away*\") t))",
@@ -250,7 +262,7 @@ fn treesit_query_predicate_restores_parser_buffer_after_callback_switches_away()
     ]));
 
     assert_eq!(captured_texts(&mut eval, parser, query), vec![r#""first""#]);
-    assert_eq!(eval.buffers.current_buffer_id(), Some(parser_buffer));
+    assert_eq!(eval.edit.buffers.current_buffer_id(), Some(parser_buffer));
 }
 
 #[test]
@@ -497,9 +509,13 @@ fn treesit_parser_set_included_ranges_requires_range_cons() {
 #[test]
 fn treesit_parser_set_included_ranges_requires_fixnum_endpoints() {
     let (mut eval, parser) = eval_with_json_parser("{}");
-    let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     let marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         buffer_id,
         LispCharPos1::new(1),
         false,
@@ -557,9 +573,13 @@ fn treesit_node_position_apis_reject_markers_like_gnu() {
     let (mut eval, parser) = eval_with_json_parser("{}");
     let root = builtin_treesit_parser_root_node(&mut eval, vec![parser])
         .expect("root node for json parser");
-    let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     let marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         buffer_id,
         LispCharPos1::new(1),
         false,
@@ -581,9 +601,13 @@ fn treesit_node_position_apis_reject_markers_like_gnu() {
 #[test]
 fn treesit_linecol_at_rejects_markers_like_gnu() {
     let (mut eval, _parser) = eval_with_json_parser("{}");
-    let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     let marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         buffer_id,
         LispCharPos1::new(1),
         false,

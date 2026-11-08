@@ -25,7 +25,7 @@ fn gc_tls_ownership_regex_reentry_keeps_evicted_compiled_translation_alive() {
     let custom = Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3);
     neovm_text::emacs_core::casetab::builtin_set_case_table(&mut ctx, vec![custom]).unwrap();
     let canon = neovm_text::emacs_core::casetab::buffer_case_canon_table(
-        ctx.buffers.current_buffer().unwrap(),
+        ctx.edit.buffers.current_buffer().unwrap(),
     )
     .unwrap();
     let payload = ctx.eval_str("(make-hash-table)").unwrap();

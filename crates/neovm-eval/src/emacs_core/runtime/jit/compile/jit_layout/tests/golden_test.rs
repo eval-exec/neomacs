@@ -522,7 +522,11 @@ fn variable_words_are_where_compiled_code_reads_them() {
     let loc = intern("neovm--jl-loc");
     let blv = ev.obarray.blv(loc).expect("buffer-local");
     let base = std::ptr::from_ref(blv).cast::<u8>();
-    let buffer = ev.buffers.current_buffer_id().expect("a current buffer");
+    let buffer = ev
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("a current buffer");
     assert_eq!(words_at(base, BLV_WHERE_BUF_ID_OFFSET), buffer.0 as usize);
     assert_eq!(words_at(base, BLV_VALCELL_OFFSET), blv.valcell.get().bits());
     assert_eq!(words_at(base, BLV_DEFCELL_OFFSET), blv.defcell.get().bits());
@@ -560,10 +564,10 @@ fn variable_words_are_where_compiled_code_reads_them() {
             ctx,
             CONTEXT_BUFFERS_OFFSET + buffer_walk::BUFFER_MANAGER_CURRENT_PTR_OFFSET
         ),
-        std::ptr::from_ref(ev.buffers.current_buffer().expect("a current buffer")) as usize
+        std::ptr::from_ref(ev.edit.buffers.current_buffer().expect("a current buffer")) as usize
     );
-    let other = ev.buffers.create_buffer("neovm--jl-other");
-    ev.buffers.switch_current(other);
+    let other = ev.edit.buffers.create_buffer("neovm--jl-other");
+    ev.edit.buffers.switch_current(other);
     let ctx = std::ptr::from_ref(&ev).cast::<u8>();
     assert_eq!(
         words_at(ctx, CONTEXT_CURRENT_BUFFER_RAW_OFFSET),
@@ -574,10 +578,10 @@ fn variable_words_are_where_compiled_code_reads_them() {
             ctx,
             CONTEXT_BUFFERS_OFFSET + buffer_walk::BUFFER_MANAGER_CURRENT_PTR_OFFSET
         ),
-        std::ptr::from_ref(ev.buffers.current_buffer().expect("a switched buffer")) as usize
+        std::ptr::from_ref(ev.edit.buffers.current_buffer().expect("a switched buffer")) as usize
     );
-    ev.buffers.kill_buffer(other);
-    assert_eq!(ev.buffers.current_buffer_id(), None);
+    ev.edit.buffers.kill_buffer(other);
+    assert_eq!(ev.edit.buffers.current_buffer_id(), None);
     let ctx = std::ptr::from_ref(&ev).cast::<u8>();
     assert_eq!(words_at(ctx, CONTEXT_CURRENT_BUFFER_RAW_OFFSET), 0);
     assert_eq!(

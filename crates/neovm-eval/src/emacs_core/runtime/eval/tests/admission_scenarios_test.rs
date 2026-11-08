@@ -163,6 +163,7 @@ impl Arm {
             .iter()
             .map(|name| {
                 self.ev
+                    .edit
                     .buffers
                     .find_buffer_by_name(name)
                     .expect("trnd buffer")

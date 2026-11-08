@@ -38,7 +38,7 @@ fn replace_buffers_and_collect(context: &mut Context) -> EvalResult {
     let mut replacement = BufferManager::new();
     let selected = replacement.create_buffer(" *world-bases-returning-owner*");
     replacement.set_current(selected);
-    context.buffers = replacement;
+    context.edit.buffers = replacement;
     context
         .obarray
         .set_symbol_value_id(intern("world-bases-callback-value"), Value::fixnum(73));
@@ -101,6 +101,7 @@ fn world_bases_cursor_reacquires_after_publication_gc_and_manager_replacement() 
     assert_eq!(print_value(&cursor.operands[0]), "(\"operand-only\")");
     assert_eq!(
         vm.ctx
+            .edit
             .buffers
             .current_buffer()
             .and_then(|buffer| buffer.name.as_str_owned())
@@ -343,10 +344,11 @@ fn world_bases_native_callback_rejoins_with_current_buffer_storage_and_selection
     assert_eq!(result.cons_car(), Value::fixnum(73));
     assert_eq!(
         result.cons_cdr().cons_car().as_buffer_id(),
-        context.buffers.current_buffer_id()
+        context.edit.buffers.current_buffer_id()
     );
     assert_eq!(
         context
+            .edit
             .buffers
             .current_buffer()
             .and_then(|buffer| buffer.name.as_str_owned())
@@ -396,7 +398,7 @@ fn world_bases_signal_rejoin_observes_hook_mutation_after_callback_gc() {
     assert_eq!(result.cons_car(), Value::fixnum(55));
     assert_eq!(
         result.cons_cdr().cons_car().as_buffer_id(),
-        context.buffers.current_buffer_id()
+        context.edit.buffers.current_buffer_id()
     );
     assert!(context.gc_count >= gc_before + 2);
 }
@@ -434,7 +436,7 @@ fn world_bases_throw_rejoin_delivers_value_and_current_owner_reads() {
     assert_eq!(result.cons_cdr().cons_car(), Value::fixnum(73));
     assert_eq!(
         result.cons_cdr().cons_cdr().cons_car().as_buffer_id(),
-        context.buffers.current_buffer_id()
+        context.edit.buffers.current_buffer_id()
     );
     assert!(context.gc_count > gc_before);
 }
@@ -468,6 +470,7 @@ fn world_bases_varref_reads_nil_undo_and_all_object_forwarders_after_gc() {
         )
         .expect("prepare nil, normalized Boolean and per-buffer channels");
     context
+        .edit
         .buffers
         .current_buffer_mut()
         .expect("a selected buffer")

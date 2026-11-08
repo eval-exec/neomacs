@@ -138,7 +138,7 @@ fn transaction_owner_excludes_standalone_scroll_and_restores_nested_and_unwound_
             .expect("committed-scroll reentry suppressed");
     }
     assert!(!actual_transaction_active(&eval));
-    let buffer = eval.buffers.current_buffer_id().expect("buffer");
+    let buffer = eval.edit.buffers.current_buffer_id().expect("buffer");
     eval.frames.create_frame("owner-regression", 80, 24, buffer);
     let called = Rc::new(Cell::new(false));
     let observed = called.clone();

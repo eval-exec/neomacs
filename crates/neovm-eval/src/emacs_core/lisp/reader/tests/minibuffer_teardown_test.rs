@@ -27,7 +27,7 @@ fn run_teardown_and_collect(
     f32,
 ) {
     // A normal buffer for the frame's root window.
-    let root_buf = ev.buffers.create_buffer("teardown-root");
+    let root_buf = ev.edit.buffers.create_buffer("teardown-root");
     let frame_id = ev
         .frames
         .create_frame("minibuffer-teardown", 200, 320, root_buf);
@@ -35,13 +35,13 @@ fn run_teardown_and_collect(
     // The active minibuffer pool buffer, with prompt text and a candidate
     // overlay (vertico-style after-string overlay) that must NOT survive
     // teardown.
-    let minibuf_id = find_or_create_minibuffer_buffer_in_state(&mut ev.buffers, 1);
-    let _ = ev.buffers.replace_buffer_contents(minibuf_id, "M-x ");
+    let minibuf_id = find_or_create_minibuffer_buffer_in_state(&mut ev.edit.buffers, 1);
+    let _ = ev.edit.buffers.replace_buffer_contents(minibuf_id, "M-x ");
     // `make-overlay` anchors on the *current* buffer when the BUFFER arg is nil;
     // switch to *Minibuf-1* so the candidate overlay lands there.
-    let _ = ev.buffers.switch_current(minibuf_id);
+    let _ = ev.edit.buffers.switch_current(minibuf_id);
     let overlay = neovm_edit::emacs_core::buffer::builtin_make_overlay(
-        &mut ev.buffers,
+        &mut ev.edit.buffers,
         vec![
             Value::fixnum(1),
             Value::fixnum(1),
@@ -54,7 +54,8 @@ fn run_teardown_and_collect(
     let _ = overlay; // keep the binding alive
 
     assert!(
-        ev.buffers
+        ev.edit
+            .buffers
             .get(minibuf_id)
             .map(|b| !b.overlays().is_empty())
             .unwrap_or(false),
@@ -81,7 +82,7 @@ fn run_teardown_and_collect(
     // Activate the minibuffer window so we have a saved state to restore.
     let saved = activate_minibuffer_window_in_state(
         &mut ev.frames,
-        &mut ev.buffers,
+        &mut ev.edit.buffers,
         &mut ev.minibuffer_selected_window,
         &mut ev.active_minibuffer_window,
         minibuf_id,
@@ -92,7 +93,7 @@ fn run_teardown_and_collect(
     // Outermost teardown: depth_after_pop == 0 (no nested minibuffer remains).
     let outcome = teardown_minibuffer_level_in_state(
         &mut ev.frames,
-        &mut ev.buffers,
+        &mut ev.edit.buffers,
         &mut ev.minibuffer_selected_window,
         &mut ev.active_minibuffer_window,
         minibuf_id,
@@ -122,6 +123,7 @@ fn teardown_deletes_all_overlays_on_expired_minibuffer() {
     let (minibuf_id, _frame_id, _height_after, _char_h) = run_teardown_and_collect(&mut ev);
 
     let overlay_count = ev
+        .edit
         .buffers
         .get(minibuf_id)
         .map(|b| b.overlays().len())

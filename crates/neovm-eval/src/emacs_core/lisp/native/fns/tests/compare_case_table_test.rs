@@ -54,16 +54,22 @@ fn compare_case_table_turkish_dotless_i() {
 fn compare_case_table_unibyte_buffer_preserves_latin1_characters() {
     let mut ctx = context_with_mappings(&[(0xe9, 0xc9)]);
     assert_eq!(compare(&mut ctx, "é", "É"), Value::T);
-    let id = ctx.buffers.current_buffer_id().unwrap();
-    ctx.buffers.set_buffer_multibyte_flag(id, false).unwrap();
+    let id = ctx.edit.buffers.current_buffer_id().unwrap();
+    ctx.edit
+        .buffers
+        .set_buffer_multibyte_flag(id, false)
+        .unwrap();
     assert_eq!(compare(&mut ctx, "é", "É"), Value::fixnum(1));
 }
 
 #[test]
 fn compare_case_table_unibyte_buffer_truncates_changed_ascii_mapping() {
     let mut ctx = context_with_mappings(&[(b'i' as u32, 0x130)]);
-    let id = ctx.buffers.current_buffer_id().unwrap();
-    ctx.buffers.set_buffer_multibyte_flag(id, false).unwrap();
+    let id = ctx.edit.buffers.current_buffer_id().unwrap();
+    ctx.edit
+        .buffers
+        .set_buffer_multibyte_flag(id, false)
+        .unwrap();
     assert_eq!(compare(&mut ctx, "i", "0"), Value::T);
 }
 

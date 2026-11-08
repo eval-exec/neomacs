@@ -8,10 +8,18 @@ use std::rc::Rc;
 
 fn chrome_context(name: &'static str) -> (Context, Rc<RefCell<Vec<String>>>) {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let buffer = eval.buffers.current_buffer_id().expect("current buffer");
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     eval.frames
         .create_frame("specpdl-chrome", 80 * 8, 24 * 16, buffer);
-    eval.buffers.get_mut(buffer).unwrap().insert("abc\ndef\n");
+    eval.edit
+        .buffers
+        .get_mut(buffer)
+        .unwrap()
+        .insert("abc\ndef\n");
     eval.eval_str(&format!("(set (make-local-variable '{name}) \"OLD\")"))
         .expect("initial local format");
     let rendered = Rc::new(RefCell::new(Vec::new()));
@@ -20,14 +28,15 @@ fn chrome_context(name: &'static str) -> (Context, Rc<RefCell<Vec<String>>>) {
         // Chrome formats are BUFFER_OBJFWD slots. The bufferless variable
         // view deliberately has no value for these forwarded descriptors.
         let format = eval
-            .variable_value_in_buffer(eval.buffers.current_buffer(), intern(name))
+            .variable_value_in_buffer(eval.edit.buffers.current_buffer(), intern(name))
             .expect("buffer-local chrome format");
         observed
             .borrow_mut()
             .push(crate::emacs_core::print::print_value(&format));
         // Match the renderer's acknowledgement so unchanged content cannot
         // mask the direct binding's responsibility to request redisplay.
-        eval.buffers
+        eval.edit
+            .buffers
             .current_buffer()
             .unwrap()
             .reset_unchanged_region();
@@ -104,16 +113,20 @@ fn non_chrome_local_bindings_do_not_publish_chrome() {
             .expect("initial local value");
         let sym = intern(name);
         assert_eq!(eval.runtime_binding_has_projection(sym), projected);
-        let buffer = eval.buffers.current_buffer_id().expect("current buffer");
+        let buffer = eval
+            .edit
+            .buffers
+            .current_buffer_id()
+            .expect("current buffer");
         let old = eval
-            .variable_value_in_buffer(eval.buffers.get(buffer), sym)
+            .variable_value_in_buffer(eval.edit.buffers.get(buffer), sym)
             .expect("old local value");
         let bound = eval.eval_str("3").expect("bound value");
         let before = (eval.redisplay_generation(), eval.display_var_change_count);
         let scope = eval.specpdl.len();
         eval.specbind_uncached(sym, bound).expect("local binding");
         assert_eq!(
-            eval.variable_value_in_buffer(eval.buffers.get(buffer), sym),
+            eval.variable_value_in_buffer(eval.edit.buffers.get(buffer), sym),
             Some(bound),
             "the actual {name} binding must be installed"
         );
@@ -124,7 +137,7 @@ fn non_chrome_local_bindings_do_not_publish_chrome() {
         );
         eval.unbind_to(scope);
         assert_eq!(
-            eval.variable_value_in_buffer(eval.buffers.get(buffer), sym),
+            eval.variable_value_in_buffer(eval.edit.buffers.get(buffer), sym),
             Some(old),
             "the actual {name} binding must be restored"
         );

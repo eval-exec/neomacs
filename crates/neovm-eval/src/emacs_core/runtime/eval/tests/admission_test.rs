@@ -112,7 +112,11 @@ fn admission_publishes_the_first_saved_value_per_channel() {
     );
     let first = intern("tad-first");
     let auto = intern("tad-auto");
-    let buffer = ev.buffers.current_buffer_id().expect("a current buffer");
+    let buffer = ev
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("a current buffer");
     ev.try_specbind(first, Value::fixnum(11)).expect("bind");
     ev.try_specbind(first, Value::fixnum(12)).expect("bind");
     // A local exists in the current buffer: these are LetLocal bindings.
@@ -258,7 +262,11 @@ fn a_killed_local_binding_is_captured() {
                 (setq tad-killed 2))",
     );
     let id = intern("tad-killed");
-    let buffer = ev.buffers.current_buffer_id().expect("a current buffer");
+    let buffer = ev
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("a current buffer");
     ev.try_specbind(id, Value::fixnum(3)).expect("bind");
     eval(&mut ev, "(kill-local-variable 'tad-killed)");
     ev.admit_threads().expect("admission");
@@ -454,10 +462,14 @@ fn a_default_binding_of_a_per_buffer_variable_reaches_direct_slot_readers() {
     let id = intern("truncate-lines");
     let info =
         neovm_edit::buffer::buffer::lookup_buffer_slot_by_sym_id(id).expect("a per-buffer slot");
-    let buffer = ev.buffers.current_buffer_id().expect("a current buffer");
+    let buffer = ev
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("a current buffer");
     let count = ev.specpdl.len();
     ev.try_specbind(id, Value::T).expect("bind");
-    let slot = |ev: &Context| ev.buffers.get(buffer).expect("live").slots[info.offset.index()];
+    let slot = |ev: &Context| ev.edit.buffers.get(buffer).expect("live").slots[info.offset.index()];
     assert_eq!(eval(&mut ev, "truncate-lines"), "t");
     assert_eq!(slot(&ev), Value::T, "a direct slot reader sees the binding");
     ev.unbind_to(count);
@@ -510,7 +522,7 @@ fn defvaralias_of_a_variable_another_owner_binds_follows_the_gnu_oracle() {
 fn truncate_slot(ev: &Context, buffer: neovm_edit::buffer::BufferId) -> Value {
     let info = neovm_edit::buffer::buffer::lookup_buffer_slot_by_sym_id(intern("truncate-lines"))
         .expect("a per-buffer slot");
-    ev.buffers.get(buffer).expect("live").slots[info.offset.index()]
+    ev.edit.buffers.get(buffer).expect("live").slots[info.offset.index()]
 }
 
 #[test]
@@ -521,7 +533,11 @@ fn a_parked_default_binding_lets_another_owner_set_the_default() {
         "(set-buffer (get-buffer-create \"tad-park-default\"))",
     );
     ev.admit_threads().expect("admission");
-    let buffer = ev.buffers.current_buffer_id().expect("a current buffer");
+    let buffer = ev
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("a current buffer");
     ev.try_specbind(intern("truncate-lines"), Value::T)
         .expect("bind");
     assert!(matches!(ev.specpdl[..], [SpecBinding::LetDefault { .. }]));
@@ -596,7 +612,11 @@ fn admission_leaves_a_per_buffer_default_binding_legacy() {
         .expect("bind");
     ev.admit_threads().expect("admission");
     assert!(matches!(ev.specpdl[..], [SpecBinding::LetDefault { .. }]));
-    let buffer = ev.buffers.current_buffer_id().expect("a current buffer");
+    let buffer = ev
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("a current buffer");
     assert_eq!(truncate_slot(&ev, buffer), Value::T);
     ev.unbind_to(0);
     assert_eq!(truncate_slot(&ev, buffer), Value::NIL);
@@ -605,8 +625,8 @@ fn admission_leaves_a_per_buffer_default_binding_legacy() {
 #[test]
 fn selected_keyboard_binding_stays_owned_across_admission_and_thread_exchange() {
     let mut ev = green();
-    let buffer = ev.buffers.create_buffer("*scratch*");
-    ev.buffers.set_current(buffer);
+    let buffer = ev.edit.buffers.create_buffer("*scratch*");
+    ev.edit.buffers.set_current(buffer);
     let tty = ev
         .frames
         .create_frame_on_terminal("terminal", 1, 80, 25, buffer);

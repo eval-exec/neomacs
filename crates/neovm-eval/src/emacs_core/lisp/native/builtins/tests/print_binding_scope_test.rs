@@ -5,8 +5,8 @@ use super::*;
 fn print_binding_selection_finish_keeps_binding_for_outer_unwind() {
     crate::test_utils::init_test_tracing();
     let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let origin = ctx.buffers.current_buffer_id().unwrap();
-    let target = ctx.buffers.create_buffer("print-binding-target");
+    let origin = ctx.edit.buffers.current_buffer_id().unwrap();
+    let target = ctx.edit.buffers.create_buffer("print-binding-target");
     let name = intern("print-binding-scope-test-value");
     ctx.obarray.set_symbol_value_id(name, Value::fixnum(10));
     let depth = ctx.specpdl.len();
@@ -17,7 +17,7 @@ fn print_binding_selection_finish_keeps_binding_for_outer_unwind() {
         .try_specbind(name, Value::fixnum(20))
         .unwrap();
     scope.finish(Ok(())).unwrap();
-    assert_eq!(ctx.buffers.current_buffer_id(), Some(origin));
+    assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(origin));
     assert_eq!(ctx.obarray.symbol_value_id_or_nil(name), Value::fixnum(20));
     assert!(ctx.specpdl.len() > depth);
     ctx.unbind_to(depth);
@@ -28,21 +28,21 @@ fn print_binding_selection_finish_keeps_binding_for_outer_unwind() {
 fn print_binding_selection_finish_restores_buffer_on_lisp_error() {
     crate::test_utils::init_test_tracing();
     let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let origin = ctx.buffers.current_buffer_id().unwrap();
-    let target = ctx.buffers.create_buffer("print-binding-error-target");
+    let origin = ctx.edit.buffers.current_buffer_id().unwrap();
+    let target = ctx.edit.buffers.create_buffer("print-binding-error-target");
     let mut scope = PrintBindingBufferGuard::new(&mut ctx);
     scope.select(target).unwrap();
     let error = signal(LispCondition::Error, vec![]);
     assert!(scope.finish(Err(error)).is_err());
-    assert_eq!(ctx.buffers.current_buffer_id(), Some(origin));
+    assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(origin));
 }
 
 #[test]
 fn print_binding_selection_panic_restores_buffer_without_seeding_case_table() {
     crate::test_utils::init_test_tracing();
     let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let origin = ctx.buffers.current_buffer_id().unwrap();
-    let target = ctx.buffers.create_buffer("print-binding-panic-target");
+    let origin = ctx.edit.buffers.current_buffer_id().unwrap();
+    let target = ctx.edit.buffers.create_buffer("print-binding-panic-target");
     let table_symbol = intern("neovm--standard-case-table-object");
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut scope = PrintBindingBufferGuard::new(&mut ctx);
@@ -51,7 +51,7 @@ fn print_binding_selection_panic_restores_buffer_without_seeding_case_table() {
         panic!("temporary printer buffer selection");
     }));
     assert!(outcome.is_err());
-    assert_eq!(ctx.buffers.current_buffer_id(), Some(origin));
+    assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(origin));
     assert!(ctx.obarray.symbol_value_id_copied(table_symbol).is_none());
 }
 
@@ -71,9 +71,10 @@ fn print_target_escape_cached_forwarded_bind_survives_selection_restore() {
             crate::test_utils::init_test_tracing();
             set_var_cache_tiers_for_test(&VarCacheTier::ALL);
             let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-            let origin = ctx.buffers.current_buffer_id().unwrap();
-            let target_buffer = ctx.buffers.create_buffer("cached-print-target");
-            ctx.buffers
+            let origin = ctx.edit.buffers.current_buffer_id().unwrap();
+            let target_buffer = ctx.edit.buffers.create_buffer("cached-print-target");
+            ctx.edit
+                .buffers
                 .set_buffer_multibyte_flag(target_buffer, multibyte)
                 .unwrap();
             for name in ["print-escape-nonascii", "print-escape-multibyte"] {
@@ -86,7 +87,7 @@ fn print_target_escape_cached_forwarded_bind_survives_selection_restore() {
             });
             let target = if marker {
                 make_registered_buffer_marker(
-                    &mut ctx.buffers,
+                    &mut ctx.edit.buffers,
                     target_buffer,
                     LispCharPos1::new(1),
                     false,
@@ -100,7 +101,7 @@ fn print_target_escape_cached_forwarded_bind_survives_selection_restore() {
             apply_print_target_escape_bindings(scope.context(), target).unwrap();
             {
                 let ctx = scope.context();
-                assert_eq!(ctx.buffers.current_buffer_id(), Some(origin));
+                assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(origin));
                 assert_eq!(ctx.specpdl.len(), depth + 1);
                 assert!(
                     matches!(ctx.specpdl[depth], crate::emacs_core::eval::SpecBinding::Let { sym_id, .. } if sym_id == escape)
@@ -110,7 +111,7 @@ fn print_target_escape_cached_forwarded_bind_survives_selection_restore() {
             }
             scope.finish(Ok(())).unwrap();
             assert_eq!(ctx.specpdl.len(), depth);
-            assert_eq!(ctx.buffers.current_buffer_id(), Some(origin));
+            assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(origin));
             assert_eq!(ctx.obarray.symbol_value_id_or_nil(escape), Value::NIL);
         }
     }
@@ -125,7 +126,7 @@ fn print_target_escape_watched_refusal_preserves_binding_and_buffer_cleanup() {
     #[doc(hidden)]
     pub use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
     fn watcher(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
-        let seen = Value::make_buffer(ctx.buffers.current_buffer_id().unwrap());
+        let seen = Value::make_buffer(ctx.edit.buffers.current_buffer_id().unwrap());
         if args.get(2) == Some(&Value::symbol("let")) {
             ctx.obarray
                 .set_symbol_value_id(intern("target-let-buffer"), seen);
@@ -144,9 +145,9 @@ fn print_target_escape_watched_refusal_preserves_binding_and_buffer_cleanup() {
     crate::test_utils::init_test_tracing();
     set_var_cache_tiers_for_test(&VarCacheTier::ALL);
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
-    let origin = ctx.buffers.current_buffer_id().unwrap();
-    let target_buffer = ctx.buffers.create_buffer("watched-print-target");
-    let other = ctx.buffers.create_buffer("watched-print-other");
+    let origin = ctx.edit.buffers.current_buffer_id().unwrap();
+    let target_buffer = ctx.edit.buffers.create_buffer("watched-print-target");
+    let other = ctx.edit.buffers.create_buffer("watched-print-other");
     let escape = intern("print-escape-nonascii");
     ctx.obarray.set_symbol_value_id(escape, Value::NIL);
     ctx.obarray
@@ -174,7 +175,7 @@ fn print_target_escape_watched_refusal_preserves_binding_and_buffer_cleanup() {
             depth + 1,
             "cache refusal appended no extra binding"
         );
-        assert_eq!(ctx.buffers.current_buffer_id(), Some(origin));
+        assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(origin));
         assert_eq!(ctx.obarray.symbol_value_id_or_nil(escape), Value::T);
         assert_eq!(
             ctx.obarray
@@ -184,7 +185,7 @@ fn print_target_escape_watched_refusal_preserves_binding_and_buffer_cleanup() {
     }
     scope.finish(Ok(())).unwrap();
     assert_eq!(ctx.specpdl.len(), depth);
-    assert_eq!(ctx.buffers.current_buffer_id(), Some(origin));
+    assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(origin));
     assert_eq!(ctx.obarray.symbol_value_id_or_nil(escape), Value::NIL);
     assert_eq!(
         ctx.obarray

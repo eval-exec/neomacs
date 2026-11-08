@@ -4,8 +4,11 @@ use strum::IntoEnumIterator;
 
 fn context() -> Context {
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
-    let buffer = ctx.buffers.create_buffer("*ttykey-k4-command-symbols*");
-    ctx.buffers.set_current(buffer);
+    let buffer = ctx
+        .edit
+        .buffers
+        .create_buffer("*ttykey-k4-command-symbols*");
+    ctx.edit.buffers.set_current(buffer);
     let frame = ctx.frames.create_frame("ttykey-k4", 80, 24, buffer);
     assert!(ctx.frames.select_frame(frame));
     ctx

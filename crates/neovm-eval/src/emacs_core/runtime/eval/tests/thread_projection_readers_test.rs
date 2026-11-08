@@ -130,11 +130,11 @@ fn every_context_free_reader_refuses_a_projected_variable() {
             None,
             "{name}: slot_index"
         );
-        let current = ev.buffers.current_buffer().expect("a current buffer");
+        let current = ev.edit.buffers.current_buffer().expect("a current buffer");
         let slot_read = buf_fwd.value_in(
             Some(&current.slots()[..]),
             current.local_flags,
-            Some(&ev.buffers.buffer_defaults[..]),
+            Some(&ev.edit.buffers.buffer_defaults[..]),
         );
         assert!(slot_read.is_unbound(), "{name}: value_in");
 
@@ -378,9 +378,10 @@ fn projected_localized_read_allocates_nothing_without_the_buffer_object() {
     let mut ev = fixture();
     // A buffer no Lisp object exists for yet, with its own local binding of
     // the projected variable's base.
-    let buffer_id = ev.buffers.create_buffer("tpr-unmaterialized");
+    let buffer_id = ev.edit.buffers.create_buffer("tpr-unmaterialized");
     let id = intern("tpr-local");
-    ev.buffers
+    ev.edit
+        .buffers
         .set_buffer_local_property_by_sym_id(buffer_id, id, Value::fixnum(4547))
         .expect("the local binding is written");
     let buffer_object =
@@ -393,7 +394,7 @@ fn projected_localized_read_allocates_nothing_without_the_buffer_object() {
     let CanonicalArm::Localized(blv) = projection.arm() else {
         panic!("tpr-local keeps a localized arm")
     };
-    let buffer = ev.buffers.get(buffer_id).expect("the buffer");
+    let buffer = ev.edit.buffers.get(buffer_id).expect("the buffer");
     let value = ev.obarray.read_projected_localized(id, blv, Some(buffer));
     assert_eq!(print_value(&value), "4547");
     assert_eq!(
@@ -404,7 +405,7 @@ fn projected_localized_read_allocates_nothing_without_the_buffer_object() {
     assert!(buffer_object().is_none(), "the read materialized no object");
 
     let object = Value::make_buffer(buffer_id);
-    let buffer = ev.buffers.get(buffer_id).expect("the buffer");
+    let buffer = ev.edit.buffers.get(buffer_id).expect("the buffer");
     let value = ev.obarray.read_projected_localized(id, blv, Some(buffer));
     assert_eq!(print_value(&value), "4547");
     assert!(buffer_object().is_some_and(|value| neovm_value::value::eq_value(&value, &object)));
@@ -440,8 +441,9 @@ impl neovm_value::value::buffer_vocab::BufferLocalView for ProjectionBufferProbe
 fn projected_localized_generic_view_keeps_cache_hits_lazy() {
     let mut ev = fixture();
     let id = intern("tpr-local");
-    let buffer_id = ev.buffers.create_buffer("tpr-generic-registered");
-    ev.buffers
+    let buffer_id = ev.edit.buffers.create_buffer("tpr-generic-registered");
+    ev.edit
+        .buffers
         .set_buffer_local_property_by_sym_id(buffer_id, id, Value::fixnum(4547))
         .expect("local binding");
     let object = Value::make_buffer(buffer_id);
@@ -451,7 +453,7 @@ fn projected_localized_generic_view_keeps_cache_hits_lazy() {
     };
     let reads = std::cell::Cell::new(0);
     let view = ProjectionBufferProbe {
-        buffer: ev.buffers.get(buffer_id).expect("buffer"),
+        buffer: ev.edit.buffers.get(buffer_id).expect("buffer"),
         local_cell_reads: &reads,
     };
     let allocated = ev.tagged_heap.allocated_count();
@@ -496,7 +498,7 @@ fn projected_localized_generic_view_keeps_cache_hits_lazy() {
 fn projected_localized_generic_view_keeps_unregistered_cache_locus_nil() {
     let mut ev = fixture();
     let id = intern("tpr-local");
-    let buffer_id = ev.buffers.create_buffer("tpr-generic-unregistered");
+    let buffer_id = ev.edit.buffers.create_buffer("tpr-generic-unregistered");
     project(&mut ev, "tpr-local");
     let CanonicalArm::Localized(blv) = projection_of(&ev, id).arm() else {
         panic!("localized projection")
@@ -504,7 +506,7 @@ fn projected_localized_generic_view_keeps_unregistered_cache_locus_nil() {
     let reads = std::cell::Cell::new(0);
     {
         let view = ProjectionBufferProbe {
-            buffer: ev.buffers.get(buffer_id).expect("buffer"),
+            buffer: ev.edit.buffers.get(buffer_id).expect("buffer"),
             local_cell_reads: &reads,
         };
         for expected_reads in 1..=2 {
@@ -525,11 +527,12 @@ fn projected_localized_generic_view_keeps_unregistered_cache_locus_nil() {
             }
         }
     }
-    ev.buffers
+    ev.edit
+        .buffers
         .set_buffer_local_property_by_sym_id(buffer_id, id, Value::fixnum(4548))
         .expect("new local binding");
     let view = ProjectionBufferProbe {
-        buffer: ev.buffers.get(buffer_id).expect("buffer"),
+        buffer: ev.edit.buffers.get(buffer_id).expect("buffer"),
         local_cell_reads: &reads,
     };
     let allocated = ev.tagged_heap.allocated_count();

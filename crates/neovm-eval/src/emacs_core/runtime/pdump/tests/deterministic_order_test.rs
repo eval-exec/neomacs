@@ -471,7 +471,7 @@ fn deterministic_order_overlay_serials_survive_dump_and_resume_the_counter() {
     };
 
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let buffer = eval.buffers.create_buffer("pdump-overlay-serial");
+    let buffer = eval.edit.buffers.create_buffer("pdump-overlay-serial");
     let detached = Value::make_overlay(OverlayDataInit {
         serial: preserved(DETACHED_SERIAL),
         plist: Value::list(vec![Value::symbol("face"), Value::symbol("bold")]),
@@ -490,7 +490,8 @@ fn deterministic_order_overlay_serials_survive_dump_and_resume_the_counter() {
         front_advance: false,
         rear_advance: true,
     });
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(buffer)
         .unwrap()
         .overlays_mut()
@@ -500,7 +501,13 @@ fn deterministic_order_overlay_serials_survive_dump_and_resume_the_counter() {
 
     // Redisplay snapshots are observers: their cloned objects keep the
     // creation serial of the overlay they observe.
-    let observer = eval.buffers.get(buffer).unwrap().overlays().snapshot_clone();
+    let observer = eval
+        .edit
+        .buffers
+        .get(buffer)
+        .unwrap()
+        .overlays()
+        .snapshot_clone();
     let observer_values = observer.dump_overlays();
     assert_eq!(
         observer_values[0].as_overlay_data().unwrap().serial.get(),
@@ -530,7 +537,7 @@ fn deterministic_order_overlay_serials_survive_dump_and_resume_the_counter() {
     assert!(!neovm_value::value::eq_value(&a, &b));
     assert_eq!(a.as_overlay_data().unwrap().serial.get(), DETACHED_SERIAL);
     assert_eq!(b.as_overlay_data().unwrap().serial.get(), ATTACHED_SERIAL);
-    let restored_buffer = loaded.buffers.get(buffer).unwrap();
+    let restored_buffer = loaded.edit.buffers.get(buffer).unwrap();
     for value in restored_buffer.overlays().dump_overlays() {
         assert_eq!(
             value.as_overlay_data().unwrap().serial.get(),

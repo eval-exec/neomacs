@@ -230,7 +230,11 @@ fn base64_region_eval_encode_decode_roundtrip() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
             buf.point_min_emacs_byte_pos().get(),
             buf.point_max_emacs_byte_pos().get(),
@@ -242,6 +246,7 @@ fn base64_region_eval_encode_decode_roundtrip() {
         .expect("encode region should succeed");
     assert_eq!(encoded, Value::fixnum(4));
     let encoded_text = eval
+        .edit
         .buffers
         .current_buffer()
         .expect("current buffer")
@@ -252,6 +257,7 @@ fn base64_region_eval_encode_decode_roundtrip() {
         .expect("decode region should succeed");
     assert_eq!(decoded, Value::fixnum(2));
     let decoded_text = eval
+        .edit
         .buffers
         .current_buffer()
         .expect("current buffer")
@@ -264,7 +270,11 @@ fn base64_region_eval_swapped_bounds_and_url_encoding() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
             buf.point_min_emacs_byte_pos().get(),
             buf.point_max_emacs_byte_pos().get(),
@@ -279,6 +289,7 @@ fn base64_region_eval_swapped_bounds_and_url_encoding() {
     .expect("url encode region should succeed");
     assert_eq!(encoded, Value::fixnum(3));
     let encoded_text = eval
+        .edit
         .buffers
         .current_buffer()
         .expect("current buffer")
@@ -290,9 +301,17 @@ fn base64_region_eval_swapped_bounds_and_url_encoding() {
 fn base64_region_eval_accepts_marker_bounds() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
             buf.point_min_emacs_byte_pos().get(),
             buf.point_max_emacs_byte_pos().get(),
@@ -314,6 +333,7 @@ fn base64_region_eval_accepts_marker_bounds() {
         .expect("encode region should accept markers");
     assert_eq!(encoded, Value::fixnum(4));
     let encoded_text = eval
+        .edit
         .buffers
         .current_buffer()
         .expect("current buffer")
@@ -326,7 +346,11 @@ fn base64_region_preserves_unibyte_raw_bytes() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.set_multibyte_value(false);
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
             buf.point_min_emacs_byte_pos().get(),
@@ -342,6 +366,7 @@ fn base64_region_preserves_unibyte_raw_bytes() {
         .expect("encode raw-byte region should succeed");
     assert_eq!(encoded, Value::fixnum(4));
     let encoded_text = eval
+        .edit
         .buffers
         .current_buffer()
         .expect("current buffer")
@@ -352,6 +377,7 @@ fn base64_region_preserves_unibyte_raw_bytes() {
         .expect("decode raw-byte region should succeed");
     assert_eq!(decoded, Value::fixnum(1));
     let decoded_text = eval
+        .edit
         .buffers
         .current_buffer()
         .expect("current buffer")
@@ -365,7 +391,11 @@ fn base64_decode_region_noerror_semantics() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
             buf.point_min_emacs_byte_pos().get(),
             buf.point_max_emacs_byte_pos().get(),
@@ -380,6 +410,7 @@ fn base64_decode_region_noerror_semantics() {
     .expect("noerror decode should succeed");
     assert_eq!(ignored, Value::fixnum(0));
     let emptied = eval
+        .edit
         .buffers
         .current_buffer()
         .expect("current buffer")
@@ -387,7 +418,11 @@ fn base64_decode_region_noerror_semantics() {
     assert_eq!(emptied, "");
 
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert("%%");
     }
     let strict = builtin_base64_decode_region(&mut eval, vec![Value::fixnum(1), Value::fixnum(3)]);
@@ -399,6 +434,7 @@ fn base64_decode_region_noerror_semantics() {
         other => panic!("expected invalid base64 signal, got {other:?}"),
     }
     let unchanged = eval
+        .edit
         .buffers
         .current_buffer()
         .expect("current buffer")
@@ -411,7 +447,11 @@ fn base64_region_eval_error_shapes() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
             buf.point_min_emacs_byte_pos().get(),
             buf.point_max_emacs_byte_pos().get(),
@@ -462,7 +502,11 @@ fn base64_decode_region_multibyte_eight_bit_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         assert!(
             buf.get_multibyte(),
             "default temp buffer should be multibyte"
@@ -480,7 +524,7 @@ fn base64_decode_region_multibyte_eight_bit_like_gnu() {
     // The number of inserted *characters* is 1 (one eight-bit char).
     assert_eq!(decoded, Value::fixnum(1));
 
-    let buf = eval.buffers.current_buffer().expect("current buffer");
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
     // The buffer now holds exactly one character.
     let text = buf.buffer_substring_lisp_string_range(buf.full_emacs_byte_range());
     assert!(
@@ -510,7 +554,11 @@ fn base64_encode_region_rejects_multibyte_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         assert!(buf.get_multibyte());
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
             buf.point_min_emacs_byte_pos().get(),
@@ -787,14 +835,23 @@ fn md5_eval_buffer_core_semantics() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
             buf.point_min_emacs_byte_pos().get(),
             buf.point_max_emacs_byte_pos().get(),
         ));
         buf.insert("abc");
     }
-    let id = eval.buffers.current_buffer().expect("current buffer").id();
+    let id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
 
     let full = builtin_md5(&mut eval, vec![Value::make_buffer(id)]).unwrap();
     assert_eq!(full.as_utf8_str(), Some("900150983cd24fb0d6963f7d28e17f72"));
@@ -815,14 +872,23 @@ fn md5_eval_buffer_range_errors() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
             buf.point_min_emacs_byte_pos().get(),
             buf.point_max_emacs_byte_pos().get(),
         ));
         buf.insert("abc");
     }
-    let id = eval.buffers.current_buffer().expect("current buffer").id();
+    let id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
 
     match builtin_md5(&mut eval, vec![Value::make_buffer(id), Value::fixnum(5)]).kinded() {
         Err(FlowKind::Signal(sig)) => {
@@ -837,7 +903,12 @@ fn md5_eval_buffer_range_errors() {
 fn md5_eval_buffer_index_type_error() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let id = eval.buffers.current_buffer().expect("current buffer").id();
+    let id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
 
     match builtin_md5(
         &mut eval,
@@ -860,8 +931,8 @@ fn md5_eval_buffer_index_type_error() {
 fn md5_eval_deleted_buffer_errors() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let id = eval.buffers.create_buffer("*md5-doomed*");
-    assert!(eval.buffers.kill_buffer(id));
+    let id = eval.edit.buffers.create_buffer("*md5-doomed*");
+    assert!(eval.edit.buffers.kill_buffer(id));
 
     match builtin_md5(&mut eval, vec![Value::make_buffer(id)]).kinded() {
         Err(FlowKind::Signal(sig)) => {
@@ -883,7 +954,11 @@ fn md5_and_secure_hash_preserve_unibyte_raw_bytes() {
         0xFF,
     ]));
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.set_multibyte_value(false);
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
             buf.point_min_emacs_byte_pos().get(),
@@ -893,7 +968,12 @@ fn md5_and_secure_hash_preserve_unibyte_raw_bytes() {
             0xFF,
         ]));
     }
-    let id = eval.buffers.current_buffer().expect("current buffer").id();
+    let id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
 
     let string_md5 = builtin_md5(&mut eval, vec![raw]).unwrap();
     assert_eq!(
@@ -1079,14 +1159,23 @@ fn secure_hash_eval_buffer_sha1() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
             buf.point_min_emacs_byte_pos().get(),
             buf.point_max_emacs_byte_pos().get(),
         ));
         buf.insert("abc");
     }
-    let id = eval.buffers.current_buffer().expect("current buffer").id();
+    let id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
     let r = builtin_secure_hash(
         &mut eval,
         vec![Value::symbol("sha1"), Value::make_buffer(id)],
@@ -1103,13 +1192,22 @@ fn secure_hash_encodes_multibyte_buffer_raw_byte_characters_for_writing() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert_lisp_string(&neovm_value::heap_types::LispString::from_unibyte(vec![
             65, 195, 169, 90,
         ]));
     }
     eval.set_variable("coding-system-for-write", Value::symbol("utf-8-unix"));
-    let id = eval.buffers.current_buffer().expect("current buffer").id();
+    let id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
 
     let result = builtin_secure_hash(
         &mut eval,
@@ -1128,14 +1226,23 @@ fn secure_hash_eval_buffer_range_errors() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
             buf.point_min_emacs_byte_pos().get(),
             buf.point_max_emacs_byte_pos().get(),
         ));
         buf.insert("abc");
     }
-    let id = eval.buffers.current_buffer().expect("current buffer").id();
+    let id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
 
     match builtin_secure_hash(
         &mut eval,
@@ -1159,7 +1266,12 @@ fn secure_hash_eval_buffer_range_errors() {
 fn secure_hash_eval_buffer_index_type_error() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let id = eval.buffers.current_buffer().expect("current buffer").id();
+    let id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
 
     match builtin_secure_hash(
         &mut eval,
@@ -1188,16 +1300,25 @@ fn secure_hash_eval_buffer_marker_range() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
             buf.point_min_emacs_byte_pos().get(),
             buf.point_max_emacs_byte_pos().get(),
         ));
         buf.insert("abc");
     }
-    let id = eval.buffers.current_buffer().expect("current buffer").id();
+    let id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
     let marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         id,
         LispCharPos1::new(2),
         false,
@@ -1222,8 +1343,8 @@ fn secure_hash_eval_buffer_marker_range() {
 fn secure_hash_eval_deleted_buffer_errors() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let id = eval.buffers.create_buffer("*secure-doomed*");
-    assert!(eval.buffers.kill_buffer(id));
+    let id = eval.edit.buffers.create_buffer("*secure-doomed*");
+    assert!(eval.edit.buffers.kill_buffer(id));
 
     match builtin_secure_hash(
         &mut eval,
@@ -1246,7 +1367,11 @@ fn secure_hash_eval_deleted_buffer_errors() {
 fn buffer_hash_eval_current_buffer_sha1() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+    let buf = eval
+        .edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer");
     buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
         buf.point_min_emacs_byte_pos().get(),
         buf.point_max_emacs_byte_pos().get(),
@@ -1263,13 +1388,18 @@ fn buffer_hash_eval_current_buffer_sha1() {
 fn buffer_hash_eval_by_name_sha1() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+    let buf = eval
+        .edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer");
     buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
         buf.point_min_emacs_byte_pos().get(),
         buf.point_max_emacs_byte_pos().get(),
     ));
     buf.insert("abc");
     let name = eval
+        .edit
         .buffers
         .current_buffer()
         .expect("current buffer")
@@ -1296,7 +1426,11 @@ fn buffer_hash_ignores_narrowing_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
             buf.point_min_emacs_byte_pos().get(),
             buf.point_max_emacs_byte_pos().get(),
@@ -1311,7 +1445,11 @@ fn buffer_hash_ignores_narrowing_like_gnu() {
     // (bytes 2..6 for this ASCII content), matching GNU's
     // (narrow-to-region 3 7).
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.narrow_to_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(2, 6));
         assert_eq!(buf.buffer_string(), "2345", "narrowing is in effect");
     }

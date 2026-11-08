@@ -116,7 +116,7 @@ fn buffer_reads_answer_the_owner_local_binding() {
     let count = ev.specpdl.len();
     ev.try_specbind(intern("tva-auto"), Value::fixnum(11))
         .expect("bind the local");
-    let buffer = ev.buffers.current_buffer();
+    let buffer = ev.edit.buffers.current_buffer();
     assert_eq!(
         show(ev.variables().value_in_buffer(buffer, intern("tva-auto"))),
         "11"
@@ -127,7 +127,7 @@ fn buffer_reads_answer_the_owner_local_binding() {
     );
     assert_eq!(show(ev.variables().default_value(intern("tva-auto"))), "5");
     ev.unbind_to(count);
-    let buffer = ev.buffers.current_buffer();
+    let buffer = ev.edit.buffers.current_buffer();
     assert_eq!(
         show(ev.variables().value_in_buffer(buffer, intern("tva-auto"))),
         "6"

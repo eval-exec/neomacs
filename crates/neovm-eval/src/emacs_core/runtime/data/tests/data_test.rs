@@ -74,7 +74,8 @@ fn uninterned_value_cells_ignore_buffer_local_namesakes() {
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let canonical = intern("depth-alist");
     let uninterned = intern_uninterned("depth-alist");
-    ctx.buffers
+    ctx.edit
+        .buffers
         .current_buffer_mut()
         .expect("current buffer")
         .set_buffer_local("depth-alist", Value::fixnum(7));
@@ -88,7 +89,8 @@ fn uninterned_value_cells_ignore_buffer_local_namesakes() {
     );
     assert_eq!(ctx.obarray().symbol_value_id_copied(canonical), None);
     assert_eq!(
-        ctx.buffers
+        ctx.edit
+            .buffers
             .current_buffer()
             .expect("current buffer")
             .get_buffer_local("depth-alist"),
@@ -114,7 +116,11 @@ fn set_default_sets_global() {
 fn set_default_preserves_current_buffer_local_binding() {
     crate::test_utils::init_test_tracing();
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
-    let current = ctx.buffers.current_buffer_id().expect("current buffer");
+    let current = ctx
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     ctx.set_buffer_local_binding_by_id(current, intern("vm-set-default-local"), Value::fixnum(7))
         .expect("buffer-local binding");
 
@@ -125,7 +131,8 @@ fn set_default_preserves_current_buffer_local_binding() {
     .expect("set-default");
 
     assert_eq!(
-        ctx.buffers
+        ctx.edit
+            .buffers
             .current_buffer()
             .expect("current buffer")
             .buffer_local_value("vm-set-default-local"),

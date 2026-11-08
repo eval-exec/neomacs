@@ -401,7 +401,7 @@ fn tty_rows_observation_partial_gc_and_driver_obligations_remain_mandatory() {
 #[test]
 fn tty_rows_observation_function_change_keeps_full_freshness_gate_separate() {
     let (mut context, frame, _restore) = ready();
-    let source = context.buffers.current_buffer_id().unwrap();
+    let source = context.edit.buffers.current_buffer_id().unwrap();
     let window = context.frames.get(frame).unwrap().selected_window;
     let before = context
         .window_display_snapshot_freshness(frame, window, source)

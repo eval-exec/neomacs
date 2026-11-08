@@ -11,8 +11,16 @@ use neovm_value::value::Value;
 fn terpri_buffer_line_state_tracks_destination_point_and_narrowed_minimum() {
     crate::test_utils::init_test_tracing();
     let mut context = Context::new(crate::test_utils::unit_runtime());
-    let destination = context.buffers.create_buffer("terpri-state-destination");
-    context.buffers.get_mut(destination).unwrap().insert("é\nb");
+    let destination = context
+        .edit
+        .buffers
+        .create_buffer("terpri-state-destination");
+    context
+        .edit
+        .buffers
+        .get_mut(destination)
+        .unwrap()
+        .insert("é\nb");
     let target = Value::make_buffer(destination);
     // The current buffer remains the caller; the explicit stream owns point.
     for (position, expected) in [
@@ -21,12 +29,12 @@ fn terpri_buffer_line_state_tracks_destination_point_and_narrowed_minimum() {
         (3, TerpriLineState::BeginningOfLine),
         (4, TerpriLineState::NeedsNewline),
     ] {
-        let buffer = context.buffers.get_mut(destination).unwrap();
+        let buffer = context.edit.buffers.get_mut(destination).unwrap();
         let point = buffer.lisp_pos_to_emacs_byte_pos(LispCharPos1::new(position));
         buffer.goto_emacs_byte_pos(point);
         assert_eq!(terpri_line_state(&context, target).unwrap(), expected);
     }
-    let buffer = context.buffers.get_mut(destination).unwrap();
+    let buffer = context.edit.buffers.get_mut(destination).unwrap();
     let start = buffer.lisp_pos_to_emacs_byte_pos(LispCharPos1::new(2));
     let end = buffer.lisp_pos_to_emacs_byte_pos(LispCharPos1::new(4));
     buffer.narrow_to_emacs_byte_range(EmacsByteRange::new(start, end));
@@ -41,15 +49,20 @@ fn terpri_buffer_line_state_tracks_destination_point_and_narrowed_minimum() {
 fn terpri_marker_line_state_uses_marker_without_moving_buffer_point() {
     crate::test_utils::init_test_tracing();
     let mut context = Context::new(crate::test_utils::unit_runtime());
-    let destination = context.buffers.create_buffer("terpri-state-marker");
-    context.buffers.get_mut(destination).unwrap().insert("é\nb");
+    let destination = context.edit.buffers.create_buffer("terpri-state-marker");
+    context
+        .edit
+        .buffers
+        .get_mut(destination)
+        .unwrap()
+        .insert("é\nb");
     let marker = make_registered_buffer_marker(
-        &mut context.buffers,
+        &mut context.edit.buffers,
         destination,
         LispCharPos1::new(2),
         false,
     );
-    let buffer = context.buffers.get_mut(destination).unwrap();
+    let buffer = context.edit.buffers.get_mut(destination).unwrap();
     let point = buffer.lisp_pos_to_emacs_byte_pos(LispCharPos1::new(3));
     buffer.goto_emacs_byte_pos(point);
     assert_eq!(
@@ -58,6 +71,7 @@ fn terpri_marker_line_state_uses_marker_without_moving_buffer_point() {
     );
     assert_eq!(
         context
+            .edit
             .buffers
             .get(destination)
             .unwrap()
@@ -65,7 +79,7 @@ fn terpri_marker_line_state_uses_marker_without_moving_buffer_point() {
         point
     );
     let beginning = make_registered_buffer_marker(
-        &mut context.buffers,
+        &mut context.edit.buffers,
         destination,
         LispCharPos1::new(3),
         false,
@@ -81,16 +95,24 @@ fn terpri_marker_validation_precedes_beginning_of_line_shortcut() {
     crate::test_utils::init_test_tracing();
     let mut context = Context::new(crate::test_utils::unit_runtime());
     let detached = make_marker_value(None, None, false);
-    let destination = context.buffers.create_buffer("terpri-state-invalid-marker");
-    context.buffers.get_mut(destination).unwrap().insert("é\nb");
+    let destination = context
+        .edit
+        .buffers
+        .create_buffer("terpri-state-invalid-marker");
+    context
+        .edit
+        .buffers
+        .get_mut(destination)
+        .unwrap()
+        .insert("é\nb");
     // Position one is BOL in the full buffer but inaccessible after narrowing.
     let inaccessible = make_registered_buffer_marker(
-        &mut context.buffers,
+        &mut context.edit.buffers,
         destination,
         LispCharPos1::new(1),
         false,
     );
-    let buffer = context.buffers.get_mut(destination).unwrap();
+    let buffer = context.edit.buffers.get_mut(destination).unwrap();
     let start = buffer.lisp_pos_to_emacs_byte_pos(LispCharPos1::new(2));
     let end = buffer.lisp_pos_to_emacs_byte_pos(LispCharPos1::new(4));
     buffer.narrow_to_emacs_byte_range(EmacsByteRange::new(start, end));
