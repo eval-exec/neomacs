@@ -5,6 +5,7 @@
 use crate::buffer_source::loop_state::BufferSourceRowCarryoverState;
 use crate::buffer_source::row_prelude::BufferSourceRowPreludeRequestContext;
 use crate::coords::layout_char_pos_from_i64;
+use crate::cursor_source_dependencies::string_properties as get_string_text_properties_table_for_value;
 use crate::display_cursor::{
     CapturedCursorInfo, CapturedCursorPlacement, CapturedCursorSlotWidth,
     CapturedCursorVisualState, CursorCaptureState, DisplayStringCursorContext,
@@ -44,7 +45,6 @@ use crate::types::{LayoutCharPos0, WindowParams};
 use neomacs_display_protocol::types::Px;
 use neovm_core::buffer::{CharPos0, DisplayColumn};
 use neovm_core::emacs_core::Value;
-use neovm_core::emacs_core::value::get_string_text_properties_table_for_value;
 
 #[derive(Clone, Copy)]
 pub(crate) struct OverlayStringRenderSource {
@@ -1005,9 +1005,7 @@ fn capture_overlay_string_cursor_at_slot(
         visual_state,
         CapturedCursorSlotWidth::Explicit(slot.width_px()),
         cursor_context,
-        slot.glyph_height_px().and_then(|height| {
-            crate::display_cursor::measured_logical_cursor_dimensions(slot.width_px(), height)
-        }),
+        slot.selected_primitive_dimensions(),
     );
 }
 

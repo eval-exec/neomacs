@@ -548,6 +548,10 @@ impl LayoutBufferView for LayoutBufferSnapshot {
             .indexed_newline_count(range, neovm_core::buffer::LineIndexBuild::IfLarge)
     }
 
+    fn layout_text_props_is_empty(&self) -> bool {
+        self.text_snapshot.text_props_is_empty()
+    }
+
     fn layout_text_prop_at_emacs_byte_pos(&self, pos: EmacsBytePos, name: Value) -> Option<Value> {
         self.text_snapshot.text_prop_at_emacs_byte_pos(pos, name)
     }

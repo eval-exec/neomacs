@@ -2,6 +2,7 @@
 //! scalar materializer; unset or `bulk` copies validated ordinary UTF-8 runs.
 //! The selector is native immutable process configuration, read once.
 
+use crate::cursor_source_dependencies::string_properties as get_string_text_properties_table_for_value;
 use crate::display_item::{
     BufferDisplayReplacementSource, DisplayGlyphless, DisplayItem, DisplayItemKind,
     DisplayItemLayout, DisplayLength, DisplayLineHeightPolicy, DisplayLineSpacingPolicy,
@@ -38,7 +39,7 @@ use neovm_core::emacs_core::composite::composition_display_text_for_property;
 use neovm_core::emacs_core::composite::{AutomaticCompositionRules, AutomaticCompositionSpan};
 use neovm_core::emacs_core::emacs_char::EmacsChar;
 use neovm_core::emacs_core::intern::WellKnown;
-use neovm_core::emacs_core::value::{get_string_text_properties_table_for_value, list_to_vec};
+use neovm_core::emacs_core::value::list_to_vec;
 use neovm_core::face::LispFaceId;
 
 // Each key is a fixed DEFSYM id resolved at its original query boundary. Cells

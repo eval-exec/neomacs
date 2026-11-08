@@ -12,6 +12,7 @@ pub mod bidi;
 pub(crate) mod buffer_source;
 pub mod composition;
 pub(crate) mod coords;
+pub(crate) mod cursor_source_dependencies;
 pub(crate) mod display_current_row_output;
 pub(crate) mod display_cursor;
 pub(crate) mod display_face_layout;

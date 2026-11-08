@@ -1127,7 +1127,7 @@ impl FrameWindowEndAttempts {
     }
 }
 
-/// GNU-visible callback acknowledgements owned by one logical frame attempt.
+/// Callback acknowledgements and producer artifacts of one logical frame attempt.
 ///
 /// Chrome/minibuffer convergence may perform several physical row walks. Those
 /// retries must not replay Lisp that the logical redisplay already ran.
@@ -1139,6 +1139,11 @@ struct RedisplayLispLedger {
     mini_eob_scroll: mini_eob_scroll::MiniEobScrollLedger,
     /// `when` answers evaluated after a walk, carried to its one replay.
     display_when: crate::display_when::DisplayWhenReplayLedger,
+    /// Original string observations commit only with the accepted matrices.
+    cursor_sources: rustc_hash::FxHashMap<
+        DisplayWindowId,
+        crate::cursor_source_dependencies::CursorSourceDependencies,
+    >,
 }
 
 impl RedisplayLispLedger {
@@ -3566,6 +3571,28 @@ impl LayoutEngine {
                 continue 'frame_layout;
             }
 
+            // A later leaf's Lisp can mutate an earlier leaf's source string
+            // without changing buffer/overlay ticks. Validate the complete
+            // accepted set after the final Lisp-capable boundary, not merely
+            // when each individual leaf finishes.
+            if let Some(window_id) = curr_window_infos.keys().copied().find(|window| {
+                lisp_ledger
+                    .cursor_sources
+                    .get(window)
+                    .is_some_and(|sources| !sources.unchanged())
+            }) {
+                if !Self::accept_frame_relayout_request(
+                    &mut layout_coordinator,
+                    evaluator,
+                    &mut frame_window_end_attempts,
+                    presentation_id,
+                    FrameRelayoutRequest::LogicalInputsChanged { window_id },
+                ) {
+                    return None;
+                }
+                continue 'frame_layout;
+            }
+
             let accepted_window_chrome_metrics: rustc_hash::FxHashMap<
                 DisplayWindowId,
                 WindowChromeMetrics,
@@ -4204,12 +4231,17 @@ impl LayoutEngine {
         // set the retained-matrix commit writes); a window that settled but
         // did not reach the presentation is not evidence.
         accepted_display_when.retain(|window, _| curr_window_infos.contains_key(window));
+        let mut cursor_sources = std::mem::take(&mut lisp_ledger.cursor_sources);
+        cursor_sources.retain(|window, _| curr_window_infos.contains_key(window));
+        self.frame_visual_histories
+            .retain_live(|frame| evaluator.frame_manager().get(frame).is_some());
         self.frame_visual_histories.commit(
             frame_id,
             FrameVisualHistory::from_accepted_presentation(
                 curr_window_infos,
                 accepted_display_when,
-            ),
+            )
+            .with_cursor_sources(cursor_sources),
         );
         {
             let frame_manager = evaluator.frame_manager_mut();
@@ -4803,6 +4835,16 @@ impl LayoutEngine {
             );
             return None;
         };
+        // The row key cannot see interval mutations on an existing string.
+        // A missing/expired producer certificate must never retain selection.
+        if !self
+            .retained_frame
+            .and_then(|frame| self.frame_visual_histories.get(frame))
+            .and_then(|history| history.cursor_sources_for(window_id))
+            .is_some_and(|sources| sources.can_replay() && sources.unchanged())
+        {
+            return None;
+        }
         let curr_key = RetainedWindowKey::from_params(params, layout_box, evaluator);
         let mut replay = match prev.cursor_only_replay(&curr_key) {
             Ok(replay) => replay,
@@ -5434,6 +5476,22 @@ impl LayoutEngine {
         topology_generation: u64,
         face_attempt: &FrameFaceAttempt,
     ) -> LeafLayoutAttempt {
+        let source_capture = crate::cursor_source_dependencies::Capture::begin(evaluator);
+        let source_window = DisplayWindowId::new(params.window_id);
+        lisp_ledger.cursor_sources.remove(&source_window);
+        let previous_sources = self
+            .frame_visual_histories
+            .get(frame_id)
+            .and_then(|history| history.cursor_sources_for(source_window));
+        let sources_current = previous_sources
+            .as_ref()
+            .is_some_and(|sources| sources.can_replay() && sources.unchanged());
+        let cursor_only_replay = if sources_current {
+            cursor_only_replay
+        } else {
+            None
+        };
+        let scroll_replay = if sources_current { scroll_replay } else { None };
         let face_resolver = face_services.resolver();
         #[cfg(test)]
         let _viewport_retry_depth = viewport_retry_depth_probe::Guard::enter();
@@ -5761,6 +5819,19 @@ impl LayoutEngine {
             ViewportResolutionPhase::Measure(measurement) => Some(measurement.clone()),
             ViewportResolutionPhase::Resolve | ViewportResolutionPhase::Commit(_) => None,
         });
+        // Conditional display/face callbacks above may have changed a source
+        // after Phase A admission. Validate again at consumption, not just lookup.
+        let sources_current = previous_sources
+            .as_ref()
+            .is_some_and(|sources| sources.can_replay() && sources.unchanged());
+        let cursor_only_replay = if sources_current {
+            cursor_only_replay
+        } else {
+            None
+        };
+        let scroll_replay = if sources_current { scroll_replay } else { None };
+        let canonical_source_walk = cursor_only_replay.is_none() && scroll_replay.is_none();
+        let unchanged_body_replay = cursor_only_replay.is_some();
         let render_outcome = render_request.render_into(
             BufferSourceRenderAttemptContext::from_frame_output_owner(
                 &mut self.frame_output,
@@ -5836,6 +5907,11 @@ impl LayoutEngine {
         };
         if evaluator.frame_manager().window_topology_generation() != topology_generation
             || !lisp_boundaries_remain_valid
+            || !source_capture.unchanged()
+            || (!canonical_source_walk
+                && !previous_sources
+                    .as_ref()
+                    .is_some_and(|sources| sources.unchanged()))
         {
             if let Some(attempt) = window_end_attempt.take() {
                 evaluator.reject_redisplay_window_end_attempt(attempt);
@@ -6256,6 +6332,32 @@ impl LayoutEngine {
                 reused_matrix_rows,
                 line_number_field_width,
             } => {
+                // Only the canonical producer establishes completeness. A
+                // cursor-only walk carries the original certificate, never an
+                // empty observation from skipping the strings. Partial walks
+                // preserve original known domains; newly expanded domains
+                // validate this frame but require a fresh canonical next walk.
+                if !source_capture.unchanged()
+                    || (!canonical_source_walk
+                        && !previous_sources
+                            .as_ref()
+                            .is_some_and(|sources| sources.unchanged()))
+                {
+                    return LeafLayoutAttempt::LogicalInputsChanged;
+                }
+                let observed = source_capture.finish();
+                let sources = if canonical_source_walk {
+                    observed
+                } else if unchanged_body_replay {
+                    previous_sources
+                } else {
+                    previous_sources
+                        .as_ref()
+                        .and_then(|old| observed.and_then(|fresh| old.after_partial_walk(fresh)))
+                };
+                if let Some(sources) = sources {
+                    lisp_ledger.cursor_sources.insert(source_window, sources);
+                }
                 if position_publication.is_synchronous_query() {
                     self.query_row_coverage = query_row_coverage;
                     self.query_target_prefix_policy = query_target_prefix_policy;

@@ -19,7 +19,7 @@ pub(super) fn bounded_string(value: Value, max_chars: usize) -> bool {
     if string.schars() > max_chars || string.as_bytes().len() > max_chars.saturating_mul(4) {
         return false;
     }
-    let props = neovm_core::emacs_core::value::get_string_text_properties_table_for_value(value);
+    let props = crate::cursor_source_dependencies::string_properties(value);
     let Some(props) = props else {
         return true;
     };

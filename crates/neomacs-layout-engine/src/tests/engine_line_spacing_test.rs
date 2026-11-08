@@ -490,73 +490,103 @@ fn replacement_logical_cursor_tracks_the_selected_visual_slot() {
         .into_iter()
         .flat_map(|replacement| [true, false].map(|visible| (replacement, visible)))
     {
-        let (mut eval, frame, _, window) = incr_editing_frame("ax\n", 800, 240);
-        realize_test_gui_frame(&mut eval, frame);
-        eval.buffer_manager_mut()
-            .current_buffer_mut()
-            .unwrap()
-            .set_buffer_local("cursor-type", if visible { Value::T } else { Value::NIL });
-        eval.eval_str(&format!("(progn (put-text-property 2 3 'display \"{replacement}\") (set-window-point (selected-window) 2))")).unwrap();
-        let mut engine = crate::font::metrics::test_catalog::layout_engine();
-        crate::font::metrics::test_catalog::enable_metrics(&mut engine);
-        let FrameLayoutAttempt::Prepared(prepared) =
-            engine.redisplay_frame_attempt(&mut eval, frame)
-        else {
-            panic!("replacement frame")
-        };
-        let row = &prepared
-            .window_matrices
-            .iter()
-            .find(|entry| entry.window_id.get() == window.0 as i64)
-            .unwrap()
-            .matrix
-            .rows[0];
-        let glyphs = &row.glyphs[GlyphArea::Text.index()];
-        let selected = glyphs
-            .iter()
-            .enumerate()
-            .filter(|(_, glyph)| !glyph.padding && row.glyph_covers_buffer_charpos(glyph, 1))
-            .filter_map(|(i, glyph)| match glyph.provenance {
-                neomacs_display_protocol::glyph_matrix::GlyphProvenance::Str { index, .. } => {
-                    Some((index, i))
-                }
-                _ => None,
-            })
-            .min()
-            .expect("replacement glyph")
-            .1;
-        let expected_col: u16 = row.glyphs[GlyphArea::LeftMargin.index()]
-            .iter()
-            .chain(glyphs[..selected].iter())
-            .filter(|glyph| !glyph.padding)
-            .map(|glyph| glyph.materialized_slot_span())
-            .sum();
-        let expected_x = row.pixel_x
-            + glyphs[..selected]
+        for line_numbers in [false, true] {
+            let (mut eval, frame, _, window) = incr_editing_frame("ax\n", 800, 240);
+            realize_test_gui_frame(&mut eval, frame);
+            eval.buffer_manager_mut()
+                .current_buffer_mut()
+                .unwrap()
+                .set_buffer_local(
+                    "display-line-numbers",
+                    if line_numbers { Value::T } else { Value::NIL },
+                );
+            eval.buffer_manager_mut()
+                .current_buffer_mut()
+                .unwrap()
+                .set_buffer_local("cursor-type", if visible { Value::T } else { Value::NIL });
+            eval.eval_str(&format!("(progn (put-text-property 2 3 'display \"{replacement}\") (set-window-point (selected-window) 2))")).unwrap();
+            let mut engine = crate::font::metrics::test_catalog::layout_engine();
+            crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+            let FrameLayoutAttempt::Prepared(prepared) =
+                engine.redisplay_frame_attempt(&mut eval, frame)
+            else {
+                panic!("replacement frame")
+            };
+            let row = &prepared
+                .window_matrices
                 .iter()
+                .find(|entry| entry.window_id.get() == window.0 as i64)
+                .unwrap()
+                .matrix
+                .rows[0];
+            let glyphs = &row.glyphs[GlyphArea::Text.index()];
+            let selected = glyphs
+                .iter()
+                .enumerate()
+                .filter(|(_, glyph)| !glyph.padding && row.glyph_covers_buffer_charpos(glyph, 1))
+                .filter_map(|(i, glyph)| match glyph.provenance {
+                    neomacs_display_protocol::glyph_matrix::GlyphProvenance::Str {
+                        index, ..
+                    } => Some((index, i)),
+                    _ => None,
+                })
+                .min()
+                .expect("replacement glyph")
+                .1;
+            let expected_col: u16 = row.glyphs[GlyphArea::LeftMargin.index()]
+                .iter()
+                .chain(glyphs[..selected].iter())
                 .filter(|glyph| !glyph.padding)
-                .map(|glyph| glyph.pixel_width)
-                .sum::<f32>();
-        let output = prepared.materialize();
-        if visible {
-            assert_eq!(output.active_cursor().unwrap().slot_id.col, expected_col);
-        } else {
-            assert!(output.active_cursor().is_none());
-        }
-        let snapshot = eval
-            .frame_manager()
-            .get(frame)
-            .unwrap()
-            .redisplay_snapshot(window)
-            .unwrap();
-        let logical = snapshot.logical_cursor.as_ref().unwrap();
-        assert_eq!(
-            logical.x,
-            expected_x.round() as i64,
-            "{replacement}, visible={visible}"
-        );
-        if let Some(physical) = snapshot.phys_cursor.as_ref() {
-            assert_eq!(logical.x, physical.x, "{replacement}");
+                .map(|glyph| glyph.materialized_slot_span())
+                .sum();
+            let expected_x = row.pixel_x
+                + glyphs[..selected]
+                    .iter()
+                    .filter(|glyph| !glyph.padding)
+                    .map(|glyph| glyph.pixel_width)
+                    .sum::<f32>();
+            let output = prepared.materialize();
+            if visible {
+                assert_eq!(output.active_cursor().unwrap().slot_id.col, expected_col);
+            } else {
+                assert!(output.active_cursor().is_none());
+            }
+            let snapshot = eval
+                .frame_manager()
+                .get(frame)
+                .unwrap()
+                .redisplay_snapshot(window)
+                .unwrap();
+            let logical = snapshot.logical_cursor.as_ref().unwrap();
+            // This fixture's line-number marks occupy display slots, not
+            // buffer-text output columns. Keep this oracle independent of the resolver.
+            let expected_output_col: u16 = glyphs[..selected]
+                .iter()
+                .filter(|glyph| {
+                    !glyph.padding
+                        && !matches!(
+                            glyph.provenance,
+                            neomacs_display_protocol::glyph_matrix::GlyphProvenance::Mark
+                        )
+                })
+                .map(|glyph| glyph.materialized_slot_span())
+                .sum();
+            if line_numbers {
+                assert!(expected_col > expected_output_col);
+            }
+            assert_eq!(
+                logical.col,
+                i64::from(expected_output_col),
+                "{replacement}, visible={visible}, line_numbers={line_numbers}"
+            );
+            assert_eq!(
+                logical.x,
+                expected_x.round() as i64,
+                "{replacement}, visible={visible}"
+            );
+            if let Some(physical) = snapshot.phys_cursor.as_ref() {
+                assert_eq!(logical.x, physical.x, "{replacement}");
+            }
         }
     }
 }
@@ -627,16 +657,17 @@ fn hidden_rtl_cursor_anchor_uses_selected_glyph_dimensions() {
     assert_eq!(anchor.bounds_in_frame().width().get(), expected_width);
 }
 
-/// Explicit string cursors must carry their own measured height, not the
-/// window's default row height used while recording the overlay candidate.
+/// Explicit string cursors retain one selected primitive's dimensions, not
+/// row defaults or the aggregate advance of a multi-glyph source character.
 #[test]
-fn hidden_explicit_string_cursor_anchor_uses_selected_glyph_height() {
+fn hidden_explicit_string_cursor_anchor_uses_selected_glyph_dimensions() {
     use neovm_core::window::geometry::{PresentationId, VisualAnchor, VisualAnchorQuery};
-    for (source, selected_index) in [
-        ("(propertize \"X\" 'cursor 1 'face '(:height 2.0))", 0),
+    for (source, selected_char) in [
+        ("(propertize \"X\" 'cursor 1 'face '(:height 2.0))", 'X'),
+        ("(propertize (string 1) 'cursor 1)", '^'),
         (
             "(concat \"א\" (propertize \"X\" 'cursor 1 'face '(:height 2.0)) \"ב\")",
-            1,
+            'X',
         ),
     ] {
         let (mut eval, frame, _, window) = incr_editing_frame("a\n", 800, 240);
@@ -646,7 +677,7 @@ fn hidden_explicit_string_cursor_anchor_uses_selected_glyph_height() {
             .unwrap()
             .set_buffer_local("cursor-type", Value::NIL);
         eval.eval_str(&format!(
-            "(overlay-put (make-overlay 1 1) 'before-string {source})"
+            "(progn (setq ctl-arrow t) (overlay-put (make-overlay 1 1) 'before-string {source}))"
         ))
         .unwrap();
         let mut engine = crate::font::metrics::test_catalog::layout_engine();
@@ -664,15 +695,11 @@ fn hidden_explicit_string_cursor_anchor_uses_selected_glyph_height() {
             .matrix
             .rows[0];
         let selected = row.glyphs[GlyphArea::Text.index()]
-        .iter()
-        .find(|glyph| {
-            matches!(
-                glyph.provenance,
-                neomacs_display_protocol::glyph_matrix::GlyphProvenance::Str { index, .. } if index == selected_index
-            )
-        })
-        .unwrap();
+            .iter()
+            .find(|glyph| matches!(&glyph.glyph_type, neomacs_display_protocol::glyph_matrix::GlyphType::Char { ch } if *ch == selected_char))
+            .expect("selected primitive");
         let expected = selected.pixel_height.round();
+        let expected_width = selected.pixel_width.round();
         assert!(prepared.materialize().active_cursor().is_none());
         let snapshot = eval
             .frame_manager()
@@ -694,7 +721,441 @@ fn hidden_explicit_string_cursor_anchor_uses_selected_glyph_height() {
             ))
             .unwrap();
         assert_eq!(anchor.bounds_in_frame().height().get(), expected);
+        assert_eq!(
+            anchor.bounds_in_frame().width().get(),
+            expected_width,
+            "{source}"
+        );
     }
+}
+
+/// An unchanged hidden explicit cursor still owns its position and extent.
+/// Visible cursors remain a positive control for ordinary retained replay.
+#[test]
+fn hidden_explicit_cursor_survives_unchanged_replay() {
+    use neovm_core::window::geometry::{PresentationId, VisualAnchor, VisualAnchorQuery};
+    for visible in [true, false] {
+        let (mut eval, frame, _, window) = incr_editing_frame("a\n", 800, 240);
+        realize_test_gui_frame(&mut eval, frame);
+        eval.buffer_manager_mut()
+            .current_buffer_mut()
+            .unwrap()
+            .set_buffer_local("cursor-type", if visible { Value::T } else { Value::NIL });
+        eval.eval_str("(overlay-put (make-overlay 1 1) 'before-string (propertize \"X\" 'cursor 1 'face '(:height 2.0)))").unwrap();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
+        crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+        engine.layout_frame_rust(&mut eval, frame);
+        let before = eval
+            .frame_manager()
+            .get(frame)
+            .unwrap()
+            .redisplay_snapshot(window)
+            .unwrap()
+            .clone();
+        assert!(before.logical_cursor.is_some());
+        assert!(before.logical_cursor_dimensions.is_some());
+        let FrameLayoutAttempt::Prepared(replayed) =
+            engine.redisplay_frame_attempt(&mut eval, frame)
+        else {
+            panic!("unchanged replay")
+        };
+        let after = eval
+            .frame_manager()
+            .get(frame)
+            .unwrap()
+            .redisplay_snapshot(window)
+            .unwrap()
+            .clone();
+        assert_eq!(
+            engine.last_layout_stats().cursor_only_windows,
+            1,
+            "visible={visible}"
+        );
+        if visible {
+            assert!(after.phys_cursor.is_some());
+        } else {
+            assert!(replayed.materialize().active_cursor().is_none());
+            let position = |snapshot: &neovm_core::window::WindowDisplaySnapshot| {
+                snapshot
+                    .logical_cursor
+                    .as_ref()
+                    .map(|cursor| (cursor.x, cursor.y, cursor.row, cursor.col))
+            };
+            assert_eq!(position(&after), position(&before));
+            assert_eq!(
+                after.logical_cursor_dimensions,
+                before.logical_cursor_dimensions
+            );
+            let expected = before.logical_cursor_dimensions.unwrap();
+            let owner = eval.frame_manager_mut().get_mut(frame).unwrap();
+            let presentation = PresentationId::new(3);
+            owner
+                .prepare_live_window_presentation(presentation, vec![after])
+                .unwrap();
+            owner.activate_display_presentation(presentation).unwrap();
+            let anchor = owner
+                .resolve_active_visual_anchor(VisualAnchorQuery::new(
+                    presentation,
+                    VisualAnchor::CursorBottom { window },
+                ))
+                .unwrap();
+            assert_eq!(
+                anchor.bounds_in_frame().width().get(),
+                expected.width as f32
+            );
+            assert_eq!(
+                anchor.bounds_in_frame().height().get(),
+                expected.height as f32
+            );
+        }
+    }
+}
+
+/// Mutating a retained string's cursor intervals is independent of buffer and
+/// overlay ticks; unchanged point must still reselect the authoritative slot.
+#[test]
+fn hidden_explicit_cursor_reselects_after_string_property_mutation() {
+    for (setup, mutation) in [
+        (
+            "(progn (setq neo-replay-string (propertize \"XY\" 'face '(:height 2.0))) (put-text-property 0 1 'cursor 1 neo-replay-string) (overlay-put (make-overlay 1 1) 'before-string neo-replay-string))",
+            "(progn (put-text-property 0 1 'cursor nil neo-replay-string) (put-text-property 1 2 'cursor 1 neo-replay-string))",
+        ),
+        (
+            "(progn (setq neo-replay-string (copy-sequence \"XY\")) (overlay-put (make-overlay 1 1) 'before-string neo-replay-string))",
+            "(put-text-property 0 1 'cursor 1 neo-replay-string)",
+        ),
+    ] {
+        let (mut eval, frame, _, window) = incr_editing_frame("a\n", 800, 240);
+        realize_test_gui_frame(&mut eval, frame);
+        eval.buffer_manager_mut()
+            .current_buffer_mut()
+            .unwrap()
+            .set_buffer_local("cursor-type", Value::NIL);
+        eval.eval_str(setup).unwrap();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
+        crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+        engine.layout_frame_rust(&mut eval, frame);
+        eval.eval_str("(put-text-property 0 1 'face 'bold (copy-sequence \"unrelated\"))")
+            .unwrap();
+        engine.layout_frame_rust(&mut eval, frame);
+        assert_eq!(
+            engine.last_layout_stats().cursor_only_windows,
+            1,
+            "unrelated string mutation must not invalidate observed sources"
+        );
+        eval.eval_str(mutation).unwrap();
+        engine.layout_frame_rust(&mut eval, frame);
+        let actual = eval
+            .frame_manager()
+            .get(frame)
+            .unwrap()
+            .redisplay_snapshot(window)
+            .unwrap()
+            .clone();
+        let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+        crate::font::metrics::test_catalog::enable_metrics(&mut fresh);
+        fresh.layout_frame_rust(&mut eval, frame);
+        let expected = eval
+            .frame_manager()
+            .get(frame)
+            .unwrap()
+            .redisplay_snapshot(window)
+            .unwrap();
+        assert!(actual.phys_cursor.is_none());
+        let position = |snapshot: &neovm_core::window::WindowDisplaySnapshot| {
+            snapshot
+                .logical_cursor
+                .as_ref()
+                .map(|cursor| (cursor.x, cursor.y, cursor.row, cursor.col))
+        };
+        assert_eq!(position(&actual), position(expected));
+        assert_eq!(
+            actual.logical_cursor_dimensions,
+            expected.logical_cursor_dimensions
+        );
+    }
+}
+
+/// A later leaf may mutate an earlier leaf's string without changing its
+/// buffer or overlay ticks. Acceptance must revalidate the whole frame.
+#[test]
+fn hidden_cursor_sources_are_revalidated_after_later_window_callbacks() {
+    let (mut eval, frame, _, window) = incr_editing_frame("a\n", 800, 240);
+    realize_test_gui_frame(&mut eval, frame);
+    eval.buffer_manager_mut()
+        .current_buffer_mut()
+        .unwrap()
+        .set_buffer_local("cursor-type", Value::NIL);
+    eval.eval_str("(progn (setq neo-frame-string (propertize \"XY\" 'cursor 1) neo-frame-mutated nil noninteractive nil) (overlay-put (make-overlay 1 1) 'before-string neo-frame-string))").unwrap();
+    let side = eval.buffer_manager_mut().create_buffer("*neo-later-leaf*");
+    eval.buffer_manager_mut()
+        .get_mut(side)
+        .unwrap()
+        .insert("b\n");
+    eval.frame_manager_mut()
+        .split_window(
+            frame,
+            window,
+            neovm_core::window::SplitDirection::Horizontal,
+            side,
+            None,
+            neovm_core::window::SplitPlacement::AfterTarget,
+        )
+        .unwrap();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+    engine.layout_frame_rust(&mut eval, frame);
+    let hook = eval.eval_str("(list (lambda (_pos) (if neo-frame-mutated nil (progn (setq neo-frame-mutated t) (put-text-property 0 1 'cursor nil neo-frame-string) (put-text-property 1 2 'cursor 1 neo-frame-string)))))").unwrap();
+    eval.buffer_manager_mut()
+        .get_mut(side)
+        .unwrap()
+        .set_buffer_local("fontification-functions", hook);
+    engine.layout_frame_rust(&mut eval, frame);
+    assert!(
+        !eval.eval_str("neo-frame-mutated").unwrap().is_nil(),
+        "later leaf hook must actually run"
+    );
+    let actual = eval
+        .frame_manager()
+        .get(frame)
+        .unwrap()
+        .redisplay_snapshot(window)
+        .unwrap()
+        .clone();
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut fresh);
+    fresh.layout_frame_rust(&mut eval, frame);
+    let expected = eval
+        .frame_manager()
+        .get(frame)
+        .unwrap()
+        .redisplay_snapshot(window)
+        .unwrap();
+    let position = |s: &neovm_core::window::WindowDisplaySnapshot| {
+        s.logical_cursor.as_ref().map(|c| (c.x, c.y, c.row, c.col))
+    };
+    assert!(actual.phys_cursor.is_none());
+    assert_eq!(position(&actual), position(expected));
+    assert_eq!(
+        actual.logical_cursor_dimensions,
+        expected.logical_cursor_dimensions
+    );
+}
+
+/// Global default properties can supply an explicit string cursor even when
+/// the buffer has no intervals or overlays of its own.
+#[test]
+fn hidden_default_property_cursor_is_not_canonical() {
+    let (mut eval, frame, _, window) = incr_editing_frame("ab\n", 800, 240);
+    realize_test_gui_frame(&mut eval, frame);
+    eval.buffer_manager_mut()
+        .current_buffer_mut()
+        .unwrap()
+        .set_buffer_local("cursor-type", Value::NIL);
+    eval.eval_str("(setq default-text-properties (list 'display (let ((s (copy-sequence \"XY\"))) (put-text-property 1 2 'cursor 2 s) s)))").unwrap();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+    engine.layout_frame_rust(&mut eval, frame);
+    eval.eval_str("(set-window-point (selected-window) 2)")
+        .unwrap();
+    engine.layout_frame_rust(&mut eval, frame);
+    let actual = eval
+        .frame_manager()
+        .get(frame)
+        .unwrap()
+        .redisplay_snapshot(window)
+        .unwrap()
+        .clone();
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut fresh);
+    fresh.layout_frame_rust(&mut eval, frame);
+    let expected = eval
+        .frame_manager()
+        .get(frame)
+        .unwrap()
+        .redisplay_snapshot(window)
+        .unwrap();
+    let position = |snapshot: &neovm_core::window::WindowDisplaySnapshot| {
+        snapshot
+            .logical_cursor
+            .as_ref()
+            .map(|cursor| (cursor.x, cursor.y, cursor.row, cursor.col))
+    };
+    assert_eq!(position(&actual), position(expected));
+    assert_eq!(
+        actual.logical_cursor_dimensions,
+        expected.logical_cursor_dimensions
+    );
+    assert!(actual.phys_cursor.is_none());
+}
+
+/// Ordinary hidden selection uses finalized geometry without requiring paint
+/// metrics; an empty last line must retain its real row origin too.
+#[test]
+fn hidden_canonical_cursor_replay_matches_fresh_positions() {
+    for point in [2, 5] {
+        let (mut eval, frame, _, window) = incr_editing_frame("abc\n", 800, 240);
+        realize_test_gui_frame(&mut eval, frame);
+        eval.buffer_manager_mut()
+            .current_buffer_mut()
+            .unwrap()
+            .set_buffer_local("cursor-type", Value::NIL);
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
+        engine.layout_frame_rust(&mut eval, frame);
+        eval.eval_str(&format!("(set-window-point (selected-window) {point})"))
+            .unwrap();
+        engine.layout_frame_rust(&mut eval, frame);
+        assert_eq!(engine.last_layout_stats().cursor_only_windows, 1);
+        let actual = eval
+            .frame_manager()
+            .get(frame)
+            .unwrap()
+            .redisplay_snapshot(window)
+            .unwrap()
+            .clone();
+        assert!(actual.phys_cursor.is_none());
+        let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+        fresh.layout_frame_rust(&mut eval, frame);
+        let expected = eval
+            .frame_manager()
+            .get(frame)
+            .unwrap()
+            .redisplay_snapshot(window)
+            .unwrap();
+        let position = |snapshot: &neovm_core::window::WindowDisplaySnapshot| {
+            snapshot
+                .logical_cursor
+                .as_ref()
+                .map(|cursor| (cursor.x, cursor.y, cursor.row, cursor.col))
+        };
+        assert_eq!(position(&actual), position(expected), "point={point}");
+        assert_eq!(
+            actual.logical_cursor_dimensions, expected.logical_cursor_dimensions,
+            "point={point}"
+        );
+    }
+}
+
+/// A moved point or translated retained row cannot certify an old explicit
+/// selection. Hidden overrides must be reselected, and retry must discard rows.
+#[test]
+fn hidden_explicit_cursor_reselects_after_point_and_start_changes() {
+    let (mut eval, frame, _, window) =
+        incr_editing_frame("ab\ncd\nef\ngh\nij\nkl\nmn\nop\n", 800, 80);
+    realize_test_gui_frame(&mut eval, frame);
+    eval.buffer_manager_mut()
+        .current_buffer_mut()
+        .unwrap()
+        .set_buffer_local("cursor-type", Value::NIL);
+    eval.eval_str("(progn (overlay-put (make-overlay 1 1) 'before-string (propertize \"X\" 'cursor 2 'face '(:height 2.0))) (overlay-put (make-overlay 4 4) 'before-string (propertize \"X\" 'cursor 2 'face '(:height 1.5))))").unwrap();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+    engine.layout_frame_rust(&mut eval, frame);
+    let mut last = None;
+    for (change, height) in [
+        ("(set-window-point (selected-window) 2)", 24),
+        ("(set-window-point (selected-window) 5)", 18),
+        ("(set-window-start (selected-window) 4 t)", 18),
+    ] {
+        eval.eval_str(change).unwrap();
+        let FrameLayoutAttempt::Prepared(prepared) =
+            engine.redisplay_frame_attempt(&mut eval, frame)
+        else {
+            panic!("changed hidden selection")
+        };
+        assert!(prepared.materialize().active_cursor().is_none());
+        assert_eq!(engine.last_layout_stats().full_windows, 1, "{change}");
+        let actual = eval
+            .frame_manager()
+            .get(frame)
+            .unwrap()
+            .redisplay_snapshot(window)
+            .unwrap()
+            .clone();
+        assert_eq!(actual.logical_cursor.as_ref().unwrap().x, 0, "{change}");
+        assert_eq!(
+            actual.logical_cursor_dimensions.unwrap().height,
+            height,
+            "{change}"
+        );
+        let rows = prepared
+            .window_matrices
+            .iter()
+            .find(|entry| entry.window_id.get() == window.0 as i64)
+            .unwrap()
+            .matrix
+            .rows
+            .iter()
+            .map(|row| {
+                (
+                    row.pixel_y,
+                    row.height_px,
+                    row.glyphs[GlyphArea::Text.index()]
+                        .iter()
+                        .map(|glyph| {
+                            (
+                                glyph.glyph_type.clone(),
+                                glyph.pixel_width,
+                                glyph.pixel_height,
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+        last = Some((actual, rows));
+    }
+    let (actual, rows) = last.unwrap();
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut fresh);
+    let FrameLayoutAttempt::Prepared(expected_frame) =
+        fresh.redisplay_frame_attempt(&mut eval, frame)
+    else {
+        panic!("fresh hidden selection")
+    };
+    let expected = eval
+        .frame_manager()
+        .get(frame)
+        .unwrap()
+        .redisplay_snapshot(window)
+        .unwrap();
+    let position = |snapshot: &neovm_core::window::WindowDisplaySnapshot| {
+        snapshot
+            .logical_cursor
+            .as_ref()
+            .map(|cursor| (cursor.x, cursor.y, cursor.row, cursor.col))
+    };
+    assert_eq!(position(&actual), position(expected));
+    assert_eq!(
+        actual.logical_cursor_dimensions,
+        expected.logical_cursor_dimensions
+    );
+    let expected_rows = expected_frame
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == window.0 as i64)
+        .unwrap()
+        .matrix
+        .rows
+        .iter()
+        .map(|row| {
+            (
+                row.pixel_y,
+                row.height_px,
+                row.glyphs[GlyphArea::Text.index()]
+                    .iter()
+                    .map(|glyph| {
+                        (
+                            glyph.glyph_type.clone(),
+                            glyph.pixel_width,
+                            glyph.pixel_height,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(rows, expected_rows);
 }
 
 /// Moved-point reconstruction must share fresh stretch-width policy, including
@@ -702,11 +1163,11 @@ fn hidden_explicit_string_cursor_anchor_uses_selected_glyph_height() {
 #[test]
 fn stretch_cursor_only_replay_matches_fresh_width_policy() {
     for stretch in [false, true] {
-        for (width, style) in [0.25, 5.0]
+        for (width, style) in [0.01, 0.25, 5.0]
             .into_iter()
             .flat_map(|width| ["box", "bar", "hbar"].map(|style| (width, style)))
         {
-            let (mut eval, frame, _, _) = incr_editing_frame("אxב\n", 800, 240);
+            let (mut eval, frame, _, window) = incr_editing_frame("אxב\n", 800, 240);
             realize_test_gui_frame(&mut eval, frame);
             let cursor_type = match style {
                 "box" => Value::T,
@@ -721,6 +1182,12 @@ fn stretch_cursor_only_replay_matches_fresh_width_policy() {
             let mut engine = crate::font::metrics::test_catalog::layout_engine();
             crate::font::metrics::test_catalog::enable_metrics(&mut engine);
             engine.layout_frame_rust(&mut eval, frame);
+            let column_width = eval
+                .eval_str("(frame-char-width)")
+                .unwrap()
+                .as_fixnum()
+                .unwrap() as f32;
+            assert!(column_width >= 1.0);
             eval.eval_str("(set-window-point (selected-window) 2)")
                 .unwrap();
             let FrameLayoutAttempt::Prepared(replayed) =
@@ -731,8 +1198,42 @@ fn stretch_cursor_only_replay_matches_fresh_width_policy() {
             assert_eq!(engine.last_layout_stats().cursor_only_windows, 1);
             assert!(engine.last_layout_stats().reused_rows > 0);
             let actual = replayed.materialize().active_cursor().unwrap().width;
-            if style == "bar" {
-                assert_eq!(actual, 2.0, "stretch={stretch} width={width}");
+            let row = &replayed
+                .window_matrices
+                .iter()
+                .find(|entry| entry.window_id.get() == window.0 as i64)
+                .unwrap()
+                .matrix
+                .rows[0];
+            let glyph_width = row.glyphs[GlyphArea::Text.index()]
+                .iter()
+                .find(|glyph| {
+                    row.glyph_covers_buffer_charpos(glyph, 1)
+                        && matches!(
+                            glyph.glyph_type,
+                            neomacs_display_protocol::glyph_matrix::GlyphType::Stretch { .. }
+                        )
+                })
+                .unwrap()
+                .pixel_width;
+            let expected_width = if style == "bar" {
+                2.0
+            } else if stretch {
+                glyph_width.max(1.0)
+            } else {
+                glyph_width.max(1.0).min(column_width)
+            };
+            assert_eq!(
+                actual, expected_width,
+                "stretch={stretch} width={width} style={style}"
+            );
+            if width < 0.1 && style != "bar" {
+                assert_eq!(actual, 1.0);
+            }
+            if width > 1.0 {
+                assert!(glyph_width > column_width);
+            } else {
+                assert!(glyph_width < column_width);
             }
             let mut fresh = crate::font::metrics::test_catalog::layout_engine();
             crate::font::metrics::test_catalog::enable_metrics(&mut fresh);
@@ -742,9 +1243,9 @@ fn stretch_cursor_only_replay_matches_fresh_width_policy() {
                 panic!("fresh stretch")
             };
             assert_eq!(
-                actual,
                 rebuilt.materialize().active_cursor().unwrap().width,
-                "stretch={stretch} width={width} style={style}"
+                expected_width,
+                "fresh stretch={stretch} width={width} style={style}"
             );
         }
     }

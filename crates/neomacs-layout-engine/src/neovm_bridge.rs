@@ -194,6 +194,11 @@ pub(crate) trait LayoutBufferView {
     fn layout_indexed_newline_count(&self, _range: EmacsByteRange) -> Option<usize> {
         None
     }
+    /// Prove the complete source has no text properties, including categories
+    /// and aliases. Projected/unknown views must conservatively return false.
+    fn layout_text_props_is_empty(&self) -> bool {
+        false
+    }
     fn layout_text_prop_at_emacs_byte_pos(&self, pos: EmacsBytePos, name: Value) -> Option<Value>;
     /// Return PROPERTY from CATEGORY's symbol plist as captured for this
     /// immutable layout view. Live-buffer test adapters have no evaluator
@@ -459,6 +464,10 @@ impl LayoutBufferView for Buffer {
         // The layout's counts are the line-number gutter's, repeated for
         // every redisplay: large enough ranges may build the index.
         self.indexed_newline_count(range, neovm_core::buffer::LineIndexBuild::IfLarge)
+    }
+
+    fn layout_text_props_is_empty(&self) -> bool {
+        self.text_props_is_empty()
     }
 
     fn layout_text_prop_at_emacs_byte_pos(&self, pos: EmacsBytePos, name: Value) -> Option<Value> {

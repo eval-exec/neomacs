@@ -2044,6 +2044,11 @@ impl BufferTextSnapshot {
             .indexed_newline_count(range.start(), range.end(), build)
     }
 
+    /// Constant-time absence proof over the complete, unprojected property table.
+    pub fn text_props_is_empty(&self) -> bool {
+        self.text.text_props_is_empty()
+    }
+
     pub fn text_prop_at_emacs_byte_pos(&self, pos: EmacsBytePos, name: Value) -> Option<Value> {
         self.text
             .text_props_get_property_at_emacs_byte_pos(pos, name)

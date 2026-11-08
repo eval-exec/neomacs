@@ -27,6 +27,24 @@ fn cloned_lease_survives_exact_gc_and_retires_with_last_owner() {
 }
 
 #[test]
+fn weak_retainer_registers_live_graphs_without_extending_context_lifetime() {
+    let mut context = Context::new();
+    context.gc_collect_exact();
+    let baseline = context.tagged_heap.allocated_count();
+    let factory = context.owned_root_retainer();
+    let value = Value::cons(Value::fixnum(7), Value::vector(vec![Value::fixnum(9)]));
+    let lease = factory.retain([value]).unwrap();
+    context.gc_collect_exact();
+    assert_eq!(context.tagged_heap.allocated_count(), baseline + 2);
+    assert_eq!(value.cons_car(), Value::fixnum(7));
+    drop(lease);
+    context.gc_collect_exact();
+    assert_eq!(context.tagged_heap.allocated_count(), baseline);
+    drop(context);
+    assert!(factory.retain([Value::NIL]).is_none());
+}
+
+#[test]
 fn retired_leases_do_not_accumulate_between_collections() {
     let context = Context::new();
     let value = Value::cons(Value::fixnum(1), Value::NIL);

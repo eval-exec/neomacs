@@ -2092,6 +2092,11 @@ impl WindowOutputEmitter {
         self.geometry.push_chrome_row_progress(progress)
     }
 
+    /// Whether this pass has established semantic selection, regardless of paint.
+    pub(crate) fn has_logical_cursor(&self) -> bool {
+        self.logical_cursor.is_some()
+    }
+
     /// Publish a position and its selected extent atomically, independently of paint.
     pub(crate) fn set_logical_cursor(
         &mut self,

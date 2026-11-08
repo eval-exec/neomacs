@@ -1609,7 +1609,7 @@ impl<'a> CapturedTextWindowCursorPublishContext<'a> {
         // Logical anchors and physical publication must accept the same
         // integer override only when bidi did not move the selected slot.
         // Explicit string-cursor candidates already have resolved placement.
-        let (finalized_x, logical_dimensions) =
+        let (finalized_x, finalized_col, logical_dimensions) =
             if cursor.slot_state == CursorSlotResolutionState::Unresolved {
                 output
                     .builder()
@@ -1621,12 +1621,17 @@ impl<'a> CapturedTextWindowCursorPublishContext<'a> {
                         ),
                         self.char_w,
                     )
-                    .map_or((cursor.x, None), |placement| {
-                        (placement.x(), placement.logical_dimensions())
+                    .map_or((cursor.x, logical_cursor.col, None), |placement| {
+                        (
+                            placement.x(),
+                            i64::from(placement.coordinates().output_col()),
+                            placement.logical_dimensions(),
+                        )
                     })
             } else {
-                (cursor.x, cursor.logical_dimensions)
+                (cursor.x, logical_cursor.col, cursor.logical_dimensions)
             };
+        logical_cursor.col = finalized_col;
         logical_cursor.x = crate::window_output::cursor_snapshot_x(
             cursor.x,
             finalized_x,

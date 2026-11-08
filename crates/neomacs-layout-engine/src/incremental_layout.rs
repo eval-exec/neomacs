@@ -651,8 +651,18 @@ pub struct CursorOnlyReplay {
     /// This also preserves explicit display-string `cursor` placement;
     /// reconstructing from buffer point would lose that semantic override.
     pub(crate) retained_cursor: Option<RetainedTextWindowCursor>,
+    /// Semantic selection survives unchanged placement independently of paint.
+    pub(crate) retained_logical_cursor: Option<RetainedLogicalCursor>,
     /// Sealed frame-face generation that owns every ID in `body_rows`.
     pub(crate) face_generation: FrameFaceGeneration,
+}
+
+/// Accepted semantic cursor authority, including a measured extent when known.
+/// A nonpainting selection is not the same as absence of a selection.
+#[derive(Clone, Debug)]
+pub(crate) struct RetainedLogicalCursor {
+    pub(crate) position: neovm_core::window::WindowCursorPos,
+    pub(crate) dimensions: Option<neovm_core::window::LogicalCursorDimensions>,
 }
 
 /// A retained cursor's renderer placement paired with its live-window output
@@ -1612,6 +1622,17 @@ impl RetainedWindowMatrix {
             chrome: None,
             chrome_memo: None,
             retained_cursor,
+            retained_logical_cursor: if point_moved {
+                None
+            } else {
+                self.display_snapshot
+                    .logical_cursor
+                    .clone()
+                    .map(|position| RetainedLogicalCursor {
+                        position,
+                        dimensions: self.display_snapshot.logical_cursor_dimensions,
+                    })
+            },
             face_generation: self.face_generation,
         })
     }
