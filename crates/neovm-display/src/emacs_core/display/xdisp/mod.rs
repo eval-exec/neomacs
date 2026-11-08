@@ -2152,7 +2152,8 @@ pub(crate) fn format_mode_line_from_state(
     }
 
     let format_val = args[0];
-    let face_spec = resolve_mode_line_face_spec(&args);
+    let face_spec =
+        resolve_mode_line_face_spec(&args, mode_line_window_is_selected(frames, args.get(2)));
     let pctx =
         build_mode_line_percent_context(frames, &*buffers, args.get(2), StoredTarget::NoProperties);
     let mut result = ModeLineRendered::default();
@@ -2471,7 +2472,11 @@ fn try_format_mode_line_display(
         Ok(ModeLineDisplayOutput::from_root_string(Value::string("")))
     } else {
         let face_spec = match destination {
-            ModeLineDisplayDestination::Rows { .. } => resolve_mode_line_face_spec(&args),
+            // GNU's redisplay path formats with FACE nil (display_mode_line
+            // calls `Fformat_mode_line (format, Qnil, Qnil, Qnil)`,
+            // src/xdisp.c:28192), so FACE `t` cannot occur here and the
+            // selection answer is irrelevant.
+            ModeLineDisplayDestination::Rows { .. } => resolve_mode_line_face_spec(&args, false),
             ModeLineDisplayDestination::FrameTitle { .. } => ModeLineFaceSpec {
                 no_props: true,
                 face: None,
@@ -2537,6 +2542,9 @@ pub(crate) fn finish_format_mode_line_in_eval(
     validate_optional_buffer_designator(eval, args.get(3))?;
 
     let saved_buffer = eval.edit.buffers.current_buffer_id();
+    // GNU compares WINDOW with `selected_window` before Fselect_window moves
+    // the selection (src/xdisp.c:29059), so answer that question first.
+    let window_is_selected = mode_line_window_is_selected(&eval.frame_manager(), args.get(2));
     let mut selection =
         if mode_line_flow_policy::enabled() && !args[0].is_nil() && !eval.noninteractive() {
             Some(mode_line_flow_policy::FormatSelection::enter(
@@ -2555,7 +2563,7 @@ pub(crate) fn finish_format_mode_line_in_eval(
             Ok(Value::string(""))
         } else {
             let format_val = args[0];
-            let face_spec = resolve_mode_line_face_spec(args);
+            let face_spec = resolve_mode_line_face_spec(args, window_is_selected);
             let output_scope = ModeLineOutputScope::enter(eval, args)?;
             let point_selection = if mode_line_flow_policy::enabled() {
                 mode_line_point::PointSelection::CurrentBuffer
@@ -2624,7 +2632,8 @@ pub(crate) fn finish_format_mode_line_in_state_with_eval(
         Ok(Value::string(""))
     } else {
         let format_val = args[0];
-        let face_spec = resolve_mode_line_face_spec(args);
+        let face_spec =
+            resolve_mode_line_face_spec(args, mode_line_window_is_selected(frames, args.get(2)));
         let pctx = build_mode_line_percent_context(
             frames,
             &*buffers,
@@ -3948,11 +3957,23 @@ impl ModeLineRendered {
         self.pin_properties();
     }
 
+    /// Install Fformat_mode_line's FACE argument on every character.
+    ///
+    /// GNU `store_mode_line_string` (src/xdisp.c:28924-28934 for generated
+    /// text, 28945-28971 for captured source strings) starts from the source
+    /// plist, takes the string's own `face` when present, appends the FACE
+    /// argument to it (`list2 (face, mode_line_string_face)`), and
+    /// `plist_put`s the result (28932, 28966).  `plist_put` keeps an
+    /// existing key at its source position and appends a new key after the
+    /// last complete pair (src/fns.c), so the FACE argument lands LAST --
+    /// never first.  A `nil` value is indistinguishable from an absent one
+    /// to GNU's `plist_get`, so it is treated as absent here.
     fn apply_default_face(&mut self, face: Value) {
         if self.text.is_empty() {
             return;
         }
 
+        let face_prop = Value::symbol("face");
         let end = self.char_len();
         let intervals = self.text_props.intervals_snapshot();
         let mut cursor = 0;
@@ -3962,23 +3983,25 @@ impl ModeLineRendered {
             let interval_end = interval.end.min(end);
 
             if cursor < start {
-                self.text_props.put_property_in_char_range(
+                self.text_props.put_property_appending_new_in_char_range(
                     display_char_range(cursor, start),
-                    Value::symbol("face"),
+                    face_prop,
                     face,
                 );
             }
 
             if start < interval_end {
-                let merged_face = interval
+                let existing = interval
                     .properties
-                    .get(&Value::symbol("face"))
+                    .get(&face_prop)
                     .copied()
+                    .filter(|existing| !existing.is_nil());
+                let merged_face = existing
                     .map(|existing| Value::list(vec![existing, face]))
                     .unwrap_or(face);
-                self.text_props.put_property_in_char_range(
+                self.text_props.put_property_appending_new_in_char_range(
                     display_char_range(start, interval_end),
-                    Value::symbol("face"),
+                    face_prop,
                     merged_face,
                 );
                 cursor = interval_end;
@@ -3990,9 +4013,9 @@ impl ModeLineRendered {
         }
 
         if cursor < end {
-            self.text_props.put_property_in_char_range(
+            self.text_props.put_property_appending_new_in_char_range(
                 display_char_range(cursor, end),
-                Value::symbol("face"),
+                face_prop,
                 face,
             );
         }
@@ -4078,15 +4101,50 @@ fn mode_line_display_width_chars(value: Value) -> Option<usize> {
     None
 }
 
-fn resolve_mode_line_face_spec(args: &[Value]) -> ModeLineFaceSpec {
+/// GNU's `no_props` test: an integer FACE means the value string carries no
+/// text properties at all (src/xdisp.c:29024, 29087).
+fn mode_line_face_suppresses_properties(args: &[Value]) -> bool {
+    args.get(1).is_some_and(|face| face.is_fixnum())
+}
+
+/// GNU Fformat_mode_line's FACE argument (src/xdisp.c:29044-29062).
+///
+/// `nil` and the symbol `default` mean the default face and add no `face`
+/// property.  `t` means the face the window's mode line currently uses:
+/// `mode-line-active` when the WINDOW argument is the selected window and
+/// `mode-line-inactive` otherwise.  GNU compares the decoded WINDOW with
+/// `selected_window` BEFORE `Fselect_window` moves the selection
+/// (src/xdisp.c:29059), which is why the caller passes the answer in rather
+/// than re-reading the selection after entering the format walk.
+fn resolve_mode_line_face_spec(args: &[Value], window_is_selected: bool) -> ModeLineFaceSpec {
     let face = args.get(1).copied().unwrap_or(Value::NIL);
-    let no_props = face.is_fixnum();
+    let no_props = mode_line_face_suppresses_properties(args);
     let face = if no_props || face.is_nil() || face.is_bare_symbol_named("default") {
         None
+    } else if face.is_t() {
+        Some(Value::symbol(if window_is_selected {
+            WellKnown::ModeLineActive
+        } else {
+            WellKnown::ModeLineInactive
+        }))
     } else {
         Some(face)
     };
     ModeLineFaceSpec { no_props, face }
+}
+
+/// Whether the mode line's WINDOW argument names the selected window, with
+/// GNU's `decode_any_window` default (nil means the selected window).
+fn mode_line_window_is_selected(
+    frames: &crate::window::FrameManager,
+    window_arg: Option<&Value>,
+) -> bool {
+    let Some(window) = resolve_mode_line_window(frames, window_arg) else {
+        return false;
+    };
+    frames
+        .selected_frame()
+        .is_some_and(|frame| frame.selected_window == window.id())
 }
 
 /// GNU xdisp.c display_mode_element's final field-width padding has no

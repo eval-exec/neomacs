@@ -76,7 +76,7 @@ impl ModeLineOutputScope {
             crate::emacs_core::window_cmds::WindowDomain::Any,
         )?;
         super::validate_optional_buffer_designator(eval, args.get(3))?;
-        let kind = if super::resolve_mode_line_face_spec(args).no_props {
+        let kind = if super::mode_line_face_suppresses_properties(args) {
             OutputKind::NoProperties
         } else {
             OutputKind::String

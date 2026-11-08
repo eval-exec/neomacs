@@ -92,6 +92,9 @@ fn strict(eval: &mut Context, expression: &str, gnu: &str) {
 /// order is only observable through the ordered interval table; the oracle
 /// expectations below are literal GNU output, not Neo-derived.
 fn attribution_value_repr(value: Value) -> String {
+    if value.is_nil() {
+        return "nil".to_string();
+    }
     if let Some(name) = value.as_bare_symbol_name() {
         return name.to_string();
     }
@@ -101,13 +104,22 @@ fn attribution_value_repr(value: Value) -> String {
     if let Some(text) = value.as_utf8_str() {
         return format!("{text:?}");
     }
+    if value.is_cons() {
+        let mut rendered = Vec::new();
+        let mut cursor = value;
+        while cursor.is_cons() {
+            rendered.push(attribution_value_repr(cursor.cons_car()));
+            cursor = cursor.cons_cdr();
+        }
+        if !cursor.is_nil() {
+            rendered.push(format!(". {}", attribution_value_repr(cursor)));
+        }
+        return format!("({})", rendered.join(" "));
+    }
     panic!("unexpected property value in the ordered oracle: {value:?}");
 }
 
-fn attribution_ordered_plists(eval: &mut Context, form: &str, positions: &[usize]) -> Vec<String> {
-    let value = eval
-        .eval_str(&format!("(format-mode-line {form})"))
-        .expect("format-mode-line returns");
+fn attribution_ordered_plists_of_value(value: Value, positions: &[usize]) -> Vec<String> {
     positions
         .iter()
         .map(|position| {
@@ -127,6 +139,13 @@ fn attribution_ordered_plists(eval: &mut Context, form: &str, positions: &[usize
             format!("({})", rendered.join(" "))
         })
         .collect()
+}
+
+fn attribution_ordered_plists(eval: &mut Context, form: &str, positions: &[usize]) -> Vec<String> {
+    let value = eval
+        .eval_str(&format!("(format-mode-line {form})"))
+        .expect("format-mode-line returns");
+    attribution_ordered_plists_of_value(value, positions)
 }
 
 /// GNU 31.1 pty oracle, recorded 2026-11-07 (probe files
@@ -204,6 +223,222 @@ fn mode_line_element_attribution_interval_plist_order_matches_gnu() {
     assert!(
         mismatches.is_empty(),
         "interval plist order differs from GNU:\n{}",
+        mismatches.join("\n")
+    );
+}
+
+/// GNU 31.1 pty oracle, recorded 2026-11-07 with the FACE argument
+/// (`object-intervals` on a real `-nw` frame; shapes F1-F14/G1-G8).
+///
+/// `format-mode-line`'s FACE reaches the interval plist through
+/// `store_mode_line_string` (src/xdisp.c:28924-28934, 28945-28971): it takes
+/// the source plist, `plist_put`s `mode-line-elt-no` (append, or replace in
+/// place at its existing position), then `plist_put`s `face` with
+/// `list2 (source_face, default_face)` when a face was already there.  The
+/// observable order is therefore source order, then `mode-line-elt-no`,
+/// then `face` LAST.  `t` maps to `mode-line-active` when the WINDOW
+/// argument is the selected window and to `mode-line-inactive` otherwise
+/// (src/xdisp.c:29059-29062, compared before `Fselect_window`),
+/// `nil`/`default` add no face, and an integer suppresses text properties
+/// entirely (29024).
+#[test]
+fn mode_line_face_argument_interval_plist_order_matches_gnu() {
+    use crate::window::{SplitDirection, SplitPlacement};
+
+    let mut eval = context();
+    let frame_id = eval
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame")
+        .id;
+    let selected = eval
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame")
+        .selected_window;
+    let buffer = eval.edit.buffers.current_buffer_id().expect("buffer");
+    let other = eval
+        .frame_manager_mut()
+        .split_window(
+            frame_id,
+            selected,
+            SplitDirection::Vertical,
+            buffer,
+            Some(3),
+            SplitPlacement::AfterTarget,
+        )
+        .expect("second window");
+    eval.frame_manager_mut()
+        .apply_staged_split_sizes(
+            frame_id,
+            other,
+            Some(3),
+            Value::NIL,
+            SplitDirection::Vertical,
+        )
+        .expect("applied split sizes");
+    assert_eq!(
+        eval.frame_manager()
+            .selected_frame()
+            .expect("selected frame")
+            .selected_window,
+        selected,
+        "GNU's split-window leaves the selected window selected"
+    );
+    eval.set_variable("ep30-other-window", Value::make_window(other.0));
+
+    let mut mismatches: Vec<String> = Vec::new();
+    for (form, face, window, positions, expected) in [
+        // F1: percent field, source plist then elt-no then FACE.
+        (
+            r#"'(#("%l" 0 2 (p 1 q 2)))"#,
+            "'bold",
+            None,
+            &[0usize][..],
+            &["(p 1 q 2 mode-line-elt-no 2 face bold)"][..],
+        ),
+        // F2: literal propertized string.
+        (
+            r#"'(#("AB" 0 2 (p 1 q 2)))"#,
+            "'bold",
+            None,
+            &[0usize][..],
+            &["(p 1 q 2 mode-line-elt-no 2 face bold)"][..],
+        ),
+        // F3: plain string, FACE appended after elt-no.
+        (
+            r#"'("AB")"#,
+            "'bold",
+            None,
+            &[0usize][..],
+            &["(mode-line-elt-no 2 face bold)"][..],
+        ),
+        // F4: :propertize element.
+        (
+            r#"'((:propertize "AB" p 1 q 2))"#,
+            "'bold",
+            None,
+            &[0usize][..],
+            &["(p 1 q 2 mode-line-elt-no 3 face bold)"][..],
+        ),
+        // F5: source face stays at its source position; the default face
+        // is appended to its value list, not to the key position.
+        (
+            r#"'(#("AB" 0 2 (face italic p 1)))"#,
+            "'bold",
+            None,
+            &[0usize][..],
+            &["(face (italic bold) p 1 mode-line-elt-no 2)"][..],
+        ),
+        // F7: same merge through :propertize.
+        (
+            r#"'((:propertize "AB" face italic p 1))"#,
+            "'bold",
+            None,
+            &[0usize][..],
+            &["(face (italic bold) p 1 mode-line-elt-no 3)"][..],
+        ),
+        // F10: an existing mode-line-elt-no is replaced in place.
+        (
+            r#"'(#("%l" 0 2 (mode-line-elt-no 700 p 1)))"#,
+            "'bold",
+            None,
+            &[0usize][..],
+            &["(mode-line-elt-no 2 p 1 face bold)"][..],
+        ),
+        // F11: FACE t on the selected window.
+        (
+            r#"'(#("AB" 0 2 (p 1)))"#,
+            "t",
+            None,
+            &[0usize][..],
+            &["(p 1 mode-line-elt-no 2 face mode-line-active)"][..],
+        ),
+        // F13: FACE nil adds nothing; the min-width padding is bare.
+        (
+            r#"'((6 #("AB" 0 2 (p 1))))"#,
+            "nil",
+            None,
+            &[0usize, 2][..],
+            &["(p 1 mode-line-elt-no 4)", "()"][..],
+        ),
+        // G1: `default` means no face property at all.
+        (
+            r#"'(#("AB" 0 2 (p 1)))"#,
+            "'default",
+            None,
+            &[0usize][..],
+            &["(p 1 mode-line-elt-no 2)"][..],
+        ),
+        // G2: FACE t, selected window by default.
+        (
+            r#"'("AB")"#,
+            "t",
+            None,
+            &[0usize][..],
+            &["(mode-line-elt-no 2 face mode-line-active)"][..],
+        ),
+        // G3: FACE t for a WINDOW that is not selected.
+        (
+            r#"'("AB")"#,
+            "t",
+            Some("ep30-other-window"),
+            &[0usize][..],
+            &["(mode-line-elt-no 2 face mode-line-inactive)"][..],
+        ),
+        // G4: the inactive face named explicitly.
+        (
+            r#"'("AB")"#,
+            "'mode-line-inactive",
+            None,
+            &[0usize][..],
+            &["(mode-line-elt-no 2 face mode-line-inactive)"][..],
+        ),
+        // G5: any face designator is installed verbatim.
+        (
+            r#"'("AB")"#,
+            "'header-line-active",
+            None,
+            &[0usize][..],
+            &["(mode-line-elt-no 2 face header-line-active)"][..],
+        ),
+        // G6: a list of faces is installed as the face value.
+        (
+            r#"'("AB")"#,
+            "'(bold italic)",
+            None,
+            &[0usize][..],
+            &["(mode-line-elt-no 2 face (bold italic))"][..],
+        ),
+    ] {
+        let window_arg = window
+            .map(|window| format!(" {window}"))
+            .unwrap_or_default();
+        let expression = format!("(format-mode-line {form} {face}{window_arg})");
+        let value = eval
+            .eval_str(&expression)
+            .expect("format-mode-line returns");
+        let actual = attribution_ordered_plists_of_value(value, positions);
+        if actual != expected {
+            mismatches.push(format!(
+                "{expression}\n  GNU: {expected:?}\n  Neo: {actual:?}"
+            ));
+        }
+    }
+
+    // G7: an integer FACE means the value string has no text properties.
+    let no_props = eval
+        .eval_str(r#"(format-mode-line '(#("AB" 0 2 (p 1))) 1)"#)
+        .expect("format-mode-line returns");
+    if with_mode_line_string_properties(no_props, |_| ()).is_some() {
+        mismatches.push(
+            "G7 integer FACE: GNU returns a property-free string, Neo attached properties".into(),
+        );
+    }
+
+    assert!(
+        mismatches.is_empty(),
+        "FACE argument plist order differs from GNU:\n{}",
         mismatches.join("\n")
     );
 }
