@@ -14,6 +14,86 @@ use super::architecture_moving_set::{
 };
 use super::architecture_production_source_roots::{crates_dir, production_source_roots};
 
+/// Frozen pre-split item map (ruling M-a): (source crate, written path) ->
+/// historical target. Generated from the last pre-split tree (773d3b64a5) by
+/// the approved M1-M3 derivation. The row count is pinned and may only
+/// shrink; an unmapped item falls back to the current module model (M-b).
+const ITEM_MAP_TSV: &str = include_str!("layering_item_map.tsv");
+const ITEM_MAP_ROWS: usize = 120;
+
+fn item_map() -> &'static BTreeMap<(String, String), String> {
+    static MAP: std::sync::OnceLock<BTreeMap<(String, String), String>> =
+        std::sync::OnceLock::new();
+    MAP.get_or_init(|| {
+        let mut map = BTreeMap::new();
+        for line in ITEM_MAP_TSV.lines() {
+            if line.is_empty() || line.starts_with("source_file") || line.starts_with("source_crate") {
+                continue;
+            }
+            let columns = line.split('\t').collect::<Vec<_>>();
+            assert_eq!(columns.len(), 3, "bad item-map row: {line}");
+            let previous = map.insert(
+                (columns[0].to_owned(), columns[1].to_owned()),
+                columns[2].to_owned(),
+            );
+            assert!(
+                previous.is_none(),
+                "duplicate item-map row: {} {}",
+                columns[0],
+                columns[1]
+            );
+        }
+        map
+    })
+}
+
+fn check_item_map_count(rows: usize) {
+    assert!(
+        rows <= ITEM_MAP_ROWS,
+        "item map row count increased: {rows} > pinned {ITEM_MAP_ROWS}; the map is frozen (M-a)"
+    );
+    assert_eq!(
+        rows, ITEM_MAP_ROWS,
+        "item map row count is pinned at {ITEM_MAP_ROWS}; lower the pin in the commit that prunes rows"
+    );
+}
+
+fn stale_item_map_rows<'a>(
+    map: &'a BTreeMap<(String, String), String>,
+    observed: &BTreeSet<(String, String)>,
+) -> Vec<&'a (String, String)> {
+    map.keys()
+        .filter(|key| !observed.contains(*key))
+        .collect::<Vec<_>>()
+}
+
+/// Dump accounting is opt-in: tests must not pay for the site ledger.
+fn dump_all() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var_os("NEOVM_LAYERING_DUMP_ALL").is_some()
+            || std::env::var_os("NEOVM_LAYERING_DUMP").is_some()
+    })
+}
+
+/// The workspace-relative source path the item map is keyed by. The map is
+/// per SOURCE FILE, not per crate: the same written path in a counted lower
+/// root and in an upper emacs_core member file has different accounting (R2).
+fn source_map_key(source: &Path) -> Option<String> {
+    let text = source.to_string_lossy().replace('\\', "/");
+    if let Some(index) = text.find("/crates/") {
+        return Some(text[index + 1..].to_owned());
+    }
+    text.starts_with("crates/").then_some(text)
+}
+
+fn item_map_target(source: &Path, written: &str) -> Option<&'static str> {
+    let key = source_map_key(source)?;
+    item_map()
+        .get(&(key, written.to_owned()))
+        .map(String::as_str)
+}
+
 /// Whether a cfg predicate can be true with `test` disabled. Other cfg values
 /// vary across production builds, so both possibilities remain in the scan.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -369,6 +449,7 @@ enum ScanPhase {
 struct Site {
     source: PathBuf,
     line: usize,
+    reference: String,
 }
 
 type Sites = BTreeMap<Pair, Vec<Site>>;
@@ -391,6 +472,14 @@ struct ModuleIndex {
     /// example `pub(crate) use neovm_value::tls_scope;`). A moving file that
     /// names one through `crate::` still targets the moving set.
     moving_crate_exports: BTreeMap<String, String>,
+    /// Every (source crate, written path) the reference scan observed; the
+    /// completeness self-test proves the frozen item map has no stale rows.
+    observed_paths: BTreeSet<(String, String)>,
+    /// Dump accounting (D-a): every NotUpward site with its reason. Collected
+    /// only when NEOVM_LAYERING_DUMP_ALL is set.
+    not_upward_sites: Vec<(PathBuf, usize, String, String)>,
+    /// Dump diagnostics: (source file, logical path) for every visited file.
+    visited_files: Vec<(PathBuf, Vec<String>)>,
     crate_exports: BTreeMap<String, EcSub>,
     /// `emacs_core/mod.rs` facade re-exports. The origin is usually a direct
     /// submodule, but after the split the facade also re-exports extracted
@@ -473,6 +562,11 @@ impl ProductionWalker {
         {
             return;
         }
+        if dump_all() && matches!(self.phase, ScanPhase::References) {
+            self.index
+                .visited_files
+                .push((path.to_path_buf(), self.logical_path.clone()));
+        }
         let source = std::fs::read_to_string(path)
             .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
         let syntax = syn::parse_file(&source)
@@ -522,14 +616,109 @@ impl ProductionWalker {
         }
     }
 
+    /// Dump accounting (D-a): why a reference was not counted.
+    fn not_upward_reason(&self, segments: &[String]) -> String {
+        let written = segments.join("::");
+        if item_map_target(&self.source, &written) == Some("lateral") {
+            return "lateral".to_owned();
+        }
+        let Some(first) = segments.first() else {
+            return "self".to_owned();
+        };
+        if matches!(first.as_str(), "self" | "super") {
+            return "self".to_owned();
+        }
+        if is_workspace_sibling(first) {
+            return format!("r1-cross-crate:{}", first.replace('-', "_"));
+        }
+        if let Some(directory) = source_crate_dir(&self.source) {
+            let source_crate = directory.replace('-', "_");
+            if is_moving_crate(&source_crate) {
+                return "moving-internal".to_owned();
+            }
+        }
+        "moving-internal".to_owned()
+    }
+
+    /// Record a NotUpward site for the dump when the accounting env is on.
+    fn observe_not_upward(&mut self, segments: &[String], span: Span) {
+        if !dump_all() || !matches!(self.phase, ScanPhase::References) {
+            return;
+        }
+        let reason = self.not_upward_reason(segments);
+        self.index.not_upward_sites.push((
+            self.source.clone(),
+            span.start().line,
+            segments.join("::"),
+            reason,
+        ));
+    }
+
+    /// Record a written path for the item-map completeness self-test.
+    fn observe_path(&mut self, segments: &[String]) {
+        if !matches!(self.phase, ScanPhase::References) {
+            return;
+        }
+        let Some(key) = source_map_key(&self.source) else {
+            return;
+        };
+        self.index.observed_paths.insert((key, segments.join("::")));
+    }
+
+    /// Classification of a frozen item-map target. The generator already
+    /// applied the moving rule to the historical target, so the spec is
+    /// authoritative: `lateral` is NotUpward, `ec:`/`root` are counted rows,
+    /// and `top:` is a top-level module row.
+    fn map_classification(&self, spec: &str, lower: LowerRoot) -> Classification {
+        if spec == "lateral" {
+            return Classification::NotUpward;
+        }
+        if spec == "root" {
+            return Classification::Upward(Pair {
+                lower,
+                upper: Upper::Ec(EcSub::root()),
+            });
+        }
+        if let Some(name) = spec.strip_prefix("top:") {
+            return Classification::Upward(Pair {
+                lower,
+                upper: Upper::Top(LowerRoot::parse(name)),
+            });
+        }
+        let Some(name) = spec.strip_prefix("ec:") else {
+            panic!("unknown item-map target {spec}");
+        };
+        Classification::Upward(Pair {
+            lower,
+            upper: Upper::Ec(EcSub::historical(name)),
+        })
+    }
+
     fn classify(&self, segments: &[String], span: Span) -> Classification {
         let Some(lower) = self.logical_path.first() else {
             return Classification::NotUpward;
         };
         if lower == "emacs_core" {
+            // The item map applies to a file's HISTORY when that file is a
+            // G0 member. The same physical file is also visited through its
+            // crate-local emacs_core facade (logical emacs_core::<member>);
+            // that visit is the upper-module model and stays NotUpward, so
+            // the map must not double-count it with a G0 lower root.
+            let member_is_g0 = self
+                .logical_path
+                .get(1)
+                .is_some_and(|member| is_g0_member(member));
+            if member_is_g0 {
+                if let Some(spec) = item_map_target(&self.source, &segments.join("::")) {
+                    return self.map_classification(spec, LowerRoot::G0);
+                }
+            }
             return self.classify_from_emacs_core(segments, span);
         }
         let source_root = LowerRoot::parse(lower);
+        if let Some(spec) = item_map_target(&self.source, &segments.join("::")) {
+            return self.map_classification(spec, source_root);
+        }
         let moving = is_bottom_peer(source_root);
         let Some(first) = segments.first() else {
             return Classification::NotUpward;
@@ -797,6 +986,7 @@ impl ProductionWalker {
     }
 
     fn record(&mut self, segments: &[String], span: Span) -> bool {
+        self.observe_path(segments);
         match self.phase {
             ScanPhase::Discover => false,
             ScanPhase::References => match self.classify(segments, span) {
@@ -805,51 +995,47 @@ impl ProductionWalker {
                     self.sites.entry(pair).or_default().push(Site {
                         source: self.source.clone(),
                         line: span.start().line,
+                        reference: segments.join("::"),
                     });
                     true
                 }
-                Classification::NotUpward => false,
+                Classification::NotUpward => {
+                    self.observe_not_upward(segments, span);
+                    false
+                }
             },
         }
     }
 
+    /// Every leaf of a use statement is classified and the statement records
+    /// one site per distinct target pair. The frozen item map overrides the
+    /// shallow prefix classification for mapped leaves; unmapped leaves keep
+    /// the current module model (M-b). A glob import counts at its module.
     fn use_references(&mut self, tree: &syn::UseTree, prefix: &mut Vec<String>, span: Span) {
-        match tree {
-            syn::UseTree::Path(path) => {
-                prefix.push(path.ident.unraw().to_string());
-                if !self.record(prefix, span) {
-                    self.use_references(&path.tree, prefix, span);
+        let mut leaves = Vec::new();
+        use_leaves(tree, prefix, &mut leaves);
+        let mut pairs = BTreeMap::new();
+        for (path, _name) in leaves {
+            let segments = if path.last().is_some_and(|part| part == "*") {
+                path[..path.len() - 1].to_vec()
+            } else {
+                path
+            };
+            self.observe_path(&segments);
+            match self.classify(&segments, span) {
+                Classification::Upward(pair) => {
+                    assert_intra_crate_upper(&pair.upper);
+                    pairs.entry(pair).or_insert_with(|| segments.join("::"));
                 }
-                prefix.pop();
+                Classification::NotUpward => self.observe_not_upward(&segments, span),
             }
-            syn::UseTree::Name(name) => {
-                let terminal_self = name.ident == "self" && !prefix.is_empty();
-                if !terminal_self {
-                    prefix.push(name.ident.unraw().to_string());
-                }
-                self.record(prefix, span);
-                if !terminal_self {
-                    prefix.pop();
-                }
-            }
-            syn::UseTree::Rename(rename) => {
-                let terminal_self = rename.ident == "self" && !prefix.is_empty();
-                if !terminal_self {
-                    prefix.push(rename.ident.unraw().to_string());
-                }
-                self.record(prefix, span);
-                if !terminal_self {
-                    prefix.pop();
-                }
-            }
-            syn::UseTree::Group(group) => {
-                for tree in &group.items {
-                    self.use_references(tree, prefix, span);
-                }
-            }
-            syn::UseTree::Glob(_) => {
-                self.record(prefix, span);
-            }
+        }
+        for (pair, reference) in pairs {
+            self.sites.entry(pair).or_default().push(Site {
+                source: self.source.clone(),
+                line: span.start().line,
+                reference,
+            });
         }
     }
 }
@@ -2004,6 +2190,75 @@ fn layering_guard_frontend_events_super_keyboard_is_not_upward() {
     ));
 }
 
+/// M-d: the frozen item map row count is pinned; an increase fails.
+#[test]
+fn layering_item_map_row_count_is_pinned() {
+    check_item_map_count(item_map().len());
+}
+
+#[test]
+#[should_panic(expected = "item map row count increased")]
+fn layering_item_map_row_count_increase_fails() {
+    check_item_map_count(ITEM_MAP_ROWS + 1);
+}
+
+/// M-c: every frozen row must still be observed by the current scan.
+#[test]
+fn layering_item_map_has_no_stale_rows() {
+    let (index, _sites) = production_sites_across_crates();
+    let stale = stale_item_map_rows(item_map(), &index.observed_paths);
+    assert!(stale.is_empty(), "stale item-map rows: {stale:?}");
+}
+
+/// M-d: a row absent from the scan is stale and fails.
+#[test]
+fn layering_item_map_stale_row_fails() {
+    let mut map = BTreeMap::new();
+    map.insert(
+        (
+            "neovm_edit".to_owned(),
+            "crate::emacs_core::gone::Item".to_owned(),
+        ),
+        "lateral".to_owned(),
+    );
+    let observed = BTreeSet::new();
+    let stale = stale_item_map_rows(&map, &observed);
+    assert_eq!(stale.len(), 1, "a row absent from the scan is stale");
+}
+
+fn real_tree_walker() -> ProductionWalker {
+    let (index, _sites) = production_sites_across_crates();
+    let mut walker = new_walker();
+    walker.phase = ScanPhase::References;
+    walker.index = index;
+    walker.logical_path = vec!["buffer".to_owned()];
+    walker.source = Path::new("crates/neovm-edit/src/buffer/buffer.rs").to_path_buf();
+    walker
+}
+
+/// M-d: a mapped lateral item stays NotUpward.
+#[test]
+fn layering_item_map_mapped_lateral_stays_not_upward() {
+    let walker = real_tree_walker();
+    let segments = ["crate", "emacs_core", "display_metrics", "WindowId"].map(str::to_owned);
+    assert!(matches!(
+        walker.classify(&segments, Span::call_site()),
+        Classification::NotUpward
+    ));
+}
+
+/// M-d: an unmapped emacs_core item keeps the conservative module model and
+/// counts Upward (RED).
+#[test]
+fn layering_item_map_unmapped_emacs_core_item_counts_upward() {
+    let walker = real_tree_walker();
+    let segments = ["crate", "emacs_core", "eval", "BRAND_NEW_ITEM"].map(str::to_owned);
+    assert!(matches!(
+        walker.classify(&segments, Span::call_site()),
+        Classification::Upward(_)
+    ));
+}
+
 /// R3 plant: a synthetic non-leaf internal dependency flips a crate from
 /// bottom to layered, so the Q1 same-crate rule stops covering it.
 #[test]
@@ -2106,4 +2361,156 @@ fn layering_guard_moving_set_planted_tagged_buffer_reference_fails() {
         message.contains("tagged top:buffer: 1 production upward references exceed the ceiling 0"),
         "{message}"
     );
+}
+
+/// The historical lower root a production source file belongs to.
+fn source_lower_of(path: &Path) -> String {
+    let parts = path
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let Some(source) = parts.iter().position(|part| part == "src") else {
+        return "(unknown)".to_owned();
+    };
+    let relative = &parts[source + 1..];
+    match relative.first().map(String::as_str) {
+        None => "(root)".to_owned(),
+        Some("emacs_core") => relative
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| "emacs_core".to_owned()),
+        Some(first) => first.trim_end_matches(".rs").to_owned(),
+    }
+}
+
+/// D-a/D-b: dump every counted site and every NotUpward site with its reason,
+/// plus per-lower-root accounting (scanned = Upward + NotUpward).
+#[test]
+fn layering_dump_sites_for_analysis() {
+    let Some(out) = std::env::var_os("NEOVM_LAYERING_DUMP") else {
+        return;
+    };
+    let (index, sites) = production_sites_across_crates();
+    let mut text = String::new();
+    let mut accounting: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for (pair, list) in &sites {
+        let entry = accounting.entry(pair.lower.name().to_owned()).or_default();
+        entry.0 += list.len();
+        for site in list {
+            text.push_str(&format!(
+                "SITE\t{}\t{}\t{}\t{}\t{}\n",
+                pair.lower.name(),
+                pair.upper.text(),
+                site.source.display(),
+                site.line,
+                site.reference
+            ));
+        }
+    }
+    for (source, line, written, reason) in &index.not_upward_sites {
+        let entry = accounting.entry(source_lower_of(source)).or_default();
+        entry.1 += 1;
+        text.push_str(&format!(
+            "NOTUPWARD\t{}\t{}\t{}\t{}\n",
+            source.display(),
+            line,
+            reason,
+            written
+        ));
+    }
+    for (path, logical) in &index.visited_files {
+        text.push_str(&format!(
+            "VISITED\t{}\t{}\n",
+            path.display(),
+            logical.join("::")
+        ));
+    }
+    for (lower, (upward, not_upward)) in accounting {
+        text.push_str(&format!(
+            "ACCOUNT\t{lower}\t{}\t{upward}\t{not_upward}\n",
+            upward + not_upward
+        ));
+    }
+    std::fs::write(&out, text).expect("write layering dump");
+}
+
+/// T3a plant pair: keyboard -> window_state stays NotUpward (the moving
+/// rule), while tagged -> window_state turns RED (a bottom peer names an
+/// upper module).
+#[test]
+fn layering_item_map_keyboard_window_state_stays_lateral() {
+    let (index, _sites) = production_sites_across_crates();
+    let mut walker = new_walker();
+    walker.phase = ScanPhase::References;
+    walker.index = index;
+    walker.logical_path = vec!["keyboard".to_owned()];
+    walker.source =
+        Path::new("crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs").to_path_buf();
+    let segments = [
+        "crate",
+        "emacs_core",
+        "eval",
+        "data",
+        "window_state",
+        "Window",
+    ]
+    .map(str::to_owned);
+    assert!(matches!(
+        walker.classify(&segments, Span::call_site()),
+        Classification::NotUpward
+    ));
+}
+
+#[test]
+fn layering_item_map_tagged_window_state_turns_red() {
+    let (index, _sites) = production_sites_across_crates();
+    let mut walker = new_walker();
+    walker.phase = ScanPhase::References;
+    walker.index = index;
+    walker.logical_path = vec!["tagged".to_owned()];
+    walker.source = Path::new("crates/neovm-value/src/tagged/gc.rs").to_path_buf();
+    let segments = [
+        "crate",
+        "emacs_core",
+        "eval",
+        "data",
+        "window_state",
+        "Window",
+    ]
+    .map(str::to_owned);
+    assert!(matches!(
+        walker.classify(&segments, Span::call_site()),
+        Classification::Upward(_)
+    ));
+}
+
+/// D-c plants: one NotUpward site per reason.
+#[test]
+fn layering_guard_records_not_upward_reasons() {
+    let mut keyboard = new_walker();
+    keyboard.phase = ScanPhase::References;
+    keyboard.logical_path = vec!["keyboard".to_owned()];
+    keyboard.source =
+        Path::new("crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs").to_path_buf();
+    let cross = ["neovm_value", "value", "Value"].map(str::to_owned);
+    assert_eq!(
+        keyboard.not_upward_reason(&cross),
+        "r1-cross-crate:neovm_value"
+    );
+
+    let mut edit = new_walker();
+    edit.phase = ScanPhase::References;
+    edit.logical_path = vec!["buffer".to_owned()];
+    edit.source = Path::new("crates/neovm-edit/src/buffer/buffer.rs").to_path_buf();
+    let lateral = ["crate", "emacs_core", "display_metrics", "WindowId"].map(str::to_owned);
+    assert_eq!(edit.not_upward_reason(&lateral), "lateral");
+    let self_reference = ["self", "item"].map(str::to_owned);
+    assert_eq!(edit.not_upward_reason(&self_reference), "self");
+
+    let mut tagged = new_walker();
+    tagged.phase = ScanPhase::References;
+    tagged.logical_path = vec!["tagged".to_owned()];
+    tagged.source = Path::new("crates/neovm-value/src/tagged/gc.rs").to_path_buf();
+    let moving = ["crate", "value", "Value"].map(str::to_owned);
+    assert_eq!(tagged.not_upward_reason(&moving), "moving-internal");
 }
