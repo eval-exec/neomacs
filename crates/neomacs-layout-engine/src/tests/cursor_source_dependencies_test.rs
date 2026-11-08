@@ -1,5 +1,30 @@
 use super::*;
 
+/// Repeated projection of one original string needs one immediate root lease,
+/// while all original content/interval observations remain freshness evidence.
+#[test]
+fn repeated_string_projections_share_one_root_lease() {
+    let context = Context::new();
+    let value = Value::string("repeated source");
+    let capture = Capture::begin(&context);
+    for _ in 0..100 {
+        let _ = string_properties(value);
+    }
+    let sources = capture.finish().unwrap();
+    let DependencyAuthority::Canonical {
+        _roots, strings, ..
+    } = sources.0.as_ref()
+    else {
+        panic!("canonical producer capture");
+    };
+    assert_eq!(strings.len(), 1);
+    assert_eq!(
+        _roots.len(),
+        1,
+        "do not register a lease per repeated projection"
+    );
+}
+
 /// Partial walks preserve original read origins without accumulating a chain
 /// of removed source strings; new strings after an empty domain are complete.
 #[test]

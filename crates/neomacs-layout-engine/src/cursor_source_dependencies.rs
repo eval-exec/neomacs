@@ -176,7 +176,7 @@ impl Drop for Capture {
 pub(crate) fn string_properties(
     value: Value,
 ) -> Option<neovm_core::emacs_core::value::text_props::TextPropertyTable> {
-    let retainer = ACTIVE.with(|active| {
+    let rooted = ACTIVE.with(|active| {
         let mut active = active.borrow_mut();
         let observation = active.as_mut()?;
         if !observation
@@ -187,16 +187,21 @@ pub(crate) fn string_properties(
             observation.complete = false;
             return None;
         }
-        Some(observation.retainer.clone())
-    });
-    let Some(roots) = retainer.and_then(|retainer| retainer.retain([value])) else {
-        ACTIVE.with(|active| {
-            if let Some(observation) = active.borrow_mut().as_mut() {
+        if !observation.strings.contains(&value) {
+            let Some(roots) = observation.retainer.retain([value]) else {
                 observation.complete = false;
-            }
-        });
+                return None;
+            };
+            // Root each original object once, before its first projection.
+            // Repeated projections must still record mutation observations.
+            observation.roots.push(roots);
+            observation.strings.insert(value);
+        }
+        Some(())
+    });
+    if rooted.is_none() {
         return neovm_core::emacs_core::value::get_string_text_properties_table_for_value(value);
-    };
+    }
     let (properties, reads) = collection_reads::capture(|| {
         // The cursor property is indexed in the original string. Observe its
         // contents/storage too, without copying/scanning bytes, so in-place
@@ -210,8 +215,6 @@ pub(crate) fn string_properties(
     });
     ACTIVE.with(|active| {
         if let Some(observation) = active.borrow_mut().as_mut() {
-            observation.roots.push(roots);
-            observation.strings.insert(value);
             if let Some(reads) = reads {
                 observation.reads.push(reads);
             } else {

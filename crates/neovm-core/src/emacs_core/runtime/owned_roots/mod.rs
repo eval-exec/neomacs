@@ -24,6 +24,9 @@ impl std::fmt::Debug for OwnedRoots {
 
 type RootLeases = RefCell<Vec<Weak<[Value]>>>;
 
+#[cfg(test)]
+thread_local! { static LEASE_PRUNING_INSPECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
 #[repr(C)]
 #[derive(Default)]
 pub(crate) struct OwnedRootRegistry {
@@ -66,7 +69,33 @@ impl OwnedRootRegistry {
             .collect();
         if !values.is_empty() {
             let mut leases = leases.borrow_mut();
-            leases.retain(|lease| lease.strong_count() != 0);
+            // Reclaim an expired suffix cheaply (including the usual single
+            // transient lease), preserving prompt cleanup without rescanning
+            // live predecessors. Each expired entry is popped at most once.
+            while leases.last().is_some_and(|lease| {
+                #[cfg(test)]
+                LEASE_PRUNING_INSPECTIONS.with(|count| count.set(count.get() + 1));
+                lease.strong_count() == 0
+            }) {
+                drop(leases.pop());
+            }
+            // Sweep at capacity, not on every registration. If most leases
+            // remain live, grow as well: freeing only one dead slot must not
+            // cause another full scan on the very next insertion. Either
+            // branch leaves at least half a buffer of registration headroom,
+            // so total pruning work is amortized linear. GC tracing also
+            // removes dead leases; weak entries never keep Lisp graphs live.
+            if leases.len() == leases.capacity() {
+                leases.retain(|lease| {
+                    #[cfg(test)]
+                    LEASE_PRUNING_INSPECTIONS.with(|count| count.set(count.get() + 1));
+                    lease.strong_count() != 0
+                });
+                if leases.len() > leases.capacity() / 2 {
+                    let additional = leases.capacity();
+                    leases.reserve(additional);
+                }
+            }
             leases.push(Rc::downgrade(&values));
         }
         OwnedRoots { values }
