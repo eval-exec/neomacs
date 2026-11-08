@@ -150,7 +150,13 @@ fn gen0_cons_shim_rejects_outside_mutator_observations_before_exact_query() {
     assert!(!is_observed(target.bits()));
     // A concurrent mark still makes the ordinary native gate ALL. Its SATB
     // work must run even when this mutator's read envelope rejects the owner.
-    context.tagged_heap.set_concurrent_active_for_test(true);
+    // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+    unsafe {
+        neovm_value::test_support::authority::set_concurrent_active_for_test(
+            &mut *context.tagged_heap,
+            true,
+        );
+    };
     let queries = super::super::dispatch::CONS_OBSERVATION_QUERIES.with(|count| count.get());
     let revision = LispCollectionRevision::current();
     let vmctx = (&mut context as *mut Context).cast::<u8>();
@@ -177,10 +183,13 @@ fn gen0_cons_shim_rejects_outside_mutator_observations_before_exact_query() {
         Value::NIL.bits() as i64,
     );
     assert!(
-        context
-            .tagged_heap
-            .take_satb_shared_for_test()
-            .contains(&old_child),
+        unsafe {
+            // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+            neovm_value::test_support::authority::take_satb_shared_for_test(
+                &mut *context.tagged_heap,
+            )
+        }
+        .contains(&old_child),
         "the ordinary SATB barrier retains the overwritten child",
     );
     // Keep the reset in the compiled domain: ordinary mutation helpers
@@ -195,7 +204,10 @@ fn gen0_cons_shim_rejects_outside_mutator_observations_before_exact_query() {
             old_child.bits() as i64,
         );
     }
-    context.tagged_heap.take_satb_shared_for_test();
+    unsafe {
+        // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+        neovm_value::test_support::authority::take_satb_shared_for_test(&mut *context.tagged_heap)
+    };
     let calls = cons_shims();
     for leaf in [&setcar, &setcdr] {
         assert_eq!(
@@ -203,15 +215,24 @@ fn gen0_cons_shim_rejects_outside_mutator_observations_before_exact_query() {
             Value::NIL
         );
         assert!(
-            context
-                .tagged_heap
-                .take_satb_shared_for_test()
-                .contains(&old_child),
+            unsafe {
+                // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+                neovm_value::test_support::authority::take_satb_shared_for_test(
+                    &mut *context.tagged_heap,
+                )
+            }
+            .contains(&old_child),
             "each native empty-proof refusal retains its overwritten child",
         );
     }
     assert_eq!(cons_shims() - calls, 2, "ALL refuses both native stores");
-    context.tagged_heap.set_concurrent_active_for_test(false);
+    // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+    unsafe {
+        neovm_value::test_support::authority::set_concurrent_active_for_test(
+            &mut *context.tagged_heap,
+            false,
+        );
+    };
     assert_eq!(
         LispCollectionRevision::current().steps_since_for_test(revision),
         0

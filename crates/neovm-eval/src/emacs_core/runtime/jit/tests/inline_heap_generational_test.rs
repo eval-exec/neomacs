@@ -744,14 +744,31 @@ fn proven_fixnum_store_logs_its_pointer_pre_image_during_a_concurrent_mark() {
         );
         assert_eq!(owner.cons_car(), old);
 
-        context.tagged_heap.set_concurrent_active_for_test(true);
+        // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+        unsafe {
+            neovm_value::test_support::authority::set_concurrent_active_for_test(
+                &mut *context.tagged_heap,
+                true,
+            );
+        };
         let before = cons_shims();
         assert_eq!(
             native(&mut context, &leaf, &[owner, Value::make_int(6)]),
             Value::make_int(7)
         );
-        let logged = context.tagged_heap.take_satb_shared_for_test();
-        context.tagged_heap.set_concurrent_active_for_test(false);
+        let logged = unsafe {
+            // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+            neovm_value::test_support::authority::take_satb_shared_for_test(
+                &mut *context.tagged_heap,
+            )
+        };
+        // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+        unsafe {
+            neovm_value::test_support::authority::set_concurrent_active_for_test(
+                &mut *context.tagged_heap,
+                false,
+            );
+        };
         assert_eq!(
             cons_shims() - before,
             1,
@@ -773,6 +790,14 @@ fn proven_fixnum_store_logs_its_pointer_pre_image_during_a_concurrent_mark() {
             before,
             "outside a mark the store stays inline"
         );
-        assert!(context.tagged_heap.take_satb_shared_for_test().is_empty());
+        assert!(
+            unsafe {
+                // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+                neovm_value::test_support::authority::take_satb_shared_for_test(
+                    &mut *context.tagged_heap,
+                )
+            }
+            .is_empty()
+        );
     }
 }

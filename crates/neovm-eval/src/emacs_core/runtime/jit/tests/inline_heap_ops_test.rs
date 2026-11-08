@@ -442,14 +442,29 @@ fn opt_cons_store_proofs_keep_deopt_and_barrier_paths() {
         eval.tagged_heap
             .set_write_tracking_mode(WriteTrackingMode::Disabled);
 
-        eval.tagged_heap.set_concurrent_active_for_test(true);
+        // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+        unsafe {
+            neovm_value::test_support::authority::set_concurrent_active_for_test(
+                &mut *eval.tagged_heap,
+                true,
+            );
+        };
         let before = shim_calls();
         assert_eq!(
             native(ctx_ptr, &leaf, &[cell, Value::T], "opt marking"),
             "t"
         );
-        let logged = eval.tagged_heap.take_satb_shared_for_test();
-        eval.tagged_heap.set_concurrent_active_for_test(false);
+        let logged = unsafe {
+            // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+            neovm_value::test_support::authority::take_satb_shared_for_test(&mut *eval.tagged_heap)
+        };
+        // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+        unsafe {
+            neovm_value::test_support::authority::set_concurrent_active_for_test(
+                &mut *eval.tagged_heap,
+                false,
+            );
+        };
         assert_eq!(shim_calls() - before, 1, "{op:?}: mark sends store to shim");
         assert!(logged.iter().any(|old| old.bits() == value.bits()));
 
@@ -565,7 +580,13 @@ fn a_store_during_a_concurrent_mark_logs_its_pre_image() {
     let (old, cell) = (args[0], args[1]);
     neovm_value::tagged::mutate::set_cons_car(cell, old);
 
-    eval.tagged_heap.set_concurrent_active_for_test(true);
+    // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+    unsafe {
+        neovm_value::test_support::authority::set_concurrent_active_for_test(
+            &mut *eval.tagged_heap,
+            true,
+        );
+    };
     let before = shim_calls();
     assert_eq!(native(ctx_ptr, &leaf, &[cell, Value::T], "marking"), "t");
     assert_eq!(
@@ -573,8 +594,17 @@ fn a_store_during_a_concurrent_mark_logs_its_pre_image() {
         1,
         "a mark sends the store to the barrier"
     );
-    let logged = eval.tagged_heap.take_satb_shared_for_test();
-    eval.tagged_heap.set_concurrent_active_for_test(false);
+    let logged = unsafe {
+        // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+        neovm_value::test_support::authority::take_satb_shared_for_test(&mut *eval.tagged_heap)
+    };
+    // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+    unsafe {
+        neovm_value::test_support::authority::set_concurrent_active_for_test(
+            &mut *eval.tagged_heap,
+            false,
+        );
+    };
     assert!(
         logged.iter().any(|v| v.bits() == old.bits()),
         "the overwritten car is logged: {logged:?}"
@@ -583,7 +613,13 @@ fn a_store_during_a_concurrent_mark_logs_its_pre_image() {
     let before = shim_calls();
     assert_eq!(native(ctx_ptr, &leaf, &[cell, Value::NIL], "quiet"), "nil");
     assert_eq!(shim_calls(), before);
-    assert!(eval.tagged_heap.take_satb_shared_for_test().is_empty());
+    assert!(
+        unsafe {
+            // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+            neovm_value::test_support::authority::take_satb_shared_for_test(&mut *eval.tagged_heap)
+        }
+        .is_empty()
+    );
 }
 
 /// An image cons (inside the dump span, the steady-state window) goes to the

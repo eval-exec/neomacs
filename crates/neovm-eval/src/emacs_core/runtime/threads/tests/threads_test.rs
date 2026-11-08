@@ -113,19 +113,37 @@ fn p15_native_thread_updates_do_not_record_lisp_writes() {
     assert!(ctx.tagged_heap.owns_heap_value_for_test(thread));
     assert!(ctx.tagged_heap.owns_heap_value_for_test(child));
 
-    ctx.tagged_heap.set_concurrent_active_for_test(true);
-    let before_satb = ctx.tagged_heap.take_satb_shared_for_test();
+    // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+    unsafe {
+        neovm_value::test_support::authority::set_concurrent_active_for_test(
+            &mut *ctx.tagged_heap,
+            true,
+        );
+    };
+    let before_satb = unsafe {
+        // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+        neovm_value::test_support::authority::take_satb_shared_for_test(&mut *ctx.tagged_heap)
+    };
     let before_remset = ctx.tagged_heap.remembered_log_len_for_test();
     let before_debt = ctx.tagged_heap.bytes_since_gc_exact();
     ctx.threads.start_thread(native);
     let changed = ctx.threads.set_thread_current_buffer(native, Some(buffer));
     let unchanged = ctx.threads.set_thread_current_buffer(native, Some(buffer));
     ctx.threads.mark_thread_exited(native);
-    let native_satb = ctx.tagged_heap.take_satb_shared_for_test();
+    let native_satb = unsafe {
+        // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+        neovm_value::test_support::authority::take_satb_shared_for_test(&mut *ctx.tagged_heap)
+    };
     let after_remset = ctx.tagged_heap.remembered_log_len_for_test();
     let after_debt = ctx.tagged_heap.bytes_since_gc_exact();
     // Disarm before any assertion can panic or a later test collection runs.
-    ctx.tagged_heap.set_concurrent_active_for_test(false);
+    // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+    unsafe {
+        neovm_value::test_support::authority::set_concurrent_active_for_test(
+            &mut *ctx.tagged_heap,
+            false,
+        );
+    };
 
     assert!(before_satb.is_empty());
     assert!(changed && unchanged);

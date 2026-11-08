@@ -539,7 +539,12 @@ fn check_concurrent_mark_store_shims() {
                     let ev = &mut *context;
                     let (got, called) = run(ev, &set_plain, &[Value::make_int(1)]);
                     assert_eq!((got.as_str(), called.varset), ("1", 1));
-                    let logged = ev.tagged_heap.take_satb_shared_for_test();
+                    // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+                    let logged = unsafe {
+                        neovm_value::test_support::authority::take_satb_shared_for_test(
+                            &mut *ev.tagged_heap,
+                        )
+                    };
                     let (got, called) = run(ev, &let_loc, &[Value::make_int(2)]);
                     assert_eq!(got, "(body 11)");
                     assert_eq!((called.varbind, called.unbind), (1, 1));
@@ -568,7 +573,13 @@ fn check_concurrent_mark_store_shims() {
         assert_eq!((got.as_str(), called), (expected, expected_shims));
         assert_eq!((ev.specpdl.len(), ev.jit_bind_stack.len()), depths);
     }
-    assert!(ev.tagged_heap.take_satb_shared_for_test().is_empty());
+    assert!(
+        unsafe {
+            // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+            neovm_value::test_support::authority::take_satb_shared_for_test(&mut *ev.tagged_heap)
+        }
+        .is_empty()
+    );
     assert_eq!(eval(&mut ev, "ivt-loc"), "11");
 }
 
@@ -945,9 +956,19 @@ fn atomic_forwarder_active_mark_routes_set_bind_and_unbind_through_satb() {
                 || {
                     let ev = &mut *context;
                     let (set_result, set_calls) = run(ev, &set, &[replacement]);
-                    let set_preimages = ev.tagged_heap.take_satb_shared_for_test();
+                    // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+                    let set_preimages = unsafe {
+                        neovm_value::test_support::authority::take_satb_shared_for_test(
+                            &mut *ev.tagged_heap,
+                        )
+                    };
                     let (let_result, let_calls) = run(ev, &bind_unbind, &[binding]);
-                    let let_preimages = ev.tagged_heap.take_satb_shared_for_test();
+                    // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+                    let let_preimages = unsafe {
+                        neovm_value::test_support::authority::take_satb_shared_for_test(
+                            &mut *ev.tagged_heap,
+                        )
+                    };
                     assert_eq!(set_result, "(new-object)");
                     assert_eq!(set_calls.varset, 1, "active mark refuses inline varset");
                     assert!(

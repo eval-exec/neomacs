@@ -121,13 +121,36 @@ fn refuses_foreign_field(field: ForeignField) {
         ForeignField::Data => event.data = foreign_root,
     }
     let foreign_before = external_roots(&foreign);
-    assert!(context.tagged_heap.take_satb_shared_for_test().is_empty());
-    context.tagged_heap.set_concurrent_active_for_test(true);
+    assert!(
+        unsafe {
+            // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+            neovm_value::test_support::authority::take_satb_shared_for_test(
+                &mut *context.tagged_heap,
+            )
+        }
+        .is_empty()
+    );
+    // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+    unsafe {
+        neovm_value::test_support::authority::set_concurrent_active_for_test(
+            &mut *context.tagged_heap,
+            true,
+        );
+    };
     let before = snapshot(&context, target);
     let result = context.threads.queue_thread_event(target, &event);
     let after = snapshot(&context, target);
-    let preimages = context.tagged_heap.take_satb_shared_for_test();
-    context.tagged_heap.set_concurrent_active_for_test(false);
+    let preimages = unsafe {
+        // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+        neovm_value::test_support::authority::take_satb_shared_for_test(&mut *context.tagged_heap)
+    };
+    // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+    unsafe {
+        neovm_value::test_support::authority::set_concurrent_active_for_test(
+            &mut *context.tagged_heap,
+            false,
+        );
+    };
 
     assert_eq!(
         result,
@@ -377,11 +400,34 @@ fn p15_mailbox_delivery_records_every_stored_satb_preimage() {
     drop(event);
     context.gc_collect_exact();
     assert_vectors_live(&context, values);
-    assert!(context.tagged_heap.take_satb_shared_for_test().is_empty());
-    context.tagged_heap.set_concurrent_active_for_test(true);
+    assert!(
+        unsafe {
+            // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+            neovm_value::test_support::authority::take_satb_shared_for_test(
+                &mut *context.tagged_heap,
+            )
+        }
+        .is_empty()
+    );
+    // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+    unsafe {
+        neovm_value::test_support::authority::set_concurrent_active_for_test(
+            &mut *context.tagged_heap,
+            true,
+        );
+    };
     let receipt = context.threads.take_thread_events(target).unwrap();
-    let preimages = context.tagged_heap.take_satb_shared_for_test();
-    context.tagged_heap.set_concurrent_active_for_test(false);
+    let preimages = unsafe {
+        // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+        neovm_value::test_support::authority::take_satb_shared_for_test(&mut *context.tagged_heap)
+    };
+    // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
+    unsafe {
+        neovm_value::test_support::authority::set_concurrent_active_for_test(
+            &mut *context.tagged_heap,
+            false,
+        );
+    };
     for value in values {
         assert!(
             preimages.contains(&value),
