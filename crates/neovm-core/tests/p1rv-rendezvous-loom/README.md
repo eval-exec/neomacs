@@ -138,15 +138,15 @@ TMPDIR="$PWD/tmp/peer-p1rv/a1/loom-tmp" \
   export RUSTFLAGS="--cfg loom"
   for bound in 2 3; do
     export LOOM_MAX_PREEMPTIONS="$bound"
-    cargo test --locked \
+    cargo nextest run --locked \
       --manifest-path crates/neovm-core/tests/p1rv-rendezvous-loom/Cargo.toml \
-      --tests -- --test-threads=1 --nocapture \
+      --tests --no-capture \
       > "tmp/peer-p1rv/a1/loom/bound-$bound.log" 2>&1
   done
 '
 ```
 
-Inspect every target's `test result:` summary and preserve the complete logs,
+Inspect the nextest summary and preserve the complete logs,
 including receipts and expected panic messages. `support::check` preserves the
 configured preemption bound, uses a 512-branch safety bound, and applies no
 permutation limit, duration limit or checkpoint truncation. A branch-limit

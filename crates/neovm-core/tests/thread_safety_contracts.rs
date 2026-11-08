@@ -45,7 +45,7 @@ fn thread_safety_compile_contracts() {
 // family.
 #[test]
 #[cfg(feature = "contract-fixtures")]
-fn obarray_view_swap_contract() {
+fn obarray_view_swap_compile_contracts() {
     let cases = trybuild::TestCases::new();
     cases.compile_fail("tests/thread_safety_ui/obarray_view_cannot_be_swapped.rs");
 }
@@ -79,15 +79,9 @@ fn nmjit_n1_sketch_compile_contracts() {
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/nmjit-type-contracts/Cargo.toml");
     let status = std::process::Command::new(env!("CARGO"))
-        .args(["test", "--locked", "--manifest-path"])
+        .args(["nextest", "run", "--locked", "--manifest-path"])
         .arg(manifest)
-        .args([
-            "--test",
-            "contracts",
-            "--",
-            "--nocapture",
-            "--test-threads=1",
-        ])
+        .args(["--test", "contracts", "--no-capture"])
         .status()
         .expect("launch isolated N1 sketch contracts");
     assert!(

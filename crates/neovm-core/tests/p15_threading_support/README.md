@@ -46,7 +46,7 @@ macOS diagnostic overlays were returned from the macOS host. No golden contains
 compiler-library source excerpts.
 
 ```sh
-env -u TRYBUILD cargo test -p neovm-core --features contract-fixtures --no-fail-fast \
+env -u TRYBUILD cargo nextest run -p neovm-core --features contract-fixtures --no-fail-fast \
   --test p0s3_contracts --test p1rv_contracts \
   --test thread_safety_contracts --test chartable_write_contracts
 ```

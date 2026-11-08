@@ -316,12 +316,12 @@ jobs:
           --no-fail-fast
 
   # The compile-fail contracts build only with the `contract-fixtures`
-  # feature because each runner compiles separate trybuild fixture crates,
-  # which does not fit a nextest per-test watchdog; the default suites and the
-  # shard matrix therefore never run them, so this standalone job is their
-  # home. It needs the workspace checkout, not the nextest archive, and it
-  # stays out of the shard matrix: this is gate-wt.sh's compile-contracts
-  # step with plain cargo test.
+  # feature, so the default suites and the shard matrix never run them and
+  # this standalone job is their home. It needs the workspace checkout, not
+  # the nextest archive, and it stays out of the shard matrix. The runners go
+  # through nextest like every other test; .config/nextest.toml runs them one
+  # at a time (trybuild serializes its scratch project behind one lock) with a
+  # watchdog sized for a fixture crate build instead of a unit test.
   compile-contracts:
     name: compile contracts (linux x86_64)
     runs-on: ubuntu-24.04
@@ -345,6 +345,7 @@ jobs:
           cache-key: ci-compile-contracts-linux-x86_64
           cache-shared-key: linux-x86_64-dev
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          install-nextest: true
 
       # trybuild always invokes `cargo --offline` on a scratch project that
       # copies this workspace's Cargo.lock and [patch.crates-io] table. The
@@ -357,34 +358,33 @@ jobs:
       - name: Fetch locked crates for trybuild's offline builds
         run: cargo fetch --locked
 
+      # The runners are compiled only with the `contract-fixtures` feature
+      # (41eaff923a moved them off #[ignore]). Without it the four test
+      # targets build empty and nextest runs nothing, so the job also counts
+      # the runners that actually passed: p0s3 1, p1rv 3, thread_safety 12
+      # (its own, sole-owner, p2ht, pentry, nmjit N1, three host-effect
+      # tests, intern-shared, P15, split T2 and obarray_view_swap_compile_contracts)
+      # and chartable_write 1; check_compile_contracts.py enforces these
+      # per-target counts and the summary. The nmjit N1 runner drives the
+      # isolated nmjit-type-contracts workspace through its own nested
+      # nextest run.
+      # Every runner lives in these test targets: the job never builds the
+      # opt-level-2 lib unit-test binary, and no runner hides in the `core`
+      # binary, which no contract job builds with the feature.
       - name: Self-test the contract result parser
         run: python3 scripts/check_compile_contracts.py --self-test
 
-      # The runners are compiled only with the `contract-fixtures` feature
-      # (41eaff923a moved them off #[ignore]). Without it the four test
-      # targets build empty and `cargo test` reports 0 passed, so the job
-      # also counts the runners that actually ran: p0s3 1, p1rv 3,
-      # thread_safety 11 (its own, sole-owner, p2ht, pentry, nmjit N1,
-      # three host-effect tests, intern-shared, P15 and split T2) and chartable_write 1,
-      # plus one nested nmjit runner: 17 passed in the summary. Every runner lives in
-      # these test targets: the job never builds the opt-level-2 lib unit-test
-      # binary, and no runner hides in the `core` binary, which no contract
-      # job builds with the feature.
       - name: Run the compile-fail contracts
         run: |
           set -o pipefail
           {
             # --no-fail-fast: one failing runner must not hide the others' goldens
             # (2026-10-29: a red p1rv runner hid 4 stale thread_safety goldens).
-            env -u TRYBUILD cargo test -p neovm-core --features contract-fixtures --no-fail-fast \
+            env -u TRYBUILD cargo nextest run -p neovm-core --features contract-fixtures --no-fail-fast \
               --test p0s3_contracts --test p1rv_contracts \
               --test thread_safety_contracts --test chartable_write_contracts
           } 2>&1 | tee "$RUNNER_TEMP/contracts.log"
-          rc=${PIPESTATUS[0]}
-          # Attribute each result line to its cargo-test target; nested
-          # trybuild `ok. 1` lines must not be able to mask a FAILED runner.
           python3 scripts/check_compile_contracts.py "$RUNNER_TEMP/contracts.log"
-          test "$rc" -eq 0 || { echo "cargo test exited $rc"; exit 1; }
 
   # The same contracts on the arm64 macOS toolchain. rustc on aarch64-apple-darwin
   # orders and caps its E0277/E0599 notes differently, so the suite keeps
@@ -413,6 +413,7 @@ jobs:
           cache-shared-key: macos-aarch64-dev
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           target: aarch64-apple-darwin
+          install-nextest: true
 
       - name: Fetch locked crates for trybuild's offline builds
         run: cargo fetch --locked
@@ -424,15 +425,11 @@ jobs:
         run: |
           set -o pipefail
           {
-            env -u TRYBUILD cargo test -p neovm-core --features contract-fixtures --no-fail-fast \
+            env -u TRYBUILD cargo nextest run -p neovm-core --features contract-fixtures --no-fail-fast \
               --test p0s3_contracts --test p1rv_contracts \
               --test thread_safety_contracts --test chartable_write_contracts
           } 2>&1 | tee "$RUNNER_TEMP/contracts.log"
-          rc=${PIPESTATUS[0]}
-          # Attribute each result line to its cargo-test target; nested
-          # trybuild `ok. 1` lines must not be able to mask a FAILED runner.
           python3 scripts/check_compile_contracts.py "$RUNNER_TEMP/contracts.log"
-          test "$rc" -eq 0 || { echo "cargo test exited $rc"; exit 1; }
 
   gnu-emacs-oracle:
     name: GNU Emacs oracle (linux x86_64)

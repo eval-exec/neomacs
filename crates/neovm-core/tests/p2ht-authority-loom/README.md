@@ -56,7 +56,7 @@ to find the specific witness (exact panic text, caught by
 From this directory, inside `nix develop`:
 
 ```
-cargo test --tests -- --test-threads=1 --nocapture
+cargo nextest run --tests --no-capture
 ```
 
 `LOOM_ITERATIONS` receipts print per test on stderr; `LOOM_WITNESS` lines

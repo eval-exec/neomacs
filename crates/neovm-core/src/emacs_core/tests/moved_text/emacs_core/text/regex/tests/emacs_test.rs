@@ -1333,7 +1333,7 @@ fn posix_blank_class_is_space_tab_only_independent_of_syntax() {
     }
 }
 
-/// Fast differential fuzz that runs on every `cargo test` — a few thousand
+/// Fast differential fuzz that runs on every `cargo nextest run` — a few thousand
 /// cases is enough to catch gross divergences quickly.
 #[test]
 fn pike_fuzz_smoke() {
@@ -1504,7 +1504,7 @@ fn pike_fallback_only_on_catastrophe() {
     );
 }
 
-/// Fast smoke run on every `cargo test`.
+/// Fast smoke run on every `cargo nextest run`.
 #[test]
 fn prefilter_fuzz_smoke() {
     crate::test_utils::init_test_tracing();

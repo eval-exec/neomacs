@@ -84,6 +84,18 @@ filter = 'test(~package_tui::)'
 platform = { host = "cfg(unix)" }
 setup = 'melpa-infra-preflight'
 
+# Compile-fail contract runners (feature `contract-fixtures`). Each runner
+# drives trybuild, which builds one scratch fixture project behind a single
+# project lock and compiles the neovm-core dependency tree into it on a cold
+# cache. Concurrent runners would only queue on that lock while their
+# watchdog clocks run, so they run one at a time; and a cold fixture build is
+# minutes, not the seconds of a unit test, so they get a fixture-build
+# watchdog. Kept first: for each setting the first matching override wins.
+[[profile.default.overrides]]
+filter = 'test(/compile_contracts$/)'
+threads-required = "num-test-threads"
+slow-timeout = { period = "900s", terminate-after = 2, grace-period = "0s" }
+
 # Minimax oracle cases intentionally evaluate game trees in both Neomacs
 # and GNU Emacs.  The exhaustive tic-tac-toe forms can legitimately exceed
 # the package-wide 60s watchdog during a full parallel run, so run this
