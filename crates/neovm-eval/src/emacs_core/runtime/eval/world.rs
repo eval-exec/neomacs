@@ -39,7 +39,10 @@ pub(crate) use era::prepare_keeper_backing;
 mod function_write_hooks;
 mod green_owner;
 mod slot;
-mod sole_owner;
+// Crate-visible so the public test-support re-export in eval/mod.rs can name
+// the driver class directly. This stays crate-internal; the struct itself is
+// public only in the test-support cfg arm.
+pub(crate) mod sole_owner;
 #[allow(unused_imports)]
 pub use green_owner::Baton;
 #[cfg(any(test, feature = "test-support"))]

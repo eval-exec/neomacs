@@ -83,7 +83,13 @@ pub use world::ObarrayViewMut;
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub use world::Baton;
+// TEST-SUPPORT-VIS row: the sole-owner compile contract names the driver from
+// the real crate so that its crate-private constructor, not a fixture-local
+// copy of the source, is the rejected item.
 pub(crate) use world::WorldSlot;
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub use world::sole_owner::SoleOwnerDriver;
 pub use world::{ContextShutdownError, ObarrayWriteAccess, OutstandingWorldViews, WorldEra};
 pub(crate) use world::{OwnedRootRegistryView, WorldView};
 

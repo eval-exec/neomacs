@@ -100,14 +100,26 @@ impl SoleOwnerVm {
 /// assertion, or blocking work.
 #[derive(Debug)]
 #[must_use = "pair the running token with the unpublished operand cursor"]
+#[cfg(not(any(test, feature = "test-support")))]
 pub(crate) struct SoleOwnerDriver {
+    _confined: PhantomData<*mut ()>,
+}
+
+// Test-support arm (TEST-SUPPORT-VIS row): the sole-owner compile contract
+// names the driver from the real crate to prove that its constructor is
+// crate-private across the crate boundary. Only the type name is public in
+// this build; the field is private and `new` is pub(crate) in both arms.
+#[derive(Debug)]
+#[must_use = "pair the running token with the unpublished operand cursor"]
+#[cfg(any(test, feature = "test-support"))]
+pub struct SoleOwnerDriver {
     _confined: PhantomData<*mut ()>,
 }
 
 impl SoleOwnerDriver {
     #[inline(always)]
     #[doc(hidden)]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             _confined: PhantomData,
         }
