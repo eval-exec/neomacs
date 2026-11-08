@@ -6,6 +6,7 @@
 
 use super::{Face, FaceTable};
 use crate::window::DisplayFrameExt;
+use crate::emacs_core::xfaces::realization::RecordedDefinitionsRefresh;
 use enum_map::EnumMap;
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::tagged::transport::SharedRoot;
@@ -110,7 +111,7 @@ pub trait FrameFaceRealizationCacheExt {
     fn replace_recorded_definitions(
         &mut self,
         table: FaceTable,
-        _refresh: crate::emacs_core::xfaces::realization::RecordedDefinitionsRefresh,
+        _refresh: RecordedDefinitionsRefresh,
     );
 
     #[cfg(test)]
@@ -175,7 +176,7 @@ impl FrameFaceRealizationCacheExt for FrameFaceRealizationCache {
     fn replace_recorded_definitions(
         &mut self,
         table: FaceTable,
-        _refresh: crate::emacs_core::xfaces::realization::RecordedDefinitionsRefresh,
+        _refresh: RecordedDefinitionsRefresh,
     ) {
         self.table = Some(table);
         self.root_lease = None;
