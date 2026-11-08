@@ -61,6 +61,14 @@ fn comment_dwim_on_blank_elisp_line_inserts_indented_comment() {
 #[test]
 fn eval_defun_via_cmeta_x_defines_current_elisp_function() {
     let (mut gnu, mut neo) = boot_pair("");
+    // show-paren's match highlight is an idle-timer presentation: whether a
+    // captured frame carries the `show-paren-match' background (steelblue3 on
+    // a dark terminal, defface in lisp/faces.el:3161) depends on where each
+    // editor's cursor sits when the frame is sampled.  This test is about
+    // C-M-x defining the function, not about paren highlighting, which has its
+    // own positive parity test in face_parity.rs (same isolation as the imenu
+    // test below).
+    eval_expression(&mut gnu, &mut neo, "(show-paren-mode -1)");
     let name = "eval-defun-probe.el";
     let initial = "(defun neo-eval-defun-probe ()\n  \"value-from-eval-defun\")\n";
 
