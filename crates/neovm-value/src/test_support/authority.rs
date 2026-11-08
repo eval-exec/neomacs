@@ -1052,3 +1052,80 @@ pub fn set_hash_table_switch_epoch_for_test(
 ) {
     storage.switch_epoch = value;
 }
+
+/// FENCE: process collection-read configuration. The original stays
+/// `pub(crate)`. This is the only public path; it writes the process gate.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn initialize_collection_reads_for_test() {
+    crate::tagged::collection_reads::initialize_for_test();
+}
+
+/// FENCE: zero the observation-access counter. The original stays
+/// `pub(crate)`. This is the only public path.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn reset_observation_state_accesses_for_test() {
+    crate::tagged::collection_reads::reset_observation_state_accesses_for_test();
+}
+
+/// FENCE: hold the cold capture state across `body`. The original stays
+/// `pub(crate)`. This is the only public path.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn with_cold_capture_for_test<R>(body: impl FnOnce() -> R) -> R {
+    crate::tagged::collection_reads::with_cold_state_held(body)
+}
+
+/// FENCE: write a cons car through the store. The original stays
+/// `pub(crate)`. This is the only public path.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn set_cons_car_in_store_for_test(
+    store: &crate::tagged::collection_reads::StoreState,
+    cell: crate::tagged::value::TaggedValue,
+    value: crate::tagged::value::TaggedValue,
+) -> bool {
+    crate::tagged::mutate::set_cons_car_in_store_for_test(store, cell, value)
+}
+
+/// FENCE: write a record slot through the store. The original stays
+/// `pub(crate)`. This is the only public path.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn set_record_slot_in_store_for_test(
+    store: &crate::tagged::collection_reads::StoreState,
+    value: crate::tagged::value::TaggedValue,
+    index: usize,
+    item: crate::tagged::value::TaggedValue,
+) -> bool {
+    crate::tagged::mutate::set_record_slot_in_store_for_test(store, value, index, item)
+}
+
+/// FENCE: write a string byte through the store. The original stays
+/// `pub(crate)`. This is the only public path.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn set_string_byte_same_char_count_in_store_for_test(
+    store: &crate::tagged::collection_reads::StoreState,
+    value: crate::tagged::value::TaggedValue,
+    byte_pos: usize,
+    byte: u8,
+) -> bool {
+    crate::tagged::mutate::set_string_byte_same_char_count_in_store_for_test(
+        store, value, byte_pos, byte,
+    )
+}
+
+/// FENCE: write a vector slot through the store. The original stays
+/// `pub(crate)`. This is the only public path.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn set_vector_slot_in_store_for_test(
+    store: &crate::tagged::collection_reads::StoreState,
+    value: crate::tagged::value::TaggedValue,
+    index: usize,
+    item: crate::tagged::value::TaggedValue,
+) -> bool {
+    crate::tagged::mutate::set_vector_slot_in_store_for_test(store, value, index, item)
+}

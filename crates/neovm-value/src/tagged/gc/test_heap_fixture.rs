@@ -4,14 +4,12 @@ use super::*;
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) struct TestHeap {
+pub struct TestHeap {
     owner: AliasableBox<TaggedHeap>,
 }
 
 impl TestHeap {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::from_heap(TaggedHeap::new())
     }
 
@@ -25,14 +23,12 @@ impl TestHeap {
     }
 
     /// Copy the provenance root without borrowing any heap bytes.
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn root(&self) -> NonNull<TaggedHeap> {
+    pub fn root(&self) -> NonNull<TaggedHeap> {
         self.owner.root()
     }
 
     /// Refresh TLS from the root after a phase/barrier-window change.
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn install(&self) {
+    pub fn install(&self) {
         set_tagged_heap_root(self.root());
     }
 

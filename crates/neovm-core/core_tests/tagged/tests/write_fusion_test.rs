@@ -2,7 +2,23 @@
 
 use super::*;
 use crate::tagged::mutate::{set_cons_car, set_cons_cdr, set_record_slot, set_vector_slot};
+use neovm_value::test_support::authority::{
+    set_cons_car_in_store_for_test as set_cons_car_in_store,
+    set_record_slot_in_store_for_test as set_record_slot_in_store,
+    set_string_byte_same_char_count_in_store_for_test as set_string_byte_same_char_count_in_store,
+    set_vector_slot_in_store_for_test as set_vector_slot_in_store,
+};
 use neovm_value::value::Value;
+
+use super::JournalPolicyForTest as JournalPolicy;
+
+const JOURNAL_SIZE: usize = journal_size_for_test();
+const MAX_READS: usize = max_reads_for_test();
+const MAX_DEPTH: usize = max_depth_for_test();
+
+fn initialize() {
+    neovm_value::test_support::authority::initialize_collection_reads_for_test();
+}
 
 type Setter = fn(Value, Value) -> bool;
 
@@ -33,7 +49,7 @@ fn storefast_vm_and_tls_stores_do_not_borrow_the_inactive_capture_recorder() {
     let (_, empty) = capture(|| ());
     assert!(empty.unwrap().unchanged());
     let before = LispCollectionRevision::current();
-    with_cold_state_held(|| {
+    neovm_value::test_support::authority::with_cold_capture_for_test(|| {
         assert_eq!(
             builtins::builtin_setcar_2(&mut context, cons, Value::T).unwrap(),
             Value::T
@@ -91,7 +107,7 @@ fn storefast_null_heap_stores_keep_journal_and_captures_without_installing_a_hea
     assert!(certificate.unchanged());
     clear_tagged_heap_if_installed(&heap);
     let before = LispCollectionRevision::current();
-    with_cold_state_held(|| {
+    neovm_value::test_support::authority::with_cold_capture_for_test(|| {
         cons.set_car(Value::T);
         assert!(vector.set_vector_slot(0, Value::T));
         assert!(record.set_record_slot(0, Value::T));
@@ -149,10 +165,6 @@ fn storefast_temporary_collector_loan_restores_one_inline_journal_before_stores_
 #[test]
 fn storefast_shared_stores_with_active_capture_and_full_barrier() {
     use crate::tagged::gc::{TestHeap, WriteTrackingMode, with_store_state};
-    use crate::tagged::mutate::{
-        set_cons_car_in_store, set_record_slot_in_store, set_string_byte_same_char_count_in_store,
-        set_vector_slot_in_store,
-    };
     let mut heap = TestHeap::new();
     let cons = Value::cons(Value::NIL, Value::NIL);
     let vector = Value::vector(vec![Value::NIL]);
@@ -192,7 +204,7 @@ fn storefast_shared_stores_with_active_capture_and_full_barrier() {
     assert_eq!(after.steps_since_for_test(before), 8);
     let owners = [cons, vector, record, string, cons, vector, record, string];
     for (offset, owner) in owners.into_iter().enumerate() {
-        let sequence = before.sequence().wrapping_add(offset as u64 + 1);
+        let sequence = before.sequence_for_test().wrapping_add(offset as u64 + 1);
         assert_eq!(
             journal_slot_for_test(sequence as usize % JOURNAL_SIZE),
             owner.bits()
@@ -289,12 +301,12 @@ fn failed_wrong_tags_journal_without_adding_projection_dependencies() {
     for (owner, setter) in failures {
         let (_, before) = capture(|| owner.heap_ptr());
         let before = before.unwrap();
-        let revision = LispCollectionRevision::current().sequence();
+        let revision = LispCollectionRevision::current().sequence_for_test();
         let (_, failed) = capture(|| assert!(!setter(owner, Value::T)));
         let failed = failed.unwrap();
         assert!(failed.reads_empty_for_test());
         assert_eq!(
-            LispCollectionRevision::current().sequence(),
+            LispCollectionRevision::current().sequence_for_test(),
             revision.wrapping_add(1)
         );
         if owner.is_heap_object() {
@@ -361,7 +373,7 @@ fn nested_fused_setters_preserve_each_scopes_first_read_and_recent_probe() {
     let _heap = crate::tagged::gc::TestHeap::new();
     let source = Value::cons(Value::NIL, Value::NIL);
     let (_, outer) = capture(|| {
-        reset_observation_state_accesses_for_test();
+        neovm_value::test_support::authority::reset_observation_state_accesses_for_test();
         assert!(set_cons_car(source, Value::T));
         assert_eq!(observation_state_accesses_for_test(), 1);
         source.cons_car();
@@ -494,10 +506,10 @@ fn lazy_prefix_observes_another_mutators_monotonic_history_transition() {
             JournalPolicy::JournalOnly
         }
     );
-    let before = LispCollectionRevision::current().sequence();
+    let before = LispCollectionRevision::current().sequence_for_test();
     assert!(set_cons_car(source, Value::T));
     assert_eq!(
-        LispCollectionRevision::current().sequence(),
+        LispCollectionRevision::current().sequence_for_test(),
         before.wrapping_add(u64::from(!lazy))
     );
 
@@ -515,11 +527,12 @@ fn lazy_prefix_observes_another_mutators_monotonic_history_transition() {
         assert!(!capture_active_for_test());
         assert!(set_cons_cdr(source, Value::T));
         assert_eq!(
-            LispCollectionRevision::current().sequence(),
+            LispCollectionRevision::current().sequence_for_test(),
             before.wrapping_add(u64::from(!lazy) + 1)
         );
         {
-            let slot = LispCollectionRevision::current().sequence() as usize % JOURNAL_SIZE;
+            let slot =
+                LispCollectionRevision::current().sequence_for_test() as usize % JOURNAL_SIZE;
             assert_eq!(journal_slot_for_test(slot), source.bits());
         }
         assert_eq!(journal_policy(), JournalPolicy::JournalOnly);
@@ -528,7 +541,7 @@ fn lazy_prefix_observes_another_mutators_monotonic_history_transition() {
     });
     assert!(set_cons_car(source, Value::NIL));
     assert_eq!(
-        LispCollectionRevision::current().sequence(),
+        LispCollectionRevision::current().sequence_for_test(),
         before.wrapping_add(u64::from(!lazy) + 2)
     );
     assert_eq!(journal_policy(), JournalPolicy::JournalOnly);
@@ -569,7 +582,7 @@ fn generic_changed_keeps_journaling_separate_from_pointer_observation() {
     let _heap = crate::tagged::gc::TestHeap::new();
     let source = Value::cons(Value::NIL, Value::NIL);
     let (_, reads) = capture(|| {
-        reset_observation_state_accesses_for_test();
+        neovm_value::test_support::authority::reset_observation_state_accesses_for_test();
         LispCollectionRevision::changed(source);
         assert_eq!(observation_state_accesses_for_test(), 0);
     });
