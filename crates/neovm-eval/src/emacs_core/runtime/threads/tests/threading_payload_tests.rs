@@ -205,34 +205,39 @@ fn exercise(cycles: &[Cycle]) {
             }
             match cycle {
                 Cycle::Full => {
-                    let report = era.collect_stopped(&mut stopped).unwrap();
+                    let report =
+                        ParallelHeapEraWorldCollectExt::collect_stopped(&era, &mut stopped)
+                            .unwrap();
                     assert!(report.major);
                     unrelated = Unrelated::Reclaimed;
                 }
-                Cycle::Minor => match era.collect_stopped_minor(&mut stopped) {
-                    Ok(report) => {
-                        assert!(generations);
-                        assert!(!report.major);
-                        unrelated = Unrelated::Reclaimed;
+                Cycle::Minor => {
+                    match ParallelHeapEraWorldCollectExt::collect_stopped_minor(&era, &mut stopped)
+                    {
+                        Ok(report) => {
+                            assert!(generations);
+                            assert!(!report.major);
+                            unrelated = Unrelated::Reclaimed;
+                        }
+                        Err(MinorCollectionError::GenerationalDisabled) => {
+                            assert!(!generations);
+                            assert_eq!(
+                                inspect(&era, &stopped, &graph, unrelated),
+                                before,
+                                "GEN0 minor refusal changes no cycle, child or age"
+                            );
+                            // The typed refusal preceded AllStopped::trace. A
+                            // no-op acknowledgement permits normal fixture cleanup;
+                            // it performs no collection or payload traversal.
+                            stopped
+                                .acknowledge_refused_minor_for_threading_test()
+                                .unwrap();
+                        }
+                        Err(error @ MinorCollectionError::Collection(_)) => {
+                            panic!("threading adapter minor failed: {error:?}");
+                        }
                     }
-                    Err(MinorCollectionError::GenerationalDisabled) => {
-                        assert!(!generations);
-                        assert_eq!(
-                            inspect(&era, &stopped, &graph, unrelated),
-                            before,
-                            "GEN0 minor refusal changes no cycle, child or age"
-                        );
-                        // The typed refusal preceded AllStopped::trace. A
-                        // no-op acknowledgement permits normal fixture cleanup;
-                        // it performs no collection or payload traversal.
-                        stopped
-                            .acknowledge_refused_minor_for_threading_test()
-                            .unwrap();
-                    }
-                    Err(error @ MinorCollectionError::Collection(_)) => {
-                        panic!("threading adapter minor failed: {error:?}");
-                    }
-                },
+                }
             }
             let after = inspect(&era, &stopped, &graph, unrelated);
             match cycle {

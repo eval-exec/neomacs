@@ -54,7 +54,7 @@ fn stopped_collection(ctx: &mut Context, old_word: usize) -> (CollectionReport, 
                         heap.owns_heap_value_for_test(Value::from_bits(old_word))
                     })
                     .map_err(|e| format!("before GC membership: {e:?}"))?;
-                let collected = era.collect_stopped(&mut stopped);
+                let collected = ParallelHeapEraWorldCollectExt::collect_stopped(era, &mut stopped);
                 let after = era.with_stopped_heap_for_test(&stopped, |heap| {
                     // Allocation membership only; never decode an old payload.
                     heap.owns_heap_value_for_test(Value::from_bits(old_word))

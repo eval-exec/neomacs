@@ -268,7 +268,11 @@ fn a6_owned_admission_pins_shell_census_and_restores_empty_weak_table() {
             {
                 let era = projection.era();
                 let mut stopped = era.stop().expect("empty membership stops");
-                assert!(era.collect_stopped(&mut stopped).unwrap().major);
+                assert!(
+                    ParallelHeapEraWorldCollectExt::collect_stopped(era, &mut stopped)
+                        .unwrap()
+                        .major
+                );
                 era.with_stopped_heap_for_test(&stopped, |heap| {
                     let shell = TaggedValue::from_bits(shell_bits);
                     assert!(heap.owns_heap_value_for_test(shell));
