@@ -17,6 +17,11 @@ expected target must contribute exactly its expected runner count, and the
 summary must report at least 17 tests run with zero failed, timed out or
 skipped.
 
+Nextest prints a failing test twice: once in the streaming section and again in
+the failure summary.  Status lines are therefore de-duplicated per (binary,
+test), taking the most severe status, so the replay cannot inflate a per-target
+runner count.
+
 Usage: check_compile_contracts.py <contracts.log>
        check_compile_contracts.py --self-test
 """
@@ -44,6 +49,7 @@ SUMMARY = re.compile(
     r"(?:,\s*(?P<timedout>\d+) timed out)?"
     r"(?:,\s*(?P<skipped>\d+) skipped)?"
 )
+SEVERITY = {"PASS": 0, "IGNORED": 1, "SKIP": 2, "FAIL": 3, "TIMEOUT": 4, "LEAK": 5}
 
 
 def check(text):
@@ -51,21 +57,24 @@ def check(text):
     text = ANSI.sub("", text)
     out = []
     ok = True
-    counts = {name: 0 for name in EXPECTED}
-    bad = []
-    seen = 0
+    statuses = {}
     for line in text.splitlines():
         match = STATUS.match(line)
         if match is None:
             continue
-        seen += 1
-        target = match.group("binary").rsplit("::", 1)[-1]
+        key = (match.group("binary"), match.group("test"))
+        status = match.group("status")
+        previous = statuses.get(key)
+        if previous is None or SEVERITY.get(status, 0) >= SEVERITY.get(previous, 0):
+            statuses[key] = status
+    counts = {name: 0 for name in EXPECTED}
+    bad = []
+    for (binary, test), status in sorted(statuses.items()):
+        target = binary.rsplit("::", 1)[-1]
         if target in counts:
             counts[target] += 1
-        if match.group("status") != "PASS":
-            bad.append(
-                f"{match.group('status')} {match.group('binary')} {match.group('test')}"
-            )
+        if status != "PASS":
+            bad.append(f"{status} {binary} {test}")
     for line in bad:
         out.append("NON-PASS " + line)
     if bad:
@@ -99,17 +108,18 @@ def check(text):
         if skipped:
             out.append("SKIPPED runners are not evidence")
             ok = False
-    if seen < EXPECTED_TOTAL:
-        out.append(f"status lines seen {seen} (need >= {EXPECTED_TOTAL})")
+    if len(statuses) < EXPECTED_TOTAL:
+        out.append(f"distinct status lines seen {len(statuses)} (need >= {EXPECTED_TOTAL})")
         ok = False
     return ok, out
 
 
-def _nextest_log(counts=None, overrides=None, extra="", summary_run=None):
+def _nextest_log(counts=None, overrides=None, extra="", summary_run=None, replay=()):
     """Build a synthetic nextest log; overrides keys are (target, index)."""
     counts = dict(EXPECTED if counts is None else counts)
     overrides = overrides or {}
     rows = []
+    lines_by_key = {}
     index = 0
     total = sum(counts.values())
     for target, count in counts.items():
@@ -122,9 +132,13 @@ def _nextest_log(counts=None, overrides=None, extra="", summary_run=None):
         for offset in range(count):
             index += 1
             status = overrides.get((target, offset), "PASS")
-            rows.append(
+            row = (
                 f"        {status} [   0.01s] ( {index:2d}/{total}) {package} {target}_case_{offset}"
             )
+            rows.append(row)
+            lines_by_key[(target, offset)] = row
+    # Nextest replays a failing test's status line in the failure summary.
+    rows.extend(lines_by_key[key] for key in replay if key in lines_by_key)
     failed = sum(1 for (target, offset), status in overrides.items() if status == "FAIL"
                  and offset < counts.get(target, 0))
     timedout = sum(1 for (target, offset), status in overrides.items() if status == "TIMEOUT"
@@ -155,6 +169,14 @@ SELF_TEST_CASES = {
             extra="test result: ok. 1 passed; 0 failed",
         ),
     ),
+    "failure-summary-replay-does-not-inflate-counts": (
+        False,
+        _nextest_log(
+            overrides={("thread_safety_contracts", 0): "FAIL"},
+            replay=[("thread_safety_contracts", 0)],
+        ),
+        "thread_safety_contracts: 12 runners (expected 12)",
+    ),
     "timeout-runner": (False, _nextest_log(overrides={("p1rv_contracts", 0): "TIMEOUT"})),
     "missing-runner": (
         False,
@@ -174,9 +196,14 @@ SELF_TEST_CASES = {
 
 def self_test():
     failures = 0
-    for name, (expected_ok, text) in SELF_TEST_CASES.items():
+    for name, case in SELF_TEST_CASES.items():
+        expected_ok, text = case[0], case[1]
+        required = case[2] if len(case) > 2 else None
         ok, lines = check(text)
-        if ok == expected_ok:
+        good = ok == expected_ok and (
+            required is None or any(required in line for line in lines)
+        )
+        if good:
             print(f"PASS self-test: {name} -> ok={ok}")
         else:
             failures += 1
