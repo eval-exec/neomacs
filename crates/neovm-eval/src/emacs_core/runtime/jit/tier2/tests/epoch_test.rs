@@ -83,12 +83,15 @@ fn tier2_inline_epoch_moved_does_not_count_as_feedback_failure() {
     let value = Value::make_bytecode(f.clone());
     crate::emacs_core::eval::push_scratch_gc_root(value);
     let run = |ctx: &mut Context| {
-        Value::from_bits(
-            // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
-            unsafe { cache::try_run_compiled(ctx, &f, value, &[Value::make_int(4)]) }
-                .expect("no signal")
-                .expect("precise: resumed, not rerun"),
-        )
+        // SAFETY: the compiled-call Ok word is a real Value's tagged bits.
+        unsafe {
+            Value::from_bits(
+                // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+                unsafe { cache::try_run_compiled(ctx, &f, value, &[Value::make_int(4)]) }
+                    .expect("no signal")
+                    .expect("precise: resumed, not rerun"),
+            )
+        }
     };
     // Numeric/call-target feedback can move in the initial profiling window.
     // Wait for the real policy to install a Feedback upgrade.
