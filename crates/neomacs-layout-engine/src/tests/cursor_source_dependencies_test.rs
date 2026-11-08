@@ -1,5 +1,100 @@
 use super::*;
 
+/// Ordinary reconstruction needs observed cursor absence, not merely absence
+/// of a currently winning candidate; relevant interval writes revoke it.
+#[test]
+fn ordinary_cursor_proof_observes_original_string_absence() {
+    let mut context = Context::new();
+    for (expression, ordinary) in [
+        ("(copy-sequence \"XY\")", true),
+        ("(propertize \"XY\" 'face 'bold)", true),
+        ("(propertize \"XY\" 'cursor nil)", true),
+        ("(propertize \"XY\" 'cursor 1)", false),
+        (
+            "(propertize \"XY\" 'category 'neo-unproven-category)",
+            false,
+        ),
+    ] {
+        let source = context
+            .eval_str(&format!("(setq neo-proof-source {expression})"))
+            .unwrap();
+        let scope = Capture::begin(&context);
+        string_properties(source);
+        let original = scope.finish().unwrap();
+        assert_eq!(
+            original.ordinary_cursor_source_proof().is_some(),
+            ordinary,
+            "{expression}"
+        );
+        context
+            .eval_str("(put-text-property 0 1 'cursor 2 neo-proof-source)")
+            .unwrap();
+        assert!(original.ordinary_cursor_source_proof().is_none());
+    }
+}
+
+/// Flattened original authorities have a hard leaf budget, not a growing
+/// historical chain, and repeating the same union does not consume more budget.
+#[test]
+fn original_authority_unions_are_flattened_deduplicated_and_bounded() {
+    let context = Context::new();
+    let mut originals = Vec::new();
+    for index in 0..33 {
+        let source = Value::string(format!("source-{index}"));
+        let scope = Capture::begin(&context);
+        string_properties(source);
+        originals.push(scope.finish().unwrap());
+    }
+    let joined =
+        CursorSourceDependencies::combine_originals(originals[..32].iter().cloned()).unwrap();
+    let repeated = CursorSourceDependencies::combine_originals([joined.clone(), joined]).unwrap();
+    let DependencyAuthority::PreparedUnion(parts) = repeated.0.as_ref() else {
+        panic!("flat original union required")
+    };
+    assert_eq!(parts.len(), 32);
+    assert!(repeated.unchanged());
+    assert!(CursorSourceDependencies::combine_originals(originals).is_none());
+}
+
+/// A newly decoded payload is a new original operand even if its source string
+/// was already observed. Detaching an observed descendant invalidates before GC.
+#[test]
+fn decoded_payload_domains_and_ancestor_mutations_keep_original_authority() {
+    let mut context = Context::new();
+    let first = context
+        .eval_str("(setq neo-original-face (list :height 2.0))")
+        .unwrap();
+    let string = Value::string("same-source");
+    let capture = |context: &Context, face: Value| {
+        let scope = Capture::begin(context);
+        string_properties(string);
+        observe_projection(face, || neovm_core::emacs_core::value::list_to_vec(&face));
+        scope.finish().unwrap()
+    };
+    let original = capture(&context, first);
+    context
+        .eval_str("(setcar (cdr (list :height 1.0)) 0.5)")
+        .unwrap();
+    assert!(original.unchanged(), "unrelated payloads do not invalidate");
+    let second = context.eval_str("(list :height 0.1)").unwrap();
+    let expanded = original
+        .after_partial_walk(capture(&context, second))
+        .unwrap();
+    assert!(
+        !expanded.can_replay(),
+        "the same string does not cover a new decoded operand"
+    );
+    context
+        .eval_str("(setcdr neo-original-face (list 0.5))")
+        .unwrap();
+    context.gc_collect_exact();
+    assert!(!original.unchanged());
+    assert!(
+        !expanded.unchanged(),
+        "original ancestor writes remain invalid after descendant reclamation"
+    );
+}
+
 /// Equal text is not object identity: each original string (including distinct
 /// interval state) must survive exact GC for its retained read certificate.
 #[test]

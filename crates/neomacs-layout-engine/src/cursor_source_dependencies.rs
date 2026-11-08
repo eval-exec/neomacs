@@ -1,4 +1,4 @@
-//! Owner-only observations of every string projected by a canonical window walk.
+//! Owner-only observations of original source objects and decoded payloads.
 //! Numeric snapshots and worker rows deliberately carry no such certificate.
 
 #[cfg(test)]
@@ -13,20 +13,30 @@ use neovm_core::{
 };
 use std::{cell::RefCell, rc::Rc};
 
-/// Original allocation identity, not Lisp `equal`: equal-text strings may
-/// have different intervals and lifetimes. The matching roots keep these
-/// tagged addresses alive for the entire certificate/domain lifetime.
+/// Original allocation identity, not Lisp `equal`: equal objects may have
+/// different contents, intervals, or decoded payloads. Matching roots protect
+/// their graphs while the original observed ancestor edges remain unchanged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct SourceStringIdentity(usize);
+struct SourceObjectIdentity(usize);
+
+// Replaces the former completeness bool without growing the TLS observation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CaptureState {
+    Ordinary,
+    SourceSelectionRequired,
+    Incomplete,
+}
+const _: () = assert!(std::mem::size_of::<CaptureState>() == std::mem::size_of::<bool>());
 
 #[derive(Debug)]
 struct Observation {
     reads: Vec<CollectionReads>,
     roots: Vec<OwnedRoots>,
-    strings: rustc_hash::FxHashSet<SourceStringIdentity>,
+    // Source strings AND directly interpreted payload operands.
+    strings: rustc_hash::FxHashSet<SourceObjectIdentity>,
     retainer: OwnedRootRetainer,
     owner: Option<CollectionReads>,
-    complete: bool,
+    state: CaptureState,
 }
 thread_local! { static ACTIVE: RefCell<Option<Observation>> = const { RefCell::new(None) }; }
 
@@ -34,14 +44,26 @@ thread_local! { static ACTIVE: RefCell<Option<Observation>> = const { RefCell::n
 /// Rc clones preserve the original read certificate across unchanged replay.
 #[derive(Clone, Debug)]
 pub(crate) struct CursorSourceDependencies(Rc<DependencyAuthority>);
+
+/// Original producer evidence that replay needs no Lisp-string cursor override.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct OrdinaryCursorSourceProof(());
 #[derive(Debug)]
 enum DependencyAuthority {
     Canonical {
         owner: CollectionReads,
         reads: Vec<CollectionReads>,
         _roots: Vec<OwnedRoots>,
-        strings: rustc_hash::FxHashSet<SourceStringIdentity>,
+        strings: rustc_hash::FxHashSet<SourceObjectIdentity>,
+        ordinary: Option<OrdinaryCursorSourceProof>,
     },
+    // Original prepared-row producer evidence and its original source leases.
+    // The domain is opaque, so partial walks cannot claim subset inclusion.
+    PreparedRows {
+        reads: CollectionReads,
+        _roots: Vec<OwnedRoots>,
+    },
+    PreparedUnion(Vec<CursorSourceDependencies>),
     // Validate a partial walk with newly introduced sources for this frame,
     // then require a canonical walk. Never grow an unbounded history chain.
     FrameOnly {
@@ -58,6 +80,8 @@ impl CursorSourceDependencies {
                 owner.unchanged_and_observe()
                     && reads.iter().all(CollectionReads::unchanged_and_observe)
             }
+            DependencyAuthority::PreparedRows { reads, .. } => reads.unchanged_and_observe(),
+            DependencyAuthority::PreparedUnion(sources) => sources.iter().all(Self::unchanged),
             DependencyAuthority::FrameOnly { previous, fresh } => {
                 previous.unchanged() && fresh.unchanged()
             }
@@ -66,12 +90,78 @@ impl CursorSourceDependencies {
     /// Expanded partial-source domains validate this frame only; the next walk
     /// resets them instead of indefinitely retaining removed strings/leases.
     pub(crate) fn can_replay(&self) -> bool {
-        matches!(self.0.as_ref(), DependencyAuthority::Canonical { .. })
+        !matches!(self.0.as_ref(), DependencyAuthority::FrameOnly { .. })
+    }
+    /// Complete canonical walks with observed absence of explicit cursors, or successful owned
+    /// row programs (which reject all non-nil string `cursor` properties), allow
+    /// moved-point reconstruction. This proof applies only to unchanged rows.
+    pub(crate) fn ordinary_cursor_source_proof(&self) -> Option<OrdinaryCursorSourceProof> {
+        let ordinary = match self.0.as_ref() {
+            DependencyAuthority::Canonical { ordinary, .. } => ordinary.is_some(),
+            DependencyAuthority::PreparedRows { .. } => true,
+            DependencyAuthority::PreparedUnion(parts) => parts
+                .iter()
+                .all(|part| part.ordinary_cursor_source_proof().is_some()),
+            DependencyAuthority::FrameOnly { .. } => false,
+        };
+        (ordinary && self.unchanged()).then_some(OrdinaryCursorSourceProof(()))
+    }
+    /// Preserve a prepared page producer's original evidence and leases. This
+    /// does not recapture or rebase dependencies when a cached page is selected.
+    pub(crate) fn from_prepared_rows(reads: CollectionReads, roots: Vec<OwnedRoots>) -> Self {
+        Self(Rc::new(DependencyAuthority::PreparedRows {
+            reads,
+            _roots: roots,
+        }))
+    }
+    /// Combine actual original page authorities, flattening and deduplicating
+    /// them under a fixed budget. Never build an unbounded historical chain.
+    pub(crate) fn combine_originals(sources: impl IntoIterator<Item = Self>) -> Option<Self> {
+        fn append(
+            source: CursorSourceDependencies,
+            leaves: &mut Vec<CursorSourceDependencies>,
+        ) -> bool {
+            match source.0.as_ref() {
+                DependencyAuthority::PreparedUnion(parts) => {
+                    parts.iter().all(|part| append(part.clone(), leaves))
+                }
+                DependencyAuthority::FrameOnly { .. } => false,
+                _ => {
+                    if !leaves.iter().any(|leaf| Rc::ptr_eq(&leaf.0, &source.0)) {
+                        if leaves.len() == 32 {
+                            return false;
+                        }
+                        leaves.push(source);
+                    }
+                    true
+                }
+            }
+        }
+        let mut leaves = Vec::new();
+        for source in sources {
+            if !source.unchanged() || !append(source, &mut leaves) {
+                return None;
+            }
+        }
+        if leaves.is_empty() {
+            None
+        } else {
+            Some(Self(Rc::new(DependencyAuthority::PreparedUnion(leaves))))
+        }
     }
     /// Unchanged original inputs certify retained rows, while actual new reads
     /// certify walked rows. Keep the ORIGINAL certificate for a known domain;
     /// new sources require a bounded frame-only union, not a rebased witness.
     pub(crate) fn after_partial_walk(&self, fresh: Self) -> Option<Self> {
+        if matches!(
+            self.0.as_ref(),
+            DependencyAuthority::PreparedRows { .. } | DependencyAuthority::PreparedUnion(_)
+        ) {
+            return Some(Self(Rc::new(DependencyAuthority::FrameOnly {
+                previous: self.clone(),
+                fresh,
+            })));
+        }
         let DependencyAuthority::Canonical {
             strings: previous, ..
         } = self.0.as_ref()
@@ -130,7 +220,11 @@ impl Capture {
                 reads: Vec::new(),
                 roots: Vec::new(),
                 strings: rustc_hash::FxHashSet::default(),
-                complete: owner.is_some(),
+                state: if owner.is_some() {
+                    CaptureState::Ordinary
+                } else {
+                    CaptureState::Incomplete
+                },
                 owner,
                 retainer: context.owned_root_retainer(),
             }))
@@ -156,7 +250,7 @@ impl Capture {
             return None;
         }
         let observation = ACTIVE.with(|active| active.borrow_mut().take())?;
-        if !observation.complete {
+        if observation.state == CaptureState::Incomplete {
             return None;
         }
         Some(CursorSourceDependencies(Rc::new(
@@ -165,6 +259,8 @@ impl Capture {
                 reads: observation.reads,
                 _roots: observation.roots,
                 strings: observation.strings,
+                ordinary: (observation.state == CaptureState::Ordinary)
+                    .then_some(OrdinaryCursorSourceProof(())),
             },
         )))
     }
@@ -177,11 +273,13 @@ impl Drop for Capture {
     }
 }
 
-/// Observe presence AND absence of intervals, before selection filters or
-/// early winner selection. Property-less competing strings may gain `cursor`.
-pub(crate) fn string_properties(
-    value: Value,
-) -> Option<neovm_core::emacs_core::value::text_props::TextPropertyTable> {
+/// Root an original operand BEFORE its callback-free native projection and
+/// observe the actual decoder, including unsuccessful/absent lookups. Rooted
+/// ancestor graphs protect child identities while observed edges stay valid;
+/// changing an edge invalidates the original certificate before reuse.
+/// Operand identities also participate in partial-domain inclusion: observing
+/// a new face plist is not covered merely by having seen its string before.
+pub(crate) fn observe_projection<T>(value: Value, project: impl FnOnce() -> T) -> T {
     let rooted = ACTIVE.with(|active| {
         let mut active = active.borrow_mut();
         let observation = active.as_mut()?;
@@ -190,13 +288,13 @@ pub(crate) fn string_properties(
             .as_ref()
             .is_some_and(CollectionReads::unchanged_and_observe)
         {
-            observation.complete = false;
+            observation.state = CaptureState::Incomplete;
             return None;
         }
-        let identity = SourceStringIdentity(value.bits());
+        let identity = SourceObjectIdentity(value.bits());
         if !observation.strings.contains(&identity) {
             let Some(roots) = observation.retainer.retain([value]) else {
-                observation.complete = false;
+                observation.state = CaptureState::Incomplete;
                 return None;
             };
             // Root each original object once, before its first projection.
@@ -207,27 +305,57 @@ pub(crate) fn string_properties(
         Some(())
     });
     if rooted.is_none() {
-        return neovm_core::emacs_core::value::get_string_text_properties_table_for_value(value);
+        return project();
     }
-    let (properties, reads) = collection_reads::capture(|| {
-        // The cursor property is indexed in the original string. Observe its
-        // contents/storage too, without copying/scanning bytes, so in-place
-        // string edits cannot retain an old source slot or glyph extent.
-        if let Some(string) = value.as_lisp_string() {
-            let _ = string.as_bytes();
-            let _ = string.is_multibyte();
-            let _ = string.schars();
-        }
-        neovm_core::emacs_core::value::get_string_text_properties_table_for_value(value)
-    });
+    let (result, reads) = collection_reads::capture(project);
     ACTIVE.with(|active| {
         if let Some(observation) = active.borrow_mut().as_mut() {
             if let Some(reads) = reads {
                 observation.reads.push(reads);
             } else {
-                observation.complete = false;
+                observation.state = CaptureState::Incomplete;
             }
         }
     });
+    result
+}
+
+/// Observe presence AND absence of intervals before candidate selection.
+/// Property-less competing strings may gain `cursor` independently of ticks.
+pub(crate) fn string_properties(
+    value: Value,
+) -> Option<neovm_core::emacs_core::value::text_props::TextPropertyTable> {
+    let mut requires_selection = false;
+    let properties = observe_projection(value, || {
+        let mut chars = 0;
+        if let Some(string) = value.as_lisp_string() {
+            let _ = string.as_bytes();
+            let _ = string.is_multibyte();
+            chars = string.schars();
+        }
+        let properties =
+            neovm_core::emacs_core::value::get_string_text_properties_table_for_value(value);
+        // Observe the ORIGINAL interval lookup while its collection scope is
+        // active. Category-derived behavior remains conservatively unproven.
+        requires_selection = properties.as_ref().is_some_and(|props| {
+            props.has_any_non_nil_property_in_char_range(
+                neovm_core::buffer::CharRange::new(
+                    neovm_core::buffer::CharPos0::ZERO,
+                    neovm_core::buffer::CharPos0::new(chars),
+                ),
+                &[Value::symbol("cursor"), Value::symbol("category")],
+            )
+        });
+        properties
+    });
+    if requires_selection {
+        ACTIVE.with(|active| {
+            if let Some(observation) = active.borrow_mut().as_mut() {
+                if observation.state == CaptureState::Ordinary {
+                    observation.state = CaptureState::SourceSelectionRequired;
+                }
+            }
+        });
+    }
     properties
 }

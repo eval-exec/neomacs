@@ -653,6 +653,9 @@ pub struct CursorOnlyReplay {
     pub(crate) retained_cursor: Option<RetainedTextWindowCursor>,
     /// Semantic selection survives unchanged placement independently of paint.
     pub(crate) retained_logical_cursor: Option<RetainedLogicalCursor>,
+    /// Original complete-source evidence, refreshed by the engine at consumption.
+    pub(crate) ordinary_cursor_source:
+        Option<crate::cursor_source_dependencies::OrdinaryCursorSourceProof>,
     /// Sealed frame-face generation that owns every ID in `body_rows`.
     pub(crate) face_generation: FrameFaceGeneration,
 }
@@ -1633,6 +1636,7 @@ impl RetainedWindowMatrix {
                         dimensions: self.display_snapshot.logical_cursor_dimensions,
                     })
             },
+            ordinary_cursor_source: None,
             face_generation: self.face_generation,
         })
     }

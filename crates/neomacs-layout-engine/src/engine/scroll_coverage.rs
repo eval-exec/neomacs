@@ -386,6 +386,19 @@ impl ScrollCoverage {
 }
 
 impl LayoutEngine {
+    /// Retire original evaluator leases independently of presentation acceptance.
+    /// Idle and aborted attempts still process deleted owners, including when
+    /// every remaining frame is hidden or no selected frame exists.
+    pub(super) fn retire_removed_frame_owners(
+        &mut self,
+        evaluator: &neovm_core::emacs_core::Context,
+    ) {
+        self.frame_visual_histories
+            .retain_live(|frame| evaluator.frame_manager().get(frame).is_some());
+        self.prepared_viewports
+            .retain_live_frames(|frame| evaluator.frame_manager().get(frame).is_some());
+    }
+
     /// A completed idle page needs one fresh immutable transport publication.
     pub fn take_scroll_coverage_publication(&mut self) -> bool {
         std::mem::take(&mut self.scroll_coverage.publication_pending)
@@ -397,6 +410,7 @@ impl LayoutEngine {
         &mut self,
         evaluator: &neovm_core::emacs_core::Context,
     ) -> Option<ScrollCoverageProgress> {
+        self.retire_removed_frame_owners(evaluator);
         self.prepared_viewports.retire_invalid_dependencies();
         if !self.prepared_viewports.invalidated.is_empty() {
             // Retire the old render-thread certificate even before a new

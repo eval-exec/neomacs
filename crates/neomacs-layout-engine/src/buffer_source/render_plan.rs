@@ -888,12 +888,17 @@ impl BufferSourceOutputSetup {
         // even a string emitting only synthetic/control primitives may override point.
         // This is O(1), excludes category/alias properties too, and caches no
         // mutable string-property claim under buffer ticks.
-        let canonical_buffer_cursor = buffer.layout_text_props_is_empty()
-            && !has_overlays
-            && !local_display_policy.has_prefix()
-            && !buffer
-                .layout_buffer_local_value(crate::neovm_bridge::LayoutVar::DefaultTextProperties)
-                .is_some_and(|value| value.is_cons());
+        let canonical_buffer_cursor = cursor_only
+            .as_ref()
+            .is_some_and(|replay| replay.ordinary_cursor_source.is_some())
+            || (buffer.layout_text_props_is_empty()
+                && !has_overlays
+                && !local_display_policy.has_prefix()
+                && !buffer
+                    .layout_buffer_local_value(
+                        crate::neovm_bridge::LayoutVar::DefaultTextProperties,
+                    )
+                    .is_some_and(|value| value.is_cons()));
         let face_resolution = BufferSourceFaceResolutionContext::new(
             buffer,
             face_resolver.resolver(),
@@ -980,12 +985,9 @@ impl BufferSourceOutputSetup {
         // rebuild (honest layering, spec §4.6) — the win is skipping fontify /
         // shaping / measurement for the body.
         if let Some(mut replay) = cursor_only {
-            // Row coverage alone cannot establish a hidden explicit selection.
-            // Unknown or moved semantic authority requires a fresh source walk.
-            if replay.retained_logical_cursor.is_none()
-                && !canonical_buffer_cursor
-                && cursor_style_for_window(params).is_none()
-            {
+            // Row coverage cannot establish an explicit selection, regardless
+            // of paint visibility. Moved authority needs a fresh source walk.
+            if replay.retained_logical_cursor.is_none() && !canonical_buffer_cursor {
                 output.restore_retry_checkpoint(retry_checkpoint);
                 return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
             }

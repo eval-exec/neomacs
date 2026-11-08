@@ -2534,6 +2534,7 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
         slots: &mut Vec<DisplayRowGlyphSlot>,
     ) -> DisplayRowAppendStatus {
         let glyph_start = self.area_len();
+        let slot_start = slots.len();
         let face_id = self.writer.face_id(face);
         let measurement = self.text_run_measurement(text, face_id);
         // An explicit or supplied measured plan remains authoritative. Query
@@ -2645,6 +2646,24 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
             byte_offset += ch.len_utf8();
             if overflowing {
                 break;
+            }
+        }
+        // Later contextual members can grow the head selected by an earlier
+        // slot. Refresh that same primitive only after this append is complete.
+        // A continuation that emitted nothing must stay unselected even if its
+        // boundary offset is now occupied by a later character's glyph.
+        let glyphs = &self.writer.row.glyphs[self.writer.area_index()];
+        for slot in &mut slots[slot_start..] {
+            if slot.selected_primitive_dimensions.is_some()
+                && let Some(offset) = slot.text_glyph_offset
+            {
+                slot.selected_primitive_dimensions =
+                    glyphs.get(glyph_start + offset).and_then(|glyph| {
+                        crate::display_cursor::measured_logical_cursor_dimensions(
+                            glyph.pixel_width,
+                            glyph.pixel_height,
+                        )
+                    });
             }
         }
         status

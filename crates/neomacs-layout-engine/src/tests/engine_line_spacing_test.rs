@@ -1036,6 +1036,403 @@ fn hidden_canonical_cursor_replay_matches_fresh_positions() {
     }
 }
 
+/// Late source rejection occurs after speculative end publication; restore
+/// the exact token before asking the frame coordinator to retry.
+#[test]
+fn late_source_rejection_restores_speculative_window_end() {
+    use neovm_core::buffer::{EmacsBytePos, LispCharPos1};
+    use neovm_core::window::{MatrixRow0, WindowEndRecord};
+    let (mut eval, frame, buffer, window) = incr_editing_frame("a\n", 800, 240);
+    let previous = eval
+        .frame_manager()
+        .get(frame)
+        .unwrap()
+        .find_window(window)
+        .unwrap()
+        .window_end_state();
+    let mut attempt = eval.begin_redisplay_window_end_attempt(frame, window, buffer);
+    assert!(attempt.is_some());
+    eval.publish_redisplay_window_end(
+        frame,
+        window,
+        WindowEndRecord::from_positions(
+            LispCharPos1::new(3),
+            EmacsBytePos::new(3),
+            LispCharPos1::new(3),
+            EmacsBytePos::new(3),
+            MatrixRow0::new(1),
+        ),
+    );
+    assert_ne!(
+        eval.frame_manager()
+            .get(frame)
+            .unwrap()
+            .find_window(window)
+            .unwrap()
+            .window_end_state(),
+        previous
+    );
+    eval.eval_str("(setq neo-end-source (propertize \"XY\" 'cursor 1))")
+        .unwrap();
+    let source = eval.eval_str("neo-end-source").unwrap();
+    let capture = crate::cursor_source_dependencies::Capture::begin(&eval);
+    crate::cursor_source_dependencies::string_properties(source);
+    eval.eval_str("(put-text-property 0 1 'cursor nil neo-end-source)")
+        .unwrap();
+    assert!(!capture.unchanged());
+    assert!(reject_changed_cursor_sources(
+        &mut eval,
+        &mut attempt,
+        !capture.unchanged()
+    ));
+    assert!(attempt.is_none(), "rejected local token must be consumed");
+    assert_eq!(
+        eval.frame_manager()
+            .get(frame)
+            .unwrap()
+            .find_window(window)
+            .unwrap()
+            .window_end_state(),
+        previous
+    );
+}
+
+/// Deleted owners must release source leases at idle maintenance, even when
+/// the remaining frame is hidden and no presentation is accepted afterward.
+#[test]
+fn deleted_frame_source_roots_retire_during_idle_without_a_presentation() {
+    use crate::cursor_source_dependencies::{Capture, string_properties};
+    use crate::frame_visual_history::FrameVisualHistory;
+    let (mut eval, frame, buffer, window) = incr_editing_frame("a\n", 800, 240);
+    let other = eval
+        .frame_manager_mut()
+        .create_frame("hidden-survivor", 800, 240, buffer);
+    eval.frame_manager_mut().get_mut(other).unwrap().visibility =
+        neovm_core::window::FrameVisibility::Invisible;
+    // Drain initialization's deferred reclamation before measuring our graph.
+    for _ in 0..3 {
+        eval.gc_collect_exact();
+    }
+    let count = || neovm_core::tagged::gc::with_tagged_heap(|heap| heap.allocated_count());
+    let baseline = count();
+    let source = Value::string("deleted-frame-unique-source");
+    let capture = Capture::begin(&eval);
+    string_properties(source);
+    let certificate = capture.finish().unwrap();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.frame_visual_histories.commit(
+        frame,
+        FrameVisualHistory::default().with_cursor_sources(
+            [(
+                neomacs_display_protocol::types::DisplayWindowId::new(window.0 as i64),
+                certificate,
+            )]
+            .into_iter()
+            .collect(),
+        ),
+    );
+    eval.gc_collect_exact();
+    assert_eq!(count(), baseline + 1);
+    // Deletion also retires ordinary frame parameters. Measure that separate
+    // graph transition under a temporary root before testing our owner lease.
+    let setup = eval.retain_gc_roots([source]);
+    eval.frame_manager_mut().delete_frame(frame);
+    for _ in 0..3 {
+        eval.gc_collect_exact();
+    }
+    let with_source = count();
+    drop(setup);
+    assert!(engine.last_frame_display_state.is_none());
+    engine.maintain_scroll_coverage(&eval);
+    eval.gc_collect_exact();
+    assert_eq!(
+        count(),
+        with_source - 1,
+        "deleted frame's original source lease must retire without a new accepted frame"
+    );
+    assert!(engine.frame_visual_histories.get(frame).is_none());
+}
+
+/// Exhausted nested observation scopes mean unknown evidence, not an empty
+/// certificate. Persistent failure must abort within the shared retry budget.
+#[test]
+fn incomplete_source_capture_aborts_without_publishing_speculative_state() {
+    fn nested<T>(depth: usize, operation: &mut dyn FnMut() -> T) -> T {
+        if depth == 0 {
+            operation()
+        } else {
+            neovm_core::tagged::collection_reads::capture(|| nested(depth - 1, operation)).0
+        }
+    }
+    let (mut eval, frame, _, window) = incr_editing_frame("a\n", 800, 240);
+    realize_test_gui_frame(&mut eval, frame);
+    eval.eval_str("(overlay-put (make-overlay 1 1) 'before-string (propertize \"X\" 'cursor 1))")
+        .unwrap();
+    let previous = eval
+        .frame_manager()
+        .get(frame)
+        .unwrap()
+        .find_window(window)
+        .unwrap()
+        .window_end_state();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    let result = nested(8, &mut || engine.redisplay_frame_attempt(&mut eval, frame));
+    assert!(
+        matches!(result, FrameLayoutAttempt::Aborted),
+        "unknown source evidence cannot authorize an accepted frame"
+    );
+    let frame_state = eval.frame_manager().get(frame).unwrap();
+    assert!(!frame_state.has_prepared_display_presentations());
+    assert!(frame_state.active_presentation().is_none());
+    assert_eq!(
+        frame_state.find_window(window).unwrap().window_end_state(),
+        previous
+    );
+    assert!(engine.last_frame_display_state.is_none());
+    // Leaving the exhausted outer scopes must allow the same producer to recover.
+    assert!(matches!(
+        engine.redisplay_frame_attempt(&mut eval, frame),
+        FrameLayoutAttempt::Prepared(_)
+    ));
+}
+
+/// Integer string coverage takes precedence over buffer point for visible as
+/// well as hidden cursors; moved replay needs fresh semantic selection.
+#[test]
+fn moved_explicit_cursor_authority_matches_fresh_for_both_styles() {
+    for visible in [false, true] {
+        let (mut eval, frame, _, window) = incr_editing_frame("ab\n", 800, 240);
+        realize_test_gui_frame(&mut eval, frame);
+        eval.buffer_manager_mut()
+            .current_buffer_mut()
+            .unwrap()
+            .set_buffer_local("cursor-type", if visible { Value::T } else { Value::NIL });
+        eval.eval_str("(overlay-put (make-overlay 1 1) 'before-string (propertize \"X\" 'cursor 2 'face '(:height 2.0)))").unwrap();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
+        crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+        engine.layout_frame_rust(&mut eval, frame);
+        eval.eval_str("(set-window-point (selected-window) 2)")
+            .unwrap();
+        engine.layout_frame_rust(&mut eval, frame);
+        let stats = engine.last_layout_stats().clone();
+        let actual = eval
+            .frame_manager()
+            .get(frame)
+            .unwrap()
+            .redisplay_snapshot(window)
+            .unwrap()
+            .clone();
+        let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+        crate::font::metrics::test_catalog::enable_metrics(&mut fresh);
+        fresh.layout_frame_rust(&mut eval, frame);
+        let expected = eval
+            .frame_manager()
+            .get(frame)
+            .unwrap()
+            .redisplay_snapshot(window)
+            .unwrap();
+        let position = |s: &neovm_core::window::WindowDisplaySnapshot| {
+            s.logical_cursor.as_ref().map(|c| (c.x, c.y, c.row, c.col))
+        };
+        assert_eq!(position(&actual), position(expected), "visible={visible}");
+        assert_eq!(
+            actual.logical_cursor_dimensions, expected.logical_cursor_dimensions,
+            "visible={visible}"
+        );
+        assert_eq!(
+            actual.phys_cursor, expected.phys_cursor,
+            "visible={visible}"
+        );
+        assert_eq!(
+            stats.cursor_only_windows, 0,
+            "moved override must be reselected"
+        );
+    }
+}
+
+/// A reused hidden point row needs its own logical capture, not a fallback
+/// published by the newly walked tail. Require actual partial reuse.
+#[test]
+fn hidden_partial_cursor_on_reused_row_matches_fresh() {
+    let (mut eval, frame, buffer, window) = incr_editing_frame(&"abc\n".repeat(80), 800, 240);
+    realize_test_gui_frame(&mut eval, frame);
+    eval.buffer_manager_mut()
+        .current_buffer_mut()
+        .unwrap()
+        .set_buffer_local("cursor-type", Value::NIL);
+    scroll_window_to(&mut eval, frame, window, buffer, 1, 21);
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+    engine.layout_frame_rust(&mut eval, frame);
+    scroll_window_to(&mut eval, frame, window, buffer, 9, 21);
+    engine.layout_frame_rust(&mut eval, frame);
+    let stats = engine.last_layout_stats().clone();
+    assert_eq!(stats.scroll_windows, 1);
+    assert!(stats.reused_rows > 0);
+    let actual = eval
+        .frame_manager()
+        .get(frame)
+        .unwrap()
+        .redisplay_snapshot(window)
+        .unwrap()
+        .clone();
+    assert!(actual.phys_cursor.is_none());
+    assert!(actual.logical_cursor.is_some());
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut fresh);
+    fresh.layout_frame_rust(&mut eval, frame);
+    let expected = eval
+        .frame_manager()
+        .get(frame)
+        .unwrap()
+        .redisplay_snapshot(window)
+        .unwrap();
+    let position = |s: &neovm_core::window::WindowDisplaySnapshot| {
+        s.logical_cursor.as_ref().map(|c| (c.x, c.y, c.row, c.col))
+    };
+    assert_eq!(position(&actual), position(expected));
+    assert_eq!(
+        actual.logical_cursor_dimensions,
+        expected.logical_cursor_dimensions
+    );
+}
+
+/// Hidden point rows above or below a localized edit must retain canonical
+/// cursor facts while the edit plan actually reuses retained rows.
+#[test]
+fn hidden_partial_edit_cursor_on_reused_rows_matches_fresh() {
+    use crate::incremental_layout::edit_sync::{
+        EditSyncMode, set_edit_sync_mode_for_test, set_prove_first_for_test,
+    };
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            set_edit_sync_mode_for_test(None);
+            set_prove_first_for_test(None);
+        }
+    }
+    let _restore = Restore;
+    set_edit_sync_mode_for_test(Some(EditSyncMode::Sync));
+    set_prove_first_for_test(Some(true));
+    for dirty_line in [2, 9, 14] {
+        let (mut eval, frame, buffer, window) = incr_editing_frame(&"abc\n".repeat(80), 800, 240);
+        realize_test_gui_frame(&mut eval, frame);
+        eval.buffer_manager_mut()
+            .current_buffer_mut()
+            .unwrap()
+            .set_buffer_local("cursor-type", Value::NIL);
+        scroll_window_to(&mut eval, frame, window, buffer, 1, 21);
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
+        crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+        engine.layout_frame_rust(&mut eval, frame);
+        eval.eval_str(&format!(
+            "(save-excursion (goto-char {}) (insert \"X\"))",
+            dirty_line * 4 + 1
+        ))
+        .unwrap();
+        engine.layout_frame_rust(&mut eval, frame);
+        assert_eq!(
+            engine.last_layout_stats().edit_windows,
+            1,
+            "dirty_line={dirty_line}"
+        );
+        assert!(engine.last_layout_stats().reused_rows > 0);
+        let actual = eval
+            .frame_manager()
+            .get(frame)
+            .unwrap()
+            .redisplay_snapshot(window)
+            .unwrap()
+            .clone();
+        assert!(actual.phys_cursor.is_none());
+        assert!(actual.logical_cursor.is_some());
+        let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+        crate::font::metrics::test_catalog::enable_metrics(&mut fresh);
+        fresh.layout_frame_rust(&mut eval, frame);
+        let expected = eval
+            .frame_manager()
+            .get(frame)
+            .unwrap()
+            .redisplay_snapshot(window)
+            .unwrap();
+        let position = |s: &neovm_core::window::WindowDisplaySnapshot| {
+            s.logical_cursor.as_ref().map(|c| (c.x, c.y, c.row, c.col))
+        };
+        assert_eq!(
+            position(&actual),
+            position(expected),
+            "dirty_line={dirty_line}"
+        );
+        assert_eq!(
+            actual.logical_cursor_dimensions, expected.logical_cursor_dimensions,
+            "dirty_line={dirty_line}"
+        );
+    }
+}
+
+/// Mutating an original face plist must invalidate the source projection even
+/// when neither the source string nor its interval table is replaced.
+#[test]
+fn retained_string_face_payload_mutation_matches_fresh_layout() {
+    for mutation in [
+        "(setcar (cdr neo-payload-face) 0.1)",
+        "(setcdr neo-payload-face (list 0.1 :foreground \"blue\"))",
+    ] {
+        let (mut eval, frame, _, window) = incr_editing_frame("a\n", 800, 240);
+        realize_test_gui_frame(&mut eval, frame);
+        eval.buffer_manager_mut()
+            .current_buffer_mut()
+            .unwrap()
+            .set_buffer_local("cursor-type", Value::NIL);
+        eval.eval_str("(progn (setq neo-payload-face (list :height 2.0 :foreground \"red\")) (setq neo-payload-string (propertize \"XY\" 'face neo-payload-face 'cursor 1)) (overlay-put (make-overlay 1 1) 'before-string neo-payload-string))").unwrap();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
+        crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+        engine.layout_frame_rust(&mut eval, frame);
+        eval.eval_str("(setcar (cdr (list :height 1.0)) 0.5)")
+            .unwrap();
+        engine.layout_frame_rust(&mut eval, frame);
+        assert_eq!(
+            engine.last_layout_stats().cursor_only_windows,
+            1,
+            "unrelated plist remains irrelevant"
+        );
+        let before = eval
+            .frame_manager()
+            .get(frame)
+            .unwrap()
+            .redisplay_snapshot(window)
+            .unwrap()
+            .logical_cursor_dimensions;
+        eval.eval_str(mutation).unwrap();
+        engine.layout_frame_rust(&mut eval, frame);
+        let actual = eval
+            .frame_manager()
+            .get(frame)
+            .unwrap()
+            .redisplay_snapshot(window)
+            .unwrap()
+            .clone();
+        let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+        crate::font::metrics::test_catalog::enable_metrics(&mut fresh);
+        fresh.layout_frame_rust(&mut eval, frame);
+        let expected = eval
+            .frame_manager()
+            .get(frame)
+            .unwrap()
+            .redisplay_snapshot(window)
+            .unwrap();
+        assert_ne!(
+            before, expected.logical_cursor_dimensions,
+            "mutation changes actual geometry"
+        );
+        assert_eq!(
+            actual.logical_cursor_dimensions, expected.logical_cursor_dimensions,
+            "{mutation}"
+        );
+        assert_eq!(engine.last_layout_stats().cursor_only_windows, 0);
+    }
+}
+
 /// A moved point or translated retained row cannot certify an old explicit
 /// selection. Hidden overrides must be reselected, and retry must discard rows.
 #[test]

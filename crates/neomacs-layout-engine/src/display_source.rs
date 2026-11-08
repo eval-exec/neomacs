@@ -125,10 +125,15 @@ impl<'a> DisplaySourceContext<'a> {
         base: RenderFaceRef,
         face_value: Value,
     ) -> RenderFaceRef {
-        self.face_resolver
-            .as_mut()
-            .map(|resolver| resolver.resolve_face_ref(base, face_value))
-            .unwrap_or(base)
+        // Interpret the original payload under observation, not just the
+        // string's cloned interval table. Native face decoding is callback-free;
+        // observed ancestor edges protect the rooted original plist graph.
+        crate::cursor_source_dependencies::observe_projection(face_value, || {
+            self.face_resolver
+                .as_mut()
+                .map(|resolver| resolver.resolve_face_ref(base, face_value))
+                .unwrap_or(base)
+        })
     }
 
     pub(crate) fn resolve_face_sources(

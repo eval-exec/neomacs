@@ -2095,6 +2095,111 @@ fn display_row_builder_groups_arabic_complex_run() {
     assert!(glyphs.iter().filter(|glyph| glyph.padding).count() >= 3);
 }
 
+struct SelectedPrimitiveMeasurer;
+
+impl DisplayGlyphMeasurer for SelectedPrimitiveMeasurer {
+    fn glyph_advance_px(
+        &mut self,
+        _ch: char,
+        _face_id: FaceId,
+        _columns: u8,
+        _fallback_advance_px: f32,
+    ) -> Option<f32> {
+        None
+    }
+
+    fn glyph_vertical_metrics_px(
+        &mut self,
+        _ch: char,
+        _face_id: FaceId,
+    ) -> Option<DisplayRowVerticalMetrics> {
+        Some(DisplayRowVerticalMetrics::new(16.0, 12.0))
+    }
+}
+
+fn assert_contextual_selected_primitive_dimensions(item: DisplayItem) {
+    let row_layout = layout();
+    let mut row = GlyphRow::new(GlyphRowRole::Text);
+    let progress = {
+        let mut measurer = SelectedPrimitiveMeasurer;
+        let mut writer = DisplayRowProgressWriter::with_glyph_measurer(
+            &row_layout,
+            &mut row,
+            &mut measurer,
+            DisplayRowPosition::new(0.0, 0),
+            240.0,
+        );
+        // A separate append with a different face and padding makes the
+        // composition's append-local glyph offsets differ from row indices.
+        let mut prefix = text_item("中");
+        prefix.face = RenderFaceRef::FaceId(FaceId::new(3));
+        writer.push_item(prefix);
+        writer.push_item(item)
+    };
+    let head = row.glyphs[GlyphArea::Text.index()]
+        .iter()
+        .find(|glyph| {
+            !glyph.padding
+                && matches!(&glyph.glyph_type, GlyphType::Composite { text } if text.as_ref() == "سلام")
+        })
+        .expect("finalized Arabic composition");
+    assert_eq!(head.pixel_width, 32.0);
+    assert_eq!(
+        progress.slots()[0].selected_primitive_dimensions(),
+        Some(neovm_core::window::LogicalCursorDimensions {
+            width: head.pixel_width.round() as u32,
+            height: head.pixel_height.round() as u32,
+        }),
+    );
+}
+
+#[test]
+fn contextual_text_selected_primitive_dimensions_are_finalized() {
+    assert_contextual_selected_primitive_dimensions(text_item("سلام"));
+}
+
+#[test]
+fn contextual_source_mapped_selected_primitive_dimensions_are_finalized() {
+    assert_contextual_selected_primitive_dimensions(mapped_text_item("سلام"));
+}
+
+#[test]
+fn text_selected_primitive_dimensions_preserve_unpainted_and_control_slots() {
+    let row_layout = layout();
+    let mut row = GlyphRow::new(GlyphRowRole::Text);
+    let (progress, control_progress) = {
+        let mut measurer = SelectedPrimitiveMeasurer;
+        let mut writer = DisplayRowProgressWriter::with_glyph_measurer(
+            &row_layout,
+            &mut row,
+            &mut measurer,
+            DisplayRowPosition::new(0.0, 0),
+            240.0,
+        );
+        (
+            writer.push_item(text_item("e\u{301}X")),
+            writer.push_item(control_item('\u{1}')),
+        )
+    };
+    let slots = progress.slots();
+    assert_eq!(slots[1].selected_primitive_dimensions(), None);
+    let control = row.glyphs[GlyphArea::Text.index()]
+        .iter()
+        .find(|glyph| matches!(glyph.glyph_type, GlyphType::Char { ch: '^' }))
+        .expect("first control-character primitive");
+    assert_eq!(
+        control_progress.slots()[0].selected_primitive_dimensions(),
+        Some(neovm_core::window::LogicalCursorDimensions {
+            width: control.pixel_width.round() as u32,
+            height: control.pixel_height.round() as u32,
+        }),
+    );
+    assert_eq!(
+        control_progress.slots()[0].width_px(),
+        2.0 * control.pixel_width
+    );
+}
+
 #[test]
 fn display_row_builder_produces_logical_order_rows() {
     // Slice 5: DisplayRowBuilder::finish normalizes displays_text but no longer
