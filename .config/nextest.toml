@@ -215,6 +215,26 @@ filter = 'package(neomacs-gui-tests) and test(~macos_native_menus::)'
 platform = { host = 'cfg(target_os = "macos")' }
 threads-required = "num-test-threads"
 
+# The Helm Pydoc workflow drives a real Helm session in BOTH editors; the first
+# `M-x helm-pydoc` synchronously collects the module list through a Python
+# subprocess in each editor, and the stage's own readiness bound is 12 s.  In a
+# fully parallel TUI run (24 pairs on the shard's cores) one editor can still
+# be inside helm-pydoc's collection when that bound expires: the captured
+# screen shows the command name in the echo area and no Helm window yet, which
+# is contention, not a divergence (it passes alone and in 1188/1188 suite
+# runs).  Run this one case without parallel CPU contention, the same way the
+# heavy oracle families above are isolated, instead of widening the in-test
+# bound.
+#
+# This block MUST stay ABOVE the package-wide `test(~package_tui::)`
+# override below: nextest applies only the FIRST matching override, so a
+# later block is shadowed by that 4-thread rule (measured: after the broad
+# block the helm pair ran concurrently with another test, 30.0 s total,
+# against 51.5 s when it holds the whole pool).
+[[profile.default.overrides]]
+filter = 'test(~package_tui::helm_pydoc_test::helm_pydoc_real_helm_workflows_match_gnu_terminal_and_filesystem)'
+threads-required = "num-test-threads"
+
 # The interactive package-TUI suites pair a GNU Emacs and a Neomacs in PTYs and
 # drive them by screen state, so every pair needs CPU to keep its own deadlines.
 # At the default budget a family run starts all thirteen pairs at once, and pairs
