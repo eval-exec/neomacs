@@ -1031,7 +1031,7 @@ fn tenured_owners_store_inline_once_remembered() {
         .expect("runtime owner");
     minor_collection(&mut eval);
     let b = eval.eval_str("aset-old-b").expect("runtime owner");
-    assert!(eval.tagged_heap.is_tenured_for_test(b));
+    assert!(eval.tagged_heap.value_is_old_for_test(b));
     // (a) Image resident: stamp the row the way the pdump loader stamps a
     // reconstructed row, then let the first partition cycle make it permanent.
     eval.eval_str("(setq aset-old-a (vector 1 2 3))")
@@ -1048,8 +1048,8 @@ fn tenured_owners_store_inline_once_remembered() {
         .expect("first partition cycle");
     let a = eval.eval_str("aset-old-a").expect("image owner");
     let b = eval.eval_str("aset-old-b").expect("runtime owner");
-    assert!(eval.tagged_heap.is_tenured_for_test(a));
-    assert!(eval.tagged_heap.is_tenured_for_test(b));
+    assert!(eval.tagged_heap.value_is_old_for_test(a));
+    assert!(eval.tagged_heap.value_is_old_for_test(b));
     // Perform an initial primitive store before measuring the barriers.
     let young = keep(&mut eval, &["(vector 0)"])[0];
     native(
@@ -1149,8 +1149,8 @@ fn gen0_image_residents_are_tenured_and_store_inline_once_remembered() {
     let a = eval.eval_str("aset-old-a").expect("a");
     let b = eval.eval_str("aset-old-b").expect("b");
     // Permanent implies tenured; both are loader-stamped image rows.
-    assert!(eval.tagged_heap.is_tenured_for_test(a));
-    assert!(eval.tagged_heap.is_tenured_for_test(b));
+    assert!(eval.tagged_heap.value_is_old_for_test(a));
+    assert!(eval.tagged_heap.value_is_old_for_test(b));
     // Perform an initial primitive store before measuring the barriers.
     let young = keep(&mut eval, &["(vector 0)"])[0];
     native(
