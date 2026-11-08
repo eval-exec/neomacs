@@ -23,6 +23,8 @@ pub(crate) struct FrameVisualHistory {
     /// type is embedded inline in the thread-local `ScrollCoverage`, so
     /// growing it would move every `%fs` offset in the binary.
     display_when: FxHashMap<DisplayWindowId, DisplayWhenRetention>,
+    cursor_sources:
+        FxHashMap<DisplayWindowId, crate::cursor_source_dependencies::CursorSourceDependencies>,
 }
 
 impl FrameVisualHistory {
@@ -33,7 +35,29 @@ impl FrameVisualHistory {
         Self {
             window_infos,
             display_when,
+            cursor_sources: FxHashMap::default(),
         }
+    }
+
+    /// Attach owner-only source certificates to this accepted presentation,
+    /// without growing TLS-embedded matrices or public numeric snapshots.
+    pub(crate) fn with_cursor_sources(
+        mut self,
+        sources: FxHashMap<
+            DisplayWindowId,
+            crate::cursor_source_dependencies::CursorSourceDependencies,
+        >,
+    ) -> Self {
+        self.cursor_sources = sources;
+        self
+    }
+
+    /// Clone the original certificate for exactly this accepted window.
+    pub(crate) fn cursor_sources_for(
+        &self,
+        window: DisplayWindowId,
+    ) -> Option<crate::cursor_source_dependencies::CursorSourceDependencies> {
+        self.cursor_sources.get(&window).cloned()
     }
 
     pub(crate) fn window_infos(&self) -> &FxHashMap<DisplayWindowId, WindowInfo> {
@@ -71,6 +95,11 @@ impl FrameVisualHistories {
     /// The last accepted history for exactly one logical frame, by reference.
     pub(crate) fn get(&self, frame_id: FrameId) -> Option<&FrameVisualHistory> {
         self.by_frame.get(&frame_id)
+    }
+
+    /// Closing a frame retires its original string roots with its history.
+    pub(crate) fn retain_live(&mut self, mut live: impl FnMut(FrameId) -> bool) {
+        self.by_frame.retain(|frame, _| live(*frame));
     }
 
     /// Commit history only after the matching frame presentation has sealed.

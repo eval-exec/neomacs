@@ -115,6 +115,7 @@ pub(super) fn pixels_suffix(
         row.body_y = row.body_y.checked_sub(y_delta)?;
     }
     placed.logical_cursor = None;
+    placed.logical_cursor_dimensions = None;
     placed.phys_cursor = None;
     placed.window_end_record = Some(
         record.with_matrix_row(MatrixRow0::new(

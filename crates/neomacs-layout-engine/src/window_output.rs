@@ -875,6 +875,20 @@ impl TextWindowCursor {
     }
 }
 
+/// Share integer-grid rounding between logical anchors and physical snapshots.
+/// A replacement boundary override is valid only if final slot placement stayed
+/// at the captured x; bidi-selected glyphs otherwise use their measured x.
+pub(crate) fn cursor_snapshot_x(
+    captured_x: f32,
+    display_x: f32,
+    text_area_left: f32,
+    grid_x_override: Option<i64>,
+) -> i64 {
+    grid_x_override
+        .filter(|_| (display_x - captured_x).abs() <= f32::EPSILON)
+        .unwrap_or_else(|| (display_x - text_area_left).round() as i64)
+}
+
 impl ResolvedTextWindowCursor {
     fn row(self) -> usize {
         self.coordinates.display_slot_id().row as usize
@@ -887,11 +901,12 @@ impl ResolvedTextWindowCursor {
     fn window_snapshot(self) -> WindowCursorSnapshot {
         WindowCursorSnapshot {
             kind: window_cursor_kind(self.captured.style),
-            x: self
-                .captured
-                .grid_x_override
-                .filter(|_| (self.display_x - self.captured.x).abs() <= f32::EPSILON)
-                .unwrap_or_else(|| (self.display_x - self.captured.text_area_left).round() as i64),
+            x: cursor_snapshot_x(
+                self.captured.x,
+                self.display_x,
+                self.captured.text_area_left,
+                self.captured.grid_x_override,
+            ),
             y: (self.captured.y - self.captured.window_top).round() as i64,
             width: self.captured.width.round() as i64,
             height: self.captured.height.round() as i64,
@@ -1427,7 +1442,11 @@ pub(crate) struct WindowOutputEmitter {
     eob_overlay_motion: neovm_core::window::EobOverlayMotionCoverage,
     current_automatic_mini_row_end: AutomaticMiniRowEnd,
     previous_automatic_mini_row_end: AutomaticMiniRowEnd,
-    logical_cursor: Option<WindowCursorPos>,
+    // Extent cannot outlive its position within the producer.
+    logical_cursor: Option<(
+        WindowCursorPos,
+        Option<neovm_core::window::LogicalCursorDimensions>,
+    )>,
     phys_cursor: Option<WindowCursorSnapshot>,
     chrome_strings: WindowChromeStringState,
 }
@@ -2073,8 +2092,18 @@ impl WindowOutputEmitter {
         self.geometry.push_chrome_row_progress(progress)
     }
 
-    pub(crate) fn set_logical_cursor(&mut self, cursor: WindowCursorPos) {
-        self.logical_cursor = Some(cursor);
+    /// Whether this pass has established semantic selection, regardless of paint.
+    pub(crate) fn has_logical_cursor(&self) -> bool {
+        self.logical_cursor.is_some()
+    }
+
+    /// Publish a position and its selected extent atomically, independently of paint.
+    pub(crate) fn set_logical_cursor(
+        &mut self,
+        cursor: WindowCursorPos,
+        dimensions: Option<neovm_core::window::LogicalCursorDimensions>,
+    ) {
+        self.logical_cursor = Some((cursor, dimensions));
     }
 
     pub(crate) fn set_phys_cursor(&mut self, cursor: WindowCursorSnapshot) {
@@ -2086,6 +2115,8 @@ impl WindowOutputEmitter {
         self.phys_cursor.as_ref()
     }
 
+    /// Freeze row geometry and cursor facts into one snapshot. Logical extent
+    /// travels with its position even when no physical cursor is painted.
     pub(crate) fn finish_snapshot_with_geometry(
         mut self,
         evaluator: &mut Context,
@@ -2097,7 +2128,11 @@ impl WindowOutputEmitter {
     ) -> WindowDisplaySnapshot {
         let frame_id = self.frame_id;
         let window_id = self.window_id;
-        let logical_cursor = self.logical_cursor.take();
+        let (logical_cursor, logical_cursor_dimensions) = self
+            .logical_cursor
+            .take()
+            .map(|(position, dimensions)| (Some(position), dimensions))
+            .unwrap_or_default();
         let phys_cursor = self.phys_cursor.take();
         let mut eob_overlay_motion = self.eob_overlay_motion;
         let prepared_rows = self
@@ -2155,6 +2190,7 @@ impl WindowOutputEmitter {
             tab_line_height,
             chrome_strings,
             logical_cursor,
+            logical_cursor_dimensions,
             phys_cursor: phys_cursor.clone(),
             points: prepared_rows.points,
             point_rows: prepared_rows.point_rows,

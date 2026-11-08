@@ -37,6 +37,14 @@ fn run_fixture_probe(probe: &str, fixture: &str) {
     let program = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));
+    let missing_telemetry = probe == "rtl-missing-telemetry";
+    let stats_path = if missing_telemetry {
+        artifacts
+            .join(format!("missing-{}", std::process::id()))
+            .join("layout-stats.log")
+    } else {
+        artifacts.join("layout-stats.log")
+    };
     let mut plan = GuiTestPlan::new(
         backend,
         &root,
@@ -50,12 +58,24 @@ fn run_fixture_probe(probe: &str, fixture: &str) {
     .with_env("NEOMACS_COMMIT_PROBE", probe)
     .with_env(
         "NEOMACS_LAYOUT_STATS_FILE",
-        artifacts
-            .join("layout-stats.log")
-            .to_string_lossy()
-            .into_owned(),
+        stats_path.to_string_lossy().into_owned(),
     )
     .with_env("RUST_LOG", "warn");
+    if missing_telemetry {
+        assert!(!stats_path.exists());
+        // Exercise Neomacs's mandatory-telemetry contract on either executable.
+        plan = plan.with_args([
+            "-Q".to_string(),
+            "--eval".to_string(),
+            "(unless (fboundp 'neomacs--frame-snapshot) (fset 'neomacs--frame-snapshot #'ignore))"
+                .to_string(),
+            "-l".to_string(),
+            root.join("crates/neomacs-gui-tests/fixtures")
+                .join(fixture)
+                .to_string_lossy()
+                .into_owned(),
+        ]);
+    }
     for (key, value) in session.env() {
         plan = plan.with_env(key, value);
     }
@@ -67,9 +87,31 @@ fn run_fixture_probe(probe: &str, fixture: &str) {
         .unwrap();
     let stderr = fs::read_to_string(&result.artifacts.stderr).unwrap_or_default();
     assert!(!result.timed_out, "{result:#?}\n{stderr}");
+    if missing_telemetry {
+        assert_eq!(result.exit_code, Some(1), "{result:#?}\n{stderr}");
+        assert!(stderr.contains("Missing layout telemetry"), "{stderr}");
+        assert!(
+            !stderr.contains("CURSOR-REPLAY-REFERENCE-GEOMETRY-ONLY"),
+            "{stderr}"
+        );
+        return;
+    }
     assert_eq!(result.exit_code, Some(0), "{result:#?}\n{stderr}");
     assert!(stderr.contains("COMMIT-EDITING-PASS"), "{stderr}");
-    if probe.ends_with("newline-cursor")
+    if probe == "org-table-whitespace" {
+        let rendered = stderr.contains("ORG-TABLE-RENDERED-FACES-PASS");
+        let source_only = stderr.contains("ORG-TABLE-REFERENCE-SOURCE-ONLY");
+        assert_ne!(
+            rendered, source_only,
+            "missing or ambiguous Org evidence: {stderr}"
+        );
+        if source_only {
+            eprintln!("Org reference control: source setup only; rendered faces were not asserted");
+        }
+    }
+    if (probe.ends_with("newline-cursor")
+        || probe == "rtl-replacement-cursor"
+        || probe.starts_with("stretch-policy-"))
         && !stderr.contains("CURSOR-REPLAY-REFERENCE-GEOMETRY-ONLY")
     {
         let marker = stderr
@@ -149,6 +191,25 @@ fn commit_probe_rejects_unknown_backend() {
     commit_probe_backend(Some("unknown"));
 }
 
+/// Neomacs verifies rendered faces; GNU explicitly reports a source-only control.
+#[test]
+fn org_table_probe_reports_rendered_faces_or_reference_source() {
+    run_fixture_probe("org-table-whitespace", "org-table-whitespace.el");
+}
+
+/// Fresh and actual cursor-only replay obey narrow/wide stretch policy in RTL.
+#[test]
+fn stretch_cursor_replay_obeys_width_policy() {
+    for probe in [
+        "stretch-policy-narrow",
+        "stretch-policy-wide",
+        "stretch-policy-narrow-enabled",
+        "stretch-policy-wide-enabled",
+    ] {
+        run_fixture_probe(probe, "cursor-stretch-policy.el");
+    }
+}
+
 #[test]
 fn first_commit_character_uses_the_asynchronously_selected_buffer() {
     run_commit_probe("async-map");
@@ -194,6 +255,16 @@ fn mixed_newline_cursor_matches_gnu_row_geometry() {
     ] {
         run_fixture_probe(probe, "newline-geometry.el");
     }
+}
+
+#[test]
+fn rtl_missing_telemetry_is_an_explicit_failure() {
+    run_fixture_probe("rtl-missing-telemetry", "cursor-rtl.el");
+}
+
+#[test]
+fn rtl_replacement_cursor_uses_one_glyph_for_placement_and_metrics() {
+    run_fixture_probe("rtl-replacement-cursor", "cursor-rtl.el");
 }
 
 #[test]

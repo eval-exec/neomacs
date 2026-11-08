@@ -154,6 +154,81 @@ fn physical_cursor_dimensions_do_not_materialize_deferred_positions() {
     assert!(!deferred.positions.is_materialized());
 }
 
+/// Explicit logical extents preserve glyph identity in flat, eager and deferred
+/// positions without changing canonical source-point lookup or physical priority.
+#[test]
+fn logical_cursor_dimensions_preserve_selected_extent_and_zero_width() {
+    use crate::window::LogicalCursorDimensions;
+    let mut combining = point(1, 0, 0, 0);
+    combining.width = 0;
+    let mut snapshot = make_snapshot(
+        vec![DisplayPointRow::from_points(vec![combining.clone()])],
+        vec![mapping(0, 0, 0)],
+    );
+    snapshot.logical_cursor = Some(WindowCursorPos {
+        row: 0,
+        col: 0,
+        x: 21,
+        y: 0,
+    });
+    for descriptors in [true, false] {
+        let mut sample = snapshot.clone();
+        if !descriptors {
+            sample.point_rows = None;
+            sample.points = vec![combining.clone()];
+        }
+        for width in [0, 7] {
+            sample.logical_cursor_dimensions = Some(LogicalCursorDimensions { width, height: 21 });
+            let (eager, deferred) = pair(&sample);
+            assert_eq!(eager.cursor, deferred.cursor);
+            let cursor = deferred.cursor.unwrap();
+            assert_eq!(
+                (cursor.x, cursor.width, cursor.height),
+                (21, i64::from(width), 21)
+            );
+            if descriptors {
+                assert!(!deferred.positions.is_materialized());
+            }
+            assert_eq!(
+                view(&deferred)
+                    .point_for_buffer_pos(LispCharPos1::new(1))
+                    .unwrap()
+                    .unwrap()
+                    .width()
+                    .get(),
+                0.0
+            );
+        }
+        sample.phys_cursor = Some(WindowCursorSnapshot {
+            kind: WindowCursorKind::Bar,
+            x: 21,
+            y: 0,
+            row: 0,
+            col: 0,
+            width: 2,
+            height: 15,
+            ascent: 12,
+        });
+        assert_eq!(pair(&sample).1.cursor.unwrap().width, 2);
+        sample.phys_cursor = None;
+        sample.logical_cursor_dimensions = None;
+        assert_eq!(
+            pair(&sample).1.cursor.unwrap().width,
+            0,
+            "legacy source order is unchanged"
+        );
+        sample.logical_cursor = None;
+        sample.logical_cursor_dimensions = Some(LogicalCursorDimensions {
+            width: 7,
+            height: 21,
+        });
+        assert!(
+            pair(&sample).1.cursor.is_none(),
+            "an extent alone is not a cursor"
+        );
+    }
+}
+
 #[test]
 fn logical_cursor_fallback_preserves_marker_and_descriptor_tie_order() {
     let mut marker = point(4, 9, 3, 0);

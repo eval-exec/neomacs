@@ -399,6 +399,9 @@ impl RetainedWindowKey {
     /// properties, overlays, faces, or the viewport changed, so the retained body
     /// rows are no longer trustworthy).
     pub fn cursor_only_eligible(prev: &Self, curr: &Self) -> bool {
+        if !Self::trailing_whitespace_unchanged_by_point_motion(prev, curr) {
+            return false;
+        }
         // Nothing moved except possibly point.
         //
         // Note what this now tolerates that it did not before: an overlay set
@@ -411,12 +414,23 @@ impl RetainedWindowKey {
         WindowDelta::between(prev, curr).only_point_moved_at_most()
     }
 
+    /// Highlighting suppresses the whitespace run ending at point. A moved
+    /// point can therefore change body faces despite unchanged source text.
+    /// GNU likewise refuses these shortcuts with show-trailing-whitespace
+    /// (xdisp.c:19880,21804); unchanged-point body reuse remains safe here.
+    fn trailing_whitespace_unchanged_by_point_motion(prev: &Self, curr: &Self) -> bool {
+        !curr.show_trailing_whitespace || prev.point == curr.point
+    }
+
     /// Whether a window may take the pure-scroll fast path: every layout input is
     /// identical to the retained (`prev`) key EXCEPT `window_start` (which moved)
     /// and `point` (which may follow the scroll). Any tick/geometry/face move
     /// escalates to a full rebuild. Whether the scroll is by WHOLE rows is decided
     /// separately against the retained matrix ([`RetainedWindowMatrix::scroll_replay`]).
     pub fn scroll_eligible(prev: &Self, curr: &Self) -> bool {
+        if !Self::trailing_whitespace_unchanged_by_point_motion(prev, curr) {
+            return false;
+        }
         let delta = WindowDelta::between(prev, curr);
         // The visible region moved and nothing else did.
         delta.window_start_moved
@@ -437,6 +451,12 @@ impl RetainedWindowKey {
     /// modiff (xdisp.c GIVE_UP 200). An overlay/face move still escalates to
     /// a full rebuild. `point` may also move with the edit.
     pub fn edit_eligible(prev: &Self, curr: &Self) -> bool {
+        // Even an unchanged numeric point can change which source endpoint it
+        // suppresses when an edit above shifts a reused row. GNU try_window_id
+        // refuses this shortcut outright with trailing whitespace (xdisp:22653).
+        if curr.show_trailing_whitespace {
+            return false;
+        }
         let delta = WindowDelta::between(prev, curr);
         // Something about the TEXT changed -- characters or properties -- and
         // nothing else did. An unchanged buffer is the cursor-only path's
@@ -631,8 +651,21 @@ pub struct CursorOnlyReplay {
     /// This also preserves explicit display-string `cursor` placement;
     /// reconstructing from buffer point would lose that semantic override.
     pub(crate) retained_cursor: Option<RetainedTextWindowCursor>,
+    /// Semantic selection survives unchanged placement independently of paint.
+    pub(crate) retained_logical_cursor: Option<RetainedLogicalCursor>,
+    /// Original complete-source evidence, refreshed by the engine at consumption.
+    pub(crate) ordinary_cursor_source:
+        Option<crate::cursor_source_dependencies::OrdinaryCursorSourceProof>,
     /// Sealed frame-face generation that owns every ID in `body_rows`.
     pub(crate) face_generation: FrameFaceGeneration,
+}
+
+/// Accepted semantic cursor authority, including a measured extent when known.
+/// A nonpainting selection is not the same as absence of a selection.
+#[derive(Clone, Debug)]
+pub(crate) struct RetainedLogicalCursor {
+    pub(crate) position: neovm_core::window::WindowCursorPos,
+    pub(crate) dimensions: Option<neovm_core::window::LogicalCursorDimensions>,
 }
 
 /// A retained cursor's renderer placement paired with its live-window output
@@ -1592,6 +1625,18 @@ impl RetainedWindowMatrix {
             chrome: None,
             chrome_memo: None,
             retained_cursor,
+            retained_logical_cursor: if point_moved {
+                None
+            } else {
+                self.display_snapshot
+                    .logical_cursor
+                    .clone()
+                    .map(|position| RetainedLogicalCursor {
+                        position,
+                        dimensions: self.display_snapshot.logical_cursor_dimensions,
+                    })
+            },
+            ordinary_cursor_source: None,
             face_generation: self.face_generation,
         })
     }

@@ -1823,6 +1823,7 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
         ctx: &LineEndContext,
         geometry: LineEndFillGeometry,
         face_ids: &mut FrameFaceAttempt,
+        source_is_trailing: &dyn Fn(neovm_core::buffer::CharPos0) -> bool,
     ) {
         let plan = line_end::plan(ctx);
         if plan.steps().is_empty() {
@@ -1837,7 +1838,9 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
         };
         self.output_render
             .current_row_output()
-            .apply_current_row_mutation(resolved);
+            .apply_current_row_mutation(
+                resolved.with_trailing_whitespace_source(source_is_trailing),
+            );
     }
 
     #[allow(clippy::too_many_arguments)]

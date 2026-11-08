@@ -104,6 +104,8 @@ pub(crate) struct CapturedCursorInfo {
     pub(crate) col: usize,
     pub(crate) display_row_offset: usize,
     pub(crate) slot_width: Option<f32>,
+    /// Raw selected extent for explicit string candidates, before paint clamps.
+    pub(crate) logical_dimensions: Option<neovm_core::window::LogicalCursorDimensions>,
     pub(crate) stretch_like: bool,
     pub(crate) slot_state: CursorSlotResolutionState,
     /// For a cursor sitting at a `display`-property replacement slot: the 1-based
@@ -285,6 +287,20 @@ pub(crate) enum CapturedCursorSlotWidth {
     Explicit(f32),
 }
 
+/// Preserve measured zero width; missing or invalid measurements retain the
+/// legacy source-point fallback instead of inventing a logical rectangle.
+pub(crate) fn measured_logical_cursor_dimensions(
+    width: f32,
+    height: f32,
+) -> Option<neovm_core::window::LogicalCursorDimensions> {
+    (width.is_finite() && width >= 0.0 && height.is_finite() && height > 0.0).then(|| {
+        neovm_core::window::LogicalCursorDimensions {
+            width: width.round() as u32,
+            height: height.round() as u32,
+        }
+    })
+}
+
 impl CapturedCursorSlotWidth {
     fn resolve(self, face_char_width: f32) -> f32 {
         match self {
@@ -368,8 +384,14 @@ pub(crate) enum CursorSlotResolutionState {
 /// measured layout geometry with an unrelated window-grid estimate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ResolvedCursorSlot {
-    BufferGlyph(u16),
-    ReplacementString(u16),
+    BufferGlyph {
+        col: u16,
+        text_glyph: usize,
+    },
+    ReplacementString {
+        col: u16,
+        text_glyph: usize,
+    },
     /// Point is left of the horizontally visible source range, not merely
     /// hidden inside it. GNU clamps this cursor to the visible text edge.
     HorizontallyClipped(u16),
@@ -393,18 +415,25 @@ pub(crate) struct ResolvedCursorCoordinatePair {
 /// Coherent cursor placement after a late row decoration changed the
 /// materialized glyph sequence.
 ///
-/// The slot and measured pixel pen are deliberately one value.  A decoration
+/// The slot, measured pen and optional glyph extent are deliberately one value. A decoration
 /// cannot publish a new column while leaving `PhysCursor::x` in the old row
 /// geometry, which is observable on TTY frames and in cursor effects.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ResolvedDecoratedCursorPlacement {
     coordinates: ResolvedCursorCoordinatePair,
     x: f32,
+    logical_dimensions: Option<neovm_core::window::LogicalCursorDimensions>,
 }
 
 impl ResolvedDecoratedCursorPlacement {
     pub(crate) const fn x(&self) -> f32 {
         self.x
+    }
+
+    pub(crate) const fn logical_dimensions(
+        &self,
+    ) -> Option<neovm_core::window::LogicalCursorDimensions> {
+        self.logical_dimensions
     }
 
     pub(crate) const fn coordinates(&self) -> ResolvedCursorCoordinatePair {
@@ -479,11 +508,21 @@ struct CursorOutputCol(u16);
 struct CursorDisplayCol(u16);
 
 impl ResolvedCursorSlot {
+    /// Return only an exact selected glyph, never a row-end or visibility approximation.
+    fn glyph(self, row: &GlyphRow) -> Option<&Glyph> {
+        let index = match self {
+            Self::BufferGlyph { text_glyph, .. } | Self::ReplacementString { text_glyph, .. } => {
+                text_glyph
+            }
+            _ => return None,
+        };
+        row.glyphs[GlyphArea::Text.index()].get(index)
+    }
+
     pub(crate) const fn col(self) -> u16 {
         match self {
-            Self::BufferGlyph(col)
-            | Self::ReplacementString(col)
-            | Self::HorizontallyClipped(col)
+            Self::BufferGlyph { col, .. } | Self::ReplacementString { col, .. } => col,
+            Self::HorizontallyClipped(col)
             | Self::FollowingVisibleGlyph(col)
             | Self::RowEnd(col) => col,
         }
@@ -538,7 +577,12 @@ impl CursorVisualColumnResolutionRequest {
         }
         let rows = context.rows?;
         let row = rows.row(self.row)?;
+        Self::resolve_row_slot(row, self.charpos)
+    }
 
+    /// Select the materialized slot and source glyph together, before inspecting
+    /// its measurements. Bidi strings can share coverage but not cursor identity.
+    fn resolve_row_slot(row: &GlyphRow, point: usize) -> Option<ResolvedCursorSlot> {
         let mut col_acc: u16 = 0;
         for glyph in &row.glyphs[GlyphArea::LeftMargin.index()] {
             if glyph.padding {
@@ -592,27 +636,28 @@ impl CursorVisualColumnResolutionRequest {
         }
 
         let mut nearest_after: Option<(usize, u16)> = None;
-        let mut replacement_candidate: Option<(usize, u16)> = None;
+        let mut replacement_candidate: Option<(usize, u16, usize)> = None;
         let text_start_col = col_acc;
         let mut has_buffer_before_point = false;
-        for glyph in &text_glyphs[..text_end] {
+        for (text_glyph, glyph) in text_glyphs[..text_end].iter().enumerate() {
             if glyph.padding {
                 continue;
             }
             match glyph.provenance {
                 GlyphProvenance::Buffer { charpos } => {
-                    has_buffer_before_point |= charpos < self.charpos;
-                    if charpos == self.charpos {
-                        return Some(ResolvedCursorSlot::BufferGlyph(col_acc));
+                    has_buffer_before_point |= charpos < point;
+                    if charpos == point {
+                        return Some(ResolvedCursorSlot::BufferGlyph {
+                            col: col_acc,
+                            text_glyph,
+                        });
                     }
-                    if charpos > self.charpos
-                        && nearest_after.is_none_or(|(after, _)| charpos < after)
-                    {
+                    if charpos > point && nearest_after.is_none_or(|(after, _)| charpos < after) {
                         nearest_after = Some((charpos, col_acc));
                     }
                 }
                 GlyphProvenance::Str { index, .. }
-                    if row.glyph_covers_buffer_charpos(glyph, self.charpos) =>
+                    if row.glyph_covers_buffer_charpos(glyph, point) =>
                 {
                     // GNU set_cursor_from_row Step 2 chooses the smallest
                     // string index, not the first glyph in visual order (bidi
@@ -620,9 +665,9 @@ impl CursorVisualColumnResolutionRequest {
                     // carried once by the row's source occurrence instead of
                     // recovered heuristically or duplicated on every glyph.
                     if replacement_candidate
-                        .is_none_or(|(candidate_index, _)| index < candidate_index)
+                        .is_none_or(|(candidate_index, _, _)| index < candidate_index)
                     {
-                        replacement_candidate = Some((index, col_acc));
+                        replacement_candidate = Some((index, col_acc, text_glyph));
                     }
                 }
                 GlyphProvenance::Str { .. }
@@ -641,8 +686,8 @@ impl CursorVisualColumnResolutionRequest {
         // rather than None keeps a blank/EOL cursor out of the line-number
         // gutter (where the captured Text-index 0 would land it), matching GNU
         // set_cursor_from_row placing the cursor in the empty area after a row.
-        Some(if let Some((_, col)) = replacement_candidate {
-            ResolvedCursorSlot::ReplacementString(col)
+        Some(if let Some((_, col, text_glyph)) = replacement_candidate {
+            ResolvedCursorSlot::ReplacementString { col, text_glyph }
         } else if let Some((_, col)) = nearest_after {
             if row.truncated_left && !has_buffer_before_point {
                 ResolvedCursorSlot::HorizontallyClipped(text_start_col)
@@ -652,6 +697,12 @@ impl CursorVisualColumnResolutionRequest {
         } else {
             ResolvedCursorSlot::RowEnd(col_acc)
         })
+    }
+
+    /// Return the exact covering point glyph selected for cursor placement.
+    /// Hidden-text/row-end approximations have no covering glyph to substitute.
+    pub(crate) fn point_glyph(row: &GlyphRow, point: usize) -> Option<&Glyph> {
+        Self::resolve_row_slot(row, point)?.glyph(row)
     }
 
     #[cfg(test)]
@@ -665,7 +716,15 @@ impl CursorVisualColumnResolutionRequest {
         self,
         context: CursorVisualColumnResolutionContext<'_>,
     ) -> Option<ResolvedCursorCoordinatePair> {
-        let display_slot = self.resolve_slot(context)?;
+        self.coordinates_for_slot(context, self.resolve_slot(context)?)
+    }
+
+    /// Reuse one slot identity for coordinates, pen and extent publication.
+    fn coordinates_for_slot(
+        self,
+        context: CursorVisualColumnResolutionContext<'_>,
+        display_slot: ResolvedCursorSlot,
+    ) -> Option<ResolvedCursorCoordinatePair> {
         let row = context.rows?.row(self.row)?;
         let left_margin_cols = row.glyphs[GlyphArea::LeftMargin.index()]
             .iter()
@@ -713,8 +772,12 @@ impl CursorVisualColumnResolutionRequest {
         text_bounds: Rect,
         char_width: f32,
     ) -> Option<ResolvedDecoratedCursorPlacement> {
-        let coordinates = self.resolve_cursor_coordinates(context)?;
+        let slot = self.resolve_slot(context)?;
+        let coordinates = self.coordinates_for_slot(context, slot)?;
         let row = context.rows?.row(self.row)?;
+        let logical_dimensions = slot.glyph(row).and_then(|glyph| {
+            measured_logical_cursor_dimensions(glyph.pixel_width, glyph.pixel_height)
+        });
         let target_col = coordinates.display_col();
         let left_margin_cols = row.glyphs[GlyphArea::LeftMargin.index()]
             .iter()
@@ -734,7 +797,11 @@ impl CursorVisualColumnResolutionRequest {
         let x = geometry.x_at_slot(neomacs_display_protocol::glyph_matrix::TextSlotColumn::new(
             target_col - left_margin_cols,
         ))?;
-        Some(ResolvedDecoratedCursorPlacement { coordinates, x })
+        Some(ResolvedDecoratedCursorPlacement {
+            coordinates,
+            x,
+            logical_dimensions,
+        })
     }
 }
 
@@ -819,6 +886,8 @@ impl CapturedCursorInfo {
         )
     }
 
+    /// Capture the lightweight insertion position; selected extent is published
+    /// separately so hidden cursors do not require a physical cursor snapshot.
     pub(crate) fn logical_cursor_position(
         &self,
         row_metric: RowMetricsSnapshot,
@@ -855,6 +924,8 @@ impl CapturedCursorInfo {
         }
     }
 
+    /// Capture visual defaults, not a claim about the selected glyph's extent.
+    /// Callers attach an extent only when an emitted source slot measured it.
     pub(crate) fn from_visual_state(
         visual_state: CapturedCursorVisualState,
         placement: CapturedCursorPlacement,
@@ -872,6 +943,9 @@ impl CapturedCursorInfo {
             col: placement.col,
             display_row_offset: placement.display_row_offset,
             slot_width: Some(placement.slot_width.resolve(visual_state.face_width)),
+            // These are visual defaults, not necessarily the selected glyph's
+            // measured height (notably for explicit overlay-string cursors).
+            logical_dimensions: None,
             stretch_like: placement.stretch_like,
             slot_state: CursorSlotResolutionState::Unresolved,
             display_replacement_anchor_charpos: None,
@@ -1324,6 +1398,28 @@ pub(crate) fn resolve_cursor_vertical_metrics(
     (y, height, ascent.min(height))
 }
 
+/// GNU caps non-stretching box/hbar cursors at one column, without
+/// enlarging a narrower glyph; vertical bars keep their explicit ink width.
+pub(crate) fn resolve_cursor_width(
+    style: CursorStyle,
+    slot_width: f32,
+    stretch_like: bool,
+    x_stretch_cursor: bool,
+    fallback_char_width: f32,
+) -> f32 {
+    let actual = match style {
+        CursorStyle::Bar(width) => width.max(1.0),
+        CursorStyle::Hbar(_) | CursorStyle::FilledBox | CursorStyle::Hollow => slot_width.max(1.0),
+    };
+    if stretch_like && !x_stretch_cursor && !matches!(style, CursorStyle::Bar(_)) {
+        actual.min(DisplayRowCharWidthPolicy::new(fallback_char_width).fallback())
+    } else {
+        actual
+    }
+}
+
+/// Combine the selected slot's canonical width and vertical metrics with cursor
+/// paint, without letting stretch policy change explicit vertical-bar geometry.
 pub(crate) fn resolve_cursor_geometry(
     style: CursorStyle,
     source: CursorGeometrySource,
@@ -1332,18 +1428,13 @@ pub(crate) fn resolve_cursor_geometry(
     color: Color,
     frame_cursor_foreground: Color,
 ) -> ResolvedCursorGeometry {
-    let actual_slot_width = match style {
-        CursorStyle::Bar(width) => width.max(1.0),
-        CursorStyle::Hbar(_) | CursorStyle::FilledBox | CursorStyle::Hollow => {
-            source.slot_width.max(1.0)
-        }
-    };
-    let width = if source.stretch_like && !x_stretch_cursor && !matches!(style, CursorStyle::Bar(_))
-    {
-        DisplayRowCharWidthPolicy::new(fallback_char_width).fallback()
-    } else {
-        actual_slot_width
-    };
+    let width = resolve_cursor_width(
+        style,
+        source.slot_width,
+        source.stretch_like,
+        x_stretch_cursor,
+        fallback_char_width,
+    );
     let (y, height, ascent) = resolve_cursor_vertical_metrics(
         source.y,
         source.face_height,
@@ -1440,6 +1531,8 @@ impl<'a> CapturedTextWindowCursorPublishContext<'a> {
         }
     }
 
+    /// Publish logical anchors even when painting is disabled, then materialize
+    /// the same selected slot's physical geometry and face when a cursor is shown.
     pub(crate) fn publish_captured_cursor(
         self,
         mut cursor: CapturedCursorInfo,
@@ -1459,14 +1552,30 @@ impl<'a> CapturedTextWindowCursorPublishContext<'a> {
         // Explicit image/stretch captures and synthetic newlines keep their
         // own contracts; unmeasured glyphs retain the fresh active-face fallback.
         if cursor.vertical_source == CursorVerticalSource::ActiveFace {
-            if let Some(row) = output.builder().current_window_row(row_metric.row()) {
-                if let Some(glyph) = row.glyphs[GlyphArea::Text.index()].iter().find(|glyph| {
-                    glyph.pixel_height > 0.0
-                        && row
-                            .glyph_covers_buffer_charpos(glyph, self.point_charpos.max(0) as usize)
-                }) {
+            let builder = output.builder();
+            if let Some(row) = builder.current_window_row(row_metric.row()) {
+                if let Some(glyph) = CursorVisualColumnResolutionRequest::point_glyph(
+                    row,
+                    self.point_charpos.max(0) as usize,
+                )
+                .filter(|glyph| glyph.pixel_height > 0.0)
+                {
                     cursor.face_h = glyph.pixel_height;
                     cursor.face_ascent = glyph.pixel_ascent;
+                    let stretch = matches!(
+                        glyph.glyph_type,
+                        neomacs_display_protocol::glyph_matrix::GlyphType::Stretch { .. }
+                    );
+                    if stretch || matches!(glyph.provenance, GlyphProvenance::Str { .. }) {
+                        // Replacement/stretch width can differ from the buffer
+                        // face captured before its display property was rendered.
+                        cursor.stretch_like = stretch;
+                        cursor.slot_width = Some(glyph.pixel_width);
+                        if let Some(face) = builder.output_face(glyph.face_id) {
+                            cursor.fg = face.foreground;
+                            cursor.bg = face.background;
+                        }
+                    }
                 }
             }
         }
@@ -1497,10 +1606,39 @@ impl<'a> CapturedTextWindowCursorPublishContext<'a> {
             self.text_area_left,
             self.window_top,
         );
-        if let Some(grid_x) = grid_x_override {
-            logical_cursor.x = grid_x;
-        }
-        output_emitter.set_logical_cursor(logical_cursor);
+        // Logical anchors and physical publication must accept the same
+        // integer override only when bidi did not move the selected slot.
+        // Explicit string-cursor candidates already have resolved placement.
+        let (finalized_x, finalized_col, logical_dimensions) =
+            if cursor.slot_state == CursorSlotResolutionState::Unresolved {
+                output
+                    .builder()
+                    .resolve_finalized_cursor_placement(
+                        CursorVisualColumnResolutionRequest::new(
+                            self.params.window_id,
+                            row_metric.row(),
+                            self.point_charpos.max(0) as usize,
+                        ),
+                        self.char_w,
+                    )
+                    .map_or((cursor.x, logical_cursor.col, None), |placement| {
+                        (
+                            placement.x(),
+                            i64::from(placement.coordinates().output_col()),
+                            placement.logical_dimensions(),
+                        )
+                    })
+            } else {
+                (cursor.x, logical_cursor.col, cursor.logical_dimensions)
+            };
+        logical_cursor.col = finalized_col;
+        logical_cursor.x = crate::window_output::cursor_snapshot_x(
+            cursor.x,
+            finalized_x,
+            self.text_area_left,
+            grid_x_override,
+        );
+        output_emitter.set_logical_cursor(logical_cursor, logical_dimensions);
 
         let Some(style) = cursor_style_for_window(self.params) else {
             return CapturedTextWindowCursorPublishOutcome::NoWindowCursor;

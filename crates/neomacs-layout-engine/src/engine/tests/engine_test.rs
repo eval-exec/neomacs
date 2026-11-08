@@ -76,6 +76,8 @@ mod font_selection;
 
 #[path = "../../tests/engine_line_spacing_test.rs"]
 mod line_spacing;
+#[path = "../../tests/engine_trailing_whitespace_test.rs"]
+mod trailing_whitespace;
 
 #[path = "../../tests/engine_display_motion_test.rs"]
 mod display_motion;
@@ -690,6 +692,7 @@ fn face_scan_checkpoint_tracks_resolution_boundaries_and_invalidation() {
 fn cursor_info_at(x: f32, display_row_offset: usize) -> CapturedCursorInfo {
     CapturedCursorInfo {
         vertical_source: crate::display_cursor::CursorVerticalSource::PointGlyph,
+        logical_dimensions: None,
         x,
         y: display_row_offset as f32 * 14.0,
         face_w: 7.0,
@@ -34207,6 +34210,9 @@ fn p45_trailing_whitespace_shadow_survives_a_wrapped_row_boundary() {
     // fits and EVERY glyph on both rows — the trailing spaces included — is
     // appended through the per-char path this rung rewires.
     let trace = layout_trace_with_buffer_setup("aaaaaaaa   \n", 88, 240, |buffer, _, _| {
+        // Fragmented insertion leaves point at the newline. GNU suppresses
+        // that run there; move away to exercise the intended highlight path.
+        buffer.set_point_anchor(neovm_core::buffer::TextPositionAnchor::ZERO);
         buffer.set_buffer_local("truncate-lines", Value::NIL);
         buffer.set_buffer_local("show-trailing-whitespace", Value::T);
     });

@@ -53,7 +53,8 @@ impl PreparedViewports {
         self.entries.iter().rev().find_map(|entry| {
             tracing::trace!(target: "neomacs_layout_engine::motion_geometry", ?scope,
                 computed = entry.computed,
-                collections_match = entry.reads.as_ref().is_none_or(|reads| reads.unchanged()),
+                collections_match = entry.cursor_sources.as_ref()
+                    .is_some_and(|sources| sources.can_replay() && sources.unchanged()),
                 fontset_matches = entry.retained.key.fontset_generation
                     == neovm_core::emacs_core::fontset::fontset_generation(),
                 start_present = entry.retained.display_snapshot.rows.iter()
@@ -170,6 +171,7 @@ impl PreparedViewports {
                 })
                 .collect();
             snapshot.logical_cursor = None;
+            snapshot.logical_cursor_dimensions = None;
             snapshot.phys_cursor = None;
             snapshot.chrome_strings = Default::default();
             snapshot.regions_materialized = true;

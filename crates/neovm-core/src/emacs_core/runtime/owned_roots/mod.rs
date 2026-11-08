@@ -22,20 +22,80 @@ impl std::fmt::Debug for OwnedRoots {
     }
 }
 
+type RootLeases = RefCell<Vec<Weak<[Value]>>>;
+
+#[cfg(test)]
+thread_local! { static LEASE_PRUNING_INSPECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+#[repr(C)]
 #[derive(Default)]
 pub(crate) struct OwnedRootRegistry {
-    leases: RefCell<Vec<Weak<[Value]>>>,
+    leases: Rc<RootLeases>,
+    // Context's pinned repr(C) ABI reserves the former inline RefCell<Vec>
+    // slot. Sharing the registry must not move any subsequent Context field.
+    _context_abi_reserved: [usize; 3],
+}
+const _: () =
+    assert!(std::mem::size_of::<OwnedRootRegistry>() == std::mem::size_of::<RootLeases>());
+const _: () =
+    assert!(std::mem::align_of::<OwnedRootRegistry>() == std::mem::align_of::<RootLeases>());
+
+/// Evaluator-local root registration without borrowing the entire Context.
+/// This weak factory cannot prolong its evaluator or cross worker threads.
+#[derive(Clone, Debug)]
+pub struct OwnedRootRetainer {
+    leases: Weak<RootLeases>,
+}
+impl OwnedRootRetainer {
+    /// Retain already-live operands, or decline after the original evaluator
+    /// has retired. This grants lifetime only, never mutation freshness.
+    pub fn retain(&self, values: impl IntoIterator<Item = Value>) -> Option<OwnedRoots> {
+        let leases = self.leases.upgrade()?;
+        Some(OwnedRootRegistry::retain_in(&leases, values))
+    }
 }
 
 impl OwnedRootRegistry {
     fn retain(&self, values: impl IntoIterator<Item = Value>) -> OwnedRoots {
+        Self::retain_in(&self.leases, values)
+    }
+
+    /// Native owners hold strong values; the original evaluator traces only
+    /// live weak leases. Registration never transfers evaluator ownership.
+    fn retain_in(leases: &RootLeases, values: impl IntoIterator<Item = Value>) -> OwnedRoots {
         let values: Rc<[Value]> = values
             .into_iter()
             .filter(|value| value.is_heap_object())
             .collect();
         if !values.is_empty() {
-            let mut leases = self.leases.borrow_mut();
-            leases.retain(|lease| lease.strong_count() != 0);
+            let mut leases = leases.borrow_mut();
+            // Reclaim an expired suffix cheaply (including the usual single
+            // transient lease), preserving prompt cleanup without rescanning
+            // live predecessors. Each expired entry is popped at most once.
+            while leases.last().is_some_and(|lease| {
+                #[cfg(test)]
+                LEASE_PRUNING_INSPECTIONS.with(|count| count.set(count.get() + 1));
+                lease.strong_count() == 0
+            }) {
+                drop(leases.pop());
+            }
+            // Sweep at capacity, not on every registration. If most leases
+            // remain live, grow as well: freeing only one dead slot must not
+            // cause another full scan on the very next insertion. Either
+            // branch leaves at least half a buffer of registration headroom,
+            // so total pruning work is amortized linear. GC tracing also
+            // removes dead leases; weak entries never keep Lisp graphs live.
+            if leases.len() == leases.capacity() {
+                leases.retain(|lease| {
+                    #[cfg(test)]
+                    LEASE_PRUNING_INSPECTIONS.with(|count| count.set(count.get() + 1));
+                    lease.strong_count() != 0
+                });
+                if leases.len() > leases.capacity() / 2 {
+                    let additional = leases.capacity();
+                    leases.reserve(additional);
+                }
+            }
             leases.push(Rc::downgrade(&values));
         }
         OwnedRoots { values }
@@ -55,6 +115,14 @@ impl OwnedRootRegistry {
 }
 
 impl Context {
+    /// Register roots while other display services borrow the Context. The
+    /// returned factory is weak and remains tied to this evaluator's registry.
+    pub fn owned_root_retainer(&self) -> OwnedRootRetainer {
+        OwnedRootRetainer {
+            leases: Rc::downgrade(&self.owned_roots.leases),
+        }
+    }
+
     /// Retain already-live operands from this evaluator. This grants object
     /// lifetime only: callers must separately validate mutation and layout
     /// generations before using derived data.

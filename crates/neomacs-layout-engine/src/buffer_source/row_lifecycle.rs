@@ -2077,7 +2077,13 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
                 fill_char_width: metrics.char_width(),
                 indicator_char_width: context.default_char_width,
             };
-            source_render.render_line_end(&line_end_ctx, line_end_geometry, face_ids);
+            source_render.render_line_end(&line_end_ctx, line_end_geometry, face_ids, &|from| {
+                crate::display_row::trailing_whitespace::buffer_trailing_whitespace_p(
+                    buffer,
+                    context.point_charpos,
+                    from,
+                )
+            });
         }
         // The row ends at a real buffer newline, so it owns the columns past
         // its last glyph. The cell is the one GNU's `append_space_for_newline`
@@ -2323,6 +2329,13 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
                     indicator_char_width: context.default_char_width,
                 },
                 face_ids,
+                &|from| {
+                    crate::display_row::trailing_whitespace::buffer_trailing_whitespace_p(
+                        buffer,
+                        context.point_charpos,
+                        from,
+                    )
+                },
             );
         }
         line_break_action.apply_before_row_transition(

@@ -49,7 +49,7 @@ use crate::window_output::{
 use neomacs_display_protocol::frame_glyphs::{
     CursorStyle, DisplaySlotId, GlyphRowRole, PhysCursor,
 };
-use neomacs_display_protocol::glyph_matrix::{FaceFillItem, GlyphArea, GlyphRow, GlyphType};
+use neomacs_display_protocol::glyph_matrix::{FaceFillItem, GlyphRow, GlyphType};
 use neomacs_display_protocol::types::{Color, DisplayWindowId, Rect};
 use neovm_core::buffer::BufferId;
 use neovm_core::window::{FrameId, WindowId};
@@ -113,6 +113,7 @@ fn render_or_retain_window_chrome(
     ),
     LogicalInputsChanged,
 > {
+    let _cursor_source_pause = crate::cursor_source_dependencies::pause();
     let memo = match source {
         WindowChromeRowSource::Recompute => None,
         WindowChromeRowSource::RecomputeWithMemo(memo) => Some(memo),
@@ -389,9 +390,7 @@ fn replay_cursor_paint(
         .builder()
         .current_window_row(cursor_row)
         .and_then(|row| {
-            row.glyphs[GlyphArea::Text.index()]
-                .iter()
-                .find(|glyph| row.glyph_covers_buffer_charpos(glyph, point))
+            crate::display_cursor::CursorVisualColumnResolutionRequest::point_glyph(row, point)
                 .map(|glyph| glyph.face_id)
         });
     let glyph_face = glyph_face_id
@@ -417,9 +416,8 @@ fn retained_point_cursor_metrics(
     if buffer_newline && !row.continued && point == row.end_charpos {
         return Some((row.height_px, row.ascent_px));
     }
-    if let Some(glyph) = row.glyphs[GlyphArea::Text.index()]
-        .iter()
-        .find(|glyph| row.glyph_covers_buffer_charpos(glyph, point))
+    if let Some(glyph) =
+        crate::display_cursor::CursorVisualColumnResolutionRequest::point_glyph(row, point)
     {
         if glyph.pixel_height > 0.0 {
             return Some((glyph.pixel_height, glyph.pixel_ascent));
@@ -432,6 +430,52 @@ fn retained_point_cursor_metrics(
         }
     }
     Some((row.height_without_line_spacing(), row.ascent_px))
+}
+
+/// Publish an ordinary buffer-point selection without manufacturing paint or
+/// font metrics. The caller must first exclude explicit string overrides.
+fn publish_canonical_logical_cursor(
+    output: &mut TextWindowOutputTarget<'_>,
+    emitter: &mut WindowOutputEmitter,
+    window_id: u64,
+    row: usize,
+    point: usize,
+    text_area_left: f32,
+    char_width: f32,
+) -> bool {
+    let Some(mut pixel_y) = output
+        .builder()
+        .current_window_row(row)
+        .map(|row| row.pixel_y)
+    else {
+        return false;
+    };
+    // The retained empty ZV placeholder can still have y=0. As on painted
+    // replay, its logical position must not precede the previous body row.
+    if let Some(previous_bottom) = row
+        .checked_sub(1)
+        .and_then(|previous| output.builder().current_window_row(previous))
+        .filter(|row| !row.role.is_chrome())
+        .map(|row| row.pixel_y + row.height_px)
+    {
+        pixel_y = pixel_y.max(previous_bottom);
+    }
+    let Some(placement) = output.builder().resolve_finalized_cursor_placement(
+        CursorVisualColumnResolutionRequest::new(window_id as i64, row, point),
+        char_width,
+    ) else {
+        return false;
+    };
+    emitter.set_logical_cursor(
+        neovm_core::window::WindowCursorPos {
+            x: (placement.x() - text_area_left).round() as i64,
+            y: pixel_y.round() as i64,
+            row: row as i64,
+            col: i64::from(placement.coordinates().output_col()),
+        },
+        placement.logical_dimensions(),
+    );
+    true
 }
 
 /// Publish a role-directed cursor on an installed scroll row. Return false
@@ -453,46 +497,41 @@ fn try_decorate_window_cursor(
     default_ascent: f32,
     measurement: DisplayRowMeasurementPolicy,
 ) -> bool {
-    let (row_pixel_y, row_height, row_ascent, cursor_width) =
-        match output.builder().current_window_row(cursor_row) {
-            Some(row) => {
-                let mut width = char_w;
-                for glyph in &row.glyphs[GlyphArea::Text.index()] {
-                    if row.glyph_covers_buffer_charpos(glyph, point) {
-                        // As the walk sizes it (`resolve_cursor_geometry`,
-                        // GNU `get_phys_cursor_geometry`): on a stretch --
-                        // a TAB -- the cursor is one column wide unless
-                        // `x-stretch-cursor` is set; a bar keeps its own.
-                        width = if matches!(glyph.glyph_type, GlyphType::Stretch { .. })
-                            && !params.x_stretch_cursor
-                            && !matches!(style, CursorStyle::Bar(_))
-                        {
-                            crate::display_row::width::DisplayRowCharWidthPolicy::new(char_w)
-                                .fallback()
-                        } else {
-                            glyph.pixel_width
-                        };
-                        break;
-                    }
-                }
-                let Some((face_height, face_ascent)) =
-                    retained_point_cursor_metrics(row, point, buffer_newline, measurement)
-                else {
-                    return false;
-                };
-                let (y, height, ascent) = crate::display_cursor::resolve_cursor_vertical_metrics(
-                    row.pixel_y,
-                    face_height,
-                    face_ascent,
-                    row.height_px,
-                    row.ascent_px,
-                    default_height,
-                    row.ends_at_zv,
+    let (row_pixel_y, row_height, row_ascent, cursor_width) = match output
+        .builder()
+        .current_window_row(cursor_row)
+    {
+        Some(row) => {
+            let mut width = char_w;
+            if let Some(glyph) =
+                crate::display_cursor::CursorVisualColumnResolutionRequest::point_glyph(row, point)
+            {
+                width = crate::display_cursor::resolve_cursor_width(
+                    style,
+                    glyph.pixel_width,
+                    matches!(glyph.glyph_type, GlyphType::Stretch { .. }),
+                    params.x_stretch_cursor,
+                    char_w,
                 );
-                (y, height, ascent, width)
             }
-            None => (0.0, default_height, default_ascent, char_w),
-        };
+            let Some((face_height, face_ascent)) =
+                retained_point_cursor_metrics(row, point, buffer_newline, measurement)
+            else {
+                return false;
+            };
+            let (y, height, ascent) = crate::display_cursor::resolve_cursor_vertical_metrics(
+                row.pixel_y,
+                face_height,
+                face_ascent,
+                row.height_px,
+                row.ascent_px,
+                default_height,
+                row.ends_at_zv,
+            );
+            (y, height, ascent, width)
+        }
+        None => (0.0, default_height, default_ascent, char_w),
+    };
     let window_id_i64 = window_id as i64;
     let paint = replay_cursor_paint(output, cursor_row, point, params);
     let cursor = PhysCursor {
@@ -845,6 +884,21 @@ impl BufferSourceOutputSetup {
         );
 
         let has_overlays = !buffer.layout_overlays().is_empty();
+        // Live, complete source absence is stronger than glyph provenance:
+        // even a string emitting only synthetic/control primitives may override point.
+        // This is O(1), excludes category/alias properties too, and caches no
+        // mutable string-property claim under buffer ticks.
+        let canonical_buffer_cursor = cursor_only
+            .as_ref()
+            .is_some_and(|replay| replay.ordinary_cursor_source.is_some())
+            || (buffer.layout_text_props_is_empty()
+                && !has_overlays
+                && !local_display_policy.has_prefix()
+                && !buffer
+                    .layout_buffer_local_value(
+                        crate::neovm_bridge::LayoutVar::DefaultTextProperties,
+                    )
+                    .is_some_and(|value| value.is_cons()));
         let face_resolution = BufferSourceFaceResolutionContext::new(
             buffer,
             face_resolver.resolver(),
@@ -931,10 +985,19 @@ impl BufferSourceOutputSetup {
         // rebuild (honest layering, spec §4.6) — the win is skipping fontify /
         // shaping / measurement for the body.
         if let Some(mut replay) = cursor_only {
+            // Row coverage cannot establish an explicit selection, regardless
+            // of paint visibility. Moved authority needs a fresh source walk.
+            if replay.retained_logical_cursor.is_none() && !canonical_buffer_cursor {
+                output.restore_retry_checkpoint(retry_checkpoint);
+                return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
+            }
             // Taken before the replay's rows are moved into the grid below.
             let retained_chrome = replay.chrome.take();
             let chrome_memo = replay.chrome_memo.take();
             let mut output_emitter = output.begin_text_window_output(self.begin_request);
+            if let Some(logical) = replay.retained_logical_cursor.take() {
+                output_emitter.set_logical_cursor(logical.position, logical.dimensions);
+            }
 
             // Capture the point glyph's metrics from the new cursor row before the
             // rows are moved into the grid (fall back to the window face metrics
@@ -943,6 +1006,7 @@ impl BufferSourceOutputSetup {
             // canonical cursor geometry rule. Width comes from the point glyph.
             // Fall back to row metrics at EOL or hidden text without a glyph.
             let mut cursor_width = geometry.char_width;
+            let mut cursor_stretch_like = false;
             let mut cursor_height = geometry.char_height;
             let mut cursor_ascent = window_metrics.ascent();
             let mut cursor_row_pixel_y = 0.0_f32;
@@ -962,37 +1026,43 @@ impl BufferSourceOutputSetup {
                     // starting at 0. The full-rebuild path is unaffected: it
                     // captures the cursor y during emission from `row_geometry`.
                     cursor_row_pixel_y = row.pixel_y.max(prev_row_bottom);
-                    for glyph in &row.glyphs[GlyphArea::Text.index()] {
-                        if row.glyph_covers_buffer_charpos(glyph, replay.new_point as usize) {
-                            cursor_width = glyph.pixel_width;
-                            break;
-                        }
+                    if let Some(glyph) =
+                        crate::display_cursor::CursorVisualColumnResolutionRequest::point_glyph(
+                            row,
+                            replay.new_point as usize,
+                        )
+                    {
+                        cursor_width = glyph.pixel_width;
+                        cursor_stretch_like = matches!(glyph.glyph_type, GlyphType::Stretch { .. });
                     }
-                    let buffer_newline = buf_access
-                        .byte_at(buf_access.charpos_to_bytepos(replay.new_point))
-                        == Some(b'\n');
-                    let Some((face_height, face_ascent)) = retained_point_cursor_metrics(
-                        row,
-                        replay.new_point as usize,
-                        buffer_newline,
-                        default_face.measurement_policy(),
-                    ) else {
-                        output.restore_retry_checkpoint(retry_checkpoint);
-                        return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
-                    };
-                    let (y, height, ascent) =
-                        crate::display_cursor::resolve_cursor_vertical_metrics(
-                            cursor_row_pixel_y,
-                            face_height,
-                            face_ascent,
-                            row.height_px,
-                            row.ascent_px,
-                            geometry.char_height,
-                            row.ends_at_zv,
-                        );
-                    cursor_row_pixel_y = y;
-                    cursor_height = height;
-                    cursor_ascent = ascent;
+                    if replay.retained_cursor.is_none() && cursor_style_for_window(params).is_some()
+                    {
+                        let buffer_newline = buf_access
+                            .byte_at(buf_access.charpos_to_bytepos(replay.new_point))
+                            == Some(b'\n');
+                        let Some((face_height, face_ascent)) = retained_point_cursor_metrics(
+                            row,
+                            replay.new_point as usize,
+                            buffer_newline,
+                            default_face.measurement_policy(),
+                        ) else {
+                            output.restore_retry_checkpoint(retry_checkpoint);
+                            return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
+                        };
+                        let (y, height, ascent) =
+                            crate::display_cursor::resolve_cursor_vertical_metrics(
+                                cursor_row_pixel_y,
+                                face_height,
+                                face_ascent,
+                                row.height_px,
+                                row.ascent_px,
+                                geometry.char_height,
+                                row.ends_at_zv,
+                            );
+                        cursor_row_pixel_y = y;
+                        cursor_height = height;
+                        cursor_ascent = ascent;
+                    }
                 }
                 prev_row_bottom = row.pixel_y + row.height_px;
             }
@@ -1070,6 +1140,24 @@ impl BufferSourceOutputSetup {
             let display_window_id = DisplayWindowId::new(window_id_i64);
             // Cursor visibility/style belongs to current window policy, not
             // retained row decoration: absent decoration must stay absent.
+            if !output_emitter.has_logical_cursor()
+                && canonical_buffer_cursor
+                && !publish_canonical_logical_cursor(
+                    &mut output,
+                    &mut output_emitter,
+                    output_window_id,
+                    replay.new_cursor_row_index,
+                    replay.new_point as usize,
+                    walk_setup.text_area_left,
+                    geometry.char_width,
+                )
+            {
+                crate::window_output::restore_text_window_retry_checkpoint(
+                    output.reborrow(),
+                    retry_checkpoint,
+                );
+                return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
+            }
             if let Some(style) = cursor_style_for_window(params) {
                 let cursor = if let Some(retained) = replay.retained_cursor.as_ref() {
                     FastPathCursorPlacement::Retained(retained.clone())
@@ -1092,7 +1180,13 @@ impl BufferSourceOutputSetup {
                         },
                         x: walk_setup.text_area_left,
                         y: walk_setup.window_top + cursor_row_pixel_y,
-                        width: cursor_width,
+                        width: crate::display_cursor::resolve_cursor_width(
+                            style,
+                            cursor_width,
+                            cursor_stretch_like,
+                            params.x_stretch_cursor,
+                            geometry.char_width,
+                        ),
                         height: cursor_height,
                         ascent: cursor_ascent,
                         style,
@@ -1615,6 +1709,25 @@ impl BufferSourceOutputSetup {
                     .find_current_window_cursor_row(scroll.new_point as usize),
             };
             if let Some(cursor_row) = cursor_row
+                && canonical_buffer_cursor
+                && !output_emitter.has_logical_cursor()
+                && !publish_canonical_logical_cursor(
+                    &mut output,
+                    &mut output_emitter,
+                    output_window_id,
+                    cursor_row,
+                    scroll.new_point as usize,
+                    walk_setup.text_area_left,
+                    geometry.char_width,
+                )
+            {
+                crate::window_output::restore_text_window_retry_checkpoint(
+                    output.reborrow(),
+                    retry_checkpoint,
+                );
+                return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
+            }
+            if let Some(cursor_row) = cursor_row
                 && let Some(style) = cursor_style_for_window(params)
             {
                 if !try_decorate_window_cursor(
@@ -1640,6 +1753,16 @@ impl BufferSourceOutputSetup {
                     );
                     return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
                 }
+            }
+
+            // Partial walks may find semantic authority freshly. Reused rows
+            // alone do not certify hidden explicit string-cursor overrides.
+            if cursor_style_for_window(params).is_none() && !output_emitter.has_logical_cursor() {
+                crate::window_output::restore_text_window_retry_checkpoint(
+                    output.reborrow(),
+                    retry_checkpoint,
+                );
+                return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
             }
 
             // A replay may not be SEALED without the frame's physical cursor.
