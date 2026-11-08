@@ -2754,6 +2754,19 @@ fn pc2_collect(
 }
 
 pub(crate) fn scan_pc2_table(workspace: &Path, text: &str) -> Result<Vec<String>, String> {
+    // Canonicalize the root ONCE, at guard entry.  Every source path below is
+    // canonicalized before it becomes a catalog key, and `Pc2Visitor::site`
+    // derives the definition's workspace-relative name with
+    // `source.strip_prefix(workspace)`.  A root that reaches this guard as a
+    // symlink (macOS `/tmp` and `/var` are links to `/private/...`) makes that
+    // strip fail for every file, so every adapter resolves to "0 definitions"
+    // and the pc2 self-tests go red on arm64 while Linux stays green.  The
+    // outside-workspace check is unchanged: a file genuinely outside the
+    // canonical root still fails to strip.
+    let canonical_workspace = workspace
+        .canonicalize()
+        .map_err(|error| format!("PC2_WORKSPACE: {}: {error}", workspace.display()))?;
+    let workspace = canonical_workspace.as_path();
     let rows = parse_pc2_table(text)?;
     let sources = discover_sources(workspace)?;
     let catalog = n13_module_catalog(&sources)?;
@@ -3421,6 +3434,32 @@ fn architecture_pc2_generic_local_helper_is_not_a_static_write() {
     assert!(
         scan_pc2_table(root, &table).unwrap().is_empty(),
         "PC2_LOCAL_HELPER_RESTORED"
+    );
+}
+
+/// ARM64-SPLIT: the root may reach the guard as a symlink.  macOS `/tmp` and
+/// `/var` are links to `/private/...`, so `tempfile::tempdir()` hands the pc2
+/// self-tests a non-canonical root while every source path is canonicalized;
+/// `Pc2Visitor::site`'s `strip_prefix(workspace)` then failed for every file
+/// and the adapters resolved to "0 definitions" on arm64 only.  A symlinked
+/// root must produce exactly the same result as the canonical one.
+#[cfg(unix)]
+#[test]
+fn architecture_pc2_accepts_a_symlinked_root_workspace() {
+    let real = tempfile::tempdir().unwrap();
+    let alias_parent = tempfile::tempdir().unwrap();
+    let alias = alias_parent.path().join("workspace-alias");
+    std::os::unix::fs::symlink(real.path(), &alias).expect("symlink root");
+    let table = pc2_sealed_fixture(real.path());
+    let violations =
+        scan_pc2_table(&alias, &table).expect("the guard must accept a symlinked root");
+    assert!(
+        violations.is_empty(),
+        "PC2_SYMLINKED_ROOT: the symlinked root changed the guard's answer: {violations:?}"
+    );
+    assert!(
+        scan_pc2_table(real.path(), &table).unwrap().is_empty(),
+        "PC2_SYMLINKED_ROOT_CANONICAL"
     );
 }
 

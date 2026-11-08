@@ -4366,6 +4366,17 @@ fn expanded_mod_rows_violation(
     rows: &[VisRow],
     authority: &[AuthRow],
 ) -> Result<(), String> {
+    // Canonicalize the root ONCE, at guard entry.  The expansion canonicalizes
+    // every source path and then derives the workspace-relative name with
+    // `strip_prefix(workspace)`; a root that arrives as a symlink (macOS
+    // `/tmp` and `/var` are links to `/private/...`) makes every strip fail
+    // with "is outside the workspace" and reds the mod-row self-tests on
+    // arm64 while Linux stays green.  The outside-workspace check is
+    // unchanged: a file genuinely outside the canonical root still fails.
+    let canonical_workspace = workspace
+        .canonicalize()
+        .map_err(|error| format!("{}: {error}", workspace.display()))?;
+    let workspace = canonical_workspace.as_path();
     let mut public_cache: BTreeMap<String, ProductionSurface> = BTreeMap::new();
     let mut failures = Vec::new();
     for row in rows.iter().filter(|row| row.kind == "mod") {
@@ -7298,6 +7309,63 @@ fn mod_row_expansion_accepts_an_aliased_root_public_item() {
         item_row("intern::well_known::HIDDEN_ALIASED"),
     ];
     assert!(expanded_mod_rows_violation(dir.path(), &rows, &[]).is_ok());
+}
+
+/// ARM64-SPLIT: the root may reach the guard as a symlink.  macOS `/tmp` and
+/// `/var` are links to `/private/...`, so `tempfile::tempdir()` hands these
+/// self-tests a non-canonical root while every source path is canonicalized;
+/// the expansion's `strip_prefix(workspace)` then failed with "is outside the
+/// workspace" on arm64 only.  A symlinked root must expand exactly like the
+/// canonical one, and must still report an unrowed pub item.
+#[cfg(unix)]
+#[test]
+fn mod_row_expansion_accepts_a_symlinked_root_workspace() {
+    let real = tempfile::tempdir().expect("real tempdir");
+    let alias_parent = tempfile::tempdir().expect("alias parent");
+    let alias = alias_parent.path().join("workspace-alias");
+    std::os::unix::fs::symlink(real.path(), &alias).expect("symlink root");
+    let src = real.path().join("crates/neovm-value/src");
+    std::fs::create_dir_all(src.join("gc")).expect("src");
+    std::fs::write(src.join("lib.rs"), "pub mod gc;\n").expect("lib");
+    let gc = "pub use facade::Published;\n\
+              #[cfg(not(feature = \"test-support\"))]\nmod facade;\n\
+              #[cfg(feature = \"test-support\")]\npub mod facade;\n";
+    std::fs::write(src.join("gc.rs"), gc).expect("gc");
+    std::fs::write(
+        src.join("gc/facade.rs"),
+        "pub struct Published;\npub struct Unrowed;\npub fn new_public_fn() {}\nimpl Published {\n    pub fn method(&self) {}\n}\n",
+    )
+    .expect("facade");
+    let mod_row = || VisRow {
+        crate_dir: "neovm-value".to_owned(),
+        item: "gc::facade".to_owned(),
+        kind: "mod".to_owned(),
+        file: "crates/neovm-value/src/gc.rs".to_owned(),
+        tests: Vec::new(),
+    };
+    let item_row = |item: &str, kind: &str| VisRow {
+        crate_dir: "neovm-value".to_owned(),
+        item: item.to_owned(),
+        kind: kind.to_owned(),
+        file: "crates/neovm-value/src/gc/facade.rs".to_owned(),
+        tests: Vec::new(),
+    };
+    let rows = vec![
+        mod_row(),
+        item_row("gc::facade::Unrowed", "struct"),
+        item_row("gc::facade::new_public_fn", "fn"),
+    ];
+    assert!(
+        expanded_mod_rows_violation(&alias, &rows, &[]).is_ok(),
+        "a symlinked root must expand like the canonical one"
+    );
+    let error = expanded_mod_rows_violation(&alias, &[mod_row()], &[])
+        .expect_err("an unrowed pub item must stay red through a symlinked root");
+    assert!(
+        error.contains("Unrowed") && error.contains("new_public_fn"),
+        "{error}"
+    );
+    assert!(expanded_mod_rows_violation(real.path(), &rows, &[]).is_ok());
 }
 
 #[test]
