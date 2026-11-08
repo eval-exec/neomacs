@@ -25,6 +25,7 @@ impl HostCfgClass {
             HostCfgClass::Lcms2 => cfg!(neomacs_have_lcms2),
             HostCfgClass::Sqlite => cfg!(feature = "sqlite"),
             HostCfgClass::VmProfile => cfg!(feature = "vm-profile"),
+            HostCfgClass::NotMacos => !cfg!(target_os = "macos"),
         }
     }
 }

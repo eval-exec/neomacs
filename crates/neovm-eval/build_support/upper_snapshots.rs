@@ -110,6 +110,11 @@ pub const BOOTSTRAP_BINDERS: [(&str, &str, usize); 4] = [
 
 fn parse_cfg(attr: &str) -> Result<String, String> {
     let compact: String = attr.split_whitespace().collect();
+    // The negated surface form must be recognized before the bare macOS test
+    // below, which would otherwise match its substring.
+    if compact.contains("not(target_os=\"macos\")") {
+        return Ok("not-macos".to_owned());
+    }
     if compact.contains("target_os=\"macos\"") {
         return Ok("macos".to_owned());
     }

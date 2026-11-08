@@ -2550,6 +2550,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(4, Some(5)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "handle-save-session",
@@ -2951,6 +2952,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         .placeholder(NoEvalPlaceholder::Nil)
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("")),
     );
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "tool-bar-get-system-style",
         NativeFn::ContextVec(|_ctx, args| builtin_tool_bar_get_system_style(args)),
@@ -3030,11 +3032,13 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(|_ctx, args| builtin_x_begin_drag(args)),
         SubrArity::new(1, Some(6)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-double-buffered-p",
         NativeFn::ContextVec(|_ctx, args| builtin_x_double_buffered_p(args)),
         SubrArity::new(0, Some(1)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "x-menu-bar-open-internal",
@@ -4456,6 +4460,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     crate::emacs_core::display_subrs::register_force_window_update(ctx);
 
     // -- Display/terminal --
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-export-frames",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4463,6 +4468,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(0, Some(2)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-backspace-delete-keys-p",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4470,6 +4476,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(0, Some(1)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-change-window-property",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4478,6 +4485,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         SubrArity::new(2, Some(7)),
     )));
     crate::emacs_core::display_subrs::register_x_focus_frame(ctx);
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-get-local-selection",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4485,6 +4493,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(0, Some(2)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-get-modifier-masks",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4492,6 +4501,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(0, Some(1)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-get-selection-internal",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4504,6 +4514,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(|_ctx, args| crate::emacs_core::display::builtin_x_display_list(args)),
         SubrArity::new(0, Some(0)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-disown-selection-internal",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4511,6 +4522,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(1, Some(3)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-delete-window-property",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4518,11 +4530,13 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(1, Some(3)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-frame-edges",
         NativeFn::ContextVec(|_ctx, args| crate::emacs_core::display::builtin_x_frame_edges(args)),
         SubrArity::new(0, Some(2)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-frame-geometry",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4530,6 +4544,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(0, Some(1)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-frame-list-z-order",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4537,6 +4552,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(0, Some(1)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-frame-restack",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4549,6 +4565,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(|_ctx, args| crate::emacs_core::display::builtin_x_family_fonts(args)),
         SubrArity::new(0, Some(2)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-get-atom-name",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4556,6 +4573,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(1, Some(2)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-mouse-absolute-pixel-position",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4563,6 +4581,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(0, Some(0)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-own-selection-internal",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4578,6 +4597,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         SubrArity::new(1, Some(1)),
     )));
     crate::emacs_core::display_subrs::register_x_popup_dialog(ctx);
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-register-dnd-atom",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4585,6 +4605,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(1, Some(2)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-selection-exists-p",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4592,6 +4613,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(0, Some(2)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-selection-owner-p",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4606,6 +4628,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(0, Some(0)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-internal-focus-input-context",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4613,6 +4636,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(1, Some(1)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-send-client-message",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4627,6 +4651,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(1, Some(6)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-set-mouse-absolute-pixel-position",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4634,11 +4659,13 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(2, Some(2)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-synchronize",
         NativeFn::ContextVec(|_ctx, args| crate::emacs_core::display::builtin_x_synchronize(args)),
         SubrArity::new(1, Some(2)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-translate-coordinates",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4646,6 +4673,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(1, Some(6)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-uses-old-gtk-dialog",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4653,6 +4681,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(0, Some(0)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-window-property",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4660,6 +4689,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(1, Some(6)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-window-property-attributes",
         NativeFn::ContextVec(|_ctx, args| {
@@ -4667,6 +4697,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }),
         SubrArity::new(1, Some(3)),
     )));
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-wm-set-size-hint",
         NativeFn::ContextVec(|_ctx, args| {

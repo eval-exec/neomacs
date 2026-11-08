@@ -1275,6 +1275,7 @@ fn upper_subr_0316(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-server-version");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0317(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-server-input-extension-version");
 }
@@ -1711,6 +1712,7 @@ fn upper_subr_0425(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::frame-terminal");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0426(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-display-monitor-attributes-list");
 }
@@ -2039,10 +2041,12 @@ fn upper_subr_0507(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::face-attributes-as-vector");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0508(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::font-get-system-font");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0509(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::font-get-system-normal-font");
 }
@@ -2211,6 +2215,7 @@ fn upper_subr_0550(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::gnutls-symmetric-encrypt");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0551(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::handle-save-session");
 }
@@ -2503,6 +2508,7 @@ fn upper_subr_0623(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::suspend-emacs");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0624(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::tool-bar-get-system-style");
 }
@@ -2575,10 +2581,12 @@ fn upper_subr_0641(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-begin-drag");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0642(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-double-buffered-p");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0643(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-menu-bar-open-internal");
 }
@@ -3079,6 +3087,7 @@ fn upper_subr_0767(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-display-save-under");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0768(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-display-set-last-user-time");
 }
@@ -3711,14 +3720,17 @@ fn upper_subr_0925(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::force-window-update");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0926(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-export-frames");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0927(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-backspace-delete-keys-p");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0928(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-change-window-property");
 }
@@ -3727,14 +3739,17 @@ fn upper_subr_0929(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-focus-frame");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0930(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-get-local-selection");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0931(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-get-modifier-masks");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0932(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-get-selection-internal");
 }
@@ -3743,26 +3758,32 @@ fn upper_subr_0933(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-display-list");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0934(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-disown-selection-internal");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0935(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-delete-window-property");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0936(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-frame-edges");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0937(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-frame-geometry");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0938(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-frame-list-z-order");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0939(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-frame-restack");
 }
@@ -3771,14 +3792,17 @@ fn upper_subr_0940(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-family-fonts");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0941(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-get-atom-name");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0942(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-mouse-absolute-pixel-position");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0943(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-own-selection-internal");
 }
@@ -3795,14 +3819,17 @@ fn upper_subr_0946(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER display::x-popup-menu");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0947(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-register-dnd-atom");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0948(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-selection-exists-p");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0949(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-selection-owner-p");
 }
@@ -3811,10 +3838,12 @@ fn upper_subr_0950(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-hide-tip");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0951(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-internal-focus-input-context");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0952(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-send-client-message");
 }
@@ -3823,30 +3852,37 @@ fn upper_subr_0953(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-show-tip");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0954(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-set-mouse-absolute-pixel-position");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0955(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-synchronize");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0956(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-translate-coordinates");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0957(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-uses-old-gtk-dialog");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0958(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-window-property");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0959(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-window-property-attributes");
 }
 
+#[cfg(not(target_os = "macos"))]
 fn upper_subr_0960(_ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
     s::absent_layer_panic("ABSENT-LAYER core::x-wm-set-size-hint");
 }
@@ -4817,6 +4853,7 @@ static UPPER_SUBRS: &[(&str, u16, Option<u16>, fn(&mut Context, Vec<Value>) -> E
     ("x-list-fonts", 1, Some(5), upper_subr_0314),
     ("window-system", 0, Some(1), upper_subr_0315),
     ("x-server-version", 0, Some(1), upper_subr_0316),
+    #[cfg(not(target_os = "macos"))]
     ("x-server-input-extension-version", 0, Some(1), upper_subr_0317),
     ("x-server-vendor", 0, Some(1), upper_subr_0318),
     ("x-display-mm-height", 0, Some(1), upper_subr_0319),
@@ -4926,6 +4963,7 @@ static UPPER_SUBRS: &[(&str, u16, Option<u16>, fn(&mut Context, Vec<Value>) -> E
     ("suspend-tty", 0, Some(1), upper_subr_0423),
     ("resume-tty", 0, Some(1), upper_subr_0424),
     ("frame-terminal", 0, Some(1), upper_subr_0425),
+    #[cfg(not(target_os = "macos"))]
     ("x-display-monitor-attributes-list", 0, Some(1), upper_subr_0426),
     ("read-char", 0, Some(3), upper_subr_0427),
     ("minibuffer-innermost-command-loop-p", 0, Some(1), upper_subr_0428),
@@ -5008,7 +5046,9 @@ static UPPER_SUBRS: &[(&str, u16, Option<u16>, fn(&mut Context, Vec<Value>) -> E
     ("do-auto-save", 0, Some(2), upper_subr_0505),
     ("describe-buffer-bindings", 1, Some(3), upper_subr_0506),
     ("face-attributes-as-vector", 1, Some(1), upper_subr_0507),
+    #[cfg(not(target_os = "macos"))]
     ("font-get-system-font", 0, Some(0), upper_subr_0508),
+    #[cfg(not(target_os = "macos"))]
     ("font-get-system-normal-font", 0, Some(0), upper_subr_0509),
     ("fontset-font", 2, Some(3), upper_subr_0510),
     ("fontset-info", 1, Some(2), upper_subr_0511),
@@ -5051,6 +5091,7 @@ static UPPER_SUBRS: &[(&str, u16, Option<u16>, fn(&mut Context, Vec<Value>) -> E
     ("gnutls-peer-status-warning-describe", 1, Some(1), upper_subr_0548),
     ("gnutls-symmetric-decrypt", 4, Some(5), upper_subr_0549),
     ("gnutls-symmetric-encrypt", 4, Some(5), upper_subr_0550),
+    #[cfg(not(target_os = "macos"))]
     ("handle-save-session", 1, Some(1), upper_subr_0551),
     ("handle-switch-frame", 1, Some(1), upper_subr_0552),
     ("help--describe-vector", 7, Some(7), upper_subr_0553),
@@ -5124,6 +5165,7 @@ static UPPER_SUBRS: &[(&str, u16, Option<u16>, fn(&mut Context, Vec<Value>) -> E
     ("subr-native-lambda-list", 1, Some(1), upper_subr_0621),
     ("subr-type", 1, Some(1), upper_subr_0622),
     ("suspend-emacs", 0, Some(1), upper_subr_0623),
+    #[cfg(not(target_os = "macos"))]
     ("tool-bar-get-system-style", 0, Some(0), upper_subr_0624),
     ("tool-bar-pixel-width", 0, Some(1), upper_subr_0625),
     ("translate-region-internal", 3, Some(3), upper_subr_0626),
@@ -5142,7 +5184,9 @@ static UPPER_SUBRS: &[(&str, u16, Option<u16>, fn(&mut Context, Vec<Value>) -> E
     ("unify-charset", 1, Some(3), upper_subr_0639),
     ("unix-sync", 0, Some(0), upper_subr_0640),
     ("x-begin-drag", 1, Some(6), upper_subr_0641),
+    #[cfg(not(target_os = "macos"))]
     ("x-double-buffered-p", 0, Some(1), upper_subr_0642),
+    #[cfg(not(target_os = "macos"))]
     ("x-menu-bar-open-internal", 0, Some(1), upper_subr_0643),
     ("xw-color-defined-p", 1, Some(2), upper_subr_0644),
     ("xw-color-values", 1, Some(2), upper_subr_0645),
@@ -5268,6 +5312,7 @@ static UPPER_SUBRS: &[(&str, u16, Option<u16>, fn(&mut Context, Vec<Value>) -> E
     ("x-display-backing-store", 0, Some(1), upper_subr_0765),
     ("x-display-color-cells", 0, Some(1), upper_subr_0766),
     ("x-display-save-under", 0, Some(1), upper_subr_0767),
+    #[cfg(not(target_os = "macos"))]
     ("x-display-set-last-user-time", 1, Some(2), upper_subr_0768),
     ("x-display-visual-class", 0, Some(1), upper_subr_0769),
     ("minor-mode-key-binding", 1, Some(2), upper_subr_0770),
@@ -5426,40 +5471,67 @@ static UPPER_SUBRS: &[(&str, u16, Option<u16>, fn(&mut Context, Vec<Value>) -> E
     ("ding", 0, Some(1), upper_subr_0923),
     ("frame--z-order-lessp", 2, Some(2), upper_subr_0924),
     ("force-window-update", 0, Some(1), upper_subr_0925),
+    #[cfg(not(target_os = "macos"))]
     ("x-export-frames", 0, Some(2), upper_subr_0926),
+    #[cfg(not(target_os = "macos"))]
     ("x-backspace-delete-keys-p", 0, Some(1), upper_subr_0927),
+    #[cfg(not(target_os = "macos"))]
     ("x-change-window-property", 2, Some(7), upper_subr_0928),
     ("x-focus-frame", 1, Some(2), upper_subr_0929),
+    #[cfg(not(target_os = "macos"))]
     ("x-get-local-selection", 0, Some(2), upper_subr_0930),
+    #[cfg(not(target_os = "macos"))]
     ("x-get-modifier-masks", 0, Some(1), upper_subr_0931),
+    #[cfg(not(target_os = "macos"))]
     ("x-get-selection-internal", 2, Some(4), upper_subr_0932),
     ("x-display-list", 0, Some(0), upper_subr_0933),
+    #[cfg(not(target_os = "macos"))]
     ("x-disown-selection-internal", 1, Some(3), upper_subr_0934),
+    #[cfg(not(target_os = "macos"))]
     ("x-delete-window-property", 1, Some(3), upper_subr_0935),
+    #[cfg(not(target_os = "macos"))]
     ("x-frame-edges", 0, Some(2), upper_subr_0936),
+    #[cfg(not(target_os = "macos"))]
     ("x-frame-geometry", 0, Some(1), upper_subr_0937),
+    #[cfg(not(target_os = "macos"))]
     ("x-frame-list-z-order", 0, Some(1), upper_subr_0938),
+    #[cfg(not(target_os = "macos"))]
     ("x-frame-restack", 2, Some(3), upper_subr_0939),
     ("x-family-fonts", 0, Some(2), upper_subr_0940),
+    #[cfg(not(target_os = "macos"))]
     ("x-get-atom-name", 1, Some(2), upper_subr_0941),
+    #[cfg(not(target_os = "macos"))]
     ("x-mouse-absolute-pixel-position", 0, Some(0), upper_subr_0942),
+    #[cfg(not(target_os = "macos"))]
     ("x-own-selection-internal", 2, Some(3), upper_subr_0943),
     ("x-parse-geometry", 1, Some(1), upper_subr_0944),
     ("x-popup-dialog", 2, Some(3), upper_subr_0945),
     ("x-popup-menu", 2, Some(2), upper_subr_0946),
+    #[cfg(not(target_os = "macos"))]
     ("x-register-dnd-atom", 1, Some(2), upper_subr_0947),
+    #[cfg(not(target_os = "macos"))]
     ("x-selection-exists-p", 0, Some(2), upper_subr_0948),
+    #[cfg(not(target_os = "macos"))]
     ("x-selection-owner-p", 0, Some(2), upper_subr_0949),
     ("x-hide-tip", 0, Some(0), upper_subr_0950),
+    #[cfg(not(target_os = "macos"))]
     ("x-internal-focus-input-context", 1, Some(1), upper_subr_0951),
+    #[cfg(not(target_os = "macos"))]
     ("x-send-client-message", 6, Some(6), upper_subr_0952),
     ("x-show-tip", 1, Some(6), upper_subr_0953),
+    #[cfg(not(target_os = "macos"))]
     ("x-set-mouse-absolute-pixel-position", 2, Some(2), upper_subr_0954),
+    #[cfg(not(target_os = "macos"))]
     ("x-synchronize", 1, Some(2), upper_subr_0955),
+    #[cfg(not(target_os = "macos"))]
     ("x-translate-coordinates", 1, Some(6), upper_subr_0956),
+    #[cfg(not(target_os = "macos"))]
     ("x-uses-old-gtk-dialog", 0, Some(0), upper_subr_0957),
+    #[cfg(not(target_os = "macos"))]
     ("x-window-property", 1, Some(6), upper_subr_0958),
+    #[cfg(not(target_os = "macos"))]
     ("x-window-property-attributes", 1, Some(3), upper_subr_0959),
+    #[cfg(not(target_os = "macos"))]
     ("x-wm-set-size-hint", 0, Some(1), upper_subr_0960),
     ("terminal-list", 0, Some(0), upper_subr_0961),
     ("delete-terminal", 0, Some(2), upper_subr_0962),

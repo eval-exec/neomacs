@@ -32,11 +32,15 @@ pub enum HostCfgClass {
     Lcms2,
     Sqlite,
     VmProfile,
+    /// Every window-system surface except the macOS NS one.  GNU's W32 and X11
+    /// builds both define these names (e.g. w32fns.c's x-change-window-property),
+    /// while the NS object set does not; the NS build leaves them void.
+    NotMacos,
 }
 
 impl HostCfgClass {
     /// Every class, in the label vocabulary's declaration order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Always,
         Self::Macos,
         Self::Windows,
@@ -45,6 +49,7 @@ impl HostCfgClass {
         Self::Lcms2,
         Self::Sqlite,
         Self::VmProfile,
+        Self::NotMacos,
     ];
 
     /// The plan/snapshot label for this class.
@@ -58,6 +63,7 @@ impl HostCfgClass {
             Self::Lcms2 => "lcms2",
             Self::Sqlite => "sqlite",
             Self::VmProfile => "vm-profile",
+            Self::NotMacos => "not-macos",
         }
     }
 
@@ -73,6 +79,7 @@ impl HostCfgClass {
             "lcms2" => Self::Lcms2,
             "sqlite" => Self::Sqlite,
             "vm-profile" => Self::VmProfile,
+            "not-macos" => Self::NotMacos,
             _ => return None,
         })
     }

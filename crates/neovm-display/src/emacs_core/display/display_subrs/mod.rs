@@ -823,6 +823,7 @@ const SPEC_X_OPEN_CONNECTION_06: SubrSpec =
         NativeFn::ContextVec(crate::emacs_core::display::builtin_x_server_version),
         SubrArity::new(0, Some(1)),
     ));
+#[cfg(not(target_os = "macos"))]
 const SPEC_X_OPEN_CONNECTION_07: SubrSpec =
     neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-server-input-extension-version",
@@ -876,6 +877,7 @@ pub fn register_x_open_connection(ctx: &mut Context) {
     ctx.register_subr(SPEC_X_OPEN_CONNECTION_04);
     ctx.register_subr(SPEC_X_OPEN_CONNECTION_05);
     ctx.register_subr(SPEC_X_OPEN_CONNECTION_06);
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(SPEC_X_OPEN_CONNECTION_07);
     ctx.register_subr(SPEC_X_OPEN_CONNECTION_08);
     ctx.register_subr(SPEC_X_OPEN_CONNECTION_09);
@@ -999,6 +1001,7 @@ const SPEC_FRAME_PARAMETER_19: SubrSpec = neovm_eval::emacs_core::subr::world_su
     NativeFn::ContextVec(crate::emacs_core::terminal::pure::builtin_frame_terminal),
     SubrArity::new(0, Some(1)),
 ));
+#[cfg(not(target_os = "macos"))]
 const SPEC_FRAME_PARAMETER_20: SubrSpec = neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(
     "x-display-monitor-attributes-list",
     NativeFn::ContextVec(crate::emacs_core::display::builtin_x_display_monitor_attributes_list),
@@ -1026,6 +1029,7 @@ pub fn register_frame_parameter(ctx: &mut Context) {
     ctx.register_subr(SPEC_FRAME_PARAMETER_17);
     ctx.register_subr(SPEC_FRAME_PARAMETER_18);
     ctx.register_subr(SPEC_FRAME_PARAMETER_19);
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(SPEC_FRAME_PARAMETER_20);
 }
 
@@ -1070,12 +1074,14 @@ pub fn register_set_frame_size_and_position_pixelwise(ctx: &mut Context) {
 }
 
 /// Canonical display step `font_get_system_font` (2 registrations).
+#[cfg(not(target_os = "macos"))]
 const SPEC_FONT_GET_SYSTEM_FONT_00: SubrSpec =
     neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(
         "font-get-system-font",
         NativeFn::ContextVec(crate::emacs_core::font::builtin_font_get_system_font),
         SubrArity::new(0, Some(0)),
     ));
+#[cfg(not(target_os = "macos"))]
 const SPEC_FONT_GET_SYSTEM_FONT_01: SubrSpec =
     neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(
         "font-get-system-normal-font",
@@ -1083,9 +1089,13 @@ const SPEC_FONT_GET_SYSTEM_FONT_01: SubrSpec =
         SubrArity::new(0, Some(0)),
     ));
 #[doc(hidden)]
-pub fn register_font_get_system_font(ctx: &mut Context) {
-    ctx.register_subr(SPEC_FONT_GET_SYSTEM_FONT_00);
-    ctx.register_subr(SPEC_FONT_GET_SYSTEM_FONT_01);
+pub fn register_font_get_system_font(_ctx: &mut Context) {
+    // Both subrs are X11-only, so the NS build compiles an empty body; the
+    // underscore keeps the NS build warning-free (the Linux body uses it).
+    #[cfg(not(target_os = "macos"))]
+    _ctx.register_subr(SPEC_FONT_GET_SYSTEM_FONT_00);
+    #[cfg(not(target_os = "macos"))]
+    _ctx.register_subr(SPEC_FONT_GET_SYSTEM_FONT_01);
 }
 
 /// Canonical display step `frame_ancestor_p` (4 registrations).
@@ -1686,6 +1696,7 @@ const SPEC_ACTIVE_MINIBUFFER_WINDOW_27: SubrSpec =
         NativeFn::ContextVec(crate::emacs_core::display::builtin_x_display_save_under),
         SubrArity::new(0, Some(1)),
     ));
+#[cfg(not(target_os = "macos"))]
 const SPEC_ACTIVE_MINIBUFFER_WINDOW_28: SubrSpec =
     neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-display-set-last-user-time",
@@ -1728,6 +1739,7 @@ pub fn register_active_minibuffer_window(ctx: &mut Context) {
     ctx.register_subr(SPEC_ACTIVE_MINIBUFFER_WINDOW_25);
     ctx.register_subr(SPEC_ACTIVE_MINIBUFFER_WINDOW_26);
     ctx.register_subr(SPEC_ACTIVE_MINIBUFFER_WINDOW_27);
+    #[cfg(not(target_os = "macos"))]
     ctx.register_subr(SPEC_ACTIVE_MINIBUFFER_WINDOW_28);
     ctx.register_subr(SPEC_ACTIVE_MINIBUFFER_WINDOW_29);
 }

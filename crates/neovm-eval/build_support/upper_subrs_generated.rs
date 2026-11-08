@@ -261,6 +261,7 @@ fn cfg_attribute(cfg: &str) -> Result<Option<&'static str>, String> {
         "always" => return Ok(None),
         "macos" => "target_os = \"macos\"",
         "windows" => "windows",
+        "not-macos" => "not(target_os = \"macos\")",
         "dbus" => "neomacs_have_dbus",
         "sqlite" => "feature = \"sqlite\"",
         other => {

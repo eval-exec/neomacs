@@ -555,6 +555,10 @@ mod architecture_coherence_upper_impl_ratchet_test;
 mod architecture_default_value_only_ratchet_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/mac_x11_subrs_ratchet_test.rs"]
+mod architecture_mac_x11_subrs_ratchet_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/plist_head_seam_guard_test.rs"]
 mod architecture_plist_head_seam_guard_test;
 
