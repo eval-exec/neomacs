@@ -1,17 +1,33 @@
 use super::*;
+use crate::platform_surface::PlatformSurface;
+
+fn declared(surface: PlatformSurface) -> usize {
+    GNU_BOOL_VARIABLES
+        .iter()
+        .filter(|v| v.surfaces.contains(surface))
+        .count()
+}
+
+fn listed(surface: PlatformSurface) -> usize {
+    GNU_BOOL_VARIABLES
+        .iter()
+        .filter(|v| v.surfaces.contains(surface))
+        .filter(|v| v.byte_boolean_vars == ByteBooleanVars::Listed)
+        .count()
+}
 
 /// GNU 31.1 replaces the frame-deletion boolean with a DEFVAR_LISP,
 /// removing one entry from the 31.0.90 baseline of 148 / 117.
+///
+/// The table is the union over the reference surfaces; the counts are per
+/// surface. X11 keeps 147 declared / 116 byte-boolean-vars; NS drops the 15
+/// X11-only rows and adds the 7 NS-only rows: 139 / 108.
 #[test]
-fn table_matches_gnu_counts() {
-    assert_eq!(GNU_BOOL_VARIABLES.len(), 147);
-    assert_eq!(
-        GNU_BOOL_VARIABLES
-            .iter()
-            .filter(|v| v.byte_boolean_vars == ByteBooleanVars::Listed)
-            .count(),
-        116
-    );
+fn table_matches_gnu_counts_per_reference_surface() {
+    assert_eq!(declared(PlatformSurface::X11), 147);
+    assert_eq!(listed(PlatformSurface::X11), 116);
+    assert_eq!(declared(PlatformSurface::Ns), 139);
+    assert_eq!(listed(PlatformSurface::Ns), 108);
 }
 
 #[test]

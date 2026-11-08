@@ -188,6 +188,9 @@ const TLS_CLASSIFICATION: &[(&str, TlsClass)] = &[
     ("PHASE_CLOCK", TlsClass::MustReset),
     ("PIKE_FALLBACK", TlsClass::MustReset),
     ("PIKE_SCRATCH", TlsClass::MustReset),
+    // platform_surface.rs test_override: test-support-only scoped surface
+    // override, RAII-restored and holding no Lisp Values.
+    ("PLATFORM_SURFACE_TEST_OVERRIDE", TlsClass::SourceOnly),
     ("PRELOAD_UNIT", TlsClass::MustReset),
     ("PREV_OP", TlsClass::SourceOnly),
     ("PREWARM_HASHES", TlsClass::MustReset),

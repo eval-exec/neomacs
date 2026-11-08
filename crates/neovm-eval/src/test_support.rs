@@ -54,6 +54,38 @@ pub mod authority {
         crate::emacs_core::print::next_print_number_index()
     }
 
+    /// platform-table fence (lead 14:0xZ, N2): the `DEFVAR_BOOL` rows the
+    /// CURRENT reference surface declares, as `(name, expected default)`
+    /// pairs. The table, its `SurfaceSet` field and `platform_surface()` stay
+    /// `pub(crate)`; core's every-GNU-bool oracle iterates this instead of the
+    /// unfiltered static, so one test asserts the X11 surface on a Linux build
+    /// and the NS surface on a mac build.
+    pub fn gnu_bool_rows_for_surface_for_test() -> Vec<(&'static str, bool)> {
+        let surface = crate::platform_surface::platform_surface();
+        crate::emacs_core::defvar_bool::GNU_BOOL_VARIABLES
+            .iter()
+            .filter(|var| var.surfaces.contains(surface))
+            .map(|var| (var.name, var.main_value.unwrap_or(var.initial)))
+            .collect()
+    }
+
+    /// platform-table fence (lead 14:0xZ, N2): run `f` with a scoped,
+    /// thread-local surface override, restored on return (nested scopes
+    /// compose). Production never reads a runtime override; the override
+    /// module exists only under `cfg(any(test, feature = "test-support"))`.
+    pub fn with_platform_surface_for_test(surface: &str, f: &mut dyn FnMut()) {
+        use crate::platform_surface::{test_override, PlatformSurface};
+        let surface = match surface {
+            "x11" => PlatformSurface::X11,
+            "ns" => PlatformSurface::Ns,
+            "w32" => PlatformSurface::W32,
+            other => panic!("unknown platform surface {other:?}"),
+        };
+        let guard = test_override::install(surface);
+        f();
+        drop(guard);
+    }
+
     /// print_buffer F1 fence (lead 13:08Z): the prepare token is `Copy` so a
     /// caller can retain it after its recorded unwind. Reusing it must fail
     /// LOUDLY in every profile; the pre-fix path returned silently in release

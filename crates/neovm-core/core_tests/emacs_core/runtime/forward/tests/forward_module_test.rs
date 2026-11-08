@@ -440,11 +440,15 @@ fn defvar_bool_coerces_every_variable_in_the_table_like_gnu() {
 /// running value, not the pre-main declared one.
 #[test]
 fn every_gnu_defvar_bool_variable_is_bound_and_reads_back_canonically() {
-    use crate::emacs_core::defvar_bool::GNU_BOOL_VARIABLES;
     let mut eval = ev();
 
-    for var in GNU_BOOL_VARIABLES {
-        let name = var.name;
+    // The table is the union across GNU reference surfaces; the signed fence
+    // returns the rows THIS host's surface declares. On a Linux build that is
+    // the same X11 row set as before; on a mac build the same test asserts
+    // the NS row set (X11-only rows unbound, NS-only rows bound).
+    for (name, expected_default) in
+        neovm_eval::test_support::authority::gnu_bool_rows_for_surface_for_test()
+    {
         assert_eq!(
             format_eval_result(&eval.eval_str(&format!("(boundp '{name})"))),
             "OK t",
@@ -460,7 +464,7 @@ fn every_gnu_defvar_bool_variable_is_bound_and_reads_back_canonically() {
         // `Context` is past that point, so it is the expected default there.
         assert_eq!(
             format_eval_result(&eval.eval_str(&format!("(default-value '{name})"))),
-            if var.main_value.unwrap_or(var.initial) {
+            if expected_default {
                 "OK t"
             } else {
                 "OK nil"

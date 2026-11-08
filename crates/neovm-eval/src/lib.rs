@@ -13,6 +13,9 @@ pub mod host_cfg;
 /// file in `cargo xtask`, which has no build-script probe.
 mod host_cfg_active;
 pub mod host_effect;
+/// The host's GNU reference build surface (X11/NS/W32), derived once and
+/// carried by every per-host platform table.
+pub(crate) mod platform_surface;
 
 /// Test support shared by this crate's own unit tests and, behind
 /// `test-support`, by core's test build (a dependency crate never has

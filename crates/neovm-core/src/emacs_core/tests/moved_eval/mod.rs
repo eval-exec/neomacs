@@ -70,6 +70,13 @@ mod emacs_core_runtime_eval_redisplay_hooks_tests_mode_line_flow_test_rs;
 #[path = "emacs_core/runtime/eval/tests/builtin_vars_test.rs"]
 mod emacs_core_runtime_eval_tests_builtin_vars_test_rs;
 
+// Per-host platform tables (MACOS_PRODUCT_DIVERGENCES rows 87-99): the
+// DEFVAR_BOOL surface is keyed by the GNU reference build; the signed fence
+// installs a scoped surface override for both-host assertions.
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/platform_surface_tests.rs"]
+mod emacs_core_runtime_eval_tests_platform_surface_tests_rs;
+
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/tests/attention_test.rs"]
 mod emacs_core_runtime_eval_tests_attention_test_rs;

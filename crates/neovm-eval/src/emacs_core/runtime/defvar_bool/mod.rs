@@ -51,6 +51,7 @@
 //! than re-derived per site.
 
 pub use neovm_value::symbol::ByteBooleanVars;
+use crate::platform_surface::{platform_surface, SurfaceSet};
 use neovm_value::symbol::Obarray;
 
 /// One GNU `DEFVAR_BOOL' declaration.
@@ -73,6 +74,12 @@ pub struct GnuBoolVariable {
     pub main_value: Option<bool>,
     /// Whether the byte optimizer is told about the coercion.
     pub byte_boolean_vars: ByteBooleanVars,
+    /// The GNU reference surfaces whose build declares this row. Most rows
+    /// are declared on every surface; the X11-only and NS-only families carry
+    /// [`SurfaceSet::X11`] / [`SurfaceSet::NS`]. The registration loop reads
+    /// this through [`platform_surface`]'s exhaustive match, so no per-row
+    /// boolean or ad-hoc `cfg!` decides it at the site.
+    pub(crate) surfaces: SurfaceSet,
 }
 
 impl GnuBoolVariable {
@@ -83,6 +90,7 @@ impl GnuBoolVariable {
             initial,
             main_value: None,
             byte_boolean_vars: ByteBooleanVars::Listed,
+            surfaces: SurfaceSet::ALL,
         }
     }
 
@@ -93,6 +101,7 @@ impl GnuBoolVariable {
             initial,
             main_value: None,
             byte_boolean_vars: ByteBooleanVars::ErasedByLreadInit,
+            surfaces: SurfaceSet::ALL,
         }
     }
 
@@ -105,21 +114,44 @@ impl GnuBoolVariable {
             initial: declared,
             main_value: Some(running),
             byte_boolean_vars: ByteBooleanVars::Listed,
+            surfaces: SurfaceSet::ALL,
         }
+    }
+
+    /// `DEFVAR_BOOL' declared only by the X11 objects (xterm.c/xfns.c/
+    /// xsettings.c): GNU's NS build does not bind it.
+    #[doc(hidden)]
+    pub const fn x11_only(mut self) -> Self {
+        self.surfaces = SurfaceSet::X11;
+        self
+    }
+
+    /// `DEFVAR_BOOL' declared only by the NS objects (nsterm.m/nsfns.m):
+    /// GNU's X11 build does not bind it.
+    #[doc(hidden)]
+    pub const fn ns_only(mut self) -> Self {
+        self.surfaces = SurfaceSet::NS;
+        self
     }
 }
 
 use GnuBoolVariable as V;
 
-/// Every supported GNU/Linux `DEFVAR_BOOL', in declaration order.  Source
-/// locations refer to GNU 31.0.90; GNU 31.1 removes the frame-deletion boolean.
+/// Every supported `DEFVAR_BOOL' across the three reference surfaces, in GNU
+/// declaration order.  Source locations refer to GNU 31.0.90; GNU 31.1 removes
+/// the frame-deletion boolean.
 ///
-/// Registering in this order reproduces GNU's `byte-boolean-vars' exactly,
-/// because `defvar_bool' prepends: the last row registered ends up first.
+/// Rows carry a [`SurfaceSet`]: the registration loop registers only the rows
+/// the host's [`PlatformSurface`] declares (X11 147 rows / NS 139 rows,
+/// matching the respective GNU builds). Registering in this order reproduces
+/// GNU's `byte-boolean-vars' on each surface, because `defvar_bool' prepends:
+/// the last row registered ends up first (use-default-font-for-symbols on
+/// both, because fontset.c's syms function runs last in the NS arm).
 ///
-/// Not listed here are the 36 `DEFVAR_BOOL's that belong to builds this one is
-/// not -- w32, Haiku, Android, `sfntfont', native compilation, xwidgets --
-/// which GNU leaves unbound here too.
+/// Not listed here are the remaining `DEFVAR_BOOL's of builds Neomacs does not
+/// model here -- Android, Haiku, `sfntfont', native compilation, xwidgets --
+/// which GNU leaves unbound on these hosts too. The w32 family is a separate
+/// host-gated registration (see the w32 platform module).
 pub static GNU_BOOL_VARIABLES: &[GnuBoolVariable] = &[
     // ---- Erased again by `syms_of_lread' itself (31) ----
     // `main' runs these `syms_of_*' before `syms_of_lread'
@@ -267,22 +299,33 @@ pub static GNU_BOOL_VARIABLES: &[GnuBoolVariable] = &[
     V::listed("cross-disabled-images", false),     // image.c:13259
     V::listed("x-use-underline-position-properties", true), // xterm.c:32667
     V::listed("x-underline-at-descent-line", false), // xterm.c:32678
-    V::listed("x-mouse-click-focus-ignore-position", false), // xterm.c:32689
-    V::listed("x-frame-normalize-before-maximize", false), // xterm.c:32812
-    V::listed("x-gtk-use-window-move", true),      // xterm.c:32825
-    V::listed("x-gtk-use-native-input", false),    // xterm.c:32839
-    V::listed("x-input-grab-touch-events", true),  // xterm.c:32860
-    V::listed("x-dnd-fix-motif-leave", true),      // xterm.c:32870
-    V::listed("x-dnd-disable-motif-drag", false),  // xterm.c:32878
-    V::listed("x-dnd-preserve-selection-data", false), // xterm.c:32947
-    V::listed("x-dnd-disable-motif-protocol", false), // xterm.c:32954
-    V::listed("x-dnd-use-unsupported-drop", true), // xterm.c:32960
-    V::listed("x-fast-protocol-requests", false),  // xterm.c:32967
-    V::listed("x-gtk-use-old-file-dialog", false), // xfns.c:10460
-    V::listed("x-gtk-show-hidden-files", false),   // xfns.c:10467
-    V::listed("x-gtk-file-dialog-help-text", true), // xfns.c:10473
+    V::listed("x-mouse-click-focus-ignore-position", false).x11_only(), // xterm.c:32689
+    V::listed("x-frame-normalize-before-maximize", false).x11_only(), // xterm.c:32812
+    V::listed("x-gtk-use-window-move", true).x11_only(),      // xterm.c:32825
+    V::listed("x-gtk-use-native-input", false).x11_only(),    // xterm.c:32839
+    V::listed("x-input-grab-touch-events", true).x11_only(),  // xterm.c:32860
+    V::listed("x-dnd-fix-motif-leave", true).x11_only(),      // xterm.c:32870
+    V::listed("x-dnd-disable-motif-drag", false).x11_only(),  // xterm.c:32878
+    V::listed("x-dnd-preserve-selection-data", false).x11_only(), // xterm.c:32947
+    V::listed("x-dnd-disable-motif-protocol", false).x11_only(), // xterm.c:32954
+    V::listed("x-dnd-use-unsupported-drop", true).x11_only(), // xterm.c:32960
+    V::listed("x-fast-protocol-requests", false).x11_only(),  // xterm.c:32967
+    V::listed("x-gtk-use-old-file-dialog", false).x11_only(), // xfns.c:10460
+    V::listed("x-gtk-show-hidden-files", false).x11_only(),   // xfns.c:10467
+    V::listed("x-gtk-file-dialog-help-text", true).x11_only(), // xfns.c:10473
+    // ---- NS only (nsterm.m/nsfns.m); GNU's X11 build leaves these unbound.
+    // Registered before use-default-font-for-symbols so that, on an NS build,
+    // the last registered row is still fontset.c's (the appkit arm runs
+    // syms_of_fontset last) and byte-boolean-vars' car matches GNU NS.
+    V::listed("ns-use-native-fullscreen", true).ns_only(), // nsterm.m:11662
+    V::listed("ns-use-fullscreen-animation", false).ns_only(), // nsterm.m:11670
+    V::listed("ns-use-srgb-colorspace", true).ns_only(),       // nsterm.m:11676
+    V::listed("ns-use-mwheel-acceleration", true).ns_only(),   // nsterm.m:11682
+    V::listed("ns-use-mwheel-momentum", true).ns_only(),       // nsterm.m:11694
+    V::listed("ns-click-through", true).ns_only(),             // nsterm.m:11720
+    V::listed("ns-use-proxy-icon", true).ns_only(),            // nsfns.m:4235
     V::listed("use-default-font-for-symbols", true), // fontset.c:2206
-    V::listed("font-use-system-font", false),      // xsettings.c:1395
+    V::listed("font-use-system-font", false).x11_only(),      // xsettings.c:1395
 ];
 
 /// Install every row as a GNU `DEFVAR_BOOL' variable.
@@ -302,7 +345,11 @@ pub static GNU_BOOL_VARIABLES: &[GnuBoolVariable] = &[
 /// (`noninteractive`, `internal--text-quoting-flag`) get their batch-shaped
 /// library values from [`apply_post_main_batch_defaults`].
 pub fn register_bootstrap_vars(obarray: &mut Obarray) {
+    let surface = platform_surface();
     for var in GNU_BOOL_VARIABLES {
+        if !var.surfaces.contains(surface) {
+            continue;
+        }
         obarray.define_bool_variable(var.name, var.initial, var.byte_boolean_vars);
     }
 }
@@ -321,7 +368,11 @@ pub fn register_bootstrap_vars(obarray: &mut Obarray) {
 /// forwarder that does not exist yet would leave a plain cell that the later
 /// `DEFVAR_BOOL` then discards.
 pub fn apply_post_main_batch_defaults(obarray: &mut Obarray) {
+    let surface = platform_surface();
     for var in GNU_BOOL_VARIABLES {
+        if !var.surfaces.contains(surface) {
+            continue;
+        }
         if let Some(running) = var.main_value {
             obarray.seed_value(var.name, neovm_value::value::Value::bool_val(running));
         }
