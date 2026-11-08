@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn world_storage_views_keep_exact_allocations_and_canonical_identity() {
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let view = &context.obarray;
     assert_eq!(view.ptr.as_ptr(), view.lease.0.obarray.get());
     let expected = view
@@ -30,7 +30,7 @@ fn world_storage_views_keep_exact_allocations_and_canonical_identity() {
 
 #[test]
 fn world_storage_shutdown_rejects_an_escaped_buffer_view() {
-    let mut context = Box::new(Context::new());
+    let mut context = Box::new(Context::new(crate::test_utils::unit_runtime()));
     let name = context.buffers.current_buffer().map(|b| b.name.clone());
     let escaped = std::mem::replace(&mut context.buffers, BufferManager::new());
     match context.shutdown() {
@@ -43,7 +43,7 @@ fn world_storage_shutdown_rejects_an_escaped_buffer_view() {
 
 #[test]
 fn world_storage_shutdown_succeeds_after_extracted_view_retirement() {
-    let mut context = Box::new(Context::new());
+    let mut context = Box::new(Context::new(crate::test_utils::unit_runtime()));
     let escaped = std::mem::replace(&mut context.buffers, BufferManager::new());
     drop(escaped);
     context
@@ -55,7 +55,7 @@ fn world_storage_shutdown_succeeds_after_extracted_view_retirement() {
 fn world_storage_cold_constructor_reads_its_own_canonical_cells() {
     // The minimal factory prepares its replacement manager BEFORE building the
     // World/view/header. An admitted owner has no mutable replacement API.
-    let context = Context::new_minimal_vm_harness();
+    let context = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let view = &context.obarray;
     assert_eq!(view.ptr.as_ptr(), view.lease.0.obarray.get());
     let canonical = view
@@ -85,7 +85,7 @@ fn world_storage_cold_constructor_reads_its_own_canonical_cells() {
 
 #[test]
 fn world_storage_factory_reinstalls_final_heap_before_lisp_allocates() {
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let identity = context.tagged_heap.identity();
     assert_eq!(
         neovm_value::tagged::gc::current_tagged_heap_identity(),
@@ -107,7 +107,7 @@ fn world_storage_factory_reinstalls_final_heap_before_lisp_allocates() {
 
 #[test]
 fn world_storage_dispatch_reads_live_forwarded_boolean_after_collection() {
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let id = intern("debug-on-next-call");
     context
         .obarray

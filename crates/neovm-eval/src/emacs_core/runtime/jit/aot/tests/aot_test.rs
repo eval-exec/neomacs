@@ -66,7 +66,7 @@ fn baseline_cbsym_object_imports_the_fast_intrinsic_shims() {
     // Populate the thread-local static subr table (`lookup_global_subr_entry`,
     // which `cbsym_spec_kind` consults) — populated from `SubrSpec`s during
     // Context setup.
-    let _ev = crate::emacs_core::eval::Context::new();
+    let _ev = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
 
     let imports = |ops: &[Op], constants: &[Value], arity: usize| -> Vec<String> {
         let (obj, _hash) = build_baseline_object_for_leaf(ops, constants, arity, None)
@@ -153,7 +153,7 @@ fn aot_pure_arith_leaf_matches_jit_via_dlopen() {
         unsafe { lib.get(entry.as_bytes()) }.expect("dlsym entry");
 
     // Call AOT and JIT for several args; results must be bit-identical.
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     for a in [0i64, 1, 7, -3, 1000] {
         let arg = Value::make_int(a);
@@ -190,7 +190,8 @@ fn aot_pure_arith_leaf_matches_jit_via_dlopen() {
 fn recipe_round_trips_string_symbol_cons() {
     // The harness installs the thread-local heap so Value::string/cons can
     // allocate (same pattern as the compile.rs MIR const tests).
-    let mut _eval = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut _eval =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
 
     // (cons "hello" (cons 'my-sym 42)) — exercises every supported recipe arm.
     let inner = Value::cons(
@@ -307,7 +308,7 @@ fn assert_aot_matches_interp_and_jit(ops: &[Op], constants: &[Value], nargs: usi
     let jit_leaf = super::super::compile::lower_mir_pure(&m).expect("jit lowers");
 
     // Reference: the interpreter (the oracle).
-    let mut eval = Context::new_minimal_vm_harness();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: (0..nargs)
             // SAFETY: test placeholder id, never resolved (peer seal N8).
@@ -453,7 +454,8 @@ fn aot_roundtrip_matches_interp_and_jit_corpus() {
 #[cfg(target_os = "linux")]
 #[test]
 fn aot_symbol_const_relocs_by_name_not_baked_sym_id() {
-    let mut eval = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut eval =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
 
     // 1-arg body: (lambda (x) (if (consp x) 'yes 'no)) — two symbol consts.
     // Bytecode: StackRef(0); Consp; GotoIfNil(->op5); Constant(0); Return;
@@ -550,7 +552,8 @@ fn aot_symbol_const_relocs_by_name_not_baked_sym_id() {
 /// a gensym const is NOT AOT-emitted (compile_leaf_to_object → None).
 #[test]
 fn aot_gensym_symbol_const_is_rejected_stays_jit() {
-    let _eval = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let _eval =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
 
     // An uninterned (gensym) symbol — name not registered as canonical.
     let gensym = Value::symbol(neovm_value::intern::intern_uninterned("g$decoy"));
@@ -598,7 +601,8 @@ fn aot_gensym_symbol_const_is_rejected_stays_jit() {
 fn aot_reloc_bearing_leaf_rebuilds_string_const() {
     // Heap allocation needs a live heap — set up the harness FIRST so the
     // string const + JIT leaf are built against it.
-    let mut eval = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut eval =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
 
     // 1-arg body: (lambda (x) "hello") — returns a heap-string CONSTANT.
     let ops = [Op::Constant(0), Op::Return];
@@ -659,7 +663,8 @@ fn aot_reloc_bearing_leaf_rebuilds_string_const() {
 #[cfg(target_os = "linux")]
 #[test]
 fn aot_two_reloc_consts_rebuild_in_index_order() {
-    let mut eval = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut eval =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
 
     // (lambda (x) (if x "first" "second")) — both arms return a heap string.
     // Bytecode: StackRef(0); GotoIfNil(->op3); Constant(0); Return;
@@ -732,7 +737,8 @@ fn aot_reloc_const_is_gc_rooted_via_compiled_walk() {
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use neovm_value::value::LambdaParams;
 
-    let mut _eval = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut _eval =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
 
     // Prime the cache's heap-identity guard with THIS heap BEFORE caching, so
     // the later root walk's `sync_cache_to_current_heap` does not see a
@@ -919,7 +925,8 @@ fn r2_enumerate_loadup_leaves_finds_d0_candidates() {
     use neovm_value::intern::SymId;
     use neovm_value::value::LambdaParams;
 
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
 
     // Candidate A: (lambda (a) (+ a 5)) — pure arith, required-only → D0 AOT.
     let mut a = ByteCodeFunction::new(LambdaParams {
@@ -977,7 +984,8 @@ fn r2_enumerate_loadup_leaves_finds_d0_candidates() {
 fn r2_build_preload_object_dedups_identical_bodies() {
     use object::{Object, ObjectSymbol};
 
-    let _ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let _ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
 
     // Two IDENTICAL bodies (1+ arg) under different names → same content hash.
     let add5 = (
@@ -1048,7 +1056,8 @@ fn r2_prepopulate_native_from_call_1_and_survives_gc() {
     use neovm_value::intern::SymId;
     use neovm_value::value::LambdaParams;
 
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
 
     // One pure-arith required-only candidate (lambda (a) (+ a 5)) → D0 AOT.
     let ops = vec![Op::Constant(0), Op::Add, Op::Return];
@@ -1147,7 +1156,8 @@ fn r2_prepopulate_skips_on_preload_miss() {
     use neovm_value::intern::SymId;
     use neovm_value::value::LambdaParams;
 
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let mut a = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
         required: vec![unsafe { SymId::from_raw(1) }],
@@ -1211,7 +1221,8 @@ fn r2_prepopulate_never_overwrites_existing_jit_leaf() {
     use neovm_value::intern::SymId;
     use neovm_value::value::LambdaParams;
 
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let mut a = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
         required: vec![unsafe { SymId::from_raw(1) }],
@@ -1417,7 +1428,8 @@ fn build_and_link_preload_writes_v2_prekey_manifest() {
     use neovm_value::intern::SymId;
     use neovm_value::value::LambdaParams;
 
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let mk = |required: Vec<SymId>, optional: Vec<SymId>, ops: Vec<Op>, consts: Vec<Value>| {
         let mut f = ByteCodeFunction::new(LambdaParams {
             required,
@@ -1554,7 +1566,8 @@ fn prepopulate_manifest_prefilter_skips_nonmember_without_hashing() {
     use neovm_value::intern::SymId;
     use neovm_value::value::LambdaParams;
 
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let mk = |ops: Vec<Op>, consts: Vec<Value>| {
         let mut f = ByteCodeFunction::new(LambdaParams {
             // SAFETY: test placeholder id, never resolved (peer seal N8).
@@ -1696,7 +1709,8 @@ fn prepopulate_prekey_mismatch_fails_closed_to_hash_path() {
     use neovm_value::intern::SymId;
     use neovm_value::value::LambdaParams;
 
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ops = vec![Op::Constant(0), Op::Add, Op::Return];
     let consts = vec![Value::make_int(5)];
     let mut f = ByteCodeFunction::new(LambdaParams {
@@ -1817,12 +1831,12 @@ fn pgo_runtime_emit_is_byte_identical_across_sessions_and_default_off() {
     // Default gate: OFF unless NEOVM_AOT_PGO is set (this process never sets it).
     assert!(!aot_pgo_enabled(), "NEOVM_AOT_PGO must default OFF");
 
-    let mut c1 = Context::new();
+    let mut c1 = Context::new(crate::test_utils::unit_runtime());
     pgo_alias(&mut c1, "pgo-eq-callee", "recordp");
     for i in 0..40 {
         let _ = intern(&format!("pgo-eq-drift1-{i}"));
     }
-    let mut c2 = Context::new();
+    let mut c2 = Context::new(crate::test_utils::unit_runtime());
     for i in 0..123 {
         let _ = intern(&format!("pgo-eq-drift2-{i}"));
     }
@@ -1855,7 +1869,7 @@ fn pgo_drain_cap_bounds_count_and_exists_skips() {
     // A bare `(callee x)` is call-dominated → decline the JIT profit gate so it
     // enters the JIT set as the drain's spec-bearing source.
     super::super::compile::force_profit_gate_for_test(false);
-    let mut c = Context::new();
+    let mut c = Context::new(crate::test_utils::unit_runtime());
     pgo_alias(&mut c, "pgo-cap-a", "recordp");
     pgo_alias(&mut c, "pgo-cap-b", "consp");
     // Bind + stage TWO distinct hot pred bodies (different callees → different hashes).
@@ -1917,7 +1931,7 @@ fn pgo_jit_set_and_wrapper_default_off() {
     let dir = tempfile::tempdir().expect("tempdir");
     super::super::cache::clear();
     super::super::compile::force_profit_gate_for_test(false);
-    let mut c = Context::new();
+    let mut c = Context::new(crate::test_utils::unit_runtime());
     pgo_alias(&mut c, "pgo-set-callee", "recordp");
     c.obarray.set_symbol_function(
         "pgo-set-fn",

@@ -111,7 +111,7 @@ fn tier2_policy_knobs_and_stress_are_bounded() {
 fn tier2_policy_requires_a_stable_work_window() {
     force_tier2_for_test(Some(knob(3, 64)));
     force_tier2_policy_for_test(Some(policy(2, 4)));
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = seven();
     for _ in 0..3 {
         assert_eq!(run(&mut ctx, &f, &[]), Value::make_int(7));
@@ -143,7 +143,7 @@ fn tier2_policy_requires_a_stable_work_window() {
 fn tier2_policy_changed_feedback_rearms_before_upgrade() {
     force_tier2_for_test(Some(knob(3, 64)));
     force_tier2_policy_for_test(Some(policy(2, 4)));
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = seven();
     for _ in 0..3 {
         run(&mut ctx, &f, &[]);
@@ -176,7 +176,7 @@ fn tier2_policy_budget_denial_rearms_current_native_leaf() {
         floor_ms: 0,
         max_reopt: 3,
     }));
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = seven();
     run(&mut ctx, &f, &[]);
     let old = current(&f);
@@ -206,7 +206,7 @@ fn tier2_policy_budget_denial_rearms_current_native_leaf() {
 fn tier2_loop_second_call_uses_upgrade_without_changing_polls() {
     force_tier2_for_test(Some(knob(15_000, 64)));
     force_tier2_policy_for_test(Some(policy(4_000, 4)));
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = countdown_loop();
     run(&mut ctx, &f, &[Value::make_int(1_000_000)]);
     let t1 = current(&f);
@@ -239,7 +239,7 @@ fn tier2_deopt_reverts_and_preserves_retreat_and_ban() {
         max_reopt: 1,
         ..policy(1, 4)
     }));
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = countdown_loop();
     run(&mut ctx, &f, &[Value::make_int(10)]);
     run(&mut ctx, &f, &[Value::make_int(10)]);
@@ -293,7 +293,7 @@ fn tier2_deopt_reverts_and_preserves_retreat_and_ban() {
 fn tier2_policy_run_once_due_leaves_do_not_reserve_cpu() {
     force_tier2_for_test(Some(knob(1, 64)));
     force_tier2_policy_for_test(Some(policy(1, 4)));
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let before = LEDGER.with(Cell::get).reserved;
     let functions: Vec<_> = (0..8).map(|_| countdown_loop()).collect();
     for f in &functions {
@@ -316,7 +316,7 @@ fn tier2_policy_due_upgrade_rechecks_budget_at_compile_seam() {
     );
     force_tier2_for_test(Some(knob(1, 64)));
     force_tier2_policy_for_test(Some(policy(1, 4)));
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = seven();
     run(&mut ctx, &f, &[]);
     run(&mut ctx, &f, &[]);

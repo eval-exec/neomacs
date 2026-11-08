@@ -75,7 +75,7 @@ fn add1() -> ByteCodeFunction {
 #[test]
 fn jit_bg_small_entry_backend_runs_in_line() {
     threaded(u64::MAX);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = add1();
     let before = stats_snapshot();
     // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
@@ -93,7 +93,7 @@ fn jit_bg_small_entry_backend_runs_in_line() {
 #[test]
 fn jit_bg_large_entry_backend_goes_to_a_worker() {
     threaded(0);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = add1();
     let before = stats_snapshot();
     // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
@@ -112,7 +112,7 @@ fn jit_bg_large_entry_backend_goes_to_a_worker() {
 #[test]
 fn jit_bg_small_osr_backend_runs_in_line() {
     threaded(u64::MAX);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = counting_loop();
     let before = stats_snapshot();
     let transfers = cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed);
@@ -134,7 +134,7 @@ fn jit_bg_small_osr_backend_runs_in_line() {
 #[test]
 fn jit_bg_large_osr_backend_goes_to_a_worker() {
     threaded(0);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = counting_loop();
     let before = stats_snapshot();
     assert_eq!(count(&mut ctx, &f, 100_000), Value::make_int(100_000));

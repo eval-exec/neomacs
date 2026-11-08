@@ -25,7 +25,7 @@ fn jit_bg_first_sight_defers_then_installs() {
     force_deferred_install_for_test(true);
     hold_publish_for_test(true);
     force_deopt_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let f = function(
         vec![Op::StackRef(0), Op::Constant(0), Op::Add, Op::Return],

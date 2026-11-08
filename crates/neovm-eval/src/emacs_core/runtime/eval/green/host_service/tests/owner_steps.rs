@@ -44,7 +44,8 @@ pub(in crate::emacs_core::eval::green::host_service) fn pending_fixture()
 pub(in crate::emacs_core::eval::green::host_service) fn step_fixture(
     stage: FixtureStepStage,
 ) -> (Context, Baton, StepKey) {
-    let mut owner = Context::new_with_threading(ThreadingMode::Green);
+    let mut owner =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     let baton = owner.start_green_runtime().unwrap();
     let input = Value::list(vec![Value::string("step-root-only"), Value::fixnum(73)]);
     let key = owner.with_green_runtime(|runtime| {

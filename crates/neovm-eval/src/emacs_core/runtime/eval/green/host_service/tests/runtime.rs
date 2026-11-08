@@ -156,7 +156,8 @@ fn green() -> Context {
     crate::test_utils::init_test_tracing();
     #[cfg(feature = "jit")]
     crate::emacs_core::jit::force_jit_off_for_test(true);
-    let mut context = Context::new_with_threading(ThreadingMode::Green);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     context.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(
         "s2-service-request",
         request_from_worker

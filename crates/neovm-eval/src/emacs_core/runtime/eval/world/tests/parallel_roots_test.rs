@@ -16,7 +16,7 @@ struct ScratchScope(usize);
 #[test]
 fn p3sym_c4_cold_function_admission_refuses_live_legacy_roots() {
     use crate::emacs_core::eval::SpecBinding;
-    let mut context = Context::new_minimal_vm_harness();
+    let mut context = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     assert!(context.function_cells_quiescent());
     context.jit_root_stack_top = 1;
     let rooted_native = context.function_cells_quiescent();
@@ -41,9 +41,9 @@ impl Drop for ScratchScope {
 
 #[test]
 fn frozen_legacy_capture_rejects_a_foreign_world_keeper() {
-    let mut first = Context::new();
+    let mut first = Context::new(crate::test_utils::unit_runtime());
     let first_keeper = first.issue_green_baton().unwrap();
-    let mut second = Context::new();
+    let mut second = Context::new(crate::test_utils::unit_runtime());
     let second_keeper = second.issue_green_baton().unwrap();
     assert_ne!(
         first_keeper.parallel_heap_identity(),
@@ -65,14 +65,14 @@ fn frozen_legacy_capture_rejects_a_foreign_world_keeper() {
 
 #[test]
 fn rooted_admission_rejects_real_capture_from_another_heap_and_returns_capabilities() {
-    let mut first = Context::new();
+    let mut first = Context::new(crate::test_utils::unit_runtime());
     first.setup_thread_locals();
     let first_keeper = first.issue_green_baton().unwrap();
     let frozen = first.capture_parallel_legacy_roots(&first_keeper).unwrap();
     let first_heap = frozen.heap_identity();
     // Keep the source Context and keeper alive without running it between
     // capture and the deliberate foreign admission attempt.
-    let mut second = Context::new();
+    let mut second = Context::new(crate::test_utils::unit_runtime());
     second.setup_thread_locals();
     let keeper = second.issue_green_baton().unwrap();
     let second_heap = keeper.parallel_heap_identity();
@@ -170,7 +170,8 @@ fn a5_admission_refuses_lisp_finalizer_fixture_before_any_mutator_activation() {
 
 #[test]
 fn a5_capture_refuses_a_preexisting_green_runtime() {
-    let mut context = Context::new_with_threading(ThreadingMode::Green);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     let keeper = context.start_green_runtime().unwrap();
     assert!(keeper.held_here());
     assert!(matches!(
@@ -182,7 +183,7 @@ fn a5_capture_refuses_a_preexisting_green_runtime() {
 
 #[test]
 fn frozen_legacy_capture_includes_own_slab_and_heap_matched_parked_tls_roots() {
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     context.setup_thread_locals();
     context
         .eval_str("(defvar p1rv-a5-capture-binding nil)")
@@ -241,7 +242,7 @@ fn a5_admission_refuses_telemetry_without_unsupported_heap_objects() {
 fn a5_admission_refuses_full_context_with_gnu_default_weak_table() {
     // Ordinary Context::new correctly includes GNU's weak-value
     // window-dead-windows-table. It remains outside A5's minimal fixture.
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     assert_fixture_refuses_before_registration(&mut context, |context| {
         context
             .tagged_heap
@@ -252,7 +253,7 @@ fn a5_admission_refuses_full_context_with_gnu_default_weak_table() {
 #[cfg(not(feature = "gc-memory-telemetry"))]
 #[test]
 fn a6_owned_admission_pins_shell_census_and_restores_empty_weak_table() {
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let shell = context
         .tagged_heap
         .alloc_cons(TaggedValue::fixnum(11), TaggedValue::fixnum(13));
@@ -304,7 +305,7 @@ fn a6_owned_admission_pins_shell_census_and_restores_empty_weak_table() {
 #[cfg(not(feature = "gc-memory-telemetry"))]
 #[test]
 fn a6_owned_admission_refuses_nonempty_weak_table_without_clearing_it() {
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     context
         .eval_str("(puthash 1 2 window-dead-windows-table)")
         .unwrap();

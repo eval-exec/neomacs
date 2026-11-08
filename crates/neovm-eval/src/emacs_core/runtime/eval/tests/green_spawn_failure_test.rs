@@ -90,7 +90,8 @@ fn lower_address_space_below_thread_stack() {
 fn child_probe() -> ! {
     // Build the evaluator BEFORE lowering the limit: image/startup work may
     // itself allocate large mappings.
-    let mut context = Context::new_with_threading(ThreadingMode::Green);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     lower_address_space_below_thread_stack();
     let source = r#"(condition-case probe-error
                         (progn (make-thread (lambda () 1) "spawn-failure-probe")

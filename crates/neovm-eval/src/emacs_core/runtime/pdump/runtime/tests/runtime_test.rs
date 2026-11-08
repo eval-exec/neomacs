@@ -5,14 +5,14 @@ fn sequential_contexts_on_a_second_thread_reset_heap_owned_caches() {
     // Initialize the runtime on one thread before using another. A global
     // registration guard incorrectly suppresses the second thread's hooks.
     std::thread::spawn(|| {
-        let mut context = Context::new();
+        let mut context = Context::new(crate::test_utils::unit_runtime());
         context.eval_str("(standard-syntax-table)").unwrap();
     })
     .join()
     .expect("first runtime thread");
 
     std::thread::spawn(|| {
-        let mut first = Context::new();
+        let mut first = Context::new(crate::test_utils::unit_runtime());
         first.eval_str("(standard-syntax-table)").unwrap();
 
         // Fail before dropping/replacing the heap when hooks are missing,
@@ -29,7 +29,7 @@ fn sequential_contexts_on_a_second_thread_reset_heap_owned_caches() {
         });
 
         drop(first);
-        let mut second = Context::new();
+        let mut second = Context::new(crate::test_utils::unit_runtime());
         let result = second
             .eval_str(
                 "(progn (set-syntax-table (copy-syntax-table))

@@ -20,7 +20,7 @@ fn green() -> Context {
     crate::test_utils::init_test_tracing();
     #[cfg(feature = "jit")]
     crate::emacs_core::jit::force_jit_off_for_test(true);
-    Context::new_with_threading(ThreadingMode::Green)
+    Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime())
 }
 
 #[test]
@@ -117,7 +117,7 @@ fn a_view_made_off_the_baton_holder_panics() {
 #[test]
 fn a_sim_world_refuses_the_green_runtime() {
     crate::test_utils::init_test_tracing();
-    let mut sim = Context::new();
+    let mut sim = Context::new(crate::test_utils::unit_runtime());
     assert!(matches!(
         sim.start_green_runtime(),
         Err(super::GreenStartError::NotGreen)

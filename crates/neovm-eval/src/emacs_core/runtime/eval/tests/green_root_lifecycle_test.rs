@@ -173,7 +173,7 @@ fn green() -> Context {
     crate::test_utils::init_test_tracing();
     #[cfg(feature = "jit")]
     crate::emacs_core::jit::force_jit_off_for_test(true);
-    Context::new_with_threading(ThreadingMode::Green)
+    Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime())
 }
 
 /// Each worker reports readiness while holding the mutex, then atomically

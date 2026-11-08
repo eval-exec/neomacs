@@ -20,7 +20,7 @@ fn green() -> Context {
     crate::test_utils::init_test_tracing();
     #[cfg(feature = "jit")]
     crate::emacs_core::jit::force_jit_off_for_test(true);
-    Context::new_with_threading(ThreadingMode::Green)
+    Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime())
 }
 
 /// Native protocol owned by one test invocation, never evaluator/TLS state.
@@ -1377,7 +1377,7 @@ fn select_parks() -> usize {
 #[test]
 fn a_sim_worlds_waits_never_slice() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new_with_threading(ThreadingMode::Sim);
+    let mut ev = Context::new_with_threading(ThreadingMode::Sim, crate::test_utils::unit_runtime());
     let before = select_parks();
     assert_eq!(
         eval(

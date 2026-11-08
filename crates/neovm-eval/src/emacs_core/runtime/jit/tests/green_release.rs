@@ -142,7 +142,8 @@ fn exercise_green_park(setup: &str) {
     let _scope = arith_scope();
     let _backend = compile::opt_mode_scope_for_test(compile::OptMode::Off);
     let _background = bg::TestModeScope::enter(bg::BgMode::Sync);
-    let mut context = Context::new_with_threading(ThreadingMode::Green);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     context.set_lexical_binding(true);
     context.register_subr(SubrSpec::fixed0("green-release-redefine", redefine_logand));
     context
@@ -251,7 +252,8 @@ fn release_check_passes_when_epoch_is_unchanged() {
     let _scope = arith_scope();
     let _backend = compile::opt_mode_scope_for_test(compile::OptMode::Off);
     let _background = bg::TestModeScope::enter(bg::BgMode::Sync);
-    let mut context = Context::new_with_threading(ThreadingMode::Green);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     context.set_lexical_binding(true);
     context
         .eval_str(
@@ -279,7 +281,8 @@ fn sim_self_fset_delivered_at_release_point() {
     let _scope = arith_scope();
     let _backend = compile::opt_mode_scope_for_test(compile::OptMode::Off);
     let _background = bg::TestModeScope::enter(bg::BgMode::Sync);
-    let mut context = Context::new_with_threading(ThreadingMode::Sim);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Sim, crate::test_utils::unit_runtime());
     context.set_lexical_binding(true);
     context
         .eval_str(
@@ -317,7 +320,8 @@ fn plus_opcode_is_not_a_function_cell_dependent() {
     let _scope = arith_scope();
     let _backend = compile::opt_mode_scope_for_test(compile::OptMode::Off);
     let _background = bg::TestModeScope::enter(bg::BgMode::Sync);
-    let mut context = Context::new_with_threading(ThreadingMode::Sim);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Sim, crate::test_utils::unit_runtime());
     context.set_lexical_binding(true);
     context
         .eval_str(
@@ -419,7 +423,8 @@ fn release_deopt_at_condition_case_landing() {
     let _scope = arith_scope();
     let _backend = compile::opt_mode_scope_for_test(compile::OptMode::Off);
     let _background = bg::TestModeScope::enter(bg::BgMode::Sync);
-    let mut context = Context::new_with_threading(ThreadingMode::Green);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     context.set_lexical_binding(true);
     context.register_subr(SubrSpec::fixed0(
         "green-release-park-signal",

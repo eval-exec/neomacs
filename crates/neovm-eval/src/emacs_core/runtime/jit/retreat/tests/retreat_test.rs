@@ -104,7 +104,7 @@ fn a_precise_deopt_counts_in_the_history_and_outlives_the_leaf() {
     use neovm_value::intern::SymId;
     use neovm_value::value::{LambdaParams, Value};
     crate::emacs_core::jit::compile::force_deopt_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     // (lambda (x) (+ x 1)), held to the baseline, whose `+` deopts
     // precisely on a float.

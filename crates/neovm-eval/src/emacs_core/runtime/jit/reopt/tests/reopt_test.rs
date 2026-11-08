@@ -114,7 +114,7 @@ fn classify_arith_float_other_overflow() {
 /// an OSR entry guard (pc == header, stack == snapshot) and the rest.
 #[test]
 fn classify_call_car_osr_entry_unattributed() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *const Context;
     let mut leaf = plain_leaf();
     let ops = [
@@ -232,7 +232,7 @@ fn census_buckets_are_distinct() {
 #[test]
 fn census_counts_a_tier_up_seam_deopt_once() {
     force_deopt_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     // (lambda (x) (+ x 1))
     let f = function(
@@ -262,7 +262,7 @@ fn census_counts_a_tier_up_seam_deopt_once() {
 fn census_counts_a_direct_path_deopt_once() {
     force_deopt_for_test(false);
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // A multi-block callee, so the MIR inliner leaves the call in place:
     // (lambda (n) (if n (1- n) 0))
     let step = Value::symbol("reopt-census-step");
@@ -342,7 +342,7 @@ fn census_counts_an_osr_deopt_once() {
         vec![Value::make_int(0)],
         2,
     );
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     crate::emacs_core::jit::force_osr_for_test(true);
     f.jit_runtime().set_hot_for_test();
     crate::emacs_core::jit::test_support::prepare_osr(&mut ev, &f, 2);
@@ -447,7 +447,7 @@ fn ceiling_baseline_only_skips_the_mir_tier() {
         crate::emacs_core::jit::compile::OptMode::Legacy,
     );
     force_deopt_for_test(false);
-    let ev = Context::new();
+    let ev = Context::new(crate::test_utils::unit_runtime());
     let f = add2();
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
     assert_eq!(leaf.tier(), LeafTier::Mir, "a pure body takes the MIR tier");
@@ -464,7 +464,7 @@ fn ceiling_baseline_only_skips_the_mir_tier() {
 #[test]
 fn ceiling_generic_takes_the_fallback_and_never_deopts() {
     force_deopt_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let f = add2();
     f.jit_runtime()
         .set_reopt_level_for_test(ReoptLevel::Generic);
@@ -502,7 +502,7 @@ fn ceiling_generic_takes_the_fallback_and_never_deopts() {
 #[test]
 fn ceiling_interpreter_refuses_entry_and_osr_compiles() {
     force_deopt_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let f = add2();
     let f_val = Value::make_bytecode(f.clone());
@@ -577,7 +577,7 @@ fn no_inline_bit_skips_the_fuser() {
         stats: true,
         ..Default::default()
     });
-    let ev = Context::new();
+    let ev = Context::new(crate::test_utils::unit_runtime());
     // The callee: a constant bytecode object, (lambda (x) (1+ x)).
     let callee = Value::make_bytecode(function(
         vec![Op::StackRef(0), Op::Add1, Op::Return],
@@ -636,7 +636,7 @@ fn no_inline_bit_skips_the_mir_inliner() {
     force_deopt_for_test(false);
     // Without the inline the body is call-dominated.
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // (defun reopt-sq (x) (* x x))
     let sq = Value::symbol("reopt-sq");
     ev.obarray.set_symbol_function_id(
@@ -680,7 +680,7 @@ fn no_inline_bit_skips_the_mir_inliner() {
 fn no_inline_bit_skips_the_inline_bit_op() {
     force_deopt_for_test(false);
     crate::emacs_core::jit::compile::force_inline_arith_for_test(true);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // (lambda (a b) (logand a b))
     let mk = || {
         function(

@@ -112,7 +112,8 @@ fn with_compiled_green(action: impl FnOnce(&mut Context)) {
     let _scope = JitFixtureScope::enter();
     let _profit = ProfitFixtureScope::enter();
     assert!(crate::emacs_core::jit::jit_runtime_enabled());
-    let mut context = Context::new_with_threading(ThreadingMode::Green);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     context.set_lexical_binding(true);
     context.register_subr(SubrSpec::fixed0("f5-jit-witness", native_witness));
     context.register_subr(SubrSpec::fixed0("f5-jit-allocate", native_allocate));
@@ -1324,7 +1325,8 @@ fn green_yield_jit_enabled_switch_micro() {
         .and_then(|n| n.parse().ok())
         .unwrap_or(1000);
     let _jit = JitFixtureScope::enter();
-    let mut context = Context::new_with_threading(ThreadingMode::Green);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     context
         .eval_str(
             "(progn
@@ -1587,7 +1589,7 @@ fn run_throughput(mode: ThreadingMode, n: usize, stride: usize) {
     assert!(stride <= Value::MOST_POSITIVE_FIXNUM as usize);
     let _jit = JitFixtureScope::enter();
     let _profit = ProfitFixtureScope::enter();
-    let mut context = Context::new_with_threading(mode);
+    let mut context = Context::new_with_threading(mode, crate::test_utils::unit_runtime());
     context.set_lexical_binding(true);
     context.register_subr(SubrSpec::fixed0("tgt-worker", throughput_worker));
     context.register_subr(SubrSpec::fixed0("tgt-tick", throughput_tick));

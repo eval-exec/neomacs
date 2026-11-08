@@ -16,7 +16,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 fn runtime() -> Context {
     crate::test_utils::init_test_tracing();
-    Context::new()
+    Context::new(crate::test_utils::unit_runtime())
 }
 
 fn coherent(context: &Context) {
@@ -53,7 +53,7 @@ fn admission_header_constructors_and_cold_minimal_reset_are_coherent() {
     // This constructor performs its whole-manager reset before its own final
     // activation, not beneath a compiled/native continuation. It is the real
     // cold-replacement control; the model additionally enforces its typestate.
-    let mut minimal = Context::new_minimal_vm_harness();
+    let mut minimal = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     coherent(&minimal);
     minimal.resolve_debug_on_next_call_cell();
     coherent(&minimal);
@@ -206,7 +206,7 @@ fn admission_header_private_writer_panic_retires_before_recovery() {
 #[test]
 fn admission_header_absent_lazy_resolution_and_later_install_are_coherent() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new_minimal_vm_harness();
+    let mut context = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     context.resolve_debug_on_next_call_cell();
     coherent(&context);
     assert!(

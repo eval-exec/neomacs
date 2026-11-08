@@ -679,7 +679,7 @@ fn classic_fuser_header_scan_keeps_unused_pdump_bytecode_lazy() {
     use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
     use crate::emacs_core::pdump::{dump_to_file, load_from_dump_with_proof};
 
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let mut callee = lexical_fn(
         0,
         vec![Op::Constant(0), Op::Return],

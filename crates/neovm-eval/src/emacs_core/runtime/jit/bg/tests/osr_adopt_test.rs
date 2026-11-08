@@ -45,7 +45,7 @@ fn jit_bg_osr_waits_on_the_pending_entry_compile_of_its_body() {
     hold_publish_for_test(true);
     force_osr_for_test(true);
     force_deopt_for_test(false);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let ptr = &mut ctx as *mut Context;
     let f = counting_loop();
     // The entry tier-up goes to the background and its call interprets.

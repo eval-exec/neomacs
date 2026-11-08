@@ -3,7 +3,7 @@ use std::{cell::Cell, rc::Rc};
 
 #[test]
 fn gui_service_keeps_deadline_and_pending_input_order() {
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::emacs_core::Context::new(crate::test_utils::unit_runtime());
     eval.eval_str("(setq inhibit-redisplay nil)").unwrap();
     let captures = Rc::new(Cell::new(0));
     let observed = captures.clone();

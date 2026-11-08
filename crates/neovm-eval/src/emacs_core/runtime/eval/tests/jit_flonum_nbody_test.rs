@@ -141,7 +141,7 @@ fn floats_consed(ev: &Context) -> u64 {
 /// the census of the compile.
 fn run_nbody(mode: FlonumMode, probe_name: &str) -> (u64, lowering::FlonumCensus) {
     force_flonum_mode_for_test(Some(mode));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let jit_fn = Value::make_bytecode(applyforces());
     let interp_fn = applyforces();
     // Bind the JIT copy to a symbol: that roots it for the whole test.

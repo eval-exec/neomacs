@@ -13,7 +13,7 @@ use neovm_value::intern::{SymId, intern};
 use neovm_value::value::Value;
 
 fn context(projected: bool) -> Context {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     eval(
         &mut ev,
         "(progn (defvar tob-v 5) (defvar tob-log nil)

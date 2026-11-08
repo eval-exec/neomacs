@@ -46,7 +46,7 @@ fn mutator(role: usize, commands: Receiver<Command>, reports: Sender<Report>) {
     force_mode_for_test(Some(BgMode::Threaded));
     force_deferred_install_for_test(false);
     force_deopt_for_test(false);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let payload = ctx
         .eval_str(if role == 0 {
             "(list (make-string 3 ?a) (cons 7 9))"

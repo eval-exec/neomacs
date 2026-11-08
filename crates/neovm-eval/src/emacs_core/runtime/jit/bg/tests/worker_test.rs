@@ -45,7 +45,7 @@ fn kind(f: &ByteCodeFunction) -> &'static str {
 #[test]
 fn jit_bg_worker_compiles_an_entry_tier_up() {
     threaded();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let f = add1();
     let jobs = WORKER_STATS.jobs.load(Ordering::Relaxed);
@@ -68,7 +68,7 @@ fn jit_bg_worker_compiles_an_entry_tier_up() {
 #[test]
 fn jit_bg_worker_panic_is_contained() {
     threaded();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let f = add1();
     let panics = WORKER_STATS.panics.load(Ordering::Relaxed);
@@ -94,7 +94,7 @@ fn jit_bg_worker_panic_is_contained() {
 #[test]
 fn jit_bg_cancelled_job_is_skipped() {
     threaded();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let f = add1();
     let (jobs, skipped) = (
@@ -120,7 +120,7 @@ fn jit_bg_cancelled_job_is_skipped() {
 fn corpus_by_dispatch(mode: BgMode) -> (Vec<String>, Vec<String>) {
     force_mode_for_test(Some(mode));
     force_deopt_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let wrong = [Value::NIL, Value::NIL, Value::NIL];
     let mut code = Vec::new();

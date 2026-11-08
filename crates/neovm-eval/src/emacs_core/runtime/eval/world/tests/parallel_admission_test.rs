@@ -202,7 +202,9 @@ impl Context {
     /// current heap mode; it does not infer admission from an environment flag.
     #[doc(hidden)]
     pub fn nmjit_n2_production_boundary_for_test() -> Result<(), String> {
-        exercise_actual_context(Self::new_minimal_vm_harness())
+        exercise_actual_context(Self::new_minimal_vm_harness(
+            crate::test_utils::unit_runtime(),
+        ))
     }
 }
 
@@ -213,14 +215,14 @@ fn nmjit_n2_owned_context_actual_mode_boundary_and_recovery() {
 
 #[test]
 fn nmjit_n2_owned_context_gen0_refuses_without_entering_and_recovers() {
-    let mut context = Context::new_minimal_vm_harness();
+    let mut context = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     ActualMode::Gen0.configure(&mut context);
     exercise_actual_context(context).expect("actual GEN0 production refusal and recovery");
 }
 
 #[test]
 fn nmjit_n2_owned_context_gen1_two_permits_finish_and_readmit() {
-    let mut context = Context::new_minimal_vm_harness();
+    let mut context = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     ActualMode::Gen1.configure(&mut context);
     exercise_actual_context(context).expect("actual GEN1 production admission and recovery");
 }

@@ -279,7 +279,10 @@ fn green_admission_accepts_all_inline_and_backend_configurations() {
                 mode,
                 Inline2Mode::Off,
                 background,
-                Context::new_with_threading(crate::emacs_core::eval::ThreadingMode::Green),
+                Context::new_with_threading(
+                    crate::emacs_core::eval::ThreadingMode::Green,
+                    crate::test_utils::unit_runtime(),
+                ),
             ));
         }
         for inline in [
@@ -292,7 +295,10 @@ fn green_admission_accepts_all_inline_and_backend_configurations() {
                 mode,
                 inline,
                 BgMode::Sync,
-                Context::new_with_threading(crate::emacs_core::eval::ThreadingMode::Green),
+                Context::new_with_threading(
+                    crate::emacs_core::eval::ThreadingMode::Green,
+                    crate::test_utils::unit_runtime(),
+                ),
             ));
         }
     }
@@ -536,7 +542,8 @@ fn green_background_fixture(redefine: bool) {
         }
     }
     let _restore = RestoreWorkers;
-    let mut context = Context::new_with_threading(ThreadingMode::Green);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     context.register_subr(SubrSpec::fixed0(
         "green-bg-publish-on-peer",
         publish_background_on_peer,
@@ -725,7 +732,8 @@ fn green_evicted_active_osr_retains_code_relocations_and_exact_source_through_pa
     let _admission = AdmissionScope::enter(Inline2Mode::Off, BgMode::Sync);
     let _backend = compile::opt_mode_scope_for_test(OptMode::Off);
     let _profit = ProfitScope::enter(ProfitGateTestPolicy::Bypass);
-    let mut context = Context::new_with_threading(ThreadingMode::Green);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     context.set_lexical_binding(true);
     context.register_subr(SubrSpec::fixed0(
         "green-evicted-osr-park",

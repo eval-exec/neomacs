@@ -4,7 +4,7 @@ use super::*;
 fn same_buffer_excursion_finish_does_not_allocate_a_vm_root_frame() {
     use neovm_edit::buffer::EmacsBytePos;
 
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let buffer = ctx.buffers.current_buffer_id().expect("current buffer");
     ctx.buffers.replace_buffer_contents(buffer, "abcd").unwrap();
     ctx.buffers
@@ -41,7 +41,7 @@ fn same_buffer_scope_finish_does_not_allocate_a_vm_root_frame() {
     use crate::emacs_core::eval::CurrentBufferScope;
     use neovm_value::intern::intern;
 
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let symbol = intern("same-buffer-scope-child");
     ctx.obarray.set_symbol_value_id(symbol, Value::fixnum(10));
     let result = Value::string("retained scope result");

@@ -12,7 +12,7 @@ fn context_with_remembered_echo() -> (
     BufferId,
     Rc<RefCell<Vec<RedisplayMiniGeometryRequest>>>,
 ) {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.current_buffer_id().expect("root buffer");
     let frame = eval.frames.create_frame("mini-source", 80, 25, buffer);
     let window = eval

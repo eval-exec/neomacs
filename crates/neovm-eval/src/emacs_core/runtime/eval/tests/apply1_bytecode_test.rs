@@ -68,7 +68,7 @@ fn apply1_matches_the_general_path_for_every_parameter_shape() {
         crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
     crate::test_utils::init_test_tracing();
     for gc_stress in [false, true] {
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         ev.gc_stress = gc_stress;
         let _roots = ev.save_vm_roots();
         for (required, optional, rest) in [
@@ -120,7 +120,7 @@ fn apply1_matches_the_general_path_for_every_parameter_shape() {
 #[test]
 fn apply1_unwinds_its_frame_on_a_signal() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let _roots = ev.save_vm_roots();
     // (lambda (a) (car a))
     let mut f = ByteCodeFunction::new(LambdaParams {
@@ -157,7 +157,7 @@ fn apply1_unwinds_its_frame_on_a_signal() {
 #[test]
 fn map_builtins_call_a_compiled_closure_through_apply1() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let f = Value::make_bytecode(lister(1, 0, false, true));
     let sym = neovm_value::intern::intern("apply1-test-lister");
     ev.obarray.set_symbol_function_id(sym, f);

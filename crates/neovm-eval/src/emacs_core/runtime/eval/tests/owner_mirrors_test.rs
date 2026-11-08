@@ -18,7 +18,7 @@ fn eval(ev: &mut Context, src: &str) -> String {
 }
 
 fn projected(names: &[&str]) -> Context {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     eval(
         &mut ev,
         "(progn (defvar tom-auto 5) (make-variable-buffer-local 'tom-auto)

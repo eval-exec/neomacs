@@ -29,7 +29,7 @@ fn p3sym_c5_jit_plain_reader_and_caller_survive_intern_relocation() {
     let _profit = Profit::bypass();
     let _backend = compile::opt_mode_scope_for_test(compile::OptMode::Off);
     let _stamps = Context::c5_function_stamps_for_test();
-    let mut ctx = Context::new_minimal_vm_harness();
+    let mut ctx = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     ctx.set_variable("window-dead-windows-table", Value::NIL);
     ctx.gc_collect_exact();
     let global = intern("p3sym-c5-native-old-value");

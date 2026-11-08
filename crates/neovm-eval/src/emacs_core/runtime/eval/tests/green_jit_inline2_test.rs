@@ -57,7 +57,8 @@ fn fixture(action: impl FnOnce(&mut Context)) {
     let _backend = compile::opt_mode_scope_for_test(compile::OptMode::Legacy);
     let _background =
         crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
-    let mut context = Context::new_with_threading(ThreadingMode::Green);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     context.set_lexical_binding(true);
     context.register_subr(SubrSpec::fixed0("g2-inline-witness", witness));
     context.register_subr(SubrSpec::fixed0("g2-inline-admit", admit_native));

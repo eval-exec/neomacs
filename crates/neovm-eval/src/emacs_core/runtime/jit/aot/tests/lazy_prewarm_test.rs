@@ -100,7 +100,7 @@ fn function_of(ev: &Context, name: &str) -> Value {
 #[cfg(target_os = "linux")]
 #[test]
 fn lazy_prewarm_serves_a_marked_member_from_the_preload() {
-    let mut ev = Context::new_minimal_vm_harness();
+    let mut ev = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let add5 = Member {
         name: "lazy-prewarm-add5",
         ops: vec![Op::Constant(0), Op::Add, Op::Return],
@@ -148,7 +148,7 @@ fn lazy_prewarm_serves_a_marked_member_from_the_preload() {
 #[cfg(target_os = "linux")]
 #[test]
 fn lazy_prewarm_battery_matches_the_interpreter_and_serves_every_member() {
-    let mut ev = Context::new_minimal_vm_harness();
+    let mut ev = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let members = [
         Member {
             name: "lazy-battery-add5",
@@ -254,7 +254,7 @@ fn lazy_prewarm_battery_matches_the_interpreter_and_serves_every_member() {
 fn lazy_prewarm_marks_pdump_stubs_without_materializing_them() {
     crate::test_utils::init_test_tracing();
     let scratch = crate::emacs_core::eval::save_scratch_gc_roots();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     // GNU bytecode (the reader literal): dumped as a lazy stub.
     ctx.eval_str("(defalias 'lazy-stub-add5 #[257 \"\\211\\300\\\\\\207\" [5] 3])")
         .expect("defalias");
@@ -410,7 +410,7 @@ fn manifest_member_stream_yields_members_behind_the_interlock() {
 #[test]
 fn call_glue_members_are_served_at_tier_up_not_from_call_1() {
     for policy in [PrewarmPolicy::Profitable, PrewarmPolicy::All] {
-        let mut ev = Context::new_minimal_vm_harness();
+        let mut ev = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
         let glue = Member {
             name: "lazy-glue-add5",
             ops: vec![Op::Constant(0), Op::Add, Op::Return],

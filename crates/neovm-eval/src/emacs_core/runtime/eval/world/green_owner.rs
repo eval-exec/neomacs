@@ -236,7 +236,7 @@ impl Context {
     pub(crate) fn with_test_mutator_era<R>(
         f: impl for<'heap> FnOnce(crate::emacs_core::eval::world::WorldProofEra<'heap>) -> R,
     ) -> R {
-        let mut context = Self::new();
+        let mut context = Self::new(crate::test_utils::unit_runtime());
         let keeper = context
             .issue_green_baton()
             .expect("fresh fixture World issues its keeper");
@@ -272,7 +272,7 @@ impl Context {
             Vec<neovm_value::tagged::transport::SharedRoot>,
         ) -> R,
     ) -> R {
-        let mut context = Self::new();
+        let mut context = Self::new(crate::test_utils::unit_runtime());
         let mut roots = Vec::new();
         for n in 0..4 {
             let value = context.tagged_heap.alloc_cons(

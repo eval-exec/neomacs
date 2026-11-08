@@ -14,7 +14,7 @@ use neovm_value::value::Value;
 
 fn green() -> Context {
     crate::test_utils::init_test_tracing();
-    Context::new_with_threading(ThreadingMode::Green)
+    Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime())
 }
 
 fn eval(ev: &mut Context, src: &str) -> String {

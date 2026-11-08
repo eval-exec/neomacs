@@ -33,7 +33,8 @@ fn multiset(values: impl IntoIterator<Item = Value>) -> BTreeMap<usize, usize> {
 
 #[test]
 fn parked_roots_equal_full_census_without_world_plus_parked_tls() {
-    let mut owner = Context::new_with_threading(ThreadingMode::Green);
+    let mut owner =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     owner
         .eval_str("(thread-join (make-thread (lambda () nil)))")
         .expect("seat the owner and join the bootstrap peer");

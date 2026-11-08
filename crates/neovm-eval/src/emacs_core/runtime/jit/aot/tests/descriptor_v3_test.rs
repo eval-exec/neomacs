@@ -50,7 +50,8 @@ fn descriptor_v3_round_trips_the_pool_indices() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_pooled_reloc_is_the_pool_element_at_its_index() {
-    let mut eval = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut eval =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let first = Value::string("twin");
     let second = Value::string("twin");
     assert_ne!(first.bits(), second.bits());

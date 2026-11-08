@@ -5,7 +5,8 @@ use neovm_value::value::Value;
 
 #[test]
 fn green_signal_hook_reads_projected_integer_depth_after_admission() {
-    let mut context = Context::new_with_threading(ThreadingMode::Green);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     let result = context.eval_str(
         "(progn
            (setq green-depth-hook-ran nil)
@@ -273,16 +274,18 @@ fn reserve_canonical(mut context: Context, storage: CanonicalDepthStorage, switc
 fn green_signal_reserve_borrows_owner_default_binding_without_watchers() {
     // Native table bootstrap must finish for every Context before the first
     // admission captures those tables for a World.
-    let [bound, canonical]: [Context; 2] =
-        std::array::from_fn(|_| Context::new_with_threading(ThreadingMode::Green));
+    let [bound, canonical]: [Context; 2] = std::array::from_fn(|_| {
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime())
+    });
     reserve_binding(bound, false);
     reserve_canonical(canonical, CanonicalDepthStorage::Forwarded, false);
 }
 
 #[test]
 fn green_signal_reserve_borrows_owner_local_binding_without_watchers() {
-    let [bound, default, local, switched]: [Context; 4] =
-        std::array::from_fn(|_| Context::new_with_threading(ThreadingMode::Green));
+    let [bound, default, local, switched]: [Context; 4] = std::array::from_fn(|_| {
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime())
+    });
     reserve_binding(bound, true);
     reserve_canonical(default, CanonicalDepthStorage::LocalizedDefault, false);
     reserve_canonical(local, CanonicalDepthStorage::LocalizedLocal, false);

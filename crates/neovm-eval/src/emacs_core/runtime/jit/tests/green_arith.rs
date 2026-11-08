@@ -104,7 +104,8 @@ fn exercise(preadmitted: bool, osr: bool) {
     let _scope = scope;
     let _backend = compile::opt_mode_scope_for_test(compile::OptMode::Off);
     let _background = bg::TestModeScope::enter(bg::BgMode::Sync);
-    let mut context = Context::new_with_threading(ThreadingMode::Green);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     context.set_lexical_binding(true);
     context.register_subr(SubrSpec::fixed0(
         "green-arith-native-witness",

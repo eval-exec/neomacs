@@ -19,7 +19,7 @@ enum PendingPolicy {
 
 #[test]
 fn frame_shader_failure_is_visible_without_optional_lisp_library() {
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::emacs_core::Context::new(crate::test_utils::unit_runtime());
     assert!(
         eval.obarray
             .symbol_value_copied("neomacs-frame-shader-error-functions")
@@ -39,7 +39,7 @@ fn frame_shader_failure_is_visible_without_optional_lisp_library() {
 
 #[test]
 fn frame_shader_failure_uses_customizable_hook_when_loaded() {
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::emacs_core::Context::new(crate::test_utils::unit_runtime());
     eval.eval_str(
         r#"(setq neomacs-frame-shader-error-functions
                  (list (lambda (error)

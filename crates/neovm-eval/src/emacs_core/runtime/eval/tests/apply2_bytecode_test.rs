@@ -62,7 +62,7 @@ fn apply2_bytecode_matches_general_apply_for_every_parameter_shape() {
         crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
     crate::test_utils::init_test_tracing();
     for gc_stress in [false, true] {
-        let mut eval = Context::new();
+        let mut eval = Context::new(crate::test_utils::unit_runtime());
         eval.gc_stress = gc_stress;
         let roots = eval.save_vm_roots();
         for (required, optional, rest) in [
@@ -123,7 +123,7 @@ fn apply2_bytecode_matches_general_apply_for_every_parameter_shape() {
 #[test]
 fn apply2_bytecode_unwinds_frame_and_caller_roots_on_signal() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let roots = eval.save_vm_roots();
     let mut function = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
@@ -160,7 +160,7 @@ fn apply2_bytecode_unwinds_frame_and_caller_roots_on_signal() {
 #[test]
 fn apply2_bytecode_probed_stack_keeps_two_arguments_and_balances_depth() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let roots = eval.save_vm_roots();
     let function = Value::make_bytecode(lister(2, 0, false, true));
     eval.push_vm_frame_root(function);
@@ -188,7 +188,7 @@ fn apply2_bytecode_probed_stack_keeps_two_arguments_and_balances_depth() {
 #[test]
 fn apply2_bytecode_preserves_bytecode_read_observation() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let roots = eval.save_vm_roots();
     let function = Value::make_bytecode(lister(2, 0, false, false));
     eval.push_vm_frame_root(function);

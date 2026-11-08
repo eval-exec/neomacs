@@ -6,7 +6,7 @@ use neovm_value::value::Value;
 
 fn check(source: &str, expected: &str) {
     for mode in [TierIMode::Off, TierIMode::On, TierIMode::Verify] {
-        let mut context = Context::new();
+        let mut context = Context::new(crate::test_utils::unit_runtime());
         context.tier_i.set_mode(mode);
         context.tier_i.set_threshold(1);
         let result = context
@@ -18,7 +18,7 @@ fn check(source: &str, expected: &str) {
 
 #[test]
 fn issue554_general_funcall_cold_arm_checks_live_policy() {
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let function = context
         .tagged_heap
         .alloc_symbol_with_pos(Value::symbol("+"), Value::fixnum(0));
@@ -193,7 +193,7 @@ fn issue554_positioned_untraced_function_survives_gc_and_releases_its_root() {
             .map_err(neovm_value::error::flow_from_eval_error)
     }
 
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     context.register_subr(SubrSpec::fixed0("issue554-positioned-gc-callee", collect));
     context.set_variable("symbols-with-pos-enabled", Value::NIL);
     let weak = context

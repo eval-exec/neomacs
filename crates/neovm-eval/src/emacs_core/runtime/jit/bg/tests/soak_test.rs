@@ -194,7 +194,7 @@ fn jit_bg_worker_installs_under_a_collection_per_allocation() {
     force_mode_for_test(Some(BgMode::Threaded));
     force_stress_for_test(Some(true));
     force_deopt_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let mut functions = Vec::new();
     for i in 0..6 {

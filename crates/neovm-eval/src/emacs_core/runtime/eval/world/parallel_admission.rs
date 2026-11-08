@@ -316,7 +316,7 @@ mod heapborrow_tests {
 
     #[test]
     fn heapborrow_r4_serial_recovery_preserves_tls_root() {
-        let mut context = Context::new_minimal_vm_harness();
+        let mut context = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
         // Exercise the production installer and the immediate view-derived
         // allocation that used to invalidate its borrow-derived TLS pointer.
         context.recover_serial_context(true);

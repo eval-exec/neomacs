@@ -65,7 +65,7 @@ fn as_f64(v: Value) -> f64 {
 
 #[test]
 fn a_mir_eligible_float_loop_keeps_the_guard_on_its_cold_add1() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let f = Value::make_bytecode(probe());
     let ValueKind::Symbol(id) = Value::symbol("mir-known-fixnum-float-probe").kind() else {
         panic!("symbol")

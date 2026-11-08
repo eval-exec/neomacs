@@ -23,7 +23,8 @@ fn counts(context: &mut Context) -> SynchronizationCounts {
 }
 
 fn initialized_world() -> Context {
-    let mut context = Context::new_with_threading(ThreadingMode::Sim);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Sim, crate::test_utils::unit_runtime());
     context.gc_stress = false;
     context.gc_collect_exact();
     context.tagged_heap.set_gc_threshold(usize::MAX);

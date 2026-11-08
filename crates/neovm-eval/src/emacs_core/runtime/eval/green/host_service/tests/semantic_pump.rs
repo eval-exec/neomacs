@@ -104,7 +104,8 @@ fn interruption_keeps_claimed_owner_roots(origin: InterruptionOrigin) {
     use crate::host_effect::owner_step::{OwnerStepResult, PendingOwnerStep};
     use neovm_value::value::Value;
 
-    let mut owner = Context::new_with_threading(ThreadingMode::Green);
+    let mut owner =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     let baton = owner.start_green_runtime().unwrap();
     let (key, claim, access) = owner.with_green_runtime(|runtime| {
         let mut roots = runtime.parked.borrow_mut();
@@ -396,7 +397,8 @@ fn late_actor_observation_cannot_reopen_a_native_settled_parent() {
         transport::{CancelReason, NativeSettlement},
     };
     use crate::emacs_core::eval::{Context, ThreadingMode};
-    let mut owner = Context::new_with_threading(ThreadingMode::Green);
+    let mut owner =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     let baton = owner.start_green_runtime().unwrap();
     let key = owner.with_green_runtime(|runtime| {
         let mut roots = runtime.parked.borrow_mut();

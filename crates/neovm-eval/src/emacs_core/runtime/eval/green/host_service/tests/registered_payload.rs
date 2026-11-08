@@ -3,7 +3,8 @@ use crate::emacs_core::eval::{Context, ThreadingMode};
 
 #[test]
 fn mixed_positions_preserve_immediates_aliases_and_symbols() {
-    let _owner = Context::new_with_threading(ThreadingMode::Green);
+    let _owner =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     let object = TaggedValue::string("registered payload alias");
     let symbol = TaggedValue::symbol("registered-payload-symbol");
     let values = [
@@ -45,7 +46,8 @@ fn immediate_only_and_empty_payloads_need_no_traced_words() {
 
 #[test]
 fn mismatched_sizes_are_rejected_before_any_destination_write() {
-    let _owner = Context::new_with_threading(ThreadingMode::Green);
+    let _owner =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     let object = TaggedValue::string("size rejection root");
     let payload = RegisteredPayload::new(&[TaggedValue::fixnum(17), object]);
     let unchanged = [TaggedValue::T; 2];

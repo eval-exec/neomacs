@@ -21,13 +21,13 @@ fn scratch_roots(ctx: &Context) -> Vec<Value> {
 fn gc_scratch_roots_exclude_a_dropped_heap() {
     let saved = save_scratch_gc_roots();
     let old = {
-        let mut ctx = Context::new();
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
         let value = ctx.eval_str("(make-hash-table)").unwrap();
         push_scratch_gc_root(value);
         assert!(scratch_roots(&ctx).contains(&value));
         value
     };
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     // Compare only tagged words. The old Box was freed when its Context died.
     assert!(
         !scratch_roots(&ctx).contains(&old),
@@ -40,11 +40,11 @@ fn gc_scratch_roots_exclude_a_dropped_heap() {
 #[test]
 fn gc_scratch_root_slots_preserve_each_live_heaps_roots() {
     let saved = save_scratch_gc_roots();
-    let mut first = Context::new();
+    let mut first = Context::new(crate::test_utils::unit_runtime());
     let a = first.eval_str("(vector 'first)").unwrap();
     let slot = push_scratch_gc_root_slot(a);
     push_scratch_gc_roots(&[a]);
-    let mut second = Context::new();
+    let mut second = Context::new(crate::test_utils::unit_runtime());
     let b = second.eval_str("(vector 'second)").unwrap();
     push_scratch_gc_roots(&[b]);
     assert_eq!(scratch_roots(&second), vec![b]);
@@ -68,12 +68,12 @@ fn gc_scratch_root_slots_preserve_each_live_heaps_roots() {
 fn gc_scratch_roots_without_an_active_heap_share_only_immediates() {
     let saved = save_scratch_gc_roots();
     let old = {
-        let mut ctx = Context::new();
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
         ctx.eval_str("(make-hash-table)").unwrap()
     };
     assert!(neovm_value::tagged::gc::current_tagged_heap_identity().is_none());
     push_scratch_gc_roots(&[Value::fixnum(7), old]);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let roots = scratch_roots(&ctx);
     assert!(roots.len() == 1 && roots[0] == Value::fixnum(7));
     ctx.gc_collect_exact();
@@ -97,7 +97,7 @@ fn propertized_echo_message(ctx: &mut Context) -> Vec<Value> {
 
 #[test]
 fn gc_preserves_echo_message_interval_plists_without_the_source_string() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let plists = propertized_echo_message(&mut ctx);
     for _ in 0..3 {
         ctx.gc_collect_exact();
@@ -120,7 +120,7 @@ fn gc_preserves_echo_message_interval_plists_without_the_source_string() {
 
 #[test]
 fn gc_preserves_redisplay_message_snapshot_interval_plists() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let plists = propertized_echo_message(&mut ctx);
     let signature = ctx.redisplay_signature();
     ctx.set_current_message(None);
@@ -138,7 +138,7 @@ fn gc_preserves_redisplay_message_snapshot_interval_plists() {
 
 #[test]
 fn gc_preserves_retained_load_name_interval_plists() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let value = ctx
         .eval_str("(propertize \"retained-load.el\" 'face '(load-face))")
         .unwrap();
@@ -172,7 +172,7 @@ fn gc_preserves_retained_load_name_interval_plists() {
 /// collection assertion would test that separate divergence, not this root.
 #[test]
 fn apply_lambda_keeps_a_callable_alive_after_its_cell_is_cleared() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str(
         r#"
 (progn

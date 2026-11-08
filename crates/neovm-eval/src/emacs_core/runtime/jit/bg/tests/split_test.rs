@@ -20,7 +20,7 @@ use neovm_value::value::Value;
 fn corpus_under(mode: BgMode) -> (Vec<String>, Vec<String>) {
     force_mode_for_test(Some(mode));
     force_deopt_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let mut code = Vec::new();
     let clif = captured_clif(|| {
@@ -93,7 +93,7 @@ fn jit_bg_sync_split_is_code_and_clif_identical_to_legacy() {
 fn jit_bg_sync_split_runs_the_corpus() {
     force_mode_for_test(Some(BgMode::Sync));
     force_deopt_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     // (lambda (n) (let ((i 0)) (while (< i n) (setq i (1+ i))) i))
     let (ops, constants, arity) = corpus().swap_remove(3);

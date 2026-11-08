@@ -57,7 +57,7 @@ fn charset_section_mule_order_round_trip_keeps_definition_chronology() {
 #[test]
 fn charset_section_accepts_legacy_and_derives_mule_priority() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let mut registry = overlapping_registry();
     registry.emacs_mule_order_syms = None;
     registry.priority_identity_syms = None;

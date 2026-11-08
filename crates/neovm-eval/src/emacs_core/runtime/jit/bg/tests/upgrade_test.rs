@@ -38,7 +38,7 @@ fn setup() -> Context {
         entry_count: true,
         ..Default::default()
     });
-    Context::new()
+    Context::new(crate::test_utils::unit_runtime())
 }
 
 fn done() {

@@ -374,7 +374,7 @@ fn jit_final_report_collects_named_leaves_from_a_context() {
         naming: false,
         entry_count: true,
     });
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // (defun jit-report-add (x) (+ (identity x) 1)): the Add follows a call,
     // so its guard is a precise deopt at pc 4.
     let mut f = ByteCodeFunction::new(LambdaParams {

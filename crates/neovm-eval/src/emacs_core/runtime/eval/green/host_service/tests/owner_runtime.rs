@@ -392,7 +392,8 @@ fn run_owner_history(history: RequestHistory) {
     crate::test_utils::init_test_tracing();
     #[cfg(feature = "jit")]
     crate::emacs_core::jit::force_jit_off_for_test(true);
-    let mut main = Context::new_with_threading(ThreadingMode::Green);
+    let mut main =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     match history {
         RequestHistory::Uninterrupted => {
             main.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(
@@ -503,7 +504,8 @@ fn real_requester_exit_drives_native_cleanup_before_join_and_quiescent_root_drai
     crate::test_utils::init_test_tracing();
     #[cfg(feature = "jit")]
     crate::emacs_core::jit::force_jit_off_for_test(true);
-    let mut main = Context::new_with_threading(ThreadingMode::Green);
+    let mut main =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     main.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(
         "s2-ended-owner-request",
         requester_ends_with_owned_step
@@ -655,7 +657,8 @@ fn unused_initial_request(context: &mut Context, history: UnusedInitialHistory) 
 fn run_unused_initial_history(history: UnusedInitialHistory) {
     #[cfg(feature = "jit")]
     crate::emacs_core::jit::force_jit_off_for_test(true);
-    let mut main = Context::new_with_threading(ThreadingMode::Green);
+    let mut main =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     match history {
         UnusedInitialHistory::SchedulerClosedBeforeAdmission => {
             main.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(

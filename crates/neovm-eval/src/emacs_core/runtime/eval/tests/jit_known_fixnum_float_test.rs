@@ -76,7 +76,7 @@ fn as_f64(v: Value) -> f64 {
 
 #[test]
 fn a_float_crossing_a_block_edge_into_a_cold_add1_is_not_treated_as_a_fixnum() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // Bind the probe to a symbol: that roots the bytecode object in the
     // obarray for the whole test (same as `jit_leaf_slot`'s `bind_fn`).
     let f = Value::make_bytecode(probe());
@@ -131,7 +131,7 @@ fn a_float_crossing_a_block_edge_into_a_cold_add1_is_not_treated_as_a_fixnum() {
 fn an_osr_entered_float_loop_is_compiled_with_its_numeric_feedback() {
     // The arglist factory allocates conses as well as these float constants.
     // Construct them in the collecting Context's heap, not a fallback heap.
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let roots = ev.save_specpdl_roots();
     let one = Value::make_float(1.0);
     ev.push_specpdl_root(one);

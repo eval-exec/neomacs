@@ -53,7 +53,7 @@ const SHAPES: &[(Shape, &str)] = &[
 ];
 
 fn context(shape: Shape, name: &str, projected: bool) -> Context {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     match shape {
         Shape::Special => eval(&mut ev, &format!("(defvar {name} 5)")),
         Shape::Void => eval(&mut ev, &format!("(defvar {name})")),
@@ -297,7 +297,7 @@ fn projected_variables_behave_as_unprojected() {
 #[test]
 fn projected_set_default_through_alias_notifies_as_unprojected() {
     let run = |projected: bool| {
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         eval(
             &mut ev,
             "(progn (defvar tpx-special 5) (defvar tpx-log nil)

@@ -113,7 +113,7 @@ fn deopt(leaf: &crate::emacs_core::jit::compile::CompiledLeaf, ev: &mut Context)
 #[test]
 fn a_chain_deopt_does_not_leak_into_the_next_single_frame_deopt() {
     force_deopt_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let mut leaf = max_leaf();
     // A real metadata table now backs the synthetic chain id. Its physical
     // frame is the same precise Max snapshot; X12 still tests id 2/reset.
@@ -160,7 +160,7 @@ fn a_chain_deopt_does_not_leak_into_the_next_single_frame_deopt() {
 #[test]
 fn an_ordinary_deopt_reads_the_cells_unset() {
     force_deopt_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let leaf = max_leaf();
     let resume = deopt(&leaf, &mut ev);
     assert_eq!((resume.cause, resume.chain), (None, None));
@@ -175,7 +175,7 @@ fn census() -> [u64; stats::DEOPT_CAUSES] {
 #[test]
 fn note_deopt_prefers_the_stored_cause() {
     force_deopt_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: Vec::new(),

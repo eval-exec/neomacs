@@ -148,7 +148,7 @@ impl Probe {
         force_deopt_for_test(false);
         // The caller is one call and no arithmetic.
         force_profit_gate_for_test(false);
-        let mut ev = Box::new(Context::new());
+        let mut ev = Box::new(Context::new(crate::test_utils::unit_runtime()));
         let sym = install(&mut ev, name, j4_add());
         let caller = caller_of(sym);
         let caller_val = Value::make_bytecode(caller.clone());
@@ -390,7 +390,7 @@ fn stale_leaf_deopt_unlinks_but_does_not_evict_successor() {
 fn closure_instances_share_the_reopt_state() {
     force_deopt_for_test(false);
     force_reopt_for_test(Some(knobs_with_heat(3)));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let f1 = j4_add();
     let f2 = f1.clone(); // shares the Runtime, as make-closure's copy does
@@ -436,7 +436,7 @@ fn closure_instances_share_the_reopt_state() {
 fn aot_prewarmed_source_honours_the_reopt_deferral() {
     force_deopt_for_test(false);
     force_reopt_for_test(Some(knobs_with_heat(1_000)));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let f = j4_add();
     let v = Value::make_bytecode(f.clone());
@@ -579,7 +579,7 @@ fn osr_float_switch_reenters_native() {
     let _native = crate::emacs_core::jit::test_support::AwaitOsrScope::enter();
     force_deopt_for_test(false);
     force_reopt_for_test(Some(knobs_with_heat(5)));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // Short enough that no collection runs: a first-run interpreter result
     // of a float loop this shape is wrong at the base commit too once the
     // first collection runs mid-loop (NEOVM_JIT=0 reproduces it), which is
@@ -643,7 +643,7 @@ fn osr_deopt_without_invalidation_latches() {
         vec![Value::make_int(0)],
         2,
     );
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     crate::emacs_core::jit::force_osr_for_test(true);
     f.jit_runtime().set_hot_for_test();
     crate::emacs_core::jit::test_support::prepare_osr(&mut ev, &f, 2);
@@ -666,7 +666,7 @@ fn osr_deopt_without_invalidation_latches() {
 fn osr_entry_guard_failures_reprofile_after_limit() {
     force_deopt_for_test(false);
     force_reopt_for_test(Some(knobs_with_heat(5)));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     // (lambda (n) (let ((i 0)) (while (< i n) (setq i (1+ i))) i)): `i` is
     // proven fixnum at the header, so the entry guards it.
@@ -740,7 +740,7 @@ fn mir_rerun_learns_or_escalates() {
     );
     force_deopt_for_test(false);
     force_reopt_for_test(Some(knobs_with_heat(5)));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let plus = || {
         function(
             vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return],
@@ -852,7 +852,7 @@ fn inline_epoch_moved_recompiles_once() {
     );
     force_deopt_for_test(false);
     force_reopt_for_test(Some(knobs_with_heat(5)));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     // (defun reopt-sq (x) (* x x))
     let sq = install(
@@ -943,7 +943,7 @@ fn inline_epoch_moved_recompiles_once() {
 fn backoff_climbs_to_generic_then_interpreter() {
     force_deopt_for_test(false);
     force_reopt_for_test(Some(ReoptKnobs::stress()));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     // (lambda (a b c d) (list (* a a) (* b b) (* c c) (* d d)))
     let f = function(
@@ -1061,7 +1061,7 @@ fn bignum_value() -> Value {
 fn stress_with_force_deopt_climbs_and_matches_the_interpreter() {
     force_deopt_for_test(true);
     force_reopt_for_test(Some(ReoptKnobs::stress()));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // An entry leaf through the interpreter's call seam.
     let sym = install(&mut ev, "reopt-stress-add", j4_add());
     let callee = bytecode_of(&ev, sym);

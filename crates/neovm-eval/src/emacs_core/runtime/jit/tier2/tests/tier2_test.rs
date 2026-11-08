@@ -159,7 +159,7 @@ fn tier2_off_leaves_carry_no_countdown() {
         on: false,
         ..knob(2, 64)
     }));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let f = seven();
     for _ in 0..10 {
         assert_eq!(run(&mut ev, &f, &[]), Some(Value::make_int(7)));
@@ -188,7 +188,7 @@ fn tier2_fast_leaf_retiers_at_the_countdown() {
     }
     const WINDOW: u32 = 6;
     force_tier2_for_test(Some(knob(WINDOW, 64)));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let f = seven();
     assert_eq!(run(&mut ev, &f, &[]), Some(Value::make_int(7)));
     let t1 = current(&f);
@@ -250,7 +250,7 @@ fn tier2_spec_reached_leaf_upgrades_and_serves_the_work() {
     force_tier2_for_test(Some(knob(WINDOW, 64)));
     force_profit_gate_for_test(false);
     count_work();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     // Not lexical, so the MIR tier's pure inliner leaves the call a call.
     let mut callee = seven();
     callee.lexical = false;
@@ -385,7 +385,7 @@ fn tier2_loop_credit_requests_inside_one_call_at_the_poll_cadence() {
     const N: i64 = 1_000_000;
     let polls_with = |k: Tier2Knob| {
         force_tier2_for_test(Some(k));
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         let f = countdown_loop();
         reset_bytecode_branch_poll_count();
         assert_eq!(
@@ -441,7 +441,7 @@ fn tier2_loop_credit_requests_at_the_expected_tick() {
         floor_ms: 5,
         max_reopt: 3,
     }));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let f = countdown_loop();
     assert_eq!(
         run(&mut ev, &f, &[Value::make_int(1_000_000)]),
@@ -465,7 +465,7 @@ fn tier2_mapping_builtin_credits_its_sequence() {
     force_profit_gate_for_test(false);
     let requested_with = |k: Tier2Knob| {
         force_tier2_for_test(Some(k));
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         // (lambda (f l) (mapc f l))
         let caller = lexical_fn(
             2,

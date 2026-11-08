@@ -42,7 +42,7 @@ fn jit_bg_queue_serves_classes_in_priority_order() {
     // The worker's OSR path is under test, whatever the leaf's size.
     force_inline_insts_for_test(Some(0));
     force_deopt_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let _ = take_served_for_test();
     let (e1, s1, e2, s2) = (add1(), add1(), add1(), add1());
@@ -100,7 +100,7 @@ fn jit_bg_full_queue_refuses_and_drops_the_lowest_class_newest() {
     force_mode_for_test(Some(BgMode::Threaded));
     force_queue_cap_for_test(Some(2));
     force_deopt_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let _ = take_served_for_test();
     let (e1, e2, e3, s1) = (add1(), add1(), add1(), add1());

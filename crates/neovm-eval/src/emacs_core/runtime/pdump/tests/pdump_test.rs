@@ -586,7 +586,7 @@ fn test_failed_load_after_symbol_table_leaves_interner_usable() {
     // LEAKED so the `borrowed_alias` name keys keep valid bytes (see
     // `load_from_dump`'s error arm) — and (c) leave the thread-local load
     // remaps cleared so a follow-up load of a good file succeeds.
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str("(defvar pdleak-canary-var 7)")
         .expect("defvar should evaluate");
     let dir = tempfile::tempdir().unwrap();

@@ -130,7 +130,7 @@ impl Fixture {
         bg::hold_publish_for_test(false);
         let _ = bg::publish_held_for_test();
 
-        let mut ctx = Context::new_minimal_vm_harness();
+        let mut ctx = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
         let (body, answer) = build(&mut ctx);
         let hash = aot::leaf_content_hash(body.executable_ops(), &body.constants, 1)
             .expect("hashable AOT member");

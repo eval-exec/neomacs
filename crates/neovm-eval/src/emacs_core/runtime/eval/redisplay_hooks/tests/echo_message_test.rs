@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 fn fixture() -> (Context, FrameId, WindowId, Rc<Cell<f32>>, Rc<Cell<usize>>) {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.set_variable("noninteractive", Value::NIL);
     let buffer = eval.buffers.current_buffer_id().expect("root buffer");
     let frame = eval.frames.create_frame("message-mini", 80, 25, buffer);

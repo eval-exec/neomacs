@@ -100,7 +100,10 @@ fn thread_current_buffer_survives_gc_through_registry_seed() {
 /// remembered log and allocation debt must also remain unchanged.
 #[test]
 fn p15_native_thread_updates_do_not_record_lisp_writes() {
-    let mut ctx = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    let mut ctx = Context::new_with_threading(
+        super::super::eval::ThreadingMode::Sim,
+        crate::test_utils::unit_runtime(),
+    );
     ctx.gc_collect_exact();
     let buffer = ctx.buffers.create_buffer("p15-native-state");
     let child = Value::vector(vec![Value::fixnum(25)]);
@@ -1125,7 +1128,7 @@ fn test_builtin_thread_signal_preserves_raw_symbol_identity_through_join() {
 /// thread object even after exit; Fthread_join:1135-1143 re-raises that error.
 /// A retained joined thread must not need a live native registration to signal.
 fn signal_joined_terminal_thread(mode: super::super::eval::ThreadingMode) {
-    let mut eval = Context::new_with_threading(mode);
+    let mut eval = Context::new_with_threading(mode, crate::test_utils::unit_runtime());
     let thread = eval
         .eval_str("(setq p15-signal-retained-thread (make-thread (lambda () 42)))")
         .unwrap();
@@ -1906,7 +1909,10 @@ fn sim_thread_creation_preserves_exchanged_locals_until_remake() {
             r##"((bound (exchange-bound default remade) bound) local t)"##,
         ),
     ] {
-        let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+        let mut eval = Context::new_with_threading(
+            super::super::eval::ThreadingMode::Sim,
+            crate::test_utils::unit_runtime(),
+        );
         let result = eval
             .eval_str(form)
             .expect("caller remakes its local after creation");
@@ -1917,7 +1923,10 @@ fn sim_thread_creation_preserves_exchanged_locals_until_remake() {
 #[test]
 fn sim_thread_creation_roots_the_preserved_local_values() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    let mut eval = Context::new_with_threading(
+        super::super::eval::ThreadingMode::Sim,
+        crate::test_utils::unit_runtime(),
+    );
     let result = eval.eval_str(r##"(progn
   (defvar g3e-local 'default)
   (fset 'g3e-local-probe
@@ -1941,7 +1950,10 @@ fn sim_thread_creation_roots_the_preserved_local_values() {
 #[test]
 fn failed_sim_thread_creation_preserves_an_absent_local_entry() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    let mut eval = Context::new_with_threading(
+        super::super::eval::ThreadingMode::Sim,
+        crate::test_utils::unit_runtime(),
+    );
     let depth = eval.specpdl.len();
     let forwarded = neovm_value::intern::intern("undo-limit");
     let outer_default = super::super::data::default_value_by_id(&eval, forwarded)
@@ -1999,7 +2011,10 @@ fn failed_sim_thread_creation_preserves_an_absent_local_entry() {
 /// the thread-object owner (P15).
 #[test]
 fn finished_threads_are_removed_from_the_registry() {
-    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    let mut eval = Context::new_with_threading(
+        super::super::eval::ThreadingMode::Sim,
+        crate::test_utils::unit_runtime(),
+    );
     let cycle = "(progn (thread-join (make-thread (lambda () nil))) nil)";
     for _ in 0..20 {
         eval.eval_str(cycle)
@@ -2027,7 +2042,10 @@ fn finished_threads_are_removed_from_the_registry() {
 /// retirement alone is insufficient: the heap-visible objects must die too.
 #[test]
 fn p15_gc_finished_thread_objects_are_reclaimed() {
-    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    let mut eval = Context::new_with_threading(
+        super::super::eval::ThreadingMode::Sim,
+        crate::test_utils::unit_runtime(),
+    );
     let cycle = "(progn (thread-join (make-thread (lambda () nil))) nil)";
     for _ in 0..20 {
         eval.eval_str(cycle)
@@ -2078,7 +2096,10 @@ fn threading_object_count(eval: &mut Context, kind: ThreadingKind) -> ThreadingO
 /// The existing P11 soak reuses mutexes, so it cannot detect this leak.
 #[test]
 fn p15_gc_dropped_mutex_objects_are_reclaimed() {
-    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    let mut eval = Context::new_with_threading(
+        super::super::eval::ThreadingMode::Sim,
+        crate::test_utils::unit_runtime(),
+    );
     eval.gc_collect_exact();
     let before = threading_object_count(&mut eval, ThreadingKind::Mutex);
     for _ in 0..64 {
@@ -2099,7 +2120,10 @@ fn p15_gc_dropped_mutex_objects_are_reclaimed() {
 /// src/alloc.c:3127-3132,3270-3285. No thread is created in this churn row.
 #[test]
 fn p15_gc_dropped_condvar_and_mutex_objects_are_reclaimed() {
-    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    let mut eval = Context::new_with_threading(
+        super::super::eval::ThreadingMode::Sim,
+        crate::test_utils::unit_runtime(),
+    );
     eval.gc_collect_exact();
     let before = (
         threading_object_count(&mut eval, ThreadingKind::CondVar),
@@ -2126,7 +2150,10 @@ fn p15_gc_dropped_condvar_and_mutex_objects_are_reclaimed() {
 /// finished object must not depend on a permanent native registry entry.
 #[test]
 fn p15_gc_reachable_finished_thread_preserves_name_and_result() {
-    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    let mut eval = Context::new_with_threading(
+        super::super::eval::ThreadingMode::Sim,
+        crate::test_utils::unit_runtime(),
+    );
     let result = eval.eval_str(
         "(progn (setq p15-retained-thread (make-thread (lambda () (vector 17 23)) (copy-sequence \"retained\"))) (thread-join p15-retained-thread))",
     ).expect("join a retained thread");
@@ -2170,7 +2197,10 @@ fn p15_gc_reachable_finished_thread_preserves_name_and_result() {
 /// (src/thread.h:293-297), even when no separate mutex variable remains.
 #[test]
 fn p15_gc_condition_variable_is_the_only_mutex_edge() {
-    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    let mut eval = Context::new_with_threading(
+        super::super::eval::ThreadingMode::Sim,
+        crate::test_utils::unit_runtime(),
+    );
     let condition = eval
         .eval_str("(setq p15-retained-condition (make-condition-variable (make-mutex)))")
         .expect("retain only the condition variable");
@@ -2199,7 +2229,10 @@ fn p15_gc_condition_variable_is_the_only_mutex_edge() {
 #[test]
 fn p15_gc_thread_payload_fields_have_only_object_edges() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    let mut eval = Context::new_with_threading(
+        super::super::eval::ThreadingMode::Sim,
+        crate::test_utils::unit_runtime(),
+    );
     eval.gc_stress = false;
     eval.gc_collect_exact();
     eval.tagged_heap.set_gc_threshold(usize::MAX);
@@ -2283,7 +2316,10 @@ fn p15_gc_thread_payload_fields_have_only_object_edges() {
 #[test]
 fn p15_gc_old_thread_payload_remembers_young_children() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    let mut eval = Context::new_with_threading(
+        super::super::eval::ThreadingMode::Sim,
+        crate::test_utils::unit_runtime(),
+    );
     eval.gc_stress = false;
     eval.gc_collect_exact();
     eval.tagged_heap.set_gc_threshold(usize::MAX);
@@ -2375,7 +2411,10 @@ fn p15_external_root_words(context: &Context) -> Vec<Value> {
 
 #[test]
 fn p15_gc_unjoined_sim_completions_return_exactly_to_baseline() {
-    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    let mut eval = Context::new_with_threading(
+        super::super::eval::ThreadingMode::Sim,
+        crate::test_utils::unit_runtime(),
+    );
     eval.gc_collect_exact();
     let before = threading_object_count(&mut eval, ThreadingKind::Thread);
     assert_eq!(before, ThreadingObjectCount(1));
@@ -2412,7 +2451,10 @@ fn p15_gc_unjoined_sim_completions_return_exactly_to_baseline() {
 /// the product handoff under test, not a retry/poll or serialized creation.
 #[test]
 fn p15_gc_unjoined_green_bursts_return_exactly_to_baseline() {
-    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Green);
+    let mut eval = Context::new_with_threading(
+        super::super::eval::ThreadingMode::Green,
+        crate::test_utils::unit_runtime(),
+    );
     eval.start_green_threads()
         .expect("initialize Green infrastructure before baseline");
     eval.eval_str("(setq p15-unjoined-completed 0)").unwrap();
@@ -2457,7 +2499,10 @@ fn p15_gc_unjoined_green_bursts_return_exactly_to_baseline() {
 /// remain in the target's error fields for thread-join (:985-991,1135-1143).
 #[test]
 fn p15_worker_signals_never_queue_native_transport() {
-    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    let mut eval = Context::new_with_threading(
+        super::super::eval::ThreadingMode::Sim,
+        crate::test_utils::unit_runtime(),
+    );
     let native = eval.threads.create_thread(Value::NIL, ThreadName::UNNAMED);
     let worker = eval.threads.thread_handle(native).unwrap();
     let id = eval.threads.get_thread(native).unwrap().id();
@@ -2500,7 +2545,10 @@ fn p15_worker_signals_never_queue_native_transport() {
 /// but must not clear ordinary stored children of a still-referenced handle.
 #[test]
 fn p15_stored_worker_event_survives_completion_without_external_leases() {
-    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    let mut eval = Context::new_with_threading(
+        super::super::eval::ThreadingMode::Sim,
+        crate::test_utils::unit_runtime(),
+    );
     let native = eval.threads.create_thread(Value::NIL, ThreadName::UNNAMED);
     let worker = eval.threads.thread_handle(native).unwrap();
     let id = eval.threads.get_thread(native).unwrap().id();

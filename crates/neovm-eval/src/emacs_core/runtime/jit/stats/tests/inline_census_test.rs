@@ -26,7 +26,7 @@ fn function(required: usize, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFun
 /// feedback, source identities, or assigning compiled-cache ids.
 #[test]
 fn inline_census_classifies_sites_without_mutating_sources() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let callee = function(1, vec![Op::StackRef(0), Op::Return], vec![]);
     callee.jit_runtime().set_hot_for_test();
     let target = Value::make_bytecode(callee);
@@ -69,7 +69,7 @@ fn inline_census_classifies_sites_without_mutating_sources() {
 /// the straight-line bytecode into mapc's callback argument.
 #[test]
 fn inline_census_recognizes_an_in_unit_map_closure() {
-    let ev = Context::new();
+    let ev = Context::new(crate::test_utils::unit_runtime());
     let template = function(1, vec![Op::StackRef(0), Op::Return], vec![]);
     template.jit_runtime().set_hot_for_test();
     let target = Value::make_bytecode(template);
@@ -106,7 +106,7 @@ fn inline_census_recognizes_an_in_unit_map_closure() {
 /// target count once enabled, with startup excluded by the loop mark.
 #[test]
 fn inline_census_callbacks_are_opt_in_and_share_source_identity() {
-    let _ev = Context::new();
+    let _ev = Context::new(crate::test_utils::unit_runtime());
     let f = function(1, vec![Op::StackRef(0), Op::Return], vec![]);
     let source = f.source_id;
     let instance = Value::make_bytecode(f.clone());
@@ -140,7 +140,7 @@ fn inline_census_callbacks_are_opt_in_and_share_source_identity() {
 #[test]
 fn inline_census_callback_entries_include_quit_and_depth_refusals() {
     FORCE_ENABLED.with(|on| on.set(Some(true)));
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let _roots = ev.save_vm_roots();
     let f = function(1, vec![Op::StackRef(0), Op::Return], vec![]);
     let source = f.source_id;
@@ -181,7 +181,7 @@ fn inline_census_callback_entries_include_quit_and_depth_refusals() {
 /// refusal keeps the source out of the compiled-leaf candidate totals.
 #[test]
 fn inline_census_refreshes_verdicts_and_records_compile_refusals() {
-    let ev = Context::new();
+    let ev = Context::new(crate::test_utils::unit_runtime());
     let target = Value::make_bytecode(function(1, vec![Op::StackRef(0), Op::Return], vec![]));
     let caller = function(
         1,

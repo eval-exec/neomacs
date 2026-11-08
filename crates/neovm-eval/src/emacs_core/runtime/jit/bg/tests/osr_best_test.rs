@@ -38,7 +38,7 @@ fn jit_bg_osr_uses_full_feedback_backend_without_a_countdown() {
         knob.on = on;
         knob.window = 1;
         force_tier2_for_test(Some(knob));
-        let mut ctx = Context::new();
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
         let callback =
             Value::make_bytecode(function(vec![Op::StackRef(0), Op::Return], Vec::new(), 1));
         // (lambda (f n) (let ((i 0)) (while (< i n) (funcall f i)

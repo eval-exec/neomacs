@@ -98,7 +98,7 @@ fn eval(ev: &mut Context, src: &str) -> String {
 
 #[test]
 fn a_plain_special_takes_the_fast_path_and_is_set() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     eval(&mut ev, "(defvar vfp-plain 0)");
     let sym = Value::symbol("vfp-plain");
     assert!(
@@ -153,7 +153,7 @@ fn a_plain_special_takes_the_fast_path_and_is_set() {
 
 #[test]
 fn constants_keep_the_setting_constant_rule() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     for &engine in ENGINES {
         assert_eq!(
             run_setq(&mut ev, engine, Value::NIL, Value::make_int(1)),
@@ -196,7 +196,7 @@ fn constants_keep_the_setting_constant_rule() {
 
 #[test]
 fn watchers_aliases_and_buffer_locals_keep_the_general_path() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     eval(
         &mut ev,
         "(progn
@@ -266,7 +266,7 @@ fn watchers_aliases_and_buffer_locals_keep_the_general_path() {
 
 #[test]
 fn host_projected_variables_are_still_republished() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     for &engine in ENGINES {
         // The cached quit state.
         assert_eq!(

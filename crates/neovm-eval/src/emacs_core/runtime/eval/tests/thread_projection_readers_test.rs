@@ -29,7 +29,7 @@ const SHAPES: &[(&str, &str)] = &[
 
 fn fixture() -> Context {
     use crate::emacs_core::defvar_bool::ByteBooleanVars;
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.obarray.intern("tpr-obj");
     ev.obarray
         .install_objfwd(intern("tpr-obj"), alloc_objfwd(Value::fixnum(4343)));

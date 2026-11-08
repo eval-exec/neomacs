@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 fn chrome_context(name: &'static str) -> (Context, Rc<RefCell<Vec<String>>>) {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.current_buffer_id().expect("current buffer");
     eval.frames
         .create_frame("specpdl-chrome", 80 * 8, 24 * 16, buffer);
@@ -99,7 +99,7 @@ fn non_chrome_local_bindings_do_not_publish_chrome() {
         ("fill-column", false),
         ("ttykey-local-control", false),
     ] {
-        let mut eval = Context::new();
+        let mut eval = Context::new(crate::test_utils::unit_runtime());
         eval.eval_str(&format!("(set (make-local-variable '{name}) 8)"))
             .expect("initial local value");
         let sym = intern(name);

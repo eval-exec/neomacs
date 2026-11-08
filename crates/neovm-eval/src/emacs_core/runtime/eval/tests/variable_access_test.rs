@@ -18,7 +18,7 @@ fn eval(ev: &mut Context, src: &str) -> String {
 }
 
 fn context(projected: bool) -> Context {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     eval(
         &mut ev,
         "(progn (defvar tva-v 5)

@@ -130,7 +130,7 @@ fn spec(kind: SpecRevalidation) -> u64 {
 #[test]
 fn jit_bg_redefined_spec_callee_takes_effect_after_install() {
     deferred_held();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let (g, g_id) = sym("jit-bg-t-i1-g");
     ev.obarray
@@ -155,7 +155,7 @@ fn jit_bg_redefined_spec_callee_takes_effect_after_install() {
 #[test]
 fn jit_bg_install_restamps_a_spec_slot_whose_binding_held() {
     deferred_held();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let (g, g_id) = sym("jit-bg-restamp-g");
     let (_, h_id) = sym("jit-bg-restamp-unrelated");
@@ -195,7 +195,7 @@ fn jit_bg_redefined_inlined_callee_supersedes_the_pending_compile() {
         crate::emacs_core::jit::compile::OptMode::Legacy,
     );
     deferred_held();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let (sq, sq_id) = sym("jit-bg-t-i2-sq");
     ev.obarray
@@ -249,7 +249,7 @@ fn jit_bg_moved_epoch_discards_a_guarded_inline_leaf_twice_then_compiles_in_line
         crate::emacs_core::jit::compile::OptMode::Legacy,
     );
     deferred_held();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let (sq, sq_id) = sym("jit-bg-t-i3-sq");
     let (g, g_id) = sym("jit-bg-t-i3-g");
@@ -318,7 +318,7 @@ fn jit_bg_moved_epoch_discards_a_guarded_inline_leaf_twice_then_compiles_in_line
 #[test]
 fn jit_bg_a_replaced_heap_never_installs_a_pending_leaf() {
     deferred_held();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let f = bytecode(
         1,
@@ -332,7 +332,7 @@ fn jit_bg_a_replaced_heap_never_installs_a_pending_leaf() {
             + s.discarded[DiscardReason::Superseded as usize]
     };
     let before = gone(&stats_snapshot());
-    let replacement = Context::new();
+    let replacement = Context::new(crate::test_utils::unit_runtime());
     assert_ne!(
         neovm_value::tagged::gc::current_tagged_heap_identity(),
         None,

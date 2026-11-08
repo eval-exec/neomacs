@@ -25,7 +25,7 @@ fn gc_context_shutdown_finalizes_native_resources_once_on_owner() {
         owner: std::thread::current().id(),
         ran_on_owner: AtomicBool::new(false),
     };
-    let mut context = Box::new(Context::new());
+    let mut context = Box::new(Context::new(crate::test_utils::unit_runtime()));
     context.setup_thread_locals();
     let data = std::ptr::from_ref(&probe).cast_mut().cast();
     context

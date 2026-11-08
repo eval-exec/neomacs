@@ -4,13 +4,13 @@ use super::*;
 fn storefast_world_certificate_survives_another_worlds_journal_wrap() {
     use neovm_value::tagged::collection_reads::capture;
 
-    let mut first = Context::new();
+    let mut first = Context::new(crate::test_utils::unit_runtime());
     let source = Value::cons(Value::NIL, Value::NIL);
     first.set_variable("storefast-source", source);
     let (_, certificate) = capture(|| source.cons_car());
     let certificate = certificate.expect("a stable source can be certified");
 
-    let mut second = Context::new();
+    let mut second = Context::new(crate::test_utils::unit_runtime());
     assert!(
         certificate.unchanged(),
         "validation uses its originating World's sequence space"
@@ -39,12 +39,12 @@ fn storefast_world_certificate_survives_another_worlds_journal_wrap() {
 fn storefast_world_capture_rejects_a_local_world_switch_without_stranding_its_guard() {
     use neovm_value::tagged::collection_reads::capture;
 
-    let mut first = Context::new();
+    let mut first = Context::new(crate::test_utils::unit_runtime());
     let source = Value::cons(Value::NIL, Value::NIL);
     first.set_variable("storefast-source", source);
     let (_, certificate) = capture(|| {
         source.cons_car();
-        let mut second = Context::new();
+        let mut second = Context::new(crate::test_utils::unit_runtime());
         let second_source = Value::cons(Value::NIL, Value::NIL);
         let (_, local) = capture(|| second_source.cons_car());
         assert!(local.unwrap().unchanged());
@@ -60,10 +60,10 @@ fn storefast_world_capture_rejects_a_local_world_switch_without_stranding_its_gu
 fn storefast_world_capture_rejects_foreign_reads_after_return_to_its_owner() {
     use neovm_value::tagged::collection_reads::capture;
 
-    let mut first = Context::new();
+    let mut first = Context::new(crate::test_utils::unit_runtime());
     let first_source = Value::cons(Value::NIL, Value::NIL);
     first.set_variable("storefast-source", first_source);
-    let mut second = Context::new();
+    let mut second = Context::new(crate::test_utils::unit_runtime());
     let second_source = Value::cons(Value::NIL, Value::NIL);
     second.set_variable("storefast-source", second_source);
 
@@ -84,8 +84,8 @@ fn storefast_world_capture_rejects_foreign_reads_after_return_to_its_owner() {
 
 #[test]
 fn gc_tls_ownership_exact_collection_uses_the_collecting_heap() {
-    let mut first = Context::new();
-    let mut second = Context::new();
+    let mut first = Context::new(crate::test_utils::unit_runtime());
+    let mut second = Context::new(crate::test_utils::unit_runtime());
     // Deliberately leave the second allocation heap installed. This exercises
     // the real collector rather than prechecking a side-table root vector.
     first.gc_collect_exact();
@@ -97,8 +97,8 @@ fn gc_tls_ownership_exact_collection_uses_the_collecting_heap() {
 
 #[test]
 fn gc_tls_ownership_safe_point_uses_the_collecting_heap() {
-    let mut first = Context::new();
-    let mut second = Context::new();
+    let mut first = Context::new(crate::test_utils::unit_runtime());
+    let mut second = Context::new(crate::test_utils::unit_runtime());
     first.gc_collect_from_current_roots();
     second.gc_collect_from_current_roots();
 }
@@ -107,7 +107,7 @@ fn gc_tls_ownership_safe_point_uses_the_collecting_heap() {
 fn gc_tls_ownership_semantic_registries_have_independent_thread_owners() {
     let (send, receive) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
-        let mut first = Context::new();
+        let mut first = Context::new(crate::test_utils::unit_runtime());
         first
             .eval_str("(register-ccl-program 'gc-tls-worker-program [0 0 0])")
             .unwrap();
@@ -117,7 +117,7 @@ fn gc_tls_ownership_semantic_registries_have_independent_thread_owners() {
         ));
         first.gc_collect_exact();
     });
-    let mut second = Context::new();
+    let mut second = Context::new(crate::test_utils::unit_runtime());
     send.send(()).unwrap();
     second.gc_collect_exact();
     worker.join().unwrap();
@@ -127,11 +127,11 @@ fn gc_tls_ownership_semantic_registries_have_independent_thread_owners() {
 }
 
 fn registered_public_entry_contexts() -> (Context, Context) {
-    let mut first = Context::new();
+    let mut first = Context::new(crate::test_utils::unit_runtime());
     first
         .eval_str("(register-ccl-program 'gc-tls-public-first [0 0 0])")
         .unwrap();
-    let mut second = Context::new();
+    let mut second = Context::new(crate::test_utils::unit_runtime());
     second
         .eval_str("(register-ccl-program 'gc-tls-public-second [0 0 0])")
         .unwrap();
@@ -186,14 +186,14 @@ fn gc_tls_ownership_eval_str_activates_its_context_registries() {
 
 #[test]
 fn gc_tls_ownership_eval_form_activates_its_context_registries() {
-    let mut first = Context::new();
+    let mut first = Context::new(crate::test_utils::unit_runtime());
     first
         .eval_str("(register-ccl-program 'gc-tls-public-first [0 0 0])")
         .unwrap();
     let form = first
         .eval_str("'(ccl-program-p 'gc-tls-public-first)")
         .unwrap();
-    let mut second = Context::new();
+    let mut second = Context::new(crate::test_utils::unit_runtime());
     second
         .eval_str("(register-ccl-program 'gc-tls-public-second [0 0 0])")
         .unwrap();
@@ -218,14 +218,14 @@ fn gc_tls_ownership_eval_form_activates_its_context_registries() {
 
 #[test]
 fn gc_tls_ownership_eval_value_activates_its_context_registries() {
-    let mut first = Context::new();
+    let mut first = Context::new(crate::test_utils::unit_runtime());
     first
         .eval_str("(register-ccl-program 'gc-tls-public-first [0 0 0])")
         .unwrap();
     let form = first
         .eval_str("'(ccl-program-p 'gc-tls-public-first)")
         .unwrap();
-    let mut second = Context::new();
+    let mut second = Context::new(crate::test_utils::unit_runtime());
     second
         .eval_str("(register-ccl-program 'gc-tls-public-second [0 0 0])")
         .unwrap();

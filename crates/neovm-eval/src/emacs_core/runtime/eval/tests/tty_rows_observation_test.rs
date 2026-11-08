@@ -26,7 +26,7 @@ fn tty_config() -> TerminalRuntimeConfig {
 }
 
 fn ready() -> (Context, FrameId, RestoreTerminal) {
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     let restore = RestoreTerminal;
     context.gc_stress = false;
     // These receipts require GEN1, independently of the test runner's policy.

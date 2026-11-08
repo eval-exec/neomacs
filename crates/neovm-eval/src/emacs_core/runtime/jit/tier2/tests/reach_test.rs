@@ -43,7 +43,7 @@ fn tier2_recursive_spec_reached_leaf_serves_over_ninety_percent() {
         entry_count: true,
         ..Default::default()
     });
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let name = intern("neovm--t2-x7-self-fib");
     // (lambda (n) (if (< n 2) n
     //               (+ (neovm--t2-x7-self-fib (1- n))

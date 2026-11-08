@@ -470,7 +470,8 @@ fn main_owner() -> Context {
     crate::test_utils::init_test_tracing();
     #[cfg(feature = "jit")]
     crate::emacs_core::jit::force_jit_off_for_test(true);
-    let mut owner = Context::new_with_threading(ThreadingMode::Green);
+    let mut owner =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     owner.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(
         "s2-local-immediate",
         local_immediate,

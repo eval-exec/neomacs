@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn context_collection_retains_obarray_seed_capacity_without_values() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let required = {
         let mut roots = Vec::new();
         ctx.obarray.trace_roots(&mut roots);

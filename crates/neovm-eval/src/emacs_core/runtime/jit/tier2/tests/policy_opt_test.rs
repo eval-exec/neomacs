@@ -104,7 +104,7 @@ fn policy_fixture(ops_len: usize) -> (ByteCodeFunction, CompiledLeaf) {
 #[test]
 fn tier2_opt_compact_helper_still_requires_stable_feedback() {
     let _settings = Settings::enter(OptMode::Opt);
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let (f, leaf) = policy_fixture(47);
     force_opt_for_test(Some(OptMode::Opt), None);
     assert_eq!(decide(&leaf), T2Decision::Keep);
@@ -123,7 +123,7 @@ fn tier2_opt_compact_helper_still_requires_stable_feedback() {
 #[test]
 fn tier2_opt_compact_helper_admission_is_bounded_at_sixty_four_ops() {
     let _settings = Settings::enter(OptMode::Opt);
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     for (ops_len, expected) in [
         (0, T2Decision::Keep),
         (64, T2Decision::Upgrade(T2Upgrade::Feedback)),
@@ -140,7 +140,7 @@ fn tier2_opt_compact_helper_admission_is_bounded_at_sixty_four_ops() {
 #[test]
 fn tier2_opt_compact_helper_off_and_legacy_keep_the_old_worth_policy() {
     let _settings = Settings::enter(OptMode::Off);
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     for mode in [OptMode::Off, OptMode::Legacy] {
         let (f, leaf) = policy_fixture(47);
         force_opt_for_test(Some(mode), None);
@@ -156,7 +156,7 @@ fn tier2_opt_compact_helper_off_and_legacy_keep_the_old_worth_policy() {
 #[test]
 fn tier2_opt_compact_helper_respects_the_persistent_reopt_ban() {
     let _settings = Settings::enter(OptMode::Opt);
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let (f, leaf) = policy_fixture(47);
     force_opt_for_test(Some(OptMode::Opt), None);
     f.jit_runtime()
@@ -172,7 +172,7 @@ fn tier2_opt_compact_helper_respects_the_persistent_reopt_ban() {
 #[test]
 fn tier2_opt_compact_helper_respects_the_compile_cpu_budget() {
     let _settings = Settings::enter(OptMode::Opt);
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let (f, leaf) = policy_fixture(47);
     force_opt_for_test(Some(OptMode::Opt), None);
     force_tier2_policy_for_test(Some(Tier2PolicyKnob {
@@ -194,7 +194,7 @@ fn tier2_opt_compact_helper_respects_the_compile_cpu_budget() {
 #[test]
 fn tier2_opt_budget_estimates_from_measured_cpu_not_wall_stall() {
     let _settings = Settings::enter(OptMode::Opt);
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let (f, leaf) = policy_fixture(47);
     force_opt_for_test(Some(OptMode::Opt), None);
     // The 1 ms floor keeps this assertion independent of the thread CPU clock;
@@ -220,7 +220,7 @@ fn tier2_opt_budget_estimates_from_measured_cpu_not_wall_stall() {
 #[test]
 fn tier2_opt_budget_denies_the_measured_cpu_ceiling() {
     let _settings = Settings::enter(OptMode::Opt);
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let (f, leaf) = policy_fixture(47);
     force_opt_for_test(Some(OptMode::Opt), None);
     force_tier2_policy_for_test(Some(Tier2PolicyKnob {
@@ -242,7 +242,7 @@ fn tier2_opt_budget_denies_the_measured_cpu_ceiling() {
 fn tier2_opt_compact_builtin_helper_serves_native_spec_calls() {
     const CALLS: u64 = 400;
     let _settings = Settings::enter(OptMode::Opt);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     // A statically named builtin does not supply dynamic call-target credit.
     let helper = function(
         vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return],
@@ -314,7 +314,7 @@ fn tier2_opt_budget_denial_retries_native_helper_after_stable_windows() {
     const DENIED_CALLS: u64 = 40;
     const SERVED_CALLS: u64 = 400;
     let _settings = Settings::enter(OptMode::Opt);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let helper = function(
         vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return],
         vec![Value::from_sym_id(intern("length"))],
@@ -449,7 +449,7 @@ fn tier2_opt_budget_wait_freezes_use_feedback_and_reopens_a_fresh_window() {
     const SERVED_CALLS: u64 = 400;
     let _settings = Settings::enter(OptMode::Opt);
     force_feedback_mode_for_test(Some(FeedbackMode::Use));
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let length = intern("length");
     let alternative = intern("neovm--t2-budget-wait-length-alternative");
     let alternative_function = Value::make_bytecode(function(
@@ -619,7 +619,7 @@ fn tier2_opt_budget_wait_freezes_use_feedback_and_reopens_a_fresh_window() {
 #[test]
 fn tier2_opt_compile_seam_denial_preserves_t1_and_reopens_sampling() {
     let _settings = Settings::enter(OptMode::Opt);
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     let (f, leaf) = policy_fixture(47);
     force_opt_for_test(Some(OptMode::Opt), None);
     assert_eq!(request_decision(&leaf, f.jit_runtime()), None);
@@ -659,7 +659,7 @@ fn tier2_opt_compile_seam_denial_preserves_t1_and_reopens_sampling() {
 #[test]
 fn tier2_opt_budget_wait_keeps_main_legacy_compile_seam_policy() {
     let _settings = Settings::enter(OptMode::Off);
-    let _ctx = Context::new();
+    let _ctx = Context::new(crate::test_utils::unit_runtime());
     for mode in [OptMode::Off, OptMode::Legacy] {
         let (f, leaf) = policy_fixture(47);
         force_opt_for_test(Some(mode), None);

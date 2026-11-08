@@ -69,7 +69,10 @@ fn two_worlds_on_one_thread_collect_while_both_mark() {
     within_timeout(|| {
         #[cfg(debug_assertions)]
         neovm_value::test_support::authority::set_verify_marked_objects_for_test(true);
-        let mut worlds = [Context::new(), Context::new()];
+        let mut worlds = [
+            Context::new(crate::test_utils::unit_runtime()),
+            Context::new(crate::test_utils::unit_runtime()),
+        ];
         for ev in &mut worlds {
             let kept = eval(ev, KEEP);
             assert!(!kept.starts_with("ERR"), "{kept}");
@@ -129,7 +132,10 @@ enum MarkerJoin {
 
 fn forced_collection_after_two_world_marks(join: MarkerJoin) {
     use neovm_value::tagged::gc::MarkPhase;
-    let mut worlds = [Context::new(), Context::new()];
+    let mut worlds = [
+        Context::new(crate::test_utils::unit_runtime()),
+        Context::new(crate::test_utils::unit_runtime()),
+    ];
     for ev in &mut worlds {
         start_mark_without_safe_points(ev);
     }
@@ -216,7 +222,7 @@ fn await_collector_threads(expected: usize, limit: Duration) {
 #[test]
 fn dropping_a_world_joins_its_collector() {
     let before = collector_threads();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.gc_collect_from_current_roots_impl(true);
     let heap = ev.tagged_heap.heap_identity();
     assert!(neovm_value::tagged::gc::collector_is_registered(heap));
@@ -231,7 +237,7 @@ fn dropping_a_world_joins_its_collector() {
 fn a_world_dropped_mid_mark_detaches_a_collector_that_then_exits() {
     within_timeout(|| {
         let before = collector_threads();
-        let mut ev = Context::new();
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
         launch_concurrent_mark(&mut ev);
         let heap = ev.tagged_heap.heap_identity();
         assert!(neovm_value::tagged::gc::collector_is_registered(heap));

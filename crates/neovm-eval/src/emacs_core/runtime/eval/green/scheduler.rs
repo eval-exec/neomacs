@@ -4028,7 +4028,8 @@ mod tests {
     fn ended_service_owner_mint_accepts_exact_world_and_preserves_sibling_reservations() {
         use crate::emacs_core::eval::{Context, ThreadingMode};
 
-        let mut owner = Context::new_with_threading(ThreadingMode::Green);
+        let mut owner =
+            Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
         let baton = owner.start_green_runtime().unwrap();
         let control = owner.with_green_runtime(|runtime| std::sync::Arc::clone(&runtime.control));
         let requester = ThreadKey::Worker(NonZeroU64::MIN);
@@ -4076,7 +4077,8 @@ mod tests {
     fn ended_continuation_authority_survives_indexed_whole_key_retirement() {
         use crate::emacs_core::eval::{Context, ThreadingMode};
 
-        let mut owner = Context::new_with_threading(ThreadingMode::Green);
+        let mut owner =
+            Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
         let baton = owner.start_green_runtime().unwrap();
         let control = owner.with_green_runtime(|runtime| std::sync::Arc::clone(&runtime.control));
         let requester = ThreadKey::Worker(NonZeroU64::MIN);
@@ -4194,7 +4196,8 @@ mod tests {
     fn ended_service_owner_mint_rejects_live_requester_without_consuming_reservation() {
         use crate::emacs_core::eval::{Context, ThreadingMode};
 
-        let mut owner = Context::new_with_threading(ThreadingMode::Green);
+        let mut owner =
+            Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
         let baton = owner.start_green_runtime().unwrap();
         let control = owner.with_green_runtime(|runtime| std::sync::Arc::clone(&runtime.control));
         let requester = ThreadKey::Worker(NonZeroU64::MIN);
@@ -4227,7 +4230,8 @@ mod tests {
     fn ended_service_owner_mint_rejects_foreign_control_with_matching_ended_metadata() {
         use crate::emacs_core::eval::{Context, ThreadingMode};
 
-        let mut owner = Context::new_with_threading(ThreadingMode::Green);
+        let mut owner =
+            Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
         let baton = owner.start_green_runtime().unwrap();
         let control = owner.with_green_runtime(|runtime| std::sync::Arc::clone(&runtime.control));
         let foreign = Control::default();

@@ -361,7 +361,7 @@ fn assert_live_snapshot_gc_values(state: &types::DumpContextState, elapsed: f64,
 
 #[test]
 fn deterministic_order_restart_gc_stats_exclude_history_without_mutating_live_state() {
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     // Ordinary names resembling the builtins are part of Lisp state, not
     // restart statistics. Allocate both historical floats before either dump.
     let historical_elapsed = [
@@ -470,7 +470,7 @@ fn deterministic_order_overlay_serials_survive_dump_and_resume_the_counter() {
         )
     };
 
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.buffers.create_buffer("pdump-overlay-serial");
     let detached = Value::make_overlay(OverlayDataInit {
         serial: preserved(DETACHED_SERIAL),

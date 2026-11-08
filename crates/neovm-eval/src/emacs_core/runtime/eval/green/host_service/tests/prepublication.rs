@@ -19,7 +19,8 @@ fn prepare(
 
 #[test]
 fn explicit_prepublication_abandonment_retires_only_its_own_registered_batches() {
-    let mut owner = Context::new_with_threading(ThreadingMode::Green);
+    let mut owner =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     let baton = owner.start_green_runtime().unwrap();
     let graph = Value::list(vec![Value::string("unpublished graph"), Value::fixnum(51)]);
     let sibling_graph = Value::string("sibling graph remains published");
@@ -81,7 +82,8 @@ fn explicit_prepublication_abandonment_retires_only_its_own_registered_batches()
 
 #[test]
 fn abandoned_admission_is_inert_and_retained_until_quiescent_drain() {
-    let mut owner = Context::new_with_threading(ThreadingMode::Green);
+    let mut owner =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     let live = owner.world_lifetime_probe_for_test();
     let baton = owner.start_green_runtime().unwrap();
     let graph = Value::string("abandoned roots survive collection without materialization");
@@ -145,7 +147,8 @@ fn abandoned_admission_is_inert_and_retained_until_quiescent_drain() {
 
 #[test]
 fn foreign_owner_cannot_abandon_an_unpublished_request() {
-    let mut owner = Context::new_with_threading(ThreadingMode::Green);
+    let mut owner =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     let baton = owner.start_green_runtime().unwrap();
     owner.with_green_runtime(|runtime| {
         let mut parked = runtime.parked.borrow_mut();
@@ -176,7 +179,8 @@ fn foreign_owner_cannot_abandon_an_unpublished_request() {
 
 #[test]
 fn refused_park_abandons_initial_request_before_any_native_or_owner_execution() {
-    let mut main = Context::new_with_threading(ThreadingMode::Green);
+    let mut main =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     main.start_green_threads().unwrap();
     let original_os = std::thread::current().id();
     let original_wait = main.with_green_runtime(|runtime| runtime.control.wait_of(ThreadKey::Main));

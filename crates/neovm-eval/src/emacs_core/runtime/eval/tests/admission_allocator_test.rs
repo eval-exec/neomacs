@@ -11,7 +11,8 @@ const AFTER: &str = "admission-allocator-after";
 
 fn green_with_open_cons_region() -> (Context, Value, Value) {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new_with_threading(ThreadingMode::Green);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     context.gc_stress = false;
     context.with_gc_inhibited(|context| {
         context

@@ -14,7 +14,7 @@ fn delta(base: &EpochCounters) -> EpochCounters {
 #[test]
 fn jit_fn_epoch_bumps_are_attributed_per_writer() {
     reset_epoch_counters_for_test();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let epoch0 = ev.obarray.function_epoch();
     let base = EpochCounters::snapshot();
     let sym = Value::symbol("jit-epoch-test-fn");
@@ -89,7 +89,7 @@ fn jit_fn_epoch_bumps_are_attributed_per_writer() {
 /// spec DISARMED sentinel) is still skipped on the wrap.
 #[test]
 fn jit_fn_epoch_bump_still_skips_the_disarmed_sentinel() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.obarray.set_function_epoch_for_test(u64::MAX - 1);
     ev.obarray
         .invalidate_all_function_bindings(FunctionEpochBump::SubrRewrite);
@@ -107,7 +107,7 @@ fn jit_fn_epoch_bump_still_skips_the_disarmed_sentinel() {
 /// Under the stats knob the most-redefined symbols are named in the report.
 #[test]
 fn jit_fn_epoch_top_redefined_names_symbols() {
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     reset_epoch_counters_for_test();
     super::force_observe_for_test(super::ObserveOverride {
         stats: true,

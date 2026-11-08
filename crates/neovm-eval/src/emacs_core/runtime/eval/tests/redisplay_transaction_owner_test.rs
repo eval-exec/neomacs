@@ -121,7 +121,7 @@ fn transaction_owner_excludes_standalone_scroll_and_restores_nested_and_unwound_
     tracing::info!(target: "d5::owner_layout", field = "context.attention", offset = std::mem::offset_of!(Context, attention), "owner layout metric");
     tracing::info!(target: "d5::owner_layout", field = "context.buffers", offset = std::mem::offset_of!(Context, edit.buffers), "owner layout metric");
     tracing::info!(target: "d5::owner_layout", field = "context.tagged_heap", offset = std::mem::offset_of!(Context, tagged_heap), "owner layout metric");
-    let mut eval = Context::new();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
     assert!(!actual_transaction_active(&eval));
     eval.redisplay_fn = Some(Box::new(|_| {
         panic!("committed-scroll reentry must be suppressed")

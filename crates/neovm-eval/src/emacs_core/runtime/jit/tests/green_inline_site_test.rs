@@ -286,7 +286,7 @@ fn green_intrinsic_loop_leaf_is_sim_identical() {
         let _backend = opt_mode_scope_for_test(OptMode::Off);
         let _background = bg::TestModeScope::enter(bg::BgMode::Sync);
         let _arith = InlineArithScope::on();
-        let mut context = Context::new_with_threading(mode);
+        let mut context = Context::new_with_threading(mode, crate::test_utils::unit_runtime());
         context.set_lexical_binding(true);
         let source = Value::make_bytecode(intrinsic_loop());
         let source_data = source.get_bytecode_data().unwrap();
@@ -341,7 +341,8 @@ fn wc_loop_carries_only_the_polls_release_check() {
     let _backend = opt_mode_scope_for_test(OptMode::Off);
     let _background = bg::TestModeScope::enter(bg::BgMode::Sync);
     let _arith = InlineArithScope::on();
-    let mut context = Context::new_with_threading(ThreadingMode::Sim);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Sim, crate::test_utils::unit_runtime());
     context.set_lexical_binding(true);
     let source = Value::make_bytecode(intrinsic_loop());
     let source_data = source.get_bytecode_data().unwrap();
@@ -367,7 +368,8 @@ fn helper_loop_carries_exactly_the_return_side_checks() {
     let _backend = opt_mode_scope_for_test(OptMode::Off);
     let _background = bg::TestModeScope::enter(bg::BgMode::Sync);
     let _arith = InlineArithScope::on();
-    let mut context = Context::new_with_threading(ThreadingMode::Sim);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Sim, crate::test_utils::unit_runtime());
     context.set_lexical_binding(true);
     context
         .eval_str("(fset 'green-shape-helper (lambda () nil))")
@@ -432,7 +434,8 @@ fn hof_only_leaf_emits_no_release_revalidation() {
     let _profit = ProfitGuard(compile::replace_profit_gate_for_test(
         compile::ProfitGateTestPolicy::Bypass,
     ));
-    let mut context = Context::new_with_threading(ThreadingMode::Sim);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Sim, crate::test_utils::unit_runtime());
     context.set_lexical_binding(true);
     context
         .eval_str("(fset 'green-hof-helper (lambda () nil))")
@@ -513,7 +516,8 @@ fn hof_only_leaf_emits_no_release_revalidation() {
 fn green_inlined_function_entry_still_guards() {
     let _backend = opt_mode_scope_for_test(OptMode::Legacy);
     let _arith = InlineArithScope::on();
-    let mut ev = Context::new_with_threading(ThreadingMode::Green);
+    let mut ev =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     ev.eval_str(
         "(setq green-inline-v 0)
         (add-variable-watcher 'green-inline-v (lambda (&rest _)
@@ -579,7 +583,8 @@ fn quit_interrupts_compiled_green_intrinsic_loop() {
     let _backend = opt_mode_scope_for_test(OptMode::Off);
     let _background = bg::TestModeScope::enter(bg::BgMode::Sync);
     let _arith = InlineArithScope::on();
-    let mut context = Context::new_with_threading(ThreadingMode::Green);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     context.set_lexical_binding(true);
     let source = Value::make_bytecode(intrinsic_loop());
     let _root = context.retain_gc_roots([source]);
@@ -614,7 +619,8 @@ fn throw_on_input_interrupts_compiled_green_intrinsic_loop() {
     let _backend = opt_mode_scope_for_test(OptMode::Off);
     let _background = bg::TestModeScope::enter(bg::BgMode::Sync);
     let _arith = InlineArithScope::on();
-    let mut context = Context::new_with_threading(ThreadingMode::Green);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     context.set_lexical_binding(true);
     let source = Value::make_bytecode(intrinsic_loop());
     let _root = context.retain_gc_roots([source]);

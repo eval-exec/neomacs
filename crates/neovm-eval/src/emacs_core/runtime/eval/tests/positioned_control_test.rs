@@ -23,7 +23,7 @@ fn issue554_catch_tags_use_throw_time_symbol_policy() {
             "7",
         ),
     ] {
-        let mut ctx = Context::new();
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
         assert_eq!(
             print_value(&ctx.eval_str(form).expect("catch EQ")),
             expected,
@@ -34,7 +34,7 @@ fn issue554_catch_tags_use_throw_time_symbol_policy() {
 
 #[test]
 fn issue554_provide_after_load_lookup_uses_symbol_policy() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let value = ctx
         .eval_str(
             "(let ((symbols-with-pos-enabled t) (features nil))
@@ -48,7 +48,7 @@ fn issue554_provide_after_load_lookup_uses_symbol_policy() {
 
 #[test]
 fn issue554_command_loop_exit_honors_positioned_true() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let positioned = ctx
         .tagged_heap
         .alloc_symbol_with_pos(Value::T, Value::fixnum(0));

@@ -86,7 +86,8 @@ struct Arm {
 impl Arm {
     #[doc(hidden)]
     pub fn new(admit: bool) -> Self {
-        let mut ev = Context::new_with_threading(ThreadingMode::Green);
+        let mut ev =
+            Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
         let setup = eval(&mut ev, SETUP);
         assert!(!setup.starts_with("ERR"), "{setup}");
         if admit {
@@ -286,7 +287,7 @@ fn admit_from_lisp(ctx: &mut Context) -> EvalResult {
 
 fn with_admit_subr(mode: ThreadingMode) -> Context {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new_with_threading(mode);
+    let mut ev = Context::new_with_threading(mode, crate::test_utils::unit_runtime());
     let id = intern("tad-admit");
     register_global_subr_entry(
         id,
@@ -438,7 +439,8 @@ fn admission_inside_a_backtrace_eval() {
 
 #[test]
 fn a_backtrace_eval_in_progress_rewinds_after_admission() {
-    let mut ev = Context::new_with_threading(ThreadingMode::Green);
+    let mut ev =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     eval(&mut ev, "(defvar tab-r 1)");
     let id = intern("tab-r");
     ev.try_specbind(id, Value::fixnum(2)).expect("bind");
@@ -483,8 +485,8 @@ fn a_backtrace_eval_in_progress_rewinds_after_admission() {
 fn a_second_worlds_sync_collection_completes_while_the_first_marks() {
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let mut first = Context::new();
-        let mut second = Context::new();
+        let mut first = Context::new(crate::test_utils::unit_runtime());
+        let mut second = Context::new(crate::test_utils::unit_runtime());
         first.setup_thread_locals();
         let mut started = false;
         // A generational heap runs up to 64 minors before a concurrent major.

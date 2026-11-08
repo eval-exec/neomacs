@@ -126,7 +126,7 @@ fn direct_stack_entry_arms_after_the_tier_up_entry_and_agrees_with_it() {
     let _bg_mode =
         crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let (sym, callee) = bind_fn(&mut ev, "c1-leaf-slot-adder", adder());
     let caller = caller_of(sym, 20, 22);
     assert!(
@@ -161,7 +161,7 @@ fn retire_and_clear_disarm_the_slot_and_the_next_call_re_arms_it() {
     let _bg_mode =
         crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let (sym, callee) = bind_fn(&mut ev, "c1-leaf-slot-retired", adder());
     let caller = caller_of(sym, 1, 2);
     assert_eq!(call0(&mut ev, caller), Value::make_int(3));
@@ -193,7 +193,7 @@ fn omitted_optionals_are_nil_padded_on_the_direct_entry() {
     let _bg_mode =
         crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let (sym, callee) = bind_fn(
         &mut ev,
         "c1-leaf-slot-optional",
@@ -238,7 +238,7 @@ fn rest_callees_take_the_direct_entry_with_a_consed_list() {
     let _bg_mode =
         crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let (sym, callee) = bind_fn(
         &mut ev,
         "c1-leaf-slot-rest",

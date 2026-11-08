@@ -28,7 +28,7 @@ fn panics_under_a_leaf(ctx: &mut Context, f: impl FnOnce(&mut Context)) -> bool 
 #[test]
 fn leaf_active_asserts_at_every_safe_point() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let car = Value::symbol("car");
     type GuardedEntry = Box<dyn FnOnce(&mut Context)>;
     let cases: Vec<(&str, GuardedEntry)> = vec![
@@ -93,7 +93,7 @@ fn leaf_active_asserts_at_every_safe_point() {
 
 #[test]
 fn witnesses_catch_an_undeclared_buffer_write() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.eval_str("(insert \"hello\")").expect("text");
     // Moving point is a buffer write `gethash` does not declare. (Straight
     // through the buffer: `goto-char` would be an `eval` the guard refuses.)
@@ -108,7 +108,7 @@ fn witnesses_catch_an_undeclared_buffer_write() {
 
 #[test]
 fn witnesses_catch_an_undeclared_allocation_on_a_value() {
-    let ctx = Context::new();
+    let ctx = Context::new(crate::test_utils::unit_runtime());
     let active = LeafActive::enter(gethash_spec(), &ctx);
     let cell = Value::cons(Value::NIL, Value::NIL);
     crate::emacs_core::eval::push_scratch_gc_root(cell);
@@ -123,7 +123,7 @@ fn witnesses_catch_an_undeclared_allocation_on_a_value() {
 
 #[test]
 fn witnesses_catch_a_bounce_after_a_side_effect() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let active = LeafActive::enter(gethash_spec(), &ctx);
     // A binding pushed and left behind: the specpdl witness.
     ctx.specpdl.push(SpecBinding::GcRoot { value: Value::NIL });
@@ -137,7 +137,7 @@ fn witnesses_catch_a_bounce_after_a_side_effect() {
 
 #[test]
 fn a_clean_leaf_call_passes_its_witnesses() {
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let table = ctx
         .eval_str("(let ((h (make-hash-table))) (puthash 1 2 h) h)")
         .expect("table");

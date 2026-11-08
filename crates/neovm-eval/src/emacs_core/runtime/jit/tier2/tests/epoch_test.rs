@@ -41,7 +41,7 @@ fn tier2_inline_epoch_moved_does_not_count_as_feedback_failure() {
     force_inline_for_test(Some(true));
     force_profit_gate_for_test(false);
     force_deopt_for_test(false);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let sq = Value::symbol("neovm--t2-epoch-sq");
     builtin_fset_2(
         &mut ctx,

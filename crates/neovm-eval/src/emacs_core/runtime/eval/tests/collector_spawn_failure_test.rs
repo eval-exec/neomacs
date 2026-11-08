@@ -49,7 +49,8 @@ fn bound_collector_address_space() {
 
 fn child_probe() -> ! {
     // Finish startup before imposing a limit on the first collector request.
-    let mut context = Context::new_with_threading(ThreadingMode::Green);
+    let mut context =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     assert!(!neovm_value::tagged::gc::collector_is_registered(
         context.tagged_heap.heap_identity()
     ));

@@ -15,7 +15,7 @@ fn green(with_jit: bool) -> Context {
     crate::test_utils::init_test_tracing();
     #[cfg(feature = "jit")]
     crate::emacs_core::jit::force_jit_off_for_test(!with_jit);
-    Context::new_with_threading(ThreadingMode::Green)
+    Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime())
 }
 
 #[test]

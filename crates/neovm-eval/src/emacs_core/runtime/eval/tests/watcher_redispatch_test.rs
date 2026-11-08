@@ -7,7 +7,7 @@ use super::*;
 
 fn eval_printed(source: &str) -> String {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     match ctx.eval_str(source) {
         Ok(value) => crate::emacs_core::print::print_value(&value),
         Err(flow) => format!("ERR {flow:?}"),

@@ -52,7 +52,7 @@ fn jit_bg_pending_leaf_installs_at_the_next_probe() {
             entry_count: false,
         },
     );
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let f = add1();
     let before = stats_snapshot();
@@ -87,7 +87,7 @@ fn jit_bg_pending_function_is_parked_until_publication() {
     use crate::emacs_core::jit::Plan;
     deferred_install();
     hold_publish_for_test(true);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let f = add1();
     let rt = f.jit_runtime();
@@ -117,7 +117,7 @@ fn jit_bg_pending_function_is_parked_until_publication() {
 #[test]
 fn jit_bg_park_after_publication_is_released_at_once() {
     deferred_install();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let f = add1();
     assert_eq!(run(ctx, &f, 1), None);
@@ -134,7 +134,7 @@ fn jit_bg_park_after_publication_is_released_at_once() {
 fn jit_bg_drained_install_restores_the_hold() {
     deferred_install();
     hold_publish_for_test(true);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let f = add1();
     assert_eq!(run(ctx, &f, 1), None);
@@ -155,7 +155,7 @@ fn jit_bg_superseded_pending_entry_releases_the_park() {
     use crate::emacs_core::jit::Plan;
     deferred_install();
     hold_publish_for_test(true);
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let f = add1();
     assert_eq!(run(ctx, &f, 1), None);
@@ -182,7 +182,7 @@ fn jit_bg_superseded_pending_entry_releases_the_park() {
 fn jit_bg_failed_backend_leaves_the_body_not_compilable() {
     deferred_install();
     fail_next_backend_for_test();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let f = add1();
     assert_eq!(run(ctx, &f, 1), None);
@@ -210,7 +210,7 @@ fn jit_bg_failed_backend_leaves_the_body_not_compilable() {
 #[test]
 fn jit_bg_drain_installs_a_job_whose_function_is_not_called_again() {
     deferred_install();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let f = add1();
     let g = add1();
@@ -235,7 +235,7 @@ fn jit_bg_drain_installs_a_job_whose_function_is_not_called_again() {
 #[test]
 fn jit_bg_first_sight_installs_a_finished_pending_compile() {
     deferred_install();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let f = add1();
     assert_eq!(run(ctx, &f, 1), None);
@@ -253,7 +253,7 @@ fn jit_bg_first_sight_installs_a_finished_pending_compile() {
 #[test]
 fn jit_bg_pending_leaf_roots_its_constants_across_gc() {
     deferred_install();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let list = ev
         .eval_str("(list 'jit-bg-a (make-string 3 ?x) (cons 1 2))")
@@ -290,7 +290,7 @@ fn jit_bg_pending_leaf_roots_its_constants_across_gc() {
 #[test]
 fn jit_bg_root_walk_includes_pending_constants() {
     deferred_install();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let list = ev.eval_str("(list 'jit-bg-root)").expect("list");
     let f = function(vec![Op::Constant(0), Op::Return], vec![list], 0);
@@ -316,7 +316,7 @@ fn jit_bg_root_walk_includes_pending_constants() {
 #[test]
 fn jit_bg_evicted_pending_compile_is_superseded() {
     deferred_install();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let f = add1();
     assert_eq!(run(ctx, &f, 1), None);
@@ -339,7 +339,7 @@ fn jit_bg_evicted_pending_compile_is_superseded() {
 #[test]
 fn jit_bg_reopt_invalidation_drops_a_pending_compile() {
     deferred_install();
-    let mut ev = Context::new();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let f = add1();
     assert_eq!(run(ctx, &f, 1), None);

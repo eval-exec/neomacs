@@ -57,7 +57,8 @@ fn assert_add_result(
 #[cfg(target_os = "linux")]
 #[test]
 fn matching_qualified_preloads_serve_under_each_journal_policy() {
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let _reset = ResetPolicy;
     let ops = [Op::Constant(0), Op::Add, Op::Return];
     let constants = [Value::make_int(1_234_567)];
@@ -90,7 +91,8 @@ fn matching_qualified_preloads_serve_under_each_journal_policy() {
 #[cfg(target_os = "linux")]
 #[test]
 fn observed_manifest_key_cannot_serve_foreign_policy_body() {
-    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut ev =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let _reset = ResetPolicy;
     let ops = [Op::Constant(0), Op::Add, Op::Return];
     let constants = [Value::make_int(1_234_567)];

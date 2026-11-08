@@ -253,7 +253,7 @@ impl Baton {
 /// production supported-type fence unchanged.
 #[cfg(test)]
 fn collection_fixture_context() -> Context {
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     context.set_variable("window-dead-windows-table", TaggedValue::NIL);
     context.gc_collect_exact();
     context

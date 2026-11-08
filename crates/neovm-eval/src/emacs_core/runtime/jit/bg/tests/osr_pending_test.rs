@@ -53,7 +53,7 @@ fn done() {
 #[test]
 fn jit_bg_pending_osr_transfers_at_a_later_wrap() {
     deferred_install();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = counting_loop();
     let (before, enqueued) = (
         transfers(),
@@ -75,7 +75,7 @@ fn jit_bg_pending_osr_transfers_at_a_later_wrap() {
 fn jit_bg_pending_osr_never_latches_the_frame() {
     deferred_install();
     hold_publish_for_test(true);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = counting_loop();
     let (before, waits) = (transfers(), stats_snapshot().osr_waits);
     assert_eq!(count(&mut ctx, &f, 100_000), Value::make_int(100_000));
@@ -97,7 +97,7 @@ fn jit_bg_pending_osr_never_latches_the_frame() {
 fn jit_bg_pending_osr_is_rooted_and_evicted_with_its_source() {
     deferred_install();
     hold_publish_for_test(true);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = counting_loop();
     assert_eq!(count(&mut ctx, &f, 1_000), Value::make_int(1_000));
     let id = f.jit_runtime().compiled_id().expect("id");
@@ -119,7 +119,7 @@ fn jit_bg_worker_osr_transfers_while_the_loop_runs() {
     force_inline_insts_for_test(Some(0));
     force_osr_for_test(true);
     force_deopt_for_test(false);
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = counting_loop();
     let before = transfers();
     assert_eq!(count(&mut ctx, &f, 20_000_000), Value::make_int(20_000_000));

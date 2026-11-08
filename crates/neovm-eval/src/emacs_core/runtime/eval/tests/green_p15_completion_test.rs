@@ -41,7 +41,8 @@ impl TryFrom<&std::ffi::OsStr> for CompletionChild {
 }
 
 fn foreign_completion_probe() -> ! {
-    let mut first = Context::new_with_threading(ThreadingMode::Sim);
+    let mut first =
+        Context::new_with_threading(ThreadingMode::Sim, crate::test_utils::unit_runtime());
     let native = first.threads.create_thread(Value::NIL, ThreadName::UNNAMED);
     let id = first.threads.get_thread(native).unwrap().id();
     first.threads.finish_thread(native, Value::fixnum(17));
@@ -49,7 +50,8 @@ fn foreign_completion_probe() -> ! {
         .threads
         .prepare_thread_completion(id, CompletionExit::Executed)
         .expect("first World's actual completion token");
-    let mut second = Context::new_with_threading(ThreadingMode::Sim);
+    let mut second =
+        Context::new_with_threading(ThreadingMode::Sim, crate::test_utils::unit_runtime());
     let mut baton = second.issue_green_baton().expect("second World's keeper");
     assert_ne!(completion.heap_identity(), baton.parallel_heap_identity());
     assert_eq!(first.threads.all_thread_ids(), vec![0]);

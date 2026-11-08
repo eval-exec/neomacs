@@ -48,7 +48,7 @@ fn prepared(
 #[test]
 fn native_callback_cache_reuses_fixed_body_without_interactive_metadata_reads() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.register_subr(SubrSpec::fixed1(
         "native-callback-cache-reuse",
         original,
@@ -73,7 +73,7 @@ fn native_callback_cache_reuses_fixed_body_without_interactive_metadata_reads() 
 #[test]
 fn native_callback_cache_nil_pads_optional_native_slots() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.register_subr(SubrSpec::fixed2(
         "native-callback-cache-optional-two",
         optional2,
@@ -122,7 +122,7 @@ fn native_callback_cache_nil_pads_optional_native_slots() {
 #[test]
 fn native_callback_cache_raw_body_rewrite_invalidates_without_function_epoch_change() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let name = "native-callback-cache-raw-body";
     ctx.register_subr(SubrSpec::fixed1(name, original, FixedMin1::One));
     let (designator, subr, epoch, proof) = prepared(&mut ctx, name, 1);
@@ -155,7 +155,7 @@ fn native_callback_cache_raw_body_rewrite_invalidates_without_function_epoch_cha
 #[test]
 fn native_callback_cache_raw_same_body_arity_rewrite_retains_deferred_error() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let name = "native-callback-cache-raw-arity";
     ctx.register_subr(SubrSpec::fixed2(name, optional2, FixedMin2::One));
     let (designator, subr, epoch, proof) = prepared(&mut ctx, name, 1);
@@ -187,7 +187,7 @@ fn native_callback_cache_raw_same_body_arity_rewrite_retains_deferred_error() {
 #[test]
 fn native_callback_cache_typed_registration_rewrite_calls_replacement() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let name = "native-callback-cache-typed-body";
     ctx.register_subr(SubrSpec::fixed1(name, original, FixedMin1::One));
     let (designator, subr, epoch, proof) = prepared(&mut ctx, name, 1);
@@ -204,7 +204,7 @@ fn native_callback_cache_typed_registration_rewrite_calls_replacement() {
 #[test]
 fn native_callback_cache_validates_after_debugger_redefines_designator() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let name = "native-callback-cache-debug-redefinition";
     ctx.register_subr(SubrSpec::fixed1(name, original, FixedMin1::One));
     ctx.eval_str(
@@ -241,7 +241,7 @@ fn native_callback_cache_validates_after_debugger_redefines_designator() {
 #[test]
 fn native_callback_cache_validates_after_gc_hook_redefines_designator() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let name = "native-callback-cache-gc-redefinition";
     ctx.register_subr(SubrSpec::fixed1(name, original, FixedMin1::One));
     ctx.eval_str(
@@ -306,7 +306,7 @@ fn native_callback_cache_preserves_backtrace_argument_roots_during_collection() 
         assert_eq!(arg1.as_utf8_str(), Some("second argument"));
         Ok(arg1)
     }
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.register_subr(SubrSpec::fixed1(
         "native-callback-cache-root-one",
         collect_one,
@@ -355,7 +355,7 @@ fn native_callback_cache_preserves_signal_throw_and_debug_exit_unwind() {
             _ => Ok(value),
         }
     }
-    let mut ctx = Context::new();
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
     ctx.register_subr(SubrSpec::fixed1(
         "native-callback-cache-unwind",
         unwind_probe,
