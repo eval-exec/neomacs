@@ -106,7 +106,7 @@ fn a_site_holds_its_sources_weakly_and_releases_them() {
     let state = rt.share_state();
     assert_eq!(Arc::weak_count(&state), 0);
     let mut f = source(1);
-    f.runtime = Some(rt);
+    f.set_jit_runtime_for_test(Some(rt));
     let v = Value::make_bytecode(f);
     {
         let s = site();

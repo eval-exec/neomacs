@@ -74,7 +74,8 @@ fn function(name: &str, verified: bool) -> ByteCodeFunction {
         // Checked execution still requires normalized, sealed instructions.
         // Conservatively revoke only the stack proof, as existing checked
         // fixtures do; never manufacture a proof for unverified code.
-        function.stack_verified = false;
+        // SAFETY: false revokes the proof; it does not claim one.
+        unsafe { function.set_stack_verified(false) };
     }
     assert_eq!(function.executes_verified_ops(), verified);
     function

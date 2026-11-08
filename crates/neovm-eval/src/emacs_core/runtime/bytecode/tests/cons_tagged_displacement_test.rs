@@ -46,7 +46,8 @@ fn bytecode_cons_tagged_displacements_preserve_exact_slots_and_capture() {
             if !verified {
                 // Keep the dispatch seal, revoke only the optional stack
                 // proof, and execute the actual checked monomorphization.
-                code.stack_verified = false;
+                // SAFETY: false revokes the proof; it does not claim one.
+                unsafe { code.set_stack_verified(false) };
             }
             assert_eq!(code.executes_verified_ops(), verified);
             let plain = execute(&mut ctx, &code, cell);

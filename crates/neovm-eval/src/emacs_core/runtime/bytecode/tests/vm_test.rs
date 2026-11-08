@@ -3081,7 +3081,6 @@ fn switch_on_arg(table: Value) -> ByteCodeFunction {
     // Seal-shaped by construction (trailing Return, in-bounds targets and
     // constants); left unverified so it runs in the checked driver, which
     // is the only one `Switch` gets.
-    func.ops_sealed = true;
     func.ops = vec![
         Op::StackRef(0), // [x x]
         Op::Constant(0), // [x x table]
@@ -3093,6 +3092,8 @@ fn switch_on_arg(table: Value) -> ByteCodeFunction {
         Op::Constant(3), // 7: byte offset 12
         Op::Return,
     ];
+    // SAFETY: the ops above are seal-shaped. The stack proof stays unset.
+    unsafe { func.mark_ops_sealed() };
     func.constants = vec![
         table,
         Value::fixnum(10),
