@@ -109,7 +109,7 @@ fn tier2_inline_epoch_moved_does_not_count_as_feedback_failure() {
         t2.tier1_fallback.borrow().is_some(),
         "T2 retained its profiling T1"
     );
-    assert_eq!(f.jit_runtime().t2_reopts.load(Ordering::Relaxed), 0);
+    assert_eq!(f.jit_runtime().t2_reopts_ref().load(Ordering::Relaxed), 0);
     assert!(
         !f.jit_runtime()
             .site_retreat()
@@ -141,7 +141,7 @@ fn tier2_inline_epoch_moved_does_not_count_as_feedback_failure() {
         "the real inline epoch guard deopted",
     );
     assert_eq!(
-        f.jit_runtime().t2_reopts.load(Ordering::Relaxed),
+        f.jit_runtime().t2_reopts_ref().load(Ordering::Relaxed),
         0,
         "an unrelated function write teaches the source no new feedback",
     );

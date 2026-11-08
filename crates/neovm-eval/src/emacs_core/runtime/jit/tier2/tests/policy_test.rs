@@ -273,7 +273,7 @@ fn tier2_deopt_reverts_and_preserves_retreat_and_ban() {
     assert!(t2.retired.get());
     assert_eq!(
         f.jit_runtime()
-            .t2_reopts
+            .t2_reopts_ref()
             .load(std::sync::atomic::Ordering::Relaxed),
         1
     );

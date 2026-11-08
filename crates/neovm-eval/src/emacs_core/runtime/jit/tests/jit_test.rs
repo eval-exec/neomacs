@@ -40,8 +40,7 @@ fn heat_saturates_without_wrapping() {
     let rt = Runtime::new();
     // Seed near the ceiling, then bump past it; must clamp, not wrap to cold.
     for _ in 0..3 {
-        rt.heat
-            .store(u32::MAX - 1, std::sync::atomic::Ordering::Relaxed);
+        rt.set_heat_for_test(u32::MAX - 1);
         let _ = rt.dispatch();
         assert_eq!(rt.heat(), u32::MAX);
         let _ = rt.dispatch();
@@ -87,8 +86,7 @@ fn loop_work_saturates_without_wrapping() {
         return;
     }
     let rt = Runtime::new();
-    rt.heat
-        .store(u32::MAX - 1, std::sync::atomic::Ordering::Relaxed);
+    rt.set_heat_for_test(u32::MAX - 1);
     rt.note_loop_work();
     assert_eq!(rt.heat(), u32::MAX);
     rt.note_loop_work();

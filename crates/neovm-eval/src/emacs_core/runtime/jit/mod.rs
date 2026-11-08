@@ -1740,7 +1740,7 @@ impl RuntimeStateTieringExt for RuntimeState {
     /// Test-only: set the reoptimization ceiling outright.
     #[cfg(test)]
     fn set_reopt_level_for_test(&self, level: ReoptLevel) {
-        self.reopt_level.store(level as u8, Ordering::Relaxed);
+        self.reopt_level_ref().store(level as u8, Ordering::Relaxed);
     }
 
     /// Whether a deopt forbade inlining the call site at `pc`.

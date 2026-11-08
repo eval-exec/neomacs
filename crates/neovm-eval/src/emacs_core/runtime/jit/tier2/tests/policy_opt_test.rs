@@ -160,7 +160,7 @@ fn tier2_opt_compact_helper_respects_the_persistent_reopt_ban() {
     let (f, leaf) = policy_fixture(47);
     force_opt_for_test(Some(OptMode::Opt), None);
     f.jit_runtime()
-        .t2_reopts
+        .t2_reopts_ref()
         .store(3, std::sync::atomic::Ordering::Relaxed);
     assert_eq!(
         request_decision(&leaf, f.jit_runtime()),
