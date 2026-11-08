@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::eval::data::minibuffer_entry::MinibufferManagerExt;
 #[doc(hidden)]
 pub use crate::emacs_core::subr::SubrSpec;
 use crate::emacs_core::{Context, format_eval_result};
