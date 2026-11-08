@@ -10,8 +10,8 @@ use super::{
     runtime_managers_image, types,
 };
 use crate::emacs_core::autoload::{AutoloadEntry, AutoloadManager, AutoloadType};
-use crate::emacs_core::interactive::{InteractiveRegistry, InteractiveSpec};
-use crate::face::{Face, FaceTable};
+use crate::emacs_core::eval::data::face::{Face, FaceTable};
+use crate::emacs_core::eval::interactive_registry::{InteractiveRegistry, InteractiveSpec};
 use neovm_text::emacs_core::coding::{CodingSystemInfo, EolType};
 use neovm_value::heap_types::LispString;
 use neovm_value::intern::intern;

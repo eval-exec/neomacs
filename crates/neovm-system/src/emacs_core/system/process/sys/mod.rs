@@ -61,6 +61,14 @@ pub use serial::{
     SerialFlowControl, SerialParity, SerialPort, SerialStopBits,
 };
 
+/// `serial_open` for a re-homed test. `SerialPortIo` stays `pub(crate)`;
+/// the trait method is what `make-serial-process` calls.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn open_serial_port_for_test(path: &std::ffi::OsStr) -> std::io::Result<SerialPort> {
+    <SerialPort as serial::SerialPortIo>::open(path)
+}
+
 // K1 narrowing (lead 02:3xZ): every net item is used only by sibling
 // `process` modules in this crate (bootstrap_vars/types/builtins); no
 // cross-crate consumer of `sys::net::*` exists, so the module is

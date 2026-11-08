@@ -380,3 +380,19 @@ mod emacs_core_lisp_native_builtins_file_notify_tests_file_notify_test_rs;
 #[cfg(all(test, target_os = "linux"))]
 #[path = "emacs_core/lisp/native/builtins/file_notify/platform/linux/tests/event_lisp_test.rs"]
 mod emacs_core_lisp_native_builtins_file_notify_platform_linux_tests_event_lisp_test_rs;
+// Reader shorthand character-domain oracle. The five tests only call the
+// booted startup helper in core `test_utils`. Assertions are unchanged.
+#[cfg(test)]
+#[path = "emacs_core/lisp/reader/tests/shorthand_character_domain.rs"]
+mod emacs_core_lisp_reader_tests_shorthand_character_domain_rs;
+// Split out of eval's jit_test.rs. The test only boots a startup context and
+// reads the value-crate observer. The rest of jit_test.rs stays in eval
+// because it uses the JIT parent's private items. Assertion unchanged.
+#[cfg(test)]
+#[path = "emacs_core/runtime/jit/tests/jit_function_cell_observer_test.rs"]
+mod emacs_core_runtime_jit_tests_jit_function_cell_observer_test_rs;
+// Process-builtin VM tests. They name the system process surface, which eval
+// cannot depend on. Seventeen tests, assertions unchanged.
+#[cfg(test)]
+#[path = "emacs_core/runtime/bytecode/tests/vm_process_builtin_test.rs"]
+mod emacs_core_runtime_bytecode_tests_vm_process_builtin_test_rs;

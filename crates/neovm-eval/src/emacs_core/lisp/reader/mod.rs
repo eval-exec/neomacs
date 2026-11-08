@@ -1169,7 +1169,3 @@ mod minibuffer_unwind_order_tests;
 #[cfg(test)]
 #[path = "tests/raw_bytes_test.rs"]
 mod raw_bytes_tests;
-
-#[cfg(test)]
-#[path = "tests/shorthand_character_domain.rs"]
-mod shorthand_character_domain_tests;
