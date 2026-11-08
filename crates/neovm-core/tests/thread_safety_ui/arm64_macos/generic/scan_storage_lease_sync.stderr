@@ -1,10 +1,21 @@
+warning: unexpected `cfg` condition value: `test-support`
+ --> tests/thread_safety_ui/arm64_macos/generic/../../support/../../../../neovm-value/src/tagged/gc/scan_contract.rs
+  |
+  | #[cfg_attr(feature = "test-support", visibility::make(pub))]
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: expected values for `feature` are: `contract-fixtures`, `dbus-vendored`, `default`, `desktop-font-settings`, `display-stop-validate`, `fuzzing`, `gc-memory-telemetry`, `jit`, `perf-probes`, `redisplay-test-policy`, `sound`, `sqlite`, `vm-profile`, and `webview`
+  = help: consider adding `test-support` as a feature in `Cargo.toml`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+  = note: `#[warn(unexpected_cfgs)]` on by default
+
 error[E0599]: the associated function or constant `check` exists for struct `ThreadSharing<ScanStorageLease>`, but its trait bounds were not satisfied
  --> tests/thread_safety_ui/arm64_macos/generic/../../scan_storage_lease_sync.rs
   |
   |     ThreadSharing::<scan_contract::ScanStorageLease>::check();
   |                                                       ^^^^^ associated function or constant cannot be called on `ThreadSharing<ScanStorageLease>` due to unsatisfied trait bounds
   |
- ::: tests/thread_safety_ui/arm64_macos/generic/../../support/../../../src/tagged/gc/scan_contract.rs
+ ::: tests/thread_safety_ui/arm64_macos/generic/../../support/../../../../neovm-value/src/tagged/gc/scan_contract.rs
   |
   | pub(crate) struct ScanStorageLease {
   | ---------------------------------- doesn't satisfy `ScanStorageLease: Sync`

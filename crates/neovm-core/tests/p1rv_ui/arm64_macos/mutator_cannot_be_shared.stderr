@@ -4,10 +4,10 @@ error[E0599]: the associated function or constant `check` exists for struct `Thr
   |     ThreadSharing::<Mutator<'static>>::check();
   |                                        ^^^^^ associated function or constant cannot be called on `ThreadSharing<Mutator<'static>>` due to unsatisfied trait bounds
   |
- ::: src/tagged/gc/mutator_registration/token.rs
+ ::: $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/token.rs
   |
   | pub struct Mutator<'era> {
-  | ------------------------ doesn't satisfy `Mutator<'static>: Sync`
+  | ------------------------ doesn't satisfy `Mutator<'static>: std::marker::Sync`
   |
  ::: tests/p1rv_ui/arm64_macos/../../thread_safety_ui/support/thread_bounds.rs
   |
@@ -15,16 +15,16 @@ error[E0599]: the associated function or constant `check` exists for struct `Thr
   | --------------------------- associated function or constant `check` not found for this struct
   |
   = note: the following trait bounds were not satisfied:
-          `Rc<()>: Sync`
-          which is required by `Mutator<'static>: Sync`
-          `Cell<usize>: Sync`
-          which is required by `Mutator<'static>: Sync`
-          `NonNull<ConsCell>: Sync`
-          which is required by `Mutator<'static>: Sync`
-          `*mut GcHeader: Sync`
-          which is required by `Mutator<'static>: Sync`
-          `*const (): Sync`
-          which is required by `Mutator<'static>: Sync`
+          `Rc<()>: std::marker::Sync`
+          which is required by `Mutator<'static>: std::marker::Sync`
+          `Cell<usize>: std::marker::Sync`
+          which is required by `Mutator<'static>: std::marker::Sync`
+          `NonNull<ConsCell>: std::marker::Sync`
+          which is required by `Mutator<'static>: std::marker::Sync`
+          `*mut GcHeader: std::marker::Sync`
+          which is required by `Mutator<'static>: std::marker::Sync`
+          `*const (): std::marker::Sync`
+          which is required by `Mutator<'static>: std::marker::Sync`
   = help: items from traits can only be used if the trait is in scope
 help: the following traits which provide `check` are implemented but not in scope; perhaps you want to import one of them
  --> tests/p1rv_ui/arm64_macos/mutator_cannot_be_shared.rs:1:1

@@ -1,3 +1,23 @@
+warning: unused import: `crate::threading`
+ --> tests/p15_threading_ui/arm64_macos/../../p15_threading_support/actual_condition_neighbors.rs
+  |
+  |     pub(crate) use crate::threading;
+  |                    ^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `crate::actual_payload::emacs_core::value::buffer_vocab`
+ --> tests/p15_threading_ui/arm64_macos/../../p15_threading_support/actual_condition_neighbors.rs
+  |
+  |         pub(crate) use crate::actual_payload::emacs_core::value::buffer_vocab;
+  |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `heap_types`
+ --> tests/p15_threading_ui/arm64_macos/../condition_wait_unvalidated_association.rs
+  |
+  |     ConditionId, MutexId, ThreadKey, Wait, api, emacs_core, heap_types,
+  |                                                             ^^^^^^^^^^
+
 error[E0451]: fields `condition`, `mutex` and `depth` of struct `ValidatedWait` are private
  --> tests/p15_threading_ui/arm64_macos/../condition_wait_unvalidated_association.rs
   |
