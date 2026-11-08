@@ -826,6 +826,19 @@ impl TuiSession {
     where
         F: Fn(&[String]) -> bool,
     {
+        self.read_until_screen(max_timeout, |grid, _screen| predicate(grid));
+    }
+
+    /// [`Self::read_until`] with the parsed screen as well as the text grid.
+    ///
+    /// Readiness that depends on cell ATTRIBUTES -- a selection highlight is a
+    /// background colour, not text -- must look at the same screen the later
+    /// assertion will read.  A frame caught between two paints can satisfy a
+    /// text-only predicate while still showing the previous highlight.
+    pub fn read_until_screen<F>(&mut self, max_timeout: Duration, predicate: F)
+    where
+        F: Fn(&[String], &vt100::Screen) -> bool,
+    {
         /// How often the predicate is re-checked while the editor is
         /// silent; small enough that a satisfied predicate is observed
         /// promptly, large enough not to spin on grid snapshots.
@@ -838,7 +851,7 @@ impl TuiSession {
                 break;
             }
             self.read(remaining.min(PREDICATE_POLL));
-            if predicate(&self.text_grid()) {
+            if predicate(&self.text_grid(), self.screen()) {
                 break;
             }
             if Instant::now() >= deadline {
@@ -846,6 +859,7 @@ impl TuiSession {
             }
         }
     }
+
 
     /// Drain the PTY while the child runs, stopping when it exits or when the
     /// supplied budget is exhausted.

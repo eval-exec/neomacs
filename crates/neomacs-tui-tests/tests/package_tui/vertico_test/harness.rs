@@ -183,6 +183,50 @@ fn background_of(session: &TuiSession, row: u16, column: u16) -> Option<vt100::C
         .map(|cell| cell.bgcolor())
 }
 
+/// Whether the candidate window has finished painting ONE selection state.
+///
+/// [`current_candidate`] reads the highlight as "the candidate row whose
+/// background differs from the prompt row's".  A frame captured between the
+/// count-indicator repaint and the highlight move can still carry the
+/// previous highlighted row beside the new one; that rule would then see two
+/// current candidates even though the next redraw is correct.  This predicate
+/// restates the same invariant as readiness: at most one candidate row
+/// differs from the prompt row's background.
+fn selection_is_drawn(grid: &[String], screen: &vt100::Screen, prefix: &str) -> bool {
+    let rows = candidate_rows(grid, prefix);
+    let Some(first) = rows.first() else {
+        return false;
+    };
+    let Some(prompt_row) = first.checked_sub(1) else {
+        return false;
+    };
+    let Some(reference) = screen.cell(prompt_row, 0).map(|cell| cell.bgcolor()) else {
+        return false;
+    };
+    rows.iter()
+        .filter(|row| screen.cell(**row, 0).map(|cell| cell.bgcolor()) != Some(reference))
+        .count()
+        <= 1
+}
+
+/// Wait until the candidate window holds exactly one drawn selection state.
+///
+/// Use after a key or a filter change whose count indicator has already
+/// updated: the indicator can repaint before the highlight moves, so a
+/// text-only wait is not enough for [`current_candidate`] to be unambiguous.
+pub(super) fn wait_for_drawn_selection(session: &mut TuiSession, prefix: &str, timeout: Duration) {
+    session.read_until_screen(timeout, |grid, screen| {
+        selection_is_drawn(grid, screen, prefix)
+    });
+    let grid = session.text_grid();
+    assert!(
+        selection_is_drawn(&grid, session.screen(), prefix),
+        "{}: the candidate window never settled on one selection state:\n{}",
+        session.name,
+        grid.join("\n")
+    );
+}
+
 /// What Vertico's count indicator says on the row holding `prompt`.
 ///
 /// The indicator is the package's own report of the selection: the candidate's
@@ -302,6 +346,9 @@ pub(super) fn press_and_wait_for_count(
             &format!("the count indicator to read {count}"),
             |grid| count_indicator_in(grid, prompt) == count,
         );
+        // The indicator can repaint before the highlight moves; assert only
+        // on a frame where the candidate window shows one selection state.
+        wait_for_drawn_selection(session, prefix, Duration::from_secs(8));
     })?;
     assert_candidate_state(pair, prefix, prompt, count, expected_current);
     Ok(())
