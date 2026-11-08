@@ -53,6 +53,7 @@ impl LispCollectionRevision {
     }
 
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn sequence(self) -> u64 {
         self.0
     }
@@ -174,6 +175,7 @@ pub fn set_cons_car(cell: TaggedValue, value: TaggedValue) -> bool {
 }
 
 #[inline(always)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn set_cons_car_in_store(
     store: &StoreState,
     cell: TaggedValue,
@@ -356,6 +358,7 @@ pub fn set_vector_slot(value: TaggedValue, index: usize, item: TaggedValue) -> b
 }
 
 #[inline(always)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn set_vector_slot_in_store(
     store: &StoreState,
     value: TaggedValue,
@@ -419,6 +422,7 @@ pub fn set_record_slot(value: TaggedValue, index: usize, item: TaggedValue) -> b
 }
 
 #[inline(always)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn set_record_slot_in_store(
     store: &StoreState,
     value: TaggedValue,
@@ -561,6 +565,7 @@ pub fn set_string_byte_same_char_count(value: TaggedValue, byte_pos: usize, byte
 }
 
 #[inline(always)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn set_string_byte_same_char_count_in_store(
     store: &StoreState,
     value: TaggedValue,

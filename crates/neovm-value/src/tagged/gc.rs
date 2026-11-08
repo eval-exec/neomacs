@@ -2699,11 +2699,13 @@ mod collector_reads;
 #[doc(hidden)]
 pub use aliasable::AliasableBox;
 #[cfg(any(test, feature = "test-support"))]
+mod test_heap_fixture;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use test_heap_fixture::TestHeap;
+#[cfg(any(test, feature = "test-support"))]
 #[path = "gc/tests/test_heap.rs"]
 pub(crate) mod test_heap;
-#[cfg(any(test, feature = "test-support"))]
-#[doc(hidden)]
-pub(crate) use test_heap::TestHeap;
 
 #[cfg(not(feature = "test-support"))]
 mod arena_pages;

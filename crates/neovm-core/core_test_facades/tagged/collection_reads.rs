@@ -21,3 +21,10 @@ pub mod observed_envelope;
 #[cfg(feature = "jit")]
 #[path = "../../core_tests/tagged/collection_reads/tests/observed_gap_test.rs"]
 mod observed_gap_tests;
+
+/// C-D: fused journal/projection tests. They name the evaluator's minimal VM
+/// harness, so they live in core. Assertions are unchanged; private journal
+/// and cold-state reads go through the test-support observers.
+#[cfg(test)]
+#[path = "../../core_tests/tagged/tests/write_fusion_test.rs"]
+mod write_fusion_tests;

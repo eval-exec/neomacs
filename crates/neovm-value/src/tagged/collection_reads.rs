@@ -65,8 +65,53 @@ static CONFIG: LazyLock<()> = LazyLock::new(|| {
     }
 });
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn initialize() {
     LazyLock::force(&CONFIG);
+}
+
+/// Same policy cell the in-crate fusion tests read. The field stays private.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn journal_policy_for_test() -> JournalPolicy {
+    store_state::with_store(|store| store.mutator.policy.get())
+}
+
+/// Same journal slot the in-crate fusion tests read. The ring stays private.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn journal_slot_for_test(index: usize) -> usize {
+    store_state::with_store(|store| store.journal()[index].get())
+}
+
+/// Hold the cold capture `RefCell` across `body`, the way the fusion tests
+/// did with `with_state`. `State` itself stays private (LEAD 10:5xZ).
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn with_cold_state_held<R>(body: impl FnOnce() -> R) -> R {
+    store_state::with_state(|cold| {
+        let _borrow = cold.borrow_mut();
+        body()
+    })
+}
+
+/// The capture-scope thread local. Tests assert it, they do not retarget it.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn capture_active_for_test() -> bool {
+    ACTIVE.with(Cell::get)
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn reset_observation_state_accesses_for_test() {
+    OBSERVATION_STATE_ACCESSES.with(|count| count.set(0));
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn observation_state_accesses_for_test() -> usize {
+    OBSERVATION_STATE_ACCESSES.with(Cell::get)
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -101,8 +146,11 @@ pub(super) fn history_required() -> bool {
     HISTORY_REQUIRED.load(Ordering::Relaxed)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 const JOURNAL_SIZE: usize = 8192;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 const MAX_READS: usize = 16_384;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 const MAX_DEPTH: usize = 8;
 
 thread_local! {
@@ -197,6 +245,7 @@ impl RecentReads {
 /// no Lisp identity: only the process's monotonic history requirement is shared.
 /// Once this mutator has observed required history, it never skips later writes,
 /// including writes after its last capture while a certificate can remain live.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum JournalPolicy {
@@ -351,6 +400,18 @@ impl CollectionReads {
     #[doc(hidden)]
     pub fn all_dependency_bits(&self, mut predicate: impl FnMut(usize) -> bool) -> bool {
         self.reads.iter().copied().all(&mut predicate)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn contains_owner_for_test(&self, bits: usize) -> bool {
+        self.reads.contains(&bits)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn reads_empty_for_test(&self) -> bool {
+        self.reads.is_empty()
     }
 
     pub fn unchanged(&self) -> bool {
@@ -1163,10 +1224,6 @@ pub fn world_state_placeholder() -> Box<dyn std::any::Any> {
 pub fn swap_world_state(slot: &mut dyn std::any::Any) {
     store_state::swap_carried(slot);
 }
-
-#[cfg(test)]
-#[path = "tests/write_fusion_test.rs"]
-mod write_fusion_tests;
 
 #[cfg(all(test, feature = "jit"))]
 #[path = "collection_reads/tests/lazy_window_test.rs"]

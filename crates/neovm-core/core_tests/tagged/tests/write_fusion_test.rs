@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::tagged::mutate::{set_cons_car, set_cons_cdr, set_record_slot, set_vector_slot};
-use crate::value::Value;
+use neovm_value::value::Value;
 
 type Setter = fn(Value, Value) -> bool;
 
@@ -15,14 +15,16 @@ fn record_slot(owner: Value, item: Value) -> bool {
 }
 
 fn journal_policy() -> JournalPolicy {
-    with_store(|store| store.mutator.policy.get())
+    journal_policy_for_test()
 }
 
 #[test]
 fn storefast_vm_and_tls_stores_do_not_borrow_the_inactive_capture_recorder() {
-    use crate::emacs_core::{builtins, eval::Context};
+    use neovm_eval::emacs_core::builtins;
 
-    let mut context = Context::new_minimal_vm_harness();
+    let boot = crate::test_utils::new_context();
+    let mut context =
+        neovm_eval::test_support::authority::new_minimal_vm_harness(boot.hooks_installed());
     let cons = Value::cons(Value::NIL, Value::NIL);
     let vector = Value::vector(vec![Value::NIL]);
     let record = Value::make_record(vec![Value::NIL]);
@@ -31,8 +33,7 @@ fn storefast_vm_and_tls_stores_do_not_borrow_the_inactive_capture_recorder() {
     let (_, empty) = capture(|| ());
     assert!(empty.unwrap().unchanged());
     let before = LispCollectionRevision::current();
-    with_state(|cold| {
-        let _borrow = cold.borrow_mut();
+    with_cold_state_held(|| {
         assert_eq!(
             builtins::builtin_setcar_2(&mut context, cons, Value::T).unwrap(),
             Value::T
@@ -42,16 +43,16 @@ fn storefast_vm_and_tls_stores_do_not_borrow_the_inactive_capture_recorder() {
             Value::T
         );
         assert_eq!(
-            builtins::builtin_aset_args_in_context(
-                &context,
+            builtins::builtin_aset_args_in_state(
+                &mut context,
                 &[vector, Value::fixnum(0), Value::T],
             )
             .unwrap(),
             Value::T
         );
         assert_eq!(
-            builtins::builtin_aset_args_in_context(
-                &context,
+            builtins::builtin_aset_args_in_state(
+                &mut context,
                 &[record, Value::fixnum(0), Value::T],
             )
             .unwrap(),
@@ -90,8 +91,7 @@ fn storefast_null_heap_stores_keep_journal_and_captures_without_installing_a_hea
     assert!(certificate.unchanged());
     clear_tagged_heap_if_installed(&heap);
     let before = LispCollectionRevision::current();
-    with_state(|cold| {
-        let _borrow = cold.borrow_mut();
+    with_cold_state_held(|| {
         cons.set_car(Value::T);
         assert!(vector.set_vector_slot(0, Value::T));
         assert!(record.set_record_slot(0, Value::T));
@@ -191,15 +191,13 @@ fn storefast_shared_stores_with_active_capture_and_full_barrier() {
     let after = LispCollectionRevision::current();
     assert_eq!(after.steps_since_for_test(before), 8);
     let owners = [cons, vector, record, string, cons, vector, record, string];
-    with_store(|store| {
-        for (offset, owner) in owners.into_iter().enumerate() {
-            let sequence = before.sequence().wrapping_add(offset as u64 + 1);
-            assert_eq!(
-                store.journal()[sequence as usize % JOURNAL_SIZE].get(),
-                owner.bits()
-            );
-        }
-    });
+    for (offset, owner) in owners.into_iter().enumerate() {
+        let sequence = before.sequence().wrapping_add(offset as u64 + 1);
+        assert_eq!(
+            journal_slot_for_test(sequence as usize % JOURNAL_SIZE),
+            owner.bits()
+        );
+    }
     assert_eq!(cons.cons_car(), Value::T);
     assert_eq!(cons.cons_cdr(), Value::T);
     assert_eq!(vector.as_vector_data().unwrap()[0], Value::NIL);
@@ -229,6 +227,7 @@ fn storefast_string_journal_precedes_projection_and_invalid_calls_are_total() {
 
 #[test]
 fn fused_setter_first_read_follows_its_journal_write() {
+    let _heap = crate::tagged::gc::TestHeap::new();
     let cases: [(Value, Setter); 4] = [
         (Value::cons(Value::NIL, Value::NIL), set_cons_car),
         (Value::cons(Value::NIL, Value::NIL), set_cons_cdr),
@@ -238,7 +237,7 @@ fn fused_setter_first_read_follows_its_journal_write() {
     for (owner, setter) in cases {
         let (_, reads) = capture(|| assert!(setter(owner, Value::T)));
         let reads = reads.expect("a first setter projection follows its own write");
-        assert!(reads.reads.contains(&owner.bits()));
+        assert!(reads.contains_owner_for_test(owner.bits()));
         assert!(reads.unchanged());
         assert_eq!(journal_policy(), JournalPolicy::JournalOnly);
         assert!(setter(owner, Value::NIL));
@@ -257,13 +256,14 @@ fn fused_setter_first_read_follows_its_journal_write() {
 
 #[test]
 fn fused_setter_projects_newly_linked_cons_dependencies() {
+    let _heap = crate::tagged::gc::TestHeap::new();
     let first = Value::cons(Value::NIL, Value::NIL);
     let second = Value::cons(Value::T, Value::NIL);
     let (_, reads) = capture(|| assert!(set_cons_cdr(first, second)));
     let reads = reads.unwrap();
-    assert!(reads.reads.contains(&first.bits()));
+    assert!(reads.contains_owner_for_test(first.bits()));
     assert!(
-        !reads.reads.contains(&second.bits()),
+        !reads.contains_owner_for_test(second.bits()),
         "the stored child is not projected"
     );
     assert!(set_cons_car(second, Value::NIL));
@@ -274,6 +274,7 @@ fn fused_setter_projects_newly_linked_cons_dependencies() {
 
 #[test]
 fn failed_wrong_tags_journal_without_adding_projection_dependencies() {
+    let _heap = crate::tagged::gc::TestHeap::new();
     let vector = Value::vector(vec![Value::NIL]);
     let cons = Value::cons(Value::NIL, Value::NIL);
     let string = Value::string("x");
@@ -291,7 +292,7 @@ fn failed_wrong_tags_journal_without_adding_projection_dependencies() {
         let revision = LispCollectionRevision::current().sequence();
         let (_, failed) = capture(|| assert!(!setter(owner, Value::T)));
         let failed = failed.unwrap();
-        assert!(failed.reads.is_empty());
+        assert!(failed.reads_empty_for_test());
         assert_eq!(
             LispCollectionRevision::current().sequence(),
             revision.wrapping_add(1)
@@ -312,6 +313,7 @@ fn failed_wrong_tags_journal_without_adding_projection_dependencies() {
 
 #[test]
 fn failed_veclike_subtypes_still_observe_their_header_after_journaling() {
+    let _heap = crate::tagged::gc::TestHeap::new();
     let vector = Value::vector(vec![Value::NIL]);
     let record = Value::make_record(vec![Value::NIL]);
     let cases: [(Value, Setter, Setter); 2] = [
@@ -323,7 +325,7 @@ fn failed_veclike_subtypes_still_observe_their_header_after_journaling() {
         let (_, failed) = capture(|| assert!(!rejected(owner, Value::T)));
         let failed = failed.expect("the failed subtype's first header read follows journaling");
         assert!(!before.unwrap().unchanged());
-        assert!(failed.reads.contains(&owner.bits()));
+        assert!(failed.contains_owner_for_test(owner.bits()));
         assert!(failed.unchanged());
         assert!(accepted(owner, Value::T));
         assert!(!failed.unchanged());
@@ -332,6 +334,7 @@ fn failed_veclike_subtypes_still_observe_their_header_after_journaling() {
 
 #[test]
 fn out_of_bounds_and_same_value_calls_keep_write_history() {
+    let _heap = crate::tagged::gc::TestHeap::new();
     let cases: [(Value, fn(Value, usize, Value) -> bool); 2] = [
         (Value::vector(vec![Value::NIL]), set_vector_slot),
         (Value::make_record(vec![Value::NIL]), set_record_slot),
@@ -341,7 +344,7 @@ fn out_of_bounds_and_same_value_calls_keep_write_history() {
         let (_, failed) = capture(|| assert!(!setter(owner, 1, Value::T)));
         let failed = failed.unwrap();
         assert!(!before.unwrap().unchanged());
-        assert!(failed.reads.contains(&owner.bits()));
+        assert!(failed.contains_owner_for_test(owner.bits()));
         assert!(failed.unchanged());
         assert!(setter(owner, 0, Value::NIL));
         assert!(!failed.unchanged(), "same-value writes remain journaled");
@@ -355,25 +358,26 @@ fn out_of_bounds_and_same_value_calls_keep_write_history() {
 
 #[test]
 fn nested_fused_setters_preserve_each_scopes_first_read_and_recent_probe() {
+    let _heap = crate::tagged::gc::TestHeap::new();
     let source = Value::cons(Value::NIL, Value::NIL);
     let (_, outer) = capture(|| {
-        OBSERVATION_STATE_ACCESSES.with(|count| count.set(0));
+        reset_observation_state_accesses_for_test();
         assert!(set_cons_car(source, Value::T));
-        assert_eq!(OBSERVATION_STATE_ACCESSES.with(Cell::get), 1);
+        assert_eq!(observation_state_accesses_for_test(), 1);
         source.cons_car();
-        assert_eq!(OBSERVATION_STATE_ACCESSES.with(Cell::get), 1);
+        assert_eq!(observation_state_accesses_for_test(), 1);
         let (_, inner) = capture(|| {
             assert_eq!(journal_policy(), JournalPolicy::JournalAndObserve);
             assert!(set_cons_cdr(source, Value::T));
             source.cons_cdr();
-            assert_eq!(OBSERVATION_STATE_ACCESSES.with(Cell::get), 2);
+            assert_eq!(observation_state_accesses_for_test(), 2);
         });
         let inner = inner.unwrap();
-        assert!(inner.reads.contains(&source.bits()));
+        assert!(inner.contains_owner_for_test(source.bits()));
         assert!(inner.unchanged());
         assert_eq!(journal_policy(), JournalPolicy::JournalAndObserve);
         assert!(set_cons_car(source, Value::NIL));
-        assert_eq!(OBSERVATION_STATE_ACCESSES.with(Cell::get), 3);
+        assert_eq!(observation_state_accesses_for_test(), 3);
         assert!(!inner.unchanged());
     });
     assert!(outer.is_none());
@@ -382,6 +386,7 @@ fn nested_fused_setters_preserve_each_scopes_first_read_and_recent_probe() {
 
 #[test]
 fn normalized_fused_setters_rebase_only_the_inner_capture() {
+    let _heap = crate::tagged::gc::TestHeap::new();
     let mut source = Value::vector(vec![Value::NIL]);
     let (_, outer) = capture(|| {
         source.as_vector_data();
@@ -391,7 +396,7 @@ fn normalized_fused_setters_rebase_only_the_inner_capture() {
             |_| (),
         );
         let normalized = normalized.unwrap();
-        assert!(normalized.reads.contains(&source.bits()));
+        assert!(normalized.contains_owner_for_test(source.bits()));
         assert!(normalized.unchanged());
     });
     assert!(outer.is_none());
@@ -406,6 +411,7 @@ fn normalized_fused_setters_rebase_only_the_inner_capture() {
 
 #[test]
 fn fused_write_budgets_and_ring_history_remain_bounded() {
+    let _heap = crate::tagged::gc::TestHeap::new();
     let values: Vec<_> = (0..=MAX_READS)
         .map(|_| Value::cons(Value::NIL, Value::NIL))
         .collect();
@@ -437,6 +443,7 @@ fn fused_write_budgets_and_ring_history_remain_bounded() {
 
 #[test]
 fn fused_write_policy_survives_depth_rejection_and_panic_unwind() {
+    let _heap = crate::tagged::gc::TestHeap::new();
     fn nested(source: Value, depth: usize) {
         let (_, reads) = capture(|| {
             assert_eq!(journal_policy(), JournalPolicy::JournalAndObserve);
@@ -449,7 +456,7 @@ fn fused_write_policy_survives_depth_rejection_and_panic_unwind() {
     }
     let source = Value::cons(Value::NIL, Value::NIL);
     nested(source, MAX_DEPTH + 2);
-    assert!(!ACTIVE.with(Cell::get));
+    assert!(!capture_active_for_test());
     assert_eq!(journal_policy(), JournalPolicy::JournalOnly);
 
     let (_, outer) = capture(|| {
@@ -461,11 +468,11 @@ fn fused_write_policy_survives_depth_rejection_and_panic_unwind() {
             });
         });
         assert!(unwind.is_err());
-        assert!(ACTIVE.with(Cell::get));
+        assert!(capture_active_for_test());
         assert_eq!(journal_policy(), JournalPolicy::JournalAndObserve);
     });
     assert!(outer.is_none());
-    assert!(!ACTIVE.with(Cell::get));
+    assert!(!capture_active_for_test());
     assert_eq!(journal_policy(), JournalPolicy::JournalOnly);
     let (_, reads) = capture(|| assert!(set_cons_car(source, Value::NIL)));
     assert!(reads.unwrap().unchanged());
@@ -473,6 +480,7 @@ fn fused_write_policy_survives_depth_rejection_and_panic_unwind() {
 
 #[test]
 fn lazy_prefix_observes_another_mutators_monotonic_history_transition() {
+    let _heap = crate::tagged::gc::TestHeap::new();
     // Run this test in an isolated nextest process. CONFIG is a LazyLock, so
     // WRITE_LAZY is inherited at launch; never change the environment in-test.
     initialize();
@@ -504,16 +512,16 @@ fn lazy_prefix_observes_another_mutators_monotonic_history_transition() {
             assert_eq!(journal_policy(), JournalPolicy::JournalOnly);
         });
         entered.wait();
-        assert!(!ACTIVE.with(Cell::get));
+        assert!(!capture_active_for_test());
         assert!(set_cons_cdr(source, Value::T));
         assert_eq!(
             LispCollectionRevision::current().sequence(),
             before.wrapping_add(u64::from(!lazy) + 1)
         );
-        with_store(|store| {
+        {
             let slot = LispCollectionRevision::current().sequence() as usize % JOURNAL_SIZE;
-            assert_eq!(store.journal()[slot].get(), source.bits());
-        });
+            assert_eq!(journal_slot_for_test(slot), source.bits());
+        }
         assert_eq!(journal_policy(), JournalPolicy::JournalOnly);
         leaving.wait();
         worker.join().unwrap();
@@ -537,6 +545,7 @@ fn lazy_prefix_observes_another_mutators_monotonic_history_transition() {
 
 #[test]
 fn own_capture_upgrades_lazy_prefix_and_never_returns_to_skipping_writes() {
+    let _heap = crate::tagged::gc::TestHeap::new();
     initialize();
     let lazy = std::env::var("NEOVM_COLLECTION_WRITE_LAZY").as_deref() == Ok("on");
     let source = Value::make_record(vec![Value::NIL]);
@@ -549,7 +558,7 @@ fn own_capture_upgrades_lazy_prefix_and_never_returns_to_skipping_writes() {
         assert!(set_record_slot(source, 0, Value::NIL));
     });
     let reads = reads.unwrap();
-    assert!(reads.reads.contains(&source.bits()));
+    assert!(reads.contains_owner_for_test(source.bits()));
     assert_eq!(journal_policy(), JournalPolicy::JournalOnly);
     assert!(set_record_slot(source, 0, Value::T));
     assert!(!reads.unchanged());
@@ -557,14 +566,15 @@ fn own_capture_upgrades_lazy_prefix_and_never_returns_to_skipping_writes() {
 
 #[test]
 fn generic_changed_keeps_journaling_separate_from_pointer_observation() {
+    let _heap = crate::tagged::gc::TestHeap::new();
     let source = Value::cons(Value::NIL, Value::NIL);
     let (_, reads) = capture(|| {
-        OBSERVATION_STATE_ACCESSES.with(|count| count.set(0));
+        reset_observation_state_accesses_for_test();
         LispCollectionRevision::changed(source);
-        assert_eq!(OBSERVATION_STATE_ACCESSES.with(Cell::get), 0);
+        assert_eq!(observation_state_accesses_for_test(), 0);
     });
     let reads = reads.unwrap();
-    assert!(reads.reads.is_empty());
+    assert!(reads.reads_empty_for_test());
     assert!(set_cons_car(source, Value::T));
     assert!(reads.unchanged());
     let (_, invalid) = capture(|| {
