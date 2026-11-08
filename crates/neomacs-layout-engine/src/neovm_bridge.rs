@@ -730,8 +730,39 @@ pub(crate) fn window_parameter_by_name(window: &Window, name: &str) -> Option<Va
         .map(|(_, value)| *value)
 }
 
-fn global_bool(vars: VariableView<'_>, symbol: &WellKnown) -> bool {
-    vars.value(symbol.id()).is_some_and(|value| !value.is_nil())
+/// Boolean read of a display-time C variable whose GNU read happens with the
+/// displayed buffer current (`set_buffer_internal_1`, xdisp.c:20555): the
+/// buffer's own binding wins, else the default.  The old `vars.value` read
+/// answered the default cell only, so a buffer-local binding was invisible.
+fn effective_buffer_bool_id(
+    buffer: &Buffer,
+    vars: VariableView<'_>,
+    symbol: &WellKnown,
+) -> bool {
+    vars.value_in_buffer(Some(buffer), symbol.id())
+        .is_some_and(|value| !value.is_nil())
+}
+
+/// GNU's display-time `mode-line-in-non-selected-windows` read
+/// (dispextern.h:1542/1583/1618 macros, evaluated while the window's buffer is
+/// current): nil means every window shows its mode line.
+fn display_mode_line_in_non_selected_windows(
+    buffer: &Buffer,
+    vars: VariableView<'_>,
+) -> bool {
+    vars.value_in_buffer(Some(buffer), MODE_LINE_IN_NON_SELECTED_WINDOWS.id())
+        .is_some_and(Value::is_nil)
+}
+
+/// GNU redisplay_window's `scroll-minibuffer-conservatively` read
+/// (xdisp.c:21092/21103) with the window's buffer current (xdisp.c:20555);
+/// void keeps the GNU default t.
+fn effective_scroll_minibuffer_conservatively(
+    buffer: &Buffer,
+    vars: VariableView<'_>,
+) -> bool {
+    vars.value_in_buffer(Some(buffer), SCROLL_MINIBUFFER_CONSERVATIVELY.id())
+        .is_none_or(|value| !value.is_nil())
 }
 
 fn effective_nobreak_char_display(buffer: &Buffer, vars: VariableView<'_>) -> NobreakDisplayMode {
@@ -742,7 +773,12 @@ fn effective_nobreak_char_display(buffer: &Buffer, vars: VariableView<'_>) -> No
     match effective_buffer_value(buffer, vars, LayoutVar::NobreakCharDisplay) {
         Some(value) if value.is_nil() => NobreakDisplayMode::Literal,
         Some(value) if value.is_t() => {
-            if global_bool(vars, &NOBREAK_CHAR_ASCII_DISPLAY) {
+            // GNU reads the DEFVAR_BOOL in the same glyph-production walk as
+            // `nobreak-char-display` (xdisp.c:8604/8618), with the window's
+            // buffer current (xdisp.c:20555; the C swap is
+            // set_buffer_internal_2, buffer.c:2374-2391), so its buffer-local
+            // binding takes effect too.
+            if effective_buffer_bool_id(buffer, vars, &NOBREAK_CHAR_ASCII_DISPLAY) {
                 NobreakDisplayMode::HighlightAscii
             } else {
                 NobreakDisplayMode::HighlightOriginal
@@ -1359,11 +1395,15 @@ fn frame_cursor_color_pixel(frame: &Frame, face_table: &FaceTable) -> u32 {
 fn frame_cursor_foreground_pixel(
     frame: &Frame,
     face_table: &FaceTable,
-    vars: VariableView<'_>,
+    x_cursor_fore_pixel: Option<Value>,
 ) -> u32 {
     // GNU's Vx_cursor_fore_pixel is a color-name string when explicitly set;
-    // otherwise x_set_cursor_color uses FRAME_BACKGROUND_PIXEL.
-    vars.value(X_CURSOR_FORE_PIXEL.id())
+    // otherwise x_set_cursor_color uses FRAME_BACKGROUND_PIXEL.  The read is
+    // in x_set_cursor_color (xfns.c:1482-1490), installed as the cursor-color
+    // frame-parameter handler (xfns.c:10187): a command-context read of the C
+    // global, so a live `let` is visible.  The caller resolves it with the
+    // evaluator's current-context visible read.
+    x_cursor_fore_pixel
         .and_then(|value| parse_color_pixel(&value))
         .unwrap_or_else(|| frame_background_color_pixel(frame, face_table))
 }
@@ -1540,6 +1580,7 @@ pub fn window_params_from_neovm(
     is_minibuffer: bool,
     window_cursor_type: Value,
     window_cursor_effect: Value,
+    x_cursor_fore_pixel: Option<Value>,
 ) -> Option<WindowParams> {
     window_params_from_neovm_with_font_sizing(
         window,
@@ -1556,6 +1597,7 @@ pub fn window_params_from_neovm(
         },
         window_cursor_type,
         window_cursor_effect,
+        x_cursor_fore_pixel,
         FontSizing::native_gui(),
     )
 }
@@ -1587,6 +1629,7 @@ pub fn window_params_from_neovm_with_font_sizing(
     display_role: WindowDisplayRole,
     window_cursor_type: Value,
     window_cursor_effect: Value,
+    x_cursor_fore_pixel: Option<Value>,
     font_sizing: FontSizing,
 ) -> Option<WindowParams> {
     let WindowDisplayRole {
@@ -1601,9 +1644,7 @@ pub fn window_params_from_neovm_with_font_sizing(
     let mode_line_active = mode_line_active
         || (neovm_core::face::realization::enabled()
             && neovm_core::face::realization::frame_is_tty_target(frame)
-            && vars
-                .value(MODE_LINE_IN_NON_SELECTED_WINDOWS.id())
-                .is_some_and(Value::is_nil));
+            && display_mode_line_in_non_selected_windows(buffer, vars));
     // Only leaf windows can be laid out.
     let effective_window_system = frame.effective_window_system();
     let is_window_system = effective_window_system.is_some();
@@ -1757,9 +1798,10 @@ pub fn window_params_from_neovm_with_font_sizing(
     let scroll_conservatively =
         effective_buffer_int(buffer, vars, LayoutVar::ScrollConservatively, 0);
     let scroll_step = effective_buffer_int(buffer, vars, LayoutVar::ScrollStep, 0);
-    let scroll_minibuffer_conservatively = vars
-        .value(SCROLL_MINIBUFFER_CONSERVATIVELY.id())
-        .is_none_or(|value| !value.is_nil());
+    // GNU reads `scroll-minibuffer-conservatively` in redisplay_window
+    // (xdisp.c:21092/21103), with the window's buffer current (xdisp.c:20555),
+    // so a buffer-local binding takes effect.
+    let scroll_minibuffer_conservatively = effective_scroll_minibuffer_conservatively(buffer, vars);
     // GNU `window_scroll_margin` (src/window.c:6207) caps `scroll-margin` by
     // `maximum-scroll-margin`, which only counts when it is a float. Resolve
     // both here so every layout consumer sees the same effective margin.
@@ -1820,13 +1862,18 @@ pub fn window_params_from_neovm_with_font_sizing(
         bar_width: CursorBarWidth::DEFAULT,
     });
     let cursor_color = frame_cursor_color_pixel(frame, face_table);
-    let cursor_foreground = frame_cursor_foreground_pixel(frame, face_table, vars);
+    let cursor_foreground = frame_cursor_foreground_pixel(frame, face_table, x_cursor_fore_pixel);
     let cursor_effects = parse_cursor_effect_profile(window_cursor_effect).or_else(|| {
         buffer_local_value(buffer, LayoutVar::NeomacsCursorEffect)
             .and_then(parse_cursor_effect_profile)
     });
     let visual_cursors = parse_visual_cursors(buffer, cursor_color);
-    let x_stretch_cursor = global_bool(vars, &X_STRETCH_CURSOR);
+    // GNU reads `x-stretch-cursor` while drawing the cursor from the window's
+    // buffer: display_and_set_cursor (xdisp.c:2727) and
+    // x_draw_stretch_glyph_string (xterm.c:10645) run inside redisplay_window,
+    // which made the window's buffer current (xdisp.c:20555).  The
+    // buffer-local binding therefore wins over the global default.
+    let x_stretch_cursor = effective_buffer_bool_id(buffer, vars, &X_STRETCH_CURSOR);
     let fill_column_indicator = buffer_fill_column_indicator(buffer, vars);
 
     let header_line_height = if wants_header_line {
@@ -2105,6 +2152,11 @@ pub fn collect_layout_params_with_font_sizing(
     let cursor_target = redisplay_cursor_target(evaluator, frame_id);
     let frame_params =
         frame_params_from_neovm(frame, evaluator.face_table(), evaluator.variables());
+    // GNU reads Vx_cursor_fore_pixel in x_set_cursor_color (xfns.c:1482-1490,
+    // the cursor-color frame-parameter handler installed at xfns.c:10187): a
+    // command-context C-global read, so a live `let` is visible.
+    let x_cursor_fore_pixel =
+        visible_value(evaluator, crate::fixed_symbols::X_CURSOR_FORE_PIXEL.id());
 
     let mut window_params = Vec::new();
 
@@ -2145,6 +2197,7 @@ pub fn collect_layout_params_with_font_sizing(
             },
             window_cursor_type,
             window_cursor_effect,
+            x_cursor_fore_pixel,
             font_sizing,
         ) {
             tracing::debug!(
@@ -2198,6 +2251,7 @@ pub fn collect_layout_params_with_font_sizing(
                 },
                 window_cursor_type,
                 window_cursor_effect,
+                x_cursor_fore_pixel,
                 font_sizing,
             ) {
                 tracing::debug!(

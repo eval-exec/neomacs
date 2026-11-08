@@ -422,6 +422,7 @@ fn window_params_resolve_special_display_face_colors() {
         false,
         Value::T,
         Value::NIL,
+        None,
     )
     .expect("leaf window params");
 
@@ -591,6 +592,7 @@ fn window_params_default_colors_follow_buffer_default_face_remap() {
         false,
         Value::T,
         Value::NIL,
+        None,
     )
     .expect("leaf window params");
 
@@ -639,6 +641,7 @@ fn test_window_params_from_neovm_internal_returns_none() {
         false,
         Value::T,
         Value::NIL,
+        None,
     );
     assert!(result.is_none(), "Internal windows should return None");
 }
@@ -685,6 +688,7 @@ fn window_params_from_neovm_uses_default_header_line_and_tab_line_values() {
         false,
         Value::T,
         Value::NIL,
+        None,
     )
     .expect("leaf window params");
 
@@ -927,6 +931,7 @@ fn test_window_params_nonselected_reads_window_point() {
         false,
         Value::T,
         Value::NIL,
+        None,
     )
     .expect("window params");
 
@@ -1297,7 +1302,11 @@ fn test_frame_cursor_foreground_defaults_to_frame_background_like_gnu() {
     let frame = evaluator.frame_manager().get(frame_id).unwrap();
 
     assert_eq!(
-        frame_cursor_foreground_pixel(frame, evaluator.face_table(), evaluator.variables()),
+        frame_cursor_foreground_pixel(
+            frame,
+            evaluator.face_table(),
+            visible_value(&evaluator, X_CURSOR_FORE_PIXEL.id()),
+        ),
         0x123456
     );
 }
@@ -1317,8 +1326,253 @@ fn test_frame_cursor_foreground_honors_x_cursor_fore_pixel_like_gnu() {
     let frame = evaluator.frame_manager().get(frame_id).unwrap();
 
     assert_eq!(
-        frame_cursor_foreground_pixel(frame, evaluator.face_table(), evaluator.variables()),
+        frame_cursor_foreground_pixel(
+            frame,
+            evaluator.face_table(),
+            visible_value(&evaluator, X_CURSOR_FORE_PIXEL.id()),
+        ),
         0xabcdef
+    );
+}
+
+/// V-CUR: GNU reads Vx_cursor_fore_pixel in x_set_cursor_color
+/// (xfns.c:1482-1490), a command-context C-global read; a live `let` must be
+/// visible to it.  The default-only read this branch replaced missed it.
+#[test]
+fn test_frame_cursor_foreground_honours_a_live_let() {
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("*cursor-foreground-let*");
+    let frame_id = evaluator
+        .frame_manager_mut()
+        .create_frame("test", 800, 600, buf_id);
+    let scope = evaluator.specpdl().len();
+    evaluator
+        .specbind_uncached(X_CURSOR_FORE_PIXEL.id(), Value::string("#abcdef"))
+        .expect("dynamic x-cursor-fore-pixel binding");
+    let resolved = visible_value(&evaluator, X_CURSOR_FORE_PIXEL.id());
+    evaluator.unbind_to(scope);
+    let frame = evaluator.frame_manager().get(frame_id).unwrap();
+    assert_eq!(
+        frame_cursor_foreground_pixel(frame, evaluator.face_table(), resolved),
+        0xabcdef,
+        "a live let on x-cursor-fore-pixel must be visible to the cursor read"
+    );
+}
+
+/// V-BUF: nobreak-char-ascii-display is a DEFVAR_BOOL read at
+/// xdisp.c:8604/8618 while producing glyphs for the displayed buffer, so its
+/// buffer-local binding must win over the global.  The default-only read this
+/// branch replaced always answered the global.
+#[test]
+fn buffer_local_nobreak_char_ascii_display_wins_over_the_global() {
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("nb-ascii-local");
+    evaluator.buffer_manager_mut().set_current(buf_id);
+    evaluator
+        .eval_str(
+            "(progn
+               (setq nobreak-char-display t)
+               (setq nobreak-char-ascii-display nil)
+               (make-local-variable 'nobreak-char-ascii-display)
+               (set 'nobreak-char-ascii-display t)
+               nil)",
+        )
+        .expect("buffer-local nobreak-char-ascii-display");
+    let local_wins = {
+        let buffer = evaluator.buffer_manager().get(buf_id).expect("buffer");
+        super::effective_nobreak_char_display(buffer, evaluator.variables())
+    };
+    assert_eq!(
+        local_wins,
+        NobreakDisplayMode::HighlightAscii,
+        "the buffer-local t must win over the global nil"
+    );
+    // Flip both: the buffer-local nil still wins over the global t.  The
+    // symbol is localized now, so the global needs set-default.
+    evaluator
+        .eval_str(
+            "(progn
+               (set-default 'nobreak-char-ascii-display t)
+               (set 'nobreak-char-ascii-display nil)
+               nil)",
+        )
+        .expect("flipped nobreak-char-ascii-display");
+    let global_loses = {
+        let buffer = evaluator.buffer_manager().get(buf_id).expect("buffer");
+        super::effective_nobreak_char_display(buffer, evaluator.variables())
+    };
+    assert_eq!(
+        global_loses,
+        NobreakDisplayMode::HighlightOriginal,
+        "the buffer-local nil must win over the global t"
+    );
+}
+
+/// V-BUF: x-stretch-cursor is read while drawing the cursor from the window's
+/// buffer (xdisp.c:2727, xterm.c:10645, under xdisp.c:20555), so a buffer-local
+/// binding must win over the global.
+#[test]
+fn buffer_local_x_stretch_cursor_wins_over_the_global() {
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("stretch-cursor-local");
+    evaluator.buffer_manager_mut().set_current(buf_id);
+    evaluator
+        .eval_str(
+            "(progn
+               (setq x-stretch-cursor nil)
+               (make-local-variable 'x-stretch-cursor)
+               (set 'x-stretch-cursor t)
+               nil)",
+        )
+        .expect("buffer-local x-stretch-cursor");
+    let buffer = evaluator.buffer_manager().get(buf_id).expect("buffer");
+    assert!(
+        super::effective_buffer_bool_id(buffer, evaluator.variables(), &X_STRETCH_CURSOR),
+        "the buffer-local t must win over the global nil"
+    );
+}
+
+/// V-BUF: mode-line-in-non-selected-windows is read by dispextern.h's display
+/// macros (1542/1583/1618) with the window's buffer current; a buffer-local
+/// nil must show the mode line even when the global is t.
+#[test]
+fn buffer_local_mode_line_in_non_selected_windows_wins_over_the_global() {
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let local_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("mode-line-local");
+    let global_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("mode-line-global");
+    evaluator.buffer_manager_mut().set_current(local_id);
+    evaluator
+        .eval_str(
+            "(progn
+               (setq mode-line-in-non-selected-windows t)
+               (make-local-variable 'mode-line-in-non-selected-windows)
+               (set 'mode-line-in-non-selected-windows nil)
+               nil)",
+        )
+        .expect("buffer-local mode-line-in-non-selected-windows");
+    let local_off = {
+        let buffer = evaluator.buffer_manager().get(local_id).expect("buffer");
+        super::display_mode_line_in_non_selected_windows(buffer, evaluator.variables())
+    };
+    let global_on = {
+        let buffer = evaluator.buffer_manager().get(global_id).expect("buffer");
+        super::display_mode_line_in_non_selected_windows(buffer, evaluator.variables())
+    };
+    assert!(local_off, "the buffer-local nil must win over the global t");
+    assert!(
+        !global_on,
+        "a buffer without its own binding must read the global t"
+    );
+}
+
+/// V-BUF: scroll-minibuffer-conservatively is read in redisplay_window
+/// (xdisp.c:21092/21103) with the window's buffer current; a buffer-local t
+/// must win over a nil global.
+#[test]
+fn buffer_local_scroll_minibuffer_conservatively_wins_over_the_global() {
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let local_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("scroll-mini-local");
+    let global_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("scroll-mini-global");
+    evaluator.buffer_manager_mut().set_current(local_id);
+    evaluator
+        .eval_str(
+            "(progn
+               (setq scroll-minibuffer-conservatively nil)
+               (make-local-variable 'scroll-minibuffer-conservatively)
+               (set 'scroll-minibuffer-conservatively t)
+               nil)",
+        )
+        .expect("buffer-local scroll-minibuffer-conservatively");
+    let local_on = {
+        let buffer = evaluator.buffer_manager().get(local_id).expect("buffer");
+        super::effective_scroll_minibuffer_conservatively(buffer, evaluator.variables())
+    };
+    let global_off = {
+        let buffer = evaluator.buffer_manager().get(global_id).expect("buffer");
+        super::effective_scroll_minibuffer_conservatively(buffer, evaluator.variables())
+    };
+    assert!(local_on, "the buffer-local t must win over the global nil");
+    assert!(
+        !global_off,
+        "a buffer without its own binding must read the global nil"
+    );
+}
+
+/// V-BUF: composition-function-table is read by composite.c:1105-1189 for the
+/// buffer being examined, so each buffer resolves its own binding; the
+/// default-only read this branch replaced answered one table for every buffer.
+#[test]
+fn buffer_local_composition_function_table_applies_only_in_its_buffer() {
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let a_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("comp-local-a");
+    let b_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("comp-local-b");
+    // The global table has a rule at ?x; each local buffer installs its own
+    // table (a distinct char-table object) with a different rule.
+    evaluator.buffer_manager_mut().set_current(a_id);
+    evaluator
+        .eval_str(
+            "(progn
+               (setq composition-function-table (make-char-table nil))
+               (aset composition-function-table ?x (list (vector \"xy\" 0 'font-shape-gstring)))
+               (make-local-variable 'composition-function-table)
+               (set 'composition-function-table (make-char-table nil))
+               (aset composition-function-table ?y (list (vector \"yz\" 0 'font-shape-gstring)))
+               nil)",
+        )
+        .expect("composition tables for A");
+    evaluator.buffer_manager_mut().set_current(b_id);
+    evaluator
+        .eval_str(
+            "(progn
+               (make-local-variable 'composition-function-table)
+               (set 'composition-function-table (make-char-table nil))
+               (aset composition-function-table ?z (list (vector \"zw\" 0 'font-shape-gstring)))
+               nil)",
+        )
+        .expect("composition tables for B");
+    let function = evaluator
+        .eval_str("'auto-compose-chars")
+        .expect("auto-compose-chars symbol");
+    let global_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("comp-global");
+    let table_for = |buffer_id| {
+        let buffer = evaluator.buffer_manager().get(buffer_id).expect("buffer");
+        super::buffer_snapshot::active_composition_table(
+            Some(Value::T),
+            Some(function),
+            buffer,
+            evaluator.variables(),
+            neovm_core::tagged::SymbolMode::Positioned,
+        )
+    };
+    let local_a = table_for(a_id);
+    let local_b = table_for(b_id);
+    let global = table_for(global_id);
+    assert!(local_a.is_some() && local_b.is_some() && global.is_some());
+    assert_ne!(local_a, global, "buffer A must not read the global table");
+    assert_ne!(local_b, global, "buffer B must not read the global table");
+    assert_ne!(
+        local_a, local_b,
+        "each buffer's own local table must be the one it reads"
     );
 }
 

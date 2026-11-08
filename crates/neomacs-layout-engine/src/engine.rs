@@ -711,6 +711,12 @@ fn collect_live_window_layout_inputs(
             },
             cursor_type,
             cursor_effect,
+            // x_set_cursor_color reads Vx_cursor_fore_pixel in the command
+            // context (xfns.c:1482-1490); resolve the visible value there.
+            super::neovm_bridge::visible_value(
+                evaluator,
+                crate::fixed_symbols::X_CURSOR_FORE_PIXEL.id(),
+            ),
             font_sizing,
         )?;
         let root_bounds = live_frame.root_window().bounds();

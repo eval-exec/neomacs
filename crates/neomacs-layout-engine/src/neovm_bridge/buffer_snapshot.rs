@@ -167,6 +167,7 @@ pub(super) fn capture_automatic_composition_spans(
     let Some(table) = active_composition_table(
         vars[LayoutVar::AutoCompositionMode as usize],
         vars[LayoutVar::AutoCompositionFunction as usize],
+        buffer,
         variables,
         symbol_mode,
     ) else {
@@ -202,6 +203,7 @@ pub(super) fn capture_string_composition_rules(
     let table = active_composition_table(
         value(LayoutVar::AutoCompositionMode),
         value(LayoutVar::AutoCompositionFunction),
+        buffer,
         vars,
         symbol_mode,
     )?;
@@ -212,9 +214,10 @@ pub(super) fn capture_string_composition_rules(
     )
 }
 
-fn active_composition_table(
+pub(super) fn active_composition_table(
     mode: Option<Value>,
     function: Option<Value>,
+    buffer: &Buffer,
     vars: VariableView<'_>,
     symbol_mode: SymbolMode,
 ) -> Option<Value> {
@@ -223,7 +226,12 @@ fn active_composition_table(
     {
         return None;
     }
-    vars.value(crate::fixed_symbols::COMPOSITION_FUNCTION_TABLE.id())
+    // GNU composite.c reads Vcomposition_function_table (1105-1189) while
+    // computing compositions for the buffer being redisplayed, so the
+    // buffer-local binding (set by ligature/auto-composition setups) applies
+    // to that buffer only; the old `vars.value` read answered the default
+    // cell for every buffer.
+    vars.value_in_buffer(Some(buffer), crate::fixed_symbols::COMPOSITION_FUNCTION_TABLE.id())
 }
 
 fn capture_layout_category_symbol_plists(
