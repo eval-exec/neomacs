@@ -956,8 +956,6 @@ obarray_method_proxies! {
             current_buffer_local_flags: u64,
             buffer_defaults: Option<&[Value]>,
         ) -> Option<Value>;
-    #[cfg(test)]
-    pub fn set_internal(id: SymId, value: Value);
     pub fn for_each_value_cell_mut(f: impl FnMut(&mut Value));
     // Audited closed operation, test-support surface: core tests unbind a
     // fixture variable through this adapter method instead of a mutable deref.
