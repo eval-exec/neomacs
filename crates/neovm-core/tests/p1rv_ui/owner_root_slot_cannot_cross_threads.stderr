@@ -4,7 +4,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
 8 |     ThreadTransfer::<OwnerRootSlot<'static>>::transfer(slot);
   |                                               ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<OwnerRootSlot<'static>>` due to unsatisfied trait bounds
   |
- ::: src/tagged/gc/mutator_registration/root_slot.rs
+ ::: $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/root_slot.rs
   |
   | pub struct OwnerRootSlot<'era> {
   | ------------------------------ doesn't satisfy `OwnerRootSlot<'static>: Send`

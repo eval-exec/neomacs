@@ -10,7 +10,7 @@ error[E0277]: `*mut HashTableObj` cannot be sent between threads safely
   |
   = help: within `{closure@$DIR/tests/p2ht_ui/table_mut_cannot_cross_threads.rs:7:28: 7:35}`, the trait `Send` is not implemented for `*mut HashTableObj`
 note: required because it appears within the type `TableMut<'_>`
- --> src/tagged/gc/mutator_registration/table_authority.rs
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/table_authority.rs
   |
   | pub struct TableMut<'access> {
   |            ^^^^^^^^
@@ -34,7 +34,7 @@ error[E0277]: `*mut gc::mutator_gc::MutatorGcState` cannot be sent between threa
   |
   = help: within `{closure@$DIR/tests/p2ht_ui/table_mut_cannot_cross_threads.rs:7:28: 7:35}`, the trait `Send` is not implemented for `*mut gc::mutator_gc::MutatorGcState`
 note: required because it appears within the type `TableMut<'_>`
- --> src/tagged/gc/mutator_registration/table_authority.rs
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/table_authority.rs
   |
   | pub struct TableMut<'access> {
   |            ^^^^^^^^
@@ -60,7 +60,7 @@ error[E0277]: `Rc<()>` cannot be sent between threads safely
 note: required because it appears within the type `PhantomData<Rc<()>>`
  --> $RUST/core/src/marker.rs
 note: required because it appears within the type `TableMut<'_>`
- --> src/tagged/gc/mutator_registration/table_authority.rs
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/table_authority.rs
   |
   | pub struct TableMut<'access> {
   |            ^^^^^^^^
@@ -86,12 +86,12 @@ error[E0277]: `*const ()` cannot be sent between threads safely
 note: required because it appears within the type `PhantomData<*const ()>`
  --> $RUST/core/src/marker.rs
 note: required because it appears within the type `TaggedValue`
- --> src/tagged/value.rs
+ --> $WORKSPACE/crates/neovm-value/src/tagged/value.rs
   |
   | pub struct TaggedValue(pub(crate) usize, ThreadConfined);
   |            ^^^^^^^^^^^
 note: required because it appears within the type `TableMut<'_>`
- --> src/tagged/gc/mutator_registration/table_authority.rs
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/table_authority.rs
   |
   | pub struct TableMut<'access> {
   |            ^^^^^^^^

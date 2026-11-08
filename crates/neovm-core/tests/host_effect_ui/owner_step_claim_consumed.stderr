@@ -10,10 +10,10 @@ error[E0382]: use of moved value: `claim`
    |             ^^^^^ value used here after move
    |
 note: `ClaimedOwnerStep::<'s, O>::complete` takes ownership of the receiver `self`, which moves `claim`
-  --> tests/host_effect_ui/support/../../../src/host_effect/owner_step.rs
+  --> tests/host_effect_ui/support/../../../../neovm-eval/src/host_effect/owner_step.rs
    |
-   |               pub(crate) fn complete(self, result: OwnerStepResult<'s>) -> Result<OwnerStepCompletion<'s, O>, RejectedOwnerStep<(Se...
-   |                                      ^^^^
+   |               pub fn complete(self, result: OwnerStepResult<'s>) -> Result<OwnerStepCompletion<'s, O>, RejectedOwnerStep<(Self, Own...
+   |                               ^^^^
 ...
    | / step_families!(
    | |     (

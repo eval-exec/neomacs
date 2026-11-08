@@ -10,31 +10,21 @@ error[E0599]: the associated function or constant `share` exists for struct `Thr
   ::: $WORKSPACE/crates/neovm-edit/src/buffer/buffer.rs
    |
    | pub struct BufferManager {
-   | ------------------------ doesn't satisfy `BufferManager: Sync`
+   | ------------------------ doesn't satisfy `BufferManager: std::marker::Sync`
    |
   ::: $WORKSPACE/crates/neovm-value/src/cold_retained.rs
    |
    | pub trait ColdRetained: 'static {}
    | ------------------------------- doesn't satisfy `_: Send` or `_: Sync`
    |
-  ::: $RUST/core/src/cell.rs
-   |
-   | pub struct UnsafeCell<T: ?Sized> {
-   | -------------------------------- doesn't satisfy `_: Sync`
-   |
-  ::: $RUST/core/src/ptr/non_null.rs
-   |
-   | pub struct NonNull<T: PointeeSized> {
-   | ----------------------------------- doesn't satisfy `NonNull<neovm_core::buffer::Buffer>: Sync` or `_: Sync`
-   |
    = note: the following trait bounds were not satisfied:
-           `NonNull<neovm_core::buffer::buffer::BufferStorage>: Sync`
-           which is required by `BufferManager: Sync`
-           `NonNull<neovm_core::buffer::Buffer>: Sync`
-           which is required by `BufferManager: Sync`
-           `UnsafeCell<neovm_core::buffer::buffer::BufferStorage>: Sync`
-           which is required by `BufferManager: Sync`
-           `(dyn neovm_value::cold_retained::ColdRetained + 'static): Sync`
-           which is required by `BufferManager: Sync`
+           `NonNull<neovm_core::buffer::buffer::BufferStorage>: std::marker::Sync`
+           which is required by `BufferManager: std::marker::Sync`
+           `NonNull<neovm_core::buffer::Buffer>: std::marker::Sync`
+           which is required by `BufferManager: std::marker::Sync`
+           `UnsafeCell<neovm_core::buffer::buffer::BufferStorage>: std::marker::Sync`
+           which is required by `BufferManager: std::marker::Sync`
+           `(dyn neovm_value::cold_retained::ColdRetained + 'static): std::marker::Sync`
+           which is required by `BufferManager: std::marker::Sync`
            `(dyn neovm_value::cold_retained::ColdRetained + 'static): Send`
-           which is required by `BufferManager: Sync`
+           which is required by `BufferManager: std::marker::Sync`

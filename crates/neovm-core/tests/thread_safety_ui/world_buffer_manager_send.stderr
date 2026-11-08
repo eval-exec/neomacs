@@ -1,41 +1,28 @@
 error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<BufferManager>`, but its trait bounds were not satisfied
   --> tests/thread_safety_ui/world_buffer_manager_send.rs:11:38
    |
- 4 |   struct ThreadTransfer<T>(PhantomData<T>);
-   |   ------------------------ associated function or constant `transfer` not found for this struct
+ 4 | struct ThreadTransfer<T>(PhantomData<T>);
+   | ------------------------ associated function or constant `transfer` not found for this struct
 ...
-11 |       ThreadTransfer::<BufferManager>::transfer();
-   |                                        ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<BufferManager>` due to unsatisfied trait bounds
+11 |     ThreadTransfer::<BufferManager>::transfer();
+   |                                      ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<BufferManager>` due to unsatisfied trait bounds
    |
   ::: $WORKSPACE/crates/neovm-edit/src/buffer/buffer.rs
    |
-   |   pub struct BufferManager {
-   |   ------------------------ doesn't satisfy `BufferManager: Send`
+   | pub struct BufferManager {
+   | ------------------------ doesn't satisfy `BufferManager: Send`
    |
   ::: $WORKSPACE/crates/neovm-value/src/cold_retained.rs
    |
-   |   pub trait ColdRetained: 'static {}
-   |   ------------------------------- doesn't satisfy `_: Send` or `_: Sync`
-   |
-  ::: $RUST/alloc/src/rc.rs
-   |
-   | / pub struct Rc<
-   | |     T: ?Sized,
-   | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
-   | | > {
-   | |_- doesn't satisfy 7 bounds
-   |
-  ::: $RUST/core/src/ptr/non_null.rs
-   |
-   |   pub struct NonNull<T: PointeeSized> {
-   |   ----------------------------------- doesn't satisfy `NonNull<MarkerObj>: Send`, `NonNull<neovm_core::buffer::Buffer>: Send` or `_: Send`
+   | pub trait ColdRetained: 'static {}
+   | ------------------------------- doesn't satisfy `_: Send` or `_: Sync`
    |
    = note: the following trait bounds were not satisfied:
            `NonNull<neovm_core::buffer::buffer::BufferStorage>: Send`
            which is required by `BufferManager: Send`
            `NonNull<neovm_core::buffer::Buffer>: Send`
            which is required by `BufferManager: Send`
-           `(dyn neovm_value::cold_retained::ColdRetained + 'static): Sync`
+           `(dyn neovm_value::cold_retained::ColdRetained + 'static): std::marker::Sync`
            which is required by `BufferManager: Send`
            `(dyn neovm_value::cold_retained::ColdRetained + 'static): Send`
            which is required by `BufferManager: Send`
@@ -57,5 +44,5 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `BufferManager: Send`
            `Rc<OverlayList>: Send`
            which is required by `BufferManager: Send`
-           `*const (): Sync`
+           `*const (): std::marker::Sync`
            which is required by `BufferManager: Send`

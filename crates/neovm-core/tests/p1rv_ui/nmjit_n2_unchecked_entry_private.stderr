@@ -2,4 +2,16 @@ error[E0599]: no associated function or constant named `admit` found for struct 
  --> tests/p1rv_ui/nmjit_n2_unchecked_entry_private.rs:4:30
   |
 4 |     let _ = ParallelHeapEra::admit;
-  |                              ^^^^^ associated function or constant not found in `ParallelHeapEra<'_, eval::world::green_owner::Baton>`
+  |                              ^^^^^ associated function or constant not found in `ParallelHeapEra<'_, Baton>`
+  |
+help: there is an associated function `admit_with` with a similar name
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs
+  |
+  | /     pub unsafe fn admit_with(
+  | |         admission: Gen1Admission<'heap>,
+  | |         keeper: K,
+  | |         prepare: impl FnOnce(
+... |
+  | |         >,
+  | |     ) -> Result<Self, EraAdmissionFailure<'heap, K>> {
+  | |____________________________________________________^

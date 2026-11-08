@@ -20,7 +20,7 @@ help: the trait `contracts::sealed::Plan` is not implemented for `ArbitrarySendP
             MessagePlan<'_>
           and $N others
 note: required by a bound in `HostPlan`
- --> src/host_effect/contracts.rs
+ --> $WORKSPACE/crates/neovm-eval/src/host_effect/contracts.rs
   |
   | pub trait HostPlan<'session>: sealed::Plan + Send + 'session {
   |                               ^^^^^^^^^^^^ required by this bound in `HostPlan`

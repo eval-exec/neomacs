@@ -7,7 +7,7 @@ error[E0308]: mismatched types
   |                                arguments to this method are incorrect
   |
 note: method defined here
- --> src/host_effect/contracts.rs
+ --> $WORKSPACE/crates/neovm-eval/src/host_effect/contracts.rs
   |
   |         pub fn message(
   |                ^^^^^^^

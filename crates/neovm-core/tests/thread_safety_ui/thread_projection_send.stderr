@@ -12,11 +12,6 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
   | pub struct ThreadProjectionDescriptor {
   | ------------------------------------- doesn't satisfy `ThreadProjectionDescriptor: Send`
   |
- ::: $RUST/core/src/ptr/non_null.rs
-  |
-  | pub struct NonNull<T: PointeeSized> {
-  | ----------------------------------- doesn't satisfy `NonNull<LispBufferLocalValue>: Send` or `NonNull<LispFwd>: Send`
-  |
   = note: the following trait bounds were not satisfied:
           `*const (): Send`
           which is required by `ThreadProjectionDescriptor: Send`

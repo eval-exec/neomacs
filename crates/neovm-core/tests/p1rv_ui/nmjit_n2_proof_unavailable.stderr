@@ -1,13 +1,16 @@
-error[E0432]: unresolved import `neovm_core::tagged::gc::ProofEra`
- --> tests/p1rv_ui/nmjit_n2_proof_unavailable.rs:1:5
+error[E0603]: struct `ProofEra` is private
+ --> tests/p1rv_ui/nmjit_n2_proof_unavailable.rs:1:29
   |
 1 | use neovm_core::tagged::gc::ProofEra;
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `ProofEra` in `tagged::gc`
+  |                             ^^^^^^^^ private struct
   |
-note: found an item that was configured out
- --> src/tagged/gc.rs
+note: the struct `ProofEra` is defined here
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc.rs
   |
-  | #[cfg(test)]
-  |       ---- the item is gated here
-  | pub(crate) use crate::emacs_core::eval::world::WorldProofEra as ProofEra;
-  |                                                                 ^^^^^^^^
+  |     GenericProofEra as ProofEra, GenericProofEraFinishFailure as ProofEraFinishFailure,
+  |     ^^^^^^^^^^^^^^^
+help: import `ProofEra` directly
+  |
+1 - use neovm_core::tagged::gc::ProofEra;
+1 + use neovm_value::tagged::gc::mutator_registration::wrappers::ProofEra;
+  |

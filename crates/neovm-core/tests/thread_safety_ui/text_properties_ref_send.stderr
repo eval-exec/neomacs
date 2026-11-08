@@ -13,5 +13,5 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
    | -------------------------------- doesn't satisfy `TextPropertiesRef<'static>: Send`
    |
    = note: the following trait bounds were not satisfied:
-           `*const (): Sync`
+           `*const (): std::marker::Sync`
            which is required by `TextPropertiesRef<'static>: Send`

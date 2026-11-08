@@ -1,476 +1,415 @@
 error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<neovm_core::Context>`, but its trait bounds were not satisfied
   --> tests/thread_safety_ui/flow_word/context_sync.rs:11:32
    |
- 4 |   struct ThreadTransfer<T>(PhantomData<T>);
-   |   ------------------------ associated function or constant `transfer` not found for this struct
+ 4 | struct ThreadTransfer<T>(PhantomData<T>);
+   | ------------------------ associated function or constant `transfer` not found for this struct
 ...
-11 |       ThreadTransfer::<Context>::transfer();
-   |                                  ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<neovm_core::Context>` due to unsatisfied trait bounds
-   |
-  ::: $RUST/core/src/ops/function.rs
-   |
-   |   pub const trait Fn<Args: Tuple>: [const] FnMut<Args> {
-   |   ---------------------------------------------------- doesn't satisfy `_: Send` or `_: Sync`
-...
-   |   pub const trait FnMut<Args: Tuple>: FnOnce<Args> {
-   |   ------------------------------------------------ doesn't satisfy `_: Sync`
+11 |     ThreadTransfer::<Context>::transfer();
+   |                                ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<neovm_core::Context>` due to unsatisfied trait bounds
    |
   ::: $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs
    |
-   |   pub struct Context {
-   |   ------------------ doesn't satisfy `neovm_core::Context: Sync`
-   |
-  ::: $RUST/core/src/cell.rs
-   |
-   |   pub struct Cell<T: ?Sized> {
-   |   -------------------------- doesn't satisfy 16 bounds
-...
-   |   pub struct RefCell<T: ?Sized> {
-   |   ----------------------------- doesn't satisfy 5 bounds
-...
-   |   pub struct UnsafeCell<T: ?Sized> {
-   |   -------------------------------- doesn't satisfy 12 bounds
-   |
-  ::: $RUST/core/src/ptr/non_null.rs
-   |
-   |   pub struct NonNull<T: PointeeSized> {
-   |   ----------------------------------- doesn't satisfy 45 bounds
+   | pub struct Context {
+   | ------------------ doesn't satisfy `neovm_core::Context: std::marker::Sync`
    |
   ::: $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs
    |
-   |   pub trait DisplayHost {
-   |   --------------------- doesn't satisfy `(dyn DisplayHost + 'static): Sync`
+   | pub trait DisplayHost {
+   | --------------------- doesn't satisfy `(dyn DisplayHost + 'static): std::marker::Sync`
    |
   ::: $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/protocol/tty_host.rs
    |
-   |   pub trait TtyFrameHostFactory {
-   |   ----------------------------- doesn't satisfy `(dyn TtyFrameHostFactory + 'static): Sync`
+   | pub trait TtyFrameHostFactory {
+   | ----------------------------- doesn't satisfy `_: Sync`
    |
   ::: $WORKSPACE/crates/neovm-value/src/cold_retained.rs
    |
-   |   pub trait ColdRetained: 'static {}
-   |   ------------------------------- doesn't satisfy `_: Send` or `_: Sync`
-   |
-  ::: $RUST/std/src/sync/mpsc.rs
-   |
-   |   pub struct Receiver<T> {
-   |   ---------------------- doesn't satisfy `_: Sync`
-   |
-  ::: $RUST/alloc/src/rc.rs
-   |
-   | / pub struct Rc<
-   | |     T: ?Sized,
-   | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
-   | | > {
-   | |_- doesn't satisfy 18 bounds
-...
-   | / pub struct Weak<
-   | |     T: ?Sized,
-   | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
-   | | > {
-   | |_- doesn't satisfy `std::rc::Weak<[TaggedValue]>: Send`
-   |
-  ::: $RUST/core/src/any.rs
-   |
-   |   pub trait Any: 'static {
-   |   ---------------------- doesn't satisfy `(dyn std::any::Any + 'static): Send`
+   | pub trait ColdRetained: 'static {}
+   | ------------------------------- doesn't satisfy `_: Send` or `_: Sync`
    |
   ::: $CARGO/portable-pty-$VERSION/src/lib.rs
    |
-   |   pub trait MasterPty: Downcast + Send {
-   |   ------------------------------------ doesn't satisfy `_: Sync`
-   |
-  ::: $RUST/std/src/io/mod.rs
-   |
-   |   pub trait Read {
-   |   -------------- doesn't satisfy `(dyn std::io::Read + Send + 'static): Sync`
-...
-   |   pub trait Write {
-   |   --------------- doesn't satisfy `(dyn std::io::Write + Send + 'static): Sync`
-   |
-  ::: $RUST/core/src/cell/once.rs
-   |
-   |   pub struct OnceCell<T> {
-   |   ---------------------- doesn't satisfy `_: Sync`
+   | pub trait MasterPty: Downcast + Send {
+   | ------------------------------------ doesn't satisfy `_: Sync`
    |
    = note: the following trait bounds were not satisfied:
-           `*mut TaggedValue: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Cell<u64>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<SelectedGlobalMap>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<Option<LispString>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<eval::EchoAreaBuffers>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<Option<WindowId>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<ThreadManager>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<CommandLoop>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<Option<(FrameId, u64)>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<Option<eval::RedisplaySignature>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<BookmarkManager>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<neovm_core::emacs_core::rect::RectangleState>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<InteractiveRegistry>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<MinibufferManager>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<ModeRegistry>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<KmacroManager>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<Vec<eval::PendingSafeFuncall>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<Option<neovm_core::emacs_core::eval::DaemonState>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<ProcessManager>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<AbbrevManager>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<owned_roots::OwnedRootRegistry>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<TaggedHeap>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<neovm_core::emacs_core::Obarray>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<neovm_core::emacs_core::symbol::CanonicalDispatchCells>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<Vec<SymId>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<XwidgetState>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<VariableWatcherList>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<HashSet<SymId>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<RegisterManager>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<AutoloadManager>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<neovm_core::emacs_core::treesit::TreeSitterManager>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<FrameManager>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<HashMap<GstringShapeCacheKey, TaggedValue>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<CodingSystemManager>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<FaceTable>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Rc<RefCell<neomacs_display_protocol::input_progress::InputStaging>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<eval::MacroPerfStats>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<neovm_eval::emacs_core::builtins::fringe_bitmap::FringeBitmapRegistry>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<TaggedValue>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<u64>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<i64>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*mut neovm_core::emacs_core::hashtab::HashTestGcInhibitAccounting: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<neovm_core::buffer::buffer::BufferStorage>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Cell<neovm_core::emacs_core::symbol::FunctionEpoch>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Cell<neovm_core::emacs_core::symbol::DebuggerDescriptor>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `RefCell<neovm_core::emacs_core::ccl::CclRegistry>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `RefCell<neovm_core::emacs_core::charset::CharsetRegistry>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `RefCell<FaceAttrState>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `RefCell<TerminalLispRegistry>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `RefCell<neovm_core::emacs_core::builtins::collections::HashTableTestRegistry>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `RefCell<neovm_core::emacs_core::builtins::file_notify::FileNotifyState>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `RefCell<HashMap<i64, neovm_core::emacs_core::builtins::WindowConfigurationSnapshot>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `RefCell<Vec<Option<GlobalRefEntry>>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*const (): Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<()>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<eval::owner_bindings::OwnerSlab>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Cell<Option<eval::lexenv_cache::LexenvAssqCacheEntry>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Cell<Option<eval::LexenvSpecialCacheEntry>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<neovm_core::buffer::Buffer>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `(dyn for<'a> FnMut(&'a mut neovm_core::Context, FrameId, WindowId, WindowLayoutQueryScope) -> WindowLayoutQueryOutcome + 'static): Sync`
-           which is required by `neovm_core::Context: Sync`
-           `(dyn for<'a> FnMut(&'a mut neovm_core::Context) + 'static): Sync`
-           which is required by `neovm_core::Context: Sync`
-           `(dyn for<'a> FnMut(&'a mut neovm_core::Context, RedisplayMiniGeometryRequest) -> Result<TaggedValue, Flow> + 'static): Sync`
-           which is required by `neovm_core::Context: Sync`
-           `(dyn for<'a> FnMut(&'a mut neovm_core::Context, TaggedValue, TaggedValue) -> GstringShapeOutcome + 'static): Sync`
-           which is required by `neovm_core::Context: Sync`
-           `(dyn for<'a> FnMut(&'a neovm_core::Context, FrameId, WindowId, Vec<neomacs_display_protocol::input_progress::InputReceipt>) + 'static): Sync`
-           which is required by `neovm_core::Context: Sync`
-           `(dyn for<'a> FnMut(&'a neovm_core::Context) -> (Option<Duration>, bool) + 'static): Sync`
-           which is required by `neovm_core::Context: Sync`
-           `(dyn for<'a, 'b> FnMut(&'a mut neovm_core::Context, &'b SnapshotRequest) -> Result<std::string::String, std::string::String> + 'static): Sync`
-           which is required by `neovm_core::Context: Sync`
-           `(dyn DisplayHost + 'static): Sync`
-           which is required by `neovm_core::Context: Sync`
-           `(dyn TtyFrameHostFactory + 'static): Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Cell<SymId>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Cell<eval::dispatch_class::FormHead>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*const i64: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*const u8: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `RefCell<eval::owner_bindings::OwnerSlabRegistry>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `RefCell<ThreadProjectionTable>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Cell<eval::admission::ThreadingMode>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `RefCell<Option<std::boxed::Box<eval::green::GreenRuntime>>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Cell<Option<ThreadId>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*mut u8: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `UnsafeCell<neovm_core::buffer::buffer::BufferStorage>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `(dyn neovm_value::cold_retained::ColdRetained + 'static): Sync`
-           which is required by `neovm_core::Context: Sync`
+           `*mut TaggedValue: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Cell<u64>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<SelectedGlobalMap>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<Option<LispString>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<eval::EchoAreaBuffers>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<Option<WindowId>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<ThreadManager>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<CommandLoop>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<Option<(FrameId, u64)>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<Option<RedisplaySignature>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<BookmarkManager>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<neovm_core::emacs_core::rect::RectangleState>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<InteractiveRegistry>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<MinibufferManager>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<ModeRegistry>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<KmacroManager>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<Vec<eval::PendingSafeFuncall>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<Option<neovm_core::emacs_core::eval::DaemonState>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<ProcessManager>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<AbbrevManager>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<owned_roots::OwnedRootRegistry>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<TaggedHeap>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<neovm_core::emacs_core::Obarray>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<neovm_core::emacs_core::symbol::CanonicalDispatchCells>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<Vec<SymId>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<XwidgetState>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<VariableWatcherList>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<HashSet<SymId>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<RegisterManager>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<AutoloadManager>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<neovm_core::emacs_core::treesit::TreeSitterManager>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<FrameManager>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<HashMap<GstringShapeCacheKey, TaggedValue>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<CodingSystemManager>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<FaceTable>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Rc<RefCell<neomacs_display_protocol::input_progress::InputStaging>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<eval::MacroPerfStats>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<neovm_eval::emacs_core::builtins::fringe_bitmap::FringeBitmapRegistry>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<TaggedValue>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<u64>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<i64>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut neovm_core::emacs_core::hashtab::HashTestGcInhibitAccounting: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<neovm_core::buffer::buffer::BufferStorage>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Cell<neovm_core::emacs_core::symbol::FunctionEpoch>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Cell<neovm_core::emacs_core::symbol::DebuggerDescriptor>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `RefCell<neovm_core::emacs_core::ccl::CclRegistry>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `RefCell<neovm_core::emacs_core::charset::CharsetRegistry>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `RefCell<FaceAttrState>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `RefCell<TerminalLispRegistry>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `RefCell<neovm_core::emacs_core::builtins::collections::HashTableTestRegistry>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `RefCell<neovm_core::emacs_core::builtins::file_notify::FileNotifyState>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `RefCell<HashMap<i64, neovm_core::emacs_core::builtins::WindowConfigurationSnapshot>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `RefCell<Vec<Option<GlobalRefEntry>>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*const (): std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<()>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<eval::owner_bindings::OwnerSlab>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Cell<Option<eval::lexenv_cache::LexenvAssqCacheEntry>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Cell<Option<eval::LexenvSpecialCacheEntry>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<neovm_core::buffer::Buffer>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `(dyn for<'a> FnMut(&'a mut neovm_core::Context, FrameId, WindowId, WindowLayoutQueryScope) -> WindowLayoutQueryOutcome + 'static): std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `(dyn for<'a> FnMut(&'a mut neovm_core::Context) + 'static): std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `(dyn for<'a> FnMut(&'a mut neovm_core::Context, RedisplayMiniGeometryRequest) -> Result<TaggedValue, Flow> + 'static): std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `(dyn for<'a> FnMut(&'a mut neovm_core::Context, TaggedValue, TaggedValue) -> GstringShapeOutcome + 'static): std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `(dyn for<'a> FnMut(&'a neovm_core::Context, FrameId, WindowId, Vec<neomacs_display_protocol::input_progress::InputReceipt>) + 'static): std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `(dyn for<'a> FnMut(&'a neovm_core::Context) -> (Option<Duration>, bool) + 'static): std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `(dyn for<'a, 'b> FnMut(&'a mut neovm_core::Context, &'b SnapshotRequest) -> Result<std::string::String, std::string::String> + 'static): std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `(dyn DisplayHost + 'static): std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `(dyn TtyFrameHostFactory + 'static): std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Cell<SymId>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Cell<eval::dispatch_class::FormHead>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*const i64: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*const u8: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `RefCell<eval::owner_bindings::OwnerSlabRegistry>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `RefCell<ThreadProjectionTable>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Cell<eval::admission::ThreadingMode>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `RefCell<Option<std::boxed::Box<eval::green::GreenRuntime>>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Cell<Option<ThreadId>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut u8: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `UnsafeCell<neovm_core::buffer::buffer::BufferStorage>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `(dyn neovm_value::cold_retained::ColdRetained + 'static): std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `(dyn neovm_value::cold_retained::ColdRetained + 'static): Send`
-           which is required by `neovm_core::Context: Sync`
-           `*mut (): Sync`
-           which is required by `neovm_core::Context: Sync`
-           `UnsafeCell<owned_roots::OwnedRootRegistry>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `UnsafeCell<neovm_core::emacs_core::Obarray>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `UnsafeCell<Vec<SymId>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `UnsafeCell<VariableWatcherList>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `UnsafeCell<HashSet<SymId>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `UnsafeCell<AutoloadManager>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `UnsafeCell<neovm_core::emacs_core::treesit::TreeSitterManager>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `UnsafeCell<FrameManager>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `UnsafeCell<CodingSystemManager>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `UnsafeCell<eval::MacroPerfStats>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `UnsafeCell<eval::global_state::GlobalState>: Sync`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut (): std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `UnsafeCell<owned_roots::OwnedRootRegistry>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `UnsafeCell<neovm_core::emacs_core::Obarray>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `UnsafeCell<Vec<SymId>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `UnsafeCell<VariableWatcherList>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `UnsafeCell<HashSet<SymId>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `UnsafeCell<AutoloadManager>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `UnsafeCell<neovm_core::emacs_core::treesit::TreeSitterManager>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `UnsafeCell<FrameManager>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `UnsafeCell<CodingSystemManager>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `UnsafeCell<eval::MacroPerfStats>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `UnsafeCell<eval::global_state::GlobalState>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut (): Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut GcHeader: Send`
-           which is required by `neovm_core::Context: Sync`
-           `Rc<eval::tier_i::compile::TierCode>: Sync`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Rc<eval::tier_i::compile::TierCode>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*const (): Send`
-           which is required by `neovm_core::Context: Sync`
-           `Rc<neovm_core::emacs_core::eval::data::face::FaceStorage>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Rc<HashMap<LispFaceId, TaggedValue>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Rc<neomacs_display_protocol::tty_palette::TtyPalette>: Sync`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Rc<neovm_core::emacs_core::eval::data::face::FaceStorage>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Rc<HashMap<LispFaceId, TaggedValue>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Rc<neomacs_display_protocol::tty_palette::TtyPalette>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut emacs_value_tag: Send`
-           which is required by `neovm_core::Context: Sync`
-           `*mut GcHeader: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Cell<u8>: Sync`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut GcHeader: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Cell<u8>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut HashTableObj: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut FinalizerObj: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut *mut MarkerObj: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<Cell<Option<shared::PointBeforeCommand>>>: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<neovm_core::emacs_core::eval::data::face::FaceStorage>: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<HashMap<LispFaceId, TaggedValue>>: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<neomacs_display_protocol::tty_palette::TtyPalette>: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<redisplay::OutputState>: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `NonNull<eval::owner_bindings::OwnerSlab>: Send`
-           which is required by `neovm_core::Context: Sync`
-           `Cell<CanonicalArm>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<ByteCodeFunction>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<[Op]>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `std::sync::mpsc::Receiver<gc::gc_thread::ConcurrentMarkResult>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Cell<usize>: Sync`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Cell<CanonicalArm>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<ByteCodeFunction>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<[Op]>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `std::sync::mpsc::Receiver<gc::gc_thread::ConcurrentMarkResult>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Cell<usize>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut u8: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut ConsCell: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut FloatObj: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut VecLikeHeader: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut StringObj: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*const u8: Send`
-           which is required by `neovm_core::Context: Sync`
-           `NonNull<MarkerObj>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `(dyn FnMut() -> Result<(), std::string::String> + Send + 'static): Sync`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<MarkerObj>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `(dyn FnMut() -> Result<(), std::string::String> + Send + 'static): std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<Cell<Vec<TaggedValue>>>: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<Cell<*const ()>>: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut TaggedHeap: Send`
-           which is required by `neovm_core::Context: Sync`
-           `*mut HashTableObj: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*mut FinalizerObj: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*mut *mut MarkerObj: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Cell<()>: Sync`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut HashTableObj: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut FinalizerObj: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut *mut MarkerObj: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Cell<()>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `std::rc::Weak<[TaggedValue]>: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut VectorObj: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut ByteCodeObj: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut LambdaObj: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut MacroObj: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut RecordObj: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut SymbolWithPosObj: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut MarkerObj: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut BignumObj: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `NonNull<[Cell<usize>; 8192]>: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `NonNull<LispBufferLocalValue>: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `NonNull<LispFwd>: Send`
-           which is required by `neovm_core::Context: Sync`
-           `*mut ConsCell: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*mut FloatObj: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*mut VecLikeHeader: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*mut StringObj: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `OnceCell<collection_reads::store_state::ObservationWorld>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Cell<*mut TaggedHeap>: Sync`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut ConsCell: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut FloatObj: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut VecLikeHeader: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut StringObj: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `OnceCell<collection_reads::store_state::ObservationWorld>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Cell<*mut TaggedHeap>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<()>: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*const c_void: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*const tree_sitter::ffi::TSTree: Send`
-           which is required by `neovm_core::Context: Sync`
-           `Rc<Cell<Vec<TaggedValue>>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Rc<Cell<*const ()>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Cell<NonNull<[Cell<usize>; 8192]>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Cell<collection_reads::JournalPolicy>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Cell<bool>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Cell<neovm_core::tagged::gc::BarrierWindow>: Sync`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Rc<Cell<Vec<TaggedValue>>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Rc<Cell<*const ()>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Cell<NonNull<[Cell<usize>; 8192]>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Cell<collection_reads::JournalPolicy>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Cell<bool>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Cell<neovm_core::tagged::gc::BarrierWindow>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<collection_reads::store_state::WorldObservations>: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<RefCell<neovm_core::buffer::buffer_text::BufferTextStorage>>: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<Cell<VisitedFileModtime>>: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<RefCell<shared::SharedUndoStateInner>>: Send`
-           which is required by `neovm_core::Context: Sync`
-           `(dyn for<'a> Fn(&'a LispString) -> Vec<LispString> + 'static): Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*mut VectorObj: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*mut ByteCodeObj: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*mut LambdaObj: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*mut MacroObj: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*mut RecordObj: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*mut SymbolWithPosObj: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*mut MarkerObj: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*mut BignumObj: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*const LispSymbol: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*const Atomic<u32>: Sync`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `(dyn for<'a> Fn(&'a LispString) -> Vec<LispString> + 'static): std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut VectorObj: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut ByteCodeObj: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut LambdaObj: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut MacroObj: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut RecordObj: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut SymbolWithPosObj: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut MarkerObj: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*mut BignumObj: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*const LispSymbol: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*const Atomic<u32>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `NonNull<MarkerObj>: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<CachedWordWrapPolicy>: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `NonNull<()>: Send`
-           which is required by `neovm_core::Context: Sync`
-           `(dyn portable_pty::MasterPty + Send + 'static): Sync`
-           which is required by `neovm_core::Context: Sync`
-           `(dyn std::io::Write + Send + 'static): Sync`
-           which is required by `neovm_core::Context: Sync`
-           `std::sync::mpsc::Receiver<Result<Vec<std::net::SocketAddr>, std::string::String>>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `Rc<()>: Sync`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `(dyn portable_pty::MasterPty + Send + 'static): std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `(dyn std::io::Write + Send + 'static): std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `std::sync::mpsc::Receiver<Result<Vec<std::net::SocketAddr>, std::string::String>>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `Rc<()>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<Vec<AutomaticCompositionSpan>>: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `(dyn std::any::Any + 'static): Send`
-           which is required by `neovm_core::Context: Sync`
-           `(dyn std::io::Read + Send + 'static): Sync`
-           which is required by `neovm_core::Context: Sync`
-           `UnsafeCell<TaggedValue>: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*const AtomicTaggedValue: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*const TaggedValue: Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*const CharTableObj: Sync`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `(dyn std::io::Read + Send + 'static): std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `UnsafeCell<TaggedValue>: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*const AtomicTaggedValue: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*const TaggedValue: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `*const CharTableObj: std::marker::Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<OverlayList>: Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `(dyn for<'a> Fn(&'a LispString) -> Vec<LispString> + 'static): Send`
-           which is required by `neovm_core::Context: Sync`
+           which is required by `neovm_core::Context: std::marker::Sync`

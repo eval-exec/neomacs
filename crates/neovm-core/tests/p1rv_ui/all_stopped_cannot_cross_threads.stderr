@@ -4,7 +4,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
 8 |     ThreadTransfer::<AllStopped<'static>>::transfer(stopped);
   |                                            ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<AllStopped<'static>>` due to unsatisfied trait bounds
   |
- ::: src/tagged/gc/mutator_registration/rendezvous/keeper.rs
+ ::: $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/rendezvous/keeper.rs
   |
   | pub struct AllStopped<'era> {
   | --------------------------- doesn't satisfy `AllStopped<'static>: Send`

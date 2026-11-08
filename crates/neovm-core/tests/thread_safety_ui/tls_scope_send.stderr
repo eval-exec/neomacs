@@ -1,26 +1,18 @@
 error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<TlsScope<u32, Cell<u32>>>`, but its trait bounds were not satisfied
   --> tests/thread_safety_ui/tls_scope_send.rs:16:60
    |
-16 |       ThreadTransfer::<tls_scope::TlsScope<u32, Cell<u32>>>::transfer(scope);
-   |                                                              ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<TlsScope<u32, Cell<u32>>>` due to unsatisfied trait bounds
+16 |     ThreadTransfer::<tls_scope::TlsScope<u32, Cell<u32>>>::transfer(scope);
+   |                                                            ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<TlsScope<u32, Cell<u32>>>` due to unsatisfied trait bounds
    |
   ::: tests/thread_safety_ui/../../../neovm-value/src/tls_scope.rs
    |
-   |   pub struct TlsScope<T: 'static, Slot: TlsSlot<T> + 'static> {
-   |   ----------------------------------------------------------- doesn't satisfy `TlsScope<u32, Cell<u32>>: Send`
-   |
-  ::: $RUST/alloc/src/rc.rs
-   |
-   | / pub struct Rc<
-   | |     T: ?Sized,
-   | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
-   | | > {
-   | |_- doesn't satisfy `Rc<()>: Send`
+   | pub struct TlsScope<T: 'static, Slot: TlsSlot<T> + 'static> {
+   | ----------------------------------------------------------- doesn't satisfy `TlsScope<u32, Cell<u32>>: Send`
    |
   ::: tests/thread_safety_ui/support/thread_bounds.rs
    |
-   |   pub struct ThreadTransfer<T>(PhantomData<T>);
-   |   ---------------------------- associated function or constant `transfer` not found for this struct
+   | pub struct ThreadTransfer<T>(PhantomData<T>);
+   | ---------------------------- associated function or constant `transfer` not found for this struct
    |
    = note: the following trait bounds were not satisfied:
            `Rc<()>: Send`

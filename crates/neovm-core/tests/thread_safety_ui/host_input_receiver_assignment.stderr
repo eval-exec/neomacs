@@ -1,10 +1,5 @@
-error[E0308]: mismatched types
- --> tests/thread_safety_ui/host_input_receiver_assignment.rs:5:24
+error[E0616]: field `input_rx` of struct `neovm_core::Context` is private
+ --> tests/thread_safety_ui/host_input_receiver_assignment.rs:5:13
   |
 5 |     context.input_rx = Some(receiver);
-  |     ----------------   ^^^^^^^^^^^^^^ expected `HostInputReceiver`, found `Option<Receiver<InputEvent>>`
-  |     |
-  |     expected due to the type of this binding
-  |
-  = note: expected struct `neovm_core::emacs_core::eval::host_input::HostInputReceiver`
-               found enum `Option<crossbeam_channel::Receiver<InputEvent>>`
+  |             ^^^^^^^^ private field

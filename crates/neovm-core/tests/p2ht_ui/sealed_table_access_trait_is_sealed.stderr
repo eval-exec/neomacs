@@ -7,19 +7,19 @@ error[E0046]: not all trait items implemented, missing: `authority_word`, `guard
   = help: implement the missing item: `fn authority_word(&self) -> &Atomic<u64> { todo!() }`
   = help: implement the missing item: `fn guarded_table(&self) -> &LispHashTable { todo!() }`
 
-error[E0277]: the trait bound `ForgedTableAccess: gc::mutator_registration::table_authority::seal::Sealed` is not satisfied
+error[E0277]: the trait bound `ForgedTableAccess: mutator_registration::table_authority::seal::Sealed` is not satisfied
  --> tests/p2ht_ui/sealed_table_access_trait_is_sealed.rs:8:28
   |
 8 | impl SealedTableAccess for ForgedTableAccess {}
   |                            ^^^^^^^^^^^^^^^^^ unsatisfied trait bound
   |
-help: the trait `gc::mutator_registration::table_authority::seal::Sealed` is not implemented for `ForgedTableAccess`
+help: the trait `mutator_registration::table_authority::seal::Sealed` is not implemented for `ForgedTableAccess`
  --> tests/p2ht_ui/sealed_table_access_trait_is_sealed.rs:6:1
   |
 6 | struct ForgedTableAccess;
   | ^^^^^^^^^^^^^^^^^^^^^^^^
-help: the following other types implement trait `gc::mutator_registration::table_authority::seal::Sealed`
- --> src/tagged/gc/mutator_registration/table_authority.rs
+help: the following other types implement trait `mutator_registration::table_authority::seal::Sealed`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/table_authority.rs
   |
   | impl seal::Sealed for TableRef<'_> {}
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `TableRef<'_>`
@@ -28,7 +28,7 @@ help: the following other types implement trait `gc::mutator_registration::table
   | impl seal::Sealed for KeeperTableMut<'_> {}
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `KeeperTableMut<'_>`
 note: required by a bound in `SealedTableAccess`
- --> src/tagged/gc/mutator_registration/table_authority.rs
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/table_authority.rs
   |
   | pub trait SealedTableAccess: seal::Sealed {
   |                              ^^^^^^^^^^^^ required by this bound in `SealedTableAccess`

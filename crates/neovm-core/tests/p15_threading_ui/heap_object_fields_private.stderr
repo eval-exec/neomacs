@@ -1,0 +1,29 @@
+error[E0451]: fields `header` and `payload` of struct `neovm_core::tagged::header::ThreadObj` are private
+  --> tests/p15_threading_ui/heap_object_fields_private.rs:15:9
+   |
+14 |     let _thread = ThreadObj {
+   |                   --------- in this type
+15 |         header: make(),
+   |         ^^^^^^ private field
+16 |         payload: make(),
+   |         ^^^^^^^ private field
+
+error[E0451]: fields `header` and `payload` of struct `neovm_core::tagged::header::MutexObj` are private
+  --> tests/p15_threading_ui/heap_object_fields_private.rs:19:9
+   |
+18 |     let _mutex = MutexObj {
+   |                  -------- in this type
+19 |         header: make(),
+   |         ^^^^^^ private field
+20 |         payload: make(),
+   |         ^^^^^^^ private field
+
+error[E0451]: fields `header` and `payload` of struct `neovm_core::tagged::header::CondVarObj` are private
+  --> tests/p15_threading_ui/heap_object_fields_private.rs:23:9
+   |
+22 |     let _condition = CondVarObj {
+   |                      ---------- in this type
+23 |         header: make(),
+   |         ^^^^^^ private field
+24 |         payload: make(),
+   |         ^^^^^^^ private field

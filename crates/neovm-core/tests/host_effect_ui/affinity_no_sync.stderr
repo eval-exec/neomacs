@@ -6,11 +6,11 @@ error[E0277]: `Rc<()>` cannot be shared between threads safely
   |                                |
   |                                required by a bound introduced by this call
   |
-  = help: within `HostAffinity`, the trait `Sync` is not implemented for `Rc<()>`
+  = help: within `HostAffinity`, the trait `std::marker::Sync` is not implemented for `Rc<()>`
 note: required because it appears within the type `PhantomData<Rc<()>>`
  --> $RUST/core/src/marker.rs
 note: required because it appears within the type `HostAffinity`
- --> src/host_effect/contracts.rs
+ --> $WORKSPACE/crates/neovm-eval/src/host_effect/contracts.rs
   |
   | pub struct HostAffinity {
   |            ^^^^^^^^^^^^

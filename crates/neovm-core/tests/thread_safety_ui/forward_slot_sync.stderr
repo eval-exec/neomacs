@@ -10,8 +10,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
  ::: $WORKSPACE/crates/neovm-value/src/forward/mod.rs
   |
   | pub enum ForwardSlot<'a> {
-  | ------------------------ doesn't satisfy `ForwardSlot<'static>: Sync`
+  | ------------------------ doesn't satisfy `ForwardSlot<'static>: std::marker::Sync`
   |
   = note: the following trait bounds were not satisfied:
-          `*const (): Sync`
-          which is required by `ForwardSlot<'static>: Sync`
+          `*const (): std::marker::Sync`
+          which is required by `ForwardSlot<'static>: std::marker::Sync`

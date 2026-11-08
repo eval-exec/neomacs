@@ -5,7 +5,7 @@ error[E0277]: the trait bound `std::string::String: std::marker::Copy` is not sa
   |                    ^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::marker::Copy` is not implemented for `std::string::String`
   |
 note: required by a bound in `SubrObj`
- --> src/tagged/header.rs
+ --> $WORKSPACE/crates/neovm-value/src/tagged/header.rs
   |
   | pub struct SubrObj<Entry: Copy + 'static> {
   |                           ^^^^ required by this bound in `SubrObj`
@@ -17,7 +17,7 @@ error[E0277]: the trait bound `std::string::String: std::marker::Copy` is not sa
   |                                              ^^^^ the trait `std::marker::Copy` is not implemented for `std::string::String`
   |
 note: required by a bound in `SubrObj`
- --> src/tagged/header.rs
+ --> $WORKSPACE/crates/neovm-value/src/tagged/header.rs
   |
   | pub struct SubrObj<Entry: Copy + 'static> {
   |                           ^^^^ required by this bound in `SubrObj`

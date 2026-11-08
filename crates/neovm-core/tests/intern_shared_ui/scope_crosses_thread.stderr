@@ -12,7 +12,7 @@ error[E0277]: `Rc<()>` cannot be sent between threads safely
 note: required because it appears within the type `PhantomData<Rc<()>>`
  --> $RUST/core/src/marker.rs
 note: required because it appears within the type `InternReadScope<'_>`
- --> tests/intern_shared_ui/support/../../../src/emacs_core/runtime/intern/shared/domain.rs
+ --> tests/intern_shared_ui/support/../../../../neovm-value/src/intern/shared/domain.rs
   |
   | pub(crate) struct InternReadScope<'domain> {
   |                   ^^^^^^^^^^^^^^^
