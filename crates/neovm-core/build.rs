@@ -21,8 +21,17 @@ mod host_cfg;
 
 // Single source of truth (R2-C2): the `neovm_jit_*` shim names, shared with
 // runtime/jit/aot.rs (MIR_SHIM_NAMES) + crates/neomacs/build.rs via `include!` so the
-// emit/salt set and both export sets can never drift.
-include!("../neovm-eval/src/emacs_core/runtime/jit/shim_names.rs");
+// emit/salt set and both export sets can never drift.  The relative path below
+// is the ONE spelling of that source file: the same macro feeds `include!` and
+// the `rerun-if-changed` watcher, so the two can never disagree again (a watch
+// path that names nothing makes cargo treat the file as changed on every
+// invocation and rebuild this crate forever).
+macro_rules! shim_names_rel {
+    () => {
+        "../neovm-eval/src/emacs_core/runtime/jit/shim_names.rs"
+    };
+}
+include!(shim_names_rel!());
 
 fn main() {
     let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir"));
@@ -102,9 +111,7 @@ fn main() {
     );
     println!(
         "cargo:rerun-if-changed={}",
-        manifest_dir
-            .join("src/emacs_core/runtime/jit/shim_names.rs")
-            .display()
+        manifest_dir.join(shim_names_rel!()).display()
     );
 }
 
