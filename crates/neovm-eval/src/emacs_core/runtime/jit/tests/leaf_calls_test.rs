@@ -739,7 +739,7 @@ fn the_bcall_guard_declines_every_observable_protocol_step() {
     let sym = neovm_value::intern::intern("gethash");
     let expected = ev.obarray.symbol_function_id(sym).expect("fbound").bits() as u64;
     let slot = SpecSlot::at_epoch(ev.obarray.function_epoch());
-    slot.bind_subr(sym.0, expected);
+    slot.bind_subr(sym.to_raw(), expected);
     let call = |ev: &mut Context, slot: &SpecSlot| {
         // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
         unsafe {
@@ -802,7 +802,7 @@ fn the_bcall_guard_declines_every_observable_protocol_step() {
 
     // A loader-disarmed slot never re-arms.
     let disarmed = SpecSlot::at_epoch(SPEC_EPOCH_DISARMED);
-    disarmed.bind_subr(sym.0, expected);
+    disarmed.bind_subr(sym.to_raw(), expected);
     assert_eq!(call(&mut ev, &disarmed), generic, "a disarmed slot");
 }
 

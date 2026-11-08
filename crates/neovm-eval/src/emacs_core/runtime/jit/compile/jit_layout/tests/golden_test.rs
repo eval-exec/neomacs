@@ -40,7 +40,7 @@ fn entry_words(entry: &SpecBinding) -> [u64; ENTRY_WORDS] {
     let (template, small, fields): (EntryTemplate, u32, Vec<(*const u8, u64)>) = match entry {
         SpecBinding::Let { sym_id, old_value } => (
             binds.let_,
-            sym_id.0,
+            sym_id.to_raw(),
             vec![(
                 std::ptr::from_ref(old_value).cast(),
                 old_value.as_plain().bits() as u64,
@@ -52,7 +52,7 @@ fn entry_words(entry: &SpecBinding) -> [u64; ENTRY_WORDS] {
             buffer_id,
         } => (
             binds.let_local,
-            sym_id.0,
+            sym_id.to_raw(),
             vec![
                 (
                     std::ptr::from_ref(old_value).cast(),
@@ -67,7 +67,7 @@ fn entry_words(entry: &SpecBinding) -> [u64; ENTRY_WORDS] {
             buffer_id,
         } => (
             binds.let_default,
-            sym_id.0,
+            sym_id.to_raw(),
             vec![
                 (
                     std::ptr::from_ref(old_value).cast(),
@@ -328,7 +328,7 @@ fn let_templates_match_rust_built_entries() {
         old_value: SavedBindingValue::from_plain(Value::fixnum(7)),
     };
     let words = entry_words(&entry);
-    assert!(layout.let_.matches(&words, sym.0));
+    assert!(layout.let_.matches(&words, sym.to_raw()));
     assert_eq!(
         words[layout.let_.field(0) as usize / WORD],
         Value::fixnum(7).bits() as u64
@@ -339,8 +339,8 @@ fn let_templates_match_rust_built_entries() {
         buffer_id: BufferId(3),
     };
     let words = entry_words(&local);
-    assert!(layout.let_local.matches(&words, sym.0));
-    assert!(!layout.let_.matches(&words, sym.0));
+    assert!(layout.let_local.matches(&words, sym.to_raw()));
+    assert!(!layout.let_.matches(&words, sym.to_raw()));
     assert_eq!(words[layout.let_local.field(1) as usize / WORD], 3);
     let default = SpecBinding::LetDefault {
         sym_id: sym,
@@ -348,7 +348,7 @@ fn let_templates_match_rust_built_entries() {
         buffer_id: SavedBufferId::from_option(Some(BufferId(4))),
     };
     let words = entry_words(&default);
-    assert!(layout.let_default.matches(&words, sym.0));
+    assert!(layout.let_default.matches(&words, sym.to_raw()));
     assert_eq!(words[layout.let_default.field(1) as usize / WORD], 4);
 }
 
@@ -379,7 +379,7 @@ fn binding_record_images_preserve_unbound_values_and_optional_buffers() {
                 else {
                     panic!("the JIT image must decode as LetDefault");
                 };
-                assert_eq!(got_sym.0, sym_id);
+                assert_eq!(got_sym.to_raw(), sym_id);
                 assert_eq!(got_value.as_plain(), old_value);
                 assert_eq!(got_buffer.get(), buffer);
                 assert_eq!(entry_words(decoded), image);

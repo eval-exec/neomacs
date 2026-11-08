@@ -49,7 +49,7 @@ fn colliding_dynamic_read_keeps_the_cached_constant_answer() {
     let mut colliding = None;
     for probe in 0..64 {
         let sym = intern(&format!("lexenv-cache-partition-probe-{probe}"));
-        if sym.0 & 15 == 0 {
+        if sym.to_raw() & 15 == 0 {
             colliding = Some(sym);
             break;
         }

@@ -129,7 +129,7 @@ fn deterministic_order_coding_registry_preserves_priority_and_alias_sequences() 
             state.coding_systems.priority_syms,
             priority
                 .iter()
-                .map(|id| types::DumpSymId(id.0))
+                .map(|id| types::DumpSymId(id.to_raw()))
                 .collect::<Vec<_>>()
         );
         for (name, sequence) in &alias_order {
@@ -137,13 +137,13 @@ fn deterministic_order_coding_registry_preserves_priority_and_alias_sequences() 
                 .coding_systems
                 .alias_order_syms
                 .iter()
-                .find(|(id, _)| id.0 == name.0)
+                .find(|(id, _)| id.0 == name.to_raw())
                 .expect("alias group retained");
             assert_eq!(
                 dumped.1,
                 sequence
                     .iter()
-                    .map(|id| types::DumpSymId(id.0))
+                    .map(|id| types::DumpSymId(id.to_raw()))
                     .collect::<Vec<_>>()
             );
         }
@@ -338,7 +338,7 @@ fn assert_live_snapshot_gc_values(state: &types::DumpContextState, elapsed: f64,
         .obarray
         .symbols
         .iter()
-        .find(|(id, _)| id.0 == intern("gc-elapsed").0)
+        .find(|(id, _)| id.0 == intern("gc-elapsed").to_raw())
         .expect("gc-elapsed remains a residual forwarded symbol");
     let types::DumpSymbolVal::ObjForwarded(types::DumpValue::Float(reference)) =
         &elapsed_symbol.1.val
@@ -353,7 +353,7 @@ fn assert_live_snapshot_gc_values(state: &types::DumpContextState, elapsed: f64,
         .obarray
         .symbols
         .iter()
-        .find(|(id, _)| id.0 == intern("gcs-done").0)
+        .find(|(id, _)| id.0 == intern("gcs-done").to_raw())
         .expect("gcs-done remains a residual forwarded symbol");
     assert!(matches!(count_symbol.1.val,
         types::DumpSymbolVal::IntForwarded(types::DumpValue::Int(value)) if value == count));

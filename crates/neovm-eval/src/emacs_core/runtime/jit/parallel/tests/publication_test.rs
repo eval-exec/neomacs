@@ -457,7 +457,7 @@ fn verify_committed<'era>(
     assert_eq!(
         winners
             .iter()
-            .map(|row| row.distinct.0)
+            .map(|row| row.distinct.to_raw())
             .collect::<BTreeSet<_>>()
             .len(),
         program.size.count()

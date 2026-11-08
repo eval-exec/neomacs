@@ -195,13 +195,13 @@ fn test_dump_buffers_use_symbol_ids_for_buffer_local_bindings() {
         dumped
             .properties_syms
             .iter()
-            .any(|(sym_id, _)| sym_id.0 == intern("fill-column").0)
+            .any(|(sym_id, _)| sym_id.0 == intern("fill-column").to_raw())
     );
     assert!(
         dumped
             .local_binding_syms
             .iter()
-            .any(|sym_id| sym_id.0 == intern("fill-column").0)
+            .any(|sym_id| sym_id.0 == intern("fill-column").to_raw())
     );
     assert!(
         dumped.properties.is_empty(),
@@ -318,7 +318,7 @@ fn test_dump_modes_use_symbol_ids_for_font_lock_faces() {
         .modes
         .major_modes
         .iter()
-        .find(|(sym_id, _)| sym_id.0 == intern("compat-font-lock-mode").0)
+        .find(|(sym_id, _)| sym_id.0 == intern("compat-font-lock-mode").to_raw())
         .map(|(_, mode)| mode)
         .expect("dumped compat-font-lock-mode");
     let keyword = dumped
@@ -329,7 +329,7 @@ fn test_dump_modes_use_symbol_ids_for_font_lock_faces() {
 
     assert_eq!(
         keyword.face_sym,
-        Some(DumpSymId(intern("font-lock-keyword-face").0))
+        Some(DumpSymId(intern("font-lock-keyword-face").to_raw()))
     );
     assert!(
         keyword.face.is_none(),
@@ -581,7 +581,10 @@ fn test_restore_snapshot_rejects_global_member_without_symbol_entry() {
     let template = Context::new(crate::test_utils::unit_runtime());
     let dangling = neovm_value::intern::intern_uninterned("compat-pdump-missing-global");
     let mut snapshot = snapshot_evaluator(&template);
-    snapshot.obarray.global_members.push(DumpSymId(dangling.0));
+    snapshot
+        .obarray
+        .global_members
+        .push(DumpSymId(dangling.to_raw()));
 
     let result = restore_snapshot(&snapshot, template.hooks_installed());
     match result {

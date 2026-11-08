@@ -147,7 +147,7 @@ fn reads_survive_obarray_growth_and_absent_symbols() {
     for i in 0..20_000 {
         far = Value::from_sym_id(neovm_value::intern::intern(&format!("vri-far-global-{i}")));
     }
-    let len_slots = far.as_bare_symbol_id().expect("symbol").0 as usize;
+    let len_slots = far.as_bare_symbol_id().expect("symbol").to_raw() as usize;
     assert!(
         len_slots >= eval.obarray.symbol_count_upper_bound_for_test(),
         "the far id is outside this obarray"

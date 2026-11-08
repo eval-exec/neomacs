@@ -30,8 +30,8 @@ impl Context {
                 .set_symbol_value_id(id, neovm_value::value::Value::string(&fresh));
         }
         let mut gap = intern_uninterned("p3sym-c5-serial-cache-gap");
-        let target = (u64::from(gap.0) / 4096 + 2) * 4096 + 17;
-        while u64::from(gap.0) + 1 < target {
+        let target = (u64::from(gap.to_raw()) / 4096 + 2) * 4096 + 17;
+        while u64::from(gap.to_raw()) + 1 < target {
             gap = intern_uninterned("p3sym-c5-serial-cache-gap");
         }
         holders

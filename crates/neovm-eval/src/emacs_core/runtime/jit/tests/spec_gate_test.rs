@@ -475,9 +475,13 @@ fn subr_spec_armed_hot_split_matches_reference() {
                 let split = SpecSlot::at_epoch(slot_epoch);
                 let reference = SpecSlot::at_epoch(slot_epoch);
                 let expected = car.bits() as i64;
-                let got = subr_spec_armed(&mut ev, sym.0 as i64, expected, &split);
-                let want =
-                    subr_spec_armed_before_the_split(&ev, sym.0 as i64, expected, &reference);
+                let got = subr_spec_armed(&mut ev, sym.to_raw() as i64, expected, &split);
+                let want = subr_spec_armed_before_the_split(
+                    &ev,
+                    sym.to_raw() as i64,
+                    expected,
+                    &reference,
+                );
                 let case = format!("{state:?} overrides={overrides} force={force}");
                 assert_eq!(got, want, "{case}");
                 assert_eq!(

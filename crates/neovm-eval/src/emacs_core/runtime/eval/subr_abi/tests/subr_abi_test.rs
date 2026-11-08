@@ -94,9 +94,9 @@ fn canonical_subr_refresh_while_reading_keeps_the_selected_lock() {
         let writer = scope.spawn(move || {
             // Install the same permanently live canonical object in the worker's
             // VALUE-only table, as carrier bootstrap does. It owns no code/root.
-            let mut values = vec![None; sym.0 as usize + 1];
+            let mut values = vec![None; sym.to_raw() as usize + 1];
             // SAFETY: shared names the real initialized/leaked specialization.
-            values[sym.0 as usize] =
+            values[sym.to_raw() as usize] =
                 Some(unsafe { TaggedValue::from_veclike_ptr(shared.header()) });
             neovm_value::tagged::value::install_static_subr_objects(values);
             match start_rx.recv() {
