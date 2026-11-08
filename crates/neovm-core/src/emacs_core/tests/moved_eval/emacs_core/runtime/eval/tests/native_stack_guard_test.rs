@@ -79,7 +79,7 @@ fn interpreted_recursion_in_a_lisp_thread_ends_at_max_depth() {
     );
     let rendered = format_eval_result(&result);
     assert!(
-        rendered.starts_with("(excessive-lisp-nesting "),
+        rendered.starts_with("OK (excessive-lisp-nesting "),
         "expected a clean depth error from the Lisp thread, got {rendered}"
     );
 }
