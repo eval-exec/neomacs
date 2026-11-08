@@ -9,6 +9,8 @@
 //! | `NEOVM_EMACS_MULE_PREPARED` | off | Prepare emacs-mule encoder candidates once per conversion, honoring charset priority. |
 
 use crate::emacs_core::text_host::TextHost;
+use crate::emacs_core::coding::EolType;
+use std::collections::HashMap;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{expect_args, expect_args_range, expect_min_args};
 use neovm_value::intern::{SymId, intern, resolve_sym};
@@ -351,8 +353,7 @@ pub fn is_multibyte_string(s: &str) -> bool {
 /// concrete without a suffix.  Reading them as undecided was harmless for as
 /// long as undecided meant "do nothing"; it stops being harmless the moment it
 /// means "detect", which is why entry 131 recorded the conflation in advance.
-pub(crate) fn coding_name_eol(coding_system: &str) -> crate::emacs_core::coding::EolType {
-    use crate::emacs_core::coding::EolType;
+pub(crate) fn coding_name_eol(coding_system: &str) -> EolType {
     match coding_system {
         "unix" => EolType::Unix,
         "dos" => EolType::Dos,
@@ -398,7 +399,6 @@ fn expand_source_eol_text(
 /// (src/coding.c:7607): once the charbuf is filled, no `encode_coding_*` ever
 /// looks at the eol type again.
 fn coding_name_with_eol_spent(coding_system: &str) -> std::borrow::Cow<'_, str> {
-    use crate::emacs_core::coding::EolType;
     use std::borrow::Cow;
     match coding_name_eol(coding_system) {
         EolType::Unix => Cow::Borrowed(coding_system),
@@ -662,7 +662,7 @@ pub fn coding_inherit_unix_eol_type(
 ) -> String {
     if !matches!(
         coding_name_eol(coding_system),
-        crate::emacs_core::coding::EolType::Undecided
+        EolType::Undecided
     ) {
         return coding_system.to_owned();
     }
@@ -3629,7 +3629,7 @@ fn coding_ascii_identity_fast_path<H: TextHost>(
         return true;
     }
     match coding_name_eol(coding) {
-        crate::emacs_core::coding::EolType::Unix => true,
+        EolType::Unix => true,
         _ => {
             let needle = if encode { b'\n' } else { b'\r' };
             !bytes.contains(&needle)
@@ -3801,7 +3801,7 @@ fn run_coding_with_conversion_hook<H: TextHost>(
     base_type: &str,
     hook: SymId,
     encode: bool,
-    eol: crate::emacs_core::coding::EolType,
+    eol: EolType,
     run: &mut CodingRun<'_>,
 ) -> Result<
     (
@@ -3868,7 +3868,7 @@ fn run_coding_with_conversion_hook<H: TextHost>(
             })?);
         let dos_eol = if matches!(
             coding_name_eol(&body),
-            crate::emacs_core::coding::EolType::Dos
+            EolType::Dos
         ) && ctx.eol_conversion()
             == crate::emacs_core::coding::EolConversion::Enabled
         {
@@ -4162,7 +4162,6 @@ fn runtime_ccl_spec<H: TextHost>(
 }
 
 fn ccl_encoding_input(source: &neovm_value::heap_types::LispString, coding: &str) -> Vec<i64> {
-    use crate::emacs_core::coding::EolType;
 
     let mut input = Vec::with_capacity(source.schars());
     for code in coding_source_codepoints(source) {
@@ -4180,7 +4179,6 @@ fn ccl_encoding_input(source: &neovm_value::heap_types::LispString, coding: &str
 }
 
 fn decode_ccl_eol(mut codes: Vec<i64>, coding: &str) -> Vec<i64> {
-    use crate::emacs_core::coding::EolType;
 
     match coding_name_eol(coding) {
         EolType::Dos => {
@@ -4750,8 +4748,7 @@ fn detect_bom_auto_coding(
 /// so a bare EOL alias (`dos`/`mac`/`unix`) still forces its EOL after the
 /// character code has been detected (GNU forces the specified eol_type in
 /// `decode_eol`).  An undecided eol leaves the name untouched.
-fn apply_explicit_eol_suffix(base: &str, eol: crate::emacs_core::coding::EolType) -> String {
-    use crate::emacs_core::coding::EolType;
+fn apply_explicit_eol_suffix(base: &str, eol: EolType) -> String {
     let base = coding_system_base(base);
     // `no-conversion` is byte-faithful (raw-text-unix); GNU keeps it whole and
     // never appends a DOS/MAC subsidiary, so leave it alone.
@@ -5153,11 +5150,11 @@ fn builtin_coding_string_in_context<H: TextHost>(
     // spent up front so the arms and the fall-through cannot collapse a second
     // time -- decoding is not idempotent ("\r\r\n\n" collapses twice).
     let decoded_eol = if encode {
-        crate::emacs_core::coding::EolType::Unix
+        EolType::Unix
     } else {
         coding_name_eol(&coding)
     };
-    if !encode && !matches!(decoded_eol, crate::emacs_core::coding::EolType::Unix) {
+    if !encode && !matches!(decoded_eol, EolType::Unix) {
         let spent = coding_name_with_eol_spent(&coding);
         if spent != coding.as_str() {
             coding = spent.into_owned();
@@ -5240,7 +5237,7 @@ fn builtin_coding_string_in_context<H: TextHost>(
         // than derived from the name because the name's EOL leg was spent
         // above -- GNU's decoders read it off `CODING_ID_EOL_TYPE (coding->id)`
         // before the same conversion happens (src/coding.c:1250-1251).
-        let dos_eol = if matches!(decoded_eol, crate::emacs_core::coding::EolType::Dos)
+        let dos_eol = if matches!(decoded_eol, EolType::Dos)
             && ctx.eol_conversion() == crate::emacs_core::coding::EolConversion::Enabled
         {
             DosEolLookahead::Required
@@ -5470,12 +5467,40 @@ impl RuntimeCodingSystem {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct CodingSystemInfo {
+    /// Canonical name of the coding system (e.g. "utf-8").
+    pub name: SymId,
+    /// Type category (e.g. "utf-8", "charset", "raw-text", "undecided").
+    pub coding_type: SymId,
+    /// Mnemonic character shown in the mode line.
+    pub mnemonic: char,
+    /// End-of-line conversion type.
+    pub eol_type: EolType,
+    /// Whether this coding system is ASCII compatible.
+    pub ascii_compatible_p: bool,
+    /// Charset list (names of supported charsets).
+    pub charset_list: Vec<SymId>,
+    /// Post-read conversion function name.
+    pub post_read_conversion: Option<SymId>,
+    /// Pre-write conversion function name.
+    pub pre_write_conversion: Option<SymId>,
+    /// Default character for encoding.
+    pub default_char: Option<char>,
+    /// Whether this is for unibyte buffers.
+    pub for_unibyte: bool,
+    /// Arbitrary property list for coding-system-get / coding-system-put.
+    pub properties: HashMap<SymId, Value>,
+    /// Integer property slots used by coding-system-get / coding-system-put.
+    pub int_properties: HashMap<i64, Value>,
+}
+
 /// Runtime attributes of a coding, including an implicit EOL subsidiary.
 /// The registry stores some subsidiary names through their registered base.
 #[doc(hidden)]
 pub struct RuntimeCodingMetadata<'a> {
-    pub(crate) info: &'a crate::emacs_core::coding::CodingSystemInfo,
-    pub(crate) eol_type: crate::emacs_core::coding::EolType,
+    pub(crate) info: &'a CodingSystemInfo,
+    pub(crate) eol_type: EolType,
 }
 
 impl RuntimeCodingSystem {
@@ -5493,7 +5518,7 @@ impl RuntimeCodingSystem {
         }
         let info = systems.get(coding_system_base(name))?;
         let explicit = coding_name_eol(name);
-        let eol_type = if explicit == crate::emacs_core::coding::EolType::Undecided {
+        let eol_type = if explicit == EolType::Undecided {
             info.eol_type
         } else {
             explicit
@@ -6316,12 +6341,12 @@ impl DecodedProcessRun {
 #[doc(hidden)]
 impl<'a> RuntimeCodingMetadata<'a> {
     #[doc(hidden)]
-    pub fn info(&self) -> &'a crate::emacs_core::coding::CodingSystemInfo {
+    pub fn info(&self) -> &'a CodingSystemInfo {
         self.info
     }
 
     #[doc(hidden)]
-    pub fn eol_type(&self) -> crate::emacs_core::coding::EolType {
+    pub fn eol_type(&self) -> EolType {
         self.eol_type
     }
 }

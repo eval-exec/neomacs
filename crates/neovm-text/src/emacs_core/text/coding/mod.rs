@@ -1020,33 +1020,7 @@ pub(crate) fn iso2022_spec(info: &CodingSystemInfo, mode: SymbolMode) -> Option<
     })
 }
 
-#[derive(Clone, Debug)]
-pub struct CodingSystemInfo {
-    /// Canonical name of the coding system (e.g. "utf-8").
-    pub name: SymId,
-    /// Type category (e.g. "utf-8", "charset", "raw-text", "undecided").
-    pub coding_type: SymId,
-    /// Mnemonic character shown in the mode line.
-    pub mnemonic: char,
-    /// End-of-line conversion type.
-    pub eol_type: EolType,
-    /// Whether this coding system is ASCII compatible.
-    pub ascii_compatible_p: bool,
-    /// Charset list (names of supported charsets).
-    pub charset_list: Vec<SymId>,
-    /// Post-read conversion function name.
-    pub post_read_conversion: Option<SymId>,
-    /// Pre-write conversion function name.
-    pub pre_write_conversion: Option<SymId>,
-    /// Default character for encoding.
-    pub default_char: Option<char>,
-    /// Whether this is for unibyte buffers.
-    pub for_unibyte: bool,
-    /// Arbitrary property list for coding-system-get / coding-system-put.
-    pub properties: HashMap<SymId, Value>,
-    /// Integer property slots used by coding-system-get / coding-system-put.
-    pub int_properties: HashMap<i64, Value>,
-}
+pub use crate::encoding::CodingSystemInfo;
 
 impl CodingSystemInfo {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
