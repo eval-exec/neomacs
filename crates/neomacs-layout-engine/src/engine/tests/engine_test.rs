@@ -10409,9 +10409,19 @@ fn replacing_display_measurement_preserves_conservative_bottom_scroll() {
         {
             let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
             buf.insert(&text);
-            buf.set_buffer_local("scroll-conservatively", Value::fixnum(101));
             buf.goto_emacs_byte_pos(EmacsBytePos::new(text.len()));
         }
+        // GNU's buffer-local spelling: setq-local declares the variable
+        // buffer-local before writing the binding.  The old
+        // `Buffer::set_buffer_local` wrote an alist entry without the
+        // declaration, which only the default-only read (which consulted the
+        // raw alist) could see; the visible read asks the declared binding
+        // exactly as set_buffer_internal's swap does (xdisp.c:20532-20535).
+        eval.eval_str(
+            "(progn (make-local-variable 'scroll-conservatively) \
+                    (set 'scroll-conservatively 101))",
+        )
+        .expect("buffer-local scroll-conservatively");
         let frame_id = eval.frame_manager_mut().create_frame(
             "conservative-scroll-across-display-replacement",
             640,
