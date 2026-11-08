@@ -475,9 +475,9 @@ struct ModuleIndex {
     /// Every (source crate, written path) the reference scan observed; the
     /// completeness self-test proves the frozen item map has no stale rows.
     observed_paths: BTreeSet<(String, String)>,
-    /// Dump accounting (D-a): every NotUpward site with its reason. Collected
-    /// only when NEOVM_LAYERING_DUMP_ALL is set.
-    not_upward_sites: Vec<(PathBuf, usize, String, String)>,
+    /// Dump accounting (D-a): every NotUpward site with its reason and its
+    /// logical lower root. Collected only when NEOVM_LAYERING_DUMP_ALL is set.
+    not_upward_sites: Vec<(PathBuf, usize, String, String, String)>,
     /// Dump diagnostics: (source file, logical path) for every visited file.
     visited_files: Vec<(PathBuf, Vec<String>)>,
     crate_exports: BTreeMap<String, EcSub>,
@@ -646,11 +646,23 @@ impl ProductionWalker {
             return;
         }
         let reason = self.not_upward_reason(segments);
+        let lower = match self.logical_path.as_slice() {
+            [root, member, ..] if root == "emacs_core" => {
+                if is_g0_member(member) {
+                    "g0".to_owned()
+                } else {
+                    "(upper)".to_owned()
+                }
+            }
+            [root, ..] => root.clone(),
+            [] => "(root)".to_owned(),
+        };
         self.index.not_upward_sites.push((
             self.source.clone(),
             span.start().line,
             segments.join("::"),
             reason,
+            lower,
         ));
     }
 
@@ -2407,13 +2419,13 @@ fn layering_dump_sites_for_analysis() {
             ));
         }
     }
-    for (source, line, written, reason) in &index.not_upward_sites {
-        let entry = accounting.entry(source_lower_of(source)).or_default();
+    for (_source, _line, written, reason, lower) in &index.not_upward_sites {
+        let entry = accounting.entry(lower.clone()).or_default();
         entry.1 += 1;
         text.push_str(&format!(
             "NOTUPWARD\t{}\t{}\t{}\t{}\n",
-            source.display(),
-            line,
+            _source.display(),
+            _line,
             reason,
             written
         ));
