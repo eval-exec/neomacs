@@ -8,9 +8,10 @@
 //! use `new_context` here because eval's unit-runtime module stays
 //! `cfg(test)`. Assertions are unchanged.
 //!
-//! `vm_save_window_excursion_restores_selected_window` stays in eval: it
-//! builds bytecode through the VM module. The lexical-binding macroexpand
-//! test stays too: it writes `Context`'s `lexenv` field.
+//! The lexical-binding macroexpand test stays in eval: it writes
+//! `Context`'s `lexenv` field. The save-window-excursion opcode test moved
+//! with the other window-surface tests; `Vm` is public and the split trait
+//! lives in display.
 
 use neovm_value::error::EvalError;
 use neovm_value::value::Value;

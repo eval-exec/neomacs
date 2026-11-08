@@ -425,8 +425,8 @@ mod emacs_core_runtime_bytecode_tests_vm_window_surface_test_rs;
 mod emacs_core_runtime_bytecode_tests_vm_display_host_test_rs;
 
 // VM tests whose harness is the runtime-startup image. The canonical hook
-// proof is minted in core. The bytecode-construction window test and the
-// lexenv macroexpand test stay in eval. Assertions are unchanged.
+// proof is minted in core. The lexenv macroexpand test stays in eval.
+// Assertions are unchanged.
 #[cfg(test)]
 #[path = "emacs_core/runtime/bytecode/tests/vm_bootstrap_runtime_test.rs"]
 mod emacs_core_runtime_bytecode_tests_vm_bootstrap_runtime_test_rs;

@@ -7,7 +7,6 @@ use crate::emacs_core::jit::feedback::CallSiteFeedbackExt;
 use crate::emacs_core::jit::feedback::CallSitesExt;
 use crate::emacs_core::jit::feedback::RuntimeStateCallSitesExt;
 use crate::emacs_core::print::map_flow;
-use crate::window::{SplitDirection, SplitPlacement};
 use neovm_edit::buffer::LispCharPos1;
 use neovm_value::display_vocab::WindowSystemKind;
 use neovm_value::error::{FlowKind, FlowRef, FlowResultExt};
@@ -2787,56 +2786,6 @@ fn vm_unbind_restores_saved_excursion_point() {
             .point_char_pos()
             .get(),
         saved_point
-    );
-}
-
-#[test]
-fn vm_save_window_excursion_restores_selected_window() {
-    crate::test_utils::init_test_tracing();
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let buffer_id = eval.edit.buffers.create_buffer("*vm-save-window*");
-    eval.edit.buffers.set_current(buffer_id);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, buffer_id);
-    assert!(eval.frames.select_frame(frame_id));
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
-    let other_window = eval
-        .frames
-        .split_window(
-            frame_id,
-            selected_window,
-            SplitDirection::Vertical,
-            buffer_id,
-            None,
-            SplitPlacement::AfterTarget,
-        )
-        .expect("split window");
-
-    let select_other = Value::list(vec![
-        Value::symbol("select-window"),
-        Value::make_window(other_window.0),
-    ]);
-    let selected_form = Value::list(vec![Value::symbol("selected-window")]);
-    let body = Value::list(vec![select_other, selected_form]);
-
-    let mut func = ByteCodeFunction::new(LambdaParams {
-        required: vec![],
-        optional: vec![],
-        rest: None,
-    });
-    let body_idx = func.add_constant(body);
-    func.ops = vec![Op::Constant(body_idx), Op::SaveWindowExcursion, Op::Return];
-    func.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
-
-    let result = {
-        let mut vm = new_vm(&mut eval);
-        vm.execute(&func, vec![])
-            .expect("save-window-excursion opcode should execute")
-    };
-
-    assert_eq!(result, Value::make_window(other_window.0));
-    assert_eq!(
-        eval.frames.get(frame_id).expect("frame").selected_window,
-        selected_window
     );
 }
 

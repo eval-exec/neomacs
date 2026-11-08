@@ -7,11 +7,13 @@
 //! because those fields are `pub(crate)`. The bare harness is core's
 //! `new_context`: eval's unit-runtime module stays `cfg(test)`. The
 //! selection test keeps `runtime_startup_context`, which is what its
-//! bootstrap helper called.
+//! bootstrap helper called. The save-window-excursion opcode test is here
+//! because it calls the display split trait; `Vm` is public.
 
 use neovm_display::window::{DisplayFrameManagerExt, SplitDirection, SplitPlacement};
+use neovm_eval::emacs_core::bytecode::{ByteCodeFunction, Op, StackDepth, Vm};
 use neovm_eval::emacs_core::eval::data::minibuffer_entry::MinibufferManagerExt;
-use neovm_value::value::Value;
+use neovm_value::value::{LambdaParams, Value};
 
 use crate::emacs_core::eval::Context;
 
@@ -413,5 +415,64 @@ fn vm_abort_minibuffers_throws_a_minibuffer_quit_thunk_to_exit() {
             },
         ),
         "OK (t minibuffer-quit minibuffer-quit not-an-error)"
+    );
+}
+
+#[test]
+fn vm_save_window_excursion_restores_selected_window() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    let buffer_id = eval.buffer_manager_mut().create_buffer("*vm-save-window*");
+    eval.buffer_manager_mut().set_current(buffer_id);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, buffer_id);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    let other_window = eval
+        .frame_manager_mut()
+        .split_window(
+            frame_id,
+            selected_window,
+            SplitDirection::Vertical,
+            buffer_id,
+            None,
+            SplitPlacement::AfterTarget,
+        )
+        .expect("split window");
+
+    let select_other = Value::list(vec![
+        Value::symbol("select-window"),
+        Value::make_window(other_window.0),
+    ]);
+    let selected_form = Value::list(vec![Value::symbol("selected-window")]);
+    let body = Value::list(vec![select_other, selected_form]);
+
+    let mut func = ByteCodeFunction::new(LambdaParams {
+        required: vec![],
+        optional: vec![],
+        rest: None,
+    });
+    let body_idx = func.add_constant(body);
+    func.ops = vec![Op::Constant(body_idx), Op::SaveWindowExcursion, Op::Return];
+    func.max_stack = StackDepth::for_test(2);
+
+    let result = {
+        let mut vm = Vm::from_context(&mut eval);
+        vm.execute(&func, vec![])
+            .expect("save-window-excursion opcode should execute")
+    };
+
+    assert_eq!(result, Value::make_window(other_window.0));
+    assert_eq!(
+        eval.frame_manager()
+            .get(frame_id)
+            .expect("frame")
+            .selected_window,
+        selected_window
     );
 }
