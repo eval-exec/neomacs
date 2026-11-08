@@ -2289,7 +2289,18 @@ fn write_value_stateful_inner(
         }
         ValueKind::Veclike(VecLikeType::Frame) => {
             let fid = value.as_frame_id().unwrap();
-            out.push_str(&format_frame_handle(fid));
+            // GNU prints the frame's name (print.c:1912-1929).  Only the
+            // evaluator printer has the live frame registry; the Context-less
+            // path below keeps the ordinal fallback.
+            let name = match &state.context {
+                PrinterContext::Evaluator(context) => context
+                    .frame_manager()
+                    .get(neovm_value::display_vocab::FrameId(fid))
+                    .map(|frame| frame.name_runtime_string_owned())
+                    .filter(|name| !name.is_empty()),
+                PrinterContext::Standalone(_) => None,
+            };
+            out.push_str(&format_frame_handle(fid, name.as_deref()));
         }
         ValueKind::Veclike(VecLikeType::Timer) => {
             let tid = value.as_timer_id().unwrap();
@@ -3391,10 +3402,22 @@ fn print_special_handle(
         .or_else(|| format_overlay_handle(value, buffers))
 }
 
-fn format_frame_handle(id: u64) -> String {
+/// GNU `print.c:1912-1929` prints a frame as `#<frame NAME 0xADDR>` using
+/// `XFRAME (obj)->name`, the frame's Lisp name, not an ordinal derived from
+/// its identity.  The evaluator printer has the live frame registry and
+/// supplies that name; the Context-less printer has no registry and falls
+/// back to the FrameId ordinal, which is only a display surrogate (the id
+/// sequence can differ from GNU's `F<n>` name sequence, e.g. after a loadup
+/// boot's extra frame).
+fn format_frame_handle(id: u64, name: Option<&str>) -> String {
     if id >= neovm_value::display_vocab::FRAME_ID_BASE {
-        let ordinal = id - neovm_value::display_vocab::FRAME_ID_BASE + 1;
-        format!("#<frame F{} 0x{:x}>", ordinal, id)
+        match name {
+            Some(name) => format!("#<frame {} 0x{:x}>", name, id),
+            None => {
+                let ordinal = id - neovm_value::display_vocab::FRAME_ID_BASE + 1;
+                format!("#<frame F{} 0x{:x}>", ordinal, id)
+            }
+        }
     } else {
         format!("#<frame {}>", id)
     }
@@ -3752,7 +3775,9 @@ fn append_print_value_bytes(value: &Value, out: &mut Vec<u8>, options: PrintOpti
             out.extend_from_slice(b"#<window-configuration>");
         }
         ValueKind::Veclike(VecLikeType::Frame) => {
-            out.extend_from_slice(format_frame_handle(value.as_frame_id().unwrap()).as_bytes());
+            out.extend_from_slice(
+                format_frame_handle(value.as_frame_id().unwrap(), None).as_bytes(),
+            );
         }
         ValueKind::Veclike(VecLikeType::Timer) => {
             out.extend_from_slice(format!("#<timer {}>", value.as_timer_id().unwrap()).as_bytes());

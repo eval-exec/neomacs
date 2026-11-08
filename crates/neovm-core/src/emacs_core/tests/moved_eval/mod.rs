@@ -321,6 +321,13 @@ mod emacs_core_lisp_print_tests_settings_gnu_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/print/tests/symbol_noescape_gnu.rs"]
 mod emacs_core_lisp_print_tests_symbol_noescape_gnu_rs;
+// Core-authored regression test (memq oracle-divergence fix): the evaluator
+// frame handle prints the frame's NAME, not an ordinal derived from FrameId.
+// It lives here because this crate's test tree reaches both the live frame
+// registry and the Lisp `format` builtin.
+#[cfg(test)]
+#[path = "emacs_core/lisp/print/tests/frame_name_print_units.rs"]
+mod emacs_core_lisp_print_tests_frame_name_print_units_rs;
 // P1 EVAL wave F1: file_notify Linux driver oracle re-homed from eval
 // (booted Context through core test_utils; driver calls re-pointed to the
 // inotify-* Lisp subrs, TLS reset to the eval authority fence).  The
