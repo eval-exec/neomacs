@@ -7595,6 +7595,7 @@ impl CommandLoopDiagnostic {
         macro_rules! emit_at {
             ($level:expr) => {
                 tracing::event!(
+                    target: "neovm_core::emacs_core::keyboard::command_loop",
                     $level,
                     condition = %condition,
                     signal = %signal,
