@@ -88,12 +88,12 @@ fn graph(context: &mut Context) -> Graph {
                 heap.with_thread_payload_mut(thread, |payload| {
                     payload.name = thread_name;
                     payload.function = children[0];
-                    payload.result = children[1];
-                    payload.last_error = Some(children[2]);
-                    payload.buffer_disposition = children[3];
-                    payload.event_object = children[4];
-                    payload.blocked_remaining_forms = children[5];
-                    payload.error_data = children[6];
+                    *payload.result_mut() = children[1];
+                    *payload.last_error_mut() = Some(children[2]);
+                    *payload.buffer_disposition_mut() = children[3];
+                    *payload.event_object_mut() = children[4];
+                    *payload.blocked_remaining_forms_mut() = children[5];
+                    *payload.error_data_mut() = children[6];
                 })
             }
             .expect("same-World thread mutation")

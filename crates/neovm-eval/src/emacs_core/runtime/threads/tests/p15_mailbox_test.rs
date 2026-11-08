@@ -37,18 +37,18 @@ fn external_roots(heap: &TaggedHeap) -> Vec<usize> {
 }
 
 fn snapshot(context: &Context, target: ThreadId) -> MailboxSnapshot {
-    let children = &context
+    let children = context
         .threads
         .get_thread(target.native_key())
         .unwrap()
-        .children;
+        .children();
     MailboxSnapshot {
         events: children
-            .stored_events
+            .stored_events()
             .iter()
             .map(|event| EventWords(event.values().map(Value::bits)))
             .collect(),
-        capacity: EventCapacity(children.stored_events.capacity()),
+        capacity: EventCapacity(children.stored_events().capacity()),
         debt: AllocationDebt(context.tagged_heap.bytes_since_gc_exact()),
         remembered: RememberedOwners(context.tagged_heap.remembered_log_len_for_test()),
         external_roots: external_roots(&context.tagged_heap),
@@ -262,8 +262,8 @@ fn p15_mailbox_main_event_alone_retains_completed_sender_until_consumption() {
             .threads
             .get_thread(0)
             .unwrap()
-            .children
-            .stored_events
+            .children()
+            .stored_events()
             .is_empty()
     );
     context.gc_collect_exact();

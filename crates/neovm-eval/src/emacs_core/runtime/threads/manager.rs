@@ -596,7 +596,7 @@ impl ThreadManager {
         thread: Value,
     ) -> Option<neovm_edit::buffer::BufferId> {
         self.thread_payload(thread)
-            .and_then(|t| t.native.current_buffer)
+            .and_then(|t| t.native().current_buffer())
     }
     pub fn set_thread_current_buffer(
         &mut self,

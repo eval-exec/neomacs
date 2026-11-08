@@ -52,7 +52,7 @@ fn assert_owned_depth_inside_handler(context: &mut Context, mutex: Value) -> Eva
         .cast::<MutexObj>();
     // SAFETY: membership and the canonical handle validation above prove the
     // live MutexObj; this callback holds the Baton and does not yield or GC.
-    match unsafe { &(*ptr).payload.ownership } {
+    match unsafe { (*ptr).payload().ownership() } {
         MutexOwnership::Locked { owner, depth } => {
             assert_eq!(owner.native_key(), current);
             assert_eq!(depth.get(), 2, "saved depth before with-mutex unwinds");

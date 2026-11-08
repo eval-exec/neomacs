@@ -155,7 +155,11 @@ fn p15_native_thread_updates_do_not_record_lisp_writes() {
     assert_eq!(after_debt, before_debt);
     assert_eq!(ctx.threads.thread_current_buffer(native), Some(buffer));
     assert_eq!(
-        ctx.threads.get_thread(native).unwrap().children.function,
+        ctx.threads
+            .get_thread(native)
+            .unwrap()
+            .children()
+            .function(),
         child
     );
     ctx.gc_collect_exact();
@@ -203,19 +207,22 @@ fn thread_lifecycle_created_running_finished() {
     crate::test_utils::init_test_tracing();
     let mut mgr = ThreadManager::new();
     let id = mgr.create_thread(Value::NIL, ThreadName::UNNAMED);
-    assert_eq!(mgr.get_thread(id).unwrap().native.phase, ThreadPhase::New);
+    assert_eq!(
+        mgr.get_thread(id).unwrap().native().phase(),
+        ThreadPhase::New
+    );
     assert!(mgr.thread_alive_p(id));
 
     mgr.start_thread(id);
     assert_eq!(
-        mgr.get_thread(id).unwrap().native.phase,
+        mgr.get_thread(id).unwrap().native().phase(),
         ThreadPhase::Active(RunState::Running)
     );
     assert!(mgr.thread_alive_p(id));
 
     mgr.finish_thread(id, Value::fixnum(42));
     assert_eq!(
-        mgr.get_thread(id).unwrap().native.phase,
+        mgr.get_thread(id).unwrap().native().phase(),
         ThreadPhase::Completing(ThreadOutcome::Returned)
     );
     // GNU `thread_live_p` is false once `run_thread` clears `m_specpdl`
@@ -240,7 +247,7 @@ fn thread_signal_records_error() {
         Value::cons(Value::symbol("test-error"), Value::string("bad")),
     );
     assert_eq!(
-        mgr.get_thread(id).unwrap().native.phase,
+        mgr.get_thread(id).unwrap().native().phase(),
         ThreadPhase::Active(RunState::Running)
     );
     assert!(mgr.thread_alive_p(id));
@@ -777,8 +784,11 @@ fn failed_blocked_thread_entry_preserves_continuation() {
         .threads
         .get_thread(thread_id)
         .expect("blocked thread remains registered");
-    assert_eq!(thread.native.phase, ThreadPhase::Active(RunState::Blocked));
-    assert_eq!(thread.children.blocked_remaining_forms, continuation);
+    assert_eq!(
+        thread.native().phase(),
+        ThreadPhase::Active(RunState::Blocked)
+    );
+    assert_eq!(thread.children().blocked_remaining_forms(), continuation);
 
     super::super::eval::set_default_toplevel_value(
         &mut eval,
@@ -2274,12 +2284,12 @@ fn p15_gc_thread_payload_fields_have_only_object_edges() {
             unsafe {
                 heap.with_thread_payload_mut(thread, |payload| {
                     payload.function = probes[0];
-                    payload.result = probes[1];
-                    payload.last_error = Some(probes[2]);
-                    payload.buffer_disposition = probes[3];
-                    payload.event_object = probes[4];
-                    payload.blocked_remaining_forms = probes[5];
-                    payload.error_data = probes[6];
+                    *payload.result_mut() = probes[1];
+                    *payload.last_error_mut() = Some(probes[2]);
+                    *payload.buffer_disposition_mut() = probes[3];
+                    *payload.event_object_mut() = probes[4];
+                    *payload.blocked_remaining_forms_mut() = probes[5];
+                    *payload.error_data_mut() = probes[6];
                 })
             }
             .expect("same-World thread payload")
@@ -2370,7 +2380,7 @@ fn p15_gc_old_thread_payload_remembers_young_children() {
             // the barrier closure does not allocate, collect, or yield.
             unsafe {
                 heap.with_thread_payload_mut(thread, |payload| {
-                    payload.result = child;
+                    *payload.result_mut() = child;
                 })
             }
             .expect("same-World old thread payload");
@@ -2538,8 +2548,8 @@ fn p15_worker_signals_never_queue_native_transport() {
         eval.threads
             .get_thread(native)
             .unwrap()
-            .children
-            .stored_events
+            .children()
+            .stored_events()
             .is_empty()
     );
     let pending = eval
@@ -2595,13 +2605,13 @@ fn p15_stored_worker_event_survives_completion_without_external_leases() {
     // SAFETY: allocation membership was checked above; no collection or yield
     // occurs while this retained Thread-tagged allocation is inspected.
     let payload = unsafe {
-        &(*worker
+        (*worker
             .as_veclike_ptr()
             .unwrap()
             .cast::<neovm_value::tagged::header::ThreadObj>())
-        .payload
+        .payload()
     };
-    let stored = &payload.children.stored_events;
+    let stored = payload.children().stored_events();
     assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].values(), [sender, Value::NIL, Value::NIL]);
 }
