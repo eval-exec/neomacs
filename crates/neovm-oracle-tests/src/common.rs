@@ -1660,6 +1660,69 @@ pub(crate) fn assert_oracle_parity_under_envs_expect(
     neomacs_envs: &[&[(&str, &str)]],
     expected: expect_test::Expect,
 ) {
+    run_parity_under_envs(form, neomacs_envs, expected, None);
+}
+
+/// What one Neomacs arm of an environment matrix actually executed, read from
+/// the final `[neovm-jit-final]` line of that run's JIT statistics
+/// (`NEOVM_JIT_STATS_FILE`, which implies the compile-stats report).
+#[derive(Debug)]
+pub(crate) struct JitTierWitness {
+    /// Leaf compiles this session (`compiles=`).
+    pub compiles: u64,
+    /// Native entries into compiled leaves (`native_entries=`).
+    pub native_entries: u64,
+    /// All deopt causes (`deopts[total=`).
+    pub deopts: u64,
+    /// The whole report, for failure messages.
+    pub stats: String,
+}
+
+/// Parse the final `[neovm-jit-final]` line of a JIT stats file.
+fn final_jit_tier_witness(stats: String) -> Option<JitTierWitness> {
+    let line = stats
+        .lines()
+        .rev()
+        .find(|line| line.starts_with("[neovm-jit-final]"))?;
+    let field = |prefix: &str| {
+        line.split_whitespace()
+            .find_map(|token| token.strip_prefix(prefix))?
+            .parse()
+            .ok()
+    };
+    Some(JitTierWitness {
+        compiles: field("compiles=")?,
+        native_entries: field("native_entries=")?,
+        deopts: field("deopts[total=")?,
+        stats,
+    })
+}
+
+/// Like [`assert_oracle_parity_under_envs_expect`], and additionally requires
+/// every Neomacs arm to show the engine activity the arm claims.
+///
+/// The witness reads the `NEOVM_JIT_STATS_FILE` report of the same run whose
+/// answer was just compared, so it observes that run rather than a re-run. It
+/// is kept outside the expectation and cannot move the expected payload: a
+/// knob arm that silently stops taking effect, or a form that never reaches
+/// the tier the arm claims, turns the test RED even while every answer still
+/// matches GNU. GNU never reads these variables; the matrix stays
+/// Neomacs-only.
+pub(crate) fn assert_oracle_parity_under_envs_expect_with_witness(
+    form: &str,
+    neomacs_envs: &[&[(&str, &str)]],
+    expected: expect_test::Expect,
+    witness: impl Fn(&[(&str, &str)], &JitTierWitness),
+) {
+    run_parity_under_envs(form, neomacs_envs, expected, Some(&witness));
+}
+
+fn run_parity_under_envs(
+    form: &str,
+    neomacs_envs: &[&[(&str, &str)]],
+    expected: expect_test::Expect,
+    witness: Option<&dyn Fn(&[(&str, &str)], &JitTierWitness)>,
+) {
     ensure_nonempty_form(form).expect("form should not be empty");
     let eval_program = EvalProgram::Normalized;
     let sandbox_with = |extra_env: &[(&str, &str)]| {
@@ -1680,11 +1743,34 @@ pub(crate) fn assert_oracle_parity_under_envs_expect(
         return;
     }
     for extra_env in neomacs_envs {
-        let neovm = run_neomacs_binary_eval_with_sandbox(&sandbox_with(extra_env), eval_program)
+        let stats_dir = witness
+            .is_some()
+            .then(|| tempfile::tempdir().expect("JIT tier witness tempdir"));
+        let stats_path = stats_dir.as_ref().map(|dir| {
+            dir.path()
+                .join("jit-stats.txt")
+                .to_string_lossy()
+                .into_owned()
+        });
+        let mut env: Vec<(&str, &str)> = extra_env.to_vec();
+        if let Some(path) = &stats_path {
+            env.push(("NEOVM_JIT_STATS_FILE", path.as_str()));
+        }
+        let neovm = run_neomacs_binary_eval_with_sandbox(&sandbox_with(&env), eval_program)
             .unwrap_or_else(|e| panic!("neomacs binary eval should run under {extra_env:?}: {e}"));
         match &oracle {
             None => expected.assert_eq(&inline_expect_payload(&neovm)),
             Some(oracle) => assert_neovm_oracle_parity(&neovm, oracle, form),
+        }
+        if let (Some(observe), Some(path)) = (witness, &stats_path) {
+            let stats = std::fs::read_to_string(path).unwrap_or_default();
+            let report = final_jit_tier_witness(stats).unwrap_or_else(|| {
+                panic!(
+                    "arm {extra_env:?} left no [neovm-jit-final] report at {path}: \
+                     the tier witness would be vacuous"
+                )
+            });
+            observe(extra_env, &report);
         }
     }
 }

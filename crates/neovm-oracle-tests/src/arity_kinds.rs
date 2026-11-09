@@ -27,7 +27,8 @@
 //! kind is checked with TOO FEW and TOO MANY arguments.
 
 use crate::common::{
-    assert_oracle_parity_expect, assert_oracle_parity_under_envs_expect,
+    JitTierWitness, assert_oracle_parity_expect,
+    assert_oracle_parity_under_envs_expect_with_witness,
     return_if_neovm_enable_oracle_proptest_not_set,
 };
 
@@ -87,9 +88,60 @@ fn arity_interpreted_closure_too_few_and_too_many() {
     );
 }
 
+/// AK-1 (lead 2026-11-09): each arm of the tier matrix must not only answer
+/// like GNU, it must actually execute the tier it claims. This witness reads
+/// the same run's `NEOVM_JIT_STATS_FILE` report -- outside the parity
+/// payload, so it can only fail the arm, never move the expected answer:
+///
+/// * JIT off compiles nothing and enters no compiled leaf;
+/// * both JIT arms compile a leaf and enter it natively;
+/// * the forced-deopt arm actually deopts.
+///
+/// A knob that stops taking effect, or a form that never gets hot enough to
+/// compile, turns the test RED while every answer still matches GNU. Raise
+/// any of these bounds and the witness fails.
+fn arity_tier_witness(env: &[(&str, &str)], jit: &JitTierWitness) {
+    let knob = |name: &str| {
+        env.iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| *value)
+    };
+    if knob("NEOVM_JIT") == Some("0") {
+        assert_eq!(
+            jit.compiles, 0,
+            "the JIT-off arm compiled a leaf: {env:?}\n{}",
+            jit.stats
+        );
+        assert_eq!(
+            jit.native_entries, 0,
+            "the JIT-off arm entered a compiled leaf: {env:?}\n{}",
+            jit.stats
+        );
+    } else {
+        assert!(
+            jit.compiles > 0,
+            "the JIT arm compiled nothing: {env:?}\n{}",
+            jit.stats
+        );
+        assert!(
+            jit.native_entries > 0,
+            "the JIT arm never entered a compiled leaf: {env:?}\n{}",
+            jit.stats
+        );
+        if knob("NEOVM_JIT_FORCE_DEOPT") == Some("1") {
+            assert!(
+                jit.deopts > 0,
+                "the forced-deopt arm never deopted: {env:?}\n{}",
+                jit.stats
+            );
+        }
+    }
+}
+
 /// The same byte-code function after it is hot enough to have a compiled
 /// leaf: interpreted, default, immediate-tier-up and forced-deopt Neomacs
-/// must all report GNU's one answer.
+/// must all report GNU's one answer, and each arm must show the engine
+/// activity it claims (AK-1, `arity_tier_witness`).
 #[test]
 fn arity_byte_code_across_jit_tiers_too_few_and_too_many() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -97,7 +149,7 @@ fn arity_byte_code_across_jit_tiers_too_few_and_too_many() {
     let expect = expect_test::expect![[
         r#""OK ((wrong-number-of-arguments (2 . 2) 0) (wrong-number-of-arguments (2 . 2) 3))""#
     ]];
-    assert_oracle_parity_under_envs_expect(
+    assert_oracle_parity_under_envs_expect_with_witness(
         "(progn
            (defun arity-kind-hot (a b) (+ a b))
            (byte-compile 'arity-kind-hot)
@@ -115,5 +167,6 @@ fn arity_byte_code_across_jit_tiers_too_few_and_too_many() {
             ],
         ],
         expect,
+        arity_tier_witness,
     );
 }
