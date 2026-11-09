@@ -2103,6 +2103,19 @@ fn read_popup_menu_key_sequence(ctx: &mut Context) -> Result<(Vec<Value>, Value)
     read
 }
 
+/// TEST-SUPPORT-VIS (P3 port): drive the modal popup reader from the
+/// re-homed regression test in neovm-core's lib tests. The production
+/// `read_popup_menu_key_sequence` stays private; this facade only forwards the
+/// already-public Context read surface and returns the read key sequence plus
+/// its executed binding.
+#[cfg(feature = "test-support")]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn read_popup_menu_key_sequence_for_test(
+    ctx: &mut Context,
+) -> Result<(Vec<Value>, Value), Flow> {
+    read_popup_menu_key_sequence(ctx)
+}
+
 #[allow(clippy::too_many_arguments)] // popup-loop inputs mirror the display-host boundary
 fn x_popup_menu_interactive_loop(
     ctx: &mut Context,

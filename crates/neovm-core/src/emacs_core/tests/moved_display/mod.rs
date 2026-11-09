@@ -3,6 +3,10 @@
 //! display -N == core +N. See DISPLAY-TESTS-oracleb.tsv.
 
 #[cfg(test)]
+#[path = "popup_reader_test.rs"]
+mod popup_reader_test;
+
+#[cfg(test)]
 #[path = "font_face_boot_test.rs"]
 mod font_face_boot_test;
 
