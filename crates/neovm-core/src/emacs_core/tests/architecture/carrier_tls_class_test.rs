@@ -26,191 +26,799 @@ enum TlsClass {
 /// One entry per production `static NAME` inside a `thread_local!` block of
 /// the workspace. Classes come from the 226-record classification; extra
 /// source-only statics are `SourceOnly`.
-const TLS_CLASSIFICATION: &[(&str, TlsClass)] = &[
-    ("ACTIVE", TlsClass::MustReset),
-    ("ACTIVE_ARRAY_KINDS", TlsClass::MustReset),
-    ("ACTIVE_BUILD", TlsClass::MustReset),
-    ("ACTIVE_CALL_HEAVY", TlsClass::MustReset),
-    ("ACTIVE_CALL_SOURCE", TlsClass::MustReset),
-    ("ACTIVE_CALL_TARGETS_READ", TlsClass::MustReset),
-    ("ACTIVE_ENVS", TlsClass::MustReset),
-    ("ACTIVE_FEEDBACK_HOLDS", TlsClass::MustReset),
-    ("ACTIVE_FUSED", TlsClass::MustReset),
-    ("ACTIVE_LABEL", TlsClass::MustReset),
-    ("ACTIVE_NO_INLINE_CALL_SITES", TlsClass::MustReset),
-    ("ACTIVE_NUMERIC_FEEDBACK", TlsClass::MustReset),
-    ("ACTIVE_REGALLOC", TlsClass::MustReset),
-    ("ACTIVE_REGION", TlsClass::MustReset),
-    ("ALLOCATION_HINT", TlsClass::MustReset),
-    ("ATOM_NAME_CACHE", TlsClass::CarrierIntrinsic),
-    ("BUF", TlsClass::CarrierIntrinsic),
-    ("BUFFER", TlsClass::MustReset),
-    ("BUSES", TlsClass::CarrierIntrinsic),
-    ("BYPASS_PROFIT_GATE", TlsClass::MustReset),
-    ("BYTECODE_BRANCH_POLL_COUNT", TlsClass::SourceOnly),
-    ("BYTECODE_DATA_ACCESS_COUNT", TlsClass::SourceOnly),
-    ("CACHE", TlsClass::OwnerCarried),
-    ("CACHED", TlsClass::CarrierIntrinsic),
-    ("CACHE_COLLECTION_EPOCH", TlsClass::OwnerCarried),
-    ("CACHE_HEAP", TlsClass::OwnerCarried),
-    ("CALL_KIND_COUNTS", TlsClass::SourceOnly),
-    ("CALL_SITES", TlsClass::SourceOnly),
-    ("CCL_REGISTRY", TlsClass::OwnerCarried),
+/// Sentinel module for a classified record that the production source
+/// scan does not find: a shipped-binary census record (linker TLS,
+/// macro-generated `{closure}` slots) or a cfg(test)-gated block the
+/// scan deliberately skips.
+const BINARY_CENSUS: &str = "<binary-census-or-test-gated>";
+
+/// One entry per (defining module, `static NAME`) pair inside a
+/// production `thread_local!` block of the workspace, plus the
+/// shipped-census records the source scan cannot see (BINARY_CENSUS).
+///
+/// The module is the workspace-relative source path from `crates/`
+/// (the same spelling MUST_RESET_MODULE_COVERAGE uses).  Keying by
+/// (module, name) keeps a shared static name from letting one module
+/// inherit another module's class: a Lisp-holding record can no longer
+/// pick up a SourceOnly row with no reset merely because the names
+/// match (peer CARRIER-TLS-KEY).  Duplicate (module, name) keys are
+/// rejected by `duplicate_classification_keys` in
+/// `every_production_thread_local_has_a_carrier_tls_class`.
+const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/stats/front_diag.rs",
+        "ACTIVE",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-value/src/tagged/collection_reads.rs",
+        "ACTIVE",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/array_snapshot.rs",
+        "ACTIVE_ARRAY_KINDS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/tier2.rs",
+        "ACTIVE_BUILD",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile.rs",
+        "ACTIVE_CALL_HEAVY",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/call_feedback.rs",
+        "ACTIVE_CALL_SOURCE",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/call_feedback.rs",
+        "ACTIVE_CALL_TARGETS_READ",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-system/src/emacs_core/system/dynamic_module/mod.rs",
+        "ACTIVE_ENVS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/call_feedback.rs",
+        "ACTIVE_FEEDBACK_HOLDS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/inline.rs",
+        "ACTIVE_FUSED",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/stats/perf_map.rs",
+        "ACTIVE_LABEL",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/snapshot.rs",
+        "ACTIVE_NO_INLINE_CALL_SITES",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/snapshot.rs",
+        "ACTIVE_NUMERIC_FEEDBACK",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/lowering.rs",
+        "ACTIVE_REGALLOC",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/lowering.rs",
+        "ACTIVE_REGION",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/code_placement.rs",
+        "ALLOCATION_HINT",
+        TlsClass::MustReset,
+    ),
+    (BINARY_CENSUS, "ATOM_NAME_CACHE", TlsClass::CarrierIntrinsic),
+    (BINARY_CENSUS, "BUF", TlsClass::CarrierIntrinsic),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/stats/front_diag.rs",
+        "BUFFER",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-system/src/emacs_core/system/dbusbind/connection.rs",
+        "BUSES",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile.rs",
+        "BYPASS_PROFIT_GATE",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/mod.rs",
+        "BYTECODE_BRANCH_POLL_COUNT",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-value/src/value/mod.rs",
+        "BYTECODE_DATA_ACCESS_COUNT",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-value/src/string_pos_cache.rs",
+        "CACHE",
+        TlsClass::OwnerCarried,
+    ),
+    (BINARY_CENSUS, "CACHED", TlsClass::CarrierIntrinsic),
+    (
+        "neovm-value/src/string_pos_cache.rs",
+        "CACHE_COLLECTION_EPOCH",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-value/src/string_pos_cache.rs",
+        "CACHE_HEAP",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/bytecode/vm.rs",
+        "CALL_KIND_COUNTS",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/bytecode/vm.rs",
+        "CALL_SITES",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/ccl/mod.rs",
+        "CCL_REGISTRY",
+        TlsClass::OwnerCarried,
+    ),
     // CarrierIntrinsic: `with_ccl_obarray` publishes the view pointer in a
     // scoped slot and a `Drop` guard restores the previous (null) value
     // before the frame ends (`ccl/mod.rs:139-167`), including on unwind, so
     // the record is null between jobs and never carries retired state.
-    ("CCL_VARIABLES", TlsClass::CarrierIntrinsic),
-    ("CHARSET_MAP_MEMO", TlsClass::MustReset),
-    ("CHARSET_REGISTRY", TlsClass::OwnerCarried),
-    ("CHAR_TABLE_ASCII_FOLD", TlsClass::MustReset),
     (
+        "neovm-text/src/emacs_core/text/ccl/mod.rs",
+        "CCL_VARIABLES",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/charset/mod.rs",
+        "CHARSET_MAP_MEMO",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/charset/mod.rs",
+        "CHARSET_REGISTRY",
+        TlsClass::OwnerCarried,
+    ),
+    (BINARY_CENSUS, "CHAR_TABLE_ASCII_FOLD", TlsClass::MustReset),
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs",
         "CHAR_TABLE_LAYOUT_MUTATION_EPOCH",
         TlsClass::CarrierIntrinsic,
     ),
-    ("CHROME_GENERATION_RECORD", TlsClass::MustReset),
-    ("CLOSE_COUNT", TlsClass::CarrierIntrinsic),
-    ("COLUMN_SPEC_CONSUMED", TlsClass::MustReset),
-    ("COMPACTION_IN_PROGRESS", TlsClass::CarrierIntrinsic),
-    ("COMPILED", TlsClass::MustReset),
-    ("COMPILED_HEAP", TlsClass::MustReset),
-    ("COMPILED_OBARRAY", TlsClass::MustReset),
-    ("COMPOSITION_REGISTRY", TlsClass::CarrierIntrinsic),
-    ("CONCURRENT_HASH_MUTATOR_ID", TlsClass::MustReset),
-    ("CONSUMED", TlsClass::MustReset),
-    ("CONTEXT", TlsClass::CarrierIntrinsic),
-    ("CORE_PDUMP_HOOKS", TlsClass::CarrierIntrinsic),
-    ("CURRENT", TlsClass::MustReset),
-    ("CURRENT_LEAF_BASES", TlsClass::MustReset),
-    ("CURRENT_PARKER", TlsClass::CarrierIntrinsic),
-    ("CURRENT_PASS", TlsClass::CarrierIntrinsic),
-    ("DB_HANDLES", TlsClass::CarrierIntrinsic),
-    ("DEFERRED", TlsClass::MustReset),
-    ("DEFER_SCOPE", TlsClass::MustReset),
-    ("DEOPT_TAIL", TlsClass::MustReset),
-    ("DESTROYED_FIRST", TlsClass::SourceOnly),
-    ("DROPPED_LEAF_TOTALS", TlsClass::MustReset),
-    ("DTORS", TlsClass::CarrierIntrinsic),
-    ("EAGER_EXPANSION_FAILURE", TlsClass::MustReset),
-    ("ENTRY_COUNTS", TlsClass::SourceOnly),
-    ("ENV", TlsClass::MustReset),
-    ("EPOCH", TlsClass::MustReset),
-    ("EPOCH_DISCARDS", TlsClass::MustReset),
-    ("FACE_ATTR_STATE", TlsClass::OwnerCarried),
-    ("FAULT", TlsClass::SourceOnly),
-    ("FILE_NOTIFY_STATE", TlsClass::OwnerCarried),
-    ("FILTERING", TlsClass::CarrierIntrinsic),
-    ("FINGERPRINT_RECORD", TlsClass::MustReset),
-    ("FLONUM_CENSUS", TlsClass::MustReset),
-    ("FN_CELL_UNCHANGED", TlsClass::MustReset),
-    ("FN_EPOCH_BUMPS", TlsClass::MustReset),
-    ("FN_REDEFINED", TlsClass::MustReset),
-    ("FOO", TlsClass::CarrierIntrinsic),
-    ("FORMAT_OBJECT_STACK", TlsClass::MustReset),
-    ("GATE_THREAD", TlsClass::SourceOnly),
-    ("GLOBAL_REFS", TlsClass::OwnerCarried),
-    ("GLOBAL_SUBR_LOOKUP_COUNT", TlsClass::SourceOnly),
-    ("GLOBAL_SUBR_TABLE", TlsClass::MustReset),
-    ("GUARD_COUNT", TlsClass::MustReset),
-    ("HANDLE", TlsClass::CarrierIntrinsic),
-    ("HASH_TABLE_TEST_ALIASES", TlsClass::OwnerCarried),
-    ("HEADER_LINE_EVAL_COUNT", TlsClass::MustReset),
+    (
+        "neomacs-layout-engine/src/display_status_line.rs",
+        "CHROME_GENERATION_RECORD",
+        TlsClass::MustReset,
+    ),
+    (BINARY_CENSUS, "CLOSE_COUNT", TlsClass::CarrierIntrinsic),
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/data/xdisp_column_spec.rs",
+        "COLUMN_SPEC_CONSUMED",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-edit/src/emacs_core/editing/undo/mod.rs",
+        "COMPACTION_IN_PROGRESS",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/cache.rs",
+        "COMPILED",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/cache.rs",
+        "COMPILED_HEAP",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/cache.rs",
+        "COMPILED_OBARRAY",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/composite/mod.rs",
+        "COMPOSITION_REGISTRY",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neovm-value/src/tagged/gc/cold_gc.rs",
+        "CONCURRENT_HASH_MUTATOR_ID",
+        TlsClass::MustReset,
+    ),
+    (
+        "neomacs-display-protocol/src/input_latency.rs",
+        "CONSUMED",
+        TlsClass::MustReset,
+    ),
+    (BINARY_CENSUS, "CONTEXT", TlsClass::CarrierIntrinsic),
+    (
+        "neovm-eval/src/emacs_core/runtime/pdump/runtime.rs",
+        "CORE_PDUMP_HOOKS",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/stats/verdict.rs",
+        "CURRENT",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs",
+        "CURRENT_LEAF_BASES",
+        TlsClass::MustReset,
+    ),
+    (BINARY_CENSUS, "CURRENT_PARKER", TlsClass::CarrierIntrinsic),
+    (BINARY_CENSUS, "CURRENT_PASS", TlsClass::CarrierIntrinsic),
+    (BINARY_CENSUS, "DB_HANDLES", TlsClass::CarrierIntrinsic),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/bg.rs",
+        "DEFERRED",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/bg.rs",
+        "DEFER_SCOPE",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/cold_exits.rs",
+        "DEOPT_TAIL",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-value/src/tls_scope.rs",
+        "DESTROYED_FIRST",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/cache.rs",
+        "DROPPED_LEAF_TOTALS",
+        TlsClass::MustReset,
+    ),
+    (BINARY_CENSUS, "DTORS", TlsClass::CarrierIntrinsic),
+    (
+        "neovm-eval/src/emacs_core/lisp/load/mod.rs",
+        "EAGER_EXPANSION_FAILURE",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/bytecode/vm.rs",
+        "ENTRY_COUNTS",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/inline_vars.rs",
+        "ENV",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-value/src/string_pos_cache.rs",
+        "EPOCH",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/bg.rs",
+        "EPOCH_DISCARDS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-display/src/emacs_core/display/xfaces/mod.rs",
+        "FACE_ATTR_STATE",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-value/src/tagged/gc/cons_block_trailer.rs",
+        "FAULT",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/lisp/native/builtins/file_notify/mod.rs",
+        "FILE_NOTIFY_STATE",
+        TlsClass::OwnerCarried,
+    ),
+    (BINARY_CENSUS, "FILTERING", TlsClass::CarrierIntrinsic),
+    (
+        "neomacs-layout-engine/src/incremental_layout/chrome_memo.rs",
+        "FINGERPRINT_RECORD",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/lowering.rs",
+        "FLONUM_CENSUS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/stats/epoch.rs",
+        "FN_CELL_UNCHANGED",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/stats/epoch.rs",
+        "FN_EPOCH_BUMPS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/stats/epoch.rs",
+        "FN_REDEFINED",
+        TlsClass::MustReset,
+    ),
+    (BINARY_CENSUS, "FOO", TlsClass::CarrierIntrinsic),
+    (
+        "neovm-eval/src/emacs_core/lisp/print/error_format.rs",
+        "FORMAT_OBJECT_STACK",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-value/src/tagged/gc/mutator_registration/gate.rs",
+        "GATE_THREAD",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs",
+        "GLOBAL_REFS",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/mod.rs",
+        "GLOBAL_SUBR_LOOKUP_COUNT",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/mod.rs",
+        "GLOBAL_SUBR_TABLE",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/lowering.rs",
+        "GUARD_COUNT",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/absent_layer.rs",
+        "HANDLE",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neovm-eval/src/emacs_core/lisp/native/builtins/collections.rs",
+        "HASH_TABLE_TEST_ALIASES",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neomacs-layout-engine/src/display_status_line.rs",
+        "HEADER_LINE_EVAL_COUNT",
+        TlsClass::MustReset,
+    ),
     // AbsentLayer H4 hit vector (eval absent_layer.rs): test-support
     // instrumentation, holds hit labels only, no Lisp Values.
-    ("HITS", TlsClass::SourceOnly),
-    ("HOTPATH_STATE", TlsClass::MustReset),
-    ("ID", TlsClass::CarrierIntrinsic),
-    ("IMM_POOL", TlsClass::MustReset),
-    ("INLINE_CENSUS", TlsClass::MustReset),
-    ("INLINE_DEPS", TlsClass::MustReset),
-    ("INLINE_EVICTED_LEAVES", TlsClass::MustReset),
-    ("INLINE_EVICTIONS", TlsClass::MustReset),
-    ("INLINE_HEAP_SITES", TlsClass::MustReset),
-    ("INLINE_SUBR_TABLE", TlsClass::MustReset),
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/absent_layer.rs",
+        "HITS",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-system/src/emacs_core/system/perf_trace/mod.rs",
+        "HOTPATH_STATE",
+        TlsClass::MustReset,
+    ),
+    (BINARY_CENSUS, "ID", TlsClass::CarrierIntrinsic),
+    (BINARY_CENSUS, "IMM_POOL", TlsClass::MustReset),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/stats.rs",
+        "INLINE_CENSUS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/cache.rs",
+        "INLINE_DEPS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/stats/epoch.rs",
+        "INLINE_EVICTED_LEAVES",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/cache.rs",
+        "INLINE_EVICTIONS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/heap_inline.rs",
+        "INLINE_HEAP_SITES",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/mod.rs",
+        "INLINE_SUBR_TABLE",
+        TlsClass::MustReset,
+    ),
     // macOS-only menu redirect (display-runtime macos_quit_redirect.rs):
     // absent from the shipped Linux census and holds an ObjC target, not
     // Lisp Values.
-    ("INSTALLED", TlsClass::SourceOnly),
-    ("INTEGER_WIDTH", TlsClass::OwnerCarried),
-    ("INTERN_STR_CACHE", TlsClass::CarrierIntrinsic),
-    ("IN_FLIGHT_ROOTS", TlsClass::OwnerCarried),
-    ("IN_HEAP_MUT_CLOSURE", TlsClass::SourceOnly),
-    ("LAMBDA_LIST", TlsClass::MustReset),
-    ("LAST_CLIF_SIZE", TlsClass::MustReset),
-    ("LAST_INSTANT", TlsClass::CarrierIntrinsic),
-    ("LAST_IR_STATS", TlsClass::MustReset),
-    ("LAST_KNOWN_COLUMN", TlsClass::MustReset),
-    ("LEAF_ACTIVE", TlsClass::SourceOnly),
-    ("LEAF_BY_SUBR", TlsClass::MustReset),
-    ("LEDGER", TlsClass::MustReset),
-    ("LISP_REGEX_PATTERN_CACHE", TlsClass::MustReset),
-    ("LITERAL_TRT_CACHE", TlsClass::MustReset),
-    ("LOADED_UNITS", TlsClass::MustReset),
-    ("LOCAL_WAKER", TlsClass::CarrierIntrinsic),
-    ("LOCK_HELD", TlsClass::CarrierIntrinsic),
-    ("LOOP_MARK", TlsClass::MustReset),
-    ("LOSSAGE_SIZE", TlsClass::CarrierIntrinsic),
-    ("MATCHER_OVERFLOW", TlsClass::MustReset),
-    ("MATCH_SCRATCH", TlsClass::MustReset),
-    ("MATERIALIZE_CALL_COUNT", TlsClass::SourceOnly),
-    ("MENU_BAR_ITEMS_CACHE", TlsClass::MustReset),
-    ("MIR_BAIL_REASONS", TlsClass::MustReset),
-    ("MODE_LINE_EVAL_COUNT", TlsClass::MustReset),
-    ("MODE_OVERRIDE", TlsClass::SourceOnly),
-    ("MODULE_CTX", TlsClass::MustReset),
-    ("NAME_CANONICAL_SYMBOL_CACHE", TlsClass::CarrierIntrinsic),
-    ("NEOMACS_CLIPBOARD_TEXT", TlsClass::CarrierIntrinsic),
-    ("NEOMACS_MONITORS", TlsClass::CarrierIntrinsic),
-    ("NEOMACS_PRIMARY_SELECTION_TEXT", TlsClass::CarrierIntrinsic),
-    ("OBSERVATION_STATE_ACCESSES", TlsClass::SourceOnly),
-    ("OBSERVED", TlsClass::CarrierIntrinsic),
-    ("OBSERVED_FUNCTION_WRITES", TlsClass::MustReset),
-    ("OBSERVED_OWNER_PUBLICATIONS", TlsClass::SourceOnly),
-    ("OP_COUNTS", TlsClass::SourceOnly),
-    ("OP_PAIR_COUNTS", TlsClass::SourceOnly),
-    ("OSR_CACHE", TlsClass::MustReset),
-    ("OSR_PENDING", TlsClass::MustReset),
-    ("OVERRIDE", TlsClass::SourceOnly),
-    ("OWNED", TlsClass::SourceOnly),
-    ("PASS_TIME", TlsClass::CarrierIntrinsic),
-    ("PDUMP_LOAD_NAME_REMAP", TlsClass::MustReset),
-    ("PDUMP_LOAD_SYM_IDENTITY", TlsClass::MustReset),
-    ("PDUMP_LOAD_SYM_REMAP", TlsClass::MustReset),
-    ("PDUMP_RUNTIME_STATE", TlsClass::MustReset),
-    ("PENDING", TlsClass::MustReset),
-    ("PENDING_CALLEE", TlsClass::MustReset),
-    ("PENDING_COUNT", TlsClass::MustReset),
-    ("PENDING_FLOW", TlsClass::MustReset),
-    ("PENDING_IDS", TlsClass::MustReset),
-    ("PENDING_ROOT_SWEEP_FLOOR", TlsClass::MustReset),
-    ("PENDING_SHIM_PANIC", TlsClass::MustReset),
-    ("PER_HASHER_NONDETERMINISM", TlsClass::CarrierIntrinsic),
-    ("PHASE_CLOCK", TlsClass::MustReset),
-    ("PIKE_FALLBACK", TlsClass::MustReset),
-    ("PIKE_SCRATCH", TlsClass::MustReset),
+    (
+        "neomacs-display-runtime/src/render_thread/macos_quit_redirect.rs",
+        "INSTALLED",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/lisp/native/builtins/arithmetic.rs",
+        "INTEGER_WIDTH",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-value/src/intern/mod.rs",
+        "INTERN_STR_CACHE",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neovm-value/src/error/mod.rs",
+        "IN_FLIGHT_ROOTS",
+        TlsClass::OwnerCarried,
+    ),
+    (BINARY_CENSUS, "IN_HEAP_MUT_CLOSURE", TlsClass::SourceOnly),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/reg_abi.rs",
+        "LAMBDA_LIST",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile.rs",
+        "LAST_CLIF_SIZE",
+        TlsClass::MustReset,
+    ),
+    (BINARY_CENSUS, "LAST_INSTANT", TlsClass::CarrierIntrinsic),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/lowering.rs",
+        "LAST_IR_STATS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-edit/src/emacs_core/editing/indent/mod.rs",
+        "LAST_KNOWN_COLUMN",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-value/src/symbol/leaf_activity.rs",
+        "LEAF_ACTIVE",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/lisp/native/subr/leaf.rs",
+        "LEAF_BY_SUBR",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/tier2/policy.rs",
+        "LEDGER",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/regex/mod.rs",
+        "LISP_REGEX_PATTERN_CACHE",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/regex/mod.rs",
+        "LITERAL_TRT_CACHE",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/aot.rs",
+        "LOADED_UNITS",
+        TlsClass::MustReset,
+    ),
+    (BINARY_CENSUS, "LOCAL_WAKER", TlsClass::CarrierIntrinsic),
+    (BINARY_CENSUS, "LOCK_HELD", TlsClass::CarrierIntrinsic),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/stats.rs",
+        "LOOP_MARK",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/lisp/native/builtins/symbols.rs",
+        "LOSSAGE_SIZE",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/regex/emacs.rs",
+        "MATCHER_OVERFLOW",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/regex/emacs.rs",
+        "MATCH_SCRATCH",
+        TlsClass::MustReset,
+    ),
+    (
+        "neomacs-display-protocol/src/glyph_matrix.rs",
+        "MATERIALIZE_CALL_COUNT",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neomacs-layout-engine/src/tty_menu_bar.rs",
+        "MENU_BAR_ITEMS_CACHE",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/stats.rs",
+        "MIR_BAIL_REASONS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neomacs-layout-engine/src/display_status_line.rs",
+        "MODE_LINE_EVAL_COUNT",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-edit/src/buffer/text_snapshot.rs",
+        "MODE_OVERRIDE",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-system/src/emacs_core/system/dynamic_module/mod.rs",
+        "MODULE_CTX",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-value/src/intern/mod.rs",
+        "NAME_CANONICAL_SYMBOL_CACHE",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neovm-eval/src/emacs_core/lisp/native/builtins/stubs.rs",
+        "NEOMACS_CLIPBOARD_TEXT",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neovm-eval/src/emacs_core/lisp/native/builtins/stubs.rs",
+        "NEOMACS_MONITORS",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neovm-eval/src/emacs_core/lisp/native/builtins/stubs.rs",
+        "NEOMACS_PRIMARY_SELECTION_TEXT",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neovm-value/src/tagged/collection_reads.rs",
+        "OBSERVATION_STATE_ACCESSES",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-value/src/symbol/property_revision.rs",
+        "OBSERVED",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/cconv_memo.rs",
+        "OBSERVED_FUNCTION_WRITES",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-value/src/tagged/collection_reads.rs",
+        "OBSERVED_OWNER_PUBLICATIONS",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/bytecode/vm.rs",
+        "OP_COUNTS",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/bytecode/vm.rs",
+        "OP_PAIR_COUNTS",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/cache.rs",
+        "OSR_CACHE",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/cache.rs",
+        "OSR_PENDING",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-edit/src/buffer/composition.rs",
+        "OVERRIDE",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-value/src/tls_scope.rs",
+        "OWNED",
+        TlsClass::SourceOnly,
+    ),
+    (BINARY_CENSUS, "PASS_TIME", TlsClass::CarrierIntrinsic),
+    (
+        "neovm-eval/src/emacs_core/runtime/pdump/convert.rs",
+        "PDUMP_LOAD_NAME_REMAP",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/pdump/convert.rs",
+        "PDUMP_LOAD_SYM_IDENTITY",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/pdump/convert.rs",
+        "PDUMP_LOAD_SYM_REMAP",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/pdump/runtime.rs",
+        "PDUMP_RUNTIME_STATE",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/stats/asm_dump.rs",
+        "PENDING",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/stats/perf_map.rs",
+        "PENDING_CALLEE",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/bg.rs",
+        "PENDING_COUNT",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs",
+        "PENDING_FLOW",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/bg.rs",
+        "PENDING_IDS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs",
+        "PENDING_ROOT_SWEEP_FLOOR",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs",
+        "PENDING_SHIM_PANIC",
+        TlsClass::MustReset,
+    ),
+    (
+        BINARY_CENSUS,
+        "PER_HASHER_NONDETERMINISM",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/stats/phases.rs",
+        "PHASE_CLOCK",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/regex/emacs.rs",
+        "PIKE_FALLBACK",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/regex/emacs.rs",
+        "PIKE_SCRATCH",
+        TlsClass::MustReset,
+    ),
     // platform_surface.rs test_override: test-support-only scoped surface
     // override, RAII-restored and holding no Lisp Values.
-    ("PLATFORM_SURFACE_TEST_OVERRIDE", TlsClass::SourceOnly),
-    ("PRELOAD_UNIT", TlsClass::MustReset),
-    ("PREV_OP", TlsClass::SourceOnly),
-    ("PREWARM_HASHES", TlsClass::MustReset),
-    ("PREWARM_STUBS", TlsClass::MustReset),
-    ("PREWARM_STUBS_PENDING", TlsClass::MustReset),
-    ("PRINT_BYTES_OBJECT_STACK", TlsClass::MustReset),
-    ("PRINT_CALL_DEPTH", TlsClass::MustReset),
-    ("PRINT_NUMBER_INDEX", TlsClass::MustReset),
-    ("PRINT_OBJECT_STACK", TlsClass::MustReset),
-    ("PROCESS_NAME_REGISTRY", TlsClass::CarrierIntrinsic),
-    ("PROFILER", TlsClass::CarrierIntrinsic),
+    (
+        "neovm-eval/src/platform_surface.rs",
+        "PLATFORM_SURFACE_TEST_OVERRIDE",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/aot.rs",
+        "PRELOAD_UNIT",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/bytecode/vm.rs",
+        "PREV_OP",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/aot.rs",
+        "PREWARM_HASHES",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/aot.rs",
+        "PREWARM_STUBS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/aot.rs",
+        "PREWARM_STUBS_PENDING",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/lisp/print/mod.rs",
+        "PRINT_BYTES_OBJECT_STACK",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/lisp/print/mod.rs",
+        "PRINT_CALL_DEPTH",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/lisp/print/mod.rs",
+        "PRINT_NUMBER_INDEX",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/lisp/print/mod.rs",
+        "PRINT_OBJECT_STACK",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs",
+        "PROCESS_NAME_REGISTRY",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (BINARY_CENSUS, "PROFILER", TlsClass::CarrierIntrinsic),
     // macOS-only menu redirect target (display-runtime
     // macos_quit_redirect.rs): absent from the shipped Linux census and holds
     // a retained AppKit object, not Lisp Values.
-    ("QUIT_REDIRECT", TlsClass::SourceOnly),
-    ("QUIT_REQUESTED_TLS", TlsClass::OwnerCarried),
-    ("RECENT_CLEARED_CELLS", TlsClass::SourceOnly),
-    ("RECENT_CLEARED_MASKS", TlsClass::SourceOnly),
-    ("RECENT_READS", TlsClass::MustReset),
-    ("REDEFINED_PINS", TlsClass::MustReset),
+    (
+        "neomacs-display-runtime/src/render_thread/macos_quit_redirect.rs",
+        "QUIT_REDIRECT",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-value/src/quit.rs",
+        "QUIT_REQUESTED_TLS",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-value/src/tagged/collection_reads.rs",
+        "RECENT_CLEARED_CELLS",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-value/src/tagged/collection_reads.rs",
+        "RECENT_CLEARED_MASKS",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-value/src/tagged/collection_reads.rs",
+        "RECENT_READS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/cache.rs",
+        "REDEFINED_PINS",
+        TlsClass::MustReset,
+    ),
     // CarrierIntrinsic, proven from the initialization side: the frame_layout
     // display hooks are installed only on the main evaluator at startup and
     // redisplay (neomacs/src/main.rs:4215-4240, 4932-4949); a Green worker
@@ -224,110 +832,437 @@ const TLS_CLASSIFICATION: &[(&str, TlsClass)] = &[
     // 4932-4949, 6155; secondary_tty.rs:70 via the main redisplay closure),
     // so no carrier executes one and REDISPLAY_RUNTIME is never initialized
     // on a carrier: it holds no per-job state and nothing resets it.
-    ("REDISPLAY_RUNTIME", TlsClass::CarrierIntrinsic),
-    ("REGEX_CACHE_COLLECTION_EPOCH", TlsClass::CarrierIntrinsic),
-    ("REGEX_CACHE_HEAP", TlsClass::CarrierIntrinsic),
-    ("REGISTERED", TlsClass::CarrierIntrinsic),
-    ("REGISTRATION", TlsClass::CarrierIntrinsic),
+    (
+        "neomacs/src/frame_layout.rs",
+        "REDISPLAY_RUNTIME",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/regex/mod.rs",
+        "REGEX_CACHE_COLLECTION_EPOCH",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/regex/mod.rs",
+        "REGEX_CACHE_HEAP",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neovm-system/src/emacs_core/system/dbusbind/fd.rs",
+        "REGISTERED",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (BINARY_CENSUS, "REGISTRATION", TlsClass::CarrierIntrinsic),
     // The green guard's debug-only emission counter (jit/compile/lowering.rs):
     // a cfg(debug_assertions) `Cell<u64>` that holds no Value.
-    ("RELEASE_REVALIDATION_EMITTED", TlsClass::SourceOnly),
-    ("RESULT_SETS", TlsClass::CarrierIntrinsic),
-    ("RETAG_COUNT", TlsClass::MustReset),
-    ("REVISION", TlsClass::CarrierIntrinsic),
-    ("RNG", TlsClass::CarrierIntrinsic),
-    ("ROOTWIN_CARRY", TlsClass::MustReset),
-    ("SCOPE", TlsClass::SourceOnly),
-    ("SCRATCH_GC_ROOTS", TlsClass::MustReset),
-    ("SCRATCH_SPACE", TlsClass::CarrierIntrinsic),
-    ("SEARCH_PATTERN_CACHE", TlsClass::MustReset),
-    ("SEED_SKIP_OBARRAY_SYMBOL_CELLS", TlsClass::MustReset),
-    ("SELF_SOURCE", TlsClass::MustReset),
-    ("SESSION", TlsClass::SourceOnly),
-    ("SHARED_JIT", TlsClass::MustReset),
-    ("SINK", TlsClass::MustReset),
-    ("SPEC_REVALIDATIONS", TlsClass::MustReset),
-    ("STACK_CURSOR_LIVE", TlsClass::SourceOnly),
-    ("STACK_LIMIT", TlsClass::CarrierIntrinsic),
-    ("STANDARD_BYTE", TlsClass::CarrierIntrinsic),
-    ("STANDARD_CASE_TABLE_HEAP", TlsClass::OwnerCarried),
-    ("STANDARD_CASE_TABLE_OBJECT", TlsClass::OwnerCarried),
-    ("STANDARD_CATEGORY_TABLE_HEAP", TlsClass::OwnerCarried),
-    ("STANDARD_CATEGORY_TABLE_OBJECT", TlsClass::OwnerCarried),
-    ("STANDARD_SYNTAX_TABLE_HEAP", TlsClass::OwnerCarried),
-    ("STANDARD_SYNTAX_TABLE_OBJECT", TlsClass::OwnerCarried),
-    ("STATE", TlsClass::CarrierIntrinsic),
-    ("STATIC_SUBR_OBJECTS", TlsClass::MustReset),
-    ("STATS", TlsClass::MustReset),
-    ("SUBR_BY_SYM", TlsClass::MustReset),
-    ("SUBR_COUNTS", TlsClass::SourceOnly),
-    ("SURVIVOR", TlsClass::SourceOnly),
-    ("SYMBOL_CACHE", TlsClass::CarrierIntrinsic),
-    ("SYNTAX_CODE_OBJECTS", TlsClass::OwnerCarried),
-    ("SYNTAX_CODE_OBJECTS_HEAP", TlsClass::OwnerCarried),
-    ("SYNTAX_FLAT_ASCII_CACHE", TlsClass::MustReset),
-    ("SYNTAX_FLAT_ASCII_ENTRIES", TlsClass::MustReset),
-    ("SYNTAX_FLAT_ASCII_ENTRY_CACHE", TlsClass::MustReset),
-    ("SYNTAX_FLAT_ASCII_ENTRY_ENTRIES", TlsClass::MustReset),
-    ("T2_STATS", TlsClass::MustReset),
-    ("TAB_LINE_EVAL_COUNT", TlsClass::MustReset),
-    ("TAGGED_HEAP", TlsClass::OwnerCarried),
-    ("TAGGED_HEAP_BARRIER_WINDOW", TlsClass::OwnerCarried),
-    ("TAGGED_HEAP_CONCURRENT_ACTIVE", TlsClass::OwnerCarried),
-    ("TAGGED_HEAP_CONCURRENT_HASH_ACTIVE", TlsClass::OwnerCarried),
-    ("TAGGED_HEAP_CONS_BARRIER_WINDOW", TlsClass::OwnerCarried),
-    ("TAGGED_HEAP_DUMP_SPAN", TlsClass::OwnerCarried),
-    ("TAGGED_HEAP_ID", TlsClass::OwnerCarried),
-    ("TAGGED_HEAP_PARTITION_ACTIVE", TlsClass::SourceOnly),
-    ("TAGGED_HEAP_SATB_CACHE", TlsClass::OwnerCarried),
-    ("TAGGED_HEAP_WRITE_TRACKING_MODE", TlsClass::OwnerCarried),
-    ("TERMINAL_LISP_STATE", TlsClass::OwnerCarried),
-    ("TERMINAL_MANAGER", TlsClass::OwnerCarried),
-    ("TEST_FALLBACK_TAGGED_HEAP", TlsClass::SourceOnly),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/lowering.rs",
+        "RELEASE_REVALIDATION_EMITTED",
+        TlsClass::SourceOnly,
+    ),
+    (BINARY_CENSUS, "RESULT_SETS", TlsClass::CarrierIntrinsic),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/lowering.rs",
+        "RETAG_COUNT",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-value/src/symbol/property_revision.rs",
+        "REVISION",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (BINARY_CENSUS, "RNG", TlsClass::CarrierIntrinsic),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/lowering.rs",
+        "ROOTWIN_CARRY",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-value/src/tagged/gc/mutator_registration/a8_probes/suppression.rs",
+        "SCOPE",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/mod.rs",
+        "SCRATCH_GC_ROOTS",
+        TlsClass::MustReset,
+    ),
+    (BINARY_CENSUS, "SCRATCH_SPACE", TlsClass::CarrierIntrinsic),
+    (
+        "neovm-text/src/emacs_core/text/regex/mod.rs",
+        "SEARCH_PATTERN_CACHE",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-value/src/symbol/mod.rs",
+        "SEED_SKIP_OBARRAY_SYMBOL_CELLS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/direct_call/self_only.rs",
+        "SELF_SOURCE",
+        TlsClass::MustReset,
+    ),
+    (
+        "neomacs/src/tty_output_windows.rs",
+        "SESSION",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/shared.rs",
+        "SHARED_JIT",
+        TlsClass::MustReset,
+    ),
+    (
+        "neomacs-terminfo/src/native/padding.rs",
+        "SINK",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/stats/epoch.rs",
+        "SPEC_REVALIDATIONS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/bytecode/vm.rs",
+        "STACK_CURSOR_LIVE",
+        TlsClass::SourceOnly,
+    ),
+    (BINARY_CENSUS, "STACK_LIMIT", TlsClass::CarrierIntrinsic),
+    (
+        "neovm-text/src/emacs_core/text/regex/emacs.rs",
+        "STANDARD_BYTE",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/casetab/mod.rs",
+        "STANDARD_CASE_TABLE_HEAP",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/casetab/mod.rs",
+        "STANDARD_CASE_TABLE_OBJECT",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/category/mod.rs",
+        "STANDARD_CATEGORY_TABLE_HEAP",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/category/mod.rs",
+        "STANDARD_CATEGORY_TABLE_OBJECT",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/syntax/mod.rs",
+        "STANDARD_SYNTAX_TABLE_HEAP",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/syntax/mod.rs",
+        "STANDARD_SYNTAX_TABLE_OBJECT",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-value/src/tagged/collection_reads.rs",
+        "STATE",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neovm-value/src/tagged/value.rs",
+        "STATIC_SUBR_OBJECTS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/bg.rs",
+        "STATS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/shared.rs",
+        "STATS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/stats.rs",
+        "STATS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/regex/dfa.rs",
+        "STATS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/syntax/parse_cache.rs",
+        "STATS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-value/src/tagged/value.rs",
+        "SUBR_BY_SYM",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/bytecode/vm.rs",
+        "SUBR_COUNTS",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-value/src/tls_scope.rs",
+        "SURVIVOR",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-value/src/intern/mod.rs",
+        "SYMBOL_CACHE",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/syntax/mod.rs",
+        "SYNTAX_CODE_OBJECTS",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/syntax/mod.rs",
+        "SYNTAX_CODE_OBJECTS_HEAP",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/syntax/mod.rs",
+        "SYNTAX_FLAT_ASCII_CACHE",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/syntax/mod.rs",
+        "SYNTAX_FLAT_ASCII_ENTRIES",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/syntax/mod.rs",
+        "SYNTAX_FLAT_ASCII_ENTRY_CACHE",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-text/src/emacs_core/text/syntax/mod.rs",
+        "SYNTAX_FLAT_ASCII_ENTRY_ENTRIES",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/tier2.rs",
+        "T2_STATS",
+        TlsClass::MustReset,
+    ),
+    (
+        "neomacs-layout-engine/src/display_status_line.rs",
+        "TAB_LINE_EVAL_COUNT",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-value/src/tagged/gc.rs",
+        "TAGGED_HEAP",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-value/src/tagged/gc.rs",
+        "TAGGED_HEAP_BARRIER_WINDOW",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-value/src/tagged/gc.rs",
+        "TAGGED_HEAP_CONCURRENT_ACTIVE",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-value/src/tagged/gc.rs",
+        "TAGGED_HEAP_CONCURRENT_HASH_ACTIVE",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-value/src/tagged/gc.rs",
+        "TAGGED_HEAP_CONS_BARRIER_WINDOW",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-value/src/tagged/gc.rs",
+        "TAGGED_HEAP_DUMP_SPAN",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-value/src/tagged/gc.rs",
+        "TAGGED_HEAP_ID",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-value/src/tagged/gc.rs",
+        "TAGGED_HEAP_PARTITION_ACTIVE",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-value/src/tagged/gc.rs",
+        "TAGGED_HEAP_SATB_CACHE",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-value/src/tagged/gc.rs",
+        "TAGGED_HEAP_WRITE_TRACKING_MODE",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-display/src/emacs_core/display/terminal/pure.rs",
+        "TERMINAL_LISP_STATE",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-display/src/emacs_core/display/terminal/pure.rs",
+        "TERMINAL_MANAGER",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-value/src/tagged/gc.rs",
+        "TEST_FALLBACK_TAGGED_HEAP",
+        TlsClass::SourceOnly,
+    ),
     // Test-support heap graveyard (value test_support/authority.rs): the
     // TestHeapScope route retires heaps at thread exit; feature-only, absent
     // from the shipped census, and no per-job reset applies (heaps are not
     // Lisp Values).
-    ("TEST_HEAP_GRAVEYARD", TlsClass::SourceOnly),
-    ("TEXT", TlsClass::CarrierIntrinsic),
-    ("THREAD", TlsClass::CarrierIntrinsic),
-    ("THREAD_CACHE_EPOCH", TlsClass::CarrierIntrinsic),
-    ("THREAD_DATA", TlsClass::CarrierIntrinsic),
-    ("THREAD_GUARD", TlsClass::CarrierIntrinsic),
-    ("THREAD_ID", TlsClass::CarrierIntrinsic),
-    ("THREAD_LOCAL_ALLOCATION_COUNTS", TlsClass::CarrierIntrinsic),
-    ("TIME_ZONE_RULE", TlsClass::CarrierIntrinsic),
-    ("TOOL_BAR_ITEMS_CACHE", TlsClass::MustReset),
-    ("UNBIND_SITES", TlsClass::MustReset),
-    ("UNBOUNDED_BODY", TlsClass::MustReset),
-    ("UNTAG_COUNT", TlsClass::MustReset),
-    ("VARREF_ALIAS", TlsClass::SourceOnly),
-    ("VARREF_COUNTS", TlsClass::SourceOnly),
-    ("VERIFY_MARKED_OBJECTS", TlsClass::SourceOnly),
-    ("VISIBLE_SYMBOL_NAME_CACHE", TlsClass::MustReset),
-    ("W32_VALID_CODEPAGES", TlsClass::SourceOnly),
-    ("WINDOW_CONFIGURATION_SNAPSHOTS", TlsClass::OwnerCarried),
     (
+        "neovm-value/src/test_support/authority.rs",
+        "TEST_HEAP_GRAVEYARD",
+        TlsClass::SourceOnly,
+    ),
+    (BINARY_CENSUS, "TEXT", TlsClass::CarrierIntrinsic),
+    (BINARY_CENSUS, "THREAD", TlsClass::CarrierIntrinsic),
+    (
+        "neovm-value/src/intern/mod.rs",
+        "THREAD_CACHE_EPOCH",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (BINARY_CENSUS, "THREAD_DATA", TlsClass::CarrierIntrinsic),
+    (BINARY_CENSUS, "THREAD_GUARD", TlsClass::CarrierIntrinsic),
+    (BINARY_CENSUS, "THREAD_ID", TlsClass::CarrierIntrinsic),
+    (
+        "neovm-value/src/value/mod.rs",
+        "THREAD_LOCAL_ALLOCATION_COUNTS",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neovm-system/src/emacs_core/system/timefns/mod.rs",
+        "TIME_ZONE_RULE",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        "neomacs-layout-engine/src/gui_chrome.rs",
+        "TOOL_BAR_ITEMS_CACHE",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/inline_vars.rs",
+        "UNBIND_SITES",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/direct_call.rs",
+        "UNBOUNDED_BODY",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/lowering.rs",
+        "UNTAG_COUNT",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/bytecode/vm.rs",
+        "VARREF_ALIAS",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/bytecode/vm.rs",
+        "VARREF_COUNTS",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-value/src/tagged/gc.rs",
+        "VERIFY_MARKED_OBJECTS",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-value/src/intern/mod.rs",
+        "VISIBLE_SYMBOL_NAME_CACHE",
+        TlsClass::MustReset,
+    ),
+    (
+        "neovm-system/src/emacs_core/system/platform/w32/mod.rs",
+        "W32_VALID_CODEPAGES",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/lisp/native/builtins/hooks.rs",
+        "WINDOW_CONFIGURATION_SNAPSHOTS",
+        TlsClass::OwnerCarried,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs",
         "WINDOW_PARAMETERS_LAYOUT_GENERATION",
         TlsClass::CarrierIntrinsic,
     ),
-    ("WORKER_THREAD_STATE", TlsClass::CarrierIntrinsic),
+    (
+        BINARY_CENSUS,
+        "WORKER_THREAD_STATE",
+        TlsClass::CarrierIntrinsic,
+    ),
     // CarrierIntrinsic: this is the linker-synthesized ELF TLS module base
     // (binary census only; no `thread_local!` in the workspace), the address
     // the OS thread's TLS block is reached through. It is valid for the
     // thread's whole lifetime, carries no Lisp state and cannot be reset by
     // source code.
-    ("_TLS_MODULE_BASE_", TlsClass::CarrierIntrinsic),
-    ("_rjem_je_tsd_tls", TlsClass::CarrierIntrinsic),
-    ("{closure#0}", TlsClass::CarrierIntrinsic),
-    ("{closure#1}", TlsClass::CarrierIntrinsic),
+    (
+        BINARY_CENSUS,
+        "_TLS_MODULE_BASE_",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (
+        BINARY_CENSUS,
+        "_rjem_je_tsd_tls",
+        TlsClass::CarrierIntrinsic,
+    ),
+    (BINARY_CENSUS, "{closure#0}", TlsClass::CarrierIntrinsic),
+    (BINARY_CENSUS, "{closure#1}", TlsClass::CarrierIntrinsic),
 ];
 
-fn classify(name: &str) -> Option<TlsClass> {
+/// Look up one `(module, name)` record.
+///
+/// Both halves must match: a static name that several modules use (ACTIVE,
+/// HANDLE, STATS) classifies per defining module, so one module's row can
+/// never silently answer for another's.
+fn classify(module: &str, name: &str) -> Option<TlsClass> {
     TLS_CLASSIFICATION
         .iter()
-        .find(|(classified, _)| *classified == name)
-        .map(|(_, class)| *class)
+        .find(|(classified_module, classified_name, _)| {
+            *classified_module == module && *classified_name == name
+        })
+        .map(|(_, _, class)| *class)
+}
+
+/// Duplicate `(module, name)` keys in the classification table.
+///
+/// A duplicate key makes the class ambiguous: `classify` returns the first
+/// row, so a later row with a different class is silently ignored. That is
+/// exactly the bare-name hazard the module key removes, and it is the only
+/// failure mode a same-module duplicate can still produce, so it fails the
+/// guard instead of being resolved by row order.
+fn duplicate_classification_keys(rows: &[(&str, &str, TlsClass)]) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut duplicates = Vec::new();
+    for (module, name, _) in rows {
+        let key = format!("{module}::{name}");
+        if !seen.insert(key.clone()) {
+            duplicates.push(key);
+        }
+    }
+    duplicates
 }
 
 fn is_test_only_block(before: &str) -> bool {
@@ -417,14 +1352,51 @@ fn every_production_thread_local_has_a_carrier_tls_class() {
         !scanned.is_empty(),
         "the scan must find the workspace TLS statics"
     );
+    let duplicates = duplicate_classification_keys(TLS_CLASSIFICATION);
+    assert!(
+        duplicates.is_empty(),
+        "duplicate (module, name) carrier TLS keys (the class would depend on row order): \
+         {duplicates:?}"
+    );
     let missing: Vec<_> = scanned
         .iter()
-        .filter(|(name, _)| classify(name).is_none())
+        .filter(|(name, file)| classify(file, name).is_none())
         .map(|(name, file)| format!("{name} ({file})"))
         .collect();
     assert!(
         missing.is_empty(),
         "unclassified thread_local! statics (add a carrier TLS class): {missing:?}"
+    );
+}
+
+/// Mutation plant: a table with one duplicated `(module, name)` key and one
+/// legitimate same-name/different-module pair. The duplicate must be
+/// reported, the cross-module pair must not: a name-keyed table would treat
+/// both as the same record and let the second class silently lose.
+#[test]
+fn planted_duplicate_carrier_tls_key_turns_the_surface_red() {
+    let plant = [
+        (
+            "neovm-value/src/tagged/gc.rs",
+            "TAGGED_HEAP",
+            TlsClass::OwnerCarried,
+        ),
+        (
+            "neovm-value/src/tagged/gc.rs",
+            "TAGGED_HEAP",
+            TlsClass::SourceOnly,
+        ),
+        (
+            "neovm-value/src/tagged/gc/concurrent.rs",
+            "TAGGED_HEAP",
+            TlsClass::SourceOnly,
+        ),
+    ];
+    assert_eq!(
+        duplicate_classification_keys(&plant),
+        vec!["neovm-value/src/tagged/gc.rs::TAGGED_HEAP".to_owned()],
+        "a duplicate (module, name) key must be rejected; the same name under a \
+         different module is a distinct record"
     );
 }
 
@@ -1266,8 +2238,8 @@ fn every_must_reset_record_is_covered_by_a_real_carrier_reset() {
 
     let mut must_reset_names = std::collections::BTreeSet::new();
     for entry in TLS_CLASSIFICATION.iter() {
-        if matches!(entry.1, TlsClass::MustReset) {
-            must_reset_names.insert((entry.0).to_owned());
+        if matches!(entry.2, TlsClass::MustReset) {
+            must_reset_names.insert((entry.1).to_owned());
         }
     }
 
@@ -1277,7 +2249,7 @@ fn every_must_reset_record_is_covered_by_a_real_carrier_reset() {
     let mut claimed_workspace = std::collections::BTreeSet::new();
 
     for (name, file) in &scanned {
-        if !matches!(classify(name), Some(TlsClass::MustReset)) {
+        if !matches!(classify(file, name), Some(TlsClass::MustReset)) {
             continue;
         }
         covered.insert(name.clone());
