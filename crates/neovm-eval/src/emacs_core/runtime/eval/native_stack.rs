@@ -46,10 +46,11 @@
 use super::Context;
 
 /// Native stack a compiled leaf that can re-enter Lisp must find below its
-/// caller's frame, or it signals "Bytecode stack overflow". It covers the
-/// Rust frames between one leaf entry and the next guard (the leaf's own
-/// frame, the call shims, a builtin, the signal's construction) and the
-/// Tier-0 interpreter's and tree walker's own red zone, whose probes switch
+/// caller's frame; below it the entry guard hands the call back to the
+/// Tier-0 interpreter (`STATUS_STACK_FALLBACK`). It covers the Rust frames
+/// between one leaf entry and the next guard (the leaf's own frame, the call
+/// shims, a builtin, the guard's stack measurement) and the Tier-0
+/// interpreter's and tree walker's own red zone, whose probes switch
 /// segments only below 128 KiB.
 pub(crate) const JIT_STACK_RED_ZONE: usize = 1024 * 1024;
 
@@ -66,8 +67,8 @@ pub(crate) const JIT_STACK_RED_ZONE: usize = 1024 * 1024;
 /// segments, so a switch keeps the last measurement (the delta computed on
 /// the fresh segment is zero).  The effective reserve is the larger of the
 /// site's red zone and [`JIT_STACK_RED_ZONE`] -- a compiled leaf can be
-/// entered between two samples and its own entry guard raises GNU's error
-/// below that threshold, so the sampled probe must grow before it -- plus
+/// entered between two samples and its own entry guard falls back below
+/// that threshold, so the sampled probe must grow before it -- plus
 /// twice the measured consumption.  The growth segment is sized to hold the
 /// following interval and at least twice the reserve, so a probe on a fresh
 /// segment always proceeds instead of growing on every sample.  State lives
