@@ -17,22 +17,34 @@ fn prepared_mule_preserves_existing_member_identity_when_name_becomes_alias() {
             [(original, 930, 150, 33, 126), (target, 931, 151, 34, 50)]
         {
             let mut info = CharsetRegistry::make_default(id, resolve_sym(name));
-            info.code_space = [min_code, max_code, 0, 0, 0, 0, 0, 0];
-            info.min_code = min_code;
-            info.max_code = max_code;
-            info.method = CharsetMethod::Offset(ch);
-            info.emacs_mule_id = Some(mule_id);
-            info.plist = CharsetPlist::Set(vec![(intern(":name"), Value::from_sym_id(name))]);
+            neovm_text::test_support::authority::set_charset_info_code_space(
+                &mut info,
+                [min_code, max_code, 0, 0, 0, 0, 0, 0],
+            );
+            neovm_text::test_support::authority::set_charset_info_min_code(&mut info, min_code);
+            neovm_text::test_support::authority::set_charset_info_max_code(&mut info, max_code);
+            neovm_text::test_support::authority::set_charset_info_method(
+                &mut info,
+                CharsetMethod::Offset(ch),
+            );
+            neovm_text::test_support::authority::set_charset_info_emacs_mule_id(
+                &mut info,
+                Some(mule_id),
+            );
+            neovm_text::test_support::authority::set_charset_info_plist(
+                &mut info,
+                CharsetPlist::Set(vec![(intern(":name"), Value::from_sym_id(name))]),
+            );
             registry.register(info);
         }
     });
     let result = |name, character| {
         CHARSET_REGISTRY.with(|slot| {
             let registry = slot.borrow();
-            let info = registry.charsets.get(&name).expect("registered fixture");
+            let info = registry.charsets().get(&name).expect("registered fixture");
             (
-                info.emacs_mule_id.expect("Mule fixture"),
-                info.dimension,
+                info.emacs_mule_id().expect("Mule fixture"),
+                info.dimension(),
                 registry
                     .encode_char(name, character)
                     .expect("fixture character"),
@@ -88,20 +100,35 @@ fn prepared_mule_preserves_legacy_alias_redefinition_fallback() {
     CHARSET_REGISTRY.with(|slot| {
         let mut registry = slot.borrow_mut();
         let mut info = CharsetRegistry::make_default(150, resolve_sym(base));
-        info.code_space = [33, 126, 0, 0, 0, 0, 0, 0];
-        info.min_code = 33;
-        info.max_code = 126;
-        info.emacs_mule_id = Some(150);
-        info.method = CharsetMethod::Offset(0x1f300);
-        info.plist = CharsetPlist::Set(vec![(intern(":name"), Value::from_sym_id(base))]);
+        neovm_text::test_support::authority::set_charset_info_code_space(
+            &mut info,
+            [33, 126, 0, 0, 0, 0, 0, 0],
+        );
+        neovm_text::test_support::authority::set_charset_info_min_code(&mut info, 33);
+        neovm_text::test_support::authority::set_charset_info_max_code(&mut info, 126);
+        neovm_text::test_support::authority::set_charset_info_emacs_mule_id(&mut info, Some(150));
+        neovm_text::test_support::authority::set_charset_info_method(
+            &mut info,
+            CharsetMethod::Offset(0x1f300),
+        );
+        neovm_text::test_support::authority::set_charset_info_plist(
+            &mut info,
+            CharsetPlist::Set(vec![(intern(":name"), Value::from_sym_id(base))]),
+        );
         registry.register(info.clone());
         registry.define_alias(alias, base);
         // Existing Neo definition-through-alias behavior changes the raw
         // alias entry rather than GNU's underlying charset identity. Preserve
         // that fallback here; the alias entry must not become a Mule member.
-        info.name = alias;
-        info.method = CharsetMethod::Offset(0x1f400);
-        info.plist = CharsetPlist::Set(vec![(intern(":name"), Value::from_sym_id(alias))]);
+        neovm_text::test_support::authority::set_charset_info_name(&mut info, alias);
+        neovm_text::test_support::authority::set_charset_info_method(
+            &mut info,
+            CharsetMethod::Offset(0x1f400),
+        );
+        neovm_text::test_support::authority::set_charset_info_plist(
+            &mut info,
+            CharsetPlist::Set(vec![(intern(":name"), Value::from_sym_id(alias))]),
+        );
         registry.register(info);
     });
     for character in [0x1f300, 0x1f350, 0x1f400] {
@@ -126,12 +153,21 @@ fn prepared_mule_restores_legacy_materialized_alias_members_once() {
     CHARSET_REGISTRY.with(|slot| {
         let mut registry = slot.borrow_mut();
         let mut info = CharsetRegistry::make_default(152, resolve_sym(base));
-        info.code_space = [33, 126, 0, 0, 0, 0, 0, 0];
-        info.min_code = 33;
-        info.max_code = 126;
-        info.emacs_mule_id = Some(152);
-        info.method = CharsetMethod::Offset(0x1f300);
-        info.plist = CharsetPlist::Set(vec![(intern(":name"), Value::from_sym_id(base))]);
+        neovm_text::test_support::authority::set_charset_info_code_space(
+            &mut info,
+            [33, 126, 0, 0, 0, 0, 0, 0],
+        );
+        neovm_text::test_support::authority::set_charset_info_min_code(&mut info, 33);
+        neovm_text::test_support::authority::set_charset_info_max_code(&mut info, 126);
+        neovm_text::test_support::authority::set_charset_info_emacs_mule_id(&mut info, Some(152));
+        neovm_text::test_support::authority::set_charset_info_method(
+            &mut info,
+            CharsetMethod::Offset(0x1f300),
+        );
+        neovm_text::test_support::authority::set_charset_info_plist(
+            &mut info,
+            CharsetPlist::Set(vec![(intern(":name"), Value::from_sym_id(base))]),
+        );
         registry.register(info);
         registry.define_alias(alias, base);
     });

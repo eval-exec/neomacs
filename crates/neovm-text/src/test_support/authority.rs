@@ -96,7 +96,9 @@ use neovm_value::emacs_char::EmacsChar;
 use neovm_value::intern::SymId;
 use neovm_value::value::Value;
 
-use crate::emacs_core::charset::{CharsetInfo, CharsetMapCacheKey, CharsetMapData, CharsetMethod};
+use crate::emacs_core::charset::{
+    CharsetInfo, CharsetMapCacheKey, CharsetMapData, CharsetMethod, CharsetPlist,
+};
 use crate::emacs_core::coding::{CODING_CAT_MAX, CharsetDetectionPlan, CodingDetectionBindings};
 use crate::emacs_core::regex_emacs::dfa::{
     ClassContext, DfaCounters, DfaGaveUp, DfaLease, DfaSlot, ExistenceDfa,
@@ -344,4 +346,32 @@ pub fn set_syntax_prop_range_ascii_for_test(
     entry: Option<crate::emacs_core::syntax::SyntaxEntry>,
 ) {
     range.ascii[byte].set(entry);
+}
+
+/// FENCE (VIS read-arm series, lead #1052): set one `CharsetInfo` field in
+/// place.  The field stays pub(crate) for this crate; the moved charset
+/// fixtures write only through these fences.
+pub fn set_charset_info_code_space(info: &mut CharsetInfo, value: [i64; 8]) {
+    info.code_space = value;
+}
+pub fn set_charset_info_id(info: &mut CharsetInfo, value: i64) {
+    info.id = value;
+}
+pub fn set_charset_info_min_code(info: &mut CharsetInfo, value: i64) {
+    info.min_code = value;
+}
+pub fn set_charset_info_max_code(info: &mut CharsetInfo, value: i64) {
+    info.max_code = value;
+}
+pub fn set_charset_info_emacs_mule_id(info: &mut CharsetInfo, value: Option<i64>) {
+    info.emacs_mule_id = value;
+}
+pub fn set_charset_info_name(info: &mut CharsetInfo, value: SymId) {
+    info.name = value;
+}
+pub fn set_charset_info_supplementary_p(info: &mut CharsetInfo, value: bool) {
+    info.supplementary_p = value;
+}
+pub fn set_charset_info_plist(info: &mut CharsetInfo, value: CharsetPlist) {
+    info.plist = value;
 }

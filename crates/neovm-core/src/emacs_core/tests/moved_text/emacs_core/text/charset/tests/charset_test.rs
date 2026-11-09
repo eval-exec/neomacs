@@ -195,8 +195,8 @@ fn registry_set_priority_reorders_and_dedups() {
     crate::test_utils::init_test_tracing();
     let mut reg = CharsetRegistry::new();
     reg.set_priority(&[intern("ascii"), intern("unicode"), intern("ascii")]);
-    assert_eq!(resolve_sym(reg.priority[0]), "ascii");
-    assert_eq!(resolve_sym(reg.priority[1]), "unicode");
+    assert_eq!(resolve_sym(reg.priority_list()[0]), "ascii");
+    assert_eq!(resolve_sym(reg.priority_list()[1]), "unicode");
 }
 
 /// GNU's ordered list holds charset ids, so the preferred charsets chosen

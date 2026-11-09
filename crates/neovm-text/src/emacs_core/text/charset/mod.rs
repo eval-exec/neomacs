@@ -421,22 +421,22 @@ struct CharsetInfo {
 /// Information about a single charset.
 #[derive(Clone, Debug)]
 pub struct CharsetInfo {
-    pub id: i64,
-    pub name: SymId,
-    pub dimension: i64,
-    pub code_space: [i64; 8],
-    pub min_code: i64,
-    pub max_code: i64,
+    pub(crate) id: i64,
+    pub(crate) name: SymId,
+    pub(crate) dimension: i64,
+    pub(crate) code_space: [i64; 8],
+    pub(crate) min_code: i64,
+    pub(crate) max_code: i64,
     iso_final_char: Option<i64>,
     iso_revision: Option<i64>,
-    pub emacs_mule_id: Option<i64>,
+    pub(crate) emacs_mule_id: Option<i64>,
     ascii_compatible_p: bool,
-    pub supplementary_p: bool,
-    pub unified_p: bool,
+    pub(crate) supplementary_p: bool,
+    pub(crate) unified_p: bool,
     invalid_code: Option<i64>,
-    pub unify_map: Value,
-    pub method: CharsetMethod,
-    pub plist: CharsetPlist,
+    pub(crate) unify_map: Value,
+    pub(crate) method: CharsetMethod,
+    pub(crate) plist: CharsetPlist,
 }
 
 #[cfg(not(any(test, feature = "test-support")))]
@@ -489,14 +489,14 @@ pub struct CharsetRegistry {
 pub struct CharsetRegistry {
     // Keyed by SymId: small, dense, and probed twice per decoded or
     // encoded character, so the hash is the fast one.
-    pub charsets: rustc_hash::FxHashMap<SymId, CharsetInfo>,
+    pub(crate) charsets: rustc_hash::FxHashMap<SymId, CharsetInfo>,
     /// Aliases mapping an alias name to its canonical charset name. Aliases
     /// resolve to the target dynamically (like GNU `define-charset-alias`), so
     /// later mutations of the target's plist (e.g. characters.el setting
     /// `preferred-coding-system`) are visible through the alias.
     aliases: rustc_hash::FxHashMap<SymId, SymId>,
     /// Priority-ordered list of charset names.
-    pub priority: Vec<SymId>,
+    pub(crate) priority: Vec<SymId>,
     /// GNU's ordered charset-ID list, represented by stable physical
     /// definition keys. Alias lookup may replace a public name's meaning but
     /// never changes an existing identity in this list. This private mirror
@@ -3340,4 +3340,34 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
     // fingerprint. The park reset still empties the slot, and the
     // architecture test covers its classification.
     neovm_value::tls_fingerprint::mix(h, 0);
+}
+
+/// VIS read rows (lead #1052): copy/reference getters for the charset info
+/// and registry fields that stay pub(crate) in this crate.
+#[cfg(any(test, feature = "test-support"))]
+impl CharsetInfo {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn dimension(&self) -> i64 {
+        self.dimension
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn code_space(&self) -> [i64; 8] {
+        self.code_space
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn min_code(&self) -> i64 {
+        self.min_code
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn emacs_mule_id(&self) -> Option<i64> {
+        self.emacs_mule_id
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl CharsetRegistry {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn charsets(&self) -> &rustc_hash::FxHashMap<SymId, CharsetInfo> {
+        &self.charsets
+    }
 }
