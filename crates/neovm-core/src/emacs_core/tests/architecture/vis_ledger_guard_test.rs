@@ -6176,10 +6176,12 @@ impl<'ast> Visit<'ast> for FieldVisibilityCollector {
     }
 }
 
-/// Peer #1005 structural guard, part 2: a field's visibility may not change
-/// between the test-support arm and its production complement.  Covers both
-/// field-level cfg pairs and whole-struct cfg arms; ignores cfg(test)-only
-/// arms, which no cross-crate build enables.
+/// Peer #1005 structural guard, part 2: arms of the same field must share one
+/// visibility, whatever the cfg polarity.  A pair of `cfg(all(...))` arms is
+/// not a negative/positive split — the first token is `all`, not `not` — and
+/// a visibility disagreement is still a bifurcation.  Covers field-level cfg
+/// pairs and whole-struct cfg arms.  Ignores cfg(test)-only arms, which no
+/// cross-crate build enables.
 fn field_visibility_bifurcations(source: &str) -> Result<Vec<String>, String> {
     let file = syn::parse_file(source).map_err(|error| format!("does not parse: {error}"))?;
     let mut collector = FieldVisibilityCollector {
@@ -6197,22 +6199,22 @@ fn field_visibility_bifurcations(source: &str) -> Result<Vec<String>, String> {
     }
     let mut violations = Vec::new();
     for ((module, struct_name, field), arms) in groups {
-        let positive: BTreeSet<bool> = arms.iter().filter(|(_, p)| *p).map(|(v, _)| *v).collect();
-        let negative: BTreeSet<bool> = arms.iter().filter(|(_, p)| !*p).map(|(v, _)| *v).collect();
-        if positive.is_empty() || negative.is_empty() {
+        // Polarity is not a pass. Two arms that both parse as positive
+        // (`cfg(all(...))`, including `not` nested under `all`) still
+        // bifurcate when their visibility differs.
+        let visibilities: BTreeSet<bool> = arms.iter().map(|(visible, _)| *visible).collect();
+        if visibilities.len() < 2 {
             continue;
         }
-        if positive != negative {
-            let module = if module.is_empty() {
-                String::new()
-            } else {
-                format!("{}::", module.join("::"))
-            };
-            violations.push(format!(
-                "{module}{struct_name}::{field}: test-support arm visibility \
-                 {positive:?} differs from the production arm {negative:?}"
-            ));
-        }
+        let module = if module.is_empty() {
+            String::new()
+        } else {
+            format!("{}::", module.join("::"))
+        };
+        violations.push(format!(
+            "{module}{struct_name}::{field}: arms disagree on visibility \
+             {visibilities:?}"
+        ));
     }
     Ok(violations)
 }
@@ -10652,6 +10654,34 @@ mod structural_field_guard_tests {
         "#;
         assert!(
             field_visibility_bifurcations(modules)
+                .expect("synthetic parses")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn two_positive_cfg_all_arms_of_different_visibility_are_a_bifurcation() {
+        // Both cfgs start with `all`, so the old first-token `not` check
+        // classified neither arm as the production complement and skipped
+        // the pair. The fields still disagree: pub versus pub(crate).
+        let split = r#"
+            #[cfg(all(feature = "jit", not(feature = "test-support")))]
+            pub(crate) struct Knob { pub(crate) bit: bool }
+            #[cfg(all(feature = "jit", feature = "test-support"))]
+            pub struct Knob { pub bit: bool }
+        "#;
+        let found = field_visibility_bifurcations(split).expect("synthetic parses");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("Knob::bit"), "{found:?}");
+
+        let same = r#"
+            #[cfg(all(feature = "jit", not(feature = "test-support")))]
+            pub(crate) struct Knob { pub(crate) bit: bool }
+            #[cfg(all(feature = "jit", feature = "test-support"))]
+            pub struct Knob { pub(crate) bit: bool }
+        "#;
+        assert!(
+            field_visibility_bifurcations(same)
                 .expect("synthetic parses")
                 .is_empty()
         );
