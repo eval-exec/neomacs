@@ -1089,13 +1089,14 @@ const SPEC_FONT_GET_SYSTEM_FONT_01: SubrSpec =
         SubrArity::new(0, Some(0)),
     ));
 #[doc(hidden)]
-pub fn register_font_get_system_font(_ctx: &mut Context) {
-    // Both subrs are X11-only, so the NS build compiles an empty body; the
-    // underscore keeps the NS build warning-free (the Linux body uses it).
+#[cfg_attr(any(windows, target_os = "macos"), expect(unused_variables))]
+pub fn register_font_get_system_font(ctx: &mut Context) {
+    // Both subrs are X11-only, so a non-X11 build compiles an empty body and
+    // the expectation above covers its unused parameter.
     #[cfg(not(any(windows, target_os = "macos")))]
-    _ctx.register_subr(SPEC_FONT_GET_SYSTEM_FONT_00);
+    ctx.register_subr(SPEC_FONT_GET_SYSTEM_FONT_00);
     #[cfg(not(any(windows, target_os = "macos")))]
-    _ctx.register_subr(SPEC_FONT_GET_SYSTEM_FONT_01);
+    ctx.register_subr(SPEC_FONT_GET_SYSTEM_FONT_01);
 }
 
 /// Canonical display step `frame_ancestor_p` (4 registrations).
