@@ -75,12 +75,16 @@ impl Context {
     }
 
     /// `(thread-signal THREAD ERROR-SYMBOL DATA)` for a worker thread (GNU
-    /// `Fthread_signal`): THREAD raises the error when it next runs, and a
-    /// `mutex-lock`, `condition-wait` or `thread-join` it waits in ends.
+    /// `Fthread_signal`): THREAD raises the error when it next runs. A
+    /// `mutex-lock`, `condition-wait`, or `thread-join` ends, because those
+    /// waits are `wait_condvar`. A `thread_select` wait is not
+    /// (`src/thread.c:974-982`); it runs until its own deadline and the
+    /// signal is raised at the reacquire (`:141-154`).
     ///
     /// A main-thread target never reaches here: `builtin_thread_signal`
     /// queues GNU's `THREAD_EVENT` for the command loop first
-    /// (`src/thread.c:1002-1021`), exactly as GNU does.
+    /// (`src/thread.c:1002-1021`), exactly as GNU does. That wake stays in
+    /// [`Self::green_wake_main_for_thread_event`].
     pub(crate) fn green_thread_signal(
         &mut self,
         thread: Value,
@@ -95,7 +99,7 @@ impl Context {
         let control = self.green_control();
         if matches!(
             control.wait_of(key),
-            Some(Wait::Join(_) | Wait::Mutex(_) | Wait::Condition(_) | Wait::Select { .. })
+            Some(Wait::Join(_) | Wait::Mutex(_) | Wait::Condition(_))
         ) {
             control.wake(key);
         }

@@ -66,12 +66,12 @@ fn next_token() -> Option<NonZeroU64> {
     NonZeroU64::new(NEXT_TOKEN.fetch_add(1, Ordering::Relaxed))
 }
 
-static SELECT_HANDLES: OnceLock<Mutex<HashMap<u64, GreenSelectHandle>>> = OnceLock::new();
+static SELECT_HANDLES: OnceLock<Mutex<HashMap<u64, Arc<GreenSelectHandle>>>> = OnceLock::new();
 static SELECT_REGISTRATIONS: OnceLock<
     Mutex<HashMap<u64, crate::host_effect::wake::WaitRegistration>>,
 > = OnceLock::new();
 
-fn select_handles() -> &'static Mutex<HashMap<u64, GreenSelectHandle>> {
+fn select_handles() -> &'static Mutex<HashMap<u64, Arc<GreenSelectHandle>>> {
     SELECT_HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -85,7 +85,7 @@ fn register_select_handle(handle: GreenSelectHandle) -> Option<SelectHandleToken
     select_handles()
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
-        .insert(raw.get(), handle);
+        .insert(raw.get(), Arc::new(handle));
     Some(SelectHandleToken::from_raw(raw))
 }
 
@@ -93,7 +93,20 @@ fn with_select<R>(token: SelectHandleToken, f: impl FnOnce(&GreenSelectHandle) -
     let handles = select_handles()
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
-    handles.get(&token.raw().get()).map(f)
+    handles.get(&token.raw().get()).map(|handle| f(handle))
+}
+
+/// Clone the handle out of the map. A blocking wait must not hold this mutex:
+/// `notify` takes the same lock, and a main thread whose own select deadline
+/// has elapsed has to nudge the scheduler while that wait is still parked
+/// (`src/thread.c:613-643` releases the global lock for the caller's own
+/// `thread_select` timeout, not for a peer's).
+fn select_handle(token: SelectHandleToken) -> Option<Arc<GreenSelectHandle>> {
+    select_handles()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .get(&token.raw().get())
+        .cloned()
 }
 
 fn eval_select_handle(ctx: &mut crate::emacs_core::eval::Context) -> Option<SelectHandleToken> {
@@ -123,7 +136,11 @@ fn select_control_source(token: SelectHandleToken) -> Option<Arc<ControlWake>> {
 fn select_wait_until(token: SelectHandleToken, deadline: Instant) -> bool {
     // A missing handle must not block: report activity so the scheduler
     // rechecks its own state instead of sleeping on an unknown source.
-    with_select(token, |handle| handle.wait_until(deadline)).unwrap_or(true)
+    // The map lock is dropped before the wait so a concurrent `notify` can
+    // take it (see [`select_handle`]).
+    select_handle(token)
+        .map(|handle| handle.wait_until(deadline))
+        .unwrap_or(true)
 }
 
 fn select_arm(token: SelectHandleToken) -> SelectArm {
@@ -155,10 +172,10 @@ fn select_wait_registered(
     let Some(registration) = registration else {
         return true;
     };
-    with_select(token, |handle| {
-        handle.wait_registered(&registration, deadline)
-    })
-    .unwrap_or(true)
+    let Some(handle) = select_handle(token) else {
+        return true;
+    };
+    handle.wait_registered(&registration, deadline)
 }
 
 fn cancel_select_arm(registration: SelectArmToken) {

@@ -576,6 +576,14 @@ fn gnu_thread_signal_during_sleep_for_is_caught_at_reacquire() {
 }
 
 #[test]
+fn green_thread_signal_during_sleep_for_is_caught_at_reacquire() {
+    assert_eq!(
+        green_printed(SIGNAL_DURING_SLEEP_CAUGHT_FORM),
+        SIGNAL_DURING_SLEEP_EXPECT
+    );
+}
+
+#[test]
 fn gnu_thread_signal_without_handler_records_last_error() {
     assert_eq!(
         sim_printed(SIGNAL_NO_HANDLER_FORM),

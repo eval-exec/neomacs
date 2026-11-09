@@ -138,7 +138,13 @@ impl GreenSelectHandle {
             Err(_) => registration.wait(deadline),
         };
         match outcome {
-            ControlWakeOutcome::DeadlineElapsed => false,
+            // A scheduling handoff (`SchedulerReady`) only means some owner
+            // can be picked. Returning false keeps `pick_next` from running
+            // `wake_selects`, so a peer's `thread_select` continues until its
+            // own deadline (`src/thread.c:974-982`). Native input still
+            // reports true and wakes selectors.
+            ControlWakeOutcome::DeadlineElapsed
+            | ControlWakeOutcome::ControlReady(ControlNudge::SchedulerReady) => false,
             ControlWakeOutcome::ControlReady(_)
             | ControlWakeOutcome::CancellationRequested
             | ControlWakeOutcome::NativeReady

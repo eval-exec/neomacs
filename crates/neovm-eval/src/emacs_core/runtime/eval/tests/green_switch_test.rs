@@ -1496,13 +1496,16 @@ fn a_green_select_with_only_a_sleeping_peer_publishes_its_own_deadline() {
             "(progn
                (setq s2r3-select-sleeper
                  (make-thread (lambda ()
-                   (condition-case nil (sleep-for 60) (error 'interrupted)))))
+                   (condition-case nil (sleep-for 0.50) (error 'interrupted)))))
                (thread-yield)
                'sleeping)"
         ),
         "sleeping"
     );
     assert_no_ready_peer_select_publication(&mut ev, true);
+    // `thread-signal` does not end the worker's select (src/thread.c:974-982).
+    // The signal is raised when that select returns.
+    let started = std::time::Instant::now();
     assert_eq!(
         eval(
             &mut ev,
@@ -1512,6 +1515,10 @@ fn a_green_select_with_only_a_sleeping_peer_publishes_its_own_deadline() {
                (thread-join s2r3-select-sleeper))"
         ),
         "interrupted"
+    );
+    assert!(
+        started.elapsed() >= std::time::Duration::from_millis(150),
+        "thread-signal ended the worker select early"
     );
 }
 
@@ -1605,18 +1612,18 @@ fn a_yield_without_ready_peers_still_refuses_gc_inhibition() {
     assert!(result.is_err(), "yield still validates the switch point");
 }
 
-/// A scheduler event interrupts a parked select without waiting for its
-/// timeout; the resumed owner raises the pending thread signal. Let the
-/// worker consume it before join, which otherwise re-raises a pending signal.
+/// A worker `sleep-for` runs until its own deadline. `thread-signal` stores
+/// the pair and does not end the select (`src/thread.c:974-982`); the
+/// handler runs when select returns. Join then sees the caught result.
 #[test]
-fn a_signal_wakes_a_thread_waiting_in_select() {
+fn a_select_wait_runs_to_its_deadline_before_the_signal_is_raised() {
     let mut ev = green();
     let started = std::time::Instant::now();
     assert_eq!(
         eval(
             &mut ev,
             "(let ((th (make-thread (lambda ()
-                     (condition-case nil (sleep-for 5)
+                     (condition-case nil (sleep-for 0.35)
                        (error 'interrupted))))))
            (thread-yield)
            (thread-signal th 'error '(wake))
@@ -1625,7 +1632,10 @@ fn a_signal_wakes_a_thread_waiting_in_select() {
         ),
         "(interrupted nil)"
     );
-    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    assert!(
+        started.elapsed() >= std::time::Duration::from_millis(200),
+        "thread-signal ended the worker select early"
+    );
 }
 
 /// Readiness reaches an owner parked in accept-process-output while its

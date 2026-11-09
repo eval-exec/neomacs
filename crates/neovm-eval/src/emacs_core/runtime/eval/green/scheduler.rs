@@ -1301,7 +1301,15 @@ impl Control {
         self.metadata_changed.notify_all();
         if let Some(Some(select)) = self.select.get() {
             let select = *select;
-            crate::emacs_core::eval::process_hooks::select_notify(select);
+            // `SchedulerReady` interrupts the idle wait so `pick_next` can
+            // choose the owner `wake` just published. It is not input:
+            // `wait_registered` reports it as a plain timeout so a peer's
+            // `thread_select` is not ended (`src/thread.c:974-982`).
+            crate::emacs_core::eval::process_hooks::select_nudge(
+                select,
+                crate::host_effect::wake::ControlDestination::IdleScheduler,
+                crate::host_effect::wake::ControlNudge::SchedulerReady,
+            );
             // A released native main owns a distinct registration. Its
             // durable scheduler state may become ready before or during the
             // OS wait; the idle-selector epoch alone cannot wake that role.
