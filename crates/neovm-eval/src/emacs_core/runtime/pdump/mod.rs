@@ -229,11 +229,38 @@ fn hex_string(bytes: &[u8]) -> String {
     out
 }
 
+/// The GNU `report_file_error` site an I/O failure belongs to.  GNU reports
+/// a failed dump-target open as "Opening dump output" (`src/pdumper.c:4204`)
+/// and a failed write of the dump image as "Could not write to dump file"
+/// (`src/pdumper.c:4348`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DumpIoPhase {
+    Open,
+    Write,
+}
+
+impl DumpIoPhase {
+    /// The ACTION string GNU passes to `report_file_error` at this phase.
+    pub fn action(self) -> &'static str {
+        match self {
+            DumpIoPhase::Open => "Opening dump output",
+            DumpIoPhase::Write => "Could not write to dump file",
+        }
+    }
+}
+
 /// Errors from dump/load operations.
 #[derive(Debug, thiserror::Error)]
 pub enum DumpError {
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
+    /// An I/O failure tagged with the GNU report phase it belongs to, so the
+    /// Lisp boundary can signal `report_file_error`'s condition and
+    /// `(ACTION STRERROR NAME...)` DATA for the right site.
+    #[error("I/O error during {phase:?}: {source}")]
+    Io {
+        phase: DumpIoPhase,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("not a valid pdump file (bad magic)")]
     BadMagic,
     #[error("unsupported pdump version {0}")]
@@ -309,6 +336,29 @@ pub enum DumpError {
     BytecodeParameterKind(#[source] num_enum::TryFromPrimitiveError<types::DumpFunctionParamsKind>),
     #[error("bytecode parameter kind and original arglist disagree")]
     BytecodeParameterShape,
+}
+
+impl From<std::io::Error> for DumpError {
+    /// `?` on an I/O result defaults to the open phase: that covers the
+    /// dump-target probe/temp-file creation and the load paths.  The writer
+    /// tags its write-phase failures explicitly with [`DumpError::write_io`].
+    fn from(source: std::io::Error) -> Self {
+        DumpError::Io {
+            phase: DumpIoPhase::Open,
+            source,
+        }
+    }
+}
+
+impl DumpError {
+    /// Tag an I/O failure from the dump-output write phase: GNU reports it
+    /// at `src/pdumper.c:4348` with "Could not write to dump file".
+    pub fn write_io(source: std::io::Error) -> Self {
+        DumpError::Io {
+            phase: DumpIoPhase::Write,
+            source,
+        }
+    }
 }
 
 fn empty_lisp_string() -> types::DumpLispString {

@@ -222,15 +222,35 @@ pub(crate) fn builtin_dump_emacs_portable(
     ctx.set_variable("command-line-processed", saved_command_line_processed);
     ctx.set_variable("process-environment", saved_process_environment);
 
-    dump_result.map_err(|err| {
-        signal(
+    dump_result.map_err(|err| match err {
+        // GNU reports the two dump-output I/O phases through
+        // `report_file_error` (src/pdumper.c:4204 for the target open,
+        // :4348 for the image write), and `get_file_errno_data`
+        // (src/fileio.c:265-283) maps the errno to the condition and DATA
+        // (ACTION STRERROR FILE...): EACCES signals `permission-denied`,
+        // ENOENT `file-missing`, and anything else `file-error`.  The typed
+        // phase supplies the ACTION string ("Opening dump output" vs
+        // "Could not write to dump file"), so a write failure can never be
+        // reported as an open failure.  `signal_file_action_error_value` is
+        // the neovm-system port of that GNU helper, shared with the file
+        // primitives.
+        crate::emacs_core::pdump::DumpError::Io { phase, source } => {
+            crate::emacs_core::fileio::signal_file_action_error_value(
+                source,
+                phase.action(),
+                Value::string(expanded_path),
+            )
+        }
+        // Neomacs-specific writer failures (section layout, fingerprint,
+        // ...) have no GNU counterpart; keep the historical shape.
+        other => signal(
             LispCondition::FileError,
             vec![
                 Value::string("dump-emacs-portable"),
                 Value::string(expanded_path),
-                Value::string(err.to_string()),
+                Value::string(other.to_string()),
             ],
-        )
+        ),
     })?;
 
     // R2-B1 (resolution B): dump-time AOT preload. Only on the FINAL production

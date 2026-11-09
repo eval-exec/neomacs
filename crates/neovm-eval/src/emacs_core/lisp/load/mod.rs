@@ -6716,7 +6716,7 @@ pub fn load_runtime_image_for_executable(
                     loaded = Some(eval);
                     break;
                 }
-                Err(pdump::DumpError::Io(err))
+                Err(pdump::DumpError::Io { source: err, .. })
                     if err.kind() == std::io::ErrorKind::NotFound
                         && index + 1 < candidates.len() =>
                 {
@@ -6738,7 +6738,7 @@ pub fn load_runtime_image_for_executable(
                 return Err(runtime_image_load_error(
                     role,
                     &default_fingerprinted_runtime_image_path(role),
-                    pdump::DumpError::Io(std::io::Error::new(
+                    pdump::DumpError::from(std::io::Error::new(
                         std::io::ErrorKind::NotFound,
                         "runtime image not found",
                     )),

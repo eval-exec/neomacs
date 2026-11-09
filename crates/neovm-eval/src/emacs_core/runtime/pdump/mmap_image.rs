@@ -509,30 +509,135 @@ pub(crate) fn write_image(path: &Path, sections: &[ImageSection<'_>]) -> Result<
     };
     bytes[..HEADER_SIZE].copy_from_slice(bytemuck::bytes_of(&header));
 
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    // GNU's pdumper creates the dump with `emacs_open (filename, O_RDWR |
-    // O_TRUNC | O_CREAT, 0666)` (src/pdumper.c:4200), so its mode is 0666
-    // masked by the caller's umask; `make install` later normalizes the
-    // installed copy to 0644 (INSTALL_DATA; Makefile.in:628-630,639) for a
-    // system prefix that every user loads from.  Request the same creation
-    // mode: tempfile applies the umask to the mode it opens with, exactly
-    // like the plain open, so a umask-077 build gets a 0600 dump as GNU
-    // would while a standard 022 build gets the world-readable 0644 that
-    // packaging preserves.  NamedTempFile's own default is a hard 0600, and
-    // `persist` renames that private mode into place; a root-installed
-    // runtime was then unreadable to every other user.
+    // GNU's `dump-emacs-portable` expands the name and then opens the target
+    // with `emacs_open (filename, O_RDWR | O_TRUNC | O_CREAT, 0666)`
+    // (src/pdumper.c:4200, inside Fdump_emacs_portable at :4075).  That open
+    // follows a symlink in the final path component, truncates an existing
+    // file in place -- so the existing inode, its mode and its owner all
+    // survive -- and creates a missing file with 0666 & ~umask.
+    //
+    // We keep tempfile + atomic rename instead of GNU's in-place truncate on
+    // purpose: another process may have the dump mapped, and truncating the
+    // live inode under its mappings faults it.  The deliberate cost of that
+    // trade-off is inode identity: a rename installs a fresh inode, so hard
+    // links to the previous dump keep the old image.  Everything GNU exposes
+    // about the named path is preserved:
+    //   * follow the final symlink chain and place the temp file beside the
+    //     resolved target, so the link survives and its target is replaced
+    //     (the rename must land on the target, not on the link);
+    //   * when the target already exists, keep its mode -- including the
+    //     kernel's drop of setid bits on a write by a caller without
+    //     CAP_FSETID -- and its owner where the caller may set it, instead
+    //     of 0666 & ~umask;
+    //   * GNU opens the target O_RDWR, so a target the caller cannot open
+    //     for read+write fails the same way; probe without O_TRUNC.
+    let target = resolve_dump_target(path)?;
+    let parent = target.parent().unwrap_or_else(|| Path::new("."));
+    let existing = std::fs::metadata(&target).ok();
+    if existing.is_some() {
+        // Match GNU's O_RDWR permission gate without truncating; the
+        // rename below would otherwise replace a file GNU refuses to open.
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&target)?;
+    }
     let mut builder = tempfile::Builder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        builder.permissions(std::fs::Permissions::from_mode(0o666));
+        let mode = existing
+            .as_ref()
+            .map_or(0o666, |meta| meta.permissions().mode() & 0o7777);
+        // For a new target this is GNU's open(..., 0666) masked by the umask
+        // (the r2 fix: tempfile applies the umask at creation exactly like
+        // the plain open).  For an existing target the umask may narrow this
+        // request; the target's exact mode is set before the write below.
+        builder.permissions(std::fs::Permissions::from_mode(mode));
     }
     let mut file = builder.tempfile_in(parent)?;
-    file.write_all(&bytes)?;
-    file.flush()?;
-    file.as_file().sync_all()?;
-    file.persist(path).map_err(|err| DumpError::Io(err.error))?;
+    #[cfg(unix)]
+    if let Some(meta) = existing.as_ref() {
+        use std::os::unix::fs::PermissionsExt;
+        // GNU truncates the existing inode in place, so the kernel strips
+        // S_ISUID -- and S_ISGID when group-exec is set -- from a regular
+        // file written by a caller without CAP_FSETID
+        // (fs/attr.c:setattr_should_drop_suidgid).  Put the temp inode in
+        // the target's exact mode before the image is written (fchmod is
+        // not umask-masked), so that same kernel rule runs here with the
+        // real capability set; the mode left after the write is the one to
+        // install.  A fixed restore of the pre-dump mode would keep 4755
+        // where GNU's write ends at 0755 for a non-root caller.
+        let target_mode = meta.permissions().mode() & 0o7777;
+        file.as_file()
+            .set_permissions(std::fs::Permissions::from_mode(target_mode))
+            .map_err(DumpError::write_io)?;
+    }
+    // Everything from here on is the write phase of GNU's two report sites:
+    // the target open above is "Opening dump output" (src/pdumper.c:4204),
+    // while producing the image is "Could not write to dump file" (:4348).
+    // The temp file stands in for GNU's single buffered emacs_write, so its
+    // write/flush/fsync/rename failures keep the write action.
+    // Write through the raw `File`: tempfile's `NamedTempFile` Write impl
+    // re-wraps the error with the temp path, which drops the OS errno that
+    // GNU's report_file_error DATA is built from (EFBIG became EIO).
+    file.as_file_mut()
+        .write_all(&bytes)
+        .map_err(DumpError::write_io)?;
+    file.as_file_mut().flush().map_err(DumpError::write_io)?;
+    file.as_file().sync_all().map_err(DumpError::write_io)?;
+    #[cfg(unix)]
+    if let Some(meta) = existing.as_ref() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        // Capture the kernel's post-write verdict before the chown, which
+        // can drop setid bits again (a chown clears S_ISUID even when the
+        // uid/gid are unchanged).  GNU keeps the owner because it writes
+        // the inode in place; restore it where the caller has the privilege
+        // and re-apply exactly the mode the kernel left.  A new target
+        // keeps r2's 0666 & ~umask.
+        let after_write = file
+            .as_file()
+            .metadata()
+            .map_err(DumpError::write_io)?
+            .permissions()
+            .mode()
+            & 0o7777;
+        let _ = std::os::unix::fs::chown(file.path(), Some(meta.uid()), Some(meta.gid()));
+        file.as_file()
+            .set_permissions(std::fs::Permissions::from_mode(after_write))
+            .map_err(DumpError::write_io)?;
+    }
+    file.persist(&target)
+        .map_err(|err| DumpError::write_io(err.error))?;
     Ok(())
+}
+
+/// Follow a symlink chain in the final path component the way open(2) does
+/// when GNU's dump writer opens its target, so the temp file and the rename
+/// target are the real file the link names rather than the link itself.
+/// Bounded at the kernel's 40-hop ELOOP limit.  A missing last component is
+/// returned as is: open(O_CREAT) would create it, and the rename does too.
+fn resolve_dump_target(path: &Path) -> Result<std::path::PathBuf, DumpError> {
+    let mut target = path.to_path_buf();
+    for _ in 0..40 {
+        match std::fs::symlink_metadata(&target) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let link = std::fs::read_link(&target)?;
+                target = if link.is_absolute() {
+                    link
+                } else {
+                    target
+                        .parent()
+                        .map(|parent| parent.join(&link))
+                        .unwrap_or(link)
+                };
+            }
+            _ => return Ok(target),
+        }
+    }
+    Err(DumpError::from(std::io::Error::other(
+        "dump target: too many levels of symbolic links",
+    )))
 }
 
 pub(crate) fn relocation_section_bytes(relocations: &[ImageRelocation]) -> Vec<u8> {

@@ -3904,10 +3904,13 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/mmap_image.rs	field	ImageSection 
 crates/neovm-eval/src/emacs_core/runtime/pdump/mmap_image.rs	field	ImageSection field flags
 crates/neovm-eval/src/emacs_core/runtime/pdump/mmap_image.rs	field	ImageSection field kind
 crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	enum	enum DumpError
+crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	enum	enum DumpIoPhase
 crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	fn	fn clone_active_evaluator
 crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	fn	fn clone_evaluator
 crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	fn	fn dump_to_file
 crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	fn	fn fingerprint_hex
+crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	fn	fn impl DumpError::write_io
+crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	fn	fn impl DumpIoPhase::action
 crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	fn	fn load_from_dump_with_proof
 crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	fn	fn restore_active_runtime
 crates/neovm-eval/src/emacs_core/runtime/pdump/mod.rs	fn	fn restore_snapshot
