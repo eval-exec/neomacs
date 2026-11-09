@@ -6383,5 +6383,3 @@ mod copy_oracle;
 mod weak_copy;
 
 mod weak_tables;
-
-mod weak_oracle;

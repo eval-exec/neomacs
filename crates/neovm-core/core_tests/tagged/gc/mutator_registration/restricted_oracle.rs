@@ -1,9 +1,30 @@
-//! B8 serial weak-table semantics, refreshed only from GNU 31.1.
-use super::*;
+//! B7/B8 serial GNU 31.1 oracle rows re-homed out of value.
+//! These rows only eval a form and print it. The owner harness stays in value.
+#![cfg(not(feature = "gc-memory-telemetry"))]
+
+use crate::emacs_core::print::print_value;
+
+fn oracle_lines() -> Vec<&'static str> {
+    let lines: Vec<_> = include_str!(
+        "../../../../../neovm-value/src/tagged/gc/mutator_registration/restricted_lisp_oracle.expected"
+    )
+    .lines()
+    .collect();
+    assert_eq!(lines.len(), 43, "GNU 31.1 oracle fixture");
+    lines
+}
+
+fn check(form: &str, line: usize, what: &str) {
+    let mut context = crate::test_utils::new_context();
+    let value = context
+        .eval_str(form)
+        .unwrap_or_else(|error| panic!("{what}: {error:?}"));
+    assert_eq!(print_value(&value), oracle_lines()[line]);
+}
 
 // Includes the aliases and rooted-GC cases from the existing strict
 // hash_table_weakness_key_value_gc_combo / weak_hash_lifecycle families.
-pub(super) const SETUP_FORM: &str = r#"(list
+const SETUP_FORM: &str = r#"(list
   (hash-table-weakness (make-hash-table :weakness t))
   (hash-table-weakness (make-hash-table :weakness 'key))
   (hash-table-weakness (make-hash-table :weakness 'value))
@@ -20,7 +41,7 @@ pub(super) const SETUP_FORM: &str = r#"(list
     (list (hash-table-count h) (gethash k h 'gone)
           (gethash 'stable-key h))))"#;
 
-pub(super) const MATRIX_FORM: &str = r#"(let ((weaknesses '(key value key-or-value key-and-value))
+const MATRIX_FORM: &str = r#"(let ((weaknesses '(key value key-or-value key-and-value))
       (answers nil))
   (while weaknesses
     (let ((h (make-hash-table :test 'eq :weakness (car weaknesses)))
@@ -42,7 +63,7 @@ pub(super) const MATRIX_FORM: &str = r#"(let ((weaknesses '(key value key-or-val
     (setq weaknesses (cdr weaknesses)))
   (nreverse answers))"#;
 
-pub(super) const CHAIN_FORM: &str = r#"(progn
+const CHAIN_FORM: &str = r#"(progn
   ;; The producer frame must end before GC: GNU conservatively protects
   ;; evaluated arguments and let initializers until their C frame returns.
   (fset 'a6-b8-oracle-produce-chain
@@ -72,7 +93,7 @@ pub(super) const CHAIN_FORM: &str = r#"(progn
       (garbage-collect)
       (list kept (hash-table-count h0) (hash-table-count h1)))))"#;
 
-pub(super) const MEMO_FORM: &str = r#"(progn
+const MEMO_FORM: &str = r#"(progn
   (define-hash-table-test 'a6-b8-oracle-collisions
     (lambda (a b) (eq a b)) (lambda (_key) 7))
   (let ((h (make-hash-table :test 'a6-b8-oracle-collisions
@@ -100,30 +121,76 @@ pub(super) const MEMO_FORM: &str = r#"(progn
     (garbage-collect)
     (list (nreverse answers) (hash-table-count h))))"#;
 
-fn check(form: &str, line: usize) {
-    let mut context = Context::new();
-    let value = context
-        .eval_str(form)
-        .unwrap_or_else(|error| panic!("B8 weak oracle eval: {error:?}"));
-    assert_eq!(crate::emacs_core::print_value(&value), oracle_lines()[line]);
-}
-
 #[test]
 fn a6_ht_b8_weak_setup_and_existing_family_twins_match_gnu_oracle() {
-    check(SETUP_FORM, 39);
+    check(SETUP_FORM, 39, "B8 weak oracle eval");
 }
 
 #[test]
 fn a6_ht_b8_weak_root_matrix_matches_gnu_oracle() {
-    check(MATRIX_FORM, 40);
+    check(MATRIX_FORM, 40, "B8 weak oracle eval");
 }
 
 #[test]
 fn a6_ht_b8_weak_fixpoint_and_dead_cycle_match_gnu_oracle() {
-    check(CHAIN_FORM, 41);
+    check(CHAIN_FORM, 41, "B8 weak oracle eval");
 }
 
 #[test]
 fn a6_ht_b8_weak_custom_removal_and_reuse_match_gnu_oracle() {
-    check(MEMO_FORM, 42);
+    check(MEMO_FORM, 42, "B8 weak oracle eval");
+}
+
+// Kept identical to the fourth B7 form in restricted_lisp_oracle.el. Both
+// hash and compare callbacks copy a guarded source, mutate the copy and
+// observe that the original remains guarded. The copy preserves metadata
+// and the custom test callbacks; each later custom lookup exercises them.
+const CUSTOM_COPY_FORM: &str = r#"(let ((answers nil) (callbacks '(compare hash)))
+  (while callbacks
+    (let ((callback (car callbacks))
+          (source nil) (armed nil) (fired nil) (copy nil) (observed nil))
+      (let ((action
+             (lambda ()
+               (if armed
+                   (if fired nil
+                     (progn
+                       (setq fired t copy (copy-hash-table source))
+                       (setq observed
+                             (list (eq (hash-table-test source) (hash-table-test copy))
+                                   (= (hash-table-size source) (hash-table-size copy))
+                                   (= (hash-table-rehash-size source)
+                                      (hash-table-rehash-size copy))
+                                   (= (hash-table-rehash-threshold source)
+                                      (hash-table-rehash-threshold copy))
+                                   (eq (hash-table-weakness source)
+                                       (hash-table-weakness copy))
+                                   (puthash "copy-only" 2 copy)
+                                   (condition-case err (puthash "source-only" 3 source)
+                                     (error (list (car err) (car (cdr err))
+                                                  (eq (nth 2 err) source))))))))))))
+        (define-hash-table-test
+         'a6-b7-copy-test
+         (lambda (a b)
+           (if (eq callback 'compare) (funcall action))
+           (equal a b))
+         (lambda (_key)
+           (if (eq callback 'hash) (funcall action))
+           0))
+        (setq source (make-hash-table :test 'a6-b7-copy-test :size 32
+                                      :rehash-size 2.0 :rehash-threshold 0.8))
+        (puthash (copy-sequence "key") 1 source)
+        (setq armed t)
+        (let ((answer (gethash (copy-sequence "key") source)))
+          (setq armed nil)
+          (setq answers
+                (cons (list callback answer observed
+                            (hash-table-count source) (hash-table-count copy)
+                            (gethash "key" copy) (gethash "copy-only" source 'absent))
+                      answers)))))
+    (setq callbacks (cdr callbacks)))
+  answers)"#;
+
+#[test]
+fn a6_ht_copy_metadata_and_custom_callbacks_match_gnu_oracle() {
+    check(CUSTOM_COPY_FORM, 38, "B7 custom copy twin eval");
 }

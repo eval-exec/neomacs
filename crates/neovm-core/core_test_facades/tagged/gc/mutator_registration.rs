@@ -75,6 +75,12 @@ mod lifecycle_tests;
 #[path = "../../../core_tests/tagged/gc/mutator_registration/a8_latency.rs"]
 mod a8_latency;
 
+/// B7/B8 GNU oracle rows re-homed out of value. They only eval a form and
+/// print it. The owner harness stays in value. Assertions are unchanged.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/restricted_oracle.rs"]
+mod restricted_oracle;
+
 /// MEMQ-TAIL-SHAPES (b)+(i)+(ii), peer 22:30Z approvals: the keeper-table
 /// scope test re-homed out of value. It uses the closure-scoped
 /// stopped-tables install, the scope's nested-install probe, the &self
