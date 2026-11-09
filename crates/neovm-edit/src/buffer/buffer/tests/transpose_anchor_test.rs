@@ -2,6 +2,7 @@ use super::*;
 
 #[test]
 fn transpose_gap_positions_match_across_storage_backends() {
+    crate::test_utils::init_test_tracing();
     for kind in implemented_text_backends() {
         for (initial, inserted, expected_gap) in [("ab", "中", 1), ("中", "ab", 4), ("b", "a", 3)]
         {
@@ -27,6 +28,7 @@ fn transpose_gap_positions_match_across_storage_backends() {
 
 #[test]
 fn transpose_storage_moves_gap_outside_rearranged_character_boundaries() {
+    crate::test_utils::init_test_tracing();
     for kind in implemented_text_backends() {
         let mut buf = buf_with_text_backend("b", kind);
         buf.insert("é");
@@ -50,6 +52,7 @@ fn transpose_storage_moves_gap_outside_rearranged_character_boundaries() {
 
 #[test]
 fn transpose_preserved_marker_anchor_has_consistent_coordinates() {
+    crate::test_utils::init_test_tracing();
     for kind in implemented_text_backends() {
         let mut buf = buf_with_text_backend("a中", kind);
         let marker = register_marker_for_test(&mut buf, 1, InsertionType::Before);
@@ -79,6 +82,7 @@ fn transpose_preserved_marker_anchor_has_consistent_coordinates() {
 /// transpose_markers (editfns.c:4500-4523) puts point below saved BEGV.
 #[test]
 fn transpose_indirect_point_restores_full_text_anchor_outside_accessible_region() {
+    crate::test_utils::init_test_tracing();
     use crate::buffer::TranspositionAnchorPolicy::{FollowText, PreserveCharacterPositions};
     for kind in implemented_text_backends() {
         for (text, preserved_point, moved_begv) in [

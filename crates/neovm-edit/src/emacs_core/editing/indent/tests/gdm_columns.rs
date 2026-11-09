@@ -12,6 +12,7 @@ fn gdm_tab_width_constructor_accepts_only_gnu_range() {
 
 #[test]
 fn gdm_column_glyphs_obey_tab_stops() {
+    crate::test_utils::init_test_tracing();
     let glyphs = Value::vector(vec![
         Value::fixnum('中' as i64),
         Value::fixnum('\t' as i64),
@@ -30,6 +31,7 @@ fn gdm_column_glyphs_obey_tab_stops() {
 
 #[test]
 fn gdm_column_glyphs_stop_at_selective_carriage_return() {
+    crate::test_utils::init_test_tracing();
     let glyphs = Value::vector(vec![
         Value::fixnum('中' as i64),
         Value::fixnum('\r' as i64),

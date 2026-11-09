@@ -7,6 +7,7 @@ use super::*;
 
 #[test]
 fn nothing_changed_has_no_gnu_prefix() {
+    crate::test_utils::init_test_tracing();
     let buf = buf_with_text("aaaa\nbbbb\n");
     buf.reset_unchanged_region();
     assert_eq!(buf.gnu_beg_unchanged(), None);
@@ -14,6 +15,7 @@ fn nothing_changed_has_no_gnu_prefix() {
 
 #[test]
 fn a_property_change_counts_from_one_char_before_its_start() {
+    crate::test_utils::init_test_tracing();
     let buf = buf_with_text("aaaa\nbbbb\n");
     buf.reset_unchanged_region();
     buf.note_changed_property_region(bytes(&buf, 5, 10));
@@ -25,6 +27,7 @@ fn a_property_change_counts_from_one_char_before_its_start() {
 
 #[test]
 fn a_character_change_is_not_shifted() {
+    crate::test_utils::init_test_tracing();
     let mut buf = buf_with_text("aaaa\nbbbb\n");
     buf.reset_unchanged_region();
     buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(7));
@@ -40,6 +43,7 @@ fn a_character_change_is_not_shifted() {
 
 #[test]
 fn an_empty_property_range_is_not_a_gnu_change() {
+    crate::test_utils::init_test_tracing();
     let buf = buf_with_text("aaaa\nbbbb\n");
     buf.reset_unchanged_region();
     buf.note_changed_property_region(bytes(&buf, 10, 10));

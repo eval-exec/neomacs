@@ -342,6 +342,7 @@ fn transposition_storage_plan_swaps_outer_regions_over_full_span() {
 
 #[test]
 fn physical_edit_lease_validates_live_geometry_and_cancellation() {
+    crate::test_utils::init_test_tracing();
     let mut buffers = BufferManager::new();
     let id = buffers.create_buffer(" *physical-edit-lease-validation*");
     buffers
@@ -409,6 +410,7 @@ fn physical_edit_lease_validates_live_geometry_and_cancellation() {
 
 #[test]
 fn physical_edit_lease_consumes_typed_multibyte_mutations() {
+    crate::test_utils::init_test_tracing();
     let mut buffers = BufferManager::new();
     let id = buffers.create_buffer(" *physical-edit-lease-mutations*");
     buffers
@@ -457,6 +459,7 @@ fn physical_edit_lease_consumes_typed_multibyte_mutations() {
 
 #[test]
 fn physical_edit_lease_empty_operations_preserve_legacy_results() {
+    crate::test_utils::init_test_tracing();
     let mut buffers = BufferManager::new();
     let id = buffers.create_buffer(" *physical-edit-lease-empty*");
     let empty = crate::buffer::CharRange::new(CharPos0::ZERO, CharPos0::ZERO);

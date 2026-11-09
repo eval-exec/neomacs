@@ -630,6 +630,7 @@ fn whole_overlay_property_summary_tracks_live_membership_and_nil_keys() {
 
 #[test]
 fn absent_overlay_key_bloom_collision_is_scanned_only_once() {
+    crate::test_utils::init_test_tracing();
     let mut list = OverlayList::new();
     let category = Value::symbol("category");
     let first = alloc_overlay(0, 1);

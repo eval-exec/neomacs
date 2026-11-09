@@ -11,6 +11,7 @@ fn casify_expansion_constructor_excludes_empty_and_single_char_outputs() {
 
 #[test]
 fn casify_same_byte_extent_can_grow_character_extent() {
+    crate::test_utils::init_test_tracing();
     let mut buffers = BufferManager::new();
     let id = buffers.current_buffer_id().unwrap();
     buffers.insert_into_buffer(id, "ßx").unwrap();
@@ -37,6 +38,7 @@ fn casify_same_byte_extent_can_grow_character_extent() {
 
 #[test]
 fn casify_point_uses_expansion_site_instead_of_region_end() {
+    crate::test_utils::init_test_tracing();
     let mut buffers = BufferManager::new();
     let id = buffers.current_buffer_id().unwrap();
     buffers.insert_into_buffer(id, "aßbßc").unwrap();
@@ -65,6 +67,7 @@ fn casify_point_uses_expansion_site_instead_of_region_end() {
 
 #[test]
 fn casify_growth_beyond_narrowed_end_keeps_coordinate_pairs_coherent() {
+    crate::test_utils::init_test_tracing();
     let mut buffers = BufferManager::new();
     let id = buffers.current_buffer_id().unwrap();
     buffers.insert_into_buffer(id, "aßz").unwrap();

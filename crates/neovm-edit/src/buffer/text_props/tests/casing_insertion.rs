@@ -2,6 +2,7 @@ use super::*;
 
 #[test]
 fn casing_insertion_preserves_interior_and_resolves_boundary_stickiness() {
+    crate::test_utils::init_test_tracing();
     let roots = CasingPropertyRoots::new();
     let face = Value::symbol("face");
     let front = Value::symbol("front-sticky");

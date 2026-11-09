@@ -4,6 +4,7 @@ use super::*;
 
 #[test]
 fn standalone_manager_publishes_one_coherent_selection() {
+    crate::test_utils::init_test_tracing();
     let mut manager = BufferManager::new();
     assert!(matches!(manager.backing, BufferBacking::Standalone(_)));
     assert_selection_matches_storage(&manager);
@@ -15,6 +16,7 @@ fn standalone_manager_publishes_one_coherent_selection() {
 
 #[test]
 fn from_dump_rebuilds_the_selection_for_the_restored_slab() {
+    crate::test_utils::init_test_tracing();
     let original = BufferManager::new();
     let current = original.current_buffer_id();
     let buffers = original
@@ -37,6 +39,7 @@ fn from_dump_rebuilds_the_selection_for_the_restored_slab() {
 
 #[test]
 fn deep_clone_has_independent_buffers_and_current_selection() {
+    crate::test_utils::init_test_tracing();
     let mut original = BufferManager::new();
     let first = original.current_buffer_id().unwrap();
     let second = original.create_buffer("*clone-selection*");
@@ -69,6 +72,7 @@ fn deep_clone_has_independent_buffers_and_current_selection() {
 
 #[test]
 fn selection_retires_before_kill_and_survives_slab_growth() {
+    crate::test_utils::init_test_tracing();
     let mut manager = BufferManager::new();
     let current = manager.current_buffer_id().unwrap();
     let pointer = manager.current_ptr;
@@ -85,6 +89,7 @@ fn selection_retires_before_kill_and_survives_slab_growth() {
 
 #[test]
 fn selection_is_rederived_after_swap_replaces_a_live_box() {
+    crate::test_utils::init_test_tracing();
     let mut manager = BufferManager::new();
     let first = manager.current_buffer_id().unwrap();
     let second = manager.create_buffer("*swap-selection*");
@@ -99,6 +104,7 @@ fn selection_is_rederived_after_swap_replaces_a_live_box() {
 
 #[test]
 fn infallible_world_parts_factory_preserves_standalone_selection() {
+    crate::test_utils::init_test_tracing();
     let parts = BufferManager::new_world_parts();
     let manager = BufferManager::from(parts);
     assert!(matches!(manager.backing, BufferBacking::Standalone(_)));
