@@ -121,5 +121,83 @@ impl<'heap, K: EraKeeper> CoreAdmission<'heap, K> for ProofAdmission<'heap, K> {
     }
 }
 
+/// R4-F1: pin the admission witnesses' auto traits INSIDE neovm-value with a
+/// local `!Send`/`!Sync` stand-in keeper.
+///
+/// The witnesses are `pub(super)` and the real evaluator keeper (`Baton`) is
+/// an upper type this crate cannot name; the eval-side assertion pins the
+/// public `EraAdmissionFailure<'static, Baton>` wrapper (R4-4).  This arm is
+/// the complementary in-crate pin: an unconditional `unsafe impl Send`/
+/// `Sync` (or a plain `Clone`/`Copy`) added to a witness would make the
+/// property hold for `LocalKeeper` too and fail the build here, with no
+/// TEST-SUPPORT-VIS widening and no upper-crate path.
+#[cfg(any(test, feature = "test-support"))]
+mod admission_auto_traits {
+    use super::{EraKeeper, ProductionAdmission, ProofAdmission};
+    use crate::intern::SymId;
+    use crate::symbol::parallel::KeeperWorldDesignator;
+    use crate::tagged::gc::function_write_hooks::FunctionWriteHooks;
+    use crate::tagged::gc::{
+        CanonicalHofSeed, CompilerActivity, HeapIdentity, HofOperation, HofPreparationError,
+        InitialDefinition, KeeperSymbols, RegistrationError, SymbolWriteToken,
+    };
+    use crate::tagged::value::TaggedValue;
+
+    /// Not shareable across threads (`Rc` makes it `!Send`/`!Sync`) and
+    /// entirely local to this crate.  Type-level only: never constructed, so
+    /// no hook below is ever called.
+    struct LocalKeeper(std::marker::PhantomData<std::rc::Rc<()>>);
+
+    impl FunctionWriteHooks for LocalKeeper {
+        unsafe fn prepare_hof_builtin(
+            &self,
+            _operation: HofOperation,
+            _authority: &SymbolWriteToken<'_>,
+        ) -> Result<CanonicalHofSeed, HofPreparationError> {
+            unimplemented!("type-level witness; never constructed")
+        }
+        unsafe fn classify_initial_definition(
+            &self,
+            _value: TaggedValue,
+            _authority: &SymbolWriteToken<'_>,
+        ) -> InitialDefinition {
+            unimplemented!("type-level witness; never constructed")
+        }
+        fn check_compiler_quiescent(&self) -> Result<(), CompilerActivity> {
+            unimplemented!("type-level witness; never constructed")
+        }
+        unsafe fn reconcile_function_write(&self, _symbol: SymId, _keeper: &KeeperSymbols<'_>) {
+            unimplemented!("type-level witness; never constructed")
+        }
+    }
+
+    // SAFETY: type-level witness only. The two hooks return the keeper's
+    // identity/designator and are never called because no value of this type
+    // exists; the admission wrappers below are never constructed with it.
+    unsafe impl EraKeeper for LocalKeeper {
+        fn keeper_designator(&self) -> Result<KeeperWorldDesignator<'_>, RegistrationError> {
+            unimplemented!("type-level witness; never constructed")
+        }
+        fn parallel_heap_identity(&self) -> HeapIdentity {
+            unimplemented!("type-level witness; never constructed")
+        }
+    }
+
+    static_assertions::assert_not_impl_any!(
+        ProductionAdmission<'static, LocalKeeper>:
+            Send,
+            Sync,
+            Clone,
+            Copy
+    );
+    static_assertions::assert_not_impl_any!(
+        ProofAdmission<'static, LocalKeeper>:
+            Send,
+            Sync,
+            Clone,
+            Copy
+    );
+}
+
 #[cfg(test)]
 mod tests;
