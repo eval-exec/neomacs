@@ -56,7 +56,8 @@
 ;; t on a toolkit GUI frame (fileio.c:6556-6572, via use-dialog-box and
 ;; use-file-dialog).  Neomacs's backend has no native file-panel primitive, so
 ;; this is GNU's own Lisp arm for that case: the same name, signature and
-;; return value, with minibuffer completion performing the prompt.  It lives
+;; argument mapping (return contract differs, see MX-4), with minibuffer
+;; completion performing the prompt.  It lives
 ;; here, the dump-safe preload (loadup.el:267), not in the GUI-runtime-only
 ;; term/neo-win.el, so batch and TTY sessions expose the same surface GNU's
 ;; dump does.  Because the caller may itself have been reached from
