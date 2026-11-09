@@ -110,6 +110,11 @@ pub const BOOTSTRAP_BINDERS: [(&str, &str, usize); 4] = [
 
 fn parse_cfg(attr: &str) -> Result<String, String> {
     let compact: String = attr.split_whitespace().collect();
+    // The x11-only surface form must be recognized before the generic
+    // windows check below, which would otherwise match its substring.
+    if compact.contains("not(any(windows,target_os=\"macos\"))") {
+        return Ok("x11-only".to_owned());
+    }
     // The negated surface form must be recognized before the bare macOS test
     // below, which would otherwise match its substring.
     if compact.contains("not(target_os=\"macos\")") {

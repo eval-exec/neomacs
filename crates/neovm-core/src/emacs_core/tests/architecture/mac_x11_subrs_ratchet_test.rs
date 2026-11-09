@@ -383,11 +383,15 @@ fn x_begin_drag_stays_registered_on_every_surface() {
 }
 
 #[test]
-fn host_cfg_surface_classes_classify_the_ns_surface() {
+fn host_cfg_surface_classes_classify_the_ns_and_w32_surfaces() {
     use neovm_eval::host_cfg::HostCfgClass;
     assert_eq!(
         HostCfgClass::from_label("not-macos"),
         Some(HostCfgClass::NotMacos)
+    );
+    assert_eq!(
+        HostCfgClass::from_label("x11-only"),
+        Some(HostCfgClass::X11Only)
     );
     assert!(
         HostCfgClass::vocabulary_round_trips(),
@@ -398,8 +402,21 @@ fn host_cfg_surface_classes_classify_the_ns_surface() {
         !cfg!(target_os = "macos"),
         "not-macos must be inactive exactly on the macOS/NS surface"
     );
+    assert_eq!(
+        HostCfgClass::X11Only.is_active(),
+        !cfg!(windows) && !cfg!(target_os = "macos"),
+        "x11-only must be active exactly on the X11 surface"
+    );
     assert!(
         !(HostCfgClass::NotMacos.is_active() && HostCfgClass::Macos.is_active()),
         "the not-macos surface class must exclude every macOS/NS build"
+    );
+    assert!(
+        !(HostCfgClass::X11Only.is_active() && HostCfgClass::Macos.is_active()),
+        "the x11-only surface class must exclude every macOS/NS build"
+    );
+    assert!(
+        !(HostCfgClass::X11Only.is_active() && HostCfgClass::Windows.is_active()),
+        "the x11-only surface class must exclude every Windows build"
     );
 }

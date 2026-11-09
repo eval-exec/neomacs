@@ -362,6 +362,11 @@ fn line_of(text: &str, byte: usize) -> usize {
 
 /// Parse the cfg label carried by an attribute or cfg_select arm line.
 fn cfg_from_directive(line: &str) -> Option<&'static str> {
+    // The x11-only surface form must be recognized before the generic
+    // windows check below, which would otherwise match its substring.
+    if line.contains("not(any(windows, target_os = \"macos\"))") {
+        return Some("x11-only");
+    }
     // The negated surface form must be recognized before the bare macOS test
     // below, which would otherwise match its substring.
     if line.contains("not(target_os = \"macos\")") {

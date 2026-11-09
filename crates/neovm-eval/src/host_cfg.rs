@@ -36,11 +36,16 @@ pub enum HostCfgClass {
     /// builds both define these names (e.g. w32fns.c's x-change-window-property),
     /// while the NS object set does not; the NS build leaves them void.
     NotMacos,
+    /// The X11 window system only.  GNU's W32 build has no DEFUN for these
+    /// names (only the four w32fns.c ones above are w32 DEFUNs) and none of
+    /// the Lisp files its windows-nt dump loads binds them, while the NS
+    /// object set does not define them either; only an X11 build binds them.
+    X11Only,
 }
 
 impl HostCfgClass {
     /// Every class, in the label vocabulary's declaration order.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Always,
         Self::Macos,
         Self::Windows,
@@ -50,6 +55,7 @@ impl HostCfgClass {
         Self::Sqlite,
         Self::VmProfile,
         Self::NotMacos,
+        Self::X11Only,
     ];
 
     /// The plan/snapshot label for this class.
@@ -64,6 +70,7 @@ impl HostCfgClass {
             Self::Sqlite => "sqlite",
             Self::VmProfile => "vm-profile",
             Self::NotMacos => "not-macos",
+            Self::X11Only => "x11-only",
         }
     }
 
@@ -80,6 +87,7 @@ impl HostCfgClass {
             "sqlite" => Self::Sqlite,
             "vm-profile" => Self::VmProfile,
             "not-macos" => Self::NotMacos,
+            "x11-only" => Self::X11Only,
             _ => return None,
         })
     }

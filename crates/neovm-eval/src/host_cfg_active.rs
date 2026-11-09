@@ -26,6 +26,9 @@ impl HostCfgClass {
             HostCfgClass::Sqlite => cfg!(feature = "sqlite"),
             HostCfgClass::VmProfile => cfg!(feature = "vm-profile"),
             HostCfgClass::NotMacos => !cfg!(target_os = "macos"),
+            HostCfgClass::X11Only => {
+                !cfg!(windows) && !cfg!(target_os = "macos")
+            }
         }
     }
 }
