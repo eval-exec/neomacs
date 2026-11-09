@@ -1,5 +1,6 @@
 use crate::emacs_core::display_host::FontResolveRequest;
 use crate::face::{FaceHeight, FontSlant, FontWeight, FontWidth};
+use crate::test_utils::xfaces_upper_layer_helpers::PointSizeFontHost;
 use neovm_eval::emacs_core::eval::{
     Context, DisplayHost, FontPxProbeResult, GuiFrameHostRequest, ResolvedFontMatch,
 };
@@ -8,59 +9,15 @@ use neovm_value::value::Value;
 /// Harness-bound wrapper over the shared upper-layer helper (one home:
 /// display test_utils); display tests keep their unit-runtime Context.
 fn context() -> Context {
-    crate::test_utils::xfaces_upper_layer_helpers::font_remapping_context(|| {
+    let mut eval = crate::test_utils::xfaces_upper_layer_helpers::font_remapping_context(|| {
         Context::new(crate::test_utils::unit_runtime())
-    })
+    });
+    eval.set_display_host(Box::new(PointSizeFontHost));
+    eval
 }
 
 /// Deterministic font-system adapter: point sizes at 96 DPI, no font cache.
 /// Face definitions, remapping, and Lisp queries all use the real evaluator.
-struct PointSizeFontHost;
-
-impl DisplayHost for PointSizeFontHost {
-    fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
-        Ok(())
-    }
-
-    fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
-        Ok(())
-    }
-
-    fn resolve_font_for_char(
-        &mut self,
-        request: FontResolveRequest,
-    ) -> Result<Option<ResolvedFontMatch>, String> {
-        let height = match request.face.height {
-            Some(FaceHeight::Absolute(height)) => f64::from(height),
-            Some(FaceHeight::Relative(scale)) => 150.0 * scale,
-            None => 150.0,
-        };
-        let pixel_size = (height * 96.0 / 720.0).round() as i32;
-        Ok(Some(ResolvedFontMatch {
-            font: neovm_eval::emacs_core::eval::test_resolved_opened_font(
-                "Test Mono",
-                None,
-                None,
-                FontWeight::NORMAL,
-                FontSlant::Normal,
-                FontWidth::Normal,
-                Some("TestMono"),
-                FontPxProbeResult {
-                    pixel_size: pixel_size.try_into().unwrap(),
-                    height: pixel_size + 4,
-                    ascent: pixel_size,
-                    descent: 4,
-                    max_width: pixel_size / 2,
-                    space_width: pixel_size / 2,
-                    average_width: pixel_size / 2,
-                },
-                None,
-            ),
-            glyph_code: Some(request.character.code()),
-        }))
-    }
-}
-
 fn default_font_size(eval: &mut Context) -> i64 {
     eval.eval_str("(font-get (font-spec :name (face-font 'default)) :size)")
         .unwrap()

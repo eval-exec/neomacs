@@ -3,7 +3,9 @@
 //! Re-homed from neovm-display (display upper-layer re-home).
 use crate::emacs_core::display_host::FontResolveRequest;
 use crate::face::{FaceHeight, FontSlant, FontWeight, FontWidth};
-use neovm_display::test_utils::xfaces_upper_layer_helpers::font_remapping_context;
+use neovm_display::test_utils::xfaces_upper_layer_helpers::{
+    PointSizeFontHost, font_remapping_context,
+};
 use neovm_eval::emacs_core::eval::{
     Context, DisplayHost, FontPxProbeResult, GuiFrameHostRequest, ResolvedFontMatch,
 };
@@ -12,6 +14,7 @@ use neovm_value::value::Value;
 #[test]
 fn font_at_named_face_remapping_uses_the_same_precedence_as_face_font() {
     let mut eval = font_remapping_context(crate::test_utils::new_context);
+    eval.set_display_host(Box::new(PointSizeFontHost));
     eval.eval_str("(internal-make-lisp-face 'issue360-font)")
         .unwrap();
     eval.eval_str("(internal-set-lisp-face-attribute 'issue360-font :height 150 nil)")

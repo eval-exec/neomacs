@@ -9,7 +9,7 @@ use crate::window::DisplayFrameExt;
 use crate::window::DisplayWindowExt;
 use crate::window::{FRAME_ID_BASE, FrameId, FrameParam};
 use neovm_display::test_utils::xfaces_upper_layer_helpers::{
-    ensure_selected_gui_frame, font_remapping_context, resolved_frame_font,
+    ensure_selected_gui_frame, resolved_frame_font,
 };
 use neovm_edit::buffer::{Buffer, CharPos0, CharRange};
 use neovm_eval::emacs_core::eval::data::face_registry::FIRST_DYNAMIC_FACE_ID;
@@ -24,9 +24,7 @@ use neovm_value::value::{ValueKind, VecLikeType};
 #[test]
 fn internal_set_lisp_face_attribute_eval_realizes_string_font_requests_for_live_default_face() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_display::test_utils::xfaces_upper_layer_helpers::font_remapping_context(
-        crate::test_utils::new_context,
-    );
+    let mut eval = crate::test_utils::new_context();
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     {
         let frame = eval
@@ -139,9 +137,7 @@ fn internal_set_lisp_face_attribute_eval_realizes_string_font_requests_for_live_
 fn internal_set_lisp_face_attribute_eval_uses_resolved_point_height_when_font_request_has_no_size()
 {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_display::test_utils::xfaces_upper_layer_helpers::font_remapping_context(
-        crate::test_utils::new_context,
-    );
+    let mut eval = crate::test_utils::new_context();
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     {
         let frame = eval
@@ -247,9 +243,7 @@ fn internal_set_face_height_accepts_function_height_like_gnu() {
 #[test]
 fn default_face_font_attr_update_refreshes_live_frame_font_state() {
     crate::test_utils::init_test_tracing();
-    let mut eval = neovm_display::test_utils::xfaces_upper_layer_helpers::font_remapping_context(
-        crate::test_utils::new_context,
-    );
+    let mut eval = crate::test_utils::new_context();
     let frame_id = ensure_selected_gui_frame(&mut eval);
     {
         let frame = eval

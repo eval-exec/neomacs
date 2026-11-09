@@ -1575,6 +1575,52 @@ pub mod window_cmds_upper_layer_helpers {
 /// live here once; the caller supplies the harness-booted Context where one
 /// is constructed.
 pub mod xfaces_upper_layer_helpers {
+    pub struct PointSizeFontHost;
+
+    impl DisplayHost for PointSizeFontHost {
+        fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn resolve_font_for_char(
+            &mut self,
+            request: FontResolveRequest,
+        ) -> Result<Option<ResolvedFontMatch>, String> {
+            let height = match request.face.height {
+                Some(FaceHeight::Absolute(height)) => f64::from(height),
+                Some(FaceHeight::Relative(scale)) => 150.0 * scale,
+                None => 150.0,
+            };
+            let pixel_size = (height * 96.0 / 720.0).round() as i32;
+            Ok(Some(ResolvedFontMatch {
+                font: neovm_eval::emacs_core::eval::test_resolved_opened_font(
+                    "Test Mono",
+                    None,
+                    None,
+                    FontWeight::NORMAL,
+                    FontSlant::Normal,
+                    FontWidth::Normal,
+                    Some("TestMono"),
+                    FontPxProbeResult {
+                        pixel_size: pixel_size.try_into().unwrap(),
+                        height: pixel_size + 4,
+                        ascent: pixel_size,
+                        descent: 4,
+                        max_width: pixel_size / 2,
+                        space_width: pixel_size / 2,
+                        average_width: pixel_size / 2,
+                    },
+                    None,
+                ),
+                glyph_code: Some(request.character.code()),
+            }))
+        }
+    }
+
     use crate::emacs_core::display_host::{FontResolveRequest, FrameFontRequest, FrameFontSize};
     use neovm_eval::emacs_core::eval::{DisplayHost, GuiFrameHostRequest, ResolvedFontMatch};
     use std::cell::{Cell, RefCell};
@@ -1703,7 +1749,7 @@ pub mod xfaces_upper_layer_helpers {
     }
     use crate::emacs_core::font::font_spec;
     use crate::emacs_core::window_cmds::ensure_selected_frame_id;
-    use crate::face::{FontSlant, FontWeight, FontWidth};
+    use crate::face::{FaceHeight, FontSlant, FontWeight, FontWidth};
     use crate::window::DisplayFrameManagerExt;
     use crate::window::FrameId;
     use neovm_eval::emacs_core::eval::Context;
