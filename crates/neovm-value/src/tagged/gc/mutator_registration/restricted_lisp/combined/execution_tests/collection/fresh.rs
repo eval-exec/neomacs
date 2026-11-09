@@ -336,12 +336,17 @@ struct Receipt {
     epoch: CollectionEpoch,
     cycle: CollectionCycle,
 }
-fn round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+fn round<K, W>(
     era: &ParallelHeapEra<'_, K>,
     cohort: Cohort,
     placement: &RefCell<Placement>,
     observation: Observation,
-) -> Receipt {
+    world_roots: W,
+) -> Receipt
+where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: WorldRoots<K>,
+{
     let mut stopped = contention::retry(
         Deadline::contention(),
         || era.stop(),
@@ -356,7 +361,7 @@ fn round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     };
     era.reconcile_functions(&mut stopped.symbols().unwrap())
         .unwrap();
-    let roots = ledger(era, &mut stopped);
+    let roots = ledger(era, &mut stopped, world_roots);
     let before = match observation {
         Observation::Current(graph) => era
             .with_stopped_heap_for_test(&stopped, |heap| graph.ages(heap))
@@ -364,8 +369,10 @@ fn round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
         Observation::Warm | Observation::Released(_) => ([Age::Missing; 3], Age::Missing),
     };
     let report = match cycle {
-        Cycle::Full => era.collect_stopped(&mut stopped).unwrap(),
-        Cycle::Minor => era.collect_stopped_minor(&mut stopped).unwrap(),
+        Cycle::Full => era.collect_stopped(&mut stopped, world_roots).unwrap(),
+        Cycle::Minor => era
+            .collect_stopped_minor(&mut stopped, world_roots)
+            .unwrap(),
     };
     let after = match observation {
         Observation::Current(graph) => vec![
@@ -505,7 +512,7 @@ fn sole_world(roots: &Ledger, graph: FreshGraph) {
         "fresh World root masked: {roots:?}"
     );
 }
-pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+pub(super) fn exercise<K, W>(
     era: &ParallelHeapEra<'_, K>,
     cohort: Cohort,
     scenario: Scenario,
@@ -513,8 +520,12 @@ pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     await_all: &impl Fn(),
     facts: &mpsc::Receiver<Construction>,
     placement: &RefCell<Placement>,
-) {
-    let warm = round(era, cohort, placement, Observation::Warm);
+    world_roots: W,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: WorldRoots<K>,
+{
+    let warm = round(era, cohort, placement, Observation::Warm, world_roots);
     dispatch(commands, Command::Repark, await_all);
     match scenario {
         Scenario::FreshNoop => return,
@@ -534,7 +545,13 @@ pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     }
     let global = prepare(commands, cohort, await_all, facts);
     dispatch(commands, Command::Advance, await_all);
-    let first = round(era, cohort, placement, Observation::Current(global));
+    let first = round(
+        era,
+        cohort,
+        placement,
+        Observation::Current(global),
+        world_roots,
+    );
     sole_world(&first.roots, global);
     assert!(first.epoch > warm.epoch && first.cycle > warm.cycle);
     dispatch(commands, Command::Repark, await_all);
@@ -556,7 +573,13 @@ pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     }
     let function = prepare(commands, cohort, await_all, facts);
     dispatch(commands, Command::Advance, await_all);
-    let second = round(era, cohort, placement, Observation::Current(function));
+    let second = round(
+        era,
+        cohort,
+        placement,
+        Observation::Current(function),
+        world_roots,
+    );
     sole_world(&second.roots, function);
     assert!(second.epoch > first.epoch && second.cycle > first.cycle);
     dispatch(commands, Command::Repark, await_all);
@@ -564,7 +587,13 @@ pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     for _ in [Phase::InstallSelected, Phase::Select, Phase::Replace] {
         dispatch(commands, Command::Advance, await_all);
     }
-    let third = round(era, cohort, placement, Observation::Current(selected));
+    let third = round(
+        era,
+        cohort,
+        placement,
+        Observation::Current(selected),
+        world_roots,
+    );
     assert!(third.epoch > second.epoch && third.cycle > second.cycle);
     assert!(
         third
@@ -605,6 +634,7 @@ pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
         cohort,
         placement,
         Observation::Released([global, function, selected]),
+        world_roots,
     );
     assert!(final_receipt.epoch > third.epoch && final_receipt.cycle > third.cycle);
     eprintln!(
@@ -612,35 +642,47 @@ pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     );
 }
 
-#[test]
-fn p3sym_c6_fresh_two_plain() {
+pub(crate) fn p3sym_c6_fresh_two_plain<H: CombinedParts>(host: &mut H) {
     cohort(
+        host,
         PlainSymbolBacking::Unprojected,
         Cohort::Two,
         Scenario::Fresh,
     )
     .unwrap();
 }
-#[test]
-fn p3sym_c6_fresh_two_projected() {
-    cohort(PlainSymbolBacking::Projected, Cohort::Two, Scenario::Fresh).unwrap();
-}
-#[test]
-fn p3sym_c6_fresh_four_plain() {
+pub(crate) fn p3sym_c6_fresh_two_projected<H: CombinedParts>(host: &mut H) {
     cohort(
+        host,
+        PlainSymbolBacking::Projected,
+        Cohort::Two,
+        Scenario::Fresh,
+    )
+    .unwrap();
+}
+pub(crate) fn p3sym_c6_fresh_four_plain<H: CombinedParts>(host: &mut H) {
+    cohort(
+        host,
         PlainSymbolBacking::Unprojected,
         Cohort::Four,
         Scenario::Fresh,
     )
     .unwrap();
 }
-#[test]
-fn p3sym_c6_fresh_four_projected() {
-    cohort(PlainSymbolBacking::Projected, Cohort::Four, Scenario::Fresh).unwrap();
+pub(crate) fn p3sym_c6_fresh_four_projected<H: CombinedParts>(host: &mut H) {
+    cohort(
+        host,
+        PlainSymbolBacking::Projected,
+        Cohort::Four,
+        Scenario::Fresh,
+    )
+    .unwrap();
 }
-#[test]
-fn p3sym_c6_fresh_unwind_returns_catalog_and_releases_banks() {
+pub(crate) fn p3sym_c6_fresh_unwind_returns_catalog_and_releases_banks<H: CombinedParts>(
+    host: &mut H,
+) {
     let error = cohort(
+        host,
         PlainSymbolBacking::Projected,
         Cohort::Two,
         Scenario::FreshUnwind,
@@ -652,9 +694,11 @@ fn p3sym_c6_fresh_unwind_returns_catalog_and_releases_banks() {
     );
 }
 
-#[test]
-fn p3sym_c6_fresh_noop_returns_catalog_and_releases_banks() {
+pub(crate) fn p3sym_c6_fresh_noop_returns_catalog_and_releases_banks<H: CombinedParts>(
+    host: &mut H,
+) {
     cohort(
+        host,
         PlainSymbolBacking::Projected,
         Cohort::Two,
         Scenario::FreshNoop,

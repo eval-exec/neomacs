@@ -1,4 +1,4 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "test-support"))]
 //! Owner-local straight-line execution through the sealed kernels only.
 use super::*;
 use crate::tagged::gc::ProofEra as ParallelHeapEra;

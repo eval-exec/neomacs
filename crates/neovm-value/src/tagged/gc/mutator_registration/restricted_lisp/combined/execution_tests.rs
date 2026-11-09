@@ -1,8 +1,8 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "test-support"))]
 //! Actual single-owner mixed tapes. Source holders remain live in this item;
 //! no cross-owner, sole-root, sweep or minor receipt is inferred from them.
 //! The collection child supplies independent cross-owner full-GC receipts.
-mod collection;
+pub(crate) mod collection;
 
 use super::executor::{Error, Frame, ProgramIndex, ReadyStep, Session};
 use super::*;
@@ -165,7 +165,8 @@ fn prefix() -> Vec<CombinedInstruction> {
     ]
 }
 
-fn fixture(
+fn fixture<H: CombinedParts>(
+    host: &mut H,
     backing: PlainSymbolBacking,
     graph: Graph,
     reservation: RootReservation,
@@ -173,7 +174,7 @@ fn fixture(
     body: impl for<'era> FnOnce(&Session, &mut Worker<'era>, Facts, &[SymbolHandle]),
 ) -> std::thread::Result<()> {
     let setup = RefCell::new(SetupState::Empty);
-    Context::with_test_symbol_functions_init_era(
+    host.symbol_functions_init(
         backing,
         |obarray, ids| {
             // Serial fixture-only nonce: no previous fixture can supply this
@@ -269,7 +270,11 @@ pub(super) enum Transfer {
     Function,
     Intern,
 }
-pub(super) fn transfer_case(backing: PlainSymbolBacking, transfer: Transfer) {
+pub(super) fn transfer_case<H: CombinedParts>(
+    host: &mut H,
+    backing: PlainSymbolBacking,
+    transfer: Transfer,
+) {
     let mut instructions = prefix();
     match transfer {
         Transfer::Function => {}
@@ -285,6 +290,7 @@ pub(super) fn transfer_case(backing: PlainSymbolBacking, transfer: Transfer) {
         }
     }
     fixture(
+        host,
         backing,
         Graph::Name,
         RootReservation::Exact,
@@ -336,9 +342,11 @@ pub(super) fn transfer_case(backing: PlainSymbolBacking, transfer: Transfer) {
     .unwrap();
 }
 
-#[test]
-fn p3sym_c6_mixed_noop_control_finishes_with_a_real_frame() {
+pub(crate) fn p3sym_c6_mixed_noop_control_finishes_with_a_real_frame<H: CombinedParts>(
+    host: &mut H,
+) {
     fixture(
+        host,
         PlainSymbolBacking::Unprojected,
         Graph::Name,
         RootReservation::Exact,
@@ -350,9 +358,11 @@ fn p3sym_c6_mixed_noop_control_finishes_with_a_real_frame() {
     )
     .unwrap();
 }
-#[test]
-fn p3sym_c6_mixed_unwind_releases_reader_and_selected_activation() {
+pub(crate) fn p3sym_c6_mixed_unwind_releases_reader_and_selected_activation<H: CombinedParts>(
+    host: &mut H,
+) {
     let outcome = fixture(
+        host,
         PlainSymbolBacking::Projected,
         Graph::Name,
         RootReservation::Exact,
@@ -372,8 +382,9 @@ fn p3sym_c6_mixed_unwind_releases_reader_and_selected_activation() {
         Some(&"C6 controlled mixed unwind")
     );
 }
-#[test]
-fn p3sym_c6_mixed_selected_old_name_survives_scalar_replacement() {
+pub(crate) fn p3sym_c6_mixed_selected_old_name_survives_scalar_replacement<H: CombinedParts>(
+    host: &mut H,
+) {
     let mut instructions = prefix();
     instructions.truncate(4); // selection and its first bounded step only
     instructions.extend([
@@ -411,6 +422,7 @@ fn p3sym_c6_mixed_selected_old_name_survives_scalar_replacement() {
         CombinedInstruction::Safepoint,
     ]);
     fixture(
+        host,
         PlainSymbolBacking::Projected,
         Graph::Name,
         RootReservation::Exact,
@@ -438,8 +450,11 @@ fn p3sym_c6_mixed_selected_old_name_survives_scalar_replacement() {
     )
     .unwrap();
 }
-#[test]
-fn p3sym_c6_mixed_intern_and_soft_allow_the_same_source_destination_home() {
+pub(crate) fn p3sym_c6_mixed_intern_and_soft_allow_the_same_source_destination_home<
+    H: CombinedParts,
+>(
+    host: &mut H,
+) {
     let mut instructions = prefix();
     instructions.extend([
         CombinedInstruction::InitialIntern {
@@ -459,6 +474,7 @@ fn p3sym_c6_mixed_intern_and_soft_allow_the_same_source_destination_home() {
         },
     ]);
     fixture(
+        host,
         PlainSymbolBacking::Unprojected,
         Graph::Name,
         RootReservation::Exact,
@@ -476,14 +492,16 @@ fn p3sym_c6_mixed_intern_and_soft_allow_the_same_source_destination_home() {
     )
     .unwrap();
 }
-#[test]
-fn p3sym_c6_mixed_keyword_refusal_preserves_pc_and_destination() {
+pub(crate) fn p3sym_c6_mixed_keyword_refusal_preserves_pc_and_destination<H: CombinedParts>(
+    host: &mut H,
+) {
     let mut instructions = prefix();
     instructions.push(CombinedInstruction::InitialIntern {
         name: home(1),
         destination: home(2),
     });
     fixture(
+        host,
         PlainSymbolBacking::Projected,
         Graph::Keyword,
         RootReservation::Exact,
@@ -511,9 +529,11 @@ fn p3sym_c6_mixed_keyword_refusal_preserves_pc_and_destination() {
     )
     .unwrap();
 }
-#[test]
-fn p3sym_c6_mixed_seed_capacity_and_repeated_seed_preserve_the_bank() {
+pub(crate) fn p3sym_c6_mixed_seed_capacity_and_repeated_seed_preserve_the_bank<H: CombinedParts>(
+    host: &mut H,
+) {
     fixture(
+        host,
         PlainSymbolBacking::Unprojected,
         Graph::Name,
         RootReservation::Short,
@@ -539,6 +559,7 @@ fn p3sym_c6_mixed_seed_capacity_and_repeated_seed_preserve_the_bank() {
     )
     .unwrap();
     fixture(
+        host,
         PlainSymbolBacking::Projected,
         Graph::Name,
         RootReservation::Exact,
@@ -574,9 +595,11 @@ fn p3sym_c6_mixed_seed_capacity_and_repeated_seed_preserve_the_bank() {
     )
     .unwrap();
 }
-#[test]
-fn p3sym_c6_mixed_expired_pending_instruction_never_restarts() {
+pub(crate) fn p3sym_c6_mixed_expired_pending_instruction_never_restarts<H: CombinedParts>(
+    host: &mut H,
+) {
     fixture(
+        host,
         PlainSymbolBacking::Unprojected,
         Graph::Name,
         RootReservation::Exact,
@@ -605,8 +628,9 @@ fn p3sym_c6_mixed_expired_pending_instruction_never_restarts() {
     )
     .unwrap();
 }
-#[test]
-fn p3sym_c6_mixed_program_budget_is_independent_of_contention() {
+pub(crate) fn p3sym_c6_mixed_program_budget_is_independent_of_contention<H: CombinedParts>(
+    host: &mut H,
+) {
     let program = CombinedTape::admit(
         prefix(),
         capacity(),
@@ -614,6 +638,7 @@ fn p3sym_c6_mixed_program_budget_is_independent_of_contention() {
     )
     .unwrap();
     fixture(
+        host,
         PlainSymbolBacking::Projected,
         Graph::Name,
         RootReservation::Exact,
@@ -629,14 +654,18 @@ fn p3sym_c6_mixed_program_budget_is_independent_of_contention() {
     .unwrap();
 }
 
-#[test]
-fn p3sym_c6_mixed_retired_session_and_stale_frame_refuse_before_access() {
+pub(crate) fn p3sym_c6_mixed_retired_session_and_stale_frame_refuse_before_access<
+    H: CombinedParts,
+>(
+    host: &mut H,
+) {
     enum Retained {
         Empty,
         Ready(Session),
     }
     let retained = RefCell::new(Retained::Empty);
     fixture(
+        host,
         PlainSymbolBacking::Unprojected,
         Graph::Name,
         RootReservation::Exact,
@@ -651,6 +680,7 @@ fn p3sym_c6_mixed_retired_session_and_stale_frame_refuse_before_access() {
         Retained::Ready(session) => session,
     };
     fixture(
+        host,
         PlainSymbolBacking::Projected,
         Graph::Name,
         RootReservation::Exact,
@@ -696,9 +726,12 @@ fn p3sym_c6_mixed_retired_session_and_stale_frame_refuse_before_access() {
     .unwrap();
 }
 
-#[test]
-fn p3sym_c6_mixed_admission_checks_every_program_before_preparing_or_registering() {
-    Context::with_test_symbol_functions_era(PlainSymbolBacking::Unprojected, |era, ids| {
+pub(crate) fn p3sym_c6_mixed_admission_checks_every_program_before_preparing_or_registering<
+    H: CombinedParts,
+>(
+    host: &mut H,
+) {
+    host.symbol_functions(PlainSymbolBacking::Unprojected, |era, ids| {
         let handles: Vec<_> = ids
             .into_iter()
             .map(|id| era.admit_plain_symbol(id).unwrap())
@@ -742,6 +775,6 @@ fn p3sym_c6_mixed_admission_checks_every_program_before_preparing_or_registering
     });
 }
 
-pub(super) fn minor_case(backing: PlainSymbolBacking) {
-    collection::minor_case(backing);
+pub(super) fn minor_case<H: CombinedParts>(host: &mut H, backing: PlainSymbolBacking) {
+    collection::minor_case(host, backing);
 }

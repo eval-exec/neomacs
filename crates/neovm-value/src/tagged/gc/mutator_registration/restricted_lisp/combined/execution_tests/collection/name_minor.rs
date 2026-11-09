@@ -122,14 +122,19 @@ struct Receipt {
     epoch: CollectionEpoch,
     cycle: CollectionCycle,
 }
-fn round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+fn round<K, W>(
     era: &ParallelHeapEra<'_, K>,
     graph: GraphWords,
     names: &Setup,
     cohort: Cohort,
     pass: Pass,
     census: Census,
-) -> Receipt {
+    world_roots: W,
+) -> Receipt
+where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: WorldRoots<K>,
+{
     let (candidate, spelling) = match names {
         Setup::Unused => panic!("name pair not prepared"),
         Setup::Pair {
@@ -145,7 +150,7 @@ fn round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     .unwrap();
     era.reconcile_functions(&mut stopped.symbols().unwrap())
         .unwrap();
-    let roots = ledger(era, &mut stopped);
+    let roots = ledger(era, &mut stopped, world_roots);
     let (cycle, before) = era
         .with_stopped_heap_for_test(&stopped, |heap| {
             let cycle = match heap.tagged_heap_generational_enabled() {
@@ -156,13 +161,15 @@ fn round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
         })
         .unwrap();
     let report = match cycle {
-        Cycle::Minor => era.collect_stopped_minor(&mut stopped).unwrap(),
-        Cycle::Full => era.collect_stopped(&mut stopped).unwrap(),
+        Cycle::Minor => era
+            .collect_stopped_minor(&mut stopped, world_roots)
+            .unwrap(),
+        Cycle::Full => era.collect_stopped(&mut stopped, world_roots).unwrap(),
     };
     let after = era
         .with_stopped_heap_for_test(&stopped, |heap| snapshot(heap, graph, candidate))
         .unwrap();
-    let response = ledger(era, &mut stopped);
+    let response = ledger(era, &mut stopped, world_roots);
     stopped.complete().unwrap();
     assert!(
         response.young_owners.is_empty()
@@ -279,7 +286,7 @@ fn advance(commands: &Commands, await_all: &impl Fn()) {
     }
     await_all();
 }
-pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+pub(super) fn exercise<K, W>(
     era: &ParallelHeapEra<'_, K>,
     graph: GraphWords,
     names: &Setup,
@@ -288,7 +295,11 @@ pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     commands: &Commands,
     await_all: &impl Fn(),
     facts: &mpsc::Receiver<Construction>,
-) {
+    world_roots: W,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: WorldRoots<K>,
+{
     let census = match scenario {
         Scenario::NameMinorNoop => Census::Baseline,
         Scenario::NameMinor | Scenario::NameMinorUnwind => {
@@ -330,7 +341,15 @@ pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
         | Scenario::RelogNoop
         | Scenario::RelogUnwind => panic!("wrong name-minor scenario"),
     };
-    let first = round(era, graph, names, cohort, Pass::FirstYoung, census);
+    let first = round(
+        era,
+        graph,
+        names,
+        cohort,
+        Pass::FirstYoung,
+        census,
+        world_roots,
+    );
     for tx in &commands.0 {
         tx.send(Command::Repark).unwrap();
     }
@@ -351,40 +370,48 @@ pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
         | Scenario::RelogNoop
         | Scenario::RelogUnwind => panic!("wrong name-minor scenario"),
     }
-    let second = round(era, graph, names, cohort, Pass::SecondRepeat, census);
+    let second = round(
+        era,
+        graph,
+        names,
+        cohort,
+        Pass::SecondRepeat,
+        census,
+        world_roots,
+    );
     assert!(second.epoch > first.epoch && second.cycle > first.cycle);
 }
 
-#[test]
-fn p3sym_c6_name_minor_four_plain() {
+pub(crate) fn p3sym_c6_name_minor_four_plain<H: CombinedParts>(host: &mut H) {
     cohort(
+        host,
         PlainSymbolBacking::Unprojected,
         Cohort::Four,
         Scenario::NameMinor,
     )
     .unwrap();
 }
-#[test]
-fn p3sym_c6_name_minor_four_void() {
+pub(crate) fn p3sym_c6_name_minor_four_void<H: CombinedParts>(host: &mut H) {
     cohort(
+        host,
         PlainSymbolBacking::VoidProjection,
         Cohort::Four,
         Scenario::NameMinor,
     )
     .unwrap();
 }
-#[test]
-fn p3sym_c6_name_minor_noop_releases_banks() {
+pub(crate) fn p3sym_c6_name_minor_noop_releases_banks<H: CombinedParts>(host: &mut H) {
     cohort(
+        host,
         PlainSymbolBacking::VoidProjection,
         Cohort::Two,
         Scenario::NameMinorNoop,
     )
     .unwrap();
 }
-#[test]
-fn p3sym_c6_name_minor_unwind_releases_banks() {
+pub(crate) fn p3sym_c6_name_minor_unwind_releases_banks<H: CombinedParts>(host: &mut H) {
     let error = cohort(
+        host,
         PlainSymbolBacking::VoidProjection,
         Cohort::Two,
         Scenario::NameMinorUnwind,

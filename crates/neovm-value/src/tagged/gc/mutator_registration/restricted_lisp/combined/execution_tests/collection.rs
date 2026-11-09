@@ -1,9 +1,9 @@
 //! Real independent owners, exact root families, and completed full jobs.
 //! Counterfactual omissions inspect copied ledgers, never a damaged live heap.
-mod fresh;
+pub(crate) mod fresh;
 mod minor_adapter;
-mod name_minor;
-mod relog;
+pub(crate) mod name_minor;
+pub(crate) mod relog;
 
 use super::*;
 use crate::tagged::gc::ProofEra as ParallelHeapEra;
@@ -136,18 +136,18 @@ impl Ledger {
             .chain(self.owners.iter().flat_map(|(_, roots)| roots))
     }
 }
-fn ledger<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+fn ledger<K, W>(
     era: &ParallelHeapEra<'_, K>,
     stopped: &mut AllStopped<'_>,
-) -> Ledger {
+    world_roots: W,
+) -> Ledger
+where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: WorldRoots<K>,
+{
     let mut result = Ledger::default();
     let mut words = Vec::new();
-    era.core
-        .keeper
-        .as_ref()
-        .unwrap()
-        .collect_parallel_world_roots(stopped, &mut words)
-        .unwrap();
+    world_roots(era.core.keeper.as_ref().unwrap(), stopped, &mut words).unwrap();
     result.world = words
         .drain(..)
         .map(|value| WordIdentity(value.bits()))
@@ -244,11 +244,16 @@ struct CollectionReceipt {
     epoch: CollectionEpoch,
     cycle: CollectionCycle,
 }
-fn round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+fn round<K, W>(
     era: &ParallelHeapEra<'_, K>,
     graph: GraphWords,
     cohort: Cohort,
-) -> CollectionReceipt {
+    world_roots: W,
+) -> CollectionReceipt
+where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: WorldRoots<K>,
+{
     let mut stopped = contention::retry(
         Deadline::contention(),
         || era.stop(),
@@ -269,12 +274,15 @@ fn round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
         .collect();
     era.reconcile_functions(&mut stopped.symbols().unwrap())
         .unwrap();
-    let roots = ledger(era, &mut stopped);
-    let report = era.collect_stopped(&mut stopped).unwrap();
+    let roots = ledger(era, &mut stopped, world_roots);
+    let report = era.collect_stopped(&mut stopped, world_roots).unwrap();
     let live = era
         .with_stopped_heap_for_test(&stopped, |heap| {
             graph.0.map(|word| {
-                match heap.owns_heap_value_for_test(TaggedValue::from_bits(word.0)) {
+                match heap.owns_heap_value_for_test(unsafe {
+                    // SAFETY: these words were read from this stopped heap's owner slots.
+                    TaggedValue::from_bits(word.0)
+                }) {
                     true => Retention::Live,
                     false => Retention::Reclaimed,
                 }
@@ -439,11 +447,13 @@ impl Drop for Commands {
         }
     }
 }
-fn cohort(
+fn cohort<H: CombinedParts>(
+    host: &mut H,
     backing: PlainSymbolBacking,
     cohort: Cohort,
     scenario: Scenario,
 ) -> std::thread::Result<()> {
+    let world_roots = host.roots();
     let setup = RefCell::new(GraphSetup::Empty);
     let nonce = crate::intern::intern_uninterned("c6-cohort-nonce");
     let spelling = format!("p3sym-c6-cohort-{}", nonce.0);
@@ -504,7 +514,7 @@ fn cohort(
             names,
         );
     };
-    let execute = |era, ids: Vec<crate::intern::SymId>| {
+    let execute = |era: ParallelHeapEra<'_, H::Keeper>, ids: Vec<crate::intern::SymId>| {
         let (graph, lambda, names) =
             match std::mem::replace(&mut *setup.borrow_mut(), GraphSetup::Empty) {
                 GraphSetup::Empty => panic!("missing serial cohort graph"),
@@ -700,24 +710,53 @@ fn cohort(
                     Scenario::Transfer | Scenario::Noop => {}
                     Scenario::Fresh | Scenario::FreshUnwind | Scenario::FreshNoop => {
                         fresh::exercise(
-                            &era, cohort, scenario, &commands, &await_all, &fresh_rx, &placement,
+                            &era,
+                            cohort,
+                            scenario,
+                            &commands,
+                            &await_all,
+                            &fresh_rx,
+                            &placement,
+                            world_roots,
                         );
                         return;
                     }
                     Scenario::Relog | Scenario::RelogNoop | Scenario::RelogUnwind => {
                         relog::exercise(
-                            &era, cohort, scenario, &commands, &await_all, &fresh_rx, &placement,
+                            &era,
+                            cohort,
+                            scenario,
+                            &commands,
+                            &await_all,
+                            &fresh_rx,
+                            &placement,
+                            world_roots,
                         );
                         return;
                     }
                     Scenario::NameMinor | Scenario::NameMinorNoop | Scenario::NameMinorUnwind => {
                         name_minor::exercise(
-                            &era, graph, &names, cohort, scenario, &commands, &await_all, &fresh_rx,
+                            &era,
+                            graph,
+                            &names,
+                            cohort,
+                            scenario,
+                            &commands,
+                            &await_all,
+                            &fresh_rx,
+                            world_roots,
                         );
                         return;
                     }
                     Scenario::MinorAdapter => {
-                        minor_adapter::exercise(&era, graph, cohort, &commands, &await_all);
+                        minor_adapter::exercise(
+                            &era,
+                            graph,
+                            cohort,
+                            &commands,
+                            &await_all,
+                            world_roots,
+                        );
                         return;
                     }
                 }
@@ -751,14 +790,14 @@ fn cohort(
                         Phase::Function | Phase::Replaced | Phase::Interned => {
                             // First job drains birth/history work. The second is
                             // the decisive live-census/omission witness.
-                            let first = round(&era, graph, cohort);
+                            let first = round(&era, graph, cohort, world_roots);
                             // Each owner applies the first response and
                             // republishes before the decisive next job.
                             for tx in &commands.0 {
                                 tx.send(Command::Repark).unwrap();
                             }
                             await_all();
-                            let second = round(&era, graph, cohort);
+                            let second = round(&era, graph, cohort, world_roots);
                             assert!(second.epoch > first.epoch);
                             assert!(second.cycle > first.cycle);
                             let CollectionReceipt { roots, live, .. } = second;
@@ -871,7 +910,7 @@ fn cohort(
             | Scenario::Relog
             | Scenario::RelogNoop
             | Scenario::RelogUnwind => {
-                era.collect_stopped(&mut stopped).unwrap();
+                era.collect_stopped(&mut stopped, world_roots).unwrap();
             }
             Scenario::Transfer
             | Scenario::Noop
@@ -903,43 +942,43 @@ fn cohort(
     };
     match layout {
         name_minor::Layout::SharedTarget => {
-            Context::with_test_symbol_functions_init_era(backing, initialize, execute)
+            host.symbol_functions_init(backing, initialize, execute)
         }
         name_minor::Layout::SeparateTarget => {
-            Context::with_test_symbol_name_inputs_init_era(backing, &spelling, initialize, execute)
+            host.symbol_name_inputs_init(backing, &spelling, initialize, execute)
         }
     }
 }
-#[test]
-fn p3sym_c6_cohort_two_plain_full_root_transfers() {
+pub(crate) fn p3sym_c6_cohort_two_plain_full_root_transfers<H: CombinedParts>(host: &mut H) {
     cohort(
+        host,
         PlainSymbolBacking::Unprojected,
         Cohort::Two,
         Scenario::Transfer,
     )
     .unwrap();
 }
-#[test]
-fn p3sym_c6_cohort_two_projected_full_root_transfers() {
+pub(crate) fn p3sym_c6_cohort_two_projected_full_root_transfers<H: CombinedParts>(host: &mut H) {
     cohort(
+        host,
         PlainSymbolBacking::Projected,
         Cohort::Two,
         Scenario::Transfer,
     )
     .unwrap();
 }
-#[test]
-fn p3sym_c6_cohort_four_plain_full_root_transfers() {
+pub(crate) fn p3sym_c6_cohort_four_plain_full_root_transfers<H: CombinedParts>(host: &mut H) {
     cohort(
+        host,
         PlainSymbolBacking::Unprojected,
         Cohort::Four,
         Scenario::Transfer,
     )
     .unwrap();
 }
-#[test]
-fn p3sym_c6_cohort_four_projected_full_root_transfers() {
+pub(crate) fn p3sym_c6_cohort_four_projected_full_root_transfers<H: CombinedParts>(host: &mut H) {
     cohort(
+        host,
         PlainSymbolBacking::Projected,
         Cohort::Four,
         Scenario::Transfer,
@@ -947,49 +986,59 @@ fn p3sym_c6_cohort_four_projected_full_root_transfers() {
     .unwrap();
 }
 
-#[test]
-fn p3sym_c6_cohort_noop_control_releases_every_owner() {
-    cohort(PlainSymbolBacking::Projected, Cohort::Two, Scenario::Noop).unwrap();
+pub(crate) fn p3sym_c6_cohort_noop_control_releases_every_owner<H: CombinedParts>(host: &mut H) {
+    cohort(
+        host,
+        PlainSymbolBacking::Projected,
+        Cohort::Two,
+        Scenario::Noop,
+    )
+    .unwrap();
 }
-#[test]
-fn p3sym_c6_cohort_unwind_releases_every_owner() {
-    let error = cohort(PlainSymbolBacking::Projected, Cohort::Two, Scenario::Unwind).unwrap_err();
+pub(crate) fn p3sym_c6_cohort_unwind_releases_every_owner<H: CombinedParts>(host: &mut H) {
+    let error = cohort(
+        host,
+        PlainSymbolBacking::Projected,
+        Cohort::Two,
+        Scenario::Unwind,
+    )
+    .unwrap_err();
     assert_eq!(
         error.downcast_ref::<&str>(),
         Some(&"controlled cohort unwind after native publication")
     );
 }
 
-#[test]
-fn p3sym_c6_minor_adapter_two_plain() {
+pub(crate) fn p3sym_c6_minor_adapter_two_plain<H: CombinedParts>(host: &mut H) {
     cohort(
+        host,
         PlainSymbolBacking::Unprojected,
         Cohort::Two,
         Scenario::MinorAdapter,
     )
     .unwrap();
 }
-#[test]
-fn p3sym_c6_minor_adapter_two_projected() {
+pub(crate) fn p3sym_c6_minor_adapter_two_projected<H: CombinedParts>(host: &mut H) {
     cohort(
+        host,
         PlainSymbolBacking::Projected,
         Cohort::Two,
         Scenario::MinorAdapter,
     )
     .unwrap();
 }
-#[test]
-fn p3sym_c6_minor_adapter_four_plain() {
+pub(crate) fn p3sym_c6_minor_adapter_four_plain<H: CombinedParts>(host: &mut H) {
     cohort(
+        host,
         PlainSymbolBacking::Unprojected,
         Cohort::Four,
         Scenario::MinorAdapter,
     )
     .unwrap();
 }
-#[test]
-fn p3sym_c6_minor_adapter_four_projected() {
+pub(crate) fn p3sym_c6_minor_adapter_four_projected<H: CombinedParts>(host: &mut H) {
     cohort(
+        host,
         PlainSymbolBacking::Projected,
         Cohort::Four,
         Scenario::MinorAdapter,
@@ -998,6 +1047,6 @@ fn p3sym_c6_minor_adapter_four_projected() {
 }
 
 // The two original missing-minor rows now drive the real combined collection.
-pub(super) fn minor_case(backing: PlainSymbolBacking) {
-    cohort(backing, Cohort::Two, Scenario::NameMinor).unwrap();
+pub(super) fn minor_case<H: CombinedParts>(host: &mut H, backing: PlainSymbolBacking) {
+    cohort(host, backing, Cohort::Two, Scenario::NameMinor).unwrap();
 }

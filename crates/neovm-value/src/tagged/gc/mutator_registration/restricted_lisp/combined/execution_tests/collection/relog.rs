@@ -257,12 +257,17 @@ struct Receipt {
     epoch: CollectionEpoch,
     cycle: CollectionCycle,
 }
-fn round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+fn round<K, W>(
     era: &ParallelHeapEra<'_, K>,
     cohort: Cohort,
     placement: &RefCell<Placement>,
     observation: Observation,
-) -> Receipt {
+    world_roots: W,
+) -> Receipt
+where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: WorldRoots<K>,
+{
     let mut stopped = contention::retry(
         Deadline::contention(),
         || era.stop(),
@@ -278,18 +283,20 @@ fn round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     };
     era.reconcile_functions(&mut stopped.symbols().unwrap())
         .unwrap();
-    let roots = ledger(era, &mut stopped);
+    let roots = ledger(era, &mut stopped, world_roots);
     let before = era
         .with_stopped_heap_for_test(&stopped, |heap| snapshot(heap, observation))
         .unwrap();
     let report = match cycle {
-        Cycle::Minor => era.collect_stopped_minor(&mut stopped).unwrap(),
-        Cycle::Full => era.collect_stopped(&mut stopped).unwrap(),
+        Cycle::Minor => era
+            .collect_stopped_minor(&mut stopped, world_roots)
+            .unwrap(),
+        Cycle::Full => era.collect_stopped(&mut stopped, world_roots).unwrap(),
     };
     let after = era
         .with_stopped_heap_for_test(&stopped, |heap| snapshot(heap, observation))
         .unwrap();
-    let response = ledger(era, &mut stopped);
+    let response = ledger(era, &mut stopped, world_roots);
     placement.resume(era, &stopped);
     stopped.complete().unwrap();
     let owner_age = match regular {
@@ -434,7 +441,7 @@ fn repark(commands: &Commands, await_all: &impl Fn()) {
     }
     await_all();
 }
-pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+pub(super) fn exercise<K, W>(
     era: &ParallelHeapEra<'_, K>,
     cohort: Cohort,
     scenario: Scenario,
@@ -442,12 +449,22 @@ pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     await_all: &impl Fn(),
     facts: &mpsc::Receiver<Construction>,
     placement: &RefCell<Placement>,
-) {
+    world_roots: W,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: WorldRoots<K>,
+{
     let owner = match command(commands, cohort, Command::InitializeRelog, await_all, facts) {
         Facts::Owner(owner) => owner,
         Facts::Replaced(_) => panic!("wrong private-owner initialization receipt"),
     };
-    let warm = round(era, cohort, placement, Observation::Warm(owner));
+    let warm = round(
+        era,
+        cohort,
+        placement,
+        Observation::Warm(owner),
+        world_roots,
+    );
     repark(commands, await_all);
     match scenario {
         Scenario::RelogNoop => return,
@@ -467,7 +484,13 @@ pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
         Facts::Replaced(facts) => facts,
         Facts::Owner(_) => panic!("wrong first replacement receipt"),
     };
-    let first_round = round(era, cohort, placement, Observation::Replacement(first));
+    let first_round = round(
+        era,
+        cohort,
+        placement,
+        Observation::Replacement(first),
+        world_roots,
+    );
     assert!(first_round.epoch > warm.epoch && first_round.cycle > warm.cycle);
     repark(commands, await_all);
     match scenario {
@@ -494,7 +517,13 @@ pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
         first.kept, second.kept,
         "a new child, not an old-child repetition"
     );
-    let second_round = round(era, cohort, placement, Observation::Replacement(second));
+    let second_round = round(
+        era,
+        cohort,
+        placement,
+        Observation::Replacement(second),
+        world_roots,
+    );
     assert!(second_round.epoch > first_round.epoch && second_round.cycle > first_round.cycle);
     repark(commands, await_all);
     let final_round = round(
@@ -505,6 +534,7 @@ pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
             previous: first.kept,
             current: second,
         },
+        world_roots,
     );
     assert!(final_round.epoch > second_round.epoch && final_round.cycle > second_round.cycle);
     match placement.borrow().cycle() {
@@ -517,44 +547,58 @@ pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     }
 }
 
-#[test]
-fn p3sym_c6_relog_two_plain() {
+pub(crate) fn p3sym_c6_relog_two_plain<H: CombinedParts>(host: &mut H) {
     cohort(
+        host,
         PlainSymbolBacking::Unprojected,
         Cohort::Two,
         Scenario::Relog,
     )
     .unwrap();
 }
-#[test]
-fn p3sym_c6_relog_two_projected() {
-    cohort(PlainSymbolBacking::Projected, Cohort::Two, Scenario::Relog).unwrap();
-}
-#[test]
-fn p3sym_c6_relog_four_plain() {
+pub(crate) fn p3sym_c6_relog_two_projected<H: CombinedParts>(host: &mut H) {
     cohort(
+        host,
+        PlainSymbolBacking::Projected,
+        Cohort::Two,
+        Scenario::Relog,
+    )
+    .unwrap();
+}
+pub(crate) fn p3sym_c6_relog_four_plain<H: CombinedParts>(host: &mut H) {
+    cohort(
+        host,
         PlainSymbolBacking::Unprojected,
         Cohort::Four,
         Scenario::Relog,
     )
     .unwrap();
 }
-#[test]
-fn p3sym_c6_relog_four_projected() {
-    cohort(PlainSymbolBacking::Projected, Cohort::Four, Scenario::Relog).unwrap();
-}
-#[test]
-fn p3sym_c6_relog_noop_returns_catalog_and_releases_banks() {
+pub(crate) fn p3sym_c6_relog_four_projected<H: CombinedParts>(host: &mut H) {
     cohort(
+        host,
+        PlainSymbolBacking::Projected,
+        Cohort::Four,
+        Scenario::Relog,
+    )
+    .unwrap();
+}
+pub(crate) fn p3sym_c6_relog_noop_returns_catalog_and_releases_banks<H: CombinedParts>(
+    host: &mut H,
+) {
+    cohort(
+        host,
         PlainSymbolBacking::Projected,
         Cohort::Two,
         Scenario::RelogNoop,
     )
     .unwrap();
 }
-#[test]
-fn p3sym_c6_relog_unwind_returns_catalog_and_releases_banks() {
+pub(crate) fn p3sym_c6_relog_unwind_returns_catalog_and_releases_banks<H: CombinedParts>(
+    host: &mut H,
+) {
     let error = cohort(
+        host,
         PlainSymbolBacking::Projected,
         Cohort::Two,
         Scenario::RelogUnwind,

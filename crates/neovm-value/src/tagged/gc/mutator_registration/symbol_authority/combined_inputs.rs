@@ -4,6 +4,7 @@ use super::*;
 use crate::tagged::value::TaggedValue as Value;
 use std::num::NonZeroU32;
 
+#[cfg(test)]
 mod tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

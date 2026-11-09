@@ -101,13 +101,17 @@ fn rebind<K: crate::tagged::gc::mutator_registration::EraKeeper>(
         registration,
     }
 }
-pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+pub(super) fn exercise<K, W>(
     era: &ParallelHeapEra<'_, K>,
     graph: GraphWords,
     cohort: Cohort,
     commands: &Commands,
     await_all: &impl Fn(),
-) {
+    world_roots: W,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: WorldRoots<K>,
+{
     let mut receipts = Vec::new();
     for pass in [Pass::First, Pass::Second] {
         let mut stopped = contention::retry(
@@ -125,7 +129,7 @@ pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
             Pass::First => rebind(era, &stopped),
             Pass::Second => YoungCredit::Unchanged,
         };
-        let report = era.collect_stopped_minor(&mut stopped);
+        let report = era.collect_stopped_minor(&mut stopped, world_roots);
         match &report {
             Ok(_) => {}
             Err(MinorCollectionError::GenerationalDisabled) => {

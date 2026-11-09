@@ -1,5 +1,6 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "test-support"))]
 use super::*;
+use crate::tagged::gc::mutator_registration::EraKeeper;
 use crate::tagged::gc::{GlobalError, PlainSymbolBacking};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -90,13 +91,14 @@ fn stopped_expected(request: StoppedRequest) -> Result<(), PreparationError> {
 
 /// Running and stopped no-op/census checks finish the same actual fixture.
 /// The combined collector cases live in execution_tests, without stubs.
-fn fixture(
+fn fixture<H: CombinedParts>(
+    host: &mut H,
     backing: PlainSymbolBacking,
     running: RunningRequest,
     stopped_request: StoppedRequest,
     body: FixtureBody,
 ) -> std::thread::Result<Result<(), PreparationError>> {
-    Context::with_test_symbol_backing_era(backing, |era, id| {
+    host.symbol_backing(backing, |era, id| {
         let symbol = era.admit_plain_symbol(id).unwrap();
         let mut stopped = era.stop().unwrap();
         let seed = era
@@ -215,38 +217,38 @@ fn fixture(
     })
 }
 
-#[test]
-fn p3sym_c6_global_function_plain() {
+pub(crate) fn p3sym_c6_global_function_plain<H: CombinedParts>(host: &mut H) {
     super::execution_tests::transfer_case(
+        host,
         PlainSymbolBacking::Unprojected,
         super::execution_tests::Transfer::Function,
     );
 }
-#[test]
-fn p3sym_c6_global_function_projected() {
+pub(crate) fn p3sym_c6_global_function_projected<H: CombinedParts>(host: &mut H) {
     super::execution_tests::transfer_case(
+        host,
         PlainSymbolBacking::Projected,
         super::execution_tests::Transfer::Function,
     );
 }
-#[test]
-fn p3sym_c6_function_intern_plain() {
+pub(crate) fn p3sym_c6_function_intern_plain<H: CombinedParts>(host: &mut H) {
     super::execution_tests::transfer_case(
+        host,
         PlainSymbolBacking::Unprojected,
         super::execution_tests::Transfer::Intern,
     );
 }
-#[test]
-fn p3sym_c6_function_intern_projected() {
+pub(crate) fn p3sym_c6_function_intern_projected<H: CombinedParts>(host: &mut H) {
     super::execution_tests::transfer_case(
+        host,
         PlainSymbolBacking::Projected,
         super::execution_tests::Transfer::Intern,
     );
 }
-#[test]
-fn p3sym_c6_keeper_census_plain() {
+pub(crate) fn p3sym_c6_keeper_census_plain<H: CombinedParts>(host: &mut H) {
     assert_eq!(
         fixture(
+            host,
             PlainSymbolBacking::Unprojected,
             RunningRequest::Noop,
             StoppedRequest::KeeperCensus,
@@ -256,10 +258,10 @@ fn p3sym_c6_keeper_census_plain() {
         Ok(())
     );
 }
-#[test]
-fn p3sym_c6_keeper_census_projected() {
+pub(crate) fn p3sym_c6_keeper_census_projected<H: CombinedParts>(host: &mut H) {
     assert_eq!(
         fixture(
+            host,
             PlainSymbolBacking::VoidProjection,
             RunningRequest::Noop,
             StoppedRequest::KeeperCensus,
@@ -269,23 +271,21 @@ fn p3sym_c6_keeper_census_projected() {
         Ok(())
     );
 }
-#[test]
-fn p3sym_c6_minor_plain() {
-    super::execution_tests::minor_case(PlainSymbolBacking::Unprojected);
+pub(crate) fn p3sym_c6_minor_plain<H: CombinedParts>(host: &mut H) {
+    super::execution_tests::minor_case(host, PlainSymbolBacking::Unprojected);
 }
-#[test]
-fn p3sym_c6_minor_projected() {
-    super::execution_tests::minor_case(PlainSymbolBacking::VoidProjection);
+pub(crate) fn p3sym_c6_minor_projected<H: CombinedParts>(host: &mut H) {
+    super::execution_tests::minor_case(host, PlainSymbolBacking::VoidProjection);
 }
 
-#[test]
-fn p3sym_c6_noop_control_finishes_plain_and_projected() {
+pub(crate) fn p3sym_c6_noop_control_finishes_plain_and_projected<H: CombinedParts>(host: &mut H) {
     for backing in [
         PlainSymbolBacking::Unprojected,
         PlainSymbolBacking::VoidProjection,
     ] {
         assert_eq!(
             fixture(
+                host,
                 backing,
                 RunningRequest::Noop,
                 StoppedRequest::Noop,
@@ -296,13 +296,15 @@ fn p3sym_c6_noop_control_finishes_plain_and_projected() {
         );
     }
 }
-#[test]
-fn p3sym_c6_unwind_control_releases_live_reader_before_finish() {
+pub(crate) fn p3sym_c6_unwind_control_releases_live_reader_before_finish<H: CombinedParts>(
+    host: &mut H,
+) {
     for backing in [
         PlainSymbolBacking::Unprojected,
         PlainSymbolBacking::VoidProjection,
     ] {
         let outcome = fixture(
+            host,
             backing,
             RunningRequest::Noop,
             StoppedRequest::Noop,

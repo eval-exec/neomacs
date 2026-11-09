@@ -124,6 +124,13 @@ mod intern_executor_tests;
 #[path = "../../../core_tests/tagged/gc/mutator_registration/globals_executor_tests.rs"]
 mod globals_executor_tests;
 
+/// Combined-executor overlap re-homed out of value. The shell opens the symbol
+/// era and passes the baton World walk. Assertions stay in the value bodies.
+/// The typed-tape refusal stays `#[test]` in value.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/combined_executor_tests.rs"]
+mod combined_executor_tests;
+
 /// MEMQ-TAIL-SHAPES (b)+(i)+(ii), peer 22:30Z approvals: the keeper-table
 /// scope test re-homed out of value. It uses the closure-scoped
 /// stopped-tables install, the scope's nested-install probe, the &self

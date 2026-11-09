@@ -3,7 +3,10 @@
 mod closed_graph;
 #[cfg(feature = "test-support")]
 pub mod closed_graph;
-#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
 pub(super) mod combined_inputs;
 #[cfg(all(
     any(test, feature = "test-support"),

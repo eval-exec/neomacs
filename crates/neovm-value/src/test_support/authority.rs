@@ -1387,6 +1387,55 @@ pub fn run_globals_executor_test_for_test<K, W>(
     );
 }
 
+/// FENCE: one re-homed combined-executor test. The core shell opens the symbol
+/// era and passes the baton World walk. The original dispatcher stays
+/// `pub(crate)`.
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[doc(hidden)]
+pub fn run_combined_executor_test_for_test<K, W>(
+    name: &str,
+    symbol_backing: &mut dyn FnMut(
+        crate::tagged::gc::PlainSymbolBacking,
+        &mut dyn for<'e> FnMut(crate::tagged::gc::ProofEra<'e, K>, crate::intern::SymId),
+    ),
+    symbol_functions: &mut dyn FnMut(
+        crate::tagged::gc::PlainSymbolBacking,
+        &mut dyn for<'e> FnMut(crate::tagged::gc::ProofEra<'e, K>, Vec<crate::intern::SymId>),
+    ),
+    symbol_functions_init: &mut dyn FnMut(
+        crate::tagged::gc::PlainSymbolBacking,
+        &mut dyn FnMut(&mut crate::symbol::Obarray, &[crate::intern::SymId]),
+        &mut dyn for<'e> FnMut(crate::tagged::gc::ProofEra<'e, K>, Vec<crate::intern::SymId>),
+    ),
+    symbol_name_inputs_init: &mut dyn FnMut(
+        crate::tagged::gc::PlainSymbolBacking,
+        &str,
+        &mut dyn FnMut(&mut crate::symbol::Obarray, &[crate::intern::SymId]),
+        &mut dyn for<'e> FnMut(crate::tagged::gc::ProofEra<'e, K>, Vec<crate::intern::SymId>),
+    ),
+    world_roots: W,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut crate::tagged::gc::mutator_registration::AllStopped<'e>,
+            &'o mut Vec<crate::tagged::value::TaggedValue>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            crate::tagged::gc::mutator_registration::RendezvousError,
+        >,
+{
+    crate::tagged::gc::mutator_registration::restricted_lisp::run_combined_executor_test(
+        name,
+        symbol_backing,
+        symbol_functions,
+        symbol_functions_init,
+        symbol_name_inputs_init,
+        world_roots,
+    );
+}
+
 /// FENCE: process collection-read configuration. The original stays
 /// `pub(crate)`. This is the only public path; it writes the process gate.
 #[cfg(any(test, feature = "test-support"))]
