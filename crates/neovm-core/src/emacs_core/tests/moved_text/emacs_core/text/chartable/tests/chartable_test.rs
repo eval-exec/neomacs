@@ -2167,4 +2167,28 @@ mod ascii_raw_values_batch {
         set_parent(child, middle);
         assert_matches_ct_lookup(child);
     }
+    #[test]
+    fn mixed_child_sub_table_parent_fills_the_holes() {
+        // The peer's mixed case: the child has its own ascii sub-table with
+        // SOME entries and a nil default; the parent's ascii sub-table fills
+        // the remaining holes and its default covers the rest.  The batch
+        // walk must carry the per-code resolved bitmap across the parent
+        // iteration and still equal per-code ct_lookup everywhere.
+        crate::test_utils::init_test_tracing();
+        let _eval = crate::test_utils::new_context();
+        let mut child_entries = vec![Value::NIL; 128];
+        child_entries[1] = Value::fixnum(21);
+        child_entries[66] = Value::fixnum(22);
+        child_entries[126] = Value::fixnum(23);
+        let child = table(Value::NIL);
+        set_char_table_ascii(child, ascii_sub_table(child_entries));
+        let mut parent_entries = vec![Value::NIL; 128];
+        parent_entries[0] = Value::fixnum(31);
+        parent_entries[2] = Value::fixnum(32);
+        parent_entries[127] = Value::fixnum(33);
+        let parent = table(Value::fixnum(9));
+        set_char_table_ascii(parent, ascii_sub_table(parent_entries));
+        set_parent(child, parent);
+        assert_matches_ct_lookup(child);
+    }
 }
