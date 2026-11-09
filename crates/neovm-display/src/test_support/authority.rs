@@ -127,46 +127,9 @@ impl Drop for ScratchRootsGuard {
     fn drop(&mut self) {}
 }
 
-/// Force the plain-field rendering path for the moved differential tests.
-pub fn set_mode_line_plain_field_for_test(
-    path: crate::emacs_core::xdisp::ModeLinePlainFieldPath,
-) -> crate::emacs_core::xdisp::ModeLinePlainFieldPath {
-    crate::emacs_core::xdisp::set_mode_line_plain_field_for_test(path)
-}
-
 /// Override the property-read policy for the moved differential tests.
 pub fn set_mode_line_prop_borrow_for_test(enabled: Option<bool>) {
     crate::emacs_core::xdisp::set_mode_line_prop_borrow_for_test(enabled)
-}
-
-/// RAII policy guard used by the shared plain-field helper (one home).
-struct PlainFieldGuard {
-    previous: crate::emacs_core::xdisp::ModeLinePlainFieldPath,
-}
-
-impl PlainFieldGuard {
-    pub fn set(
-        path: crate::emacs_core::xdisp::ModeLinePlainFieldPath,
-        properties: crate::test_utils::mode_line_plain_field_test_upper_layer_helpers::PropertyRead,
-    ) -> Self {
-        let previous = set_mode_line_plain_field_for_test(path);
-        match properties {
-            crate::test_utils::mode_line_plain_field_test_upper_layer_helpers::PropertyRead::Copied => {
-                set_mode_line_prop_borrow_for_test(Some(false))
-            }
-            crate::test_utils::mode_line_plain_field_test_upper_layer_helpers::PropertyRead::Borrowed => {
-                set_mode_line_prop_borrow_for_test(Some(true))
-            }
-        }
-        Self { previous }
-    }
-}
-
-impl Drop for PlainFieldGuard {
-    fn drop(&mut self) {
-        set_mode_line_prop_borrow_for_test(None);
-        set_mode_line_plain_field_for_test(self.previous);
-    }
 }
 
 /// RAII guard over the plain-field policy knobs (moved tests).
@@ -174,7 +137,9 @@ pub fn plain_field_guard_for_test(
     path: crate::emacs_core::xdisp::ModeLinePlainFieldPath,
     properties: crate::test_utils::mode_line_plain_field_test_upper_layer_helpers::PropertyRead,
 ) -> impl Drop {
-    PlainFieldGuard::set(path, properties)
+    crate::test_utils::mode_line_plain_field_test_upper_layer_helpers::plain_field_guard_for_test(
+        path, properties,
+    )
 }
 
 /// Append one display (min-width) run through the production formatter.

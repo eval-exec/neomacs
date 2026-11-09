@@ -2124,6 +2124,39 @@ pub mod mode_line_element_attribution_test_upper_layer_helpers {
 /// Shared upper-layer helpers for mode_line_plain_field_test (peer P1 precision):
 /// real bodies live here once; callers supply the harness Context where needed.
 pub mod mode_line_plain_field_test_upper_layer_helpers {
+    pub(crate) struct PlainFieldGuard {
+        previous: ModeLinePlainFieldPath,
+    }
+
+    impl PlainFieldGuard {
+        pub(crate) fn set(path: ModeLinePlainFieldPath, properties: PropertyRead) -> Self {
+            let previous = crate::emacs_core::xdisp::set_mode_line_plain_field_for_test(path);
+            match properties {
+                PropertyRead::Copied => {
+                    crate::emacs_core::xdisp::set_mode_line_prop_borrow_for_test(Some(false))
+                }
+                PropertyRead::Borrowed => {
+                    crate::emacs_core::xdisp::set_mode_line_prop_borrow_for_test(Some(true))
+                }
+            }
+            Self { previous }
+        }
+    }
+
+    impl Drop for PlainFieldGuard {
+        fn drop(&mut self) {
+            crate::emacs_core::xdisp::set_mode_line_prop_borrow_for_test(None);
+            crate::emacs_core::xdisp::set_mode_line_plain_field_for_test(self.previous);
+        }
+    }
+
+    pub(crate) fn plain_field_guard_for_test(
+        path: ModeLinePlainFieldPath,
+        properties: PropertyRead,
+    ) -> impl Drop {
+        PlainFieldGuard::set(path, properties)
+    }
+
     use crate::emacs_core::xdisp::ModeLinePlainFieldPath;
     use crate::emacs_core::xdisp::format_mode_line_for_display_with_sources;
     use crate::test_utils::xdisp_test_upper_layer_helpers::interactive_context;
@@ -2202,7 +2235,7 @@ pub mod mode_line_plain_field_test_upper_layer_helpers {
         order: PropertyOrder,
     ) -> OutputTrace {
         crate::test_utils::init_test_tracing();
-        let _guard = crate::test_support::authority::plain_field_guard_for_test(path, properties);
+        let _guard = plain_field_guard_for_test(path, properties);
         let mut eval = interactive_context(make_context);
         let buffer_id = eval
             .edit
@@ -2746,16 +2779,12 @@ pub mod mode_line_numeric_padding_shared_helpers {
     pub struct PaddingPolicyGuard(Option<bool>);
     impl PaddingPolicyGuard {
         pub fn set(value: bool) -> Self {
-            Self(
-                crate::test_support::authority::force_mode_line_numeric_padding_for_test(Some(
-                    value,
-                )),
-            )
+            Self(crate::emacs_core::xdisp::force_for_test(Some(value)))
         }
     }
     impl Drop for PaddingPolicyGuard {
         fn drop(&mut self) {
-            crate::test_support::authority::force_mode_line_numeric_padding_for_test(self.0);
+            crate::emacs_core::xdisp::force_for_test(self.0);
         }
     }
 }

@@ -45,7 +45,7 @@ fn plain_percent_fields_preserve_multibyte_identity_like_temporary_segments() {
             ModeLinePlainFieldPath::Temporary,
             ModeLinePlainFieldPath::Direct,
         ] {
-            let _guard = crate::test_support::authority::plain_field_guard_for_test(
+            let _guard = crate::test_utils::mode_line_plain_field_test_upper_layer_helpers::plain_field_guard_for_test(
                 path,
                 PropertyRead::Copied,
             );
