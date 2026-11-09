@@ -5693,6 +5693,7 @@ mod tests {
         let rows = vec![AuthRow {
             crate_name: "neovm-value".to_owned(),
             item: "Owner::method".to_owned(),
+            kind: "method".to_owned(),
             defining_file: "crates/neovm-value/src/test_support/authority.rs".to_owned(),
             fence_path: "neovm_value::test_support::authority::Owner::method".to_owned(),
         }];
@@ -5761,6 +5762,7 @@ mod tests {
         let auth = vec![AuthRow {
             crate_name: "neovm-edit".to_owned(),
             item: "unrowed".to_owned(),
+            kind: "fn".to_owned(),
             defining_file: "crates/neovm-edit/src/test_support.rs".to_owned(),
             fence_path: "neovm_edit::test_support::authority::unrowed".to_owned(),
         }];
@@ -7232,6 +7234,7 @@ fn mod_row_expansion_requires_a_row_for_each_new_pub_item() {
     let authority = vec![AuthRow {
         crate_name: "neovm-value".to_owned(),
         item: "blanket_bypass".to_owned(),
+        kind: "fn".to_owned(),
         defining_file: "crates/neovm-value/src/gc/facade.rs".to_owned(),
         fence_path: "neovm_value::test_support::authority::blanket_bypass".to_owned(),
     }];
@@ -7505,6 +7508,20 @@ fn authority_items_have_rows_and_existing_defining_files() {
             "AUTHORITY-ITEMS.tsv line {}: defining file missing: {file}",
             index + 2
         );
+        // Peer r2 R4: the tests cell is a comma-separated list of REAL
+        // workspace paths.  A placeholder or a moved/stale path makes the
+        // row's coverage claim unverifiable.
+        for cell in tests
+            .split(',')
+            .map(str::trim)
+            .filter(|cell| !cell.is_empty())
+        {
+            assert!(
+                workspace.join(cell).is_file(),
+                "AUTHORITY-ITEMS.tsv line {}: tests file missing: {cell}",
+                index + 2
+            );
+        }
         assert!(
             rows.insert((crate_name.to_owned(), item.to_owned())),
             "AUTHORITY-ITEMS.tsv line {}: duplicate row {crate_name}/{item}",
@@ -7555,6 +7572,7 @@ fn authority_items_have_rows_and_existing_defining_files() {
 struct AuthRow {
     crate_name: String,
     item: String,
+    kind: String,
     defining_file: String,
     fence_path: String,
 }
@@ -7579,6 +7597,7 @@ fn auth_rows(workspace: &Path) -> Vec<AuthRow> {
         rows.push(AuthRow {
             crate_name: fields[0].to_owned(),
             item: fields[1].to_owned(),
+            kind: fields[2].to_owned(),
             defining_file: fields[3].to_owned(),
             fence_path: fields[4].to_owned(),
         });
@@ -7835,7 +7854,12 @@ fn auth_test_support_widened(attrs: &[syn::Attribute]) -> bool {
 
 /// True when the file (at any inline depth) declares or re-exports `leaf`
 /// publicly. The fence file is the one place where the item must be public.
-fn auth_items_declare_public(items: &[syn::Item], leaf: &str, impl_owner: Option<&str>) -> bool {
+fn auth_items_declare_public(
+    items: &[syn::Item],
+    leaf: &str,
+    impl_owner: Option<&str>,
+    trait_self_name: bool,
+) -> bool {
     // A row whose item names an owner (`Owner::method`) is a method row:
     // only an inherent `pub fn method` on that owner (the impl arm below)
     // or the separate alias route may declare it. A free fn/struct/const
@@ -7865,11 +7889,14 @@ fn auth_items_declare_public(items: &[syn::Item], leaf: &str, impl_owner: Option
                         && matches!(item.vis, syn::Visibility::Public(_))
                 }
                 // Trait methods carry no `pub` keyword; a method of a public
-                // trait is a public path (the display fence's shape).
+                // trait is a public path (the display fence's shape). The
+                // self-name arm is the trait-item original-path shape and is
+                // keyed to kind=trait (peer r2 R3): a fn/field/method row
+                // must not be satisfied by a same-named trait.
                 syn::Item::Trait(item) => {
                     leaf_arms
                         && matches!(item.vis, syn::Visibility::Public(_))
-                        && (item.ident == leaf
+                        && ((trait_self_name && item.ident == leaf)
                             || item.items.iter().any(|member| {
                                 matches!(member, syn::TraitItem::Fn(function) if function.sig.ident == leaf)
                             }))
@@ -7901,7 +7928,7 @@ fn auth_items_declare_public(items: &[syn::Item], leaf: &str, impl_owner: Option
                             .content
                             .as_ref()
                             .is_some_and(|(_, inner)| {
-                                auth_items_declare_public(inner, leaf, impl_owner)
+                                auth_items_declare_public(inner, leaf, impl_owner, trait_self_name)
                             })
                 }
                 // Inherent-impl methods on the fence type are a public path
@@ -7938,7 +7965,28 @@ fn auth_declares_public(file: &Path, leaf: &str, impl_owner: Option<&str>) -> Re
     let text = read(file)?;
     let ast = syn::parse_file(&text)
         .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", file.display()))?;
-    Ok(auth_items_declare_public(&ast.items, leaf, impl_owner))
+    Ok(auth_items_declare_public(
+        &ast.items, leaf, impl_owner, false,
+    ))
+}
+
+/// The original-path declaration check for a row of `kind`: only a
+/// kind=trait row may be satisfied by a public trait's own name (peer r2 R3).
+fn auth_declares_public_for_kind(
+    file: &Path,
+    leaf: &str,
+    impl_owner: Option<&str>,
+    kind: &str,
+) -> Result<bool, String> {
+    let text = read(file)?;
+    let ast = syn::parse_file(&text)
+        .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", file.display()))?;
+    Ok(auth_items_declare_public(
+        &ast.items,
+        leaf,
+        impl_owner,
+        kind == "trait",
+    ))
 }
 
 /// Resolve a crate-relative module path for the original-path branch. File
@@ -7965,14 +8013,18 @@ fn auth_inline_module_declares_public(
     file: &Path,
     tail: &[String],
     owner: &str,
+    kind: &str,
 ) -> Result<(bool, bool), String> {
     if tail.is_empty() {
-        return Ok((true, auth_declares_public(file, owner, None)?));
+        return Ok((
+            true,
+            auth_declares_public_for_kind(file, owner, None, kind)?,
+        ));
     }
     let text = read(file)?;
     let ast = syn::parse_file(&text)
         .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", file.display()))?;
-    fn descend(items: &[syn::Item], tail: &[String], owner: &str) -> (bool, bool) {
+    fn descend(items: &[syn::Item], tail: &[String], owner: &str, kind: &str) -> (bool, bool) {
         let Some((name, rest)) = tail.split_first() else {
             return (true, false);
         };
@@ -7992,13 +8044,16 @@ fn auth_inline_module_declares_public(
                 return (false, false);
             };
             if rest.is_empty() {
-                return (true, auth_items_declare_public(inner, owner, None));
+                return (
+                    true,
+                    auth_items_declare_public(inner, owner, None, kind == "trait"),
+                );
             }
-            return descend(inner, rest, owner);
+            return descend(inner, rest, owner, kind);
         }
         (false, false)
     }
-    Ok(descend(&ast.items, tail, owner))
+    Ok(descend(&ast.items, tail, owner, kind))
 }
 
 /// Resolve a Rust path written in `from_module` to (module segments, item
@@ -8727,8 +8782,8 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
                         module_segments.join("::")
                     ));
                 };
-                let (inline_public, declares_public) =
-                    auth_inline_module_declares_public(module_file, inline_tail, owner)?;
+                let (inline_public, mut declares_public) =
+                    auth_inline_module_declares_public(module_file, inline_tail, owner, &row.kind)?;
                 if !file_public || !inline_public {
                     return Err(format!(
                         "AUTHORITY_PATHS {expected}: the module chain is not publicly reachable"
@@ -8741,17 +8796,30 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
                     ));
                 }
                 signed_module_file = Some(module_file.clone());
-                if method_row
-                    && !auth_file_pub_inherent_method(
-                        &workspace.join(&row.defining_file),
-                        &[owner.to_string()],
-                        leaf,
-                    )?
-                    && !auth_file_pub_field(&workspace.join(&row.defining_file), owner, leaf)?
-                {
-                    return Err(format!(
-                        "AUTHORITY_PATHS {expected}: the defining file does not expose {owner}::{leaf} as a pub inherent method or pub field"
-                    ));
+                if method_row {
+                    // Kind-keyed public route (peer r2 R3): a field row is
+                    // satisfied only by a pub named field, every other
+                    // method-shaped row only by a pub inherent method.
+                    let exposed = if row.kind == "field" {
+                        auth_file_pub_field(&workspace.join(&row.defining_file), owner, leaf)?
+                    } else {
+                        auth_file_pub_inherent_method(
+                            &workspace.join(&row.defining_file),
+                            &[owner.to_string()],
+                            leaf,
+                        )?
+                    };
+                    if !exposed {
+                        let shape = if row.kind == "field" {
+                            "a pub named field"
+                        } else {
+                            "a pub inherent method"
+                        };
+                        return Err(format!(
+                            "AUTHORITY_PATHS {expected}: the defining file does not expose {owner}::{leaf} as {shape} (row kind {:?})",
+                            row.kind
+                        ));
+                    }
                 }
                 if let Some(fence) = &fence {
                     if auth_declares_public(fence, leaf, None)?
@@ -8807,6 +8875,7 @@ fn authority_rejects_a_pub_trait_method_named_like_a_signed_item() {
     let rows = vec![AuthRow {
         crate_name: "neovm-value".to_owned(),
         item: "window::WindowExt::frobnicate".to_owned(),
+        kind: "method".to_owned(),
         defining_file: "crates/neovm-value/src/test_support/authority.rs".to_owned(),
         fence_path: "neovm_value::window::WindowExt::frobnicate".to_owned(),
     }];
@@ -8877,6 +8946,7 @@ fn authority_public_paths_mutations() {
     let rows = vec![AuthRow {
         crate_name: "neovm-value".to_owned(),
         item: "mark".to_owned(),
+        kind: "fn".to_owned(),
         defining_file: "crates/neovm-value/src/original.rs".to_owned(),
         fence_path: "neovm_value::test_support::authority::mark".to_owned(),
     }];
@@ -8961,6 +9031,7 @@ fn authority_original_path_only_fenceless_mutations() {
     let rows = vec![AuthRow {
         crate_name: "neovm-system".to_owned(),
         item: "fileio::decode_for_test".to_owned(),
+        kind: "fn".to_owned(),
         defining_file: "crates/neovm-system/src/fileio.rs".to_owned(),
         fence_path: "neovm_system::fileio".to_owned(),
     }];
@@ -8997,6 +9068,7 @@ fn authority_original_path_only_fenceless_mutations() {
     let second_route = vec![AuthRow {
         crate_name: "neovm-system".to_owned(),
         item: "fileio::decode_for_test".to_owned(),
+        kind: "fn".to_owned(),
         defining_file: "crates/neovm-system/src/original.rs".to_owned(),
         fence_path: "neovm_system::fileio".to_owned(),
     }];
@@ -9014,6 +9086,7 @@ fn authority_original_path_only_fenceless_mutations() {
     let inline_rows = vec![AuthRow {
         crate_name: "neovm-system".to_owned(),
         item: "fileio::test_support::inline_for_test".to_owned(),
+        kind: "fn".to_owned(),
         defining_file: "crates/neovm-system/src/fileio.rs".to_owned(),
         fence_path: "neovm_system::fileio::test_support".to_owned(),
     }];
@@ -9060,6 +9133,7 @@ fn authority_mod_row_route_is_a_second_path() {
     let rows = vec![AuthRow {
         crate_name: "neovm-value".to_owned(),
         item: "mark".to_owned(),
+        kind: "fn".to_owned(),
         defining_file: "crates/neovm-value/src/original.rs".to_owned(),
         fence_path: "neovm_value::test_support::authority::mark".to_owned(),
     }];
@@ -9116,6 +9190,7 @@ fn authority_alias_method_rows_are_method_aware() {
     let rows = vec![AuthRow {
         crate_name: "neovm-value".to_owned(),
         item: "Owner::method".to_owned(),
+        kind: "method".to_owned(),
         defining_file: "crates/neovm-value/src/original.rs".to_owned(),
         fence_path: "neovm_value::test_support::authority::Owner::method".to_owned(),
     }];
@@ -9181,6 +9256,7 @@ fn authority_alias_method_rows_are_method_aware() {
     let original_rows = vec![AuthRow {
         crate_name: "neovm-value".to_owned(),
         item: "Owner::method".to_owned(),
+        kind: "method".to_owned(),
         defining_file: "crates/neovm-value/src/original.rs".to_owned(),
         fence_path: "neovm_value::tagged::gc::Owner::method".to_owned(),
     }];
@@ -9226,6 +9302,150 @@ fn authority_alias_method_rows_are_method_aware() {
     assert!(authority_public_paths_violation(dir.path(), &original_rows).is_err());
 }
 
+/// Peer r2 R3: the two new original-path arms are keyed by the row's KIND.
+/// A field row is satisfied only by a pub named field, and the trait
+/// self-name arm only satisfies a kind=trait row.  Green controls plus the
+/// requested red fixtures: a private field, a tuple field, a non-pub owner,
+/// a private trait, and both kind mismatches.
+#[test]
+fn authority_kind_keyed_route_mutations() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let value_src = dir.path().join("crates/neovm-value/src");
+    let core_src = dir.path().join("crates/neovm-core/src");
+    std::fs::create_dir_all(value_src.join("test_support")).expect("value src");
+    std::fs::create_dir_all(&core_src).expect("core src");
+    std::fs::write(
+        value_src.join("lib.rs"),
+        "pub mod test_support;\npub mod types;\npub mod impls;\npub mod traits;\npub(crate) mod hidden;\n",
+    )
+    .expect("lib");
+    std::fs::write(value_src.join("test_support.rs"), "pub mod authority;\n").expect("support");
+    std::fs::write(value_src.join("test_support/authority.rs"), "").expect("fence");
+    std::fs::write(
+        value_src.join("types.rs"),
+        "pub struct Holder {\n    pub field: u8,\n    secret: u8,\n}\n\
+         impl Holder {\n    pub fn method(&self) {}\n}\n\
+         pub struct TupleHolder(pub u8);\n\
+         pub(crate) struct CrateOwner;\n",
+    )
+    .expect("types");
+    std::fs::write(value_src.join("hidden.rs"), "pub struct HiddenOwner;\n").expect("hidden");
+    std::fs::write(
+        value_src.join("impls.rs"),
+        "use crate::hidden::HiddenOwner;\n\
+         use crate::types::CrateOwner;\n\
+         impl HiddenOwner {\n    pub fn hidden_method(&self) {}\n}\n\
+         impl CrateOwner {\n    pub fn crate_method(&self) {}\n}\n",
+    )
+    .expect("impls");
+    std::fs::write(
+        value_src.join("traits.rs"),
+        "pub trait PublicTrait {}\ntrait PrivateTrait {}\n",
+    )
+    .expect("traits");
+    std::fs::write(core_src.join("lib.rs"), "").expect("core lib");
+    let row = |item: &str, kind: &str, defining: &str, fence: &str| AuthRow {
+        crate_name: "neovm-value".to_owned(),
+        item: item.to_owned(),
+        kind: kind.to_owned(),
+        defining_file: defining.to_owned(),
+        fence_path: fence.to_owned(),
+    };
+    let check =
+        |row: &AuthRow| authority_public_paths_violation(dir.path(), std::slice::from_ref(row));
+
+    // Green controls: a pub named field for kind=field, a pub trait's own
+    // name for kind=trait.
+    let field = row(
+        "types::Holder::field",
+        "field",
+        "crates/neovm-value/src/types.rs",
+        "neovm_value::types::Holder::field",
+    );
+    assert!(check(&field).is_ok());
+    let trait_row = row(
+        "traits::PublicTrait",
+        "trait",
+        "crates/neovm-value/src/traits.rs",
+        "neovm_value::traits::PublicTrait",
+    );
+    assert!(check(&trait_row).is_ok());
+
+    // A private field is not a field route.
+    let private_field = row(
+        "types::Holder::secret",
+        "field",
+        "crates/neovm-value/src/types.rs",
+        "neovm_value::types::Holder::secret",
+    );
+    let error = check(&private_field).expect_err("private field");
+    assert!(error.contains("pub named field"), "{error}");
+    // A tuple field has no own item path.
+    let tuple_field = row(
+        "types::TupleHolder::0",
+        "field",
+        "crates/neovm-value/src/types.rs",
+        "neovm_value::types::TupleHolder::0",
+    );
+    let error = check(&tuple_field).expect_err("tuple field");
+    assert!(error.contains("pub named field"), "{error}");
+    // An owner declared pub only inside a private module is not public.
+    let hidden_owner = row(
+        "impls::HiddenOwner::hidden_method",
+        "method",
+        "crates/neovm-value/src/impls.rs",
+        "neovm_value::impls::HiddenOwner::hidden_method",
+    );
+    let error = check(&hidden_owner).expect_err("private owner module");
+    assert!(error.contains("does not publicly expose"), "{error}");
+    // A pub(crate) owner is not public.
+    let crate_owner = row(
+        "impls::CrateOwner::crate_method",
+        "method",
+        "crates/neovm-value/src/impls.rs",
+        "neovm_value::impls::CrateOwner::crate_method",
+    );
+    let error = check(&crate_owner).expect_err("pub(crate) owner");
+    assert!(error.contains("does not publicly expose"), "{error}");
+    // A private trait is not a public trait route.
+    let private_trait = row(
+        "traits::PrivateTrait",
+        "trait",
+        "crates/neovm-value/src/traits.rs",
+        "neovm_value::traits::PrivateTrait",
+    );
+    let error = check(&private_trait).expect_err("private trait");
+    assert!(error.contains("does not publicly expose"), "{error}");
+    // Kind mismatch: a kind=field row cannot ride a pub inherent method.
+    let field_on_method = row(
+        "types::Holder::method",
+        "field",
+        "crates/neovm-value/src/types.rs",
+        "neovm_value::types::Holder::method",
+    );
+    let error = check(&field_on_method).expect_err("field row on a method");
+    assert!(error.contains("pub named field"), "{error}");
+    // Kind mismatch: a method-shaped row of any other kind cannot ride a pub
+    // field.
+    let method_on_field = row(
+        "types::Holder::field",
+        "method",
+        "crates/neovm-value/src/types.rs",
+        "neovm_value::types::Holder::field",
+    );
+    let error = check(&method_on_field).expect_err("method row on a field");
+    assert!(error.contains("pub inherent method"), "{error}");
+    // Kind mismatch: the trait self-name arm is off for a kind=method row.
+    let method_on_trait = row(
+        "traits::PublicTrait",
+        "method",
+        "crates/neovm-value/src/traits.rs",
+        "neovm_value::traits::PublicTrait",
+    );
+    let error = check(&method_on_trait).expect_err("method row on a trait name");
+    assert!(error.contains("does not publicly expose"), "{error}");
+}
+
 #[test]
 fn authority_pub_use_method_rows_are_method_aware() {
     // A fence `pub use` of a type from a private module exposes the type at
@@ -9257,6 +9477,7 @@ fn authority_pub_use_method_rows_are_method_aware() {
     let rows = vec![AuthRow {
         crate_name: "neovm-value".to_owned(),
         item: "Owner::method".to_owned(),
+        kind: "method".to_owned(),
         defining_file: "crates/neovm-value/src/original.rs".to_owned(),
         fence_path: "neovm_value::test_support::authority::Owner::method".to_owned(),
     }];
@@ -9297,9 +9518,24 @@ mod disjointness_ratchet_tests {
     use super::*;
 
     fn auth_row(crate_name: &str, item: &str, defining_file: &str, fence_path: &str) -> AuthRow {
+        // These fixtures only exercise route/disjointness identity, so the
+        // kind is the path-shape default (the kind-keyed checks have their
+        // own fixtures).
+        let kind = match item.rsplit("::").nth(1) {
+            Some(owner)
+                if owner
+                    .chars()
+                    .next()
+                    .is_some_and(|first| first.is_ascii_uppercase()) =>
+            {
+                "method"
+            }
+            _ => "fn",
+        };
         AuthRow {
             crate_name: crate_name.to_owned(),
             item: item.to_owned(),
+            kind: kind.to_owned(),
             defining_file: defining_file.to_owned(),
             fence_path: fence_path.to_owned(),
         }
