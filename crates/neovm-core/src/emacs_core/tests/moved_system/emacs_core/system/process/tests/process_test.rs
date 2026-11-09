@@ -10100,6 +10100,80 @@ fn accepted_local_client_with_default_filter_gets_distinct_buffer_like_gnu() {
     assert_eq!(results[0], "OK (nil t t t)");
 }
 
+/// GNU `src/process.c:4115-4116` (Emacs 31.1, `a360712c`) rejects a local
+/// `:service` whose byte length is `>= sizeof(sockaddr_un.sun_path)` with
+/// `(error "Service name too long")` before bind or connect. 108 on Linux,
+/// 104 on Darwin. A multibyte string uses `SBYTES`, not the character length.
+#[cfg(unix)]
+#[test]
+fn local_service_byte_length_at_sun_path_signals_service_name_too_long() {
+    crate::test_utils::init_test_tracing();
+    let limit = sun_path_capacity();
+    #[cfg(target_os = "linux")]
+    assert_eq!(limit, 108, "Linux sun_path");
+    #[cfg(target_os = "macos")]
+    assert_eq!(limit, 104, "Darwin sun_path");
+    let too_long = "a".repeat(limit);
+    let at_max = "b".repeat(limit - 1);
+    let results = eval_all(&format!(
+        r#"(let ((too-long "{too_long}")
+                 (at-max "{at_max}"))
+             (list
+              (condition-case err
+                  (make-network-process :name "too-long-server" :family 'local :server t
+                                         :service too-long)
+                (error err))
+              (condition-case err
+                  (make-network-process :name "too-long-client" :family 'local
+                                         :service too-long)
+                (error err))
+              (condition-case err
+                  (make-network-process :name "too-long-dgram" :family 'local :server t
+                                         :type 'datagram :service too-long)
+                (error err))
+              (condition-case err
+                  (make-network-process :name "mb" :family 'local :server t
+                                         :service (make-string 60 ?é))
+                (error err))
+              (let (proc)
+                (unwind-protect
+                    (condition-case err
+                        (progn
+                          (setq proc (make-network-process :name "max-server" :family 'local
+                                                           :server t :service at-max))
+                          'server-ok)
+                      (error err))
+                  (when proc (delete-process proc))
+                  (when (file-exists-p at-max) (delete-file at-max))))
+              (condition-case err
+                  (make-network-process :name "max-client" :family 'local :service at-max)
+                (error err))))"#
+    ));
+    let text = &results[0];
+    assert_eq!(
+        text.matches("(error \"Service name too long\")").count(),
+        4,
+        "{text}"
+    );
+    assert!(
+        text.contains("server-ok"),
+        "a service of sizeof(sun_path)-1 must bind, got {text}"
+    );
+    assert!(
+        text.contains("file-missing"),
+        "a client at sizeof(sun_path)-1 must miss the socket, not reject the name, got {text}"
+    );
+    assert!(
+        !text.contains("Service name too long\" \"Input/output error"),
+        "{text}"
+    );
+}
+
+#[cfg(unix)]
+fn sun_path_capacity() -> usize {
+    std::mem::size_of::<libc::sockaddr_un>() - std::mem::offset_of!(libc::sockaddr_un, sun_path)
+}
+
 #[cfg(unix)]
 #[test]
 fn accepted_local_client_completes_the_pinentry_initial_handshake() {

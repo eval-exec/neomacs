@@ -66,6 +66,9 @@ mod post_image_init_tests_post_image_init_test_rs;
 #[path = "emacs_core/system/process/tests/darwin_attributes_test.rs"]
 mod process_tests_darwin_attributes_test_rs;
 
+#[path = "emacs_core/system/process/tests/gnu_local_service_oracle.rs"]
+mod process_tests_gnu_local_service_oracle_rs;
+
 #[path = "emacs_core/system/process/tests/gnu_pty_exit_oracle.rs"]
 mod process_tests_gnu_pty_exit_oracle_rs;
 

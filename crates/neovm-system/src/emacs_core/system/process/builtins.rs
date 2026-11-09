@@ -2076,6 +2076,13 @@ pub(super) fn listen_stream_network_process(
     Ok(Value::make_process(id))
 }
 
+/// `sizeof(sockaddr_un.sun_path)`. Linux is 108; Darwin is 104. Derived from
+/// the libc struct so the two platforms cannot drift.
+#[cfg(unix)]
+fn unix_sun_path_capacity() -> usize {
+    std::mem::size_of::<libc::sockaddr_un>() - std::mem::offset_of!(libc::sockaddr_un, sun_path)
+}
+
 /// `make-network-process` for `:family 'local` (unix-domain sockets):
 /// server bind/listen or client connect on a filesystem socket path,
 /// stream or datagram. Diverges on every path (non-unix builds signal),
@@ -2116,9 +2123,18 @@ pub(super) fn connect_local_socket_process(
 
     #[cfg(unix)]
     {
-        let service_path = crate::emacs_core::fileio::lisp_file_name_to_path_buf(
-            neovm_eval::emacs_core::builtins::expect_lisp_string(&service)?,
-        );
+        let service_string = neovm_eval::emacs_core::builtins::expect_lisp_string(&service)?;
+        // GNU src/process.c:4115-4116 (Emacs 31.1, a360712c): family local
+        // rejects a service whose byte length is >= sizeof(sun_path) before
+        // any socket call. Equality with the array size is an error. SBYTES,
+        // not the character length. Covers bind and connect.
+        if unix_sun_path_capacity() <= service_string.byte_len() {
+            return Err(signal(
+                "error",
+                vec![Value::string("Service name too long")],
+            ));
+        }
+        let service_path = crate::emacs_core::fileio::lisp_file_name_to_path_buf(service_string);
         if !host_value.is_nil() {
             contact = process_contact_plist_put(contact, ProcessKeyword::Host.value(), Value::NIL)?;
         }
