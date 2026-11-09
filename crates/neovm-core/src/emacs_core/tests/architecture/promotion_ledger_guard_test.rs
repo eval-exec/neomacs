@@ -3032,6 +3032,21 @@ fn pc2_reason_names_file(reason: &str, file: &str) -> bool {
     }
 }
 
+/// Map one collected source file to its workspace-relative ledger spelling
+/// and read it.  Fail closed: a file the walker collected outside the
+/// workspace, and an unreadable file, are errors that carry the path; neither
+/// may `continue`, because a skipped file hides every call site in it from the
+/// PC2 scan.
+fn pc2_relative_source(workspace: &Path, file: &Path) -> Result<(String, String), String> {
+    let relative = file
+        .strip_prefix(workspace)
+        .map_err(|_| format!("B3_PC2_FILE_OUTSIDE_WORKSPACE {}", file.display()))?;
+    let relative = relative.to_string_lossy().replace('\\', "/");
+    let text = std::fs::read_to_string(file)
+        .map_err(|error| format!("B3_PC2_SOURCE_READ {relative}: {error}"))?;
+    Ok((relative, text))
+}
+
 fn pc2_rows_violation(
     workspace: &Path,
     ledger_name: &str,
@@ -3042,8 +3057,8 @@ fn pc2_rows_violation(
     // canonicalizes every file it visits). The workspace may be named through
     // a symlinked temp root -- macOS /tmp and /var are symlinks to /private,
     // and tempdir() keeps the $TMPDIR spelling -- so canonicalize it too, or
-    // strip_prefix below misses every file and a planted unnamed call site is
-    // silently GREEN.
+    // the file mapping below treats every file as outside the workspace and
+    // a planted unnamed call site is silently GREEN.
     let workspace = workspace
         .canonicalize()
         .map_err(|error| format!("B3_PC2_WORKSPACE {}: {error}", workspace.display()))?;
@@ -3074,14 +3089,7 @@ fn pc2_rows_violation(
         let method_calls = pc2_method_takes_self(&ast.items, &target)?;
         let mut unnamed = BTreeSet::new();
         for file in &files {
-            let Ok(relative) = file.strip_prefix(&workspace) else {
-                continue;
-            };
-            let relative = relative.to_string_lossy().replace('\\', "/");
-            let text = match std::fs::read_to_string(file) {
-                Ok(text) => text,
-                Err(_) => continue,
-            };
+            let (relative, text) = pc2_relative_source(&workspace, file)?;
             if !text.contains(target.name()) {
                 continue;
             }
@@ -3295,6 +3303,37 @@ fn architecture_mutation_pc2_symlinked_workspace_still_detects_call_sites() {
         error.contains("B3_PC2_UNNAMED_CALL_SITE") && error.contains("secret_caller"),
         "{error}"
     );
+}
+
+#[test]
+fn architecture_mutation_pc2_source_file_failures_are_fail_closed() {
+    // PC2-H1: the scan must never skip a collected file.  A strip_prefix miss
+    // (a file outside the workspace) and an unreadable file both error with
+    // their path; a `continue` would hide every call site in that file.
+    let workspace = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(workspace.path().join("crate/src")).unwrap();
+    let inside = workspace.path().join("crate/src/lib.rs");
+    std::fs::write(&inside, "fn named_caller() {}\n").unwrap();
+
+    let outside_dir = tempfile::tempdir().unwrap();
+    let outside = outside_dir.path().join("outside.rs");
+    std::fs::write(&outside, "fn outside() {}\n").unwrap();
+    let error = pc2_relative_source(workspace.path(), &outside).unwrap_err();
+    assert!(
+        error.contains("B3_PC2_FILE_OUTSIDE_WORKSPACE") && error.contains("outside.rs"),
+        "{error}"
+    );
+
+    let missing = workspace.path().join("crate/src/missing.rs");
+    let error = pc2_relative_source(workspace.path(), &missing).unwrap_err();
+    assert!(
+        error.contains("B3_PC2_SOURCE_READ") && error.contains("crate/src/missing.rs"),
+        "{error}"
+    );
+
+    let (relative, text) = pc2_relative_source(workspace.path(), &inside).unwrap();
+    assert_eq!(relative, "crate/src/lib.rs");
+    assert!(text.contains("fn named_caller"), "{text}");
 }
 
 #[test]
