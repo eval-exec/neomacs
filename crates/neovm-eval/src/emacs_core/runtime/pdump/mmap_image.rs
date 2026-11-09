@@ -510,7 +510,24 @@ pub(crate) fn write_image(path: &Path, sections: &[ImageSection<'_>]) -> Result<
     bytes[..HEADER_SIZE].copy_from_slice(bytemuck::bytes_of(&header));
 
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut file = tempfile::NamedTempFile::new_in(parent)?;
+    // GNU's pdumper creates the dump with `emacs_open (filename, O_RDWR |
+    // O_TRUNC | O_CREAT, 0666)` (src/pdumper.c:4200), so its mode is 0666
+    // masked by the caller's umask; `make install` later normalizes the
+    // installed copy to 0644 (INSTALL_DATA; Makefile.in:628-630,639) for a
+    // system prefix that every user loads from.  Request the same creation
+    // mode: tempfile applies the umask to the mode it opens with, exactly
+    // like the plain open, so a umask-077 build gets a 0600 dump as GNU
+    // would while a standard 022 build gets the world-readable 0644 that
+    // packaging preserves.  NamedTempFile's own default is a hard 0600, and
+    // `persist` renames that private mode into place; a root-installed
+    // runtime was then unreadable to every other user.
+    let mut builder = tempfile::Builder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o666));
+    }
+    let mut file = builder.tempfile_in(parent)?;
     file.write_all(&bytes)?;
     file.flush()?;
     file.as_file().sync_all()?;
