@@ -2,6 +2,7 @@ use super::*;
 
 #[test]
 fn nested_conversion_uses_and_then_kills_a_temporary_buffer() {
+    crate::test_utils::init_test_tracing();
     let mut buffers = BufferManager::new();
     let mut workspace = CodeConversionWorkspace::default();
 

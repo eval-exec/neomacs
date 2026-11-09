@@ -2,6 +2,7 @@ use super::*;
 
 #[test]
 fn repeated_ascii_lookups_decode_the_table_once_per_write_tick() {
+    crate::test_utils::init_test_tracing();
     // The persistent flat ASCII cache must survive across `SyntaxPropByteRun`
     // instances (one is built per `re-search-forward`), so font-lock's
     // thousands of searches do not re-decode every ASCII char through

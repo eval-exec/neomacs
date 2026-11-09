@@ -2440,6 +2440,7 @@ fn eol_resolution_requires_being_told_about_inhibit_eol_conversion() {
 /// `CODING_ATTR_PLIST` is.
 #[test]
 fn accessor_memo_follows_every_registry_change() {
+    crate::test_utils::init_test_tracing();
     let mut m = mgr();
     let utf8 = Value::symbol("utf-8");
     let first =
@@ -2515,6 +2516,7 @@ fn accessor_memo_follows_every_registry_change() {
 /// share one, or an `aset` on the answer would leak into the next.
 #[test]
 fn eol_type_vector_answers_are_fresh_each_call() {
+    crate::test_utils::init_test_tracing();
     let m = mgr();
     let a = builtin_coding_system_eol_type(
         &m,
