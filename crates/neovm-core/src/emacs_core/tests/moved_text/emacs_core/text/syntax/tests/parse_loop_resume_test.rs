@@ -129,12 +129,12 @@ fn a_scan_resumed_at_any_loop_top_answers_as_the_uninterrupted_scan() {
                                 opts,
                                 &mut Plain,
                             ));
-                            assert_eq!(resumed, want, "resume at {} {}", top.char_pos, ctx());
+                            assert_eq!(resumed, want, "resume at {} {}", top.char_pos(), ctx());
                             resumes += 1;
 
                             // The same snapshot answers for any later TO.
                             let other_to_char =
-                                top.char_pos + 1 + rng.below(len + 1 - top.char_pos);
+                                top.char_pos() + 1 + rng.below(len + 1 - top.char_pos());
                             let direct =
                                 finished(scan(&eval, fresh(), other_to_char, opts, &mut Plain));
                             let via = finished(scan(
@@ -151,7 +151,7 @@ fn a_scan_resumed_at_any_loop_top_answers_as_the_uninterrupted_scan() {
                                 via,
                                 direct,
                                 "snapshot at {} to other TO {} {}",
-                                top.char_pos,
+                                top.char_pos(),
                                 other_to_char + 1,
                                 ctx()
                             );
@@ -169,21 +169,27 @@ fn a_scan_resumed_at_any_loop_top_answers_as_the_uninterrupted_scan() {
                                 opts,
                                 &mut Overriding,
                             ));
-                            assert_eq!(overridden, want, "override at {} {}", top.char_pos, ctx());
+                            assert_eq!(
+                                overridden,
+                                want,
+                                "override at {} {}",
+                                top.char_pos(),
+                                ctx()
+                            );
                             overrides += 1;
                         }
 
                         // Pause at every loop top, the first included.
                         for top in &rec.tops {
-                            let mut pause = PauseAt { at: top.char_pos };
+                            let mut pause = PauseAt { at: top.char_pos() };
                             let paused = match scan(&eval, fresh(), to_char, opts, &mut pause) {
                                 ScanEnd::Paused(at) => at,
                                 ScanEnd::Finished(_) => {
-                                    panic!("no pause at {} {}", top.char_pos, ctx())
+                                    panic!("no pause at {} {}", top.char_pos(), ctx())
                                 }
                             };
-                            assert_eq!(paused.char_pos, top.char_pos);
-                            if paused.comment_resume.is_some() {
+                            assert_eq!(paused.char_pos(), top.char_pos());
+                            if paused.comment_resume().is_some() {
                                 first_top_pauses_in_comment += 1;
                             }
                             let resumed = finished(scan(
@@ -196,7 +202,7 @@ fn a_scan_resumed_at_any_loop_top_answers_as_the_uninterrupted_scan() {
                                 opts,
                                 &mut Plain,
                             ));
-                            assert_eq!(resumed, want, "pause at {} {}", top.char_pos, ctx());
+                            assert_eq!(resumed, want, "pause at {} {}", top.char_pos(), ctx());
                             pauses += 1;
                         }
                     }
@@ -248,7 +254,7 @@ impl ScanMode for RecordAll {
     }
     fn at_loop_top(&mut self, top: LoopTop<'_>) -> TopAction {
         self.tops.push(top.to_state());
-        TopAction::Continue(top.char_pos + 1)
+        TopAction::Continue(top.char_pos() + 1)
     }
 }
 
@@ -415,8 +421,8 @@ fn scan<M: ScanMode>(
 
 fn finished(end: ScanEnd) -> (PartialParseState, i64) {
     match end {
-        ScanEnd::Finished(finish) => (finish.state, finish.stop),
-        ScanEnd::Paused(at) => panic!("unexpected pause at {}", at.char_pos),
+        ScanEnd::Finished(finish) => (finish.state().clone(), finish.stop()),
+        ScanEnd::Paused(at) => panic!("unexpected pause at {}", at.char_pos()),
     }
 }
 
@@ -431,8 +437,8 @@ fn syntax_at(
     let honor = parse_sexp_lookup_properties_enabled(eval);
     let props = SyntaxProperties::for_scan(honor, eval.variables(), &eval.edit.buffers);
     let prop_cache = SyntaxPropRange::new(props);
-    let ch = ParseBufferChars::at_emacs_byte(buf, at.byte_pos).peek();
-    let entry = effective_syntax_entry_for_abs_char(buf, &table, ch, at.char_pos, &prop_cache);
+    let ch = ParseBufferChars::at_emacs_byte(buf, at.byte_pos()).peek();
+    let entry = effective_syntax_entry_for_abs_char(buf, &table, ch, at.char_pos(), &prop_cache);
     (entry.class, entry.flags)
 }
 

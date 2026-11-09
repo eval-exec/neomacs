@@ -167,7 +167,7 @@ fn canonical_back_comment_extension_preserves_segment_minima_for_adoption() {
                 chunk,
             );
             let before = canonical_snapshots(&eval);
-            let frontier = before.last().expect("nonempty partial seed").0.char_pos;
+            let frontier = before.last().expect("nonempty partial seed").0.char_pos();
             assert!(frontier < late_end - 3, "late lossage must extend the run");
             assert!(
                 before.iter().any(|(_, minimum)| *minimum < 0),
@@ -203,7 +203,7 @@ fn canonical_back_comment_extension_preserves_segment_minima_for_adoption() {
                 after.canon_back_comments > within.canon_back_comments,
                 "{after:?}"
             );
-            assert!(extended.last().expect("extended run").0.char_pos > frontier);
+            assert!(extended.last().expect("extended run").0.char_pos() > frontier);
             assert!(extended.len() > before.len());
             assert_eq!(&extended[..before.len()], before.as_slice());
             assert!(

@@ -61,9 +61,9 @@ pub(super) struct LoopState {
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub struct LoopState {
     /// Absolute 0-based position of the character about to be scanned.
-    pub char_pos: usize,
+    pub(crate) char_pos: usize,
     /// Its Emacs byte position.
-    pub byte_pos: EmacsBytePos,
+    pub(crate) byte_pos: EmacsBytePos,
     pub(super) pps: PartialParseState,
     /// Start of the symbol or word run still being scanned (GNU's pending
     /// `curlevel->last` before `symdone`).
@@ -71,7 +71,7 @@ pub struct LoopState {
     /// GNU `forw_comment`'s `prev_syntax` for a resumed comment. Consumed by
     /// the first iteration of a fresh scan, so it is `None` at every later
     /// loop top.
-    pub comment_resume: Option<CommentResumeSyntax>,
+    pub(crate) comment_resume: Option<CommentResumeSyntax>,
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -124,9 +124,9 @@ pub(super) struct ScanFinish {
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// A finished scan: the finalized state and where the scan stopped.
 pub struct ScanFinish {
-    pub state: PartialParseState,
+    pub(crate) state: PartialParseState,
     /// The Lisp position the scan stopped at (point after `parse-partial-sexp`).
-    pub stop: i64,
+    pub(crate) stop: i64,
     /// Where the character cursor ended: one past the last character the
     /// loop consumed. A peek reads only the character that starts here.
     pub(super) cursor_byte: EmacsBytePos,
@@ -145,7 +145,7 @@ pub(super) struct LoopTop<'a> {
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// A loop top as a [`ScanMode`] sees it.
 pub struct LoopTop<'a> {
-    pub char_pos: usize,
+    pub(crate) char_pos: usize,
     pub(super) byte_pos: EmacsBytePos,
     pub(super) pps: &'a PartialParseState,
     pub(super) atom_start: Option<i64>,
@@ -884,4 +884,42 @@ pub(super) fn run_parse_loop<M: ScanMode>(
         stop: char_pos_to_lisp_i64(from_char + idx),
         cursor_byte: chars.byte_pos,
     })
+}
+
+/// VIS read rows (lead #1052): copy/reference getters for the loop-top,
+/// loop-state and scan-finish fields that stay pub(crate) in this crate.
+#[cfg(any(test, feature = "test-support"))]
+impl LoopState {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn char_pos(&self) -> usize {
+        self.char_pos
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn byte_pos(&self) -> EmacsBytePos {
+        self.byte_pos
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn comment_resume(&self) -> Option<CommentResumeSyntax> {
+        self.comment_resume
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl LoopTop<'_> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn char_pos(&self) -> usize {
+        self.char_pos
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl ScanFinish {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn state(&self) -> &PartialParseState {
+        &self.state
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn stop(&self) -> i64 {
+        self.stop
+    }
 }
