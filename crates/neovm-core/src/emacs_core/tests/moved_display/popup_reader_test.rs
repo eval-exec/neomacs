@@ -13,6 +13,7 @@ use neovm_value::value::Value;
 fn popup_key_reader_follows_selected_buffer_after_async_display() {
     use crate::emacs_core::eval::RedisplayHookPolicyGuard;
     use crate::test_utils::input_wait::InputGateOwner;
+    use crate::window::DisplayFrameManagerExt;
     let _policy = RedisplayHookPolicyGuard::legacy();
     let mut ctx = crate::test_utils::runtime_startup_context();
     let old = ctx.edit.buffers.create_buffer("*popup-old*");
