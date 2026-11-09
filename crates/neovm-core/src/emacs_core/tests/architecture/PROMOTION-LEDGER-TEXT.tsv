@@ -99,6 +99,7 @@ charset_target_ranges	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charse
 map_charset_char_ranges	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:1398	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
 charset_exists	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:1445	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
 charset_contains_char	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:1450	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
+charset_canonical_name	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:1925	emacs_core::charset	stage-3b text K1 PC7-surface row: the display fontset canonicalizes encodings at definition (lead #469 P3 port; upstream core-local pub(crate) call across the split boundary)
 builtin_charsetp_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:1995	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
 builtin_charset_priority_list	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2033	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)
 builtin_set_charset_priority_in_state	fn	pub(crate)	crates/neovm-text/src/emacs_core/text/charset/mod.rs:2061	emacs_core::charset	stage-3b text K1 bulk row; core callers (1 sites)

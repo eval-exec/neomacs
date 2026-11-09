@@ -1921,7 +1921,8 @@ pub(crate) fn charset_decoder(charset: SymId) -> Option<CharsetDecoder> {
 ///
 /// Falls back to the name it was given when the charset is unregistered, so an
 /// unknown symbol publishes as itself rather than disappearing.
-pub(crate) fn charset_canonical_name(charset: SymId) -> SymId {
+#[doc(hidden)]
+pub fn charset_canonical_name(charset: SymId) -> SymId {
     CHARSET_REGISTRY.with(|slot| slot.borrow().resolve_name(charset))
 }
 
