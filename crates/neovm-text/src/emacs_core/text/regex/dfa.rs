@@ -2559,6 +2559,18 @@ fn stats_on() -> bool {
     cfg!(any(test, feature = "fuzzing")) || STATS_ON.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Arm this process's filter counters from a dependency test build.
+///
+/// The runtime enable stays `cfg!(test)` (own-build discriminator class): a
+/// test-support dependency build must not turn the counters on by itself.
+/// The only cross-crate route is neovm-text's signed AUTHORITY fence
+/// `test_support::authority::enable_dfa_stats_for_test`, so the counters stay
+/// inert until a test explicitly arms them (R4-F2, peer P5).
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn enable_dfa_stats_for_test() {
+    STATS_ON.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 #[cfg(not(any(test, feature = "test-support")))]
 /// Counters of the candidate filter on this thread (the regexp engine runs
 /// on the Lisp thread), reported at exit under `NEOVM_REGEX_DFA_STATS=1`.

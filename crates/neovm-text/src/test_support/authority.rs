@@ -49,3 +49,11 @@ pub fn reset_parse_cache_stats() {
 pub fn reset_syntax_table_decodes_for_test() {
     crate::emacs_core::syntax::reset_syntax_table_decodes_for_test();
 }
+
+/// FENCE (R4-F2, peer P5): arm this process's existence-DFA filter counters.
+/// The runtime stats enable stays `cfg!(test)`; without this explicit arming
+/// a test-support dependency build records nothing (own-build discriminator).
+/// Inert unless called.
+pub fn enable_dfa_stats_for_test() {
+    crate::emacs_core::regex_emacs::dfa::enable_dfa_stats_for_test();
+}

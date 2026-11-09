@@ -12,7 +12,7 @@ use neovm_text::emacs_core::regex::*;
 use neovm_text::emacs_core::regex_emacs::CompiledPattern;
 use neovm_text::emacs_core::regex_emacs::SyntaxLookup;
 use neovm_text::emacs_core::regex_emacs::dfa::UNKNOWN;
-use neovm_text::test_support::authority::reset_dfa_stats;
+use neovm_text::test_support::authority::{enable_dfa_stats_for_test, reset_dfa_stats};
 use neovm_value::emacs_char;
 
 use neovm_text::emacs_core::regex_emacs::{
@@ -504,6 +504,7 @@ fn cold_successful_searches_take_no_dfa_lease() {
 /// candidates of the same search, without counting its classic attempt twice.
 #[test]
 fn cold_failure_threshold_filters_the_rest_of_the_same_search() {
+    enable_dfa_stats_for_test();
     let syntax = DefaultSyntaxLookup;
     let compiled = regex_compile("z[0-9]", false, false).unwrap();
     let dense = vec![b'z'; 128];
@@ -540,6 +541,7 @@ fn cold_failure_threshold_filters_the_rest_of_the_same_search() {
 /// built, then skips candidates; the results are those of the matcher alone.
 #[test]
 fn searches_skip_rejected_candidates_once_the_dfa_is_built() {
+    enable_dfa_stats_for_test();
     let syntax = DefaultSyntaxLookup;
     let compiled = regex_compile("\\(?:foo\\|bar\\)[0-9]+;", false, false).unwrap();
     let text = b"foo bar fo1 foox barbar1 foo2 bar33x foo9; tail bar7 end";
@@ -599,6 +601,7 @@ fn searches_skip_rejected_candidates_once_the_dfa_is_built() {
 /// contradicts, over forward, backward, bounded and POSIX searches.
 #[test]
 fn verify_mode_finds_no_mismatch_on_random_searches() {
+    enable_dfa_stats_for_test();
     let mut rng = DfaRng(0x5EA7_C4ED);
     reset_dfa_stats();
     for _ in 0..800 {
@@ -802,6 +805,7 @@ fn a_pattern_that_reads_no_syntax_steps_over_property_runs() {
 /// skips candidates there: the lease is granted.
 #[test]
 fn searches_inside_property_runs_equal_the_matcher_alone() {
+    enable_dfa_stats_for_test();
     crate::test_utils::init_test_tracing();
     let mut rng = DfaRng(0x5EA7_0C7E);
     reset_dfa_stats();
@@ -855,6 +859,7 @@ fn searches_inside_property_runs_equal_the_matcher_alone() {
 /// one the matcher alone records, and every result is the matcher's.
 #[test]
 fn the_frontier_records_what_the_matcher_alone_records() {
+    enable_dfa_stats_for_test();
     crate::test_utils::init_test_tracing();
     let mut rng = DfaRng(0xF207_71E2);
     reset_dfa_stats();
@@ -944,6 +949,7 @@ fn a_candidate_reaching_the_frontier_is_left_to_the_matcher() {
 /// outlined matcher, while a successful fallback and verify keep all registers.
 #[test]
 fn inline_first_step_rejects_and_success_fallback_agree_with_verify() {
+    enable_dfa_stats_for_test();
     let syntax = DefaultSyntaxLookup;
     let compiled = regex_compile("\\<\\(foo\\)\\([0-9]\\);", false, false).unwrap();
     let text = b"xfoo7; foo8;";
@@ -1302,6 +1308,7 @@ fn the_overflow_free_span_is_the_fail_stack_bound() {
 /// the matcher, which signals the overflow as GNU does.
 #[test]
 fn a_rejection_that_could_overflow_runs_the_matcher() {
+    enable_dfa_stats_for_test();
     let syntax = DefaultSyntaxLookup;
     let compiled = regex_compile("x\\(?:a\\|b\\)*c", false, false).unwrap();
     let short = b"xab xba xabab xb xa xx xab xb xa xabb xa xbb xa xb xab xba xab xa";
@@ -1323,6 +1330,7 @@ fn a_rejection_that_could_overflow_runs_the_matcher() {
 /// A pattern whose candidates mostly match goes on holiday.
 #[test]
 fn mostly_matching_candidates_send_the_pattern_on_holiday() {
+    enable_dfa_stats_for_test();
     let syntax = DefaultSyntaxLookup;
     let compiled = regex_compile("[a-z]+", false, false).unwrap();
     let failing = b"1234567890 1234567890 12345";
@@ -1488,6 +1496,7 @@ fn dfa_differential_regressions() {
 /// as with it off.
 #[test]
 fn lisp_searches_follow_syntax_table_changes_with_the_filter_on() {
+    enable_dfa_stats_for_test();
     // Primitives only: `crate::test_utils::new_context()` loads no Lisp.
     let program = r#"
 (let ((out nil) (round 0) (st (copy-syntax-table)))
@@ -1539,6 +1548,7 @@ fn lisp_searches_follow_syntax_table_changes_with_the_filter_on() {
 /// runs at their positions, and answers exactly as with it off.
 #[test]
 fn lisp_searches_over_syntax_table_properties_with_the_filter_on() {
+    enable_dfa_stats_for_test();
     // Primitives only: `crate::test_utils::new_context()` loads no Lisp.
     let program = r#"
 (let ((out nil) (parse-sexp-lookup-properties t) (pos 1) (res nil))
@@ -1888,6 +1898,7 @@ fn inline_cached_prefix_keeps_consumed_accounting_and_captures() {
 /// including direct anchored exits and backward sparse-scan exhaustion.
 #[test]
 fn cold_isolated_whole_search_failures_admit_at_threshold() {
+    enable_dfa_stats_for_test();
     let syntax = DefaultSyntaxLookup;
     for (source, start, range) in [
         ("z\\([0-9]\\)", 0, 1),
