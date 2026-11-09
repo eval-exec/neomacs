@@ -6,12 +6,20 @@
 //! ZERO overlays (the vertico candidate `after-string` overlay is gone) and the
 //! minibuffer window is exactly one line tall (the analogue of GNU's
 //! unconditional `resize_mini_window (minibuf_window, 0)` at unwind).
+//!
+//! Frame creation and `grow_mini_window` are display traits. The teardown
+//! function stays private in this crate; the cfg(test) delegate is the route.
+//! The context is the bare constructor (`new_context`), the same one
+//! `Context::new(unit_runtime())` was. Assertions are unchanged.
 
-use super::*;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::minibuffer::{
-    activate_minibuffer_window_in_state, teardown_minibuffer_level_in_state,
+    activate_minibuffer_window_in_state, find_or_create_minibuffer_buffer_in_state,
+    teardown_minibuffer_level_in_state_for_test,
 };
+use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
+use neovm_value::minibuffer_state::MinibufferEntryLevel;
+use neovm_value::value::Value;
 
 /// Build a context with a selected frame, an active-looking ` *Minibuf-1*`
 /// buffer that carries an overlay, a grown (multi-line) minibuffer window, and a
@@ -29,7 +37,7 @@ fn run_teardown_and_collect(
     // A normal buffer for the frame's root window.
     let root_buf = ev.edit.buffers.create_buffer("teardown-root");
     let frame_id = ev
-        .frames
+        .frame_manager_mut()
         .create_frame("minibuffer-teardown", 200, 320, root_buf);
 
     // The active minibuffer pool buffer, with prompt text and a candidate
@@ -64,12 +72,17 @@ fn run_teardown_and_collect(
 
     // Grow the minibuffer window so it is multi-line, simulating a redisplay
     // that expanded it for the candidate list.
-    if let Some(frame) = ev.frames.get_mut(frame_id) {
+    if let Some(frame) = ev.frame_manager_mut().get_mut(frame_id) {
         frame.grow_mini_window(8);
     }
-    let char_h = ev.frames.get(frame_id).expect("frame").char_height.max(1.0);
+    let char_h = ev
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .char_height
+        .max(1.0);
     let grown_h = ev
-        .frames
+        .frame_manager()
         .get(frame_id)
         .and_then(|f| f.minibuffer_leaf.as_ref())
         .map(|m| m.bounds().height)
@@ -80,27 +93,35 @@ fn run_teardown_and_collect(
     );
 
     // Activate the minibuffer window so we have a saved state to restore.
-    let saved = activate_minibuffer_window_in_state(
-        &mut ev.frames,
-        &mut ev.edit.buffers,
-        &mut ev.minibuffer_selected_window,
-        &mut ev.active_minibuffer_window,
-        minibuf_id,
-        neovm_value::minibuffer_state::MinibufferEntryLevel::Outermost,
-    )
-    .expect("activate minibuffer window");
+    let saved = {
+        let (frames, buffers, minibuffer_selected_window, active_minibuffer_window) =
+            ev.frame_manager_buffers_and_minibuffer_selection_mut();
+        activate_minibuffer_window_in_state(
+            frames,
+            buffers,
+            minibuffer_selected_window,
+            active_minibuffer_window,
+            minibuf_id,
+            MinibufferEntryLevel::Outermost,
+        )
+        .expect("activate minibuffer window")
+    };
 
     // Outermost teardown: depth_after_pop == 0 (no nested minibuffer remains).
-    let outcome = teardown_minibuffer_level_in_state(
-        &mut ev.frames,
-        &mut ev.edit.buffers,
-        &mut ev.minibuffer_selected_window,
-        &mut ev.active_minibuffer_window,
-        minibuf_id,
-        0,
-        saved,
-        || Ok(Value::NIL),
-    );
+    let outcome = {
+        let (frames, buffers, minibuffer_selected_window, active_minibuffer_window) =
+            ev.frame_manager_buffers_and_minibuffer_selection_mut();
+        teardown_minibuffer_level_in_state_for_test(
+            frames,
+            buffers,
+            minibuffer_selected_window,
+            active_minibuffer_window,
+            minibuf_id,
+            0,
+            saved,
+            || Ok(Value::NIL),
+        )
+    };
     assert!(
         outcome.inactive_mode_result.is_ok(),
         "teardown inactive-mode hook should succeed"
@@ -108,7 +129,7 @@ fn run_teardown_and_collect(
     outcome.window_restore.apply(ev);
 
     let height_after = ev
-        .frames
+        .frame_manager()
         .get(frame_id)
         .and_then(|f| f.minibuffer_leaf.as_ref())
         .map(|m| m.bounds().height)
@@ -119,7 +140,7 @@ fn run_teardown_and_collect(
 #[test]
 fn teardown_deletes_all_overlays_on_expired_minibuffer() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    let mut ev = crate::test_utils::new_context();
     let (minibuf_id, _frame_id, _height_after, _char_h) = run_teardown_and_collect(&mut ev);
 
     let overlay_count = ev
@@ -139,7 +160,7 @@ fn teardown_deletes_all_overlays_on_expired_minibuffer() {
 #[test]
 fn teardown_force_resizes_mini_window_to_one_line() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    let mut ev = crate::test_utils::new_context();
     let (_minibuf_id, _frame_id, height_after, char_h) = run_teardown_and_collect(&mut ev);
 
     assert!(

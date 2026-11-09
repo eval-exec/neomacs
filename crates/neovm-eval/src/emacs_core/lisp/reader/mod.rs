@@ -1161,11 +1161,5 @@ impl ObarrayReadSymbolsExt for Obarray {
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/minibuffer_teardown_test.rs"]
-mod minibuffer_teardown_tests;
-#[cfg(test)]
-#[path = "tests/minibuffer_unwind_order_test.rs"]
-mod minibuffer_unwind_order_tests;
-#[cfg(test)]
 #[path = "tests/raw_bytes_test.rs"]
 mod raw_bytes_tests;

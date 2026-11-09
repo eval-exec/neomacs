@@ -316,6 +316,32 @@ fn teardown_minibuffer_level_in_state(
     }
 }
 
+/// Same-crate test route. The production function stays private. This is not
+/// a cross-crate visibility item: core's moved tests are in this crate, and
+/// the delegate exists only while this crate is built as a test.
+#[cfg(test)]
+pub(crate) fn teardown_minibuffer_level_in_state_for_test(
+    frames: &mut crate::window::FrameManager,
+    buffers: &mut crate::buffer::BufferManager,
+    minibuffer_selected_window: &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+    active_minibuffer_window: &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+    minibuf_id: crate::buffer::BufferId,
+    depth_after_pop: usize,
+    saved: ActiveMinibufferWindowState,
+    run_inactive_mode: impl FnOnce() -> EvalResult,
+) -> MinibufferTeardownOutcome {
+    teardown_minibuffer_level_in_state(
+        frames,
+        buffers,
+        minibuffer_selected_window,
+        active_minibuffer_window,
+        minibuf_id,
+        depth_after_pop,
+        saved,
+        run_inactive_mode,
+    )
+}
+
 pub(crate) fn unwind_minibuffer_session(
     shared: &mut crate::emacs_core::eval::Context,
     state: MinibufferSessionUnwind,

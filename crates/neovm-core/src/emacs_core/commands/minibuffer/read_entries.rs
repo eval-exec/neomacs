@@ -857,6 +857,18 @@ pub(crate) fn finish_read_from_minibuffer_in_vm_runtime(
     finish_read_from_minibuffer_in_vm_runtime_with_setup(shared, args, |_| Ok(Value::NIL))
 }
 
+/// Same-crate test route for the reader-session setup hook. The production
+/// function stays private. Core's moved tests are in this crate, so this is
+/// not a cross-crate visibility item.
+#[cfg(test)]
+pub(crate) fn finish_read_from_minibuffer_in_vm_runtime_with_setup_for_test(
+    shared: &mut Context,
+    args: &[Value],
+    run_before_setup_hook: impl FnMut(&mut Context) -> EvalResult,
+) -> EvalResult {
+    finish_read_from_minibuffer_in_vm_runtime_with_setup(shared, args, run_before_setup_hook)
+}
+
 fn finish_read_from_minibuffer_in_vm_runtime_with_setup(
     shared: &mut Context,
     args: &[Value],

@@ -1,91 +1,39 @@
 //! Exercise the real reader session, native configuration unwind, and GNU
 //! window hook epochs. One exclusively owned Context remains live throughout.
 //! The counting frontend accepts real frame transactions but measures no glyphs.
-use super::*;
-use crate::emacs_core::eval::host_input::HostInputPublisher;
+//!
+//! `HostInputPublisher` and `ensure_selected_frame_id` are upper-crate routes.
+//! The reader setup hook stays private; the cfg(test) delegate in this crate
+//! is the route. Assertions are unchanged.
+
+use crate::emacs_core::eval::keyboard::{InputEvent, KeyEvent};
 use crate::emacs_core::eval::{ConditionFrame, Context, RedisplayHookPolicyGuard, ResumeTarget};
+use crate::emacs_core::host_input::HostInputPublisher;
+use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
 use neovm_edit::emacs_core::display_metrics::WindowId;
 use neovm_value::display_vocab::FrameId;
-
-// Native layout evidence is emitted before the semantic RED assertion and
-// has no behavioral side effects. It reads only type/probe facts of this build.
-fn trace_minibuffer_unwind_layout() {
-    use crate::emacs_core::eval::redisplay_hooks::RedisplayHookOwnership;
-    use crate::emacs_core::eval::{NativeUnwindAction, SpecBinding};
-    tracing::info!(target: "d5::mini_unwind_layout", hook_size = std::mem::size_of::<RedisplayHookOwnership>(), hook_align = std::mem::align_of::<RedisplayHookOwnership>(), context_size = std::mem::size_of::<Context>(), context_align = std::mem::align_of::<Context>(), "mini unwind layout sizes");
-    tracing::info!(target: "d5::mini_unwind_layout", field = "context.gnu_redisplay_hooks", offset = std::mem::offset_of!(Context, gnu_redisplay_hooks), "mini unwind layout metric");
-    tracing::info!(target: "d5::mini_unwind_layout", field = "context.specpdl", offset = std::mem::offset_of!(Context, specpdl), "mini unwind layout metric");
-    tracing::info!(target: "d5::mini_unwind_layout", field = "context.jit_bind_stack", offset = std::mem::offset_of!(Context, jit_bind_stack), "mini unwind layout metric");
-    tracing::info!(target: "d5::mini_unwind_layout", field = "context.depth", offset = std::mem::offset_of!(Context, depth), "mini unwind layout metric");
-    tracing::info!(target: "d5::mini_unwind_layout", field = "context.max_depth", offset = std::mem::offset_of!(Context, max_depth), "mini unwind layout metric");
-    tracing::info!(target: "d5::mini_unwind_layout", field = "context.obarray", offset = std::mem::offset_of!(Context, obarray), "mini unwind layout metric");
-    tracing::info!(target: "d5::mini_unwind_layout", field = "context.jit_stack_limit", offset = std::mem::offset_of!(Context, jit_stack_limit), "mini unwind layout metric");
-    tracing::info!(target: "d5::mini_unwind_layout", field = "context.jit_stack_scratch", offset = std::mem::offset_of!(Context, jit_stack_scratch), "mini unwind layout metric");
-    tracing::info!(target: "d5::mini_unwind_layout", field = "context.attention", offset = crate::emacs_core::eval::runtime_projection::CONTEXT_ATTENTION_OFFSET, "mini unwind layout metric");
-    tracing::info!(target: "d5::mini_unwind_layout", field = "context.buffers", offset = std::mem::offset_of!(Context, edit.buffers), "mini unwind layout metric");
-    tracing::info!(target: "d5::mini_unwind_layout", field = "context.tagged_heap", offset = std::mem::offset_of!(Context, tagged_heap), "mini unwind layout metric");
-    tracing::info!(target: "d5::mini_unwind_layout",
-        spec_size = std::mem::size_of::<SpecBinding>(),
-        spec_align = std::mem::align_of::<SpecBinding>(),
-        native_size = std::mem::size_of::<NativeUnwindAction>(),
-        native_align = std::mem::align_of::<NativeUnwindAction>(),
-        "mini unwind specpdl sizes");
-    #[cfg(feature = "jit")]
-    {
-        use crate::emacs_core::jit::compile::jit_layout;
-        let lets = jit_layout::let_layout();
-        let backtraces = jit_layout::backtrace_layout();
-        tracing::info!(target: "d5::mini_unwind_layout",
-            let_available = true, backtrace_available = backtraces.is_some(),
-            "mini unwind template probes");
-        {
-            let layout = lets;
-            for (name, template) in [
-                ("let", layout.let_),
-                ("let_local", layout.let_local),
-                ("let_default", layout.let_default),
-            ] {
-                tracing::info!(target: "d5::mini_unwind_layout", template = name,
-                    header_offset = template.header_offset, header = template.header,
-                    header_mask = template.header_mask, small_shift = ?template.small_shift,
-                    fields = ?template.fields, "mini unwind entry template");
-            }
-        }
-        if let Some(layout) = backtraces {
-            for (name, template) in [
-                ("backtrace1", layout.bt1),
-                ("backtrace2", layout.bt2),
-                ("backtrace_native", layout.native),
-            ] {
-                tracing::info!(target: "d5::mini_unwind_layout", template = name,
-                    header_offset = template.header_offset, header = template.header,
-                    header_mask = template.header_mask, small_shift = ?template.small_shift,
-                    fields = ?template.fields, "mini unwind entry template");
-            }
-        }
-    }
-}
+use neovm_value::error::{Flow, signal};
+use neovm_value::value::{Value, list_to_vec};
 
 fn fixture() -> (Context, FrameId, WindowId, neovm_edit::buffer::BufferId) {
     crate::test_utils::init_test_tracing();
-    trace_minibuffer_unwind_layout();
     let mut eval = crate::test_utils::runtime_startup_context();
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let mini = eval
-        .frames
+        .frame_manager()
         .get(frame)
         .expect("frame")
         .minibuffer_window
         .expect("mini");
     let inactive = eval
-        .frames
+        .frame_manager()
         .get(frame)
         .expect("frame")
         .find_window(mini)
-        .and_then(crate::emacs_core::eval::data::window_state::Window::buffer_id)
+        .and_then(|window| window.buffer_id())
         .expect("inactive source");
     {
-        let state = eval.frames.get_mut(frame).expect("frame");
+        let state = eval.frame_manager_mut().get_mut(frame).expect("frame");
         state.char_width = 1.0;
         state.char_height = 1.0;
         state.shrink_mini_window();
@@ -104,7 +52,7 @@ fn fixture() -> (Context, FrameId, WindowId, neovm_edit::buffer::BufferId) {
         "minibuffer-exit-hook",
         "resize-mini-windows",
     ] {
-        eval.obarray.set_symbol_value(name, Value::NIL);
+        eval.obarray_mut().set_symbol_value(name, Value::NIL);
     }
     eval.eval_str(
         r#"(progn
@@ -134,9 +82,13 @@ fn exercise_reader(restore_windows: bool, throw_inactive: bool, record_active: b
         .buffers
         .current_buffer_id()
         .expect("caller buffer");
-    let selected = eval.frames.get(frame).expect("frame").selected_window;
-    let saved_stamp = eval.frames.get(frame).expect("frame").change_stamp;
-    eval.obarray.set_symbol_value(
+    let selected = eval
+        .frame_manager()
+        .get(frame)
+        .expect("frame")
+        .selected_window;
+    let saved_stamp = eval.frame_manager().get(frame).expect("frame").change_stamp;
+    eval.obarray_mut().set_symbol_value(
         "read-minibuffer-restore-windows",
         Value::bool(restore_windows),
     );
@@ -147,16 +99,14 @@ fn exercise_reader(restore_windows: bool, throw_inactive: bool, record_active: b
         .expect("inactive-mode transfer");
     }
     let tx = HostInputPublisher::install(&mut eval);
-    tx.send(crate::emacs_core::eval::keyboard::InputEvent::key_press(
-        crate::emacs_core::eval::keyboard::KeyEvent::char(' '),
-    ))
-    .expect("queue reader exit");
+    tx.send(InputEvent::key_press(KeyEvent::char(' ')))
+        .expect("queue reader exit");
     let map = eval
-        .obarray
+        .obarray()
         .symbol_value_copied("d5-mini-map")
         .expect("map");
     let mut expired = None;
-    let handlers = eval.condition_stack.len();
+    let handlers = eval.condition_stack_for_test().len();
     if throw_inactive {
         // Match sf_catch_value: GNU throw requires an active catch handler.
         // Without it this fixture would signal no-catch before observing the
@@ -166,17 +116,17 @@ fn exercise_reader(restore_windows: bool, throw_inactive: bool, record_active: b
             resume: ResumeTarget::InterpreterCatch,
         });
     }
-    let result = finish_read_from_minibuffer_in_vm_runtime_with_setup(
+    let result = crate::emacs_core::minibuffer::read_entries::finish_read_from_minibuffer_in_vm_runtime_with_setup_for_test(
         &mut eval,
         &[Value::string("Prompt: "), Value::string("answer"), map],
         |eval| {
-            expired = eval.buffers.current_buffer_id();
+            expired = eval.buffer_manager().current_buffer_id();
             assert_ne!(expired, Some(inactive));
             if record_active {
                 eval.gnu_mark_frame_window_change(frame);
                 crate::emacs_core::eval::lifecycle::run_redisplay_window_change_hooks(eval)?;
                 assert_ne!(
-                    eval.frames.get(frame).expect("frame").change_stamp,
+                    eval.frame_manager().get(frame).expect("frame").change_stamp,
                     saved_stamp
                 );
                 Ok(Value::NIL)
@@ -192,7 +142,7 @@ fn exercise_reader(restore_windows: bool, throw_inactive: bool, record_active: b
     );
     if throw_inactive {
         eval.pop_condition_frame();
-        assert_eq!(eval.condition_stack.len(), handlers);
+        assert_eq!(eval.condition_stack_for_test().len(), handlers);
         assert!(
             result
                 .as_ref()
@@ -217,13 +167,16 @@ fn exercise_reader(restore_windows: bool, throw_inactive: bool, record_active: b
     }
     assert_eq!(eval.edit.buffers.current_buffer_id(), Some(caller));
     assert_eq!(
-        eval.frames.get(frame).expect("frame").selected_window,
+        eval.frame_manager()
+            .get(frame)
+            .expect("frame")
+            .selected_window,
         selected
     );
-    assert_eq!(eval.minibuffers.depth(), 0);
-    assert_eq!(*eval.active_minibuffer_window, None);
+    assert_eq!(eval.minibuffers().depth(), 0);
+    assert_eq!(*eval.active_minibuffer_window(), None);
     let leaf = eval
-        .frames
+        .frame_manager()
         .get(frame)
         .expect("frame")
         .find_window(mini)
@@ -238,7 +191,7 @@ fn exercise_reader(restore_windows: bool, throw_inactive: bool, record_active: b
         },
         "the final mini source restoration follows DONT-SET-MINIWINDOW configuration restoration"
     );
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("d5-mini-buffer-calls", Value::NIL);
     // The live shrink or configuration restore marks this in the TUI oracle.
     // Keep this epoch-focused native seam independent of glyph sizing.
@@ -246,7 +199,7 @@ fn exercise_reader(restore_windows: bool, throw_inactive: bool, record_active: b
     crate::emacs_core::eval::lifecycle::run_redisplay_window_change_hooks(&mut eval)
         .expect("first post-reader hook pass");
     let calls = eval
-        .obarray
+        .obarray()
         .symbol_value_copied("d5-mini-buffer-calls")
         .expect("calls");
     let calls = list_to_vec(&calls).expect("call list");
@@ -261,7 +214,7 @@ fn exercise_reader(restore_windows: bool, throw_inactive: bool, record_active: b
     crate::emacs_core::eval::lifecycle::run_redisplay_window_change_hooks(&mut eval)
         .expect("idle post-reader pass");
     let idle = eval
-        .obarray
+        .obarray()
         .symbol_value_copied("d5-mini-buffer-calls")
         .expect("idle calls");
     assert_eq!(

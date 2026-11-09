@@ -2984,6 +2984,15 @@ pub mod authority {
             .collect()
     }
 
+    /// FENCE: how many source spec slots this leaf has. `SpecSlot` stays
+    /// private to the compile module. The count is the only word returned.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn source_spec_slot_count_for_test(
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+    ) -> usize {
+        leaf.source_spec_slots().count()
+    }
+
     /// FENCE: MIR census `(build_failed, reach_dead, taken, dead_leaders)`.
     /// `CompileStats` stays pub(crate).
     #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
@@ -3019,13 +3028,29 @@ pub mod authority {
             .all(|slot| slot.direct_entry_ptr_for_test().is_null())
     }
 
-    /// FENCE: how many source spec slots this leaf has. `SpecSlot` stays
-    /// private to the compile module. The count is the only word returned.
-    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
-    pub fn source_spec_slot_count_for_test(
-        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
-    ) -> usize {
-        leaf.source_spec_slots().count()
+    /// FENCE: shipped alias rows as `(name, source, authority is World)`.
+    /// `InventoryEntry` and `AliasTarget` stay pub(crate).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn shipped_alias_rows_for_test(
+        ctx: &crate::emacs_core::eval::Context,
+    ) -> Vec<(&'static str, &'static str, bool)> {
+        crate::emacs_core::subr::effect_catalog::shipped_alias_rows_for_test(ctx)
+    }
+
+    /// FENCE: the live function cell of `name` resolves to World authority.
+    /// `AliasTarget` stays pub(crate).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn alias_authority_is_world_for_test(
+        ctx: &crate::emacs_core::eval::Context,
+        name: &str,
+    ) -> bool {
+        crate::emacs_core::subr::effect_catalog::alias_authority_is_world_for_test(ctx, name)
+    }
+
+    /// FENCE: primitive inventory names. `InventoryEntry` stays pub(crate).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn primitive_inventory_names_for_test() -> Vec<&'static str> {
+        crate::emacs_core::subr::effect_catalog::primitive_inventory_names_for_test()
     }
 }
 

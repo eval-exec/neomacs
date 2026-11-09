@@ -46,16 +46,6 @@ fn pentry_catalog_covers_every_installed_subr_opcode_leaf_and_alias() {
             .expect("rebased primitive has a cold inventory row");
         assert_eq!(row.authority, Authority::World);
     }
-    for batch in crate::emacs_core::builtins::localized_subr_catalog() {
-        for spec in batch.specs() {
-            assert!(installed.contains(spec.name()));
-            let declaration = crate::emacs_core::subr::WorldSubr::new(*spec).declaration();
-            assert_eq!(
-                declaration.classification,
-                super::super::effect_schema::Classification::Classified(Authority::World)
-            );
-        }
-    }
 
     // Generated exhaustive matches are compiled against the real enums. Tables
     // have one source row per variant, including the trap opcode and opcode leaves.
@@ -259,38 +249,6 @@ fn pentry_catalog_shipped_alias_rows_match_lisp_reader_forms() {
     assert_eq!(
         generated, declared,
         "complete shipped alias source registry"
-    );
-}
-
-#[test]
-fn pentry_catalog_covers_shipped_and_loaded_alias_cells() {
-    let ctx = crate::test_utils::runtime_startup_context();
-    let aliases = INVENTORY
-        .iter()
-        .filter(|row| row.kind == CatalogKind::Alias)
-        .collect::<Vec<_>>();
-    assert!(!aliases.is_empty());
-    for row in &aliases {
-        assert_eq!(row.source, "lisp/subr.el");
-        assert_eq!(alias_authority(&ctx, row.name), Some(Authority::World));
-    }
-    let mut loaded = 0;
-    for (id, _) in ctx.obarray.iter_symbols() {
-        if ctx
-            .obarray
-            .symbol_function_id(id)
-            .is_some_and(|value| value.as_bare_symbol_id().is_some())
-        {
-            loaded += 1;
-            assert_eq!(
-                alias_authority(&ctx, resolve_sym(id)),
-                Some(Authority::World)
-            );
-        }
-    }
-    assert!(
-        loaded > 0,
-        "loaded runtime must exercise actual alias cells"
     );
 }
 

@@ -131,6 +131,64 @@ pub(crate) fn leaf_dispatch_slot(entry: crate::emacs_core::subr::leaf::LeafId) -
     leaf_dispatch(entry)
 }
 
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn primitive_inventory_names_for_test() -> Vec<&'static str> {
+    INVENTORY
+        .iter()
+        .filter(|entry| entry.kind == CatalogKind::Primitive)
+        .map(|entry| entry.name)
+        .collect()
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn current_alias_target_for_test(
+    ctx: &crate::emacs_core::eval::Context,
+    name: &str,
+) -> AliasTarget<'static> {
+    let mut id = neovm_value::intern::intern(name);
+    let mut visited = std::collections::HashSet::new();
+    while visited.insert(id) {
+        let Some(value) = ctx.obarray().symbol_function_id(id) else {
+            return AliasTarget::Void;
+        };
+        if let Some(next) = value.as_bare_symbol_id() {
+            id = next;
+        } else if value.is_subr() {
+            return AliasTarget::Native(neovm_value::intern::resolve_sym(
+                value.as_subr_id().expect("subr identity"),
+            ));
+        } else {
+            return AliasTarget::Interpreted;
+        }
+    }
+    AliasTarget::Cycle
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn alias_authority_is_world_for_test(
+    ctx: &crate::emacs_core::eval::Context,
+    name: &str,
+) -> bool {
+    alias_target_authority(current_alias_target_for_test(ctx, name)) == Some(Authority::World)
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn shipped_alias_rows_for_test(
+    ctx: &crate::emacs_core::eval::Context,
+) -> Vec<(&'static str, &'static str, bool)> {
+    INVENTORY
+        .iter()
+        .filter(|row| row.kind == CatalogKind::Alias)
+        .map(|row| {
+            (
+                row.name,
+                row.source,
+                alias_authority_is_world_for_test(ctx, row.name),
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 #[path = "tests/effect_catalog_test.rs"]
 mod tests;
