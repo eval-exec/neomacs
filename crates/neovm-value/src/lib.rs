@@ -75,5 +75,9 @@ pub use value::bytecode_semantics::{BytecodeSemantics, install_bytecode_semantic
 // share this one identity-selection rule; the module path stays `pub(crate)`.
 #[doc(hidden)]
 pub use value::hook_publication::select_published_identity;
+// K1: the full payload+identity publication rule the nine evaluator descriptor
+// installers call (the module path stays `pub(crate)`).
+#[doc(hidden)]
+pub use value::hook_publication::publish as publish_hook_table;
 pub use value::hook_publication::{HookInstallError, HookInstallStatus};
 pub use value::scratch_bridge::{ScratchRootHooks, install_scratch_root_hooks};

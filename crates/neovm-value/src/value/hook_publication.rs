@@ -43,9 +43,18 @@ pub fn select_published_identity<T: 'static>(
     }
 }
 
+/// Publish one payload cell through the shared identity rule, for the cold
+/// per-table installers (cross-crate K1 surface; `value`'s own
+/// `hook_publication::publish` callers and the evaluator's nine descriptor
+/// installers share this one body).
+///
+/// Pure std `OnceLock` state: it compares descriptor addresses and copies a
+/// `Copy` fn-pointer table into the payload cell.  No heap allocation, no
+/// thread-local or carrier access, no callback invocation.
+#[doc(hidden)]
 #[cold]
 #[inline(never)]
-pub(crate) fn publish<T: Copy + Sync + 'static>(
+pub fn publish<T: Copy + Sync + 'static>(
     payload: &OnceLock<T>,
     identity: &OnceLock<&'static T>,
     offered: &'static T,
