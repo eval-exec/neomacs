@@ -36,17 +36,17 @@ fn fresh_intern(kind: PlainSymbolBacking, query: Query, exact_epoch: bool) {
             );
         }
         let after = run.initial_facts_copy_for_test(id).unwrap();
-        assert!(after.present && after.member && after.spine_current);
+        assert!(after.present() && after.member() && after.spine_current());
         assert_eq!(
-            (after.members, after.epoch),
-            (before.members + 1, before.epoch + 1)
+            (after.members(), after.epoch()),
+            (before.members() + 1, before.epoch() + 1)
         );
-        assert_eq!(after.chunks, after.sides);
+        assert_eq!(after.chunks(), after.sides());
         assert_eq!(
-            after.cells,
+            after.cells(),
             Some((Value::NIL.bits(), Value::NIL.bits(), false, false))
         );
-        assert_eq!(after.backing, Some(kind));
+        assert_eq!(after.backing(), Some(kind));
         assert_eq!(
             name_publication_for_test(run.registry_heap_for_test(), id, loser),
             (Some(name), true, false, true)
@@ -54,7 +54,7 @@ fn fresh_intern(kind: PlainSymbolBacking, query: Query, exact_epoch: bool) {
         assert!(run.hot_bytes_since_gc_for_test().unwrap() > charge);
         if matches!(query, Query::FreshBoundary) {
             assert!(
-                after.chunks >= before.chunks + 2,
+                after.chunks() >= before.chunks() + 2,
                 "fresh publication must really grow chunk and side tables"
             );
             assert!(
@@ -64,7 +64,7 @@ fn fresh_intern(kind: PlainSymbolBacking, query: Query, exact_epoch: bool) {
                     crate::intern::SymId::from_raw(id.to_raw() - 1)
                 })
                 .unwrap()
-                .present
+                .present()
             );
         }
         let stable_registry = identity_census_for_test();
@@ -101,30 +101,35 @@ fn existing_intern(kind: PlainSymbolBacking, query: Query) {
             .target
             .expect("existing canonical ID prepared serially");
         let before = run.initial_facts_copy_for_test(id).unwrap();
-        let table_before = run.symbol_table_census_for_test().unwrap().retained_bytes;
+        let table_before = run.symbol_table_census_for_test().unwrap().retained_bytes();
         let charge = run.hot_bytes_since_gc_for_test().unwrap();
         intern_retry(run, &homes.name, &mut homes.dst).unwrap();
         assert_eq!(homes.dst.word_for_test(run), Value::from_sym_id(id).bits());
         let after = run.initial_facts_copy_for_test(id).unwrap();
-        assert!(after.present && after.member);
-        assert_eq!(after.members, before.members + usize::from(!before.member));
-        assert_eq!(after.epoch, before.epoch + u64::from(!before.member));
-        assert_eq!(after.chunks, after.sides);
-        assert!(after.spine_current);
+        assert!(after.present() && after.member());
+        assert_eq!(
+            after.members(),
+            before.members() + usize::from(!before.member())
+        );
+        assert_eq!(after.epoch(), before.epoch() + u64::from(!before.member()));
+        assert_eq!(after.chunks(), after.sides());
+        assert!(after.spine_current());
         assert_eq!(
             run.hot_bytes_since_gc_for_test().unwrap() - charge,
-            after.bytes - before.bytes + run.symbol_table_census_for_test().unwrap().retained_bytes
+            after.bytes() - before.bytes()
+                + run.symbol_table_census_for_test().unwrap().retained_bytes()
                 - table_before
         );
-        if before.present {
+        if before.present() {
             assert_eq!(
-                after.cells, before.cells,
+                after.cells(),
+                before.cells(),
                 "intern must preserve function/plist and nonmembership flags"
             );
         }
         if matches!(query, Query::Boundary) {
             assert!(
-                after.slots > before.slots && after.chunks >= before.chunks + 2,
+                after.slots() > before.slots() && after.chunks() >= before.chunks() + 2,
                 "actual chunk/side growth required"
             );
             assert!(
@@ -134,32 +139,32 @@ fn existing_intern(kind: PlainSymbolBacking, query: Query) {
                     crate::intern::SymId::from_raw(id.to_raw() - 1)
                 })
                 .unwrap()
-                .present,
+                .present(),
                 "registry-ID gap remains absent in World"
             );
         }
         intern_retry(run, &homes.equal_name, &mut homes.dst).unwrap();
         let repeated = run.initial_facts_copy_for_test(id).unwrap();
         assert_eq!(
-            (repeated.members, repeated.epoch, repeated.bytes),
-            (after.members, after.epoch, after.bytes)
+            (repeated.members(), repeated.epoch(), repeated.bytes()),
+            (after.members(), after.epoch(), after.bytes())
         );
         assert_eq!(homes.dst.word_for_test(run), Value::from_sym_id(id).bits());
         let handle = run.initial_symbol_handle(&homes.dst).unwrap();
         run.sym_function_into(&handle, &mut homes.dst).unwrap();
         assert_eq!(
             homes.dst.word_for_test(run),
-            if before.present {
+            if before.present() {
                 Value::fixnum(31).bits()
             } else {
                 Value::NIL.bits()
             }
         );
-        if !before.present {
+        if !before.present() {
             run.sym_boundp_into(&handle, &mut homes.dst).unwrap();
             assert_eq!(homes.dst.word_for_test(run), Value::NIL.bits());
             assert_eq!(
-                after.backing,
+                after.backing(),
                 Some(if kind == PlainSymbolBacking::VoidProjection {
                     PlainSymbolBacking::VoidProjection
                 } else {
@@ -172,14 +177,14 @@ fn existing_intern(kind: PlainSymbolBacking, query: Query) {
             assert_eq!(homes.dst.word_for_test(run), Value::fixnum(23).bits());
             let set = run.initial_facts_copy_for_test(id).unwrap();
             assert_eq!(
-                set.projections,
-                after.projections + usize::from(kind == PlainSymbolBacking::VoidProjection)
+                set.projections(),
+                after.projections() + usize::from(kind == PlainSymbolBacking::VoidProjection)
             );
             run.sym_set_into(&handle, &homes.value, &mut homes.dst)
                 .unwrap();
             assert_eq!(
-                run.initial_facts_copy_for_test(id).unwrap().projections,
-                set.projections,
+                run.initial_facts_copy_for_test(id).unwrap().projections(),
+                set.projections(),
                 "one descriptor per symbol, no repeated issue"
             );
         } else if kind != PlainSymbolBacking::VoidProjection {
@@ -449,8 +454,18 @@ fn p3sym_c5_intern_busy_leaves_output_and_membership_unchanged() {
             });
             let after = run.initial_facts_copy_for_test(id).unwrap();
             assert_eq!(
-                (after.members, after.epoch, after.bytes, after.present),
-                (before.members, before.epoch, before.bytes, before.present)
+                (
+                    after.members(),
+                    after.epoch(),
+                    after.bytes(),
+                    after.present()
+                ),
+                (
+                    before.members(),
+                    before.epoch(),
+                    before.bytes(),
+                    before.present()
+                )
             );
             assert_eq!(homes.dst.word_for_test(run), output);
             intern_retry(run, &homes.name, &mut homes.dst).unwrap();
@@ -468,13 +483,13 @@ fn p3sym_c5_existing_intern_can_replace_its_name_home() {
         fixture(kind, Query::RegistryOnly, |run, homes| {
             let id = homes.target.unwrap();
             let before = run.initial_facts_copy_for_test(id).unwrap();
-            assert!(!before.member);
+            assert!(!before.member());
             let mut alias = homes.name.clone();
             intern_retry(run, &homes.name, &mut alias).unwrap();
             assert_eq!(homes.name.word_for_test(run), Value::from_sym_id(id).bits());
             assert_eq!(
-                run.initial_facts_copy_for_test(id).unwrap().members,
-                before.members + 1
+                run.initial_facts_copy_for_test(id).unwrap().members(),
+                before.members() + 1
             );
             run.initial_symbol_handle(&homes.name).unwrap();
         })

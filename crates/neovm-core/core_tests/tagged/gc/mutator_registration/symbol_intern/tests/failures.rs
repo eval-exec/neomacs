@@ -7,8 +7,8 @@ fn reservation_refusal(kind: PlainSymbolBacking, query: Query) {
     fixture(kind, query, |run, homes| {
         let id = homes.target.unwrap();
         let before = run.initial_facts_copy_for_test(id).unwrap();
-        assert!(!before.present && !before.member);
-        let table_before = run.symbol_table_census_for_test().unwrap().retained_bytes;
+        assert!(!before.present() && !before.member());
+        let table_before = run.symbol_table_census_for_test().unwrap().retained_bytes();
         let charge = run.hot_bytes_since_gc_for_test().unwrap();
         let output = homes.dst.word_for_test(run);
         let old_cell = homes.old_id;
@@ -23,47 +23,49 @@ fn reservation_refusal(kind: PlainSymbolBacking, query: Query) {
         );
         let after = run.initial_facts_copy_for_test(id).unwrap();
         assert_ne!(
-            after.spine_address, before.spine_address,
+            after.spine_address(),
+            before.spine_address(),
             "fault must actually relocate the spine"
         );
         assert!(
-            after.spine_current,
+            after.spine_current(),
             "reservation refusal left a retired JIT spine"
         );
         assert_eq!(
             (
-                after.members,
-                after.epoch,
-                after.slots,
-                after.chunks,
-                after.sides,
-                after.present,
-                after.member
+                after.members(),
+                after.epoch(),
+                after.slots(),
+                after.chunks(),
+                after.sides(),
+                after.present(),
+                after.member()
             ),
             (
-                before.members,
-                before.epoch,
-                before.slots,
-                before.chunks,
-                before.sides,
-                before.present,
-                before.member
+                before.members(),
+                before.epoch(),
+                before.slots(),
+                before.chunks(),
+                before.sides(),
+                before.present(),
+                before.member()
             )
         );
         assert_eq!(homes.dst.word_for_test(run), output);
         assert!(
-            after.bytes > before.bytes,
+            after.bytes() > before.bytes(),
             "retained reservation capacity is real"
         );
         assert_eq!(
             run.hot_bytes_since_gc_for_test().unwrap() - charge,
-            after.bytes - before.bytes + run.symbol_table_census_for_test().unwrap().retained_bytes
+            after.bytes() - before.bytes()
+                + run.symbol_table_census_for_test().unwrap().retained_bytes()
                 - table_before
         );
         let old_after = run.initial_facts_copy_for_test(old_cell).unwrap();
         assert_eq!(
-            (old_after.cells, old_after.backing, old_after.member),
-            (old.cells, old.backing, old.member)
+            (old_after.cells(), old_after.backing(), old_after.member()),
+            (old.cells(), old.backing(), old.member())
         );
         run.sym_value_into(&homes.old_handle, &mut homes.dst)
             .unwrap();
@@ -81,13 +83,13 @@ fn reservation_refusal(kind: PlainSymbolBacking, query: Query) {
         intern_retry(run, &homes.name, &mut homes.dst).unwrap();
         let committed = run.initial_facts_copy_for_test(id).unwrap();
         assert_eq!(
-            (committed.members, committed.epoch),
-            (before.members + 1, before.epoch + 1)
+            (committed.members(), committed.epoch()),
+            (before.members() + 1, before.epoch() + 1)
         );
         intern_retry(run, &homes.equal_name, &mut homes.dst).unwrap();
         assert_eq!(
-            run.initial_facts_copy_for_test(id).unwrap().epoch,
-            committed.epoch
+            run.initial_facts_copy_for_test(id).unwrap().epoch(),
+            committed.epoch()
         );
     })
     .expect("clean refusal permits complete root teardown and serial handoff");

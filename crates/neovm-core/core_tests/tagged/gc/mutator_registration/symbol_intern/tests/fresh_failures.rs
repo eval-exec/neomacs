@@ -8,17 +8,17 @@ use crate::symbol::parallel::test_facts::{FreshRegistryFacts, fresh_registry_fac
 use crate::tagged::gc::{GlobalError, InitialInternError, RegistrationError};
 
 fn unpublished(before: FreshRegistryFacts, after: FreshRegistryFacts) {
-    assert!(!before.id_present && !before.input_rooted && before.canonical_id.is_none());
+    assert!(!before.id_present() && !before.input_rooted() && before.canonical_id().is_none());
     assert!(
-        after.bytes >= before.bytes,
+        after.bytes() >= before.bytes(),
         "capacity reservations remain retained"
     );
     assert_eq!(
         after,
-        FreshRegistryFacts {
-            bytes: after.bytes,
-            ..before
-        },
+        neovm_value::test_support::authority::fresh_registry_facts_with_bytes(
+            before,
+            after.bytes(),
+        ),
         "no ID, atom, mapping, exact root or epoch may publish before World success"
     );
 }
@@ -37,7 +37,7 @@ fn refusal(kind: PlainSymbolBacking, query: Query) {
         let registry_before = fresh_registry_facts_for_test(heap, id, name, &spelling);
         let before = run.initial_facts_copy_for_test(id).unwrap();
         let old = run.initial_facts_copy_for_test(homes.old_id).unwrap();
-        let table_before = run.symbol_table_census_for_test().unwrap().retained_bytes;
+        let table_before = run.symbol_table_census_for_test().unwrap().retained_bytes();
         let charge = run.hot_bytes_since_gc_for_test().unwrap();
         let output = homes.dst.word_for_test(run);
         run.arm_initial_fault_for_test(InitialInternFault::ReservationAfterSpineMove).unwrap();
@@ -49,21 +49,21 @@ fn refusal(kind: PlainSymbolBacking, query: Query) {
         assert_eq!(name_publication_for_test(heap, id, name), (None, false, false, false));
         assert_eq!(name_publication_for_test(heap, id, equal), (None, false, false, false));
         assert_eq!(homes.dst.word_for_test(run), output);
-        assert_ne!(before.spine_address, after.spine_address);
-        assert!(after.spine_current && after.bytes > before.bytes);
-        assert_eq!((after.members, after.epoch, after.slots, after.chunks, after.sides,
-            after.present, after.member, after.projections),
-            (before.members, before.epoch, before.slots, before.chunks, before.sides,
-            before.present, before.member, before.projections));
-        assert!(!after.present && !after.member);
+        assert_ne!(before.spine_address(), after.spine_address());
+        assert!(after.spine_current() && after.bytes() > before.bytes());
+        assert_eq!((after.members(), after.epoch(), after.slots(), after.chunks(), after.sides(),
+            after.present(), after.member(), after.projections()),
+            (before.members(), before.epoch(), before.slots(), before.chunks(), before.sides(),
+            before.present(), before.member(), before.projections()));
+        assert!(!after.present() && !after.member());
         assert_eq!(run.hot_bytes_since_gc_for_test().unwrap() - charge,
-            after.bytes - before.bytes + registry_after.bytes - registry_before.bytes
-                + run.symbol_table_census_for_test().unwrap().retained_bytes
+            after.bytes() - before.bytes() + registry_after.bytes() - registry_before.bytes()
+                + run.symbol_table_census_for_test().unwrap().retained_bytes()
                 - table_before,
             "charge retained World, registry AND table capacity, excluding abandoned staging");
         let old_after = run.initial_facts_copy_for_test(homes.old_id).unwrap();
-        assert_eq!((old_after.cells, old_after.backing, old_after.member),
-            (old.cells, old.backing, old.member));
+        assert_eq!((old_after.cells(), old_after.backing(), old_after.member()),
+            (old.cells(), old.backing(), old.member()));
         run.sym_value_into(&homes.old_handle, &mut homes.dst).unwrap();
         assert_eq!(homes.dst.word_for_test(run), name);
         assert_eq!(run.initial_poison_receipt_for_test(),
@@ -73,27 +73,27 @@ fn refusal(kind: PlainSymbolBacking, query: Query) {
         intern_retry(run, &homes.name, &mut homes.dst).unwrap();
         assert_eq!(unsafe { Value::from_bits(homes.dst.word_for_test(run)) }.as_bare_symbol_id(), Some(id));
         let committed = fresh_registry_facts_for_test(heap, id, name, &spelling);
-        assert_eq!((committed.epoch, committed.symbols),
-            (registry_before.epoch + 1, registry_before.symbols + 1));
-        assert!(committed.id_present && committed.input_rooted && committed.atom_present);
-        assert_eq!(committed.canonical_id, Some(id));
-        assert_eq!(committed.atoms - registry_before.atoms,
+        assert_eq!((committed.epoch(), committed.symbols()),
+            (registry_before.epoch() + 1, registry_before.symbols() + 1));
+        assert!(committed.id_present() && committed.input_rooted() && committed.atom_present());
+        assert_eq!(committed.canonical_id(), Some(id));
+        assert_eq!(committed.atoms() - registry_before.atoms(),
             usize::from(!matches!(query, Query::FreshReusedAtom)));
         let world = run.initial_facts_copy_for_test(id).unwrap();
-        assert_eq!((world.members, world.epoch), (before.members + 1, before.epoch + 1));
+        assert_eq!((world.members(), world.epoch()), (before.members() + 1, before.epoch() + 1));
         if matches!(query, Query::FreshBoundary) {
-            assert!(world.chunks >= before.chunks + 2);
+            assert!(world.chunks() >= before.chunks() + 2);
             assert!(!run.initial_facts_copy_for_test(unsafe {
                 // SAFETY: one below an id this process just interned, observed only for absence.
                 SymId::from_raw(id.to_raw() - 1)
-            }).unwrap().present);
+            }).unwrap().present());
         }
         intern_retry(run, &homes.equal_name, &mut homes.dst).unwrap();
         assert_eq!(unsafe { Value::from_bits(homes.dst.word_for_test(run)) }.as_bare_symbol_id(), Some(id));
         assert_eq!(fresh_registry_facts_for_test(heap, id, name, &spelling), committed);
         assert_eq!(name_publication_for_test(heap, id, equal), (Some(name), true, false, true));
         eprintln!("P3SYM_C5_FRESH_REFUSAL {kind:?} {query:?} unpublished=1 retry_winners=1 world_bytes={} registry_bytes={}",
-            after.bytes - before.bytes, registry_after.bytes - registry_before.bytes);
+            after.bytes() - before.bytes(), registry_after.bytes() - registry_before.bytes());
     }).expect("fresh reservation refusal permits ordinary root teardown and handoff");
 }
 

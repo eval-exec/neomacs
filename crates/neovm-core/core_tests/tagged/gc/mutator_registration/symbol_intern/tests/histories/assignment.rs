@@ -108,9 +108,12 @@ fn prepare<'era>(
 }
 
 fn assert_void(facts: &InitialInternFacts, shared: (usize, usize)) {
-    assert_eq!(facts.backing, Some(PlainSymbolBacking::VoidProjection));
-    assert_eq!(facts.shared_void, Some(shared));
-    assert_eq!(facts.projection, Some((shared.0, 0, Value::UNBOUND.bits())));
+    assert_eq!(facts.backing(), Some(PlainSymbolBacking::VoidProjection));
+    assert_eq!(facts.shared_void(), Some(shared));
+    assert_eq!(
+        facts.projection(),
+        Some((shared.0, 0, Value::UNBOUND.bits()))
+    );
     assert_eq!(shared.1, Value::UNBOUND.bits());
 }
 
@@ -129,7 +132,7 @@ fn p3sym_c5_fresh_projected_first_assignment_preserves_shared_void() {
                 let [(left, handle), (right, other)] = inputs.symbols;
                 assert_ne!(left, right);
                 let before = inputs.before;
-                let shared = before.shared_void.expect("actual shared VOID exists");
+                let shared = before.shared_void().expect("actual shared VOID exists");
                 assert_void(&before, shared);
                 let second = attempt(owner, "second fresh VOID facts", |run| {
                     Ok(run.initial_facts_copy_for_test(right)?)
@@ -143,7 +146,7 @@ fn p3sym_c5_fresh_projected_first_assignment_preserves_shared_void() {
                     Ok(run.initial_facts_copy_for_test(left)?)
                 })?;
                 assert_void(&after_void, shared);
-                assert_eq!(after_void.projections, before.projections);
+                assert_eq!(after_void.projections(), before.projections());
                 let charge = attempt(owner, "first assignment charge baseline", |run| {
                     Ok(run.hot_bytes_since_gc_for_test().unwrap())
                 })?;
@@ -157,9 +160,9 @@ fn p3sym_c5_fresh_projected_first_assignment_preserves_shared_void() {
                 let assigned = attempt(owner, "private assignment facts", |run| {
                     Ok(run.initial_facts_copy_for_test(left)?)
                 })?;
-                assert_eq!(assigned.backing, Some(PlainSymbolBacking::Projected));
-                assert_eq!(assigned.projections, before.projections + 1);
-                let descriptor = assigned.projection.expect("private Plain descriptor");
+                assert_eq!(assigned.backing(), Some(PlainSymbolBacking::Projected));
+                assert_eq!(assigned.projections(), before.projections() + 1);
+                let descriptor = assigned.projection().expect("private Plain descriptor");
                 assert_ne!(descriptor.0, shared.0);
                 assert!(descriptor.1 > 0);
                 assert_eq!(descriptor.2, Value::fixnum(97).bits());
@@ -168,7 +171,7 @@ fn p3sym_c5_fresh_projected_first_assignment_preserves_shared_void() {
                 })?;
                 assert_eq!(
                     charged - charge,
-                    assigned.projection_bytes - before.projection_bytes
+                    assigned.projection_bytes() - before.projection_bytes()
                 );
                 // Match the existing GNU31.1 fresh-global twin, not a handwritten
                 // expected Lisp result. These inputs/outputs remain rooted.
@@ -193,7 +196,7 @@ fn p3sym_c5_fresh_projected_first_assignment_preserves_shared_void() {
                     Ok(run.initial_facts_copy_for_test(right)?)
                 })?;
                 assert_void(&untouched, shared);
-                assert_eq!(untouched.projections, assigned.projections);
+                assert_eq!(untouched.projections(), assigned.projections());
                 attempt(owner, "other fresh symbol still unbound", |run| {
                     run.sym_boundp_into(&other, &mut inputs.dst)?;
                     if inputs.dst.word_for_test(run) != Value::NIL.bits() {
@@ -213,12 +216,12 @@ fn p3sym_c5_fresh_projected_first_assignment_preserves_shared_void() {
                 let unbound = attempt(owner, "private UNBOUND facts", |run| {
                     Ok(run.initial_facts_copy_for_test(left)?)
                 })?;
-                assert_eq!(unbound.backing, Some(PlainSymbolBacking::Projected));
+                assert_eq!(unbound.backing(), Some(PlainSymbolBacking::Projected));
                 assert_eq!(
-                    unbound.projection,
+                    unbound.projection(),
                     Some((descriptor.0, descriptor.1, Value::UNBOUND.bits()))
                 );
-                assert_eq!(unbound.projections, assigned.projections);
+                assert_eq!(unbound.projections(), assigned.projections());
                 // Reuse the original VOID-admitted handle; metadata does not force
                 // a second descriptor when this cell is assigned again.
                 attempt(owner, "set again through original handle", |run| {
@@ -227,10 +230,10 @@ fn p3sym_c5_fresh_projected_first_assignment_preserves_shared_void() {
                 let repeated = attempt(owner, "same private descriptor after reset", |run| {
                     Ok(run.initial_facts_copy_for_test(left)?)
                 })?;
-                assert_eq!(repeated.projection, Some(descriptor));
-                assert_eq!(repeated.projections, assigned.projections);
-                assert_eq!(repeated.projection_bytes, assigned.projection_bytes);
-                assert_eq!(repeated.shared_void, Some(shared));
+                assert_eq!(repeated.projection(), Some(descriptor));
+                assert_eq!(repeated.projections(), assigned.projections());
+                assert_eq!(repeated.projection_bytes(), assigned.projection_bytes());
+                assert_eq!(repeated.shared_void(), Some(shared));
                 assert_eq!(
                     identity_census_for_test(),
                     registry,
@@ -350,24 +353,24 @@ fn p3sym_c5_two_to_four_owners_issue_one_fresh_plain_descriptor() {
                     let [(left, handle), (right, _)] = rows[0].symbols;
                     let after = attempt(owner, "final first-assignment facts", |run| Ok(run.initial_facts_copy_for_test(left)?))?;
                     let other = attempt(owner, "final untouched VOID facts", |run| Ok(run.initial_facts_copy_for_test(right)?))?;
-                    let shared = rows[0].before.shared_void.expect("actual shared VOID");
+                    let shared = rows[0].before.shared_void().expect("actual shared VOID");
                     for row in &rows {
                         assert_eq!(row.symbols, rows[0].symbols);
                         assert_void(&row.before, shared);
-                        assert_eq!(row.before.projections, rows[0].before.projections);
+                        assert_eq!(row.before.projections(), rows[0].before.projections());
                         assert!(values.contains(&row.observed));
                     }
                     let submitted: BTreeSet<_> = rows.iter().map(|row| row.input).collect();
                     assert_eq!(submitted.len(), count);
-                    assert_eq!(after.projections, rows[0].before.projections + 1);
-                    assert_eq!(after.backing, Some(PlainSymbolBacking::Projected));
-                    let private = after.projection.expect("one private descriptor");
+                    assert_eq!(after.projections(), rows[0].before.projections() + 1);
+                    assert_eq!(after.backing(), Some(PlainSymbolBacking::Projected));
+                    let private = after.projection().expect("one private descriptor");
                     assert_ne!(private.0, shared.0);
                     assert!(private.1 > 0);
                     // SAFETY: `private.2` is the rooted cell word stored in the projection fact.
                     assert!(submitted.contains(&unsafe { Value::from_bits(private.2) }.as_fixnum().unwrap()));
                     assert_void(&other, shared);
-                    assert_eq!(other.projections, after.projections);
+                    assert_eq!(other.projections(), after.projections());
                     // The pre-assignment handle still addresses the current cell;
                     // a rooted read, not just a facts snapshot, must see it.
                     let mut dst = attempt(owner, "final value root", |run| Ok(run.root_slot(&roots[0])?))?;

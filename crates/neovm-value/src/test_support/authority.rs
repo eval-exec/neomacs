@@ -1098,6 +1098,18 @@ pub fn handoff_resume_outlasts_yield_budget_for_test<
     crate::tagged::gc::mutator_registration::restricted_lisp::globals::handoff::worker::contention_tests::handoff_resume_outlasts_yield_budget(era);
 }
 
+/// FENCE (lead #768): the only cross-crate construction of
+/// [`FreshRegistryFacts`](crate::symbol::parallel::test_facts::FreshRegistryFacts).
+/// Copies the snapshot and replaces `bytes`. The fields stay
+/// pub(crate); cross-crate reads use the Copy getters.
+#[doc(hidden)]
+pub fn fresh_registry_facts_with_bytes(
+    facts: crate::symbol::parallel::test_facts::FreshRegistryFacts,
+    bytes: usize,
+) -> crate::symbol::parallel::test_facts::FreshRegistryFacts {
+    crate::symbol::parallel::test_facts::FreshRegistryFacts { bytes, ..facts }
+}
+
 /// The fence's own behavioural tests are a DECLARED CHILD of the authority
 /// module, not a physical sibling: TA2's definition surface is this module
 /// tree, so the tests' `crate::test_support::authority` references stay

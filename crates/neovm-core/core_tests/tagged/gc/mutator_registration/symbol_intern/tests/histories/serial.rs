@@ -163,7 +163,7 @@ fn audit(scenario: Scenario) {
         winners.len(),
         before.len(),
         after.len(),
-        receipt.after.chunks - receipt.before.chunks
+        receipt.after.chunks() - receipt.before.chunks()
     );
 }
 

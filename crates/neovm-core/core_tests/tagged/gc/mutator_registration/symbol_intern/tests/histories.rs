@@ -424,7 +424,7 @@ fn exercise_with_relocation(
                             SymId::from_raw(first - 1)
                         })?)
                     })?
-                    .present;
+                    .present();
                 }
                 names.push(name_publication_for_test(
                     heap,
@@ -489,8 +489,11 @@ fn assert_history(
         }
     );
     assert_eq!(
-        (after.members, after.epoch),
-        (before.members + expected, before.epoch + expected as u64)
+        (after.members(), after.epoch()),
+        (
+            before.members() + expected,
+            before.epoch() + expected as u64
+        )
     );
     assert_eq!(
         *registry_after,
@@ -500,9 +503,10 @@ fn assert_history(
         ),
         "exactly one process ID/epoch per winning spelling, none for losing/hit/soft operations"
     );
-    assert_eq!(after.chunks, after.sides);
+    assert_eq!(after.chunks(), after.sides());
     assert_eq!(
-        after.projections, before.projections,
+        after.projections(),
+        before.projections(),
         "new projected names reuse shared VOID"
     );
     assert!(rows.iter().all(|row| row.soft_before == Value::NIL.bits()
@@ -515,15 +519,15 @@ fn assert_history(
     );
     assert!(
         rows.iter().map(|row| row.charge).sum::<usize>() + preparation_charge
-            >= after.bytes - before.bytes
+            >= after.bytes() - before.bytes()
     );
     for (index, (cell, name)) in cells.iter().zip(names).enumerate() {
-        assert!(cell.present && cell.member && cell.spine_current);
+        assert!(cell.present() && cell.member() && cell.spine_current());
         if let Some(kind) = kind {
-            assert_eq!(cell.backing, Some(kind));
+            assert_eq!(cell.backing(), Some(kind));
         }
         assert_eq!(
-            cell.cells,
+            cell.cells(),
             Some((Value::NIL.bits(), Value::NIL.bits(), false, false))
         );
         assert!(
@@ -542,7 +546,7 @@ fn assert_history(
     }
     if growth {
         assert!(
-            after.slots > before.slots && after.chunks >= before.chunks + 2,
+            after.slots() > before.slots() && after.chunks() >= before.chunks() + 2,
             "actual retained chunk/side growth required"
         );
         assert!(*gaps_absent, "registry gaps remain absent in this World");
@@ -551,8 +555,8 @@ fn assert_history(
         "P3SYM_C5_NATIVE_HISTORY {scenario:?} owners={} winners={} members_added={} chunks_added={}",
         rows.len(),
         ids.len(),
-        after.members - before.members,
-        after.chunks - before.chunks
+        after.members() - before.members(),
+        after.chunks() - before.chunks()
     );
 }
 

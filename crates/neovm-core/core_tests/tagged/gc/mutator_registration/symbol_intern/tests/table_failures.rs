@@ -25,7 +25,7 @@ fn table_limit(limit: Limit) {
             let old = run.symbol_table_census_for_test().unwrap();
             let table_before = old;
             let old_name =
-                run.symbol_table_name_at_for_test(old.address, &homes.old_handle, homes.old_id);
+                run.symbol_table_name_at_for_test(old.address(), &homes.old_handle, homes.old_id);
             let id = unsafe {
                 // SAFETY: the census length is the next id this process interner issues.
                 SymId::from_raw(identity_census_for_test().1.try_into().unwrap())
@@ -61,19 +61,19 @@ fn table_limit(limit: Limit) {
                 let after = run.symbol_table_census_for_test().unwrap();
                 assert_eq!(
                     run.hot_bytes_since_gc_for_test().unwrap() - charge,
-                    canonical_after.bytes - registry_before.bytes + after.retained_bytes
-                        - before.retained_bytes
+                    canonical_after.bytes() - registry_before.bytes() + after.retained_bytes()
+                        - before.retained_bytes()
                 );
-                assert_eq!(after.generation, table_before.generation);
-                assert_eq!(after.retired, table_before.retired);
-                assert_eq!(after.address, old.address);
+                assert_eq!(after.generation(), table_before.generation());
+                assert_eq!(after.retired(), table_before.retired());
+                assert_eq!(after.address(), old.address());
                 assert_eq!(homes.dst.word_for_test(run), output);
                 assert_eq!(
                     canonical_after,
-                    crate::symbol::parallel::test_facts::FreshRegistryFacts {
-                        bytes: canonical_after.bytes,
-                        ..canonical_before
-                    }
+                    neovm_value::test_support::authority::fresh_registry_facts_with_bytes(
+                        canonical_before,
+                        canonical_after.bytes(),
+                    )
                 );
                 assert_eq!(
                     name_publication_for_test(heap, id, name),
@@ -82,28 +82,32 @@ fn table_limit(limit: Limit) {
                 let world = run.initial_facts_copy_for_test(id).unwrap();
                 assert_eq!(
                     (
-                        world.members,
-                        world.epoch,
-                        world.slots,
-                        world.chunks,
-                        world.sides,
-                        world.bytes,
-                        world.present,
-                        world.member
+                        world.members(),
+                        world.epoch(),
+                        world.slots(),
+                        world.chunks(),
+                        world.sides(),
+                        world.bytes(),
+                        world.present(),
+                        world.member()
                     ),
                     (
-                        world_before.members,
-                        world_before.epoch,
-                        world_before.slots,
-                        world_before.chunks,
-                        world_before.sides,
-                        world_before.bytes,
-                        world_before.present,
-                        world_before.member
+                        world_before.members(),
+                        world_before.epoch(),
+                        world_before.slots(),
+                        world_before.chunks(),
+                        world_before.sides(),
+                        world_before.bytes(),
+                        world_before.present(),
+                        world_before.member()
                     )
                 );
                 assert_eq!(
-                    run.symbol_table_name_at_for_test(old.address, &homes.old_handle, homes.old_id),
+                    run.symbol_table_name_at_for_test(
+                        old.address(),
+                        &homes.old_handle,
+                        homes.old_id
+                    ),
                     old_name
                 );
             }
@@ -113,12 +117,12 @@ fn table_limit(limit: Limit) {
                 .unwrap();
             intern_retry(run, &homes.name, &mut homes.dst).unwrap();
             let committed = fresh_registry_facts_for_test(heap, id, name, &spelling);
-            assert_eq!(committed.epoch, canonical_before.epoch + 1);
-            assert_eq!(committed.symbols, canonical_before.symbols + 1);
+            assert_eq!(committed.epoch(), canonical_before.epoch() + 1);
+            assert_eq!(committed.symbols(), canonical_before.symbols() + 1);
             let after = run.symbol_table_census_for_test().unwrap();
-            assert_eq!(after.retired, table_before.retired + 1);
+            assert_eq!(after.retired(), table_before.retired() + 1);
             assert_eq!(
-                after.generation,
+                after.generation(),
                 table_before.generation_successor().unwrap()
             );
             eprintln!("NMJIT_N3_ACTUAL_TABLE_LIMIT {limit:?} no_world_or_registry_publication=1");
@@ -187,7 +191,7 @@ fn nmjit_n3_actual_post_table_publication_poison_retains_both_descriptors() {
                     let heap = run.registry_heap_for_test();
                     let canonical_before = fresh_registry_facts_for_test(heap, id, word, &spelling);
                     let old_name =
-                        run.symbol_table_name_at_for_test(old.address, &old_handle, ids[1]);
+                        run.symbol_table_name_at_for_test(old.address(), &old_handle, ids[1]);
                     let world_before = run.initial_facts_copy_for_test(id).unwrap();
                     let charge = run.hot_bytes_since_gc_for_test().unwrap();
                     run.arm_table_commit_fault_for_test(
@@ -199,23 +203,23 @@ fn nmjit_n3_actual_post_table_publication_poison_retains_both_descriptors() {
                         Err(InitialInternError::Authority(RegistrationError::Poisoned))
                     );
                     let now = run.symbol_table_census_for_test().unwrap();
-                    assert_eq!(now.generation, before.generation_successor().unwrap());
-                    assert_eq!(now.retired, before.retired + 1);
-                    assert_ne!(old.address, now.address);
-                    assert_eq!(old.chunk0, now.chunk0);
-                    assert!(now.slots > old.slots);
+                    assert_eq!(now.generation(), before.generation_successor().unwrap());
+                    assert_eq!(now.retired(), before.retired() + 1);
+                    assert_ne!(old.address(), now.address());
+                    assert_eq!(old.chunk0(), now.chunk0());
+                    assert!(now.slots() > old.slots());
                     // Poison refuses new leases. This terminal test has one owner;
                     // WRITER returned and no other actor can edit the retained World.
                     // The name read does not take a cell reader.
-                    let old_again = run.retained_symbol_name_for_test(old.address, ids[1]);
+                    let old_again = run.retained_symbol_name_for_test(old.address(), ids[1]);
                     assert_eq!(old_again, old_name);
                     let canonical_after = fresh_registry_facts_for_test(heap, id, word, &spelling);
                     assert_eq!(
                         canonical_after,
-                        crate::symbol::parallel::test_facts::FreshRegistryFacts {
-                            bytes: canonical_after.bytes,
-                            ..canonical_before
-                        }
+                        neovm_value::test_support::authority::fresh_registry_facts_with_bytes(
+                            canonical_before,
+                            canonical_after.bytes(),
+                        )
                     );
                     assert_eq!(
                         name_publication_for_test(heap, id, word),
@@ -224,9 +228,9 @@ fn nmjit_n3_actual_post_table_publication_poison_retains_both_descriptors() {
                     assert_eq!(dst.word_for_test(&run), Value::fixnum(23).bits());
                     assert!(
                         run.hot_bytes_since_gc_for_test().unwrap() - charge
-                            >= now.retained_bytes - before.retained_bytes
+                            >= now.retained_bytes() - before.retained_bytes()
                     );
-                    assert!(now.slots > world_before.slots);
+                    assert!(now.slots() > world_before.slots());
                     assert_eq!(
                         run.initial_intern_soft_into(&name, &mut dst),
                         Err(InitialInternError::Authority(RegistrationError::Poisoned))

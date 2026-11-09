@@ -38,20 +38,20 @@ pub(super) fn force_spine_move(
                 ))
             })?;
             if refused != Err(InitialInternError::Authority(RegistrationError::Capacity))
-                || before.spine_address == after.spine_address
-                || !after.spine_current
+                || before.spine_address() == after.spine_address()
+                || !after.spine_current()
                 || (
-                    before.members,
-                    before.epoch,
-                    before.slots,
-                    before.chunks,
-                    before.sides,
+                    before.members(),
+                    before.epoch(),
+                    before.slots(),
+                    before.chunks(),
+                    before.sides(),
                 ) != (
-                    after.members,
-                    after.epoch,
-                    after.slots,
-                    after.chunks,
-                    after.sides,
+                    after.members(),
+                    after.epoch(),
+                    after.slots(),
+                    after.chunks(),
+                    after.sides(),
                 )
             {
                 return Err(format!(
