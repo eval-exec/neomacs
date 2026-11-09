@@ -1558,30 +1558,30 @@ fn at_most(rows: RowCount, limit: RowCount) -> Result<(), String> {
 /// ceiling-file-only are grandfathered by exact (ceiling path, revision).
 /// No history rewrite: the value-ledger entry is the SHA the ruling named;
 /// the EVAL entries are the sixteen pre-convention stage-4 move commits
-/// (79 -> 80 at 4d21f3c022 through 137 -> 140 at c4a4981ab4) that carried
+/// (79 -> 80 at 6654f82bc5 through 137 -> 140 at 34aaf7f206) that carried
 /// source, ledger rows and the ceiling together before the ceiling-only
 /// convention existed. These are the complete violation set from the
 /// first-parent ceiling histories; every later revision still needs a named
 /// ceiling-only bump commit, and the path key keeps one ledger's exemption
 /// from excusing another.
 const GRANDFATHERED_CEILING_BUMPS: &[(&str, &str)] = &[
-    (CEILING, "b0d047a6e07f9a7e9bda0425d4c93dbce035a7b8"),
-    (EVAL_CEILING, "4d21f3c0220f838338b26f1398d875e6f9a5ded9"),
-    (EVAL_CEILING, "78e0fbb02f9e95c5785bd93e9b2fed18d81bd0fb"),
-    (EVAL_CEILING, "3db5ecf426aea5f9f19216ec589948c912418903"),
-    (EVAL_CEILING, "8fb8bf98ebbfc9c77fc95fd1342673607a64e062"),
-    (EVAL_CEILING, "6e7b74b4772bed9c200ba8e4a9a3cb319bd7e65e"),
-    (EVAL_CEILING, "f26d95860682ed11116c069399913fc5be39ac7e"),
-    (EVAL_CEILING, "97ee7690fa96a82da8ded3a435e4b615e44c7714"),
-    (EVAL_CEILING, "0ea760177090be002923aeefa3b047e99fdf143c"),
-    (EVAL_CEILING, "e251b8c83d72b70fe548e83e56bd7527090fa1c2"),
-    (EVAL_CEILING, "14fdb525882d6b92854abebc688780e6561f4032"),
-    (EVAL_CEILING, "deaca89331f1b9215fc341330d9d7497ce07974e"),
-    (EVAL_CEILING, "a86c4ed3592db844a0cdd15fc7679cb98af771e9"),
-    (EVAL_CEILING, "dc2dcc925f3b8e60fe07d69c5a4138a187fe9306"),
-    (EVAL_CEILING, "686374f8e7ae364aaa5f3dfcb99028e0e39b32c9"),
-    (EVAL_CEILING, "17e0cb96c4ae64977778ad2f7bb6a91c91127a2f"),
-    (EVAL_CEILING, "c4a4981ab4f604e32228a17be3c98579f5d14028"),
+    (CEILING, "c4025399e3d9a6838923b06fb7d553ae07019c87"),
+    (EVAL_CEILING, "6654f82bc57d49f182fdcf0839e6bb046fb4a654"),
+    (EVAL_CEILING, "588c8f1107f06dfb5a55dcac4204bdef2042b0bd"),
+    (EVAL_CEILING, "53870fd1405f8805639c69597ad5641c6938d1e1"),
+    (EVAL_CEILING, "a15b88ebe5ad58b5190d9936348d32fc60a27005"),
+    (EVAL_CEILING, "660475878caba80a1a5f021763995fa4b5044b8b"),
+    (EVAL_CEILING, "2ad2e0c2032245e4937d8c9f90513c09f19429ce"),
+    (EVAL_CEILING, "0512e2de1153ecccd3bba7aaf69a5bf9adfdda62"),
+    (EVAL_CEILING, "80cafc865a0370cab65f5fcb1bca14cd051bd66a"),
+    (EVAL_CEILING, "de58f774b49d97457b340be2eacbe1a62413e75a"),
+    (EVAL_CEILING, "f01a9631c2b919058500fe9131ef098922f819a0"),
+    (EVAL_CEILING, "a790aff9b6305eaff96d5134108ff9107b0f81b8"),
+    (EVAL_CEILING, "18b2b078a3ffc86b33d9f1d65f037890a8462209"),
+    (EVAL_CEILING, "aca933c0cc05881ced475fafa103e437e26b45e5"),
+    (EVAL_CEILING, "23ce70e64442faff5e8bcb15abbe886fed79bf14"),
+    (EVAL_CEILING, "fa0b0c9f60f80592ecf2e5536d4d7c093e9c92af"),
+    (EVAL_CEILING, "34aaf7f206a4fdba2782b7be1d56c5500073e5ba"),
 ];
 
 fn monotonic(
@@ -1971,7 +1971,7 @@ fn architecture_pc11_mutation_silent_ceiling_raise_is_rejected() {
             "stage4 boot: install eval hooks through one typed-proof entry (E3a)",
             &[EVAL_CEILING.into(), "other.rs".into()],
             EVAL_CEILING,
-            "c4a4981ab4f604e32228a17be3c98579f5d14028",
+            "34aaf7f206a4fdba2782b7be1d56c5500073e5ba",
         )
         .is_ok()
     );
