@@ -154,16 +154,23 @@ pub(super) fn record_spec_fast_for_census(framed: bool) {
     }
 }
 
-#[cfg(test)]
-fn spec_fast_counts_for_test() -> (u64, u64) {
+/// Copied spec-fast census `(armed, framed)`. The atomics stay in this module.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn spec_fast_counts_for_test() -> (u64, u64) {
     (
         SPEC_FAST_ARMED.load(Ordering::Relaxed),
         SPEC_FAST_FRAMED.load(Ordering::Relaxed),
     )
 }
 
-#[cfg(test)]
-fn reset_for_test() {
+/// Zero the process-wide call-census counters.
+///
+/// The cross-crate name is `call_census_reset_for_test` (the leaf `reset_for_test`
+/// collides with the AOT reset). The counters are process-wide atomics, so
+/// isolation relies on nextest's process-per-test unless the caller resets.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn reset_for_test() {
     for row in &COUNTS {
         for count in row {
             count.store(0, Ordering::Relaxed);

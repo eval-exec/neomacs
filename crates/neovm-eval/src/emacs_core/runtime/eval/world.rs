@@ -1536,6 +1536,10 @@ impl Context {
     }
 
     /// How many projections this World's table has issued.
+    ///
+    /// Copy count. The projection table stays inside the World.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn thread_projection_count_for_test(&self) -> usize {
         self.obarray.lease.0.thread_projections.borrow().len()
     }

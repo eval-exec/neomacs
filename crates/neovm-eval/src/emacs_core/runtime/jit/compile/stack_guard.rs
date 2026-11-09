@@ -88,7 +88,7 @@ pub(crate) fn emit_entry_stack_guard(
     abi: LeafAbi,
     params: &[ClifValue],
 ) -> Vec<ClifValue> {
-    #[cfg(any(test, debug_assertions))]
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
     STACK_GUARDS_EMITTED.with(|c| c.set(c.get() + 1));
     debug_assert!(
         params.len() <= 1 + crate::emacs_core::eval::native_stack::JIT_STACK_SCRATCH_WORDS,
@@ -145,15 +145,16 @@ pub(crate) fn emit_entry_stack_guard(
     fb.block_params(body).to_vec()
 }
 
-#[cfg(any(test, debug_assertions))]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 thread_local! {
     /// Entry guards emitted on this thread (engagement evidence for tests).
     pub(crate) static STACK_GUARDS_EMITTED: core::cell::Cell<usize> =
         const { core::cell::Cell::new(0) };
 }
 
-/// Entry guards emitted on this thread so far (tests).
-#[cfg(test)]
+/// Entry guards emitted on this thread so far. Copy count; the cell stays here.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn stack_guards_emitted_for_test() -> usize {
     STACK_GUARDS_EMITTED.with(core::cell::Cell::get)
 }

@@ -1468,6 +1468,25 @@ pub mod authority {
         context.cconv_memo.trusted().trusted_cells().to_vec()
     }
 
+    /// FENCE: opaque identity of the compiled leaf cached for `id`.
+    /// Copy + Eq. The pointer stays on the pub(crate) cache helper.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn compiled_leaf_identity_for_test(id: u64) -> Option<LeafIdentity> {
+        crate::emacs_core::jit::cache::compiled_leaf_ptr_for_test(id)
+            .map(|ptr| LeafIdentity::from_address(ptr as usize))
+    }
+
+    /// FENCE: opaque identity of the installed OSR leaf at this header.
+    /// Copy + Eq. The pointer stays on the pub(crate) cache helper.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn osr_leaf_identity_for_test(
+        func: &crate::emacs_core::bytecode::ByteCodeFunction,
+        pc: usize,
+    ) -> Option<LeafIdentity> {
+        crate::emacs_core::jit::cache::osr_leaf_ptr_for_test(func, pc)
+            .map(|ptr| LeafIdentity::from_address(ptr as usize))
+    }
+
     /// P1 CCONV family C4 read: the `(t)` empty-environment value, copied.
     /// The caller inspects the copy immediately; it is never stored across a
     /// GC (peer condition b).
@@ -1562,6 +1581,19 @@ pub mod authority {
             seeded_count: observation.seeded_count,
             parked_count: observation.parked_count,
             reset_counts: observation.reset_counts,
+        }
+    }
+
+    /// Opaque compiled-leaf identity. Copy + Eq. The field is the address and
+    /// stays private, so a raw `*const` never crosses this module.
+    #[cfg(any(test, feature = "test-support"))]
+    #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+    pub struct LeafIdentity(usize);
+
+    #[cfg(any(test, feature = "test-support"))]
+    impl LeafIdentity {
+        pub(crate) fn from_address(address: usize) -> Self {
+            Self(address)
         }
     }
 }

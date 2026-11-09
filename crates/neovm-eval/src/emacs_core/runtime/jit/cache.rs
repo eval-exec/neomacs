@@ -2048,8 +2048,9 @@ pub(crate) fn testkit_leaf_ptr(id: u64) -> Option<*const CompiledLeaf> {
     })
 }
 
-/// Test-only: the identity of the compiled leaf cached for `id`.
-#[cfg(test)]
+/// Crate-private compiled-leaf pointer. Content checks inside eval dereference
+/// this. It is not a fence and not an A' surface.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn compiled_leaf_ptr_for_test(id: u64) -> Option<*const CompiledLeaf> {
     COMPILED.with(|c| {
         c.borrow()
@@ -2059,9 +2060,11 @@ pub(crate) fn compiled_leaf_ptr_for_test(id: u64) -> Option<*const CompiledLeaf>
     })
 }
 
-/// The installed OSR leaf at this header (tests only). Its owning mutator
-/// retains it until eviction/clear; callers must not keep it across either.
-#[cfg(test)]
+/// Crate-private OSR-leaf pointer. Content checks inside eval dereference
+/// this. It is not a fence and not an A' surface. The owning mutator retains
+/// the leaf until eviction or clear; callers must not keep the pointer across
+/// either.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn osr_leaf_ptr_for_test(
     func: &ByteCodeFunction,
     pc: usize,

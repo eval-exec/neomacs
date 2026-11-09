@@ -425,7 +425,7 @@ pub(crate) fn emit_direct_bytecode_call(
 ) -> DirectCall {
     debug_assert_eq!(args.len(), site.nargs);
     DIRECT_SITES_EMITTED.fetch_add(1, Ordering::Relaxed);
-    #[cfg(any(test, debug_assertions))]
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
     DIRECT_SITES_EMITTED_HERE.with(|c| c.set(c.get() + 1));
     let flags = MemFlagsData::trusted();
     let ptr_ty = rt.ptr_ty;
@@ -1171,15 +1171,16 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_finish(
     )
 }
 
-#[cfg(any(test, debug_assertions))]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 thread_local! {
     /// Direct sites emitted on this thread (tests' engagement evidence).
     pub(crate) static DIRECT_SITES_EMITTED_HERE: core::cell::Cell<usize> =
         const { core::cell::Cell::new(0) };
 }
 
-/// Direct sites emitted on this thread so far (tests).
-#[cfg(test)]
+/// Direct sites emitted on this thread so far. Copy count; the cell stays here.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn direct_sites_emitted_for_test() -> usize {
     DIRECT_SITES_EMITTED_HERE.with(core::cell::Cell::get)
 }
