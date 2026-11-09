@@ -769,10 +769,7 @@ pub(crate) fn note_syntax_table_mutation() {
 /// > handling.
 #[derive(Clone, Copy, Debug)]
 pub struct SyntaxTable {
-    #[cfg(feature = "test-support")]
-    pub chartable: Value,
-    #[cfg(not(feature = "test-support"))]
-    chartable: Value,
+    pub(crate) chartable: Value,
 }
 
 impl SyntaxTable {

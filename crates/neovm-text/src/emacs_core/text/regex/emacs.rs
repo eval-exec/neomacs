@@ -4441,14 +4441,8 @@ impl WordBoundaryLookup {
 /// decoded characters and numeric byte positions; no Lisp identity or borrow.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct BoundarySyntaxCharacter {
-    #[cfg(feature = "test-support")]
-    pub character: emacs_char::EmacsChar,
-    #[cfg(not(feature = "test-support"))]
-    character: emacs_char::EmacsChar,
-    #[cfg(feature = "test-support")]
-    pub byte_position: neovm_edit::buffer::EmacsBytePos,
-    #[cfg(not(feature = "test-support"))]
-    byte_position: neovm_edit::buffer::EmacsBytePos,
+    pub(crate) character: emacs_char::EmacsChar,
+    pub(crate) byte_position: neovm_edit::buffer::EmacsBytePos,
 }
 
 impl BoundarySyntaxCharacter {
@@ -4474,22 +4468,10 @@ impl BoundarySyntaxCharacter {
 /// immutable physical input metadata, valid for one opcode evaluation.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct BoundarySyntaxRequest {
-    #[cfg(feature = "test-support")]
-    pub kind: SyntaxAssertion,
-    #[cfg(not(feature = "test-support"))]
-    kind: SyntaxAssertion,
-    #[cfg(feature = "test-support")]
-    pub current_byte: neovm_edit::buffer::EmacsBytePos,
-    #[cfg(not(feature = "test-support"))]
-    current_byte: neovm_edit::buffer::EmacsBytePos,
-    #[cfg(feature = "test-support")]
-    pub previous: Option<BoundarySyntaxCharacter>,
-    #[cfg(not(feature = "test-support"))]
-    previous: Option<BoundarySyntaxCharacter>,
-    #[cfg(feature = "test-support")]
-    pub current: Option<BoundarySyntaxCharacter>,
-    #[cfg(not(feature = "test-support"))]
-    current: Option<BoundarySyntaxCharacter>,
+    pub(crate) kind: SyntaxAssertion,
+    pub(crate) current_byte: neovm_edit::buffer::EmacsBytePos,
+    pub(crate) previous: Option<BoundarySyntaxCharacter>,
+    pub(crate) current: Option<BoundarySyntaxCharacter>,
 }
 
 impl BoundarySyntaxRequest {

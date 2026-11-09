@@ -42,18 +42,9 @@ const UNIBYTE_BYTE_SENTINEL_MAX: u32 = 0xE3FF;
 #[derive(Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct CharsetMapCacheKey {
-    #[cfg(feature = "test-support")]
-    pub map_name: String,
-    #[cfg(not(feature = "test-support"))]
-    map_name: String,
-    #[cfg(feature = "test-support")]
-    pub code_space: [i64; 8],
-    #[cfg(not(feature = "test-support"))]
-    code_space: [i64; 8],
-    #[cfg(feature = "test-support")]
-    pub min_code: i64,
-    #[cfg(not(feature = "test-support"))]
-    min_code: i64,
+    pub(crate) map_name: String,
+    pub(crate) code_space: [i64; 8],
+    pub(crate) min_code: i64,
 }
 
 static CHARSET_MAP_CACHE: OnceLock<
@@ -290,14 +281,8 @@ struct CharsetMapData {
     // Keyed by code point and character code -- small integers, hashed once
     // per decoded or encoded character. SipHash's mixing is for adversarial
     // keys; these are dense and internal.
-    #[cfg(feature = "test-support")]
-    pub code_to_char: rustc_hash::FxHashMap<i64, i64>,
-    #[cfg(not(feature = "test-support"))]
-    code_to_char: rustc_hash::FxHashMap<i64, i64>,
-    #[cfg(feature = "test-support")]
-    pub char_to_code: rustc_hash::FxHashMap<i64, i64>,
-    #[cfg(not(feature = "test-support"))]
-    char_to_code: rustc_hash::FxHashMap<i64, i64>,
+    pub(crate) code_to_char: rustc_hash::FxHashMap<i64, i64>,
+    pub(crate) char_to_code: rustc_hash::FxHashMap<i64, i64>,
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]

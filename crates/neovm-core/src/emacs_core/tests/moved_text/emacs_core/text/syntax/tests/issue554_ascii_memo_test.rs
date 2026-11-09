@@ -9,7 +9,7 @@ use neovm_text::emacs_core::regex_emacs::SyntaxAssertion;
 use neovm_text::emacs_core::syntax::parse_loop::{
     Entry, Plain, SafePositionRecorder, ScanEnd, ScanFinish, run_parse_loop,
 };
-use neovm_text::test_support::authority::reset_syntax_table_decodes_for_test;
+use neovm_text::test_support::authority::{reset_syntax_table_decodes_for_test, syntax_table};
 use neovm_value::emacs_char::EmacsChar;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
@@ -52,7 +52,7 @@ fn issue554_ascii_memo_shares_entries_across_symbol_policies() {
     )
     .unwrap();
     super::super::chartable::builtin_set_char_table_parent(vec![child, parent]).unwrap();
-    let table = SyntaxTable { chartable: child };
+    let table = syntax_table(child);
 
     // GNU lisp.h:2133-2146 / chartab.c:230-246: ASCII, default and
     // parent reads never inspect the purpose symbol. A positioned uniprop

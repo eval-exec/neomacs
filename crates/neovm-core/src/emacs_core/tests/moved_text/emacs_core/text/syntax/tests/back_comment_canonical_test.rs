@@ -72,10 +72,10 @@ fn canonical_back_comments_match_plain_scans_across_dialects() {
     tracing::info!(queries, ?stats, "canonical back-comment dialect coverage");
     assert!(queries > 10_000, "too few scanner queries: {queries}");
     assert!(
-        stats.canon_back_comments > 100,
+        stats.canon_back_comments_for_test() > 100,
         "canonical helper unused: {stats:?}"
     );
-    assert_eq!(stats.mismatches, 0, "{stats:?}");
+    assert_eq!(stats.mismatches_for_test(), 0, "{stats:?}");
 }
 
 /// Reset statistics after seeding: skipped characters must come from the
@@ -114,14 +114,14 @@ fn repeated_back_comments_reuse_canonical_states_in_both_verify_modes() {
             );
             let after = parse_cache_stats();
             assert!(
-                after.canon_back_comments > before.canon_back_comments,
+                after.canon_back_comments_for_test() > before.canon_back_comments_for_test(),
                 "repeat did not reach canonical back-comment helper: {configuration:?}, {query:?}, {before:?} -> {after:?}"
             );
             assert!(
-                after.canon_skipped_chars > before.canon_skipped_chars,
+                after.canon_skipped_chars_for_test() > before.canon_skipped_chars_for_test(),
                 "repeat skipped no canonical prefix: {configuration:?}, {query:?}, {before:?} -> {after:?}"
             );
-            assert_eq!(after.mismatches, 0, "{after:?}");
+            assert_eq!(after.mismatches_for_test(), 0, "{after:?}");
         }
     }
 }
@@ -188,7 +188,7 @@ fn canonical_back_comment_extension_preserves_segment_minima_for_adoption() {
                 "an inner plain tail must not republish old segments"
             );
             let within = parse_cache_stats();
-            assert!(within.canon_back_comments > 0, "{within:?}");
+            assert!(within.canon_back_comments_for_test() > 0, "{within:?}");
             check(
                 &mut eval,
                 late_end,
@@ -200,7 +200,7 @@ fn canonical_back_comment_extension_preserves_segment_minima_for_adoption() {
             let extended = canonical_snapshots(&eval);
             let after = parse_cache_stats();
             assert!(
-                after.canon_back_comments > within.canon_back_comments,
+                after.canon_back_comments_for_test() > within.canon_back_comments_for_test(),
                 "{after:?}"
             );
             assert!(extended.last().expect("extended run").0.char_pos() > frontier);
@@ -231,21 +231,21 @@ fn canonical_back_comment_extension_preserves_segment_minima_for_adoption() {
             eval.push_specpdl_root(oldstate);
             let plain =
                 partial_parse_answer(&mut eval, from, zv, oldstate, Configuration::Plain, chunk);
-            let adopted_before = parse_cache_stats().canon_adopted;
+            let adopted_before = parse_cache_stats().canon_adopted_for_test();
             let cached = partial_parse_answer(&mut eval, from, zv, oldstate, configuration, chunk);
             let final_stats = parse_cache_stats();
             assert_eq!(cached, plain, "{configuration:?}, chunk {chunk}");
             assert!(
-                final_stats.canon_adopted > adopted_before,
+                final_stats.canon_adopted_for_test() > adopted_before,
                 "{final_stats:?}"
             );
-            assert_eq!(final_stats.mismatches, 0, "{final_stats:?}");
+            assert_eq!(final_stats.mismatches_for_test(), 0, "{final_stats:?}");
             if matches!(
                 configuration,
                 Configuration::VerifyL1 | Configuration::VerifyL2
             ) {
                 assert!(
-                    final_stats.verified >= 3,
+                    final_stats.verified_for_test() >= 3,
                     "both backward raw states and the adopted answer must be verified: {final_stats:?}"
                 );
             }
@@ -277,8 +277,8 @@ fn canonical_back_comment_cold_and_disabled_paths_preserve_the_legacy_index() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .with_syntax_parse_cache(|cache, _| assert!(cache.canonical.is_none()));
-    assert_eq!(parse_cache_stats().canon_back_comments, 0);
+        .with_syntax_parse_cache(|cache, _| assert!(cache.canonical_for_test().is_none()));
+    assert_eq!(parse_cache_stats().canon_back_comments_for_test(), 0);
     assert!(BACK_COMMENT_SAFE_REPARSES.with(Cell::get) > reparses);
 
     seed_canonical(&mut eval, 16);
@@ -364,7 +364,7 @@ fn canonical_back_comments_see_edits_properties_descriptors_and_narrowing() {
             check_every_position(&mut eval, chunk, &format!("after {mutation:?}"));
             seed_canonical(&mut eval, chunk);
             check_every_position(&mut eval, chunk, &format!("reseeded after {mutation:?}"));
-            assert_eq!(parse_cache_stats().mismatches, 0);
+            assert_eq!(parse_cache_stats().mismatches_for_test(), 0);
         }
     }
 }
@@ -411,10 +411,11 @@ fn canonical_back_comments_bypass_unstamped_lisp_property_resolvers() {
         check_every_position(&mut eval, 3, &format!("{resolver:?} after plist mutation"));
         let after = parse_cache_stats();
         assert_eq!(
-            after.canon_back_comments, before.canon_back_comments,
+            after.canon_back_comments_for_test(),
+            before.canon_back_comments_for_test(),
             "unstamped resolver reached canonical back-comment reuse: {resolver:?}, {before:?} -> {after:?}"
         );
-        assert_eq!(after.mismatches, 0, "{after:?}");
+        assert_eq!(after.mismatches_for_test(), 0, "{after:?}");
     }
 }
 
@@ -719,12 +720,12 @@ fn canonical_snapshots(eval: &Context) -> Vec<(LoopState, i64)> {
         .expect("current buffer")
         .with_syntax_parse_cache(|cache, _| {
             cache
-                .canonical
+                .canonical_for_test()
                 .as_ref()
                 .expect("a seeded canonical run")
-                .snaps
+                .snaps_for_test()
                 .iter()
-                .map(|snap| (snap.state.clone(), snap.closes_min))
+                .map(|snap| (snap.state_for_test().clone(), snap.closes_min_for_test()))
                 .collect()
         })
 }

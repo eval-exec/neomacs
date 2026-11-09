@@ -178,10 +178,28 @@ pub(super) struct CanonSnap {
 pub struct CanonSnap {
     /// The canonical scan's state here; its minimum depth is the scan's since
     /// BEGV.
-    pub state: LoopState,
+    pub(crate) state: LoopState,
     /// The lowest depth a close paren left the scan at between the previous
     /// state (BEGV for the first) and this one; `i64::MAX` when none closed.
-    pub closes_min: i64,
+    pub(crate) closes_min: i64,
+}
+
+impl CanonSnap {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Borrowed loop-top state (VIS read arm, lead #1052).  The field is
+    /// `pub(crate)` in every arm; these getters are the only cross-crate
+    /// read routes.
+    pub(crate) fn state_for_test(&self) -> &LoopState {
+        &self.state
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied minimum closed depth (VIS read arm, lead #1052).
+    pub(crate) fn closes_min_for_test(&self) -> i64 {
+        self.closes_min
+    }
 }
 
 impl CanonSnap {
@@ -213,10 +231,20 @@ pub(super) struct CanonicalRun {
 pub struct CanonicalRun {
     pub(super) env: EnvKey,
     /// Ascending, strictly after BEGV.
-    pub snaps: Vec<CanonSnap>,
+    pub(crate) snaps: Vec<CanonSnap>,
     /// The last state taken on the chunk grid (BEGV when none).
     grid_frontier: usize,
     pub(super) descriptors: Vec<Descriptor>,
+}
+
+impl CanonicalRun {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Borrowed canonical snapshots (VIS read arm, lead #1052).  The field is
+    /// `pub(crate)` in every arm; this getter is the only cross-crate route.
+    pub(crate) fn snaps_for_test(&self) -> &[CanonSnap] {
+        &self.snaps
+    }
 }
 
 impl CanonicalRun {

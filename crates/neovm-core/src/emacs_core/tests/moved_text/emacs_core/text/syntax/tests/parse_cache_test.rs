@@ -93,18 +93,18 @@ fn cached_answers_equal_plain_scans_under_every_change() {
     GEOMETRY_OVERRIDE.with(|cell| cell.set(None));
     let stats = parse_cache_stats();
     tracing::info!(queries, ?stats, ?changes, "parse cache fuzz coverage");
-    assert_eq!(stats.mismatches, 0);
+    assert_eq!(stats.mismatches_for_test(), 0);
     assert!(queries > 5_000, "queries {queries}");
-    assert!(stats.exact > 500, "exact answers: {stats:?}");
-    assert!(stats.resumes > 500, "resumes: {stats:?}");
+    assert!(stats.exact_for_test() > 500, "exact answers: {stats:?}");
+    assert!(stats.resumes_for_test() > 500, "resumes: {stats:?}");
     assert!(
-        stats.skipped_chars > 10_000,
+        stats.skipped_chars_for_test() > 10_000,
         "resumes skipped too little: {stats:?}"
     );
-    assert!(stats.recorded > 500, "recorded: {stats:?}");
-    assert!(stats.short > 100, "short scans: {stats:?}");
+    assert!(stats.recorded_for_test() > 500, "recorded: {stats:?}");
+    assert!(stats.short_for_test() > 100, "short scans: {stats:?}");
     assert!(
-        stats.descriptor_changes > 10,
+        stats.descriptor_changes_for_test() > 10,
         "descriptor changes: {stats:?}"
     );
     for what in [
@@ -148,21 +148,32 @@ fn short_queries_keep_long_run_resumes_and_exact_answers() {
     reset_parse_cache_stats();
     check(&mut eval, short, "fresh short scan");
     let stats = parse_cache_stats();
-    assert_eq!(stats.queries, 1, "short miss counted once");
-    assert_eq!(stats.short, 1);
-    assert_eq!((stats.recorded, stats.resumes, stats.exact), (0, 0, 0));
+    assert_eq!(stats.queries_for_test(), 1, "short miss counted once");
+    assert_eq!(stats.short_for_test(), 1);
+    assert_eq!(
+        (
+            stats.recorded_for_test(),
+            stats.resumes_for_test(),
+            stats.exact_for_test()
+        ),
+        (0, 0, 0)
+    );
 
     check(&mut eval, Query { to: 401, ..short }, "record long scan");
     check(&mut eval, short, "resume long run for short query");
-    assert_eq!(parse_cache_stats().resumes, 1);
+    assert_eq!(parse_cache_stats().resumes_for_test(), 1);
     let plain = answer(&mut eval, short, Value::NIL, ParseCacheMode::Off);
     let verified = answer(&mut eval, short, Value::NIL, ParseCacheMode::Verify);
     assert_eq!(verified, plain);
     let stats = parse_cache_stats();
-    assert_eq!(stats.queries, 4, "each cache-enabled query counted once");
-    assert_eq!(stats.exact, 1);
-    assert_eq!(stats.verified, 1);
-    assert_eq!(stats.mismatches, 0);
+    assert_eq!(
+        stats.queries_for_test(),
+        4,
+        "each cache-enabled query counted once"
+    );
+    assert_eq!(stats.exact_for_test(), 1);
+    assert_eq!(stats.verified_for_test(), 1);
+    assert_eq!(stats.mismatches_for_test(), 0);
     GEOMETRY_OVERRIDE.with(|cell| cell.set(None));
 }
 
@@ -205,7 +216,10 @@ fn from_membership_survives_collisions_eviction_and_invalidation() {
                 for &from in &probes {
                     assert_eq!(
                         cache.has_run_from(from),
-                        cache.runs.iter().any(|run| run.key.from_char == from),
+                        cache
+                            .runs_for_test()
+                            .iter()
+                            .any(|run| { run.key_for_test().from_char_for_test() == from }),
                         "membership at {from}"
                     );
                 }
@@ -223,7 +237,7 @@ fn from_membership_survives_collisions_eviction_and_invalidation() {
         .expect("buffer")
         .with_syntax_parse_cache(|cache, _| {
             let from = colliding + 400;
-            let mut key = cache.runs[0].key.clone();
+            let mut key = cache.runs_for_test()[0].key_for_test().clone();
             neovm_text::test_support::authority::set_run_key_from_char_for_test(&mut key, from);
             cache.store(key, Record::new(from, from, from), None);
             assert!(!cache.has_run_from(from), "empty recording not retained");
@@ -290,7 +304,7 @@ fn short_misses_preserve_pending_text_and_property_invalidation() {
         eval.eval_str(change).expect(what);
         reset_parse_cache_stats();
         check(&mut eval, miss, what);
-        assert_eq!(parse_cache_stats().short, 1);
+        assert_eq!(parse_cache_stats().short_for_test(), 1);
         let invalidation = eval
             .edit
             .buffers
@@ -299,7 +313,7 @@ fn short_misses_preserve_pending_text_and_property_invalidation() {
             .with_syntax_parse_cache(|_, invalidation| invalidation);
         assert_eq!(invalidation, expected, "short miss consumed {what}");
         check(&mut eval, Query { to: 65, ..long }, "mutated original FROM");
-        assert_eq!(parse_cache_stats().mismatches, 0);
+        assert_eq!(parse_cache_stats().mismatches_for_test(), 0);
     }
     GEOMETRY_OVERRIDE.with(|cell| cell.set(None));
 }
@@ -324,9 +338,9 @@ fn short_query_gate_preserves_threshold_zero_span_and_oldstate_options() {
     reset_parse_cache_stats();
     check(&mut eval, query, "empty scan");
     check(&mut eval, Query { to: 128, ..query }, "127 characters");
-    assert_eq!(parse_cache_stats().recorded, 0);
+    assert_eq!(parse_cache_stats().recorded_for_test(), 0);
     check(&mut eval, Query { to: 129, ..query }, "128 characters");
-    assert_eq!(parse_cache_stats().recorded, 1);
+    assert_eq!(parse_cache_stats().recorded_for_test(), 1);
 
     for (target_depth, stop_before, commentstop) in [
         (None, false, 0),
@@ -347,8 +361,8 @@ fn short_query_gate_preserves_threshold_zero_span_and_oldstate_options() {
             "short scan with OLDSTATE and options",
         );
     }
-    assert_eq!(parse_cache_stats().recorded, 1);
-    assert_eq!(parse_cache_stats().mismatches, 0);
+    assert_eq!(parse_cache_stats().recorded_for_test(), 1);
+    assert_eq!(parse_cache_stats().mismatches_for_test(), 0);
     GEOMETRY_OVERRIDE.with(|cell| cell.set(None));
 }
 
@@ -377,7 +391,7 @@ fn category_and_alias_properties_bypass_the_cache() {
     reset_parse_cache_stats();
     check(&mut eval, query, "plain buffer");
     check(&mut eval, query, "plain buffer again");
-    assert_eq!(parse_cache_stats().exact, 1, "cached normally");
+    assert_eq!(parse_cache_stats().exact_for_test(), 1, "cached normally");
 
     eval.eval_str(
         "(progn (put 'my-cat 'syntax-table '(7)) (put-text-property 3 4 'category 'my-cat))",
@@ -388,7 +402,7 @@ fn category_and_alias_properties_bypass_the_cache() {
     eval.eval_str("(put 'my-cat 'syntax-table '(1))")
         .expect("category plist");
     check(&mut eval, query, "category plist changed");
-    assert_eq!(parse_cache_stats().bypassed, 2);
+    assert_eq!(parse_cache_stats().bypassed_for_test(), 2);
 
     let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 0);
@@ -401,7 +415,7 @@ fn category_and_alias_properties_bypass_the_cache() {
     .expect("alias");
     reset_parse_cache_stats();
     check(&mut eval, query, "alias");
-    assert_eq!(parse_cache_stats().bypassed, 1);
+    assert_eq!(parse_cache_stats().bypassed_for_test(), 1);
     GEOMETRY_OVERRIDE.with(|cell| cell.set(None));
 }
 
@@ -439,8 +453,8 @@ fn verify_mode_recomputes_cached_answers() {
         }
     }
     let stats = parse_cache_stats();
-    assert!(stats.verified > 50, "{stats:?}");
-    assert_eq!(stats.mismatches, 0, "{stats:?}");
+    assert!(stats.verified_for_test() > 50, "{stats:?}");
+    assert_eq!(stats.mismatches_for_test(), 0, "{stats:?}");
     assert_eq!(parse_cache_mismatches(), 0);
     GEOMETRY_OVERRIDE.with(|cell| cell.set(None));
 }
@@ -694,13 +708,13 @@ fn canonical_answers_equal_plain_scans_under_every_change() {
     GEOMETRY_OVERRIDE.with(|cell| cell.set(None));
     let stats = parse_cache_stats();
     tracing::info!(queries, ?stats, ?changes, "canonical run fuzz coverage");
-    assert_eq!(stats.mismatches, 0);
+    assert_eq!(stats.mismatches_for_test(), 0);
     assert!(queries > 2_000, "queries {queries}");
-    assert!(stats.canon_absolute > 300, "absolute: {stats:?}");
-    assert!(stats.canon_adopted > 500, "adopted: {stats:?}");
-    assert!(stats.canon_declined > 20, "declined: {stats:?}");
+    assert!(stats.canon_absolute_for_test() > 300, "absolute: {stats:?}");
+    assert!(stats.canon_adopted_for_test() > 500, "adopted: {stats:?}");
+    assert!(stats.canon_declined_for_test() > 20, "declined: {stats:?}");
     assert!(
-        stats.canon_skipped_chars > 20_000,
+        stats.canon_skipped_chars_for_test() > 20_000,
         "skipped too little: {stats:?}"
     );
     for what in [
@@ -717,7 +731,10 @@ fn canonical_answers_equal_plain_scans_under_every_change() {
             "{what}: {changes:?}"
         );
     }
-    assert!(stats.canon_resets > 5, "environment changes: {stats:?}");
+    assert!(
+        stats.canon_resets_for_test() > 5,
+        "environment changes: {stats:?}"
+    );
 }
 
 /// Deeply nested text, long spans and a small chunk: adopted queries jump
@@ -750,9 +767,9 @@ fn adopted_answers_correct_depth_and_levels_across_jumps() {
     }
     eval.restore_specpdl_roots(roots);
     let stats = parse_cache_stats();
-    assert_eq!(stats.mismatches, 0);
-    assert!(stats.canon_adopted > 200, "{stats:?}");
-    assert!(stats.canon_skipped_chars > 20_000, "{stats:?}");
+    assert_eq!(stats.mismatches_for_test(), 0);
+    assert!(stats.canon_adopted_for_test() > 200, "{stats:?}");
+    assert!(stats.canon_skipped_chars_for_test() > 20_000, "{stats:?}");
 }
 
 /// A property-supplied syntax table is deliberately unvalidatable: setcar on
@@ -813,13 +830,14 @@ fn canonical_exact_memo_rejects_property_syntax_tables() {
         );
         let stats = parse_cache_stats();
         assert_eq!(
-            stats.exact, 0,
+            stats.exact_for_test(),
+            0,
             "unvalidatable syntax must not be memoized; adopted={adopted}: {stats:?}"
         );
         if adopted {
-            assert_eq!(stats.canon_adopted, 2, "{stats:?}");
+            assert_eq!(stats.canon_adopted_for_test(), 2, "{stats:?}");
         } else {
-            assert_eq!(stats.canon_absolute, 2, "{stats:?}");
+            assert_eq!(stats.canon_absolute_for_test(), 2, "{stats:?}");
         }
         eval.restore_specpdl_roots(roots);
     }
@@ -858,7 +876,7 @@ fn canonical_exact_memo_rejects_descriptor_log_overflow() {
         }
         let query = plain_query(1, point_max(&eval));
         let before = check_l2(&mut eval, query, Value::NIL, "warm descriptor overflow");
-        let absolutes_before = parse_cache_stats().canon_absolute;
+        let absolutes_before = parse_cache_stats().canon_absolute_for_test();
         eval.eval_str(&format!(
             "(setcar (get-text-property {count} 'syntax-table) 4)"
         ))
@@ -871,10 +889,15 @@ fn canonical_exact_memo_rejects_descriptor_log_overflow() {
         );
         let stats = parse_cache_stats();
         assert_eq!(
-            stats.exact, 0,
+            stats.exact_for_test(),
+            0,
             "overflow must not create an exact memo; existing_capacity={existing_capacity}: {stats:?}"
         );
-        assert_eq!(stats.canon_absolute, absolutes_before + 1, "{stats:?}");
+        assert_eq!(
+            stats.canon_absolute_for_test(),
+            absolutes_before + 1,
+            "{stats:?}"
+        );
         eval.restore_specpdl_roots(roots);
     }
 }
@@ -909,9 +932,9 @@ fn canonical_adoption_matches_plain_above_one_hundred_levels() {
         }
     }
     let stats = parse_cache_stats();
-    assert!(stats.canon_adopted > 0, "{stats:?}");
-    assert!(stats.canon_skipped_chars > 100, "{stats:?}");
-    assert_eq!(stats.mismatches, 0, "{stats:?}");
+    assert!(stats.canon_adopted_for_test() > 0, "{stats:?}");
+    assert!(stats.canon_skipped_chars_for_test() > 100, "{stats:?}");
+    assert_eq!(stats.mismatches_for_test(), 0, "{stats:?}");
     eval.restore_specpdl_roots(roots);
 }
 
@@ -954,9 +977,9 @@ fn canonical_extension_ignores_negative_minima_before_from() {
         );
     }
     let stats = parse_cache_stats();
-    assert!(stats.canon_adopted > 0, "{stats:?}");
-    assert!(stats.canon_skipped_chars > 100, "{stats:?}");
-    assert_eq!(stats.mismatches, 0, "{stats:?}");
+    assert!(stats.canon_adopted_for_test() > 0, "{stats:?}");
+    assert!(stats.canon_skipped_chars_for_test() > 100, "{stats:?}");
+    assert_eq!(stats.mismatches_for_test(), 0, "{stats:?}");
     eval.restore_specpdl_roots(roots);
 }
 
@@ -1005,9 +1028,21 @@ fn canonical_run_leaves_optioned_queries_to_l1() {
         }
     }
     let after = parse_cache_stats();
-    assert_eq!(after.canon_absolute, before.canon_absolute, "{after:?}");
-    assert_eq!(after.canon_adopted, before.canon_adopted, "{after:?}");
-    assert_eq!(after.canon_declined, before.canon_declined, "{after:?}");
+    assert_eq!(
+        after.canon_absolute_for_test(),
+        before.canon_absolute_for_test(),
+        "{after:?}"
+    );
+    assert_eq!(
+        after.canon_adopted_for_test(),
+        before.canon_adopted_for_test(),
+        "{after:?}"
+    );
+    assert_eq!(
+        after.canon_declined_for_test(),
+        before.canon_declined_for_test(),
+        "{after:?}"
+    );
     eval.restore_specpdl_roots(roots);
 }
 
@@ -1055,10 +1090,10 @@ fn canonical_verify_mode_recomputes_absolute_and_adopted_answers() {
         );
     }
     let stats = parse_cache_stats();
-    assert!(stats.canon_absolute > 0, "{stats:?}");
-    assert!(stats.canon_adopted > 0, "{stats:?}");
-    assert!(stats.verified >= 3, "{stats:?}");
-    assert_eq!(stats.mismatches, 0, "{stats:?}");
+    assert!(stats.canon_absolute_for_test() > 0, "{stats:?}");
+    assert!(stats.canon_adopted_for_test() > 0, "{stats:?}");
+    assert!(stats.verified_for_test() >= 3, "{stats:?}");
+    assert_eq!(stats.mismatches_for_test(), 0, "{stats:?}");
     eval.restore_specpdl_roots(roots);
 }
 
@@ -1116,25 +1151,28 @@ fn live_sync_waits_for_full_state_then_skips_with_verify() {
                     oldstate,
                     "different reporting levels before completion",
                 );
-                assert_eq!(parse_cache_stats().canon_synced, 0);
+                assert_eq!(parse_cache_stats().canon_synced_for_test(), 0);
             }
             reset_parse_cache_stats();
             let query = plain_query(from, zv);
             let first = check_live_verified(&mut eval, query, oldstate, "live boundary");
             let stats = parse_cache_stats();
             assert!(
-                stats.canon_synced > 0,
+                stats.canon_synced_for_test() > 0,
                 "chunk={chunk}, {boundary:?}: {stats:?}"
             );
             assert!(
-                stats.canon_skipped_chars > 0,
+                stats.canon_skipped_chars_for_test() > 0,
                 "chunk={chunk}, {boundary:?}: {stats:?}"
             );
-            assert!(stats.verified > 0, "{stats:?}");
-            assert_eq!(stats.mismatches, 0, "{stats:?}");
+            assert!(stats.verified_for_test() > 0, "{stats:?}");
+            assert_eq!(stats.mismatches_for_test(), 0, "{stats:?}");
             let again = check_live_verified(&mut eval, query, oldstate, "live exact repeat");
             assert_eq!(print_value(&first), print_value(&again));
-            assert!(parse_cache_stats().exact > 0, "chunk={chunk}, {boundary:?}");
+            assert!(
+                parse_cache_stats().exact_for_test() > 0,
+                "chunk={chunk}, {boundary:?}"
+            );
             eval.restore_specpdl_roots(roots);
         }
     }
@@ -1180,14 +1218,18 @@ fn live_sync_grows_partial_frontier_for_oldstate_string_chains() {
         let second_frontier = live_canonical_frontier(&eval);
         let stats = parse_cache_stats();
         assert!(
-            stats.canon_synced > 0,
+            stats.canon_synced_for_test() > 0,
             "first chain, chunk={chunk}: {stats:?}"
         );
         assert!(
             second_frontier > first_frontier,
             "first chain, chunk={chunk}"
         );
-        assert_eq!(stats.canon_absolute, 0, "chain must not reseed: {stats:?}");
+        assert_eq!(
+            stats.canon_absolute_for_test(),
+            0,
+            "chain must not reseed: {stats:?}"
+        );
         assert!(!list_to_vec(&next).expect("state")[3].is_nil());
         reset_parse_cache_stats();
         check_live_verified(
@@ -1198,12 +1240,16 @@ fn live_sync_grows_partial_frontier_for_oldstate_string_chains() {
         );
         let stats = parse_cache_stats();
         assert!(
-            stats.canon_synced > 0,
+            stats.canon_synced_for_test() > 0,
             "second chain, chunk={chunk}: {stats:?}"
         );
         assert!(live_canonical_frontier(&eval) > second_frontier);
-        assert_eq!(stats.canon_absolute, 0, "chain must not reseed: {stats:?}");
-        assert_eq!(stats.mismatches, 0, "{stats:?}");
+        assert_eq!(
+            stats.canon_absolute_for_test(),
+            0,
+            "chain must not reseed: {stats:?}"
+        );
+        assert_eq!(stats.mismatches_for_test(), 0, "{stats:?}");
         eval.restore_specpdl_roots(roots);
     }
 }
@@ -1233,13 +1279,13 @@ fn live_sync_rejects_exact_memos_for_prefix_and_union_descriptor_overflow() {
             reset_parse_cache_stats();
             let first = check_live_verified(&mut eval, query, oldstate, "overflow live prefix");
             assert!(
-                parse_cache_stats().canon_synced > 0,
+                parse_cache_stats().canon_synced_for_test() > 0,
                 "chunk={chunk}, prefix={prefix_count}, skipped={skipped_count}: {:?}",
                 parse_cache_stats(),
             );
             check_live_verified(&mut eval, query, oldstate, "overflow repeat");
             assert_eq!(
-                parse_cache_stats().exact,
+                parse_cache_stats().exact_for_test(),
                 0,
                 "overflow must not yield exact memo"
             );
@@ -1258,8 +1304,8 @@ fn live_sync_rejects_exact_memos_for_prefix_and_union_descriptor_overflow() {
                     "mutated skipped descriptor after union overflow",
                 );
                 assert_ne!(print_value(&first), print_value(&changed));
-                assert_eq!(parse_cache_stats().exact, 0);
-                assert!(parse_cache_stats().descriptor_changes > 0);
+                assert_eq!(parse_cache_stats().exact_for_test(), 0);
+                assert!(parse_cache_stats().descriptor_changes_for_test() > 0);
             } else {
                 // Mutate the first descriptor that did not fit the actual
                 // prefix's dictionary. A shorter query exposes the resulting
@@ -1281,9 +1327,9 @@ fn live_sync_rejects_exact_memos_for_prefix_and_union_descriptor_overflow() {
                     oldstate,
                     "full answer after prefix mutation",
                 );
-                assert_eq!(parse_cache_stats().exact, 0);
+                assert_eq!(parse_cache_stats().exact_for_test(), 0);
             }
-            assert_eq!(parse_cache_stats().mismatches, 0);
+            assert_eq!(parse_cache_stats().mismatches_for_test(), 0);
             eval.restore_specpdl_roots(roots);
         }
     }
@@ -1314,12 +1360,12 @@ fn live_sync_exact_memo_validates_actual_and_skipped_dependencies() {
             reset_parse_cache_stats();
             let before = check_live_verified(&mut eval, query, oldstate, "record dependency union");
             assert!(
-                parse_cache_stats().canon_synced > 0,
+                parse_cache_stats().canon_synced_for_test() > 0,
                 "chunk={chunk}: {:?}",
                 parse_cache_stats()
             );
             check_live_verified(&mut eval, query, oldstate, "exact dependency union");
-            assert!(parse_cache_stats().exact > 0);
+            assert!(parse_cache_stats().exact_for_test() > 0);
             let at = if mutate_prefix {
                 prefix_positions[0]
             } else {
@@ -1330,15 +1376,15 @@ fn live_sync_exact_memo_validates_actual_and_skipped_dependencies() {
                 "(setcar (get-text-property {at} 'syntax-table) {class})",
             ))
             .expect("mutate descriptor without a tick");
-            let exact_before = parse_cache_stats().exact;
+            let exact_before = parse_cache_stats().exact_for_test();
             let after =
                 check_live_verified(&mut eval, query, oldstate, "changed exact dependency union");
             assert_eq!(
-                parse_cache_stats().exact,
+                parse_cache_stats().exact_for_test(),
                 exact_before,
                 "old exact result rejected"
             );
-            assert!(parse_cache_stats().descriptor_changes > 0);
+            assert!(parse_cache_stats().descriptor_changes_for_test() > 0);
             if !mutate_prefix {
                 assert_ne!(print_value(&before), print_value(&after));
             } else {
@@ -1349,7 +1395,7 @@ fn live_sync_exact_memo_validates_actual_and_skipped_dependencies() {
                     check_live_verified(&mut eval, short, oldstate, "changed short prefix");
                 assert!(list_to_vec(&changed).expect("short state")[4].is_nil());
             }
-            assert_eq!(parse_cache_stats().mismatches, 0);
+            assert_eq!(parse_cache_stats().mismatches_for_test(), 0);
             eval.restore_specpdl_roots(roots);
         }
     }
@@ -1915,7 +1961,11 @@ fn live_canonical_frontier(eval: &crate::emacs_core::eval::Context) -> usize {
         .current_buffer()
         .expect("buffer")
         .with_syntax_parse_cache(|cache, _| {
-            cache.canonical.as_ref().expect("canonical run").frontier()
+            cache
+                .canonical_for_test()
+                .as_ref()
+                .expect("canonical run")
+                .frontier()
         })
 }
 

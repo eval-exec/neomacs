@@ -196,15 +196,33 @@ pub(crate) struct SyntaxParseCache {
 /// Per-storage syntax parse cache. See the module documentation.
 #[derive(Debug, Default)]
 pub struct SyntaxParseCache {
-    pub runs: Vec<ParseRun>,
+    pub(crate) runs: Vec<ParseRun>,
     /// The BEGV canonical run, under the same storage-owned exclusive cache
     /// access as L1 runs; it is never stored in a mutator thread-local cache.
-    pub canonical: Option<canon::CanonicalRun>,
+    pub(crate) canonical: Option<canon::CanonicalRun>,
     /// A conservative membership filter for numeric FROM positions. A clear
     /// bit proves a miss; collisions still require an exact run search.
     from_filter: u64,
     /// LRU clock.
     clock: u64,
+}
+
+impl SyntaxParseCache {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Borrowed recorded runs (VIS read arm, lead #1052).  The field is
+    /// `pub(crate)` in every arm; these getters are the only cross-crate
+    /// read routes.
+    pub(crate) fn runs_for_test(&self) -> &[ParseRun] {
+        &self.runs
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Borrowed BEGV canonical run (VIS read arm, lead #1052).
+    pub(crate) fn canonical_for_test(&self) -> Option<&canon::CanonicalRun> {
+        self.canonical.as_ref()
+    }
 }
 
 impl SyntaxParseCache {
@@ -432,37 +450,160 @@ pub(crate) struct ParseCacheStats {
 pub struct ParseCacheStats {
     /// Queries that reached the cache (every `parse-partial-sexp` with the
     /// knob on that runs no `syntax-propertize`).
-    pub queries: u64,
+    pub(crate) queries: u64,
     /// Answered from an exact memo.
-    pub exact: u64,
+    pub(crate) exact: u64,
     /// Resumed from a recorded loop state.
-    pub resumes: u64,
+    pub(crate) resumes: u64,
     /// Characters the resumes did not scan.
-    pub skipped_chars: u64,
+    pub(crate) skipped_chars: u64,
     /// Scanned from FROM and recorded.
-    pub recorded: u64,
+    pub(crate) recorded: u64,
     /// Scanned from FROM, too short to record, no run for the key.
-    pub short: u64,
+    pub(crate) short: u64,
     /// Not cached: properties resolve through Lisp structure no note sees.
-    pub bypassed: u64,
+    pub(crate) bypassed: u64,
     /// Answers compared with a plain scan (`verify`), and the mismatches.
-    pub verified: u64,
-    pub mismatches: u64,
+    pub(crate) verified: u64,
+    pub(crate) mismatches: u64,
     /// Reuses refused because a descriptor cons had changed.
-    pub descriptor_changes: u64,
+    pub(crate) descriptor_changes: u64,
     /// Queries answered by the canonical run, absolute or by state agreement.
-    pub canon_absolute: u64,
-    pub canon_adopted: u64,
+    pub(crate) canon_absolute: u64,
+    pub(crate) canon_adopted: u64,
     /// Failed FROM agreement or completed attempts without live synchronization.
-    pub canon_declined: u64,
+    pub(crate) canon_declined: u64,
     /// Characters skipped through canonical snapshots.
-    pub canon_skipped_chars: u64,
+    pub(crate) canon_skipped_chars: u64,
     /// Existing canonical runs replaced because the environment changed.
-    pub canon_resets: u64,
+    pub(crate) canon_resets: u64,
     /// Queries that matched a later complete canonical loop state.
-    pub canon_synced: u64,
+    pub(crate) canon_synced: u64,
     /// Back-comment lossage queries resumed from a warm canonical state.
-    pub canon_back_comments: u64,
+    pub(crate) canon_back_comments: u64,
+}
+
+impl ParseCacheStats {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `queries` counter (VIS read arm, lead #1052).  The field is
+    /// `pub(crate)` in every arm; these getters are the only cross-crate
+    /// read routes.
+    pub(crate) fn queries_for_test(&self) -> u64 {
+        self.queries
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `exact` counter (VIS read arm, lead #1052).
+    pub(crate) fn exact_for_test(&self) -> u64 {
+        self.exact
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `resumes` counter (VIS read arm, lead #1052).
+    pub(crate) fn resumes_for_test(&self) -> u64 {
+        self.resumes
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `skipped_chars` counter (VIS read arm, lead #1052).
+    pub(crate) fn skipped_chars_for_test(&self) -> u64 {
+        self.skipped_chars
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `recorded` counter (VIS read arm, lead #1052).
+    pub(crate) fn recorded_for_test(&self) -> u64 {
+        self.recorded
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `short` counter (VIS read arm, lead #1052).
+    pub(crate) fn short_for_test(&self) -> u64 {
+        self.short
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `bypassed` counter (VIS read arm, lead #1052).
+    pub(crate) fn bypassed_for_test(&self) -> u64 {
+        self.bypassed
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `verified` counter (VIS read arm, lead #1052).
+    pub(crate) fn verified_for_test(&self) -> u64 {
+        self.verified
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `mismatches` counter (VIS read arm, lead #1052).
+    pub(crate) fn mismatches_for_test(&self) -> u64 {
+        self.mismatches
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `descriptor_changes` counter (VIS read arm, lead #1052).
+    pub(crate) fn descriptor_changes_for_test(&self) -> u64 {
+        self.descriptor_changes
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `canon_absolute` counter (VIS read arm, lead #1052).
+    pub(crate) fn canon_absolute_for_test(&self) -> u64 {
+        self.canon_absolute
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `canon_adopted` counter (VIS read arm, lead #1052).
+    pub(crate) fn canon_adopted_for_test(&self) -> u64 {
+        self.canon_adopted
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `canon_declined` counter (VIS read arm, lead #1052).
+    pub(crate) fn canon_declined_for_test(&self) -> u64 {
+        self.canon_declined
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `canon_skipped_chars` counter (VIS read arm, lead #1052).
+    pub(crate) fn canon_skipped_chars_for_test(&self) -> u64 {
+        self.canon_skipped_chars
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `canon_resets` counter (VIS read arm, lead #1052).
+    pub(crate) fn canon_resets_for_test(&self) -> u64 {
+        self.canon_resets
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `canon_synced` counter (VIS read arm, lead #1052).
+    pub(crate) fn canon_synced_for_test(&self) -> u64 {
+        self.canon_synced
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `canon_back_comments` counter (VIS read arm, lead #1052).
+    pub(crate) fn canon_back_comments_for_test(&self) -> u64 {
+        self.canon_back_comments
+    }
 }
 
 thread_local! {
@@ -628,7 +769,7 @@ struct RunKey {
 /// Everything a scan from FROM reads besides the text and properties.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunKey {
-    pub from_char: usize,
+    pub(crate) from_char: usize,
     /// The internalized OLDSTATE: two OLDSTATEs GNU treats alike share a run.
     start: PartialParseState,
     from_oldstate: bool,
@@ -636,6 +777,16 @@ pub struct RunKey {
     stop_before: bool,
     commentstop: CommentStopMode,
     env: EnvKey,
+}
+
+impl RunKey {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied FROM position (VIS read arm, lead #1052).  The field is
+    /// `pub(crate)` in every arm; this getter is the only cross-crate route.
+    pub(crate) fn from_char_for_test(&self) -> usize {
+        self.from_char
+    }
 }
 
 /// A finished answer for one TO.
@@ -725,7 +876,7 @@ struct ParseRun {
 /// Recorded scans that share one key.
 #[derive(Debug)]
 pub struct ParseRun {
-    pub key: RunKey,
+    pub(crate) key: RunKey,
     /// Loop-top states strictly after FROM, ascending by position (and so by
     /// byte).
     snaps: Vec<LoopState>,
@@ -736,6 +887,16 @@ pub struct ParseRun {
     results: Vec<ExactResult>,
     descriptors: Vec<Descriptor>,
     last_used: u64,
+}
+
+impl ParseRun {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Borrowed run key (VIS read arm, lead #1052).  The field is
+    /// `pub(crate)` in every arm; this getter is the only cross-crate route.
+    pub(crate) fn key_for_test(&self) -> &RunKey {
+        &self.key
+    }
 }
 
 impl ParseRun {

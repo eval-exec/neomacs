@@ -387,7 +387,7 @@ fn word_boundaries_between_scripts_are_decided_per_pair() {
             assert_eq!(tally.2, 0);
         }
         assert!(
-            dfa.counters().slow_transitions > 0 || !source.contains('w'),
+            dfa.counters().slow_transitions_for_test() > 0 || !source.contains('w'),
             "{source:?}"
         );
     }
@@ -469,7 +469,7 @@ fn a_full_cache_is_cleared_and_relearned() {
     );
     assert_eq!(tally.0, 0);
     assert!(tally.1 > 0);
-    assert!(dfa.counters().clears > 0, "{:?}", dfa.counters());
+    assert!(dfa.counters().clears_for_test() > 0, "{:?}", dfa.counters());
     assert_eq!(dfa.gave_up(), None);
 }
 
@@ -712,7 +712,7 @@ fn dfa_verdicts_agree_with_the_matcher_inside_property_runs() {
             totals.1 += tally.1;
             totals.2 += tally.2;
         }
-        positional_chars += dfa.counters().positional_chars;
+        positional_chars += dfa.counters().positional_chars_for_test();
     }
     tracing::info!(
         eligible,
@@ -806,7 +806,7 @@ fn a_pattern_that_reads_no_syntax_steps_over_property_runs() {
         let tally = check_dfa_against_matcher(&compiled, &mut dfa, text, &lookup, source);
         assert_eq!(tally.2, 0, "{source:?}");
         assert_eq!(
-            dfa.counters().positional_chars > 0,
+            dfa.counters().positional_chars_for_test() > 0,
             reads,
             "{source:?}: {:?}",
             dfa.counters()
@@ -962,7 +962,7 @@ fn a_candidate_reaching_the_frontier_is_left_to_the_matcher() {
         Exists::No { .. }
     ));
     assert_eq!(lookup.crossed.get(), None);
-    assert_eq!(dfa.counters().frontier_unknown, 2);
+    assert_eq!(dfa.counters().frontier_unknown_for_test(), 2);
 }
 
 /// A real candidate rejected from the cached start transition avoids the
@@ -993,7 +993,7 @@ fn inline_first_step_rejects_and_success_fallback_agree_with_verify() {
             let mut lease = DfaLease::acquire(&compiled, &syntax, text.len()).unwrap();
             assert!(lease.inline_first_step_enabled());
             let (before_no, before_decisions) = match &*lease.slot() {
-                DfaSlot::Live(live) => (live.dfa().counters().no, live.decisions()),
+                DfaSlot::Live(live) => (live.dfa().counters().no_for_test(), live.decisions()),
                 _ => panic!("primed slot should be live"),
             };
             let entries = matcher_entry_count();
@@ -1002,7 +1002,7 @@ fn inline_first_step_rejects_and_success_fallback_agree_with_verify() {
             let DfaSlot::Live(live) = &*lease.slot() else {
                 panic!("a cached rejection keeps the slot live");
             };
-            assert_eq!(live.dfa().counters().no, before_no + 1);
+            assert_eq!(live.dfa().counters().no_for_test(), before_no + 1);
             assert_eq!(live.decisions(), before_decisions + 1);
             assert_eq!(lease.skipped(), 1);
             // The real match falls through exactly once, with full registers.
@@ -1079,9 +1079,9 @@ fn cached_first_step_rejections_equal_the_matcher() {
             }),
             Exists::No { consumed: 0 }
         );
-        assert_eq!(dfa.counters().no, before.no + 1);
-        assert_eq!(dfa.counters().bytes, before.bytes);
-        assert_eq!(dfa.counters().states, before.states);
+        assert_eq!(dfa.counters().no_for_test(), before.no_for_test() + 1);
+        assert_eq!(dfa.counters().bytes_for_test(), before.bytes_for_test());
+        assert_eq!(dfa.counters().states_for_test(), before.states_for_test());
         assert!(re_match(&compiled, text, p, text.len(), &syntax, 0).is_none());
     }
 }
@@ -1139,14 +1139,14 @@ fn cached_first_step_keeps_memory_and_give_up_guards() {
     });
     assert!(dfa.cached_first_step_dead(&compiled, text, 0, text.len(), 0));
     neovm_text::test_support::authority::set_existence_dfa_memory(&mut dfa, MEMORY_CAP + 1);
-    let clears = dfa.counters().clears;
+    let clears = dfa.counters().clears_for_test();
     assert_eq!(
         with_first_step(true, || {
             dfa.anchored_exists(&compiled, text, 0, text.len(), 0, &syntax)
         }),
         Exists::No { consumed: 0 }
     );
-    assert_eq!(dfa.counters().clears, clears + 1);
+    assert_eq!(dfa.counters().clears_for_test(), clears + 1);
     neovm_text::test_support::authority::set_existence_dfa_gave_up(
         &mut dfa,
         Some(DfaGaveUp::StateExplosion),
@@ -1173,7 +1173,7 @@ fn cached_first_step_context_changes_clear_character_maps() {
     });
     assert!(dfa.cached_first_step_dead(&compiled, text, 1, text.len(), 0));
     let prev_class = dfa.classes().byte_class()[b'x' as usize];
-    let prev_facts = dfa.classes().byte_facts[b'x' as usize];
+    let prev_facts = dfa.classes().byte_facts_for_test()[b'x' as usize];
     neovm_text::test_support::authority::set_existence_dfa_byte_class(
         &mut dfa,
         b'x' as usize,
@@ -1223,7 +1223,7 @@ fn cached_first_step_context_changes_clear_character_maps() {
     let standard = ClassContext::of_search(&compiled, dfa.nfa(), &syntax).unwrap();
     neovm_text::test_support::authority::sync_existence_dfa_classes(&mut dfa, standard);
     dfa.begin_search(&compiled, &syntax);
-    assert_eq!(dfa.classes().byte_facts[b'-' as usize], NO_FACTS);
+    assert_eq!(dfa.classes().byte_facts_for_test()[b'-' as usize], NO_FACTS);
     assert!(!dfa.cached_first_step_dead(&compiled, text, 1, text.len(), 0));
     assert_eq!(
         with_first_step(true, || {
@@ -1933,8 +1933,8 @@ fn inline_cached_prefix_keeps_consumed_accounting_and_captures() {
             assert_eq!(matcher_entry_count(), entries);
             let after = neovm_text::test_support::authority::live_dfa_counters_for_test(&lease)
                 .expect("cached rejection should stay live");
-            assert_eq!(after.no, before.no + 1);
-            assert_eq!(after.bytes, before.bytes + 2);
+            assert_eq!(after.no_for_test(), before.no_for_test() + 1);
+            assert_eq!(after.bytes_for_test(), before.bytes_for_test() + 2);
             assert_eq!(lease.skipped(), 1);
         });
         let entries = matcher_entry_count();
@@ -2196,7 +2196,7 @@ fn start_closure(nfa: &Nfa, text: &[u8], d: usize) -> (Vec<Predicate>, bool) {
     out.sort_unstable();
     let predicates = out
         .iter()
-        .map(|&p| nfa.predicates()[nfa.positions()[p as usize].predicate as usize])
+        .map(|&p| nfa.predicates()[nfa.positions()[p as usize].predicate_for_test() as usize])
         .collect();
     (predicates, accept)
 }

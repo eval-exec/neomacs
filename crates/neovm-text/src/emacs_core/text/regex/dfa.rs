@@ -152,9 +152,19 @@ pub struct Position {
     /// Byte offset of the pattern character within an `exactn` literal.
     pub(crate) lit_off: u8,
     /// Index into [`Nfa::predicates`].
-    pub predicate: u16,
+    pub(crate) predicate: u16,
     /// Where the thread resumes after the character is consumed.
     pub(crate) next: KernelItem,
+}
+
+impl Position {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied predicate index (VIS read arm, lead #1052).  The field is
+    /// `pub(crate)` in every arm; this getter is the only cross-crate route.
+    pub(crate) fn predicate_for_test(&self) -> u16 {
+        self.predicate
+    }
 }
 
 /// The zero-width tests a pattern contains, which decide the facts a
@@ -587,29 +597,11 @@ enum Epsilon {
 /// A text position the closure evaluates assertions at: the matcher's view
 /// (`text`, `d`, `stop`, point, representation, syntax).
 pub(crate) struct Place<'a> {
-    #[cfg(feature = "test-support")]
-    pub text: &'a [u8],
-    #[cfg(not(feature = "test-support"))]
     pub(crate) text: &'a [u8],
-    #[cfg(feature = "test-support")]
-    pub d: usize,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) d: usize,
-    #[cfg(feature = "test-support")]
-    pub stop: usize,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) stop: usize,
-    #[cfg(feature = "test-support")]
-    pub point: usize,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) point: usize,
-    #[cfg(feature = "test-support")]
-    pub target_multibyte: bool,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) target_multibyte: bool,
-    #[cfg(feature = "test-support")]
-    pub syntax: MatchSyntax<'a>,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) syntax: MatchSyntax<'a>,
 }
 
@@ -1187,7 +1179,7 @@ pub struct CharClasses {
     /// The facts of each tabled byte's character ([`NO_FACTS`]: not known
     /// yet), for the character before a candidate, which the DFA need not
     /// have classified.
-    pub byte_facts: [u8; 256],
+    pub(crate) byte_facts: [u8; 256],
     keys: Vec<ClassKey>,
     ids: FxHashMap<ClassKey, u8>,
     context: Option<ClassContext>,
@@ -1242,6 +1234,14 @@ impl CharClasses {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn len(&self) -> usize {
         self.keys.len()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Borrowed per-byte facts table (VIS read arm, lead #1052).  The field is
+    /// `pub(crate)` in every arm; this getter is the only cross-crate route.
+    pub(crate) fn byte_facts_for_test(&self) -> &[u8; 256] {
+        &self.byte_facts
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -1473,20 +1473,72 @@ pub(crate) struct DfaCounters {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DfaCounters {
     pub(crate) yes: u64,
-    pub no: u64,
+    pub(crate) no: u64,
     pub(crate) unknown: u64,
-    pub states: u64,
-    pub clears: u64,
-    pub slow_transitions: u64,
-    pub bytes: u64,
+    pub(crate) states: u64,
+    pub(crate) clears: u64,
+    pub(crate) slow_transitions: u64,
+    pub(crate) bytes: u64,
     /// Characters classified at their position, inside a `syntax-table`
     /// property run.
-    pub positional_chars: u64,
+    pub(crate) positional_chars: u64,
     /// Property-free stretches looked up (`plain_syntax_until`).
     pub(crate) plain_runs: u64,
     /// Candidates left to the matcher because the DFA would have read syntax
     /// at or past the lazy `syntax-propertize` frontier.
-    pub frontier_unknown: u64,
+    pub(crate) frontier_unknown: u64,
+}
+
+impl DfaCounters {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `no` counter (VIS read arm, lead #1052).  The field is
+    /// `pub(crate)` in every arm; this getter is the only cross-crate route.
+    pub(crate) fn no_for_test(&self) -> u64 {
+        self.no
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `states` counter (VIS read arm, lead #1052).
+    pub(crate) fn states_for_test(&self) -> u64 {
+        self.states
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `clears` counter (VIS read arm, lead #1052).
+    pub(crate) fn clears_for_test(&self) -> u64 {
+        self.clears
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `slow_transitions` counter (VIS read arm, lead #1052).
+    pub(crate) fn slow_transitions_for_test(&self) -> u64 {
+        self.slow_transitions
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `bytes` counter (VIS read arm, lead #1052).
+    pub(crate) fn bytes_for_test(&self) -> u64 {
+        self.bytes
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `positional_chars` counter (VIS read arm, lead #1052).
+    pub(crate) fn positional_chars_for_test(&self) -> u64 {
+        self.positional_chars
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied `frontier_unknown` counter (VIS read arm, lead #1052).
+    pub(crate) fn frontier_unknown_for_test(&self) -> u64 {
+        self.frontier_unknown
+    }
 }
 
 #[cfg(not(any(test, feature = "test-support")))]
@@ -1509,11 +1561,11 @@ pub struct SearchSyntax {
     /// The pattern reads syntax and `syntax-table` properties may apply: the
     /// cached loop stops at property runs, and syntax is read through the
     /// real lookup at the real position.
-    pub positional: bool,
+    pub(crate) positional: bool,
     /// The first input position whose syntax the matcher records for lazy
     /// `syntax-propertize` (`usize::MAX`: none).  A candidate the DFA cannot
     /// decide below it is left to the matcher.
-    pub read_limit: usize,
+    pub(crate) read_limit: usize,
 }
 
 impl SearchSyntax {
