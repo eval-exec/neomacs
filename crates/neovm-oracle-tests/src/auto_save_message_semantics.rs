@@ -242,3 +242,26 @@ fn do_auto_save_multibyte_shrink_uses_character_length() {
         ]],
     );
 }
+
+#[test]
+fn do_auto_save_buffer_local_include_big_deletions_does_not_disable() {
+    // Live GNU 31.1 reads `auto-save-include-big-deletions` after
+    // `set_buffer_internal` (`fileio.c:6453`). Local t with a global nil
+    // saves; `save_length` becomes Z-BEG (100).
+    let form = r##"(progn
+  (setq auto-save-include-big-deletions nil)
+  (let ((buf (generate-new-buffer "as-local-include")))
+    (with-current-buffer buf
+      (setq-local auto-save-include-big-deletions t)
+      (setq buffer-file-name (expand-file-name "as-local-include.txt" temporary-file-directory))
+      (insert (make-string 100 ?x))
+      (setq buffer-saved-size 8000)
+      (setq buffer-auto-save-file-name
+            (expand-file-name "#as-local-include#" temporary-file-directory)))
+    (do-auto-save)
+    (with-current-buffer buf buffer-saved-size)))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        form,
+        expect_test::expect![[r#""Auto-saving...\nAuto-saving...done\nVALUE OK 100""#]],
+    );
+}
