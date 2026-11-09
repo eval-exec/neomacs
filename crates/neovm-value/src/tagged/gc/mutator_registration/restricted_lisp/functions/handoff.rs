@@ -1,4 +1,4 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "test-support"))]
 //! Ordered real-owner calls, concurrent writers, and stopped definition lifetime.
 use super::*;
 use crate::tagged::gc::PlainSymbolBacking;
@@ -82,19 +82,24 @@ struct Round {
     major: bool,
     owners: usize,
 }
-fn collect<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+fn collect<K, W>(
     era: &ParallelHeapEra<'_, K>,
     stopped: &mut AllStopped<'_>,
     graphs: &[Vec<usize>],
     reconcile: bool,
-) -> Round {
-    let journal_before = gc::ledger(era, stopped).journal;
+    world_roots: W,
+) -> Round
+where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: gc::WorldRoots<K>,
+{
+    let journal_before = gc::ledger(era, stopped, world_roots).journal;
     if reconcile {
         era.reconcile_functions(&mut stopped.symbols().unwrap())
             .unwrap();
     }
-    let roots = gc::ledger(era, stopped);
-    let report = era.collect_stopped(stopped).unwrap();
+    let roots = gc::ledger(era, stopped, world_roots);
+    let report = era.collect_stopped(stopped, world_roots).unwrap();
     let live = gc::live(era, stopped, graphs);
     era.resume_cons_storage(stopped).unwrap();
     Round {
@@ -106,16 +111,21 @@ fn collect<K: crate::tagged::gc::mutator_registration::EraKeeper>(
         owners: report.frozen_owners,
     }
 }
-fn round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+fn round<K, W>(
     era: &ParallelHeapEra<'_, K>,
     owner: &mut Mutator<'_>,
     graphs: &[Vec<usize>],
     reconcile: bool,
-) -> Round {
+    world_roots: W,
+) -> Round
+where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: gc::WorldRoots<K>,
+{
     owner.enter_native(&[]).unwrap();
     let mut stopped = era.stop().unwrap();
     era.return_cons_storage(&stopped).unwrap();
-    let result = collect(era, &mut stopped, graphs, reconcile);
+    let result = collect(era, &mut stopped, graphs, reconcile, world_roots);
     stopped.complete().unwrap();
     owner.leave_native().unwrap();
     result
@@ -130,125 +140,133 @@ fn paused(actor: &Actor) -> Snapshot {
         event => panic!("expected paused owner: {event:?}"),
     }
 }
-fn scenario(kind: PlainSymbolBacking, count: usize) {
+fn scenario<K, W>(
+    era: ParallelHeapEra<'_, K>,
+    ids: &[crate::intern::SymId],
+    kind: PlainSymbolBacking,
+    count: usize,
+    world_roots: W,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: gc::WorldRoots<K>,
+{
     let _probes = crate::tagged::gc::mutator_registration::a8_probes::suppress();
-    let (rounds, snapshots, finished, graphs) =
-        Context::with_test_symbol_functions_era(kind, |era, ids: Vec<crate::intern::SymId>| {
-            let sources: Vec<_> = (0..count).map(source).collect();
-            let session = Session::admit(&era, &ids, &sources).unwrap();
-            let mut stopped = era.stop().unwrap();
-            let nil = era
-                .with_stopped_heap_for_test(&stopped, |heap| unsafe {
-                    // SAFETY: same stopped heap and immediate scalar seed.
-                    SharedRoot::new(heap, TaggedValue::NIL)
+    let (rounds, snapshots, finished, graphs) = {
+        let sources: Vec<_> = (0..count).map(source).collect();
+        let session = Session::admit(&era, ids, &sources).unwrap();
+        let mut stopped = era.stop().unwrap();
+        let nil = era
+            .with_stopped_heap_for_test(&stopped, |heap| unsafe {
+                // SAFETY: same stopped heap and immediate scalar seed.
+                SharedRoot::new(heap, TaggedValue::NIL)
+            })
+            .unwrap();
+        stopped.trace(|_, _| Ok(())).unwrap();
+        stopped.complete().unwrap();
+        era.start_cons_storage().unwrap();
+        let (rounds, snapshots, finished, graphs) = thread::scope(|scope| {
+            let permits: Vec<_> = (0..count)
+                .map(|index| {
+                    era.register(
+                        OWNER_BASE + index as u64,
+                        session.root_capacity(index).unwrap(),
+                    )
+                    .unwrap()
                 })
-                .unwrap();
-            stopped.trace(|_, _| Ok(())).unwrap();
-            stopped.complete().unwrap();
-            era.start_cons_storage().unwrap();
-            let (rounds, snapshots, finished, graphs) = thread::scope(|scope| {
-                let permits: Vec<_> = (0..count)
-                    .map(|index| {
-                        era.register(
-                            OWNER_BASE + index as u64,
-                            session.root_capacity(index).unwrap(),
-                        )
-                        .unwrap()
-                    })
-                    .collect();
-                let mut actors = Vec::new();
-                let mut jobs = Vec::new();
-                for (index, permit) in permits.into_iter().enumerate() {
-                    let (commands, receive_commands) = channel();
-                    let (send_events, events) = channel();
-                    let (session, nil) = (&session, &nil);
-                    let heap = era.heap_identity();
-                    jobs.push(scope.spawn(move || {
-                        worker::run(
-                            session,
-                            nil,
-                            permit,
-                            heap,
-                            index,
-                            receive_commands,
-                            send_events,
-                        )
-                    }));
-                    actors.push(Actor { commands, events });
+                .collect();
+            let mut actors = Vec::new();
+            let mut jobs = Vec::new();
+            for (index, permit) in permits.into_iter().enumerate() {
+                let (commands, receive_commands) = channel();
+                let (send_events, events) = channel();
+                let (session, nil) = (&session, &nil);
+                let heap = era.heap_identity();
+                jobs.push(scope.spawn(move || {
+                    worker::run(
+                        session,
+                        nil,
+                        permit,
+                        heap,
+                        index,
+                        receive_commands,
+                        send_events,
+                    )
+                }));
+                actors.push(Actor { commands, events });
+            }
+            for actor in &actors {
+                assert!(matches!(worker::receive(&actor.events), Event::Seeded));
+            }
+            let mut rounds = Vec::new();
+            let mut snapshots = Vec::new();
+            let mut graphs = Vec::new();
+            for phase in 0..PHASES {
+                let mut before: Vec<Option<Snapshot>> = (0..count).map(|_| None).collect();
+                // Successful selection precedes the writer phase. Remaining
+                // owners advance concurrently, including the two writers.
+                if phase == 1 || phase == 3 {
+                    before[0] = Some(advance(&actors[0]));
                 }
+                for (index, actor) in actors.iter().enumerate() {
+                    if before[index].is_none() {
+                        actor.commands.send(Command::Advance).unwrap();
+                    }
+                }
+                for (index, actor) in actors.iter().enumerate() {
+                    if before[index].is_none() {
+                        before[index] = Some(paused(actor));
+                    }
+                }
+                let before: Vec<_> = before.into_iter().map(Option::unwrap).collect();
+                let mut stopped = era.stop().unwrap();
+                era.return_cons_storage(&stopped).unwrap();
+                if phase == 0 {
+                    graphs = vec![
+                        gc::graph(&era, &stopped, before[0].words[3]),
+                        gc::graph(&era, &stopped, before[1].words[3]),
+                    ];
+                }
+                rounds.push(collect(&era, &mut stopped, &graphs, true, world_roots));
+                stopped.complete().unwrap();
                 for actor in &actors {
-                    assert!(matches!(worker::receive(&actor.events), Event::Seeded));
+                    actor.commands.send(Command::Resume).unwrap();
                 }
-                let mut rounds = Vec::new();
-                let mut snapshots = Vec::new();
-                let mut graphs = Vec::new();
-                for phase in 0..PHASES {
-                    let mut before: Vec<Option<Snapshot>> = (0..count).map(|_| None).collect();
-                    // Successful selection precedes the writer phase. Remaining
-                    // owners advance concurrently, including the two writers.
-                    if phase == 1 || phase == 3 {
-                        before[0] = Some(advance(&actors[0]));
-                    }
-                    for (index, actor) in actors.iter().enumerate() {
-                        if before[index].is_none() {
-                            actor.commands.send(Command::Advance).unwrap();
-                        }
-                    }
-                    for (index, actor) in actors.iter().enumerate() {
-                        if before[index].is_none() {
-                            before[index] = Some(paused(actor));
-                        }
-                    }
-                    let before: Vec<_> = before.into_iter().map(Option::unwrap).collect();
-                    let mut stopped = era.stop().unwrap();
-                    era.return_cons_storage(&stopped).unwrap();
-                    if phase == 0 {
-                        graphs = vec![
-                            gc::graph(&era, &stopped, before[0].words[3]),
-                            gc::graph(&era, &stopped, before[1].words[3]),
-                        ];
-                    }
-                    rounds.push(collect(&era, &mut stopped, &graphs, true));
-                    stopped.complete().unwrap();
-                    for actor in &actors {
-                        actor.commands.send(Command::Resume).unwrap();
-                    }
-                    let after: Vec<_> = actors
-                        .iter()
-                        .map(|actor| match worker::receive(&actor.events) {
-                            Event::Resumed(snapshot) => snapshot,
-                            event => panic!("expected resumed owner: {event:?}"),
-                        })
-                        .collect();
-                    snapshots.push((before, after));
-                }
-                for actor in &actors {
-                    actor.commands.send(Command::Finish).unwrap();
-                }
-                let finished: Vec<_> = actors
+                let after: Vec<_> = actors
                     .iter()
                     .map(|actor| match worker::receive(&actor.events) {
-                        Event::Finished { result, cleanup } => (result, cleanup),
-                        event => panic!("expected completed owner: {event:?}"),
+                        Event::Resumed(snapshot) => snapshot,
+                        event => panic!("expected resumed owner: {event:?}"),
                     })
                     .collect();
-                for job in jobs {
-                    job.join().unwrap();
-                }
-                (rounds, snapshots, finished, graphs)
-            });
-            drop(nil);
-            let mut stopped = era.stop().unwrap();
-            era.return_cons_storage(&stopped).unwrap();
-            era.reconcile_functions(&mut stopped.symbols().unwrap())
-                .unwrap();
-            stopped.trace(|_, _| Ok(())).unwrap();
-            stopped.complete().unwrap();
-            let (collector, keeper) = era.finish().unwrap();
-            drop(collector);
-            drop(keeper);
+                snapshots.push((before, after));
+            }
+            for actor in &actors {
+                actor.commands.send(Command::Finish).unwrap();
+            }
+            let finished: Vec<_> = actors
+                .iter()
+                .map(|actor| match worker::receive(&actor.events) {
+                    Event::Finished { result, cleanup } => (result, cleanup),
+                    event => panic!("expected completed owner: {event:?}"),
+                })
+                .collect();
+            for job in jobs {
+                job.join().unwrap();
+            }
             (rounds, snapshots, finished, graphs)
         });
+        drop(nil);
+        let mut stopped = era.stop().unwrap();
+        era.return_cons_storage(&stopped).unwrap();
+        era.reconcile_functions(&mut stopped.symbols().unwrap())
+            .unwrap();
+        stopped.trace(|_, _| Ok(())).unwrap();
+        stopped.complete().unwrap();
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+        (rounds, snapshots, finished, graphs)
+    };
     // Check semantic facts only after every frame/image and era has finished.
     assert_eq!(graphs.iter().map(Vec::len).collect::<Vec<_>>(), [3, 3]);
     assert!(graphs[0].iter().all(|word| !graphs[1].contains(word)));
@@ -393,58 +411,81 @@ fn scenario(kind: PlainSymbolBacking, count: usize) {
         "P3SYM_C4_HANDOFF kind={kind:?} owners={count} property_gcs={PHASES} graphs=2 nodes=6"
     );
 }
-#[cfg(not(miri))]
-#[test]
-fn p3sym_c4_plain_multi_owner_function_handoff_gc() {
-    for count in 2..=4 {
-        scenario(PlainSymbolBacking::Unprojected, count);
-    }
+fn p3sym_c4_plain_multi_owner_function_handoff_gc<K, W>(
+    era: ParallelHeapEra<'_, K>,
+    ids: &[crate::intern::SymId],
+    count: usize,
+    world_roots: W,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: gc::WorldRoots<K>,
+{
+    scenario(
+        era,
+        ids,
+        PlainSymbolBacking::Unprojected,
+        count,
+        world_roots,
+    );
 }
-#[cfg(not(miri))]
-#[test]
-fn p3sym_c4_projected_multi_owner_function_handoff_gc() {
-    for count in 2..=4 {
-        scenario(PlainSymbolBacking::Projected, count);
-    }
+fn p3sym_c4_projected_multi_owner_function_handoff_gc<K, W>(
+    era: ParallelHeapEra<'_, K>,
+    ids: &[crate::intern::SymId],
+    count: usize,
+    world_roots: W,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: gc::WorldRoots<K>,
+{
+    scenario(era, ids, PlainSymbolBacking::Projected, count, world_roots);
 }
 
-#[test]
-fn p3sym_c4_journal_only_definition_gc() {
+fn p3sym_c4_journal_only_definition_gc<K, W>(
+    era: ParallelHeapEra<'_, K>,
+    ids: &[crate::intern::SymId],
+    kind: PlainSymbolBacking,
+    world_roots: W,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: gc::WorldRoots<K>,
+{
     let _probes = a8_probes::suppress();
-    for kind in [
-        PlainSymbolBacking::Unprojected,
-        PlainSymbolBacking::Projected,
-    ] {
-        let ops = vec![
-            function(FunctionOp::Function { symbol: 0, dst: 3 }),
-            Op::Safepoint,
-            Op::Global(GlobalOp::Value { symbol: 1, dst: 0 }),
-            function(FunctionOp::Fset {
-                symbol: 0,
-                src: 0,
-                dst: 2,
-            }),
-            Op::Global(GlobalOp::Makunbound { symbol: 0, dst: 2 }),
-            nil(0),
-            nil(2),
-            nil(3),
-            Op::Safepoint,
-            Op::Safepoint,
-        ];
-        super::tests::case(kind, ops, NSLOTS, |era, session, owner, frame, _| {
+    let ops = vec![
+        function(FunctionOp::Function { symbol: 0, dst: 3 }),
+        Op::Safepoint,
+        Op::Global(GlobalOp::Value { symbol: 1, dst: 0 }),
+        function(FunctionOp::Fset {
+            symbol: 0,
+            src: 0,
+            dst: 2,
+        }),
+        Op::Global(GlobalOp::Makunbound { symbol: 0, dst: 2 }),
+        nil(0),
+        nil(2),
+        nil(3),
+        Op::Safepoint,
+        Op::Safepoint,
+    ];
+    super::tests::case(
+        era,
+        ids,
+        kind,
+        ops,
+        NSLOTS,
+        |era, session, owner, frame, _| {
             worker::pause(session, owner, frame).unwrap();
             let head = with_run(owner, |run| Ok(frame.slots[3].word_for_test(run))).unwrap();
             owner.enter_native(&[]).unwrap();
             let mut stopped = era.stop().unwrap();
             era.return_cons_storage(&stopped).unwrap();
             let graphs = vec![gc::graph(era, &stopped, head)];
-            let warm = collect(era, &mut stopped, &graphs, true);
+            let warm = collect(era, &mut stopped, &graphs, true, world_roots);
             stopped.complete().unwrap();
             owner.leave_native().unwrap();
             worker::pause(session, owner, frame).unwrap();
-            let journal = round(era, owner, &graphs, false);
+            let journal = round(era, owner, &graphs, false, world_roots);
             worker::pause(session, owner, frame).unwrap();
-            let retired = round(era, owner, &graphs, true);
+            let retired = round(era, owner, &graphs, true, world_roots);
             assert_eq!(graphs[0].len(), 3);
             assert_eq!(warm.live[0], [true; 3]);
             assert!(journal.journal_before.contains(&head));
@@ -460,11 +501,17 @@ fn p3sym_c4_journal_only_definition_gc() {
             assert!(!retired.roots.ordinary_has(&graphs[0]));
             assert_eq!(retired.live[0], [false; 3]);
             eprintln!("P3SYM_C4_GC_WITNESS omitted_journal_loses_only_definition_root {kind:?}");
-        });
-    }
+        },
+    );
 }
-#[test]
-fn p3sym_c4_activation_gc_small() {
+fn p3sym_c4_activation_gc_small<K, W>(
+    era: ParallelHeapEra<'_, K>,
+    ids: &[crate::intern::SymId],
+    world_roots: W,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: gc::WorldRoots<K>,
+{
     let _probes = a8_probes::suppress();
     let ops = vec![
         function(FunctionOp::Function { symbol: 0, dst: 2 }),
@@ -485,6 +532,8 @@ fn p3sym_c4_activation_gc_small() {
         Op::Safepoint,
     ];
     super::tests::case(
+        era,
+        ids,
         PlainSymbolBacking::Projected,
         ops,
         NSLOTS,
@@ -494,12 +543,12 @@ fn p3sym_c4_activation_gc_small() {
             let graphs = vec![vec![head]];
             // This property collection drains serial setup births. Without
             // it, a YoungBlock can mask the private activation root under test.
-            let warm = round(era, owner, &graphs, true);
+            let warm = round(era, owner, &graphs, true, world_roots);
             worker::pause(session, owner, frame).unwrap();
             with_run(owner, |run| frame.cache.clear(run).map_err(ExecError::from)).unwrap();
-            let selected = round(era, owner, &graphs, true);
+            let selected = round(era, owner, &graphs, true, world_roots);
             worker::pause(session, owner, frame).unwrap();
-            let returned = round(era, owner, &graphs, true);
+            let returned = round(era, owner, &graphs, true, world_roots);
             let answer = with_run(owner, |run| Ok(frame.slots[1].word_for_test(run))).unwrap();
             assert_eq!(warm.live[0], [true]);
             assert_eq!(selected.live[0], [true]);
@@ -525,4 +574,32 @@ fn p3sym_c4_activation_gc_small() {
             assert_eq!(prin1(answer), oracle[3]);
         },
     );
+}
+
+/// One iteration of a moved handoff test. The core shell boots the era and
+/// loops kinds and owner counts. `world_roots` is the eval baton walker.
+pub(crate) fn run_function_handoff_test<K, W>(
+    name: &str,
+    era: ParallelHeapEra<'_, K>,
+    ids: &[crate::intern::SymId],
+    kind: PlainSymbolBacking,
+    count: usize,
+    world_roots: W,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: gc::WorldRoots<K>,
+{
+    match name {
+        "p3sym_c4_plain_multi_owner_function_handoff_gc" => {
+            p3sym_c4_plain_multi_owner_function_handoff_gc(era, ids, count, world_roots);
+        }
+        "p3sym_c4_projected_multi_owner_function_handoff_gc" => {
+            p3sym_c4_projected_multi_owner_function_handoff_gc(era, ids, count, world_roots);
+        }
+        "p3sym_c4_journal_only_definition_gc" => {
+            p3sym_c4_journal_only_definition_gc(era, ids, kind, world_roots);
+        }
+        "p3sym_c4_activation_gc_small" => p3sym_c4_activation_gc_small(era, ids, world_roots),
+        other => panic!("unknown function handoff test: {other}"),
+    }
 }

@@ -23,6 +23,8 @@ use super::{
 
 mod combined;
 mod functions;
+#[cfg(feature = "test-support")]
+pub(crate) use functions::{run_function_handoff_test, run_functions_executor_test};
 pub(crate) mod globals;
 mod intern;
 #[cfg(test)]

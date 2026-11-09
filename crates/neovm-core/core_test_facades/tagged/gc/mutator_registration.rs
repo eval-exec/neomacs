@@ -87,6 +87,14 @@ mod restricted_oracle;
 #[path = "../../../core_tests/tagged/gc/mutator_registration/handoff_contention_tests.rs"]
 mod handoff_contention_tests;
 
+/// Function-executor and function-handoff tests re-homed out of value.
+/// The shell is eval's symbol-functions fence. Assertions stay in the value
+/// bodies. World roots are the baton walker. The two multi-owner tests keep
+/// `not(miri)` on the test itself.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/functions_executor_tests.rs"]
+mod functions_executor_tests;
+
 /// MEMQ-TAIL-SHAPES (b)+(i)+(ii), peer 22:30Z approvals: the keeper-table
 /// scope test re-homed out of value. It uses the closure-scoped
 /// stopped-tables install, the scope's nested-install probe, the &self

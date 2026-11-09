@@ -362,6 +362,10 @@ impl Session {
     }
 }
 
+mod handoff;
 mod tests;
 
-mod handoff;
+#[cfg(feature = "test-support")]
+pub(crate) use handoff::run_function_handoff_test;
+#[cfg(feature = "test-support")]
+pub(crate) use tests::run_functions_executor_test;

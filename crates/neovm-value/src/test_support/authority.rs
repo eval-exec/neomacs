@@ -1098,6 +1098,56 @@ pub fn handoff_resume_outlasts_yield_budget_for_test<
     crate::tagged::gc::mutator_registration::restricted_lisp::globals::handoff::worker::contention_tests::handoff_resume_outlasts_yield_budget(era);
 }
 
+/// FENCE: one iteration of a re-homed function-executor test. The core shell
+/// admits the era. The original dispatcher stays `pub(crate)`.
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[doc(hidden)]
+pub fn run_functions_executor_test_for_test<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    name: &str,
+    era: crate::tagged::gc::ProofEra<'_, K>,
+    ids: &[crate::intern::SymId],
+    kind: crate::tagged::gc::PlainSymbolBacking,
+    row: usize,
+) {
+    crate::tagged::gc::mutator_registration::restricted_lisp::run_functions_executor_test(
+        name, era, ids, kind, row,
+    );
+}
+
+/// FENCE: one iteration of a re-homed function-handoff test. `world_roots`
+/// is the caller's World walk (the eval baton walker). The original
+/// dispatcher stays `pub(crate)`.
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[doc(hidden)]
+pub fn run_function_handoff_test_for_test<K, W>(
+    name: &str,
+    era: crate::tagged::gc::ProofEra<'_, K>,
+    ids: &[crate::intern::SymId],
+    kind: crate::tagged::gc::PlainSymbolBacking,
+    count: usize,
+    world_roots: W,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut crate::tagged::gc::mutator_registration::AllStopped<'e>,
+            &'o mut Vec<crate::tagged::value::TaggedValue>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            crate::tagged::gc::mutator_registration::RendezvousError,
+        >,
+{
+    crate::tagged::gc::mutator_registration::restricted_lisp::run_function_handoff_test(
+        name,
+        era,
+        ids,
+        kind,
+        count,
+        world_roots,
+    );
+}
+
 /// FENCE (lead #768): the only cross-crate construction of
 /// [`FreshRegistryFacts`](crate::symbol::parallel::test_facts::FreshRegistryFacts).
 /// Copies the snapshot and replaces `bytes`. The fields stay

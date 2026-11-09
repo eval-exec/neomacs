@@ -21,18 +21,46 @@ impl Ledger {
             .any(|word| graph.contains(word))
     }
 }
-pub(super) fn ledger<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+/// Caller-supplied World root walk. The value crate does not name `Baton`.
+/// The bound is higher-ranked so a `Copy` fn item (the eval baton walker)
+/// satisfies it at the core call site.
+pub(super) trait WorldRoots<K>:
+    Copy
+    + for<'k, 's, 'e, 'o> Fn(
+        &'k K,
+        &'s mut AllStopped<'e>,
+        &'o mut Vec<TaggedValue>,
+    ) -> Result<
+        Vec<*mut *mut crate::tagged::header::MarkerObj>,
+        RendezvousError,
+    >
+{
+}
+impl<K, F> WorldRoots<K> for F where
+    F: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<TaggedValue>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >
+{
+}
+
+pub(super) fn ledger<K, W>(
     era: &ParallelHeapEra<'_, K>,
     stopped: &mut AllStopped<'_>,
-) -> Ledger {
+    world_roots: W,
+) -> Ledger
+where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: WorldRoots<K>,
+{
     let mut result = Ledger::default();
     let mut roots = Vec::new();
-    era.core
-        .keeper
-        .as_ref()
-        .unwrap()
-        .collect_parallel_world_roots(stopped, &mut roots)
-        .unwrap();
+    world_roots(era.core.keeper.as_ref().unwrap(), stopped, &mut roots).unwrap();
     result.world = roots.into_iter().map(TaggedValue::bits).collect();
     let mut roots = Vec::new();
     era.core
