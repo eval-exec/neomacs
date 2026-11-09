@@ -208,10 +208,7 @@ fn load_hash_table_makes_all_dumped_entries_iterable() {
     // Proof 2 (R6): the dump never serialized in-flight state, so a restored
     // table starts quiescent — no authority word, no user-test nesting count.
     assert_eq!(
-        table
-            .data
-            .authority
-            .load(std::sync::atomic::Ordering::Relaxed),
+        table.data.authority_word(),
         0,
         "restored tables start with a quiescent authority word"
     );
