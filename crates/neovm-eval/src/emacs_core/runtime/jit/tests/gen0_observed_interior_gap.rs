@@ -368,7 +368,7 @@ fn gen0_native_two_store_leaf_closes_only_the_first_read_owner() {
     assert_eq!(learned.single_cons_for_test(), owners[1].bits() & !TAG_MASK);
     assert!(
         learned
-            .excluded
+            .excluded_for_test()
             .expect("the second owner has a range proof")
             .covers(owners[5].bits() & !TAG_MASK)
     );
