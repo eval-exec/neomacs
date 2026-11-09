@@ -1029,7 +1029,7 @@ pub fn set_signal_search_complete_for_test(
     signal: &mut crate::error::SignalData,
     search_complete: bool,
 ) {
-    signal.search_complete = search_complete;
+    signal.set_search_complete_for_test(search_complete);
 }
 
 /// Setter fence for `SignalData::selected_resume` (peer #816 write arm): the
@@ -1039,5 +1039,5 @@ pub fn set_signal_selected_resume_for_test(
     signal: &mut crate::error::SignalData,
     selected_resume: Option<crate::value::flow_vocab::ResumeTarget>,
 ) {
-    signal.selected_resume = selected_resume;
+    signal.set_selected_resume_for_test(selected_resume);
 }

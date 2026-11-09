@@ -123,11 +123,14 @@ fn as_signal_mut_edits_the_payload_in_place() {
     crate::test_utils::init_test_tracing();
     let _eval = crate::test_utils::new_context();
     let mut flow = signal(LispCondition::Error, vec![Value::fixnum(7)]);
-    flow.as_signal_mut().expect("a signal").search_complete = true;
+    neovm_value::test_support::authority::set_signal_search_complete_for_test(
+        flow.as_signal_mut().expect("a signal"),
+        true,
+    );
     let FlowKind::Signal(sig) = flow.into_kind() else {
         panic!("still a signal")
     };
-    assert!(sig.search_complete);
+    assert!(sig.search_complete());
 
     let mut thrown = Flow::throw(Value::symbol("tag"), Value::NIL);
     assert!(thrown.as_signal_mut().is_none());
@@ -215,8 +218,11 @@ fn gdl_eval_error_memory_round_trip_keeps_original_binding_through_clone_and_gc(
     };
     let mut flow = memory_signal_from_binding_value(binding, crate::tagged::SymbolMode::Bare);
     let signal = flow.as_signal_mut().unwrap();
-    signal.selected_resume = Some(target.clone());
-    signal.search_complete = true;
+    neovm_value::test_support::authority::set_signal_selected_resume_for_test(
+        signal,
+        Some(target.clone()),
+    );
+    neovm_value::test_support::authority::set_signal_search_complete_for_test(signal, true);
 
     let original_error = map_flow(flow);
     let error = original_error.clone();
@@ -241,8 +247,8 @@ fn gdl_eval_error_memory_round_trip_keeps_original_binding_through_clone_and_gc(
     assert_eq!(signal.symbol, symbol);
     assert_eq!(signal.raw_data, Some(tail));
     assert_eq!(make_signal_binding_value(signal).bits(), binding.bits());
-    assert_eq!(signal.selected_resume, Some(target));
-    assert!(signal.search_complete);
+    assert_eq!(signal.selected_resume().clone(), Some(target));
+    assert!(signal.search_complete());
     ctx.gc_collect_exact();
     assert!(ctx.tagged_heap().owns_heap_value_for_test(binding));
     assert!(ctx.tagged_heap().owns_heap_value_for_test(vector));
@@ -264,8 +270,8 @@ fn gdl_eval_error_round_trip_keeps_hook_suppression() {
     let signal = back.as_signal().unwrap();
     assert!(matches!(signal.delivery(), SignalDelivery::HookSuppressed));
     assert_eq!(signal.data, vec![Value::fixnum(2)]);
-    assert!(signal.selected_resume.is_none());
-    assert!(!signal.search_complete);
+    assert!(signal.selected_resume().is_none());
+    assert!(!signal.search_complete());
 }
 
 #[test]
@@ -288,14 +294,17 @@ fn gdl_eval_error_round_trip_keeps_completed_handler_selection() {
             SignalDelivery::HookSuppressed
         );
         let signal = flow.as_signal_mut().unwrap();
-        signal.selected_resume = Some(target.clone());
-        signal.search_complete = true;
+        neovm_value::test_support::authority::set_signal_selected_resume_for_test(
+            signal,
+            Some(target.clone()),
+        );
+        neovm_value::test_support::authority::set_signal_search_complete_for_test(signal, true);
         // A second public boundary models repeated loader cleanup crossings;
         // none may restart handler-bind search or discard the chosen target.
         let back = flow_from_eval_error(map_flow(flow_from_eval_error(map_flow(flow))));
         let signal = back.as_signal().unwrap();
-        assert_eq!(signal.selected_resume, Some(target));
-        assert!(signal.search_complete);
+        assert_eq!(signal.selected_resume().clone(), Some(target));
+        assert!(signal.search_complete());
         assert_eq!(
             matches!(signal.delivery(), SignalDelivery::HookSuppressed),
             suppressed
@@ -316,6 +325,6 @@ fn gdl_eval_error_public_signal_constructor_starts_ordinary_unselected() {
     ));
     let signal = back.as_signal().unwrap();
     assert!(matches!(signal.delivery(), SignalDelivery::Ordinary));
-    assert!(signal.selected_resume.is_none());
-    assert!(!signal.search_complete);
+    assert!(signal.selected_resume().is_none());
+    assert!(!signal.search_complete());
 }

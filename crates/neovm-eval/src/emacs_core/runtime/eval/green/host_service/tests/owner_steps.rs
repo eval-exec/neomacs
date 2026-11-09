@@ -1093,8 +1093,11 @@ fn retained_flow_keeps_selected_handler_and_private_backtrace_on_requester() {
     .with_bytecode_error_backtrace(InlineErrorOp::Car, &[bad_operand]);
     let original = flow.as_signal_mut().unwrap();
     assert!(original.bytecode_error_backtrace.is_some());
-    original.search_complete = true;
-    original.selected_resume = Some(ResumeTarget::InterpreterCatch);
+    neovm_value::test_support::authority::set_signal_search_complete_for_test(&mut original, true);
+    neovm_value::test_support::authority::set_signal_selected_resume_for_test(
+        &mut original,
+        Some(ResumeTarget::InterpreterCatch),
+    );
     let original_payload = original as *const _;
     owner
         .with_owner_execution_frame(key, |frame, claim, access| {
@@ -1146,9 +1149,9 @@ fn retained_flow_keeps_selected_handler_and_private_backtrace_on_requester() {
         signal as *const _, original_payload,
         "the exact object is retained, not reconstructed"
     );
-    assert!(signal.search_complete);
+    assert!(signal.search_complete());
     assert!(matches!(
-        signal.selected_resume,
+        signal.selected_resume(),
         Some(ResumeTarget::InterpreterCatch)
     ));
     assert!(signal.bytecode_error_backtrace.is_some());

@@ -35,16 +35,16 @@ assert_not_impl!(Flow, Sync);
 
 fn owning_pin(flow: &Flow) -> &InFlightRootPin {
     let roots = match flow.kind() {
-        FlowRef::Signal(payload) => &payload.pin,
-        FlowRef::Throw(payload) => &payload.pin,
-        FlowRef::ThreadBlocked(payload) => &payload.pin,
+        FlowRef::Signal(payload) => payload.pin(),
+        FlowRef::Throw(payload) => payload.pin(),
+        FlowRef::ThreadBlocked(payload) => payload.pin(),
         FlowRef::Shutdown(_) => panic!("Shutdown has no registry pin"),
     };
-    roots.pin.as_ref().expect("heap payload has a pin")
+    roots.pin_for_test().expect("heap payload has a pin")
 }
 
 fn owning_pin_slot(flow: &Flow) -> usize {
-    owning_pin(flow).slot
+    owning_pin(flow).slot()
 }
 
 fn owned_payload_address(kind: &FlowKind) -> Option<usize> {
@@ -186,7 +186,7 @@ fn into_kind_transfers_the_pin_until_the_owned_payload_drops() {
     let FlowKind::Signal(payload) = &owned else {
         panic!("Signal owned view")
     };
-    assert_eq!(payload.pin.pin.as_ref().unwrap().slot, slot);
+    assert_eq!(payload.pin().pin_for_test().unwrap().slot(), slot);
     drop(owned);
     assert_eq!(registry_state(&registry).live, before.live);
 }
@@ -208,17 +208,17 @@ fn clone_keeps_the_original_context_registry_after_activation_changes() {
     let cloned = original.clone();
     assert!(
         owning_pin(&original)
-            .registry
+            .registry()
             .shares_table_with(&first_registry)
     );
     assert!(
         owning_pin(&cloned)
-            .registry
+            .registry()
             .shares_table_with(&first_registry)
     );
     assert!(
         !owning_pin(&cloned)
-            .registry
+            .registry()
             .shares_table_with(&second_registry)
     );
     assert_eq!(registry_state(&first_registry).live, first_before.live + 2);
@@ -272,8 +272,8 @@ fn as_signal_mut_edits_in_place() {
     let FlowKind::Signal(payload) = flow.into_kind() else {
         panic!("Signal owned view")
     };
-    assert!(payload.search_complete);
-    assert_eq!(payload.selected_resume, Some(target));
+    assert!(payload.search_complete());
+    assert_eq!(payload.selected_resume(), &Some(target));
 }
 
 #[test]
@@ -352,8 +352,8 @@ fn with_signal_result_transfers_the_original_box_and_pin_without_cloning() {
         result
     }, payload => {
         assert_eq!(std::ptr::from_ref(&*payload).cast::<()>() as usize, address);
-        assert_eq!(payload.pin.pin.as_ref().unwrap().slot, slot);
-        assert!(payload.pin.pin.as_ref().unwrap().registry.shares_table_with(&registry));
+        assert_eq!(payload.pin().pin_for_test().unwrap().slot(), slot);
+        assert!(payload.pin().pin_for_test().unwrap().registry().shares_table_with(&registry));
         assert_eq!(registry_state(&registry).live, before.live + 1);
         Err(Flow::signal_boxed(payload))
     });
@@ -421,7 +421,7 @@ fn with_signal_result_forwards_throw_thread_blocked_shutdown_and_ok_owners() {
             slot
         );
         if let Some(flow) = forwarded.as_ref().err().filter(|flow| !flow.is_shutdown()) {
-            assert!(owning_pin(flow).registry.shares_table_with(&registry));
+            assert!(owning_pin(flow).registry().shares_table_with(&registry));
         }
         drop(forwarded);
         assert_eq!(registry_state(&registry).live, before.live);

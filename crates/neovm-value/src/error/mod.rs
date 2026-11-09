@@ -367,9 +367,6 @@ pub struct ThrowData {
     symbol_mode: crate::tagged::SymbolMode,
     /// See [`SignalData::pin`]. PRIVATE, so `Flow::throw` is the only way in.
     #[allow(dead_code)] // held for its Drop (the GC pin); read only via the sealed trait
-    #[cfg(feature = "test-support")]
-    pub pin: InFlightRoots,
-    #[cfg(not(feature = "test-support"))]
     pin: InFlightRoots,
 }
 
@@ -419,9 +416,6 @@ pub struct ThreadBlockedData {
     /// See [`SignalData::pin`]. PRIVATE, so `Flow::thread_blocked` is the only
     /// way in.
     #[allow(dead_code)] // held for its Drop (the GC pin); read only via the sealed trait
-    #[cfg(feature = "test-support")]
-    pub pin: InFlightRoots,
-    #[cfg(not(feature = "test-support"))]
     pin: InFlightRoots,
 }
 
@@ -517,14 +511,8 @@ pub struct SignalData {
     /// Original cdr payload when a signal uses non-list data.
     pub raw_data: Option<Value>,
     delivery: SignalDelivery,
-    #[cfg(feature = "test-support")]
-    pub selected_resume: Option<ResumeTarget>,
-    #[cfg(not(feature = "test-support"))]
-    pub(crate) selected_resume: Option<ResumeTarget>,
-    #[cfg(feature = "test-support")]
-    pub search_complete: bool,
-    #[cfg(not(feature = "test-support"))]
-    pub(crate) search_complete: bool,
+    selected_resume: Option<ResumeTarget>,
+    search_complete: bool,
     pub(crate) bytecode_error_backtrace: Option<BytecodeErrorBacktrace>,
     /// Keeps `data` and `raw_data` reachable for the collector while this
     /// signal is in flight. PRIVATE on purpose: it is what makes an unrooted
@@ -533,9 +521,6 @@ pub struct SignalData {
     /// construction site has to go through the constructors below, which pin.
     /// See [`InFlightRoots`] for why the pin is needed at all.
     #[allow(dead_code)] // held for its Drop (the GC pin); read only via the sealed trait
-    #[cfg(feature = "test-support")]
-    pub pin: InFlightRoots,
-    #[cfg(not(feature = "test-support"))]
     pin: InFlightRoots,
 }
 
@@ -734,13 +719,7 @@ pub fn install_in_flight_registry_handle(registry: &InFlightRegistryHandle) {
 struct InFlightRootPin {
     // A proc-macro attribute cannot decorate a field; the cfg split is the
     // field-level spelling of TEST-SUPPORT-VIS. Production keeps it private.
-    #[cfg(feature = "test-support")]
-    pub registry: InFlightRegistryHandle,
-    #[cfg(not(feature = "test-support"))]
     registry: InFlightRegistryHandle,
-    #[cfg(feature = "test-support")]
-    pub slot: usize,
-    #[cfg(not(feature = "test-support"))]
     slot: usize,
 }
 
@@ -750,9 +729,6 @@ struct InFlightRootPin {
 /// activation changes. The payload and this pin remain on their owner thread.
 pub struct InFlightRoots {
     /// `None` for a payload with no traceable values, avoiding registry traffic.
-    #[cfg(feature = "test-support")]
-    pub pin: Option<InFlightRootPin>,
-    #[cfg(not(feature = "test-support"))]
     pin: Option<InFlightRootPin>,
     /// Flow payloads and Context remain local to their evaluator call stack.
     /// Shared registry metadata does not make a payload transferable.
@@ -1404,5 +1380,59 @@ impl SignalData {
     #[doc(hidden)]
     pub fn selected_resume_mut(&mut self) -> &mut Option<ResumeTarget> {
         &mut self.selected_resume
+    }
+}
+
+/// VIS read rows + in-crate setters (lead #1052): the carrier fields stay
+/// private in every arm.  These copy/reference getters are the cross-crate
+/// test route; the plain `pub(crate)` setters keep the authority fences'
+/// writes inside this defining module.
+#[cfg(any(test, feature = "test-support"))]
+impl SignalData {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn pin(&self) -> &InFlightRoots {
+        &self.pin
+    }
+    pub(crate) fn set_search_complete_for_test(&mut self, value: bool) {
+        self.search_complete = value;
+    }
+    pub(crate) fn set_selected_resume_for_test(&mut self, value: Option<ResumeTarget>) {
+        self.selected_resume = value;
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl ThrowData {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn pin(&self) -> &InFlightRoots {
+        &self.pin
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl ThreadBlockedData {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn pin(&self) -> &InFlightRoots {
+        &self.pin
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl InFlightRoots {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn pin_for_test(&self) -> Option<&InFlightRootPin> {
+        self.pin.as_ref()
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl InFlightRootPin {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn registry(&self) -> &InFlightRegistryHandle {
+        &self.registry
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn slot(&self) -> usize {
+        self.slot
     }
 }

@@ -256,7 +256,7 @@ fn inline_hof_runtime_abort_dispatches_signal_with_live_map_depth_and_frame() {
             panic!("mapping completion preserves signal kind")
         };
         assert_eq!(signal.symbol, intern("quit"));
-        assert!(signal.search_complete);
+        assert!(signal.search_complete());
         for (name, expected) in [
             ("hof-abort-hook-count", Value::make_int(1)),
             // One eager mapping call plus the hook's own Ffuncall frame.
