@@ -40,7 +40,7 @@ fn bytecode_lazy_iterative_admission_decodes_real_gnu_code_and_keeps_arity_bound
     assert!(lazy.decoded().unwrap().stack_verified());
     assert_eq!(func.executable_ops(), &[Op::Constant(0), Op::Return]);
     let range = lazy.iterative_admission().unwrap().unwrap();
-    assert_eq!((range.required, range.nonrest), (1, 2));
+    assert_eq!(range.bounds_for_test(), (1, 2));
 }
 
 #[test]
@@ -125,7 +125,7 @@ fn bytecode_lazy_iterative_admission_restarts_when_decode_is_reinstalled() {
     assert_eq!(func.lazy_iterative_admission(0), Some(false));
     assert_eq!(func.lazy_iterative_admission(1), Some(true));
     let range = restored.iterative_admission().unwrap().unwrap();
-    assert_eq!((range.required, range.nonrest), (1, 2));
+    assert_eq!(range.bounds_for_test(), (1, 2));
     // Defer is another installer and must also start with a fresh cell.
     func.defer_gnu_decode();
     let deferred = func.lazy_gnu_code().as_ref().unwrap();

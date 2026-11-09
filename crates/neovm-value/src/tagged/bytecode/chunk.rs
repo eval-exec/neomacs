@@ -352,6 +352,17 @@ impl IterativeArgRange {
         Self { required, nonrest }
     }
 
+    /// Copy the admission bounds as `(required, nonrest)`.
+    ///
+    /// The pair is the only cross-crate view of these fields. A caller that
+    /// compares arity keeps that comparison; this reader does not decide it.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    #[inline]
+    pub(crate) fn bounds_for_test(&self) -> (u16, u16) {
+        (self.required, self.nonrest)
+    }
+
     #[inline(always)]
     #[doc(hidden)]
     pub fn accepts(self, nargs: usize) -> bool {
