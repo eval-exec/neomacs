@@ -7415,7 +7415,7 @@ pub(crate) fn builtin_find_file_noselect(
 /// file does not exist yet, gets the ordinary 0666.  The umask still applies,
 /// and an auto-save file that already exists keeps its own modes.
 fn auto_save_creation_mode(
-    eval: &mut super::eval::Context,
+    eval: &mut Context,
     visited_file: Option<&LispString>,
 ) -> Result<u32, Flow> {
     let Some(visited_file) = visited_file else {
@@ -7443,7 +7443,7 @@ fn auto_save_creation_mode(
 /// `file-modes` answers nil for every failed stat, so it cannot be called
 /// here: an unreadable private file would get a 0666 auto-save file.
 fn auto_save_file_modes(
-    eval: &mut super::eval::Context,
+    eval: &mut Context,
     visited_file: &LispString,
 ) -> Result<Option<i64>, Flow> {
     let absname = expand_and_dir_to_file_lisp_for_file_predicate(eval, visited_file)?;
@@ -7478,8 +7478,8 @@ fn auto_save_file_modes(
 /// meanwhile, and the file must hold the text whose modification tick
 /// `do-auto-save` then records as auto-saved.
 fn auto_save_1(
-    eval: &mut super::eval::Context,
-    buf_id: crate::buffer::BufferId,
+    eval: &mut Context,
+    buf_id: BufferId,
     visited_file: Option<&LispString>,
     target: &LispString,
 ) -> Result<(), Flow> {
@@ -7519,32 +7519,33 @@ fn auto_save_1(
 /// `display-warning` is Lisp, autoloaded from warnings.el as in GNU.  A bare
 /// `Context` that has not loaded the Lisp layer has no way to display it, and
 /// drops the report.
-fn auto_save_error(eval: &mut super::eval::Context, flow: &Flow) -> Result<(), Flow> {
+fn auto_save_error(eval: &mut Context, flow: &Flow) -> Result<(), Flow> {
     let Some(sig) = flow.as_signal() else {
         return Ok(());
     };
     // `ring_bell (XFRAME (selected_frame))`.
-    let _ = crate::emacs_core::builtins::dispatch_builtin(eval, "ding", vec![]);
-    if !eval.obarray.fboundp("display-warning") {
+    let _ = neovm_eval::emacs_core::builtins::dispatch_builtin(eval, "ding", vec![]);
+    if !eval.obarray().fboundp("display-warning") {
         return Ok(());
     }
     // The error object and the message are fresh heap values that must
     // survive the allocations of `error-message-string` and `format`.
     let roots = eval.save_specpdl_roots();
     let result = (|| {
-        let error_data = crate::emacs_core::error::make_signal_binding_value(sig);
+        let error_data = neovm_value::error::make_signal_binding_value(sig);
         eval.push_specpdl_root(error_data);
         let error_message =
-            crate::emacs_core::print::builtin_error_message_string(eval, vec![error_data])?;
+            neovm_eval::emacs_core::print::builtin_error_message_string(eval, vec![error_data])?;
         eval.push_specpdl_root(error_message);
         let format_string = Value::string("Auto-saving %s: %s");
         eval.push_specpdl_root(format_string);
         let buffer_name = eval
+            .edit
             .buffers
             .current_buffer()
             .map_or(Value::NIL, |buf| buf.name_value());
-        let message = crate::emacs_core::builtins::builtin_format(
-            eval,
+        let message = eval.funcall_general(
+            Value::symbol("format"),
             vec![format_string, buffer_name, error_message],
         )?;
         eval.funcall_general(
