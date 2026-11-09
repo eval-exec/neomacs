@@ -1,5 +1,6 @@
 //! Diagnostic domains and the test-tool boundary. No product setting.
 use super::*;
+use std::sync::atomic::AtomicUsize;
 
 /// Reader rows require a bound global. The shared-VOID initial state is
 /// useful for intern publication tests, but is not a diagnostic row choice.
@@ -145,7 +146,7 @@ impl Contention {
         }
         match &self.0 {
             Pending::Idle => unreachable!("deadline initialized above"),
-            Pending::Waiting(deadline) => deadline.check(WaitExpired)?,
+            Pending::Waiting(deadline) => deadline.check_for_test(WaitExpired)?,
         }
         std::thread::yield_now();
         Ok(())

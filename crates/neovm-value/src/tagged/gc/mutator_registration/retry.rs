@@ -27,6 +27,13 @@ impl Deadline {
         }
     }
 
+    /// Same absolute deadline `check` reads. The method stays crate-private.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn check_for_test<E>(&self, expired: E) -> Result<(), E> {
+        self.check(expired)
+    }
+
     /// Deterministic deadline boundary for fixtures; never sleep for SPIN_WAIT.
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn expired_for_test() -> Self {

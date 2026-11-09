@@ -2,7 +2,10 @@
 //! No reader/run loan crosses a wait. These are minimal-World diagnostics,
 //! not continuous VM-reader drain or representative editor-heap timings.
 use super::*;
-use crate::tagged::gc::ProofEra as ParallelHeapEra;
+use neovm_eval::test_support::authority::WorldProofEra as ParallelHeapEra;
+use neovm_eval::test_support::authority::with_test_symbol_backing_era;
+use std::num::NonZeroU64;
+use std::sync::atomic::Ordering;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Round {
@@ -54,7 +57,7 @@ enum Notice {
         owner: Ordinal,
         epoch: Response,
     },
-    Failed(Ordinal),
+    Failed,
 }
 #[derive(Clone, Copy, Debug)]
 enum Scenario {
@@ -110,7 +113,7 @@ fn requested(owner: &Mutator<'_>, commands: &Receiver<Instruction>) -> Result<St
                 Retry::Refuse => return Err(error.into()),
             },
         }
-        deadline.check(Error::Deadline)?;
+        deadline.check_for_test(Error::Deadline)?;
         thread::yield_now();
     }
 }
@@ -141,14 +144,14 @@ fn worker(
         Ok(guard) => guard,
         Err(error) => {
             drop(permit);
-            let _ = events.send(Notice::Failed(ordinal));
+            let _ = events.send(Notice::Failed);
             return Receipt::ActivationFailed(error);
         }
     };
     let mut guard = match diagnostic_owner(permit) {
         Ok(guard) => guard,
         Err(error) => {
-            let _ = events.send(Notice::Failed(ordinal));
+            let _ = events.send(Notice::Failed);
             return Receipt::ActivationFailed(error);
         }
     };
@@ -160,7 +163,10 @@ fn worker(
         };
         *home = Home::Seeded(contention::retry(
             Deadline::contention(),
-            || owner.run_access()?.private_nil_root(),
+            || {
+                let mut run = owner.run_access()?;
+                neovm_value::test_support::authority::nil_root_for_test(&mut run)
+            },
             contention::registration,
         )?);
         if let Scenario::RefuseBeforeRequest(target) = scenario {
@@ -191,7 +197,7 @@ fn worker(
                 })
                 .map_err(|_| Error::Channel)?;
             let epoch = requested(owner, &commands)?;
-            let _suppress = a8_probes::suppress();
+            let _suppress = a8_probes::suppress_for_test();
             let returned = owner.with_native_extent(&[], |_| {
                 events
                     .send(Notice::Published {
@@ -240,12 +246,12 @@ fn worker(
         Ok(observations)
     }));
     if !matches!(&body, Ok(Ok(_))) {
-        let _ = events.send(Notice::Failed(ordinal));
+        let _ = events.send(Notice::Failed);
         // An unexpected failure may precede this owner's ACK. Publish it
         // before root-bank cleanup so the controller can finish an active
         // request; an Abort/disconnect returns through the canonical wrapper.
         if let Resources::Resident(Resident { owner, .. }) = &mut guard.resources {
-            let _suppress = a8_probes::suppress();
+            let _suppress = a8_probes::suppress_for_test();
             if let Err(error) = owner.with_native_extent(&[], |_| {
                 let _ = wait_native(&commands);
             }) {
@@ -292,7 +298,7 @@ fn ready(events: &[Receiver<Notice>], round: Round) -> Result<(), Error> {
             Notice::Ready { .. }
             | Notice::Published { .. }
             | Notice::Restored { .. }
-            | Notice::Failed(_) => return Err(Error::Protocol),
+            | Notice::Failed => return Err(Error::Protocol),
         }
     }
     Ok(())
@@ -330,7 +336,7 @@ fn round(
             Notice::Ready { .. }
             | Notice::Published { .. }
             | Notice::Restored { .. }
-            | Notice::Failed(_) => return Err(Error::Protocol),
+            | Notice::Failed => return Err(Error::Protocol),
         }
     }
     let mut stopped = stopped(era)?;
@@ -342,7 +348,10 @@ fn round(
         Scenario::Collect
         | Scenario::ControllerUnwindAfterFirst
         | Scenario::RefuseBeforeRequest(_) => {
-            let report = era.collect_stopped(&mut stopped)?;
+            let report = era.collect_stopped(
+                &mut stopped,
+                neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
+            )?;
             (Job::Collected(report), Response::Collected(epoch))
         }
         Scenario::Noop => {
@@ -372,7 +381,7 @@ fn round(
             Notice::Ready { .. }
             | Notice::Published { .. }
             | Notice::Restored { .. }
-            | Notice::Failed(_) => return Err(Error::Protocol),
+            | Notice::Failed => return Err(Error::Protocol),
         }
     }
     if actual_epoch != epoch {
@@ -390,8 +399,9 @@ fn round(
     })
 }
 fn scenario(backing: DiagnosticBacking, owners: Owners, scenario: Scenario) {
+    crate::test_utils::init_test_tracing();
     let mode = DiagnosticMode::load();
-    Context::with_test_symbol_backing_era(backing.initial(), |era, id| {
+    with_test_symbol_backing_era(backing.initial(), |era, id| {
         let symbol = era.admit_plain_symbol(id).unwrap();
         let before = census(&era);
         let permits: Vec<_> = (0..owners.count())

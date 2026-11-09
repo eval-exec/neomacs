@@ -2,17 +2,26 @@
 //! Ordinary cases are small semantic tests. Explicit cfg(test) measurement
 //! mode changes only work/affinity, retains every assertion, and requires the
 //! external island lock. There is no production setting or authority change.
+// The parent file is mounted with #[path], so child modules resolve next to
+// that file rather than in the symbol_diagnostics/ directory.
+#[path = "symbol_diagnostics/affinity.rs"]
 mod affinity;
+#[path = "symbol_diagnostics/reads.rs"]
 mod reads;
+#[path = "symbol_diagnostics/stopped.rs"]
 mod stopped;
+#[path = "symbol_diagnostics/types.rs"]
 mod types;
 
-use super::symbol_functions::retry::{self as contention, Deadline, Retry, retry_owned};
 use super::*;
-use crate::emacs_core::eval::Context;
-use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::value::TaggedValue;
+use neovm_eval::test_support::authority::WorldProofEra as ParallelHeapEra;
+use neovm_eval::test_support::authority::with_test_symbol_backing_era;
+use neovm_value::test_support::authority::{self as contention, Deadline, Retry, retry_owned};
+use std::cell::RefCell;
 use std::ops::ControlFlow;
+use std::rc::Rc;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -171,12 +180,15 @@ fn worker<'era>(
         };
         *home = Home::Seeded(contention::retry(
             Deadline::contention(),
-            || owner.run_access()?.private_nil_root(),
+            || {
+                let mut run = owner.run_access()?;
+                neovm_value::test_support::authority::nil_root_for_test(&mut run)
+            },
             contention::registration,
         )?);
         // Publication completes BEFORE Armed; the callback can wait without
         // a run/symbol/root-reader loan. The wrapper restores Running itself.
-        let _suppress = a8_probes::suppress();
+        let _suppress = a8_probes::suppress_for_test();
         owner
             .with_native_extent(&[], |_| {
                 events
@@ -233,7 +245,7 @@ fn worker<'era>(
     let cleanup = std::mem::replace(&mut *cleanup.borrow_mut(), Cleanup::Pending);
     Receipt::Retired { body, cleanup }
 }
-fn census<K: EraKeeper>(era: &ParallelHeapEra<'_, K>) -> Collections {
+fn census(era: &ParallelHeapEra<'_>) -> Collections {
     let mut stopped = contention::retry(
         Deadline::contention(),
         || era.stop(),
@@ -248,8 +260,9 @@ fn census<K: EraKeeper>(era: &ParallelHeapEra<'_, K>) -> Collections {
     collections
 }
 fn scenario(backing: DiagnosticBacking, owners: Owners, workload: Workload, action: Action) {
+    crate::test_utils::init_test_tracing();
     let mode = DiagnosticMode::load();
-    Context::with_test_symbol_backing_era(backing.initial(), |era, id| {
+    with_test_symbol_backing_era(backing.initial(), |era, id| {
         let handle = era.admit_plain_symbol(id).unwrap();
         let before = census(&era);
         let permits: Vec<_> = (0..owners.count())

@@ -1,5 +1,6 @@
 //! The actual sealed read plus checked canonical root-home consumer.
 use super::*;
+use std::sync::atomic::Ordering;
 
 fn writer(
     run: &mut RunAccess<'_, '_>,
@@ -24,7 +25,7 @@ fn writer(
             Err(error) => match contention::registration(&error) {
                 Retry::Busy => {
                     busy.0 += 1;
-                    if deadline.check(()).is_err() {
+                    if deadline.check_for_test(()).is_err() {
                         return Err(WriterFailure {
                             sample: WriterSample {
                                 wait: started.elapsed(),
@@ -143,7 +144,7 @@ pub(super) fn run<'era>(
             Err(error) => match contention::registration(&error) {
                 Retry::Busy => {
                     record.run_busy.0 += 1;
-                    if run_deadline.check(()).is_err() {
+                    if run_deadline.check_for_test(()).is_err() {
                         return Err(record.failed(ReadRefusal::RunDeadline));
                     }
                     thread::yield_now();

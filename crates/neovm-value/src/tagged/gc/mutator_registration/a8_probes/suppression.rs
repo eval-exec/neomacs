@@ -28,6 +28,13 @@ pub(crate) fn suppress() -> Suppression {
     }
 }
 
+/// Same probe-scope guard `suppress` installs. The guard type stays crate-private.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn suppress_for_test() -> impl Drop {
+    suppress()
+}
+
 pub(super) fn scope() -> ProbeScope {
     SCOPE.with(Cell::get)
 }

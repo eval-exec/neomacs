@@ -45,6 +45,13 @@ mod root_slot_tests;
 #[path = "../../../core_tests/tagged/gc/mutator_registration/slice_tests.rs"]
 mod slice_tests;
 
+/// Sealed-read and stop diagnostics re-homed out of value. They name the
+/// evaluator's symbol-backing era. Assertions are unchanged; collection uses
+/// the fenced two-argument walker and the existing retry fences.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/symbol_diagnostics.rs"]
+mod symbol_diagnostics;
+
 /// MEMQ-TAIL-SHAPES (3): the lifecycle refusal tests re-homed out of value.
 /// The value fields stay private; the tests use the copied entry observers and
 /// the three C3 seed fences (`test_support::authority`).

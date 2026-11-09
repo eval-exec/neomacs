@@ -75,8 +75,6 @@ mod summaries;
 mod symbol_authority;
 #[cfg(feature = "test-support")]
 pub mod symbol_authority;
-#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
-mod symbol_diagnostics;
 #[cfg(any(test, feature = "test-support"))]
 pub mod symbol_functions;
 #[cfg(test)]
