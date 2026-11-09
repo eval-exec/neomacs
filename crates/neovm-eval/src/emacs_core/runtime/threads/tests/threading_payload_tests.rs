@@ -8,7 +8,8 @@ use neovm_edit::buffer::CharRange;
 use neovm_value::heap_types::LispString;
 use neovm_value::heap_types::threading::ThreadName as PayloadThreadName;
 use neovm_value::tagged::gc::{AllStopped, MinorCollectionError, with_tagged_heap};
-use neovm_value::tagged::header::{VecLikeType, VectorObj};
+use neovm_value::tagged::header::{VecLikeHeader, VecLikeType, VectorObj};
+use neovm_value::tagged::value::TAG_MASK;
 use neovm_value::tagged::value::TaggedValue as Value;
 
 #[derive(Clone, Copy)]
@@ -140,21 +141,34 @@ fn inspect(
     era.with_stopped_heap_for_test(stopped, |heap| {
         for ObjectWord(word) in graph.owners {
             assert!(
-                heap.owns_heap_value_for_test(Value::from_bits(word)),
+                heap.owns_heap_value_for_test(unsafe {
+                    /* SAFETY: the word is Value::bits() of a fixture object this test rooted. */
+                    Value::from_bits(word)
+                }),
                 "threading owner reclaimed"
             );
         }
         for VectorWord(word) in graph.children {
             assert!(
-                heap.owns_heap_value_for_test(Value::from_bits(word)),
+                heap.owns_heap_value_for_test(unsafe {
+                    /* SAFETY: the word is Value::bits() of a fixture object this test rooted. */
+                    Value::from_bits(word)
+                }),
                 "sole-edge threading child reclaimed"
             );
         }
         // Membership for every observed word precedes every payload decode.
         let children = std::array::from_fn(|index| {
-            let value = Value::from_bits(graph.children[index].0);
+            let value = unsafe {
+                /* SAFETY: the word is Value::bits() of a fixture vector this test rooted. */
+                Value::from_bits(graph.children[index].0)
+            };
+            // The collector projection is this veclike address. It does not
+            // publish a serial observation. `stopped` is the loan around this
+            // read; the projection itself does not use it.
             let ptr = value
-                .gc_veclike_ptr_for_stopped_threading_test(stopped)
+                .is_veclike()
+                .then_some((value.bits() & !TAG_MASK) as *const VecLikeHeader)
                 .expect("known vector word");
             // SAFETY: exact membership above retains this initialized object;
             // AllStopped and the collector loan exclude mutation and sweeping.
@@ -171,10 +185,16 @@ fn inspect(
         });
         match unrelated {
             Unrelated::Retained => {
-                assert!(heap.owns_heap_value_for_test(Value::from_bits(graph.unrelated.0)))
+                assert!(heap.owns_heap_value_for_test(unsafe {
+                    /* SAFETY: the word is Value::bits() of the fixture control this test rooted. */
+                    Value::from_bits(graph.unrelated.0)
+                }))
             }
             Unrelated::Reclaimed => assert!(
-                !heap.owns_heap_value_for_test(Value::from_bits(graph.unrelated.0)),
+                !heap.owns_heap_value_for_test(unsafe {
+                    /* SAFETY: the word is Value::bits() of the fixture control this test rooted. */
+                    Value::from_bits(graph.unrelated.0)
+                }),
                 "unreachable control stayed rooted"
             ),
         }
