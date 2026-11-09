@@ -6969,6 +6969,7 @@ fn display_prop_replacing_p_matches_gnu_taxonomy() {
 /// intangible either, while GNU's own replacing specs still do.
 #[test]
 fn display_prop_replacing_p_does_not_take_media_heads_under_disable_eval() {
+    crate::test_utils::init_test_tracing();
     let sym = Value::symbol;
     let disable_eval = |spec: Value| Value::list(vec![sym("disable-eval"), spec]);
     for name in ["video", "webkit", "surface"] {
@@ -7006,6 +7007,7 @@ fn display_prop_replacing_p_does_not_take_media_heads_under_disable_eval() {
 /// value keeps the structural reading (a non-nil FORM holds).
 #[test]
 fn display_prop_replacing_p_takes_only_a_literal_t_when_form_under_disable_eval() {
+    crate::test_utils::init_test_tracing();
     let sym = Value::symbol;
     let disable_eval = |spec: Value| Value::list(vec![sym("disable-eval"), spec]);
     // `(when FORM . "x")`.
