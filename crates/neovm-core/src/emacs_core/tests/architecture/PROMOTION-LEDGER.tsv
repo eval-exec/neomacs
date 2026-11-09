@@ -100,6 +100,7 @@ HEAP_JIT_FLOAT_LIM	const	pub(crate)	crates/neovm-value/src/tagged/gc/jit_state.r
 HEAP_JIT_SINGLE_CONS	const	pub(crate)	crates/neovm-value/src/tagged/gc/barrier_window.rs:46	tagged::gc	bulk
 HEAP_JIT_SLOT_BARRIER_LEN	const	pub(crate)	crates/neovm-value/src/tagged/gc/barrier_window.rs:50	tagged::gc	bulk
 HEAP_JIT_SLOT_BARRIER_LO	const	pub(crate)	crates/neovm-value/src/tagged/gc/barrier_window.rs:48	tagged::gc	bulk
+HandlerList	enum	pub	crates/neovm-value/src/heap_types/threading.rs:337	heap_types::threading	bulk; THREADSIG T1 beac46c81b; consumers eval threads/manager.rs:300,306 and threads/mod.rs:195
 HashTableHint	use	pub(crate)	crates/neovm-value/src/alloc/mod.rs:84	emacs_core::alloc	bulk
 HashTableMakeKeyword	enum	pub(crate)	crates/neovm-value/src/value/mod.rs:1932	emacs_core::value	bulk
 HashTableSize	use	pub(crate)	crates/neovm-value/src/alloc/mod.rs:85	emacs_core::alloc	bulk
@@ -237,6 +238,8 @@ ThreadId	struct	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:36	hea
 ThreadIds	struct	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:61	heap_types::threading	pc1-d: DATA seal privacy ledger 17f6ac250b; caller runtime/threads/layout.rs
 ThreadName	struct	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:178	heap_types::threading	bulk
 ThreadNativeState	struct	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:278	heap_types::threading	bulk
+ThreadNativeState::handlerlist	method	pub	crates/neovm-value/src/heap_types/threading.rs:893	heap_types::threading	B3-d production surface present in source; THREADSIG T1 beac46c81b; consumer eval threads/manager.rs:300
+ThreadNativeState::handlerlist_mut	method	pub	crates/neovm-value/src/heap_types/threading.rs:898	heap_types::threading	B3-d production surface present in source; THREADSIG T1 beac46c81b; consumer eval threads/manager.rs:306
 ThreadObj	struct	pub(crate)	crates/neovm-value/src/tagged/header.rs:2207	tagged::header	bulk
 ThreadOutcome	enum	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:212	heap_types::threading	bulk
 ThreadPayload	struct	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:313	heap_types::threading	bulk
