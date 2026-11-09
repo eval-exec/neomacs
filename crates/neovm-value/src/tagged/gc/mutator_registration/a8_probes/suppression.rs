@@ -29,9 +29,10 @@ pub(crate) fn suppress() -> Suppression {
 }
 
 /// Same probe-scope guard `suppress` installs. The guard type stays crate-private.
-#[cfg(any(test, feature = "test-support"))]
+/// The only public route is `test_support::authority::suppress_for_test`.
+#[cfg(feature = "test-support")]
 #[doc(hidden)]
-pub fn suppress_for_test() -> impl Drop {
+pub(crate) fn suppress_for_test() -> impl Drop {
     suppress()
 }
 

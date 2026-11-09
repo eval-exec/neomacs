@@ -16,9 +16,9 @@ use std::time::Instant;
 
 mod suppression;
 pub(crate) use suppression::suppress;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(feature = "test-support")]
 #[doc(hidden)]
-pub use suppression::suppress_for_test;
+pub(crate) use suppression::suppress_for_test;
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) const REQUEST_PUBLISHED: u8 = 1;

@@ -188,7 +188,7 @@ fn worker<'era>(
         )?);
         // Publication completes BEFORE Armed; the callback can wait without
         // a run/symbol/root-reader loan. The wrapper restores Running itself.
-        let _suppress = a8_probes::suppress_for_test();
+        let _suppress = neovm_value::test_support::authority::suppress_for_test();
         owner
             .with_native_extent(&[], |_| {
                 events

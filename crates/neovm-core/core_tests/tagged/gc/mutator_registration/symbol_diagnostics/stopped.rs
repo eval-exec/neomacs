@@ -197,7 +197,7 @@ fn worker(
                 })
                 .map_err(|_| Error::Channel)?;
             let epoch = requested(owner, &commands)?;
-            let _suppress = a8_probes::suppress_for_test();
+            let _suppress = neovm_value::test_support::authority::suppress_for_test();
             let returned = owner.with_native_extent(&[], |_| {
                 events
                     .send(Notice::Published {
@@ -251,7 +251,7 @@ fn worker(
         // before root-bank cleanup so the controller can finish an active
         // request; an Abort/disconnect returns through the canonical wrapper.
         if let Resources::Resident(Resident { owner, .. }) = &mut guard.resources {
-            let _suppress = a8_probes::suppress_for_test();
+            let _suppress = neovm_value::test_support::authority::suppress_for_test();
             if let Err(error) = owner.with_native_extent(&[], |_| {
                 let _ = wait_native(&commands);
             }) {

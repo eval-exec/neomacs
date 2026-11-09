@@ -1014,6 +1014,15 @@ pub fn reset_symbol_with_pos_plist_comparisons() {
     crate::symbol::plist_core::reset_symbol_with_pos_plist_comparisons();
 }
 
+/// FENCE (peer #297): install the calling thread's probe-scope suppression
+/// guard. The guard writes thread-local state and is an unnameable
+/// `!Send`/`!Sync` RAII value. The original stays `pub(crate)`; this fence
+/// is its only public path.
+#[must_use = "hold this guard for the fixture's entire probe-free scope"]
+pub fn suppress_for_test() -> impl Drop {
+    crate::tagged::gc::mutator_registration::a8_probes::suppress_for_test()
+}
+
 /// The fence's own behavioural tests are a DECLARED CHILD of the authority
 /// module, not a physical sibling: TA2's definition surface is this module
 /// tree, so the tests' `crate::test_support::authority` references stay
