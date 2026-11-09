@@ -92,7 +92,7 @@ fn abbrev_copied_properties_have_only_manager_roots() {
                 &[Value::fixnum(index as i64)]
             );
         }
-        let table = eval
+        let table: &AbbrevTable = eval
             .abbrevs
             .get_table("owned-abbrev-root-table")
             .expect("retained abbrev table");
@@ -138,7 +138,7 @@ fn abbrev_copied_properties_have_only_manager_roots() {
     assert_eq!(eval.gc_count, completed + 1);
     check_live(&eval);
 
-    *eval.abbrevs = AbbrevManager::new();
+    neovm_eval::test_support::authority::reset_abbrevs_for_test(&mut eval);
     eval.gc_collect_exact();
     for Probe(bits) in probes {
         assert!(
@@ -160,7 +160,7 @@ fn define_and_expand() {
     assert_eq!(result, Some("by the way".to_string()));
 
     // Check count incremented
-    let tbl = mgr.get_table("global-abbrev-table").unwrap();
+    let tbl: &AbbrevTable = mgr.get_table("global-abbrev-table").unwrap();
     let key_btw = runtime_string_to_abbrev_string("btw");
     assert_eq!(tbl.abbrevs.get(&key_btw).unwrap().count, 1);
 
@@ -168,7 +168,7 @@ fn define_and_expand() {
     let result = mgr.expand_abbrev("global-abbrev-table", "btw");
     assert_eq!(result, Some("by the way".to_string()));
 
-    let tbl = mgr.get_table("global-abbrev-table").unwrap();
+    let tbl: &AbbrevTable = mgr.get_table("global-abbrev-table").unwrap();
     assert_eq!(tbl.abbrevs.get(&key_btw).unwrap().count, 2);
 }
 
@@ -211,10 +211,12 @@ fn case_fixed() {
     crate::test_utils::init_test_tracing();
     let mut mgr = AbbrevManager::new();
     mgr.define_abbrev("global-abbrev-table", "btw", "by the way");
-    mgr.tables
-        .get_mut(&abbrev_table_sym("global-abbrev-table"))
-        .unwrap()
-        .case_fixed = true;
+    neovm_eval::test_support::authority::with_abbrev_tables_mut_for_test(&mut mgr, |tables| {
+        tables
+            .get_mut(&abbrev_table_sym("global-abbrev-table"))
+            .unwrap()
+            .case_fixed = true;
+    });
 
     // With case_fixed, expansion is returned verbatim regardless of input case
     let result = mgr.expand_abbrev("global-abbrev-table", "BTW");
@@ -317,7 +319,7 @@ fn define_abbrev_full_with_hook_and_system() {
         true,
     );
 
-    let tbl = mgr.get_table("global-abbrev-table").unwrap();
+    let tbl: &AbbrevTable = mgr.get_table("global-abbrev-table").unwrap();
     let key_hw = runtime_string_to_abbrev_string("hw");
     let ab = tbl.abbrevs.get(&key_hw).unwrap();
     assert_eq!(abbrev_runtime(&ab.expansion), "hello world");

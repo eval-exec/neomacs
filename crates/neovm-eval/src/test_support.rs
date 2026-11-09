@@ -516,6 +516,31 @@ pub mod authority {
         crate::emacs_core::eval::register_global_subr_entry(sym, entry)
     }
 
+    /// Constructor fence for `SubrEntry` (peer #816): the ONLY cross-crate
+    /// test construction path. Every field is explicit; there are no hidden
+    /// defaults. Consumers replace struct literals (including the
+    /// functional-update `SubrEntry { field: X, ..orig }` form) with this call
+    /// and spell the preserved values out. `SubrFn` lives in the crate-private
+    /// subr_abi chain, so the fence interface is private by design.
+    #[allow(private_interfaces)]
+    pub fn subr_entry_for_test(
+        function: Option<crate::emacs_core::eval::subr_abi::SubrFn>,
+        min_args: u16,
+        max_args: Option<u16>,
+        dispatch_kind: SubrDispatchKind,
+        interactive_spec: Option<
+            crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec,
+        >,
+    ) -> SubrEntry {
+        SubrEntry {
+            function,
+            min_args,
+            max_args,
+            dispatch_kind,
+            interactive_spec,
+        }
+    }
+
     /// Copied read of the entry's dispatch class; the field stays pub(crate)
     /// (item 6).
     pub fn subr_entry_dispatch_kind(entry: &SubrEntry) -> SubrDispatchKind {
@@ -576,6 +601,49 @@ pub mod authority {
     /// Fence delegate for the HOF fixture (item 7).
     pub fn builtin_hof_entry_for_test(operation: HofOperation) -> SubrEntry {
         crate::emacs_core::eval::subr_abi::builtin_hof_entry_for_test(operation)
+    }
+
+    // ---- peer #816 write-arm fences: construction for the two remaining
+    // parent types and setters for the fields whose moved tests write them.
+
+    /// Constructor fence for `InternalEventEffects`: every field explicit.
+    pub fn internal_event_effects_for_test(
+        redisplay_needed: bool,
+    ) -> crate::emacs_core::eval::frontend_events::InternalEventEffects {
+        crate::emacs_core::eval::frontend_events::InternalEventEffects { redisplay_needed }
+    }
+
+    /// Setter fence for `Context::gc_driver_active` (the moved panic
+    /// containment test arms and disarms the GC driver flag).
+    pub fn set_gc_driver_active_for_test(context: &mut Context, active: bool) {
+        context.gc_driver_active = active;
+    }
+
+    /// Reset fence for `Context::abbrevs`: the moved root-retention test
+    /// replaces the manager, a write to the world slot.
+    pub fn reset_abbrevs_for_test(context: &mut Context) {
+        *context.abbrevs = crate::emacs_core::eval::data::abbrev::AbbrevManager::new();
+    }
+
+    /// Setter fence for `Context::lexenv`: the moved quit test installs a
+    /// crafted lexical environment to observe the discard path.
+    pub fn set_lexenv_for_test(context: &mut Context, lexenv: neovm_value::value::Value) {
+        context.lexenv = lexenv;
+    }
+
+    /// Borrow-scoped mutable access to `AbbrevManager::tables` (peer #816
+    /// setter fence): `get_mut` on the field's map is a write; the field
+    /// itself stays a read surface.
+    pub fn with_abbrev_tables_mut_for_test<R>(
+        manager: &mut crate::emacs_core::eval::data::abbrev::AbbrevManager,
+        f: impl FnOnce(
+            &mut std::collections::HashMap<
+                SymId,
+                crate::emacs_core::eval::data::abbrev::AbbrevTable,
+            >,
+        ) -> R,
+    ) -> R {
+        f(&mut manager.tables)
     }
 
     /// Fence delegate for the metadata fixture (item 7).

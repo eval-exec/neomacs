@@ -542,7 +542,10 @@ fn discard_specpdl_runtime_projection_ignores_lexical_shadow() {
     ctx.try_specbind(symbol, Value::symbol("discard-dynamic-tag"))
         .unwrap();
     let lexical_tag = Value::symbol("discard-lexical-tag");
-    ctx.lexenv = Value::list(vec![Value::cons(Value::from_sym_id(symbol), lexical_tag)]);
+    neovm_eval::test_support::authority::set_lexenv_for_test(
+        &mut ctx,
+        Value::list(vec![Value::cons(Value::from_sym_id(symbol), lexical_tag)]),
+    );
     ctx.discard_specpdl_to(depth);
     assert_eq!(ctx.visible_variable_value_or_nil_by_id(symbol), lexical_tag);
     assert_eq!(

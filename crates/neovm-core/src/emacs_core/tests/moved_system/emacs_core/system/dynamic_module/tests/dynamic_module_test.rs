@@ -394,7 +394,7 @@ fn contain_lisp_panics_restores_boundary_state() {
 #[test]
 fn contain_lisp_panics_re_raises_when_gc_driver_was_active() {
     let mut ev = crate::emacs_core::eval_hook_installers::new_context();
-    ev.gc_driver_active = true;
+    neovm_eval::test_support::authority::set_gc_driver_active_for_test(&mut ev, true);
 
     let caught = std::panic::catch_unwind(AssertUnwindSafe(|| {
         let _: Result<Value, Flow> = contain_lisp_panics(&mut ev, |_ctx| panic!("must-flee"));
@@ -402,7 +402,7 @@ fn contain_lisp_panics_re_raises_when_gc_driver_was_active() {
 
     let payload = caught.expect_err("the panic must be re-raised, not contained");
     assert_eq!(panic_message(&*payload), "must-flee");
-    ev.gc_driver_active = false;
+    neovm_eval::test_support::authority::set_gc_driver_active_for_test(&mut ev, false);
     assert_eq!(ev.specpdl().len(), 0);
 }
 

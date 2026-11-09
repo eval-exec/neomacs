@@ -375,9 +375,7 @@ fn wait_request_redisplay_query_tracks_request_and_activity() {
     assert!(!quiet.needs_redisplay_after_service(special, service));
 
     special = SpecialInputServiceOutcome::from_internal_effects(
-        neovm_eval::emacs_core::eval::frontend_events::InternalEventEffects {
-            redisplay_needed: true,
-        },
+        neovm_eval::test_support::authority::internal_event_effects_for_test(true),
     );
     assert!(
         redisplay.needs_redisplay_after_service(special, service),

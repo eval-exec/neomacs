@@ -1,6 +1,7 @@
 use super::*;
 use crate::buffer::BufferId;
 use crate::emacs_core::error::{FlowRef, FlowResultExt as _};
+use crate::emacs_core::eval::data::minibuffer::MinibufferState;
 use crate::emacs_core::eval::data::minibuffer_entry::{
     basic_match, compute_common_prefix, flex_match, prefix_match, substring_match,
 };
@@ -68,7 +69,7 @@ fn minibuffer_copied_properties_have_only_manager_roots() {
             .buffers
             .current_buffer_id()
             .expect("current buffer");
-        let state = eval
+        let state: &mut MinibufferState = eval
             .minibuffers_mut()
             .read_from_minibuffer_lisp(buffer, &text(&mut probes, key), None, None)
             .expect("outer minibuffer");
@@ -81,7 +82,7 @@ fn minibuffer_copied_properties_have_only_manager_roots() {
         state.require_match = payload(&mut probes);
         state.completion_table = Some(CompletionTable::List(vec![text(&mut probes, key)]));
 
-        let state = eval
+        let state: &mut MinibufferState = eval
             .minibuffers_mut()
             .read_from_minibuffer_lisp(buffer, &text(&mut probes, key), None, None)
             .expect("inner minibuffer");
@@ -90,7 +91,7 @@ fn minibuffer_copied_properties_have_only_manager_roots() {
             payload(&mut probes),
         )]));
 
-        let state = eval
+        let state: &mut MinibufferState = eval
             .minibuffers_mut()
             .read_from_minibuffer_lisp(buffer, &ls("Files: "), None, None)
             .expect("directory minibuffer");

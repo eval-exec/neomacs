@@ -18716,7 +18716,7 @@ fn jit_cbsym_spec_inplace_rewrite_to_nonbuiltin_bounces_like_interp() {
     crate::test_utils::init_test_tracing();
     neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     use neovm_eval::test_support::authority::{
-        SubrEntry, lookup_global_subr_entry, register_global_subr_entry,
+        lookup_global_subr_entry, register_global_subr_entry, subr_entry_for_test,
     };
     use neovm_value::intern::intern;
     use neovm_value::tagged::header::SubrDispatchKind;
@@ -18734,10 +18734,13 @@ fn jit_cbsym_spec_inplace_rewrite_to_nonbuiltin_bounces_like_interp() {
     // In-place rewrite the STATIC entry to a non-Builtin kind (VALUE bits stable).
     register_global_subr_entry(
         widen,
-        SubrEntry {
-            dispatch_kind: SubrDispatchKind::SpecialForm,
-            ..orig
-        },
+        subr_entry_for_test(
+            orig.function,
+            orig.min_args,
+            orig.max_args,
+            SubrDispatchKind::SpecialForm,
+            orig.interactive_spec,
+        ),
     );
     let native = ev.funcall_general_untraced(hot, Vec::<Value>::new());
     let interp = ev.funcall_general_untraced(cold, Vec::<Value>::new());
