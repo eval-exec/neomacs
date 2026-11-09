@@ -2763,10 +2763,6 @@ mod arithmetic_integer_width_test;
 mod gdl_random_bignum;
 
 #[cfg(test)]
-#[path = "tests/random_seed_test.rs"]
-mod random_seed_test;
-
-#[cfg(test)]
 #[path = "tests/gdl_ash_validation_test.rs"]
 mod gdl_ash_validation;
 

@@ -412,7 +412,9 @@ mod tests;
 /// `adjust_point_for_property` and the layout engine's classifier can share one
 /// decision. `when` forms are resolved structurally rather than evaluated,
 /// matching GNU's own `single_display_spec_string_p` shortcut (the text was
-/// already displayed, so the condition was non-nil).
+/// already displayed, so the condition was non-nil). The `(disable-eval …)`
+/// wrapper decides whether a non-`t` `when` form counts as nil without
+/// evaluation (xdisp.c, `handle_single_display_spec`).
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn display_prop_replacing_p(spec: Value, frame_window_p: bool) -> bool {
     let mut replacing = false;
@@ -443,8 +445,7 @@ fn display_single_spec_replacing_p(
         // `(when FORM . VALUE)`: a nil FORM disables the spec; otherwise the
         // decision is VALUE's. Resolved structurally rather than evaluated -- see
         // the note on `display_prop_replacing_p`. Under `disable-eval` GNU takes
-        // any FORM but `t` as nil without evaluating it (xdisp.c,
-        // `handle_single_display_spec`), so only a literal `t` holds there.
+        // any FORM but `t` as nil without evaluating it.
         None => match display_spec_when_parts(spec) {
             // GNU continues with its SINGLE-spec arms on VALUE -- it does not
             // re-enter `handle_display_spec` -- so `(when t . SPEC)` never treats

@@ -342,4 +342,38 @@ impl Context {
         *self.interactive_minibuffer_read_count =
             self.interactive_minibuffer_read_count.saturating_add(1);
     }
+
+    /// Remember selected-window point and synchronize its buffer/runtime state.
+    /// With no selected frame, leave the caller's current buffer unchanged.
+    pub(crate) fn sync_current_buffer_to_selected_window(&mut self) {
+        let Some(frame_id) = self.frames.selected_frame().map(|frame| frame.id) else {
+            return;
+        };
+        super::display_query_hooks::remember_selected_window_point(
+            &mut self.frames,
+            &mut self.edit.buffers,
+            frame_id,
+        );
+        let selected = self
+            .frames
+            .get(frame_id)
+            .and_then(|frame| frame.find_window(frame.selected_window))
+            .and_then(|window| match window {
+                super::data::window_state::Window::Leaf {
+                    buffer_id, point, ..
+                } => Some((*buffer_id, *point)),
+                super::data::window_state::Window::Internal { .. } => None,
+            });
+        if let Some((buffer_id, point)) = selected {
+            // GNU `command_loop_1` only realigns `current_buffer` with
+            // `selected_window` via `set_buffer_internal`; it does not call
+            // `record_buffer`.
+            self.edit.buffers.switch_current_unrecorded(buffer_id);
+            if let Some(buffer) = self.edit.buffers.get(buffer_id) {
+                let byte_pos = buffer.lisp_pos_to_emacs_byte_pos(point);
+                let _ = self.edit.buffers.goto_buffer_emacs_byte_pos(buffer_id, byte_pos);
+            }
+        }
+        let _ = self.sync_current_buffer_runtime_state();
+    }
 }
