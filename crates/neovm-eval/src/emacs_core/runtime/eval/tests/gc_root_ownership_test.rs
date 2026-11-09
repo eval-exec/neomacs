@@ -6,10 +6,9 @@ fn scratch_roots(ctx: &Context) -> Vec<Value> {
         &mut roots,
         ctx.tagged_heap.identity(),
         ctx.tagged_heap.gc_collections(),
-        neovm_value::tagged::gc::CacheRootScan::Snapshot {
-            collection_in_progress: ctx.tagged_heap.mark_in_progress()
-                || ctx.tagged_heap.sweep_in_progress(),
-        },
+        neovm_value::tagged::gc::CacheRootScan::snapshot(
+            ctx.tagged_heap.mark_in_progress() || ctx.tagged_heap.sweep_in_progress(),
+        ),
         &mut Vec::new(),
     );
     roots

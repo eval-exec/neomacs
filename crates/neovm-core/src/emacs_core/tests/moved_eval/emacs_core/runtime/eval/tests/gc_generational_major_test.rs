@@ -207,10 +207,9 @@ fn major_and_minor_keep_only_the_matching_heaps_scratch_root_graph() {
         &mut discovered,
         second.tagged_heap().tagged_heap_identity(),
         second.tagged_heap().gc_collections(),
-        neovm_value::tagged::gc::CacheRootScan::Snapshot {
-            collection_in_progress: second.tagged_heap().mark_in_progress()
-                || second.tagged_heap().sweep_in_progress(),
-        },
+        neovm_value::tagged::gc::CacheRootScan::snapshot(
+            second.tagged_heap().mark_in_progress() || second.tagged_heap().sweep_in_progress(),
+        ),
         &mut Vec::new(),
     );
     assert!(

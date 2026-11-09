@@ -63,10 +63,9 @@ fn roots(ctx: &Context) -> Vec<Value> {
         &mut roots,
         ctx.tagged_heap().tagged_heap_identity(),
         ctx.tagged_heap().gc_collections(),
-        neovm_value::tagged::gc::CacheRootScan::Snapshot {
-            collection_in_progress: ctx.tagged_heap().mark_in_progress()
-                || ctx.tagged_heap().sweep_in_progress(),
-        },
+        neovm_value::tagged::gc::CacheRootScan::snapshot(
+            ctx.tagged_heap().mark_in_progress() || ctx.tagged_heap().sweep_in_progress(),
+        ),
     );
     roots
 }

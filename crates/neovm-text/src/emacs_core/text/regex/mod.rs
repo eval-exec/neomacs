@@ -793,6 +793,7 @@ pub fn collect_regex_gc_roots(
         }
         neovm_value::tagged::gc::CacheRootScan::Snapshot {
             collection_in_progress,
+            ..
         } => {
             activate_regex_thread_locals(heap_identity, collection_epoch, collection_in_progress);
         }

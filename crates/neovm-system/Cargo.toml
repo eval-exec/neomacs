@@ -84,9 +84,6 @@ neovm-value = { path = "../neovm-value", default-features = false, features = ["
 # The re-homed process/wait tests name eval's test-support surface (wait gates,
 # process-state metadata).  Downward, test-only.
 neovm-eval = { path = "../neovm-eval", default-features = false, features = ["test-support"] }
-# Feature unification: value/test-support adds CacheRootScan::Snapshot, so the
-# text consumer must compile with its matching test-support arm.
-neovm-text = { path = "../neovm-text", default-features = false, features = ["test-support"] }
 # The A' gate on fence-routed items is cfg(any(test, feature = "test-support"));
 # the optional `visibility` dependency is tied to the test-support feature, so
 # this dev-dependency makes the attribute macro resolvable in this crate's own

@@ -168,6 +168,7 @@ pub fn collect_string_pos_cache_gc_roots(
         }
         crate::tagged::gc::CacheRootScan::Snapshot {
             collection_in_progress,
+            ..
         } => {
             activate_string_pos_cache(
                 heap_identity,

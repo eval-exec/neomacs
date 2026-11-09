@@ -138,9 +138,9 @@ fn gc_collection_epoch_string_pos_partial_sweep_root_scan_discards_swept_entry()
         &mut roots,
         heap.tagged_heap_identity(),
         heap.gc_collections(),
-        neovm_value::tagged::gc::CacheRootScan::Snapshot {
-            collection_in_progress: heap.mark_in_progress() || heap.sweep_in_progress(),
-        },
+        neovm_value::tagged::gc::CacheRootScan::snapshot(
+            heap.mark_in_progress() || heap.sweep_in_progress(),
+        ),
     );
     assert!(
         roots.iter().all(|root| root.bits() != string.bits()),
