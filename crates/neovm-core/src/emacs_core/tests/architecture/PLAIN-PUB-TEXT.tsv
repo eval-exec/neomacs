@@ -96,18 +96,6 @@ crates/neovm-text/src/emacs_core/text/chartable/mod.rs	use	use ct_set_single
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	enum	enum EolConversion
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	enum	enum EolType
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	enum	enum IsoFlag
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	CodingSystemInfo field ascii_compatible_p
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	CodingSystemInfo field charset_list
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	CodingSystemInfo field coding_type
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	CodingSystemInfo field default_char
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	CodingSystemInfo field eol_type
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	CodingSystemInfo field for_unibyte
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	CodingSystemInfo field int_properties
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	CodingSystemInfo field mnemonic
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	CodingSystemInfo field name
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	CodingSystemInfo field post_read_conversion
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	CodingSystemInfo field pre_write_conversion
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	CodingSystemInfo field properties
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	CodingSystemManager field alias_order
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	CodingSystemManager field aliases
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	CodingSystemManager field priority
@@ -139,9 +127,9 @@ crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl Iso2022Spec::enco
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl Iso2022Spec::register_of
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn process_locale_uses_utf8
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn register_bootstrap_vars
-crates/neovm-text/src/emacs_core/text/coding/mod.rs	struct	struct CodingSystemInfo
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	struct	struct CodingSystemManager
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	struct	struct Iso2022Spec
+crates/neovm-text/src/emacs_core/text/coding/mod.rs	use	use CodingSystemInfo
 crates/neovm-text/src/emacs_core/text/composite/mod.rs	fn	fn ascii_has_no_composition_rules
 crates/neovm-text/src/emacs_core/text/composite/mod.rs	fn	fn ascii_has_no_composition_rules_with_symbols
 crates/neovm-text/src/emacs_core/text/composite/mod.rs	fn	fn automatic_composition_for_terminal
@@ -260,6 +248,18 @@ crates/neovm-text/src/emacs_core/text/syntax/mod.rs	struct	struct SyntaxFlags
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	struct	struct SyntaxTable
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	use	use SyntaxClass
 crates/neovm-text/src/encoding.rs	enum	enum CodingEncoderState
+crates/neovm-text/src/encoding.rs	field	CodingSystemInfo field ascii_compatible_p
+crates/neovm-text/src/encoding.rs	field	CodingSystemInfo field charset_list
+crates/neovm-text/src/encoding.rs	field	CodingSystemInfo field coding_type
+crates/neovm-text/src/encoding.rs	field	CodingSystemInfo field default_char
+crates/neovm-text/src/encoding.rs	field	CodingSystemInfo field eol_type
+crates/neovm-text/src/encoding.rs	field	CodingSystemInfo field for_unibyte
+crates/neovm-text/src/encoding.rs	field	CodingSystemInfo field int_properties
+crates/neovm-text/src/encoding.rs	field	CodingSystemInfo field mnemonic
+crates/neovm-text/src/encoding.rs	field	CodingSystemInfo field name
+crates/neovm-text/src/encoding.rs	field	CodingSystemInfo field post_read_conversion
+crates/neovm-text/src/encoding.rs	field	CodingSystemInfo field pre_write_conversion
+crates/neovm-text/src/encoding.rs	field	CodingSystemInfo field properties
 crates/neovm-text/src/encoding.rs	fn	fn byte_to_char_pos
 crates/neovm-text/src/encoding.rs	fn	fn char_to_byte_pos
 crates/neovm-text/src/encoding.rs	fn	fn glyphless_char_display
@@ -270,6 +270,7 @@ crates/neovm-text/src/encoding.rs	fn	fn is_whitespace
 crates/neovm-text/src/encoding.rs	fn	fn is_word_char
 crates/neovm-text/src/encoding.rs	fn	fn string_width
 crates/neovm-text/src/encoding.rs	struct	struct CodingDecoderState
+crates/neovm-text/src/encoding.rs	struct	struct CodingSystemInfo
 crates/neovm-text/src/encoding.rs	struct	struct Iso2022EncodeState
 crates/neovm-text/src/encoding.rs	struct	struct RuntimeCodingSystem
 crates/neovm-text/src/encoding.rs	use	use char_width
