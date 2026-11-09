@@ -450,10 +450,16 @@ mod emacs_core_lisp_native_builtins_tests_strings_runtime_startup_test_rs;
 #[path = "emacs_core/lisp/native/fns/tests/fns_runtime_startup_test.rs"]
 mod emacs_core_lisp_native_fns_tests_fns_runtime_startup_test_rs;
 // save-current-buffer needs the runtime-startup image. Buffer identity goes
-// through the public edit buffer manager. The rest of misc_test.rs stays.
+// through the public edit buffer manager. Direct builtin rows stay in
+// misc_test.rs.
 #[cfg(test)]
 #[path = "emacs_core/lisp/native/misc/tests/save_current_buffer_test.rs"]
 mod emacs_core_lisp_native_misc_tests_save_current_buffer_test_rs;
+// assoc-default, with-syntax-table, and the ledger-183 backtrace row need
+// the minimal GNU runtime minted in core. Assertions are unchanged.
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/misc/tests/misc_minimal_runtime_test.rs"]
+mod emacs_core_lisp_native_misc_tests_misc_minimal_runtime_test_rs;
 
 // Tests whose harness is minted in core: runtime_startup_eval_all,
 // runtime_startup_eval_one, or the GNU refresh command. Direct builtin
@@ -467,6 +473,11 @@ mod emacs_core_lisp_native_builtins_extra_tests_builtins_extra_runtime_startup_t
 #[cfg(test)]
 #[path = "emacs_core/lisp/native/builtins/tests/replace_region_contents_runtime_startup_test.rs"]
 mod emacs_core_lisp_native_builtins_tests_replace_region_contents_runtime_startup_test_rs;
+// Minimal GNU subr.el rows of replace-region-contents. The Myers-diff unit
+// tests stay in eval. Assertions are unchanged.
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/replace_region_contents_minimal_runtime_test.rs"]
+mod emacs_core_lisp_native_builtins_tests_replace_region_contents_minimal_runtime_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/value_reader/tests/mod.rs"]
 mod emacs_core_runtime_value_reader_tests_runtime_startup_escapes_rs;
