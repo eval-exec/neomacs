@@ -4473,6 +4473,8 @@ dependencies = [
  "memmap2",
  "neomacs-display-protocol",
  "neomacs-infra",
+ "neomacs-test-env",
+ "neomacs-test-oracle",
  "neomacs-video-model",
  "neovm-edit",
  "neovm-text",

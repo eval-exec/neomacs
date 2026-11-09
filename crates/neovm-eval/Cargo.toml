@@ -18,7 +18,7 @@ default = ["jit", "neovm-value/sqlite"]
 # (B3, peer ruling 02:2xZ): named items keep their production visibility and
 # gain `visibility::make(pub)` only in this build; the provider features
 # forward downward so the whole lower graph is in the same test mode.
-test-support = ["neovm-value/test-support", "neovm-text/test-support", "neovm-edit/test-support", "dep:visibility"]
+test-support = ["neovm-value/test-support", "neovm-text/test-support", "neovm-edit/test-support", "dep:visibility", "dep:neomacs-test-oracle", "dep:neomacs-test-env"]
 contract-fixtures = []
 # The moved system-vocabulary table lives in neovm-value; forward the
 # capability down so an eval-only consumer advertises the same
@@ -45,6 +45,11 @@ cc = "1.4.5"
 # B3 TEST-SUPPORT-VIS: pub only in the test-support build; product visibility
 # is unchanged.  Test-provider defs are annotated by exact rustc def span.
 visibility = { version = "0.1.1", optional = true }
+# L2: the GNU harness family lives in test_utils. Optional so a product
+# build does not link them; test-support turns them on for core's tests.
+# The matching dev-dependencies cover this crate's own cfg(test) build.
+neomacs-test-oracle = { workspace = true, optional = true }
+neomacs-test-env = { workspace = true, optional = true }
 neovm-value = { path = "../neovm-value", default-features = false }
 neovm-edit = { path = "../neovm-edit", default-features = false }
 neovm-text = { path = "../neovm-text", default-features = false }
@@ -130,6 +135,8 @@ neovm-edit = { path = "../neovm-edit", default-features = false, features = ["te
 # dependency is tied to the test-support feature, so this dev-dependency makes
 # the attribute macro resolvable in this crate's own cfg(test) build too.
 visibility = "0.1.1"
+neomacs-test-oracle.workspace = true
+neomacs-test-env.workspace = true
 # External crates the test tree uses directly (test-only; no product edge).
 tracing-subscriber.workspace = true
 neomacs-infra.workspace = true
