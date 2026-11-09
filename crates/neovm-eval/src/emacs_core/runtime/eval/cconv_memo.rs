@@ -1322,7 +1322,7 @@ impl Context {
         let gc_count = self.gc_count;
         let before = self.cconv_effect_snapshot();
         self.cconv_memo.observing += 1;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if std::mem::take(&mut self.cconv_memo.collect_in_next_observed_run) {
             self.gc_collect_exact();
         }
