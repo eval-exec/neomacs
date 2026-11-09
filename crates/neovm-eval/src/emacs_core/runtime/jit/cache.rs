@@ -3402,6 +3402,13 @@ pub(crate) fn run_resolved_leaf_native(
 /// the other interpreter sites do. Below the sampling depth the entry runs
 /// straight through: the shallow recursion is bounded by `max-lisp-eval-depth`
 /// long before the stack matters.
+///
+/// The sampled branch is OUT OF LINE. Keeping it inline put the stacker
+/// query, its thread-local lazy-init slow path and the adaptive reserve /
+/// segment arithmetic into the leaf runner's body (and forced a frame on
+/// every native entry), which the protected-codegen census counted as
+/// run_armed_leaf +119 instructions. The hot path keeps only the depth test;
+/// the probe runs once per sampled interval, on the segment it grows.
 #[inline(always)]
 pub(crate) fn run_with_bytecode_stack_probe<R>(
     ctx: *mut Context,
@@ -3414,6 +3421,17 @@ pub(crate) fn run_with_bytecode_stack_probe<R>(
     {
         return run(ctx);
     }
+    run_with_bytecode_stack_probe_sampled(ctx, run)
+}
+
+/// The sampled half of [`run_with_bytecode_stack_probe`], deliberately out of
+/// line: stacker's remaining-stack query and the adaptive reserve arithmetic
+/// stay off the leaf entry path.
+#[inline(never)]
+fn run_with_bytecode_stack_probe_sampled<R>(
+    ctx: *mut Context,
+    run: impl FnOnce(*mut Context) -> R,
+) -> R {
     // SAFETY: as above; `maybe_grow_tracking_jit_limit` keeps the Context's
     // guard limit on the segment the callback runs on.
     let ctx_ref = unsafe { &mut *ctx };

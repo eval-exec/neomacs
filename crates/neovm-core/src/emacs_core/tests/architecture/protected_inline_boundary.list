@@ -404,6 +404,7 @@ never	emacs_core/runtime/jit/stats.rs	record_native_entry_enabled	run_armed_leaf
 always	emacs_core/runtime/bytecode/chunk.rs	<ByteCodeFunction as ByteCodeFunctionExt>::jit_constant_base	run_armed_leaf,inline
 always	emacs_core/runtime/jit/cache.rs	run_resolved_leaf_native	run_armed_leaf,inline
 always	emacs_core/runtime/jit/cache.rs	run_with_bytecode_stack_probe	run_armed_leaf,inline
+never	emacs_core/runtime/jit/cache.rs	run_with_bytecode_stack_probe_sampled	run_armed_leaf	# the outlined sampled half (stacker query + adaptive reserve); #[inline(never)], called from run_with_bytecode_stack_probe so the leaf entry keeps only the depth test
 always	emacs_core/runtime/jit/compile/leaf.rs	CompiledLeaf::entry_call_raw_memory	run_armed_leaf,inline
 always	emacs_core/runtime/jit/stats.rs	record_native_entry	run_armed_leaf,inline
 exempt	emacs_core/runtime/jit/cache.rs	count_native_status	run_armed_leaf	# called by run_resolved_leaf_native, but leaves no code at the protected site (folded, cfg-gated or debug-only)

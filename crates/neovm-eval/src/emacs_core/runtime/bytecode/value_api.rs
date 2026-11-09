@@ -206,10 +206,20 @@ impl TaggedValueBytecodeExt for TaggedValue {
     /// about already-live functions — AOT post-insert marking, PGO drains.
     /// Today (pre-stub) it is the same borrow.
     fn bytecode_data_if_materialized(self) -> Option<&'static super::ByteCodeFunction> {
-        if self.veclike_type()? != VecLikeType::ByteCode {
+        // ONE observed projection for the header and the data, the same shape
+        // as `get_bytecode_data`: `veclike_type()` followed by
+        // `as_veclike_ptr()` records the same collection-read dependency
+        // twice, and this accessor is the JIT call-spec fast path's charge
+        // projection (dispatch.rs reads the callee's `max_stack` there).
+        let header = self.as_veclike_ptr()?;
+        // SAFETY: `as_veclike_ptr` proved a live veclike header; `type_tag`
+        // is at the same address and is readable for every veclike object.
+        if unsafe { (*header).type_tag } != VecLikeType::ByteCode {
             return None;
         }
-        let ptr = self.as_veclike_ptr().unwrap() as *const ByteCodeObj;
+        let ptr = header as *const ByteCodeObj;
+        // SAFETY: the type tag proved a byte-code object; arena/mapped
+        // byte-code objects are immovable and live for this read.
         let data = unsafe { &(*ptr).data };
         (!data.is_pdump_stub()).then_some(data)
     }
