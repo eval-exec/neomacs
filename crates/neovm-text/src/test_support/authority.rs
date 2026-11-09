@@ -53,7 +53,10 @@ pub fn reset_syntax_table_decodes_for_test() {
 /// FENCE (R4-F2, peer P5): arm this process's existence-DFA filter counters.
 /// The runtime stats enable stays `cfg!(test)`; without this explicit arming
 /// a test-support dependency build records nothing (own-build discriminator).
-/// Inert unless called.
+/// Inert unless called.  Arming persists for the rest of the process (there
+/// is no disarm); the moved DFA tests rely on nextest running every test in
+/// its own process, so a later test in the same process would still observe
+/// the counters armed.
 pub fn enable_dfa_stats_for_test() {
     crate::emacs_core::regex_emacs::dfa::enable_dfa_stats_for_test();
 }
