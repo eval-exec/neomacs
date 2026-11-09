@@ -3796,7 +3796,7 @@ fn bootstrap_fingerprint_memo_store(memo_path: &Path, stat_key: &str, fingerprin
 }
 
 fn bootstrap_content_fingerprint(runtime_root: &Path, files: &[PathBuf]) -> String {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     BOOTSTRAP_CONTENT_FINGERPRINT_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     let mut hasher = Sha256::new();
