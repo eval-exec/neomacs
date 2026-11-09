@@ -1,18 +1,19 @@
-//! Chrome-presence gating for point-only retained-row reuse.
+//! position_chrome_query_test tests re-homed to the core upper-layer harness.
 //!
-//! GNU `pos_visible_p` measures chrome on every query, so retained rows may
-//! answer a point-only move only when no chrome line can change the text area.
-
-use super::*;
-use crate::window::DisplayFrameTestExt;
+//! Re-homed from neovm-display (display upper-layer re-home).
+use crate::emacs_core::xdisp::*;
+use crate::window::DisplayFrameManagerExt;
+use crate::window::display::WindowDisplayContextExt;
 use crate::window::{Window, WindowLayoutQuery, WindowLayoutQueryOutcome, WindowLayoutQueryScope};
+use neovm_display::test_utils::xdisp_test_upper_layer_helpers::interactive_context;
 use neovm_edit::buffer::LispCharPos1;
+use neovm_eval::emacs_core::eval::Context;
 use neovm_value::value::Value;
 
 fn assert_point_only_warm_query_reuse(setup: &str, reuse_after_move: bool) {
     use crate::window::{WindowLayoutQuery, WindowLayoutQueryOutcome, WindowLayoutQueryScope};
 
-    let mut eval = interactive_context();
+    let mut eval = interactive_context(crate::test_utils::new_context);
     let buffer = eval.edit.buffers.current_buffer().unwrap().id;
     eval.edit.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
     let frame = eval
@@ -93,10 +94,10 @@ fn assert_point_only_warm_query_reuse(setup: &str, reuse_after_move: bool) {
     };
     warm.regions.text_body.width = 160.0;
     warm.regions.text_body.height = 32.0;
-    eval.frame_manager_mut()
-        .get_mut(frame)
-        .unwrap()
-        .commit_redisplay_cache_for_test(vec![warm]);
+    neovm_display::test_support::authority::commit_redisplay_cache_for_test(
+        eval.frame_manager_mut().get_mut(frame).unwrap(),
+        vec![warm],
+    );
 
     // Mock canonical bounds, not a font/chrome metric engine: the old body
     // admitted the target at y=16 in [0,32); the new visible body is [0,16),

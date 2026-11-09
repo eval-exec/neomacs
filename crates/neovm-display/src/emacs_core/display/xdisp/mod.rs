@@ -32,13 +32,23 @@ use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
 use crate::window::geometry::DisplayGeometryExt;
 use mode_line_coding::CodingAccess;
+#[cfg(any(test, feature = "test-support"))]
+#[path = "mode_line_flow.rs"]
+pub mod mode_line_flow_policy;
+#[cfg(not(any(test, feature = "test-support")))]
 #[path = "mode_line_flow.rs"]
 mod mode_line_flow_policy;
 mod mode_line_output;
 mod mode_line_point;
-mod mode_line_string;
+#[cfg(any(test, feature = "test-support"))]
+pub mod mode_line_string;
+#[cfg(not(any(test, feature = "test-support")))]
+pub(crate) mod mode_line_string;
+#[cfg(any(test, feature = "test-support"))]
+pub mod mode_line_target;
+#[cfg(not(any(test, feature = "test-support")))]
 mod mode_line_target;
-mod mode_line_walk;
+pub(crate) mod mode_line_walk;
 use mode_line_append::{
     AppendAdmission, DecimalDigit, PercentAppendDriver, PercentWidth, TrailingPercent,
     ZeroTerminator,
@@ -62,8 +72,12 @@ mod text_measurement;
 use neovm_eval::emacs_core::eval::VariableView;
 use text_measurement::TextMeasurement;
 mod fontification_boundary;
-mod mode_line_gc;
+#[cfg(any(test, feature = "test-support"))]
+pub use fontification_boundary::admit;
+pub(crate) mod mode_line_gc;
 mod mode_line_numeric_padding;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use mode_line_numeric_padding::force_for_test;
 mod mode_line_symbols;
 use fontification_boundary::{FontificationBoundaryAdmission, FontificationBoundaryMode};
 pub(crate) mod motion;
@@ -469,7 +483,11 @@ fn emacs_char_count(bytes: &[u8], multibyte: bool) -> usize {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 struct LineColumn {
+    #[cfg(any(test, feature = "test-support"))]
+    pub line: usize,
+    #[cfg(not(any(test, feature = "test-support")))]
     line: usize,
     column: usize,
 }
@@ -626,6 +644,7 @@ impl LineAdvance {
 // same-screen-row precondition does NOT pin: moving point left or right within
 // a row changes `%c` while the row is unchanged.
 //
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 fn prefix_line_and_column(
     buf: &Buffer,
     accessible: AccessibleEmacsByteRange,
@@ -2608,7 +2627,7 @@ pub(crate) fn finish_format_mode_line_in_eval(
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn finish_format_mode_line_in_state_with_eval(
     vars: VariableView<'_>,
     dynamic: &[OrderedRuntimeBindingMap],
@@ -2698,6 +2717,11 @@ enum ModeLineSymbol {
     Eval,
 }
 
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn risky_local_variable_symbol_id() -> neovm_value::intern::SymId {
+    ModeLineSymbol::RiskyLocalVariable.id()
+}
+
 impl ModeLineSymbol {
     #[inline]
     fn id(self) -> neovm_value::intern::SymId {
@@ -2754,7 +2778,7 @@ fn mode_line_fixed_symbol_value_in_state(
 
 // Name-based baseline retained for fixed-key equivalence tests.
 #[cfg(test)]
-fn mode_line_symbol_value_in_state(
+pub(crate) fn mode_line_symbol_value_in_state(
     vars: VariableView<'_>,
     _dynamic: &[OrderedRuntimeBindingMap],
     buffers: &neovm_edit::buffer::BufferManager,
@@ -2858,7 +2882,7 @@ fn mode_line_symbol_is_risky(obarray: &neovm_value::symbol::Obarray, name: &str)
         .is_some_and(|value| !value.is_nil())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn mode_line_conditional_branch(cdr: Value, branch_is_then: bool) -> Option<Value> {
     if !cdr.is_cons() {
         return None;
@@ -2878,6 +2902,7 @@ fn mode_line_conditional_branch(cdr: Value, branch_is_then: bool) -> Option<Valu
 ///
 /// Corresponds to the `struct window *w` and `struct frame *f` parameters
 /// in GNU's `decode_mode_spec` (xdisp.c:29083).
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 struct ModeLinePercentContext<T: TargetPolicy = StoredTarget<'static>> {
     /// Identity reuse is scoped to this formatter pass and existing registry epoch.
     dynamic_symbols: std::cell::RefCell<mode_line_symbols::DynamicSymbols>,
@@ -3185,7 +3210,7 @@ impl ModeLineDisplayOutput {
 /// source interval borrow only in its own synchronous, no-Lisp read span.
 #[inline]
 fn mode_line_prop_borrow_enabled() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(enabled) = MODE_LINE_PROP_BORROW_OVERRIDE.with(std::cell::Cell::get) {
         return enabled;
     }
@@ -3201,15 +3226,20 @@ fn mode_line_prop_borrow_enabled() -> bool {
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static MODE_LINE_PROP_BORROW_OVERRIDE: std::cell::Cell<Option<bool>> =
         const { std::cell::Cell::new(None) };
 }
 
-#[cfg(test)]
-fn set_mode_line_prop_borrow_for_test(enabled: Option<bool>) {
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn set_mode_line_prop_borrow_for_test(enabled: Option<bool>) {
     MODE_LINE_PROP_BORROW_OVERRIDE.with(|cell| cell.set(enabled));
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn replace_mode_line_prop_borrow_for_test(enabled: Option<bool>) -> Option<bool> {
+    MODE_LINE_PROP_BORROW_OVERRIDE.with(|cell| cell.replace(enabled))
 }
 
 /// Read a source's properties at the same point in the formatter walk as the
@@ -3233,14 +3263,15 @@ fn with_mode_line_string_properties<R>(
 
 /// The product always grafts directly. Unit tests retain the former two-step
 /// operation as an explicit reference, absent from production code.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 enum ModeLineSourceSliceTestMode {
     Production,
     TwoStepReference,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     // Replace the existing override slot in place; do not add TLS storage.
     static MODE_LINE_PROP_SLICE_OVERRIDE: std::cell::Cell<ModeLineSourceSliceTestMode> =
@@ -3258,15 +3289,15 @@ static_assertions::const_assert_eq!(
     std::mem::align_of::<std::cell::Cell<Option<bool>>>()
 );
 
-#[cfg(test)]
-fn replace_mode_line_source_slice_test_mode(
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn replace_mode_line_source_slice_test_mode(
     mode: ModeLineSourceSliceTestMode,
 ) -> ModeLineSourceSliceTestMode {
     MODE_LINE_PROP_SLICE_OVERRIDE.with(|cell| cell.replace(mode))
 }
 
-#[cfg(test)]
-fn restore_mode_line_source_slice_test_mode(mode: ModeLineSourceSliceTestMode) {
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn restore_mode_line_source_slice_test_mode(mode: ModeLineSourceSliceTestMode) {
     // A test guard cannot move to another thread. If that thread's TLS has
     // already retired, there is no live state to restore; Drop must not panic.
     let _ = MODE_LINE_PROP_SLICE_OVERRIDE.try_with(|cell| cell.set(mode));
@@ -3305,12 +3336,16 @@ fn append_mode_line_source_slice(
 }
 
 #[derive(Clone, Default)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 struct ModeLineRendered {
     /// Accumulated Emacs character codes (one entry per character). Storing
     /// codes rather than a `String` lets the mode line carry raw eight-bit and
     /// non-Unicode characters byte-faithfully — a Rust `String` cannot hold
     /// them, and the legacy storage-String round-trip that used to bridge the
     /// gap has been retired (issue #131).
+    #[cfg(any(test, feature = "test-support"))]
+    pub text: Vec<u32>,
+    #[cfg(not(any(test, feature = "test-support")))]
     text: Vec<u32>,
     /// GNU string identity: multibyte iff any FORMAT INPUT was multibyte (the
     /// `concat' rule), never derived from the accumulated content.  Deriving
@@ -3318,8 +3353,17 @@ struct ModeLineRendered {
     /// whose code fits in a byte as a unibyte raw byte, which then displays
     /// as the octal escape `\NNN` -- issue #470's "dot turns into `\267`".
     multibyte: bool,
+    #[cfg(any(test, feature = "test-support"))]
+    pub text_props: TextPropertyTable,
+    #[cfg(not(any(test, feature = "test-support")))]
     text_props: TextPropertyTable,
+    #[cfg(any(test, feature = "test-support"))]
+    pub source_spans: Vec<ModeLineDisplaySourceSpan>,
+    #[cfg(not(any(test, feature = "test-support")))]
     source_spans: Vec<ModeLineDisplaySourceSpan>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub min_width_transitions: Vec<ModeLineMinWidthTransition>,
+    #[cfg(not(any(test, feature = "test-support")))]
     min_width_transitions: Vec<ModeLineMinWidthTransition>,
     /// The enclosing walk owns the scratch-root scope. Mutations publish new
     /// Lisp values there before any later element can evaluate Lisp.
@@ -3331,16 +3375,33 @@ struct ModeLineRendered {
 /// display stream.  `WIDTH-SPEC` identity is deliberately retained: GNU
 /// partitions adjacent runs with `EQ`, not structural equality.
 #[derive(Clone, Debug)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 struct ModeLineMinWidthRun {
+    #[cfg(any(test, feature = "test-support"))]
+    pub width_spec: Value,
+    #[cfg(not(any(test, feature = "test-support")))]
     width_spec: Value,
+    #[cfg(any(test, feature = "test-support"))]
+    pub columns: usize,
+    #[cfg(not(any(test, feature = "test-support")))]
     columns: usize,
     /// Source interval plist in insertion order (GNU's observable order).
+    #[cfg(any(test, feature = "test-support"))]
+    pub padding_properties: Vec<(Value, Value)>,
+    #[cfg(not(any(test, feature = "test-support")))]
     padding_properties: Vec<(Value, Value)>,
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 struct ModeLineMinWidthTransition {
+    #[cfg(any(test, feature = "test-support"))]
+    pub output_start: usize,
+    #[cfg(not(any(test, feature = "test-support")))]
     output_start: usize,
+    #[cfg(any(test, feature = "test-support"))]
+    pub run: ModeLineMinWidthRun,
+    #[cfg(not(any(test, feature = "test-support")))]
     run: ModeLineMinWidthRun,
 }
 
@@ -3413,7 +3474,7 @@ struct ModeLineFaceSpec {
 
 impl ModeLineRendered {
     #[inline(always)]
-    fn root_for_walk(&mut self) {
+    pub(crate) fn root_for_walk(&mut self) {
         if self.gc_roots.is_none() {
             self.gc_roots = Some(mode_line_gc::pin_rendered_scratch(self));
         }
@@ -3533,7 +3594,7 @@ impl ModeLineRendered {
         self.text.extend(mode_line_string_char_codes(string));
     }
 
-    fn append_string_value_preserving_props(&mut self, value: &Value) {
+    pub(crate) fn append_string_value_preserving_props(&mut self, value: &Value) {
         match value.as_lisp_string() {
             Some(string) => {
                 let char_offset = self.char_len();
@@ -3639,6 +3700,7 @@ impl ModeLineRendered {
         self.text.push(ch as u32);
     }
 
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
     fn char_len(&self) -> usize {
         self.text.len()
     }
@@ -3691,7 +3753,7 @@ impl ModeLineRendered {
         }
     }
 
-    fn note_display_min_width_transition(&mut self, props: Value) {
+    pub(crate) fn note_display_min_width_transition(&mut self, props: Value) {
         let Some(mut run) = mode_line_display_min_width(props) else {
             return;
         };
@@ -4223,8 +4285,9 @@ fn overlay_mode_line_property_map(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Default)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 enum ModeLinePlainFieldPath {
     #[default]
     Direct,
@@ -4233,24 +4296,26 @@ enum ModeLinePlainFieldPath {
 
 // Reuses the existing test-only selector slot; no product TLS or runtime
 // measurement selector. The guard restores the previous path on every exit.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static MODE_LINE_PLAIN_FIELD_OVERRIDE: std::cell::Cell<ModeLinePlainFieldPath> =
         const { std::cell::Cell::new(ModeLinePlainFieldPath::Direct) };
 }
 
-#[cfg(test)]
-fn set_mode_line_plain_field_for_test(path: ModeLinePlainFieldPath) -> ModeLinePlainFieldPath {
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn set_mode_line_plain_field_for_test(
+    path: ModeLinePlainFieldPath,
+) -> ModeLinePlainFieldPath {
     MODE_LINE_PLAIN_FIELD_OVERRIDE.with(|cell| cell.replace(path))
 }
 
-fn append_mode_line_percent_string_spec(
+pub(crate) fn append_mode_line_percent_string_spec(
     result: &mut ModeLineRendered,
     spec: &str,
     props_at_percent: &[(Value, Value)],
     field_width: i64,
 ) {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     match MODE_LINE_PLAIN_FIELD_OVERRIDE.with(std::cell::Cell::get) {
         ModeLinePlainFieldPath::Direct => {}
         ModeLinePlainFieldPath::Temporary => {
@@ -4312,7 +4377,7 @@ fn append_mode_line_percent_lisp_text_spec(
 }
 
 #[allow(clippy::too_many_arguments)] // split evaluator state avoids aliasing the full Context
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn append_mode_line_string_in_state<T: TargetPolicy>(
     vars: VariableView<'_>,
     dynamic: &[OrderedRuntimeBindingMap],
@@ -4543,7 +4608,7 @@ impl ModeLineTailCycle {
 /// - `(:eval FORM)`: evaluate FORM, use result as format
 /// - `(:propertize ELT PROPS...)`: process ELT and apply text properties
 /// - A cons `(SYMBOL . REST)`: if SYMBOL's value is non-nil, process REST
-fn format_mode_line_for_target<T: mode_line_walk::WalkPolicy>(
+pub(crate) fn format_mode_line_for_target<T: mode_line_walk::WalkPolicy>(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     pctx: &ModeLinePercentContext<T>,
     format: &Value,
@@ -4565,8 +4630,8 @@ fn format_mode_line_for_target<T: mode_line_walk::WalkPolicy>(
 }
 
 #[allow(dead_code, clippy::too_many_arguments)] // split-state mode-line compatibility seam
-#[cfg(test)]
-fn format_mode_line_recursive_in_state(
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn format_mode_line_recursive_in_state(
     vars: VariableView<'_>,
     dynamic: &[OrderedRuntimeBindingMap],
     buffers: &neovm_edit::buffer::BufferManager,
@@ -4741,8 +4806,8 @@ fn format_mode_line_recursive_in_state(
 }
 
 #[allow(clippy::too_many_arguments)] // split-state mode-line compatibility seam
-#[cfg(test)]
-fn format_mode_line_recursive_in_state_with_eval_rooted(
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn format_mode_line_recursive_in_state_with_eval_rooted(
     vars: VariableView<'_>,
     dynamic: &[OrderedRuntimeBindingMap],
     buffers: &neovm_edit::buffer::BufferManager,
@@ -8124,6 +8189,7 @@ fn approx_wrap_cols(ctx: &ApproxWindowDisplayContext) -> i64 {
     ctx.body_cols.saturating_sub(1).max(1)
 }
 
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 fn resolve_live_window_identity(
     frames: &crate::window::FrameManager,
     window: Option<&Value>,
@@ -9166,6 +9232,7 @@ fn get_fontified_property(ctx: &mut neovm_eval::emacs_core::eval::Context, pos: 
     )
 }
 
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 fn next_fontified_property_change(
     ctx: &mut neovm_eval::emacs_core::eval::Context,
     pos: i64,
@@ -9225,6 +9292,7 @@ fn next_fontified_property_change(
 /// Find the next effective nil position without retaining a cursor across
 /// Lisp. The common proof seats one bounded interval walk; the fallback
 /// resolves values at text/overlay stops, including aliases and categories.
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 fn next_unfontified_position(
     ctx: &mut neovm_eval::emacs_core::eval::Context,
     mut pos: i64,
@@ -9386,6 +9454,19 @@ pub fn ensure_fontified_for_redisplay(
     )
 }
 
+/// Test-support fence route (display upper-layer re-home): the private
+/// boundary-mode entry point stays private; this crate-visible wrapper is the
+/// only path the signed AUTHORITY delegate uses.
+pub(crate) fn ensure_fontified_for_redisplay_with_mode_for_test(
+    ctx: &mut neovm_eval::emacs_core::eval::Context,
+    buf_id: BufferId,
+    from_char: i64,
+    to_char: i64,
+    mode: FontificationBoundaryMode,
+) -> Result<RedisplayFontificationOutcome, Flow> {
+    ensure_fontified_for_redisplay_with_mode(ctx, buf_id, from_char, to_char, mode)
+}
+
 // Explicit mode keeps tests independent of shared environment/TLS mutation.
 fn ensure_fontified_for_redisplay_with_mode(
     ctx: &mut neovm_eval::emacs_core::eval::Context,
@@ -9425,6 +9506,18 @@ pub fn ensure_fontified_for_redisplay_with_demand(
         demand.abort();
     }
     result
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn ensure_fontified_for_redisplay_inner_for_test(
+    ctx: &mut neovm_eval::emacs_core::eval::Context,
+    buf_id: neovm_edit::buffer::BufferId,
+    from_char: i64,
+    to_char: i64,
+    mode: neovm_edit::emacs_core::textprop::FontificationBoundaryMode,
+    observer: &mut fontification_demand::RedisplayFontificationDemand,
+) -> Result<RedisplayFontificationOutcome, neovm_value::error::Flow> {
+    ensure_fontified_for_redisplay_inner(ctx, buf_id, from_char, to_char, mode, observer)
 }
 
 fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
@@ -10675,13 +10768,5 @@ mod mode_line_live_spine;
 mod mode_line_flow;
 
 #[cfg(test)]
-#[path = "tests/fontification_demand_test.rs"]
-mod fontification_demand_tests;
-
-#[cfg(test)]
 #[path = "tests/mode_line_fixed_symbols_test.rs"]
 mod mode_line_fixed_symbols;
-
-#[cfg(test)]
-#[path = "tests/mode_line_nested_point_test.rs"]
-mod mode_line_nested_point_test;

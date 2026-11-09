@@ -2,6 +2,7 @@
 //! behavior is compared dynamically by the separate live GNU padding oracle.
 use super::super::mode_line_numeric_padding::{self, PaddingRanges};
 use super::*;
+use crate::test_utils::mode_line_numeric_padding_shared_helpers::PaddingPolicyGuard;
 use std::ffi::OsStr;
 
 fn unmarked(ranges: &PaddingRanges, end: usize) -> Vec<std::ops::Range<usize>> {
@@ -50,18 +51,6 @@ fn mode_line_numeric_padding_stretch_insertion_remains_unmarked() {
     assert_eq!(unmarked(&ranges, 16), vec![0..3, 5..7, 10..12, 14..16]);
     ranges.insert_unmarked(0, 1);
     assert_eq!(unmarked(&ranges, 17), vec![0..4, 6..8, 11..13, 15..17]);
-}
-
-pub(super) struct PaddingPolicyGuard(Option<bool>);
-impl PaddingPolicyGuard {
-    pub(super) fn set(value: bool) -> Self {
-        Self(mode_line_numeric_padding::force_for_test(Some(value)))
-    }
-}
-impl Drop for PaddingPolicyGuard {
-    fn drop(&mut self) {
-        mode_line_numeric_padding::force_for_test(self.0);
-    }
 }
 
 fn width_props(eval: &mut Context, width: usize, help: &str) -> Value {

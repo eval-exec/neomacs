@@ -13,6 +13,7 @@ use neovm_value::error::{FlowKind, FlowResultExt};
 
 /// Immutable process configuration; shared by mutators, contains no Lisp state.
 #[inline]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(super) fn enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| {
@@ -99,7 +100,7 @@ fn signal_message(form: &Value, data: &neovm_value::error::SignalData) -> String
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn split_eval_result(form: &Value, result: EvalResult) -> EvalResult {
     if !enabled() || result.is_ok() {
         return result;
@@ -139,6 +140,7 @@ pub(super) fn handle_display_error(eval: &mut neovm_eval::emacs_core::eval::Cont
 /// Fformat_mode_line's window/point unwind data. Owned by one Context's
 /// mutator for this call. Its marker is pinned to that Context's specpdl;
 /// neither the selection token nor its Lisp state is shared between mutators.
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(super) struct FormatSelection {
     original_window: Option<WindowId>,
     target_selection: (Option<FrameId>, Option<(FrameId, WindowId)>),

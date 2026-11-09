@@ -7,7 +7,7 @@ use std::ops::Range;
 /// cached and independent mutators may read the selector concurrently.
 #[inline]
 pub(super) fn enabled() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(enabled) = OVERRIDE.with(std::cell::Cell::get) {
         return enabled;
     }
@@ -28,10 +28,10 @@ pub(super) fn parse(value: Option<&OsStr>) -> bool {
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! { static OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) }; }
-#[cfg(test)]
-pub(super) fn force_for_test(value: Option<bool>) -> Option<bool> {
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn force_for_test(value: Option<bool>) -> Option<bool> {
     OVERRIDE.with(|v| v.replace(value))
 }
 

@@ -29,35 +29,6 @@ fn font_resize_propagates_nonlocal_exits_from_window_minimum_policy() {
 }
 
 #[test]
-fn explicit_frame_minimum_overrides_inhibited_font_resize_on_only_that_axis() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let buffer = eval.edit.buffers.create_buffer("*font-minimum*");
-    let fid = eval
-        .frame_manager_mut()
-        .create_frame("minimum", 800, 600, buffer);
-    let frame = eval.frame_manager_mut().get_mut(fid).unwrap();
-    frame.set_window_system(Some(Value::symbol("neo")));
-    frame.char_width = 8.0;
-    frame.char_height = 16.0;
-    let host = RecordingDisplayHost::with_resolved_frame_font(remapped_mono_font_metrics());
-    let requests = host.resized.clone();
-    eval.set_display_host(Box::new(host));
-    eval.eval_str(
-        r#"(progn
-       (modify-frame-parameters nil '((min-width . 120)))
-       (setq frame-inhibit-implied-resize t)
-       (internal-set-lisp-face-attribute 'default :font "Remapped Mono-24" nil))"#,
-    )
-    .unwrap();
-    let requests = requests.borrow();
-    let request = requests
-        .last()
-        .expect("minimum must trigger a native resize");
-    assert_eq!(request.width, 120 * 16);
-    assert_eq!(request.height, 600);
-}
-
-#[test]
 fn native_resize_counts_the_entire_grown_minibuffer_in_frame_height() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buffer = eval.edit.buffers.create_buffer("*grown-minibuffer*");

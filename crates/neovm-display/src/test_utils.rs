@@ -1494,3 +1494,1295 @@ pub mod mock_redisplay {
         }
     }
 }
+
+/// Shared upper-layer re-home projection setup (peer P1 precision): the
+/// caller supplies the harness-booted Context, so display's unit runtime and
+/// core's new_context use the same projection lines from one home.
+pub mod upper_layer_helpers {
+    use crate::window::DisplayFrameManagerExt;
+    use crate::window::{FrameId, WindowId};
+    use neovm_edit::buffer::BufferId;
+    use neovm_eval::emacs_core::eval::Context;
+
+    pub fn attempt_freshness_projections(
+        mut eval: Context,
+    ) -> (Context, BufferId, FrameId, WindowId) {
+        let live = eval.buffer_manager().current_buffer().unwrap().id();
+        let frame = eval
+            .frame_manager_mut()
+            .create_frame("attempt-reuse", 800, 600, live);
+        let window = eval.frame_manager().get(frame).unwrap().selected_window;
+        (eval, live, frame, window)
+    }
+
+    pub fn buffer_layout_projection_setup(mut eval: Context) -> (Context, BufferId) {
+        eval.eval_str("(setq fontification-functions nil)").unwrap();
+        let buffer = eval.buffer_manager().current_buffer().unwrap().id();
+        (eval, buffer)
+    }
+}
+
+/// Shared window-command upper-layer harness helpers (peer P1 precision): the
+/// real helper bodies live here once; the caller supplies the harness-booted
+/// Context, so display's unit-runtime tests and the core re-home share them.
+pub mod window_cmds_upper_layer_helpers {
+    use crate::window::DisplayFrameExt;
+    use crate::window::DisplayFrameManagerExt;
+    use neovm_eval::emacs_core::eval::Context;
+    use neovm_eval::emacs_core::print::format_eval_result;
+    use neovm_value::value::Value;
+
+    pub fn eval_with_frame(make_context: impl FnOnce() -> Context, src: &str) -> Vec<String> {
+        let mut ev = make_context();
+        // Create a buffer for the initial window.
+        let buf = ev.edit.buffers.create_buffer("*scratch*");
+        ev.edit.buffers.set_current(buf);
+        // Create a frame so window/frame builtins have something to work with.
+        ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
+        // Tests that exercise `make-frame` need a usable terminal (production
+        // --batch deliberately has none, so frame creation errors like GNU).
+        crate::emacs_core::terminal::pure::mark_selected_terminal_usable_for_test(&ev);
+        ev.eval_str_each(src)
+            .iter()
+            .map(format_eval_result)
+            .collect()
+    }
+
+    pub fn eval_one_with_frame(make_context: impl FnOnce() -> Context, src: &str) -> String {
+        eval_with_frame(make_context, src)
+            .into_iter()
+            .next()
+            .unwrap()
+    }
+
+    pub fn eval_with_gui_frame(make_context: impl FnOnce() -> Context, src: &str) -> Vec<String> {
+        let mut ev = make_context();
+        let buf = ev.edit.buffers.create_buffer("*scratch*");
+        ev.edit.buffers.set_current(buf);
+        let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
+        {
+            let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
+            frame.set_window_system(Some(Value::symbol("neo")));
+        }
+        ev.eval_str_each(src)
+            .iter()
+            .map(format_eval_result)
+            .collect()
+    }
+}
+
+/// Shared xfaces upper-layer helpers (peer P1 precision): real bodies
+/// live here once; the caller supplies the harness-booted Context where one
+/// is constructed.
+pub mod xfaces_upper_layer_helpers {
+    use crate::emacs_core::display_host::{FontResolveRequest, FrameFontRequest, FrameFontSize};
+    use neovm_eval::emacs_core::eval::{DisplayHost, GuiFrameHostRequest, ResolvedFontMatch};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    pub fn frame_font_at_height(height_tenths: i32) -> ResolvedFrameFont {
+        frame_font_at_height_with_line_height(height_tenths, 18)
+    }
+
+    pub fn frame_font_at_height_with_line_height(
+        height_tenths: i32,
+        line_height: i32,
+    ) -> ResolvedFrameFont {
+        ResolvedFrameFont {
+            font: neovm_eval::emacs_core::eval::test_resolved_opened_font(
+                "Monospace",
+                None,
+                None,
+                FontWeight::NORMAL,
+                FontSlant::Normal,
+                FontWidth::Normal,
+                Some("Monospace-Regular"),
+                FontPxProbeResult {
+                    pixel_size: 15,
+                    height: line_height,
+                    ascent: 14,
+                    descent: 4,
+                    max_width: 9,
+                    space_width: 8,
+                    average_width: 8,
+                },
+                None,
+            ),
+            height_tenths,
+        }
+    }
+
+    pub struct CapturingFrameFontDisplayHost {
+        pub(crate) requested_size: Rc<Cell<FrameFontSize>>,
+        pub(crate) realized: ResolvedFrameFont,
+    }
+
+    pub struct FrameSpecificFontDisplayHost {
+        pub(crate) selected_frame: FrameId,
+        pub(crate) requests: Rc<RefCell<Vec<FrameId>>>,
+    }
+
+    impl DisplayHost for FrameSpecificFontDisplayHost {
+        fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn resolve_frame_font(
+            &mut self,
+            frame_id: FrameId,
+            request: FrameFontRequest,
+        ) -> Result<Option<ResolvedFrameFont>, String> {
+            assert_eq!(
+                request.size(),
+                FrameFontSize::pixels(15).expect("positive pixel size")
+            );
+            self.requests.borrow_mut().push(frame_id);
+            let height_tenths = if frame_id == self.selected_frame {
+                // Cocoa-like logical coordinates.
+                150
+            } else {
+                // Windows/Wayland-like logical coordinates.
+                113
+            };
+            Ok(Some(frame_font_at_height(height_tenths)))
+        }
+    }
+
+    impl DisplayHost for CapturingFrameFontDisplayHost {
+        fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn resolve_frame_font(
+            &mut self,
+            _frame_id: FrameId,
+            request: FrameFontRequest,
+        ) -> Result<Option<ResolvedFrameFont>, String> {
+            self.requested_size.set(request.size());
+            Ok(Some(self.realized.clone()))
+        }
+    }
+
+    pub struct LiveFrameFontDisplayHost {
+        pub(crate) realized: Option<ResolvedFrameFont>,
+    }
+
+    impl DisplayHost for LiveFrameFontDisplayHost {
+        fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn resolve_frame_font(
+            &mut self,
+            _frame_id: crate::window::FrameId,
+            _request: crate::emacs_core::display_host::FrameFontRequest,
+        ) -> Result<Option<ResolvedFrameFont>, String> {
+            Ok(self.realized.clone())
+        }
+
+        fn resolve_font_for_char(
+            &mut self,
+            request: FontResolveRequest,
+        ) -> Result<Option<ResolvedFontMatch>, String> {
+            Ok(self.realized.clone().map(|resolved| ResolvedFontMatch {
+                font: resolved.font,
+                glyph_code: Some(request.character.code()),
+            }))
+        }
+    }
+    use crate::emacs_core::font::font_spec;
+    use crate::emacs_core::window_cmds::ensure_selected_frame_id;
+    use crate::face::{FontSlant, FontWeight, FontWidth};
+    use crate::window::DisplayFrameManagerExt;
+    use crate::window::FrameId;
+    use neovm_eval::emacs_core::eval::Context;
+    use neovm_eval::emacs_core::eval::{FontPxProbeResult, ResolvedFrameFont};
+    use neovm_value::value::Value;
+
+    pub fn integer_font_spec() -> Value {
+        font_spec(vec![
+            Value::keyword("family"),
+            Value::string("Monospace"),
+            Value::keyword("size"),
+            Value::fixnum(15),
+        ])
+        .expect("create font spec")
+    }
+    pub fn ensure_selected_gui_frame(eval: &mut Context) -> FrameId {
+        let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(eval);
+        let frame = eval
+            .frame_manager_mut()
+            .get_mut(frame_id)
+            .expect("selected frame");
+        frame.set_window_system(Some(Value::symbol("neo")));
+        frame_id
+    }
+    pub fn resolved_frame_font(
+        family: &str,
+        postscript_name: &str,
+        height_tenths: i32,
+        metrics: FontPxProbeResult,
+    ) -> ResolvedFrameFont {
+        ResolvedFrameFont {
+            font: neovm_eval::emacs_core::eval::test_resolved_opened_font(
+                family,
+                None,
+                None,
+                FontWeight::NORMAL,
+                FontSlant::Normal,
+                FontWidth::Normal,
+                Some(postscript_name),
+                metrics,
+                None,
+            ),
+            height_tenths,
+        }
+    }
+    pub fn font_remapping_context(make_context: impl FnOnce() -> Context) -> Context {
+        let mut eval = make_context();
+        let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+        eval.frame_manager_mut()
+            .get_mut(frame)
+            .unwrap()
+            .set_window_system(Some(neovm_value::value::Value::symbol("neo")));
+        eval
+    }
+}
+
+/// Shared upper-layer helpers for mode_line_gc_roots_test (peer P1 precision):
+/// real bodies live here once; callers supply the harness Context where needed.
+pub mod mode_line_gc_roots_test_upper_layer_helpers {
+    use crate::emacs_core::xdisp::format_mode_line_for_display_with_sources;
+    use neovm_value::value::Value;
+    // Inspect every retained cons before following it; an added formatter-owned
+    // property may precede the fixture key. Property order is not an ownership
+    // contract, and the new ordinal's spine must survive collection too.
+    pub fn assert_owned_property(
+        eval: &Context,
+        mut plist: Value,
+        property: Value,
+        expected: Value,
+    ) {
+        let mut found = false;
+        while plist.is_cons() {
+            assert!(
+                eval.tagged_heap().owns_heap_value_for_test(plist),
+                "retained property name cell"
+            );
+            let name = plist.cons_car();
+            assert_ne!(
+                name.bits(),
+                Value::DEAD.bits(),
+                "a retained property name was swept"
+            );
+            let rest = plist.cons_cdr();
+            assert!(rest.is_cons(), "retained property value cell");
+            assert!(
+                eval.tagged_heap().owns_heap_value_for_test(rest),
+                "retained property value ownership"
+            );
+            let value = rest.cons_car();
+            assert_ne!(
+                value.bits(),
+                Value::DEAD.bits(),
+                "a retained property value was swept"
+            );
+            if name.bits() == property.bits() {
+                assert_eq!(value.bits(), expected.bits());
+                found = true;
+            }
+            plist = rest.cons_cdr();
+        }
+        assert!(plist.is_nil(), "proper retained property list");
+        assert!(
+            found,
+            "fixture property remains in the complete retained plist"
+        );
+    }
+
+    #[derive(Clone, Copy)]
+    pub enum PropertySource {
+        PropertizeElement,
+        CopiedString,
+        NestedEval,
+        FreshEvalString,
+        DetachedFormatElements,
+    }
+
+    #[derive(Clone, Copy)]
+    pub enum FormatEntry {
+        LispString,
+        Display,
+    }
+    use neovm_eval::emacs_core::eval::Context;
+    pub fn assert_accumulated_property_survives(
+        make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+        generational: bool,
+        source: PropertySource,
+        entry: FormatEntry,
+    ) {
+        // Nextest runs each case in a fresh process. The constructor reads this
+        // knob once; the explicit collection inside :eval is the trigger here.
+        unsafe {
+            std::env::set_var(
+                "NEOVM_GC_GENERATIONAL",
+                if generational { "1" } else { "0" },
+            );
+        }
+        crate::test_utils::init_test_tracing();
+        let mut eval = make_context();
+        eval.gc_stress = false;
+        eval.set_gc_threshold(usize::MAX);
+        eval.set_variable("noninteractive", Value::NIL);
+        eval.gc_collect_exact();
+
+        // Keep the input in the actual obarray, independently of the formatter's
+        // Rust locals. The copied-string case also keeps the ORIGINAL plist alive;
+        // only the freshly copied destination spine needs an additional root.
+        let setup = match source {
+            PropertySource::PropertizeElement => {
+                "(setq u34-mode-line-gc-format
+                        '((:propertize \"A\" u34-mode-line-gc-property 73)
+                          (:eval (progn (garbage-collect) \"B\"))))"
+            }
+            PropertySource::CopiedString => {
+                "(setq u34-mode-line-gc-format
+                        (list (propertize \"A\" 'u34-mode-line-gc-property 73)
+                              '(:eval (progn (garbage-collect) \"B\"))))"
+            }
+            PropertySource::NestedEval => {
+                "(setq u34-mode-line-gc-format
+                        '((:propertize \"A\" u34-mode-line-gc-property 73)
+                          (1 (:propertize
+                                ((:eval (progn (garbage-collect) \"B\")))
+                                face bold))))"
+            }
+            PropertySource::FreshEvalString => {
+                // Add no source span after collection: a missing source root must
+                // reach the ownership probe before any source-value comparison.
+                "(setq u34-mode-line-gc-format
+                        '((:eval (propertize (concat \"A\")
+                                             'u34-mode-line-gc-property 73))
+                          (:eval (progn (garbage-collect) \"\"))))"
+            }
+            PropertySource::DetachedFormatElements => {
+                "(setq u34-mode-line-gc-format
+                        (list '(:propertize \"A\" u34-mode-line-gc-property 73)
+                              '(:eval (progn
+                                        (setcdr (cdr u34-mode-line-gc-format) nil)
+                                        (garbage-collect)
+                                        \"\"))
+                              (concat \"B\")))"
+            }
+        };
+        eval.eval_str(setup)
+            .expect("install rooted mode-line format");
+        let format = eval
+            .obarray_view()
+            .symbol_value_copied("u34-mode-line-gc-format")
+            .expect("installed mode-line format");
+        let before = eval.gc_count;
+        let (rendered, sources) = match entry {
+            FormatEntry::LispString => {
+                // The Lisp entry runs the same evaluator-backed recursive walk.
+                let value = eval
+                    .eval_str("(format-mode-line u34-mode-line-gc-format)")
+                    .expect("format-mode-line with a collecting :eval");
+                (value, Vec::new())
+            }
+            FormatEntry::Display => {
+                let output = format_mode_line_for_display_with_sources(
+                    &mut eval,
+                    format,
+                    Value::NIL,
+                    Value::NIL,
+                    80,
+                );
+                let sources = output
+                    .source_spans()
+                    .iter()
+                    .map(|span| span.source())
+                    .collect::<Vec<_>>();
+                (output.value(), sources)
+            }
+        };
+        assert_eq!(eval.gc_count, before + 1, "the later :eval must collect");
+        let expected = if matches!(
+            source,
+            PropertySource::DetachedFormatElements | PropertySource::FreshEvalString
+        ) {
+            "A"
+        } else {
+            "AB"
+        };
+        assert_eq!(rendered.as_utf8_str(), Some(expected));
+        let string = rendered.as_lisp_string().expect("rendered string");
+        let runs = string.intervals().object_interval_plist_runs_for_char_len(
+            neovm_edit::buffer::CharLen::new(expected.len()),
+        );
+        let first = runs.first().expect("retained first interval");
+        assert_eq!(first.start(), neovm_edit::buffer::CharPos0::ZERO);
+        let plist = first.plist();
+        assert!(plist.is_cons(), "the property spine must be retained");
+
+        assert_owned_property(
+            &eval,
+            plist,
+            Value::symbol("u34-mode-line-gc-property"),
+            Value::fixnum(73),
+        );
+        // A previous :eval can contribute a fresh source string that is retained
+        // only in the display sidecar after its temporary evaluator root ends.
+        // Check the arena's allocation bitmap without reading the string payload.
+        // The final rendered string is the only string allocation after :eval's
+        // collection; reject its address too, in case it reused a swept source.
+        for source_value in sources {
+            assert_ne!(
+                source_value.bits(),
+                rendered.bits(),
+                "a swept mode-line source was reused for the rendered string"
+            );
+            assert!(
+                eval.tagged_heap().owns_heap_value_for_test(source_value),
+                "the accumulated source string was swept during the later :eval"
+            );
+        }
+    }
+}
+
+/// Shared upper-layer helpers for mode_line_flow_test (peer P1 precision):
+/// real bodies live here once; callers supply the harness Context where needed.
+pub mod mode_line_flow_test_upper_layer_helpers {
+    use neovm_eval::emacs_core::eval::Context;
+    use neovm_eval::emacs_core::eval::save_scratch_gc_roots;
+    use neovm_value::value::Value;
+    pub fn context(
+        make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+    ) -> Context {
+        // nextest runs each test in its own process. This process knob contains
+        // no Lisp state and is shared read-only by every mutator after first use.
+        if std::env::var_os("NEOVM_MODE_LINE_FLOW").is_none() {
+            unsafe { std::env::set_var("NEOVM_MODE_LINE_FLOW", "1") };
+        }
+        crate::test_utils::init_test_tracing();
+        let mut eval = make_context();
+        eval.set_variable("noninteractive", Value::NIL);
+        eval
+    }
+}
+
+/// Shared upper-layer helpers for mode_line_incremental_lifetimes_test (peer P1 precision):
+/// real bodies live here once; callers supply the harness Context where needed.
+pub mod mode_line_incremental_lifetimes_test_upper_layer_helpers {
+    use crate::test_utils::xdisp_test_upper_layer_helpers::interactive_context;
+    use neovm_edit::buffer::CharLen;
+    use neovm_eval::emacs_core::eval::Context;
+    use neovm_eval::emacs_core::eval::save_scratch_gc_roots;
+    use neovm_value::value::Value;
+    use neovm_value::value::get_string_text_properties_table_for_value;
+    pub fn assert_live_interval_plists(eval: &Context, value: Value) {
+        let string = value.as_lisp_string().expect("formatted string");
+        let Some(table) = get_string_text_properties_table_for_value(value) else {
+            return;
+        };
+        for run in table.object_interval_plist_runs_for_char_len(CharLen::new(string.schars())) {
+            let mut plist = run.plist();
+            while plist.is_cons() {
+                assert!(
+                    eval.tagged_heap().owns_heap_value_for_test(plist),
+                    "GC reclaimed an accumulated plist cell"
+                );
+                assert!(
+                    !plist.cons_car().is_dead(),
+                    "accumulated property name was swept"
+                );
+                let tail = plist.cons_cdr();
+                if !tail.is_cons() {
+                    break;
+                }
+                assert!(
+                    eval.tagged_heap().owns_heap_value_for_test(tail),
+                    "GC reclaimed an accumulated property value cell"
+                );
+                assert!(
+                    !tail.cons_car().is_dead(),
+                    "accumulated property payload was swept"
+                );
+                plist = tail.cons_cdr();
+            }
+        }
+    }
+    pub fn context(
+        make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+    ) -> Context {
+        let mut eval = interactive_context(make_context);
+        eval.gc_stress = false;
+        eval.set_gc_threshold(usize::MAX);
+        eval
+    }
+}
+
+/// Shared upper-layer helpers for mode_line_element_attribution_test (peer P1 precision):
+/// real bodies live here once; callers supply the harness Context where needed.
+pub mod mode_line_element_attribution_test_upper_layer_helpers {
+    use crate::window::DisplayFrameManagerExt;
+    use neovm_eval::emacs_core::eval::Context;
+    use neovm_eval::emacs_core::eval::save_scratch_gc_roots;
+    use neovm_value::value::Value;
+    pub fn context(
+        make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+    ) -> Context {
+        crate::test_utils::init_test_tracing();
+        let mut eval = make_context();
+        eval.gc_stress = false;
+        eval.set_gc_threshold(usize::MAX);
+        eval.set_variable("noninteractive", Value::NIL);
+        let buffer = eval
+            .edit
+            .buffers
+            .current_buffer_id()
+            .expect("current buffer");
+        let frame = eval
+            .frame_manager_mut()
+            .create_frame("element-attribution", 800, 600, buffer);
+        assert!(eval.frame_manager_mut().select_frame(frame));
+        eval.eval_str(
+            r#"(defvar ep30-events nil)
+               (defvar ep30-tail "OLD")
+               (defvar ep30-live-list nil)
+               (defvar ep30-effects 0)
+               (defvar ep30-inner nil)
+               (defvar ep30-inner-format '("i" "j"))
+               (defvar ep30-format-string nil)
+               (defvar ep30-collect nil)
+               (fset 'ep30-callback '(lambda (kind)
+                 (setq ep30-events (cons (list 'enter kind) ep30-events))
+                 (prog1
+                     (cond
+                      ((eq kind 'nested) "EV")
+                      ((eq kind 'mutate-value) (setq ep30-tail "NEW")
+                       (if ep30-collect (garbage-collect)) "M")
+                      ((eq kind 'mutate-spine)
+                       (setcar (cdr (cdr ep30-live-list)) "NEW")
+                       (if ep30-collect (garbage-collect)) "M")
+                      ((eq kind 'reenter)
+                       (setq ep30-inner (format-mode-line ep30-inner-format)) "E")
+                      ((eq kind 'reenter-noprop)
+                       (setq ep30-inner (format-mode-line '("i" "j") 0)) "E")
+                      ((eq kind 'signal) (signal 'error '("EP30 expected signal")))
+                      ((eq kind 'throw) (throw 'ep30-escape 'ep30-thrown))
+                      ((eq kind 'reenter-throw)
+                       (format-mode-line '("i" (:eval (ep30-callback 'throw)) "j")))
+                      ((eq kind 'reenter-caught-throw)
+                       (setq ep30-events
+                             (cons
+                              (list 'inner-caught
+                                    (catch 'ep30-inner
+                                      (format-mode-line
+                                       '("i" "j" "k" (:eval (throw 'ep30-inner 'escaped)) "l"))))
+                              ep30-events))
+                       "E")
+                      ((eq kind 'count) (setq ep30-effects (1+ ep30-effects)) "Q")
+                      (t (error "Unknown attribution callback: %S" kind)))
+                   (setq ep30-events (cons (list 'return kind) ep30-events)))))"#,
+        )
+        .expect("GNU callback fixture");
+        eval
+    }
+    pub fn strict(eval: &mut Context, expression: &str, gnu: &str) {
+        let roots = save_scratch_gc_roots();
+        eval.eval_str(&format!("(setq ep30-actual {expression})"))
+            .expect("format-mode-line returns");
+        assert_eq!(
+            save_scratch_gc_roots(),
+            roots,
+            "temporary roots: {expression}"
+        );
+        let equal = eval
+            .eval_str(&format!("(equal-including-properties ep30-actual '{gnu})"))
+            .expect("strict property comparison");
+        assert!(
+            equal.is_t(),
+            "GNU properties differ for {expression}: {:?}",
+            eval.eval_str("(prin1-to-string ep30-actual)")
+                .map(|value| value.as_utf8_str().map(str::to_owned))
+        );
+    }
+}
+
+/// Shared upper-layer helpers for mode_line_plain_field_test (peer P1 precision):
+/// real bodies live here once; callers supply the harness Context where needed.
+pub mod mode_line_plain_field_test_upper_layer_helpers {
+    use crate::emacs_core::xdisp::ModeLinePlainFieldPath;
+    use crate::emacs_core::xdisp::format_mode_line_for_display_with_sources;
+    use crate::test_utils::xdisp_test_upper_layer_helpers::interactive_context;
+    use crate::window::DisplayFrameManagerExt;
+    use neovm_eval::emacs_core::eval::Context;
+    use neovm_value::value::Value;
+
+    #[derive(Clone, Copy, Debug)]
+    pub enum PropertyRead {
+        Copied,
+        Borrowed,
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct StringTrace {
+        bytes: Vec<u8>,
+        multibyte: bool,
+        char_len: usize,
+        interval_plists: String,
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct SourceTrace {
+        output_start: usize,
+        output_end: usize,
+        source_start: usize,
+        source_ordinal: usize,
+        is_root: bool,
+        is_input_source: bool,
+        text: StringTrace,
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct OutputTrace {
+        text: StringTrace,
+        sources: Vec<SourceTrace>,
+        eval_count: i64,
+        point: usize,
+    }
+
+    #[derive(Clone, Copy)]
+    pub enum PropertyOrder {
+        Exact,
+        Canonical,
+    }
+    pub fn compare(
+        mut make_context: impl FnMut() -> neovm_eval::emacs_core::eval::Context,
+        setup: &str,
+    ) {
+        for properties in [PropertyRead::Copied, PropertyRead::Borrowed] {
+            let temporary = output_trace(
+                || make_context(),
+                setup,
+                ModeLinePlainFieldPath::Temporary,
+                properties,
+                PropertyOrder::Canonical,
+            );
+            let direct = output_trace(
+                || make_context(),
+                setup,
+                ModeLinePlainFieldPath::Direct,
+                properties,
+                PropertyOrder::Canonical,
+            );
+            assert_eq!(
+                direct, temporary,
+                "properties={properties:?}; format setup: {setup}"
+            );
+        }
+    }
+    pub fn output_trace(
+        make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+        setup: &str,
+        path: ModeLinePlainFieldPath,
+        properties: PropertyRead,
+        order: PropertyOrder,
+    ) -> OutputTrace {
+        crate::test_utils::init_test_tracing();
+        let _guard = crate::test_support::authority::plain_field_guard_for_test(path, properties);
+        let mut eval = interactive_context(make_context);
+        let buffer_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id;
+        let frame_id = eval
+            .frame_manager_mut()
+            .create_frame("plain-field", 800, 600, buffer_id);
+        let window_id = eval
+            .frame_manager()
+            .get(frame_id)
+            .expect("frame")
+            .selected_window;
+        eval.edit
+            .buffers
+            .get_mut(buffer_id)
+            .expect("buffer")
+            .insert("first\nsecond\n");
+        eval.eval_str("(setq d5-plain-field-evals 0)")
+            .expect("eval counter");
+        let raw = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
+            b'A', 0xff, b'B', b'%', b'b', b'Z', 0x80,
+        ]));
+        eval.set_variable("d5-plain-field-raw", raw);
+        let format = eval.eval_str(setup).expect("format setup");
+        eval.set_variable("d5-plain-field-format", format);
+        let output = format_mode_line_for_display_with_sources(
+            &mut eval,
+            format,
+            Value::make_window(window_id.0),
+            Value::make_buffer(buffer_id),
+            24,
+        );
+        // Fresh :eval strings are owned only by the output sidecar. Root the
+        // complete sidecar before introspection calls that could collect.
+        let root_scope = eval.save_specpdl_roots();
+        eval.push_specpdl_root(output.value());
+        for span in output.source_spans() {
+            eval.push_specpdl_root(span.source());
+        }
+        let input_source = eval
+            .obarray_view()
+            .symbol_value_copied("d5-plain-field-source");
+        let mut identities = Vec::new();
+        let text = string_trace(&mut eval, output.value(), order);
+        let sources = output
+            .source_spans()
+            .iter()
+            .map(|span| {
+                let source = span.source();
+                let source_ordinal =
+                    if let Some(index) = identities.iter().position(|seen| *seen == source) {
+                        index
+                    } else {
+                        identities.push(source);
+                        identities.len() - 1
+                    };
+                SourceTrace {
+                    output_start: span.output_start(),
+                    output_end: span.output_end(),
+                    source_start: span.source_start(),
+                    source_ordinal,
+                    is_root: source == output.value(),
+                    is_input_source: input_source == Some(source),
+                    text: string_trace(&mut eval, source, PropertyOrder::Exact),
+                }
+            })
+            .collect();
+        let eval_count = eval
+            .obarray_view()
+            .symbol_value_copied("d5-plain-field-evals")
+            .and_then(Value::as_fixnum)
+            .expect("eval counter");
+        let point = eval
+            .edit
+            .buffers
+            .get(buffer_id)
+            .expect("buffer")
+            .point_char_pos()
+            .get();
+        eval.restore_specpdl_roots(root_scope);
+        OutputTrace {
+            text,
+            sources,
+            eval_count,
+            point,
+        }
+    }
+    pub fn string_trace(eval: &mut Context, value: Value, order: PropertyOrder) -> StringTrace {
+        let string = value.as_lisp_string().expect("mode-line string");
+        let bytes = string.as_bytes().to_vec();
+        let multibyte = string.is_multibyte();
+        let char_len = string.schars();
+        // No interval borrow crosses these Lisp calls. Literal-only cases keep
+        // exact plist order. Percent expansion's existing HashMap overlay order
+        // is random even for two copied-baseline walks, so those comparisons sort
+        // property pairs within each output run, retaining boundaries and values.
+        // Original source strings always use Exact below.
+        eval.set_variable("d5-plain-field-result", value);
+        let inspect = match order {
+            PropertyOrder::Exact => "(prin1-to-string (object-intervals d5-plain-field-result))",
+            PropertyOrder::Canonical => {
+                r#"(prin1-to-string
+              (mapcar
+               (lambda (run)
+                 (let ((plist (nth 2 run)) (pairs nil))
+                   (while plist
+                     (setq pairs (cons (cons (car plist) (car (cdr plist))) pairs))
+                     (setq plist (cdr (cdr plist))))
+                   (list (car run) (car (cdr run))
+                         (apply #'append
+                                (mapcar (lambda (pair) (list (car pair) (cdr pair)))
+                                        (sort pairs
+                                              (lambda (a b)
+                                                (string-lessp (prin1-to-string (car a))
+                                                              (prin1-to-string (car b))))))))))
+               (object-intervals d5-plain-field-result)))"#
+            }
+        };
+        let interval_plists = eval
+            .eval_str(inspect)
+            .expect("object intervals")
+            .as_utf8_str()
+            .expect("printed intervals")
+            .to_owned();
+        StringTrace {
+            bytes,
+            multibyte,
+            char_len,
+            interval_plists,
+        }
+    }
+}
+
+/// Shared upper-layer helpers for mode_line_min_width_boundary_test (peer P1 precision):
+/// real bodies live here once; callers supply the harness Context where needed.
+pub mod mode_line_min_width_boundary_test_upper_layer_helpers {
+    use crate::test_utils::xdisp_test_upper_layer_helpers::utf8_locale_terminal;
+    use crate::window::DisplayFrameManagerExt;
+    use neovm_eval::emacs_core::eval::Context;
+    pub const GNU_ROWS: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/emacs_core/display/xdisp/tests/mode_line_min_width_boundary_gnu_rows.tsv"
+    ));
+    /// Give the terminal UTF-8 keyboard and terminal codings, as mule.el's
+    /// `set-locale-environment` does under a UTF-8 locale.  A bare context has
+    /// GNU `create_terminal`'s defaults (`no-conversion` and `undecided`), since
+    /// no startup Lisp has run.
+    use crate::emacs_core::xdisp::format_mode_line_for_display_with_sources;
+    use crate::test_utils::mode_line_numeric_padding_shared_helpers::PaddingPolicyGuard;
+    use crate::test_utils::xdisp_test_upper_layer_helpers::interactive_context;
+    use neovm_value::value::Value;
+    pub fn compare_fresh_gnu_row(
+        make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+        kind: &str,
+    ) {
+        crate::test_utils::init_test_tracing();
+        let _policy = PaddingPolicyGuard::set(true);
+        let mut eval = interactive_context(make_context);
+        utf8_locale_terminal(&mut eval);
+        let buffer_id = eval.edit.buffers.current_buffer_id().expect("buffer");
+        let frame_id = eval
+            .frame_manager_mut()
+            .create_frame("D5-F", 800, 600, buffer_id);
+        let window_id = eval
+            .frame_manager()
+            .get(frame_id)
+            .expect("frame")
+            .selected_window;
+        eval.edit
+            .buffers
+            .set_buffer_local_property(buffer_id, "mode-name", Value::string("MODE"))
+            .expect("set mode name");
+        eval.edit
+            .buffers
+            .set_buffer_local_property(
+                buffer_id,
+                "buffer-file-coding-system",
+                Value::symbol("utf-8-unix"),
+            )
+            .expect("set buffer coding");
+        eval.obarray_mut()
+            .set_symbol_value("eol-mnemonic-unix", Value::string("EOL"));
+        let format = eval.eval_str(format_for(kind)).expect("GNU format setup");
+        let output = format_mode_line_for_display_with_sources(
+            &mut eval,
+            format,
+            Value::make_window(window_id.0),
+            Value::make_buffer(buffer_id),
+            120,
+        );
+        assert_eq!(output.value().as_utf8_str(), Some(expected(kind)), "{kind}");
+        let closing = output.source_spans().last().expect("closing source");
+        assert_eq!(closing.source().as_utf8_str(), Some("|"));
+        assert_eq!(closing.output_start(), expected(kind).chars().count() - 1);
+    }
+    pub fn expected(kind: &str) -> &str {
+        GNU_ROWS
+            .lines()
+            .filter_map(|line| line.split_once('\t'))
+            .find_map(|(name, row)| (name == kind).then_some(row))
+            .expect("fresh GNU case exists")
+    }
+    pub fn format_for(kind: &str) -> &'static str {
+        match kind {
+            "mode-name" => r#"'((:propertize "AB" display (min-width (10.0))) "%m" "|")"#,
+            "frame-name" => r#"'((:propertize "AB" display (min-width (10.0))) "%F" "|")"#,
+            "eol-indicator" => r#"'((:propertize "AB" display (min-width (10.0))) "%Z" "|")"#,
+            "other-source-literal" => {
+                r#"'((:propertize "AB" display (min-width (10.0))) "%l rest" "|")"#
+            }
+            "same-source-predecessor" => {
+                r#"(let* ((width (list 10.0))
+                           (display (list 'min-width width))
+                           (source (copy-sequence "%m rest")))
+                      (put-text-property 0 2 'display display source)
+                      (list (list :propertize "AB" 'display display) source "|"))"#
+            }
+            "other-identity-predecessor" => {
+                r#"(let* ((width (list 10.0))
+                           (display (list 'min-width width))
+                           (source (copy-sequence "%m rest")))
+                      (put-text-property 0 2 'display (list 'min-width (list 10.0)) source)
+                      (list (list :propertize "AB" 'display display) source "|"))"#
+            }
+            _ => panic!("unknown GNU boundary case"),
+        }
+    }
+}
+
+/// Shared upper-layer helpers for mode_line_dynamic_symbols_test (peer P1 precision):
+/// real bodies live here once; callers supply the harness Context where needed.
+pub mod mode_line_dynamic_symbols_test_upper_layer_helpers {
+    use crate::emacs_core::xdisp::ModeLinePercentContext;
+    use crate::emacs_core::xdisp::ModeLineRendered;
+    use crate::emacs_core::xdisp::format_mode_line_for_target;
+    use crate::emacs_core::xdisp::format_mode_line_recursive_in_state;
+    use crate::emacs_core::xdisp::format_mode_line_recursive_in_state_with_eval_rooted;
+    use crate::emacs_core::xdisp::mode_line_gc;
+    use crate::emacs_core::xdisp::mode_line_string::Risk;
+    use neovm_value::value::Value;
+    #[derive(Clone, Copy)]
+    pub enum Walker {
+        Context,
+        State,
+        StateWithEval,
+    }
+    use neovm_eval::emacs_core::eval::Context;
+    use neovm_value::heap_types::{GnuDeclaredCharacterCount, LispString};
+    use neovm_value::intern::{
+        intern_call_names, intern_uninterned, reset_intern_calls, restore_runtime_interner,
+        unintern_canonical_id,
+    };
+    pub fn context(
+        make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+    ) -> Context {
+        let mut ctx = make_context();
+        ctx.gc_stress = false;
+        ctx.set_gc_threshold(usize::MAX);
+        let buffer = ctx
+            .edit
+            .buffers
+            .create_buffer("*ttykey-k5-dynamic-symbols*");
+        ctx.edit.buffers.set_current(buffer);
+        ctx
+    }
+    pub fn render(
+        ctx: &mut Context,
+        pctx: &ModeLinePercentContext,
+        format: Value,
+        walker: Walker,
+    ) -> String {
+        let mut rendered = ModeLineRendered::default();
+        render_into(ctx, pctx, format, walker, &mut rendered);
+        // Literal strings in these cases are property-free and contain no padding.
+        rendered
+            .text
+            .into_iter()
+            .map(|code| char::from_u32(code).expect("Unicode test text"))
+            .collect()
+    }
+    pub fn render_into(
+        ctx: &mut Context,
+        pctx: &ModeLinePercentContext,
+        format: Value,
+        walker: Walker,
+        rendered: &mut ModeLineRendered,
+    ) {
+        match walker {
+            Walker::Context => {
+                format_mode_line_for_target(
+                    ctx,
+                    pctx,
+                    &format,
+                    rendered,
+                    0.into(),
+                    Risk::Trusted,
+                    None,
+                )
+                .expect("context walk");
+            }
+            Walker::State => {
+                assert!(!format_mode_line_recursive_in_state(
+                    ctx.variables(),
+                    &[],
+                    &ctx.edit.buffers,
+                    &ctx.processes(),
+                    pctx,
+                    &format,
+                    rendered,
+                    0,
+                    false,
+                ));
+            }
+            Walker::StateWithEval => {
+                let roots = mode_line_gc::ScratchRoots::new();
+                format_mode_line_recursive_in_state_with_eval_rooted(
+                    ctx.variables(),
+                    &[],
+                    &ctx.edit.buffers,
+                    &ctx.processes(),
+                    pctx,
+                    &format,
+                    rendered,
+                    0,
+                    false,
+                    &mut |_, _| Ok(Value::NIL),
+                    &roots,
+                )
+                .expect("split callback walk");
+            }
+        }
+    }
+}
+
+/// Shared upper-layer helpers for xdisp_test (peer P1 precision):
+/// real bodies live here once; callers supply the harness Context where needed.
+pub mod xdisp_test_upper_layer_helpers {
+    pub(crate) fn utf8_locale_terminal(eval: &mut Context) {
+        eval.eval_str(
+            "(progn (set-keyboard-coding-system-internal 'utf-8-unix)
+                (set-terminal-coding-system-internal 'utf-8-unix))",
+        )
+        .expect("setting the terminal codings should evaluate");
+    }
+    use crate::emacs_core::image_catalog::{
+        ImageCatalog, ImageId, ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken, ImageLookup,
+        ImageMaskKind, ImageResolveRequest, ImageSizeLimit, ReadyImage, ResolvedImageMetadata,
+    };
+    use crate::window::DisplayFrameManagerExt;
+    use neovm_edit::buffer::buffer::BUFFER_SLOT_BUFFER_FILE_CODING_SYSTEM;
+    use neovm_edit::buffer::{BufferTextBackendKind, CharPos0, LispCharPos1};
+    use neovm_eval::emacs_core::eval::Context;
+    use neovm_eval::emacs_core::eval::DisplayHost;
+    use neovm_eval::emacs_core::eval::VariableView;
+    use neovm_eval::emacs_core::eval::data::display_spec::display_prop_replacing_p;
+    use neovm_value::error::FlowKind;
+    use neovm_value::intern::intern;
+    use neovm_value::value::Value;
+    use neovm_value::value::{
+        StringTextPropertyRun, ValueKind, get_string_text_properties_table_for_value,
+        set_string_text_properties_for_value,
+    };
+    pub fn interactive_context(
+        make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+    ) -> Context {
+        let mut eval = make_context();
+        eval.set_variable("noninteractive", Value::NIL);
+        eval
+    }
+    /// Build a context with a single TTY frame (char cell 1x1) whose selected
+    /// window shows the current buffer, used by the `display`-spec measurement
+    /// tests below.  Returns the selected-window id as a fixnum-able integer.
+    pub fn pixel_size_tty_context(
+        make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+    ) -> (Context, i64) {
+        let mut eval = interactive_context(make_context);
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id;
+        let frame_id = eval
+            .frame_manager_mut()
+            .create_frame("xdisp-display-spec", 200, 24, buf_id);
+        {
+            let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+            frame.char_width = 1.0;
+            frame.char_height = 1.0;
+            frame.font_pixel_size = 1.0;
+            frame.set_window_system(None);
+        }
+        let selected_window = eval
+            .frame_manager()
+            .get(frame_id)
+            .expect("frame")
+            .selected_window
+            .0 as i64;
+        (eval, selected_window)
+    }
+}
+
+/// Shared upper-layer helpers for motion_test (peer P1 precision):
+/// real bodies live here once; callers supply the harness Context where needed.
+pub mod motion_test_upper_layer_helpers {
+    use crate::window::{DisplayRowSnapshot, WindowDisplaySnapshot};
+    use neovm_edit::buffer::LispCharPos1;
+    pub fn eob_overlay_snapshot(two_lines: bool, extra_rows: usize) -> WindowDisplaySnapshot {
+        use crate::window::{
+            CompletedEobOverlayMotionExtent, DisplayRowEndSource, EobOverlayMotionCoverage,
+        };
+
+        let end = if two_lines { 8 } else { 4 };
+        let mut rows = Vec::new();
+        if two_lines {
+            rows.push(row(0, 1, 4));
+        }
+        let mut source = row(rows.len() as i64, if two_lines { 5 } else { 1 }, end);
+        source.end_source = DisplayRowEndSource::OverlayAfterString;
+        rows.push(source);
+        for _ in 0..extra_rows {
+            let mut inserted = row(rows.len() as i64, end, end);
+            inserted.end_source = DisplayRowEndSource::OverlayAfterString;
+            rows.push(inserted);
+        }
+        rows.push(DisplayRowSnapshot {
+            row: rows.len() as i64,
+            ..Default::default()
+        });
+        WindowDisplaySnapshot {
+            rows,
+            eob_overlay_motion: EobOverlayMotionCoverage::Complete(
+                CompletedEobOverlayMotionExtent::from_physical_rows(
+                    LispCharPos1::new(end),
+                    usize::from(two_lines),
+                    usize::from(two_lines) + extra_rows + 1,
+                )
+                .expect("overlay traversal advances forward"),
+            ),
+            ..Default::default()
+        }
+    }
+    pub fn row(index: i64, start: i64, end: i64) -> DisplayRowSnapshot {
+        DisplayRowSnapshot {
+            row: index,
+            start_buffer_pos: Some(LispCharPos1::new(start)),
+            end_buffer_pos: Some(LispCharPos1::new(end)),
+            ..Default::default()
+        }
+    }
+}
+
+/// Shared upper-layer helpers for system_font_test (peer P1 precision):
+/// real bodies live here once; callers supply the harness Context where needed.
+pub mod system_font_test_upper_layer_helpers {
+    use crate::emacs_core::display_host::FrameFontSize;
+    use crate::emacs_core::display_host::{
+        FrameFontRequest, SystemFontName, SystemFontRole, SystemFonts,
+    };
+    use crate::face::{FontSlant, FontWeight, FontWidth};
+    use crate::test_utils::xfaces_upper_layer_helpers::ensure_selected_gui_frame;
+    use crate::window::FrameId;
+    use neovm_eval::emacs_core::eval::ResolvedFrameFont;
+    use neovm_eval::emacs_core::eval::{
+        Context, DisplayHost, FontPxProbeResult, GuiFrameHostRequest,
+    };
+    pub fn desktop_context(
+        make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+    ) -> Context {
+        let mut eval = make_context();
+        ensure_selected_gui_frame(&mut eval);
+        eval.set_display_host(Box::new(DesktopFontHost(SystemFonts::new(
+            SystemFontName::new("Ubuntu Mono 13".into()),
+            SystemFontName::new("Ubuntu 10".into()),
+        ))));
+        eval
+    }
+    /// Substitute only the native desktop/font system. Lisp face updates, name
+    /// parsing and default-face queries go through the real public interface.
+    struct DesktopFontHost(SystemFonts);
+
+    impl DisplayHost for DesktopFontHost {
+        fn realize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
+            Ok(())
+        }
+        fn resize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn system_font(&self, role: SystemFontRole) -> Option<&SystemFontName> {
+            self.0.get(role)
+        }
+
+        fn resolve_frame_font(
+            &mut self,
+            _: FrameId,
+            request: FrameFontRequest,
+        ) -> Result<Option<ResolvedFrameFont>, String> {
+            let family = request
+                .face()
+                .family_runtime_string_owned()
+                .unwrap_or("Fallback Mono".into());
+            let pixels = match request.size() {
+                FrameFontSize::Points(points) => (points.get() * 96.0 / 72.27).round() as u32,
+                FrameFontSize::Pixels(pixels) => pixels.get(),
+                FrameFontSize::Default => 13,
+                FrameFontSize::Relative(scale) => (13.0 * scale.get()).round() as u32,
+            };
+            Ok(Some(ResolvedFrameFont {
+                height_tenths: (f64::from(pixels) * 720.0 / 96.0).round() as i32,
+                font: neovm_eval::emacs_core::eval::test_resolved_opened_font(
+                    &family,
+                    None,
+                    None,
+                    request.face().weight.unwrap_or(FontWeight::NORMAL),
+                    request.face().slant.unwrap_or(FontSlant::Normal),
+                    request.face().width.unwrap_or(FontWidth::Normal),
+                    None,
+                    FontPxProbeResult {
+                        pixel_size: pixels,
+                        height: pixels as i32 + 1,
+                        ascent: pixels as i32,
+                        descent: 1,
+                        max_width: pixels as i32 / 2,
+                        space_width: pixels as i32 / 2,
+                        average_width: pixels as i32 / 2,
+                    },
+                    None,
+                ),
+            }))
+        }
+    }
+}
+
+/// Shared numeric-padding policy guard for the re-homed mode-line tests.
+/// One home; the display unit tests and the core destinations share it.
+pub mod mode_line_numeric_padding_shared_helpers {
+    pub struct PaddingPolicyGuard(Option<bool>);
+    impl PaddingPolicyGuard {
+        pub fn set(value: bool) -> Self {
+            Self(
+                crate::test_support::authority::force_mode_line_numeric_padding_for_test(Some(
+                    value,
+                )),
+            )
+        }
+    }
+    impl Drop for PaddingPolicyGuard {
+        fn drop(&mut self) {
+            crate::test_support::authority::force_mode_line_numeric_padding_for_test(self.0);
+        }
+    }
+}
+
+/// Shared terminal recording fixture for the moved idle-redisplay test.
+pub mod terminal_test_upper_layer_helpers {
+    use crate::emacs_core::terminal::pure::TerminalHost;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    pub struct RecordingTerminalHost {
+        pub(crate) log: Rc<RefCell<Vec<&'static str>>>,
+    }
+    impl TerminalHost for RecordingTerminalHost {
+        fn suspend_tty(&mut self) -> Result<(), String> {
+            self.log.borrow_mut().push("suspend");
+            Ok(())
+        }
+
+        fn resume_tty(&mut self) -> Result<(), String> {
+            self.log.borrow_mut().push("resume");
+            Ok(())
+        }
+
+        fn delete_terminal(&mut self) -> Result<(), String> {
+            self.log.borrow_mut().push("delete");
+            Ok(())
+        }
+    }
+}

@@ -4,110 +4,15 @@
 
 use super::*;
 
-struct PlainFieldGuard {
-    previous: ModeLinePlainFieldPath,
-}
+use crate::test_utils::mode_line_plain_field_test_upper_layer_helpers::{
+    OutputTrace, PropertyOrder, PropertyRead, string_trace,
+};
 
-#[derive(Clone, Copy, Debug)]
-enum PropertyRead {
-    Copied,
-    Borrowed,
-}
-
-impl PlainFieldGuard {
-    fn set(path: ModeLinePlainFieldPath, properties: PropertyRead) -> Self {
-        let previous = set_mode_line_plain_field_for_test(path);
-        match properties {
-            PropertyRead::Copied => set_mode_line_prop_borrow_for_test(Some(false)),
-            PropertyRead::Borrowed => set_mode_line_prop_borrow_for_test(Some(true)),
-        }
-        Self { previous }
-    }
-}
-
-impl Drop for PlainFieldGuard {
-    fn drop(&mut self) {
-        set_mode_line_prop_borrow_for_test(None);
-        set_mode_line_plain_field_for_test(self.previous);
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct StringTrace {
-    bytes: Vec<u8>,
-    multibyte: bool,
-    char_len: usize,
-    interval_plists: String,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct SourceTrace {
-    output_start: usize,
-    output_end: usize,
-    source_start: usize,
-    source_ordinal: usize,
-    is_root: bool,
-    is_input_source: bool,
-    text: StringTrace,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct OutputTrace {
-    text: StringTrace,
-    sources: Vec<SourceTrace>,
-    eval_count: i64,
-    point: usize,
-}
-
-#[derive(Clone, Copy)]
-enum PropertyOrder {
-    Exact,
-    Canonical,
-}
-
-fn string_trace(eval: &mut Context, value: Value, order: PropertyOrder) -> StringTrace {
-    let string = value.as_lisp_string().expect("mode-line string");
-    let bytes = string.as_bytes().to_vec();
-    let multibyte = string.is_multibyte();
-    let char_len = string.schars();
-    // No interval borrow crosses these Lisp calls. Literal-only cases keep
-    // exact plist order. Percent expansion's existing HashMap overlay order
-    // is random even for two copied-baseline walks, so those comparisons sort
-    // property pairs within each output run, retaining boundaries and values.
-    // Original source strings always use Exact below.
-    eval.set_variable("d5-plain-field-result", value);
-    let inspect = match order {
-        PropertyOrder::Exact => "(prin1-to-string (object-intervals d5-plain-field-result))",
-        PropertyOrder::Canonical => {
-            r#"(prin1-to-string
-          (mapcar
-           (lambda (run)
-             (let ((plist (nth 2 run)) (pairs nil))
-               (while plist
-                 (setq pairs (cons (cons (car plist) (car (cdr plist))) pairs))
-                 (setq plist (cdr (cdr plist))))
-               (list (car run) (car (cdr run))
-                     (apply #'append
-                            (mapcar (lambda (pair) (list (car pair) (cdr pair)))
-                                    (sort pairs
-                                          (lambda (a b)
-                                            (string-lessp (prin1-to-string (car a))
-                                                          (prin1-to-string (car b))))))))))
-           (object-intervals d5-plain-field-result)))"#
-        }
-    };
-    let interval_plists = eval
-        .eval_str(inspect)
-        .expect("object intervals")
-        .as_utf8_str()
-        .expect("printed intervals")
-        .to_owned();
-    StringTrace {
-        bytes,
-        multibyte,
-        char_len,
-        interval_plists,
-    }
+fn compare(setup: &str) {
+    crate::test_utils::mode_line_plain_field_test_upper_layer_helpers::compare(
+        || neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime()),
+        setup,
+    )
 }
 
 fn output_trace(
@@ -116,179 +21,13 @@ fn output_trace(
     properties: PropertyRead,
     order: PropertyOrder,
 ) -> OutputTrace {
-    crate::test_utils::init_test_tracing();
-    let _guard = PlainFieldGuard::set(path, properties);
-    let mut eval = interactive_context();
-    let buffer_id = eval
-        .edit
-        .buffers
-        .current_buffer()
-        .expect("current buffer")
-        .id;
-    let frame_id = eval
-        .frame_manager_mut()
-        .create_frame("plain-field", 800, 600, buffer_id);
-    let window_id = eval
-        .frame_manager()
-        .get(frame_id)
-        .expect("frame")
-        .selected_window;
-    eval.edit
-        .buffers
-        .get_mut(buffer_id)
-        .expect("buffer")
-        .insert("first\nsecond\n");
-    eval.eval_str("(setq d5-plain-field-evals 0)")
-        .expect("eval counter");
-    let raw = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
-        b'A', 0xff, b'B', b'%', b'b', b'Z', 0x80,
-    ]));
-    eval.set_variable("d5-plain-field-raw", raw);
-    let format = eval.eval_str(setup).expect("format setup");
-    eval.set_variable("d5-plain-field-format", format);
-    let output = format_mode_line_for_display_with_sources(
-        &mut eval,
-        format,
-        Value::make_window(window_id.0),
-        Value::make_buffer(buffer_id),
-        24,
-    );
-    // Fresh :eval strings are owned only by the output sidecar. Root the
-    // complete sidecar before introspection calls that could collect.
-    let root_scope = eval.save_specpdl_roots();
-    eval.push_specpdl_root(output.value());
-    for span in output.source_spans() {
-        eval.push_specpdl_root(span.source());
-    }
-    let input_source = eval
-        .obarray_view()
-        .symbol_value_copied("d5-plain-field-source");
-    let mut identities = Vec::new();
-    let text = string_trace(&mut eval, output.value(), order);
-    let sources = output
-        .source_spans()
-        .iter()
-        .map(|span| {
-            let source = span.source();
-            let source_ordinal =
-                if let Some(index) = identities.iter().position(|seen| *seen == source) {
-                    index
-                } else {
-                    identities.push(source);
-                    identities.len() - 1
-                };
-            SourceTrace {
-                output_start: span.output_start(),
-                output_end: span.output_end(),
-                source_start: span.source_start(),
-                source_ordinal,
-                is_root: source == output.value(),
-                is_input_source: input_source == Some(source),
-                text: string_trace(&mut eval, source, PropertyOrder::Exact),
-            }
-        })
-        .collect();
-    let eval_count = eval
-        .obarray_view()
-        .symbol_value_copied("d5-plain-field-evals")
-        .and_then(Value::as_fixnum)
-        .expect("eval counter");
-    let point = eval
-        .edit
-        .buffers
-        .get(buffer_id)
-        .expect("buffer")
-        .point_char_pos()
-        .get();
-    eval.restore_specpdl_roots(root_scope);
-    OutputTrace {
-        text,
-        sources,
-        eval_count,
-        point,
-    }
-}
-
-fn compare(setup: &str) {
-    for properties in [PropertyRead::Copied, PropertyRead::Borrowed] {
-        let temporary = output_trace(
-            setup,
-            ModeLinePlainFieldPath::Temporary,
-            properties,
-            PropertyOrder::Canonical,
-        );
-        let direct = output_trace(
-            setup,
-            ModeLinePlainFieldPath::Direct,
-            properties,
-            PropertyOrder::Canonical,
-        );
-        assert_eq!(
-            direct, temporary,
-            "properties={properties:?}; format setup: {setup}"
-        );
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct TransitionTrace {
-    output_start: usize,
-    width_spec: Value,
-    columns: usize,
-    padding_properties: Vec<(Value, Value)>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct RenderedTrace {
-    text: Vec<u32>,
-    intervals: Vec<(usize, usize, Vec<(Value, Value)>)>,
-    mutation_tick: u64,
-    syntax_tick: u64,
-    syntax_free_end: usize,
-    sources: Vec<ModeLineDisplaySourceSpan>,
-    transitions: Vec<TransitionTrace>,
-}
-
-fn rendered_trace(rendered: &ModeLineRendered) -> RenderedTrace {
-    rendered
-        .text_props
-        .debug_syntax_caches_consistent()
-        .expect("syntax cache");
-    let syntax_free_end = rendered
-        .text_props
-        .syntax_prop_free_run_end(
-            CharPos0::new(rendered.char_len().saturating_sub(1)),
-            CharPos0::new(rendered.char_len()),
-        )
-        .get();
-    let transitions = rendered
-        .min_width_transitions
-        .iter()
-        .map(|transition| {
-            let mut padding_properties: Vec<_> = transition
-                .run
-                .padding_properties
-                .iter()
-                .map(|(name, value)| (*name, *value))
-                .collect();
-            padding_properties.sort_unstable_by_key(|(name, _)| name.bits());
-            TransitionTrace {
-                output_start: transition.output_start,
-                width_spec: transition.run.width_spec,
-                columns: transition.run.columns,
-                padding_properties,
-            }
-        })
-        .collect();
-    RenderedTrace {
-        text: rendered.text.clone(),
-        intervals: rendered.text_props.interval_plist_runs_for_test(),
-        mutation_tick: rendered.text_props.mutation_tick(),
-        syntax_tick: rendered.text_props.syntax_prop_tick(),
-        syntax_free_end,
-        sources: rendered.source_spans.clone(),
-        transitions,
-    }
+    crate::test_utils::mode_line_plain_field_test_upper_layer_helpers::output_trace(
+        || neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime()),
+        setup,
+        path,
+        properties,
+        order,
+    )
 }
 
 #[test]
@@ -306,7 +45,10 @@ fn plain_percent_fields_preserve_multibyte_identity_like_temporary_segments() {
             ModeLinePlainFieldPath::Temporary,
             ModeLinePlainFieldPath::Direct,
         ] {
-            let _guard = PlainFieldGuard::set(path, PropertyRead::Copied);
+            let _guard = crate::test_support::authority::plain_field_guard_for_test(
+                path,
+                PropertyRead::Copied,
+            );
             let mut rendered = ModeLineRendered::default();
             append_mode_line_percent_string_spec(&mut rendered, spec, &properties, width);
             if let Some(precision) = precision {
@@ -321,69 +63,6 @@ fn plain_percent_fields_preserve_multibyte_identity_like_temporary_segments() {
         }
         assert_eq!(identities[1], identities[0], "spec={spec:?}");
     }
-}
-
-#[test]
-fn empty_fields_preserve_ticks_intervals_sources_and_min_width_transitions() {
-    crate::test_utils::init_test_tracing();
-    let mut eval = interactive_context();
-    let source = eval
-        .eval_str(r#"(propertize "前A" 'face 'bold 'mouse-face 'highlight 'syntax-table '(2))"#)
-        .expect("source");
-    eval.set_variable("d5-plain-field-source", source);
-    let min_width = eval
-        .eval_str("'(display (min-width (6.0)) face italic)")
-        .expect("min width");
-    let mut seed = ModeLineRendered::default();
-    seed.append_string_value_preserving_props(&source);
-    seed.note_display_min_width_transition(min_width);
-    seed.text_props
-        .syntax_prop_free_run_end(CharPos0::ZERO, CharPos0::new(seed.char_len()));
-    let properties: Vec<(Value, Value)> = Vec::new();
-    let mut traces = Vec::new();
-    for path in [
-        ModeLinePlainFieldPath::Temporary,
-        ModeLinePlainFieldPath::Direct,
-    ] {
-        let _guard = PlainFieldGuard::set(path, PropertyRead::Copied);
-        let mut rendered = seed.clone();
-        for (text, width) in [("", 0), ("été😀", -4), ("A", 7), ("", 3), ("café", 2)] {
-            append_mode_line_percent_string_spec(&mut rendered, text, &properties, width);
-        }
-        rendered.append_string_value_preserving_props(&source);
-        traces.push(rendered_trace(&rendered));
-    }
-    assert_eq!(traces[1], traces[0]);
-}
-
-#[test]
-fn propertized_fields_keep_graft_plist_order_and_ticks() {
-    crate::test_utils::init_test_tracing();
-    let mut eval = interactive_context();
-    let source = eval
-        .eval_str(r#"(propertize "AB" 'face 'bold 'help-echo "prefix")"#)
-        .expect("source");
-    eval.set_variable("d5-plain-field-source", source);
-    let mut seed = ModeLineRendered::default();
-    seed.append_string_value_preserving_props(&source);
-    let properties = vec![
-        (Value::symbol("face"), Value::symbol("italic")),
-        (Value::symbol("mouse-face"), Value::symbol("highlight")),
-    ];
-    let mut traces = Vec::new();
-    for path in [
-        ModeLinePlainFieldPath::Temporary,
-        ModeLinePlainFieldPath::Direct,
-    ] {
-        let _guard = PlainFieldGuard::set(path, PropertyRead::Copied);
-        let mut rendered = seed.clone();
-        // Borrowed iteration and the cloned reference retain the same map order.
-        append_mode_line_percent_string_spec(&mut rendered, "éB", &properties, 7);
-        append_mode_line_percent_string_spec(&mut rendered, "", &properties, 3);
-        rendered.append_string_value_preserving_props(&source);
-        traces.push(rendered_trace(&rendered));
-    }
-    assert_eq!(traces[1], traces[0]);
 }
 
 #[test]
@@ -414,63 +93,4 @@ fn nested_propertize_precision_and_min_width_match_temporary_segments() {
       '(-4 "é:%b!")
       '(12 (:propertize "%l:%c" face bold)))"#,
     );
-}
-
-#[test]
-fn eval_source_mutation_and_fresh_mouse_targets_match_temporary_segments() {
-    compare(
-        r#"(progn
-      (setq d5-plain-field-source "A%12bZ")
-      (list d5-plain-field-source
-            '(:eval (progn
-                      (setq d5-plain-field-evals (1+ d5-plain-field-evals))
-                      (put-text-property 0 (length d5-plain-field-source) 'face 'italic d5-plain-field-source)
-                      (put-text-property 0 (length d5-plain-field-source) 'help-echo "after" d5-plain-field-source)
-                      d5-plain-field-source))
-            '(:eval (progn
-                      (setq d5-plain-field-evals (1+ d5-plain-field-evals))
-                      (propertize (copy-sequence "E%l!") 'help-echo "fresh"
-                                  'local-map '(keymap (mouse-1 . ignore)))))
-            "%-"))"#,
-    );
-}
-
-#[test]
-fn native_fields_keep_rooted_grafts_and_syntax_ticks_across_collection() {
-    crate::test_utils::init_test_tracing();
-    static_assertions::const_assert_eq!(std::mem::size_of::<ModeLinePlainFieldPath>(), 1);
-    let mut eval = interactive_context();
-    let source = eval
-        .eval_str(r#"(propertize "前A" 'face 'bold 'syntax-table '(2))"#)
-        .expect("source");
-    eval.set_variable("d5-plain-field-source", source);
-    let syntax = eval.eval_str("'(3)").expect("syntax property");
-    eval.set_variable("d5-plain-field-syntax", syntax);
-    for properties in [
-        Vec::new(),
-        vec![(Value::symbol("face"), Value::symbol("italic"))],
-        vec![
-            (Value::symbol("face"), Value::symbol("italic")),
-            (Value::symbol("syntax-table"), syntax),
-        ],
-    ] {
-        let mut traces = Vec::new();
-        for path in [
-            ModeLinePlainFieldPath::Temporary,
-            ModeLinePlainFieldPath::Direct,
-        ] {
-            let _guard = PlainFieldGuard::set(path, PropertyRead::Copied);
-            let _roots = mode_line_gc::ScratchRoots::new();
-            let mut rendered = ModeLineRendered::default();
-            rendered.append_string_value_preserving_props(&source);
-            rendered.root_for_walk();
-            for (text, width) in [("", 0), ("abc", 7), ("été😀", -1), ("", 3), ("é", 1)] {
-                append_mode_line_percent_string_spec(&mut rendered, text, &properties, width);
-                eval.eval_str("(garbage-collect)").expect("collection");
-                rendered.append_string_value_preserving_props(&source);
-            }
-            traces.push(rendered_trace(&rendered));
-        }
-        assert_eq!(traces[1], traces[0]);
-    }
 }

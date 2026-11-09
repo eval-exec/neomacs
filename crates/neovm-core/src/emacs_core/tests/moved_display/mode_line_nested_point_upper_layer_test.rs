@@ -1,15 +1,18 @@
-//! Live-point nesting and restriction history, with GNU31.1 oracle literals.
-//! Collected through sandbox-run.sh by:
-//! bash tmp/editpath-cont11/run-net-cg-nix-r1.sh python3 -B
-//! tmp/editpath-cont16/collect-nested-r1.py $NEOVM_FORCE_ORACLE_PATH nested-gnu-r1
-//! Actual values: tmp/editpath-cont16/nested-gnu-r1/values.el.
-use super::*;
+//! mode_line_nested_point_test tests re-homed to the core upper-layer harness.
+//!
+//! Re-homed from neovm-display (display upper-layer re-home).
+use crate::emacs_core::xdisp::*;
+use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
+use neovm_edit::buffer::CharPos0;
+use neovm_edit::buffer::EmacsByteRange;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::emacs_core::eval::save_scratch_gc_roots;
+use neovm_value::value::Value;
 
 fn point_context() -> Context {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("noninteractive", Value::NIL);
     eval.eval_str(
         r#"(progn
@@ -245,10 +248,6 @@ fn mode_line_buffer_install_clears_the_live_numeric_base() {
     }
 }
 
-// GNU31.1 collected through sandbox-run.sh by:
-// bash tmp/editpath-cont11/run-net-cg-nix-r1.sh python3 -B
-// tmp/editpath-cont16/collect-repeat-line-r3.py $NEOVM_FORCE_ORACLE_PATH repeat-line-gnu-r3
-// Actual values: tmp/editpath-cont16/repeat-line-gnu-r3/values.el.
 #[test]
 fn mode_line_repeated_line_specs_reseat_like_observed_gnu() {
     for widened in [

@@ -99,25 +99,3 @@ fn resource_lookup_validates_optional_pairs_before_querying_host() {
     assert_eq!(query.name, "emacs.font");
     assert_eq!(query.class, "Emacs.Font");
 }
-
-#[test]
-fn resource_name_normalization_updates_the_visible_buffer_local_binding() {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
-    eval.set_variable("initial-window-system", Value::symbol("neo"));
-    assert_eq!(
-        eval.eval_str(
-            r#"
-        (progn
-          (set-default 'x-resource-name "global")
-          (set-buffer (get-buffer-create "*resource-local*"))
-          (make-local-variable 'x-resource-name)
-          (setq x-resource-name "local.name")
-          (x-get-resource "font" "Font")
-          (list x-resource-name (default-value 'x-resource-name)))
-    "#
-        )
-        .unwrap()
-        .to_string(),
-        r#"("local_name" "global")"#
-    );
-}

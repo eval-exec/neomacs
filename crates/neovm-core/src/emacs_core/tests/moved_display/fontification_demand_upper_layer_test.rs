@@ -1,31 +1,13 @@
-use super::*;
+//! fontification_demand_test tests re-homed to the core upper-layer harness.
+//!
+//! Re-homed from neovm-display (display upper-layer re-home).
+use crate::emacs_core::xdisp::*;
+use neovm_edit::buffer::BufferId;
+use neovm_edit::buffer::CharLen;
+use neovm_edit::buffer::CharPos0;
+use neovm_edit::buffer::CharRange;
+use neovm_edit::emacs_core::textprop::FontificationBoundaryMode;
 use neovm_eval::emacs_core::eval::Context;
-
-fn scene(setup: &str) -> (Context, BufferId) {
-    crate::test_utils::init_test_tracing();
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
-    eval.eval_str("(insert \"abcdefghij\") (setq ttykey-demand-calls nil ttykey-demand-source-name (buffer-name))").unwrap();
-    eval.eval_str(setup).unwrap();
-    let buffer = eval.buffer_manager().current_buffer().unwrap().id();
-    (eval, buffer)
-}
-
-fn chars(start: usize, end: usize) -> CharRange {
-    CharRange::from_start_len(CharPos0::new(start), CharLen::new(end - start))
-}
-
-fn observed(
-    eval: &mut Context,
-    buffer: BufferId,
-    start: i64,
-    end: i64,
-) -> (RedisplayFontificationOutcome, RedisplayFontificationWitness) {
-    let mut demand = RedisplayFontificationDemand::new();
-    let outcome = ensure_fontified_for_redisplay_with_demand(eval, buffer, start, end, &mut demand)
-        .expect("canonical observed walk");
-    (outcome, demand.finish())
-}
-
 const NO_MARK_HOOK: &str = r#"
 (setq fontification-functions
   (list (lambda (pos) (setq ttykey-demand-calls (cons pos ttykey-demand-calls)))))
@@ -57,6 +39,81 @@ fn truthy_and_defer_certify_exact_clamped_character_extent_without_callbacks() {
     }
 }
 
+fn assert_resolved_truthy_demand_observation(setup: &str) {
+    for mode in [
+        FontificationBoundaryMode::Off,
+        FontificationBoundaryMode::On,
+    ] {
+        let mut observations = Vec::new();
+        for observe in [false, true] {
+            let (mut eval, buffer) = scene(NO_MARK_HOOK);
+            eval.eval_str(setup).expect("effective non-nil fallback");
+            assert!(
+                eval.eval_str(
+                    "(and (get-char-property 1 'fontified)
+                          (get-char-property 10 'fontified))"
+                )
+                .unwrap()
+                .is_truthy(),
+                "both ends must use an effective non-nil fallback: {setup}"
+            );
+            let outcome = if observe {
+                let mut demand = RedisplayFontificationDemand::new();
+                let outcome = neovm_display::test_support::authority::ensure_fontified_for_redisplay_inner_for_test(
+                    &mut eval,
+                    buffer,
+                    0,
+                    10,
+                    mode,
+                    &mut demand,
+                )
+                .expect("observed resolved fallback walk");
+                let witness = demand.finish();
+                let RedisplayFontificationWitness::NoDemand(coverage) = witness else {
+                    panic!("effective truthy values require no callback: {setup}: {witness:?}");
+                };
+                assert!(coverage.covers(buffer, chars(0, 10)));
+                assert!(!coverage.covers(buffer, chars(0, 11)));
+                outcome
+            } else {
+                neovm_display::test_support::authority::ensure_fontified_for_redisplay_with_mode_for_test(&mut eval, buffer, 0, 10, mode)
+                    .expect("legacy resolved fallback walk")
+            };
+            assert_eq!(outcome, RedisplayFontificationOutcome::Unchanged);
+            let calls = eval.eval_str("ttykey-demand-calls").unwrap();
+            assert!(calls.is_nil(), "fallback must suppress callbacks: {setup}");
+            observations.push((outcome, neovm_eval::emacs_core::print::print_value(&calls)));
+        }
+        assert_eq!(observations[0], observations[1], "{mode:?}: {setup}");
+    }
+}
+
+fn chars(start: usize, end: usize) -> CharRange {
+    CharRange::from_start_len(CharPos0::new(start), CharLen::new(end - start))
+}
+
+fn observed(
+    eval: &mut Context,
+    buffer: BufferId,
+    start: i64,
+    end: i64,
+) -> (RedisplayFontificationOutcome, RedisplayFontificationWitness) {
+    let mut demand = RedisplayFontificationDemand::new();
+    let outcome = ensure_fontified_for_redisplay_with_demand(eval, buffer, start, end, &mut demand)
+        .expect("canonical observed walk");
+    (outcome, demand.finish())
+}
+
+fn scene(setup: &str) -> (Context, BufferId) {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    eval.eval_str("(insert \"abcdefghij\") (setq ttykey-demand-calls nil ttykey-demand-source-name (buffer-name))").unwrap();
+    eval.eval_str(setup).unwrap();
+    let buffer = eval.buffer_manager().current_buffer().unwrap().id();
+    (eval, buffer)
+}
+
+#[test]
 #[test]
 fn nil_islands_preserve_legacy_callback_positions_even_when_callbacks_leave_nil() {
     let setup = format!(
@@ -278,14 +335,14 @@ fn observer_preserves_both_existing_explicit_boundary_modes() {
         ] {
             let (mut plain, source) = scene(&setup);
             let expected =
-                ensure_fontified_for_redisplay_with_mode(&mut plain, source, 0, 10, mode).unwrap();
+                neovm_display::test_support::authority::ensure_fontified_for_redisplay_with_mode_for_test(&mut plain, source, 0, 10, mode).unwrap();
             let expected_calls = neovm_eval::emacs_core::print::print_value(
                 &plain.eval_str("ttykey-demand-calls").unwrap(),
             );
             drop(plain);
             let (mut observed_ctx, source) = scene(&setup);
             let mut demand = RedisplayFontificationDemand::new();
-            let actual = ensure_fontified_for_redisplay_inner(
+            let actual = neovm_display::test_support::authority::ensure_fontified_for_redisplay_inner_for_test(
                 &mut observed_ctx,
                 source,
                 0,
@@ -307,58 +364,6 @@ fn observer_preserves_both_existing_explicit_boundary_modes() {
                     || matches!(witness, RedisplayFontificationWitness::CallbacksRan)
             );
         }
-    }
-}
-
-// These are the same resolved-property sources as fontification_boundary's
-// fallback fixtures. This witnesses one canonical walk, not future validity
-// of the category plist or the alias/default variable values.
-fn assert_resolved_truthy_demand_observation(setup: &str) {
-    for mode in [
-        FontificationBoundaryMode::Off,
-        FontificationBoundaryMode::On,
-    ] {
-        let mut observations = Vec::new();
-        for observe in [false, true] {
-            let (mut eval, buffer) = scene(NO_MARK_HOOK);
-            eval.eval_str(setup).expect("effective non-nil fallback");
-            assert!(
-                eval.eval_str(
-                    "(and (get-char-property 1 'fontified)
-                          (get-char-property 10 'fontified))"
-                )
-                .unwrap()
-                .is_truthy(),
-                "both ends must use an effective non-nil fallback: {setup}"
-            );
-            let outcome = if observe {
-                let mut demand = RedisplayFontificationDemand::new();
-                let outcome = ensure_fontified_for_redisplay_inner(
-                    &mut eval,
-                    buffer,
-                    0,
-                    10,
-                    mode,
-                    &mut demand,
-                )
-                .expect("observed resolved fallback walk");
-                let witness = demand.finish();
-                let RedisplayFontificationWitness::NoDemand(coverage) = witness else {
-                    panic!("effective truthy values require no callback: {setup}: {witness:?}");
-                };
-                assert!(coverage.covers(buffer, chars(0, 10)));
-                assert!(!coverage.covers(buffer, chars(0, 11)));
-                outcome
-            } else {
-                ensure_fontified_for_redisplay_with_mode(&mut eval, buffer, 0, 10, mode)
-                    .expect("legacy resolved fallback walk")
-            };
-            assert_eq!(outcome, RedisplayFontificationOutcome::Unchanged);
-            let calls = eval.eval_str("ttykey-demand-calls").unwrap();
-            assert!(calls.is_nil(), "fallback must suppress callbacks: {setup}");
-            observations.push((outcome, neovm_eval::emacs_core::print::print_value(&calls)));
-        }
-        assert_eq!(observations[0], observations[1], "{mode:?}: {setup}");
     }
 }
 
@@ -407,7 +412,7 @@ fn actual_source_killing_callback_preserves_legacy_outcome_and_never_no_demand()
             eval.set_current_buffer_unrecorded(saved).unwrap();
             let mut demand = RedisplayFontificationDemand::new();
             let result = if observe {
-                let result = ensure_fontified_for_redisplay_inner(
+                let result = neovm_display::test_support::authority::ensure_fontified_for_redisplay_inner_for_test(
                     &mut eval,
                     source,
                     0,
@@ -421,7 +426,7 @@ fn actual_source_killing_callback_preserves_legacy_outcome_and_never_no_demand()
                 }
                 result
             } else {
-                ensure_fontified_for_redisplay_with_mode(&mut eval, source, 0, 10, mode)
+                neovm_display::test_support::authority::ensure_fontified_for_redisplay_with_mode_for_test(&mut eval, source, 0, 10, mode)
             };
             assert!(
                 eval.buffer_manager().get(source).is_none(),

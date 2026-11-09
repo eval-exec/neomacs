@@ -20,7 +20,7 @@ mod subrs;
 #[path = "modifiers/tests/modifiers_test.rs"]
 mod tests;
 #[cfg(any(test, feature = "test-support"))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) use subrs::SUBRS;
 #[doc(hidden)]
 pub use subrs::register_subrs;

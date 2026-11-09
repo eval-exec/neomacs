@@ -21,6 +21,7 @@ pub(super) enum PropertyApplication {
     MaterializeThenOverlay,
 }
 
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(super) trait TargetPolicy: sealed::Sealed + Copy {
     const PROPERTY_APPLICATION: PropertyApplication;
 
@@ -62,6 +63,7 @@ impl TargetPolicy for DisplayTarget {
 #[derive(Clone, Copy, Debug, Default)]
 /// Stored output borrows its admitted same-thread formatter extent. No handle
 /// survives that extent or crosses mutators; static assertions pin this rule.
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(super) enum StoredTarget<'scope> {
     String(ModeLineStringTarget<'scope>),
     #[default]

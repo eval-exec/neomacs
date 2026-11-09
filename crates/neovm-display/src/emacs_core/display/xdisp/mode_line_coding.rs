@@ -32,7 +32,7 @@ impl From<&crate::window::Frame> for CodingFrame {
 #[derive(Clone, Copy)]
 pub(super) enum CodingAccess<'native> {
     Registry(&'native CodingSystemManager),
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     SplitState,
 }
 
@@ -55,7 +55,7 @@ impl CodingAccess<'_> {
                         coding_system_mnemonic_char(self, manager.keyboard_coding_sym()),
                         coding_system_mnemonic_char(self, manager.terminal_coding_sym()),
                     ),
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-support"))]
                     Self::SplitState => {
                         let keyboard = _vars
                             .value_by_name("keyboard-coding-system")
@@ -177,7 +177,7 @@ fn coding_system_mnemonic_char(
 ) -> char {
     let registered = match access {
         CodingAccess::Registry(manager) => manager.mode_line_mnemonic(cs_name),
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         CodingAccess::SplitState => None,
     };
     if let Some(mnemonic) = registered {

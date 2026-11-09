@@ -41,6 +41,7 @@ pub(super) fn mode() -> FontificationBoundaryMode {
 /// The core property module shares its existing resolved buffer tail on
 /// proof refusal. This borrows one immutable query and never runs Lisp/GC.
 #[inline]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(super) fn admit(
     ctx: &Context,
     position: i64,

@@ -649,7 +649,7 @@ fn x_optional_display_query_error_eval(
 
 /// Context-aware variant of `display-graphic-p`.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn builtin_display_graphic_p(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -790,7 +790,7 @@ pub(crate) fn builtin_display_screens(
 
 /// Context-aware variant of `display-planes`.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn builtin_display_planes(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -815,7 +815,7 @@ pub(crate) fn builtin_display_planes(
 
 /// Context-aware variant of `display-visual-class`.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn builtin_display_visual_class(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,

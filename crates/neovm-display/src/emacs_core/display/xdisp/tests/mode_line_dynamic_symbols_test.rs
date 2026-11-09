@@ -11,93 +11,14 @@ use neovm_value::intern::{
     unintern_canonical_id,
 };
 
-#[derive(Clone, Copy)]
-enum Walker {
-    Context,
-    State,
-    StateWithEval,
-}
-
 fn context() -> Context {
-    let mut ctx = Context::new(crate::test_utils::unit_runtime());
-    ctx.gc_stress = false;
-    ctx.set_gc_threshold(usize::MAX);
-    let buffer = ctx
-        .edit
-        .buffers
-        .create_buffer("*ttykey-k5-dynamic-symbols*");
-    ctx.edit.buffers.set_current(buffer);
-    ctx
+    crate::test_utils::mode_line_dynamic_symbols_test_upper_layer_helpers::context(|| {
+        neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime())
+    })
 }
 
-fn render(
-    ctx: &mut Context,
-    pctx: &ModeLinePercentContext,
-    format: Value,
-    walker: Walker,
-) -> String {
-    let mut rendered = ModeLineRendered::default();
-    render_into(ctx, pctx, format, walker, &mut rendered);
-    // Literal strings in these cases are property-free and contain no padding.
-    rendered
-        .text
-        .into_iter()
-        .map(|code| char::from_u32(code).expect("Unicode test text"))
-        .collect()
-}
-
-fn render_into(
-    ctx: &mut Context,
-    pctx: &ModeLinePercentContext,
-    format: Value,
-    walker: Walker,
-    rendered: &mut ModeLineRendered,
-) {
-    match walker {
-        Walker::Context => {
-            format_mode_line_for_target(
-                ctx,
-                pctx,
-                &format,
-                rendered,
-                0.into(),
-                Risk::Trusted,
-                None,
-            )
-            .expect("context walk");
-        }
-        Walker::State => {
-            assert!(!format_mode_line_recursive_in_state(
-                ctx.variables(),
-                &[],
-                &ctx.edit.buffers,
-                &ctx.processes(),
-                pctx,
-                &format,
-                rendered,
-                0,
-                false,
-            ));
-        }
-        Walker::StateWithEval => {
-            let roots = mode_line_gc::ScratchRoots::new();
-            format_mode_line_recursive_in_state_with_eval_rooted(
-                ctx.variables(),
-                &[],
-                &ctx.edit.buffers,
-                &ctx.processes(),
-                pctx,
-                &format,
-                rendered,
-                0,
-                false,
-                &mut |_, _| Ok(Value::NIL),
-                &roots,
-            )
-            .expect("split callback walk");
-        }
-    }
-}
+use crate::test_utils::mode_line_dynamic_symbols_test_upper_layer_helpers::Walker;
+use crate::test_utils::mode_line_dynamic_symbols_test_upper_layer_helpers::{render, render_into};
 
 /// Like the existing exact-clock fixtures, run without unrelated registry
 /// writers. The SAME owned formatter state/accumulator survives both halves.
@@ -740,60 +661,5 @@ fn mode_line_symbol_object_identity_and_conditional_match_gnu() {
             Walker::Context
         ),
         "FALSE"
-    );
-}
-
-#[test]
-fn mode_line_symbol_object_risk_property_matches_gnu() {
-    let mut ctx = context();
-    let name = "mode-line-symbol-object-risk";
-    let canonical = intern(name);
-    let actual = intern_uninterned(name);
-    let value = ctx
-        .eval_str("'(:eval (propertize \"RISK-EVAL\" 'ep33-symbol-probe-property 'present))")
-        .expect("GNU probe value");
-    ctx.obarray_mut().set_symbol_value_id(canonical, value);
-    ctx.obarray_mut().set_symbol_value_id(actual, value);
-    let risk = ModeLineSymbol::RiskyLocalVariable.id();
-    ctx.obarray_mut()
-        .put_property_id(actual, risk, Value::T)
-        .expect("valid risk plist");
-    ctx.obarray_mut()
-        .put_property_id(canonical, risk, Value::NIL)
-        .expect("valid risk plist");
-    let format = Value::from_sym_id(actual);
-    let mut rendered = ModeLineRendered::default();
-    render_into(
-        &mut ctx,
-        &ModeLinePercentContext::default(),
-        format,
-        Walker::Context,
-        &mut rendered,
-    );
-    assert_eq!(
-        rendered.text,
-        "RISK-EVAL".chars().map(u32::from).collect::<Vec<_>>()
-    );
-    assert_eq!(
-        rendered.text_props.get_property_at_char_pos(
-            neovm_edit::buffer::CharPos0::new(0),
-            Value::symbol("ep33-symbol-probe-property"),
-        ),
-        Some(Value::symbol("present"))
-    );
-    ctx.obarray_mut()
-        .put_property_id(actual, risk, Value::NIL)
-        .expect("valid risk plist");
-    ctx.obarray_mut()
-        .put_property_id(canonical, risk, Value::T)
-        .expect("valid risk plist");
-    assert_eq!(
-        render(
-            &mut ctx,
-            &ModeLinePercentContext::default(),
-            format,
-            Walker::Context
-        ),
-        ""
     );
 }

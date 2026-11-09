@@ -52,6 +52,11 @@ tracing.workspace = true
 visibility = { version = "0.1.1", optional = true }
 
 [dev-dependencies]
+# The A' gate on fence-routed items is cfg(any(test, feature = "test-support"))
+# to match the fence module's cfg; the optional `visibility` dependency is
+# tied to the test-support feature, so this dev-dependency makes the
+# attribute macro resolvable in this crate's own cfg(test) build too.
+visibility = "0.1.1"
 # Downward-only: shared value test helpers for this crate's own unit tests
 # (dependency crates never have cfg(test), so the provider feature is enabled
 # only by this dev edge, exactly like neovm-eval).

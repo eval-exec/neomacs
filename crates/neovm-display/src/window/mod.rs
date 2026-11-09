@@ -571,7 +571,13 @@ pub struct WindowLayoutAttemptFreshness {
     window_topology_generation: u64,
     frame: FrameLayoutInputState,
     window: WindowLayoutInputState,
+    #[cfg(any(test, feature = "test-support"))]
+    pub live_buffer: WindowBufferLayoutInputState,
+    #[cfg(not(any(test, feature = "test-support")))]
     live_buffer: WindowBufferLayoutInputState,
+    #[cfg(any(test, feature = "test-support"))]
+    pub source_buffer: WindowBufferLayoutInputState,
+    #[cfg(not(any(test, feature = "test-support")))]
     source_buffer: WindowBufferLayoutInputState,
     source_layout_variables: WindowLayoutVariableState,
     selection: WindowLayoutSelectionState,
@@ -582,7 +588,13 @@ pub struct WindowLayoutAttemptFreshness {
     /// Lisp is running must not let that attempt publish rows produced from
     /// the pre-invalidation inputs, and unlike `media_generation` it does not
     /// depend on `image-flush` having actually changed a catalog entry.
+    #[cfg(any(test, feature = "test-support"))]
+    pub body_redisplay: BodyRedisplayRevision,
+    #[cfg(not(any(test, feature = "test-support")))]
     body_redisplay: BodyRedisplayRevision,
+    #[cfg(any(test, feature = "test-support"))]
+    pub function_epoch: u64,
+    #[cfg(not(any(test, feature = "test-support")))]
     function_epoch: u64,
 }
 

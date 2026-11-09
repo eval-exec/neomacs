@@ -5,6 +5,14 @@ use neovm_eval::emacs_core::eval::{
 };
 use neovm_value::value::Value;
 
+/// Harness-bound wrapper over the shared upper-layer helper (one home:
+/// display test_utils); display tests keep their unit-runtime Context.
+fn context() -> Context {
+    crate::test_utils::xfaces_upper_layer_helpers::font_remapping_context(|| {
+        Context::new(crate::test_utils::unit_runtime())
+    })
+}
+
 /// Deterministic font-system adapter: point sizes at 96 DPI, no font cache.
 /// Face definitions, remapping, and Lisp queries all use the real evaluator.
 struct PointSizeFontHost;
@@ -53,19 +61,6 @@ impl DisplayHost for PointSizeFontHost {
     }
 }
 
-fn context() -> Context {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frame_manager_mut()
-        .get_mut(frame)
-        .unwrap()
-        .set_window_system(Some(Value::symbol("neo")));
-    eval.eval_str("(internal-set-lisp-face-attribute 'default :height 150 nil)")
-        .unwrap();
-    eval.set_display_host(Box::new(PointSizeFontHost));
-    eval
-}
-
 fn default_font_size(eval: &mut Context) -> i64 {
     eval.eval_str("(font-get (font-spec :name (face-font 'default)) :size)")
         .unwrap()
@@ -100,19 +95,4 @@ fn face_font_remapping_preserves_gnu_relative_and_absolute_precedence() {
             .unwrap();
         assert_eq!(default_font_size(&mut eval), expected, "{specification}");
     }
-}
-
-#[test]
-fn font_at_named_face_remapping_uses_the_same_precedence_as_face_font() {
-    let mut eval = context();
-    eval.eval_str("(internal-make-lisp-face 'issue360-font)")
-        .unwrap();
-    eval.eval_str("(internal-set-lisp-face-attribute 'issue360-font :height 150 nil)")
-        .unwrap();
-    eval.eval_str("(setq face-remapping-alist '((issue360-font (:height 1.2) issue360-font)))")
-        .unwrap();
-    let size = eval
-        .eval_str("(font-get (font-at 0 nil (propertize \"M\" 'face 'issue360-font)) :size)")
-        .unwrap();
-    assert_eq!(size.as_int(), Some(24));
 }

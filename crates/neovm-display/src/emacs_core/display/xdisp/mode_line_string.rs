@@ -111,7 +111,7 @@ impl TargetAccounting {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) enum Risk {
+pub(crate) enum Risk {
     Trusted,
     Untrusted,
 }
@@ -291,6 +291,7 @@ impl StringEmissionControls {
 }
 
 #[derive(Clone, Copy)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(super) struct ElementDepth(usize);
 
 impl From<usize> for ElementDepth {

@@ -5,7 +5,7 @@ use neovm_eval::emacs_core::eval::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use neovm_eval::emacs_core::eval::{push_scratch_gc_root_slot, set_scratch_gc_root};
 
 // Keep the native root set and its borrowed rendered fields visible at walk
@@ -90,13 +90,13 @@ pub(super) fn pin_rendered_scratch(rendered: &ModeLineRendered) -> AccumulatorRo
 /// Context reference. The caller must keep the same tagged heap active while
 /// the callback runs: the existing scratch registry records that heap's
 /// identity and the collector filters these roots by it.
-pub(super) struct ScratchRoots {
+pub(crate) struct ScratchRoots {
     saved_len: usize,
 }
 
 impl ScratchRoots {
     #[inline]
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             saved_len: save_scratch_gc_roots(),
         }
@@ -107,13 +107,13 @@ impl ScratchRoots {
         push_scratch_gc_root(value);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[inline]
     pub(super) fn slot(&self, value: Value) -> usize {
         push_scratch_gc_root_slot(value)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[inline]
     pub(super) fn set(&self, slot: usize, value: Value) {
         set_scratch_gc_root(slot, value);

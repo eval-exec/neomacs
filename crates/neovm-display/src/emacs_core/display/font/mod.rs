@@ -12,7 +12,7 @@
 mod subrs;
 mod system_fonts;
 #[cfg(any(test, feature = "test-support"))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) use subrs::SUBRS;
 #[doc(hidden)]
 pub use subrs::register_subrs;
@@ -1140,7 +1140,7 @@ trait OpenedFontMetricsExt {
     /// One public font-info schema for stored objects and newly opened entities.
     fn info_vector(self, names: OpenedFontNames, file: Value, capability: Value) -> Value;
     fn from_probe(probe: neovm_eval::emacs_core::eval::FontPxProbeResult) -> Self;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn fallback(pixel_size: i64) -> Self;
 }
 
@@ -1179,7 +1179,7 @@ impl OpenedFontMetricsExt for OpenedFontMetrics {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn fallback(pixel_size: i64) -> Self {
         let pixel_size = pixel_size.max(1);
         let height = pixel_size;
@@ -2224,6 +2224,7 @@ pub(crate) fn font_face_attributes(args: Vec<Value>) -> EvalResult {
 /// `(fontp OBJECT &optional EXTRA-TYPE)` -- return t if OBJECT is a font-spec,
 /// font-entity, or font-object.  We represent all of these as tagged vectors
 /// with `:font-spec` keyword at position 0.
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn fontp(args: Vec<Value>) -> EvalResult {
     expect_max_args("fontp", &args, 2)?;
     expect_min_args("fontp", &args, 1)?;
@@ -2251,6 +2252,7 @@ pub(crate) fn fontp(args: Vec<Value>) -> EvalResult {
 /// Usage: `(font-spec :family "Monospace" :weight 'normal :size 12)`
 ///
 /// Returns a vector `[:font-spec :family "Monospace" :weight normal :size 12]`.
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn font_spec(args: Vec<Value>) -> EvalResult {
     let mut elems: Vec<Value> = Vec::with_capacity(1 + args.len());
     elems.push(Value::keyword(FONT_SPEC_TAG));
@@ -2326,6 +2328,7 @@ pub(crate) fn font_spec(args: Vec<Value>) -> EvalResult {
 }
 
 /// `(font-get FONT PROP)` -- get a property value from a font-spec.
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn font_get(args: Vec<Value>) -> EvalResult {
     expect_args("font-get", &args, 2)?;
     if !is_font(&args[0]) {
@@ -2917,14 +2920,15 @@ fn font_weight_symbol(weight: FontWeight) -> &'static str {
     weight.symbol_name()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn build_font_object(face: &RuntimeFace) -> Value {
     build_font_object_with_pixel_size(face, None)
 }
 
 /// GNU font objects carry the OPENED pixel size in FONT_SIZE (the XLFD's
 /// pixel field prints it); pass `pixel_size` when the resolver knows it.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn build_font_object_with_pixel_size(face: &RuntimeFace, pixel_size: Option<i64>) -> Value {
     let fields = font_object_property_fields(face, pixel_size);
     let stable_name = font_name_for_face(face)
@@ -2947,7 +2951,7 @@ fn build_font_object_with_pixel_size(face: &RuntimeFace, pixel_size: Option<i64>
 
 /// Render an unresolved face request to its public XLFD without pretending
 /// that the request is an opened font object.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn font_name_for_face(face: &RuntimeFace) -> Value {
     let mut fields = font_object_property_fields(face, None);
     fields[0] = Value::keyword(FONT_ENTITY_TAG);

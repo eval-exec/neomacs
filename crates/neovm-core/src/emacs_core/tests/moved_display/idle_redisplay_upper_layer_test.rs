@@ -1,17 +1,23 @@
-//! GNU `resume-tty` (term.c) revives the terminal frames, requiring a fresh
-//! presentation even if no text or window state changed while suspended.
-
-use super::*;
+//! idle_redisplay_test tests re-homed to the core upper-layer harness.
+//!
+//! Re-homed from neovm-display (display upper-layer re-home).
+use crate::emacs_core::terminal::pure::TerminalRuntimeConfig;
+use crate::emacs_core::terminal::pure::builtin_resume_tty;
+use crate::emacs_core::terminal::pure::builtin_suspend_tty;
+use crate::emacs_core::terminal::pure::configure_terminal_runtime;
+use crate::emacs_core::terminal::pure::reset_terminal_thread_locals;
+use crate::emacs_core::terminal::pure::set_terminal_host;
+use crate::emacs_core::terminal::*;
 use crate::window::DisplayFrameManagerExt;
-use std::cell::Cell;
-
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 /// Owns test-only terminal and redisplay state on the current test thread;
 /// neither the fixture nor its policy is shared between Lisp mutators.
 struct TerminalIdleFixture;
 
 impl Drop for TerminalIdleFixture {
     fn drop(&mut self) {
-        crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(None);
+        neovm_display::test_support::authority::set_redisplay_idle_skip_for_test(None);
         reset_terminal_thread_locals();
     }
 }
@@ -20,9 +26,9 @@ impl Drop for TerminalIdleFixture {
 fn resumed_tty_invalidates_idle_redisplay() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
-    crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(Some(true));
+    neovm_display::test_support::authority::set_redisplay_idle_skip_for_test(Some(true));
     let _fixture = TerminalIdleFixture;
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     configure_terminal_runtime(TerminalRuntimeConfig::interactive(
         Some("xterm-256color".to_owned()),
         neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(
@@ -33,9 +39,9 @@ fn resumed_tty_invalidates_idle_redisplay() {
     eval.frame_manager_mut()
         .create_frame("resume-idle-tty", 640, 384, buffer);
     let log = Rc::new(RefCell::new(Vec::new()));
-    set_terminal_host(Box::new(RecordingTerminalHost {
-        log: Rc::clone(&log),
-    }));
+    set_terminal_host(Box::new(
+        neovm_display::test_support::authority::recording_terminal_host_for_test(Rc::clone(&log)),
+    ));
     let layouts = Rc::new(Cell::new(0));
     let observed = Rc::clone(&layouts);
     eval.redisplay_fn = Some(Box::new(move |eval| {

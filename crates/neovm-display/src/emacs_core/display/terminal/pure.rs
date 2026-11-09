@@ -1181,7 +1181,7 @@ pub fn builtin_terminal_list(args: Vec<Value>) -> EvalResult {
 }
 
 /// (selected-terminal) -> currently selected terminal handle.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn builtin_selected_terminal(args: Vec<Value>) -> EvalResult {
     expect_args("selected-terminal", &args, 0)?;
     Ok(terminal_handle_value())

@@ -300,6 +300,7 @@ pub(crate) fn face_new_frame_defaults_vector(
 /// already-interned symbol `Value`. Returns the lface vector (entry CDR), or
 /// None when the face is absent. Callers that need create-on-miss (defface,
 /// copy-face, make-lisp-face) use `face_new_frame_defaults_vector` instead.
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn lookup_face_new_frame_defaults_vector(
     eval: &neovm_eval::emacs_core::eval::Context,
     key: Value,
@@ -3874,6 +3875,7 @@ pub fn builtin_internal_lisp_face_equal_p(
 ///
 /// Never signals. An unknown face, alias cycle, or malformed vector cannot be
 /// proven equal and returns false.
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn lisp_faces_equal_in_frame(
     eval: &neovm_eval::emacs_core::eval::Context,
     frame_id: FrameId,

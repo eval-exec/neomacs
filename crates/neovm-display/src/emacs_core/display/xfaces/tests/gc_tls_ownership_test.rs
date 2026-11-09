@@ -54,38 +54,6 @@ fn gc_tls_ownership_font_roots_exclude_another_live_heap() {
 }
 
 #[test]
-fn gc_tls_ownership_font_registry_names_do_not_retain_unrooted_properties() {
-    let mut ctx = Context::new(crate::test_utils::unit_runtime());
-    let normalized = ctx.eval_str("(let ((name (propertize \"ISO-10646-1\" 'gc-tls-payload (vector 42)))) (internal-set-alternative-font-registry-alist (list (list name))))").unwrap();
-    assert!(
-        normalized
-            .cons_car()
-            .cons_car()
-            .as_lisp_string()
-            .unwrap()
-            .has_intervals(),
-        "the normalized Lisp result must preserve GNU-visible properties"
-    );
-    let state = alternative_font_registry_alist().read().unwrap();
-    assert!(
-        state
-            .iter()
-            .all(|(name, aliases)| !name.to_lisp_string().has_intervals()
-                && aliases
-                    .iter()
-                    .all(|alias| !alias.to_lisp_string().has_intervals())),
-        "the static font name registry copied heap Values in string text properties"
-    );
-    drop(state);
-    ctx.gc_collect_exact();
-    assert_eq!(
-        crate::emacs_core::font::alternative_font_registries("iso-10646-1"),
-        vec!["iso-10646-1"]
-    );
-    builtin_internal_set_alternative_font_registry_alist(vec![Value::NIL]).unwrap();
-}
-
-#[test]
 fn gc_tls_ownership_font_overrides_follow_context_swaps() {
     let mut first = Context::new(crate::test_utils::unit_runtime());
     let a = Value::vector(vec![Value::fixnum(1)]);

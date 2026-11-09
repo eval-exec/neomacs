@@ -2,16 +2,9 @@
 
 use super::*;
 
-const BUFFER_END: i64 = 302;
+use crate::test_utils::motion_test_upper_layer_helpers::{eob_overlay_snapshot, row};
 
-fn row(index: i64, start: i64, end: i64) -> DisplayRowSnapshot {
-    DisplayRowSnapshot {
-        row: index,
-        start_buffer_pos: Some(LispCharPos1::new(start)),
-        end_buffer_pos: Some(LispCharPos1::new(end)),
-        ..Default::default()
-    }
-}
+const BUFFER_END: i64 = 302;
 
 /// The rows a real redisplay publishes for 300 `x` characters followed by a
 /// newline, in a 160-column window with `truncate-lines` on.
@@ -105,42 +98,6 @@ fn a_bounded_last_row_does_not_own_unmeasured_source() {
     truncated[0].truncated_end_buffer_pos = Some(LispCharPos1::new(50));
     assert_eq!(lookup(&truncated, 50), Some(0));
     assert_eq!(lookup(&truncated, 51), None);
-}
-
-fn eob_overlay_snapshot(two_lines: bool, extra_rows: usize) -> WindowDisplaySnapshot {
-    use crate::window::{
-        CompletedEobOverlayMotionExtent, DisplayRowEndSource, EobOverlayMotionCoverage,
-    };
-
-    let end = if two_lines { 8 } else { 4 };
-    let mut rows = Vec::new();
-    if two_lines {
-        rows.push(row(0, 1, 4));
-    }
-    let mut source = row(rows.len() as i64, if two_lines { 5 } else { 1 }, end);
-    source.end_source = DisplayRowEndSource::OverlayAfterString;
-    rows.push(source);
-    for _ in 0..extra_rows {
-        let mut inserted = row(rows.len() as i64, end, end);
-        inserted.end_source = DisplayRowEndSource::OverlayAfterString;
-        rows.push(inserted);
-    }
-    rows.push(DisplayRowSnapshot {
-        row: rows.len() as i64,
-        ..Default::default()
-    });
-    WindowDisplaySnapshot {
-        rows,
-        eob_overlay_motion: EobOverlayMotionCoverage::Complete(
-            CompletedEobOverlayMotionExtent::from_physical_rows(
-                LispCharPos1::new(end),
-                usize::from(two_lines),
-                usize::from(two_lines) + extra_rows + 1,
-            )
-            .expect("overlay traversal advances forward"),
-        ),
-        ..Default::default()
-    }
 }
 
 fn overlay_motion(
@@ -301,58 +258,4 @@ fn an_eob_overlay_extent_for_another_anchor_is_not_motion_evidence() {
             .expect("forward extent"),
     );
     assert!(overlay_motion(&snapshot, 4, 1, 1).settled().is_none());
-}
-
-#[test]
-fn integer_motion_expands_a_query_that_covers_source_eob_but_not_its_overlay_tail() {
-    use crate::window::{EobOverlayMotionCoverage, WindowLayoutQuery, WindowLayoutQueryOutcome};
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
-    eval.buffer_manager_mut()
-        .get_mut(buffer)
-        .unwrap()
-        .insert("abc");
-    let frame = eval
-        .frame_manager_mut()
-        .create_frame("overlay-motion", 400, 240, buffer);
-    eval.frame_manager_mut()
-        .get_mut(frame)
-        .unwrap()
-        .window_system = Some(Value::symbol("neomacs"));
-    let window = eval.frame_manager().get(frame).unwrap().selected_window;
-    let calls = Arc::new(AtomicUsize::new(0));
-    let query_calls = Arc::clone(&calls);
-    eval.install_window_layout_query(move |_, _, _, scope| {
-        let crate::window::WindowLayoutQueryScope::Rows { count, .. } = scope else {
-            panic!("motion requests rows");
-        };
-        let mut snapshot = if query_calls.fetch_add(1, Ordering::Relaxed) == 0 {
-            assert_eq!(count.get(), 4);
-            let mut partial = eob_overlay_snapshot(false, 3);
-            partial.rows.pop();
-            partial.eob_overlay_motion = EobOverlayMotionCoverage::Incomplete {
-                anchor: LispCharPos1::new(4),
-            };
-            partial
-        } else {
-            assert_eq!(count.get(), 8);
-            eob_overlay_snapshot(false, 5)
-        };
-        snapshot.window_id = window;
-        WindowLayoutQueryOutcome::Ready(WindowLayoutQuery::new(
-            LispCharPos1::new(4),
-            Some(snapshot),
-        ))
-    })
-    .expect("install the layout-query handler");
-    let result = eval
-        .eval_str("(let ((noninteractive nil)) (goto-char 1) (list (vertical-motion 1) (point)))")
-        .expect("source EOB does not prematurely terminate an unfinished display walk");
-    assert_eq!(neovm_eval::emacs_core::print::print_value(&result), "(6 4)");
-    assert_eq!(calls.load(Ordering::Relaxed), 2);
 }

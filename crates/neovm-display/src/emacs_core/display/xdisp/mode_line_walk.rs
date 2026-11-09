@@ -190,7 +190,7 @@ impl Drop for FrameRoots<'_> {
 static_assertions::assert_not_impl_any!(FrameRoots<'static>: Send, Sync);
 
 #[inline(always)]
-pub(super) fn with_root_scope<R>(
+pub(crate) fn with_root_scope<R>(
     eval: &mut Context,
     operation: impl FnOnce(&mut Context) -> R,
 ) -> R {

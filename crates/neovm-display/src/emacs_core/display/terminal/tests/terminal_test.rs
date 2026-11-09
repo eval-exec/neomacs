@@ -1,4 +1,5 @@
 use super::pure::*;
+use crate::test_utils::terminal_test_upper_layer_helpers::RecordingTerminalHost;
 use crate::window::DisplayFrameManagerExt;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_value::error::{FlowKind, FlowResultExt as _};
@@ -7,12 +8,6 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 #[cfg(test)]
-#[path = "idle_redisplay_test.rs"]
-mod idle_redisplay;
-
-struct RecordingTerminalHost {
-    log: Rc<RefCell<Vec<&'static str>>>,
-}
 
 struct FailingDeleteTerminalHost;
 
@@ -70,23 +65,6 @@ impl TtyFrameHostFactory for DeferredRedisplayFactory {
         Some(Box::new(move |_| {
             runs.set(runs.get() + 1);
         }))
-    }
-}
-
-impl TerminalHost for RecordingTerminalHost {
-    fn suspend_tty(&mut self) -> Result<(), String> {
-        self.log.borrow_mut().push("suspend");
-        Ok(())
-    }
-
-    fn resume_tty(&mut self) -> Result<(), String> {
-        self.log.borrow_mut().push("resume");
-        Ok(())
-    }
-
-    fn delete_terminal(&mut self) -> Result<(), String> {
-        self.log.borrow_mut().push("delete");
-        Ok(())
     }
 }
 
