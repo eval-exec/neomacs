@@ -650,7 +650,7 @@ pub struct LispRegexPatternCacheEntry {
     target_key: RegexTargetKey,
     pattern: Vec<u8>,
     syntax_key: Option<SyntaxCacheKey>,
-    pub compiled: Rc<CompiledPattern>,
+    pub(crate) compiled: Rc<CompiledPattern>,
 }
 
 // Gate the exact entry footprint against its prior shape in the core build.
@@ -5598,3 +5598,12 @@ impl<'a> PropertizeFrontier<'a> {
 #[cfg(test)]
 #[path = "tests/regex_test.rs"]
 mod tests;
+
+/// VIS read row (lead #1052): reference getter for the compiled pattern.
+#[cfg(any(test, feature = "test-support"))]
+impl LispRegexPatternCacheEntry {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn compiled(&self) -> &Rc<CompiledPattern> {
+        &self.compiled
+    }
+}

@@ -51,7 +51,7 @@ fn native_parser_tag_survives(first: FirstCollection) {
         false,
     );
     let record = make_parser_value(id, language, Value::NIL, tag);
-    manager.parser_mut(id).unwrap().value = record;
+    manager.parser_mut(id).unwrap().set_value(record);
     // Parser records expose this setter, independently of ParserEntry.tag.
     // No parsing is needed: the canonical native owner is real, and a new
     // Parser does not need a grammar until it parses input.
@@ -60,7 +60,7 @@ fn native_parser_tag_survives(first: FirstCollection) {
         record.as_record_data().unwrap()[PARSER_SLOT_TAG],
         Value::NIL
     );
-    assert_eq!(manager.parser(id).unwrap().tag, tag);
+    assert_eq!(manager.parser(id).unwrap().tag(), tag);
 
     // The weak key does not root the tag. Its entry survives a full GC
     // exactly when the independent native tag edge was traced.
@@ -82,7 +82,7 @@ fn native_parser_tag_survives(first: FirstCollection) {
     }
     for _ in 0..3 {
         heap.collect_exact(manager.roots().into_iter().chain([witness]));
-        assert_eq!(manager.parser(id).unwrap().tag, tag);
+        assert_eq!(manager.parser(id).unwrap().tag(), tag);
         let table = witness.as_hash_table().unwrap();
         assert_eq!(
             table.data.len(),

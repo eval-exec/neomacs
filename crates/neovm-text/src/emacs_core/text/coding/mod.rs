@@ -4950,11 +4950,11 @@ struct CodingDetectionBindings {
 /// (src/coding.c:586, :590), coupled to the bound charset coding's byte grammar.
 /// Reporting and decoding build the same runtime bindings before scanning.
 pub struct CodingDetectionBindings {
-    pub priorities: Vec<usize>,
+    pub(crate) priorities: Vec<usize>,
     // The whole struct exists only in test builds (struct-level cfg split);
     // its production twin keeps these fields private.
-    pub systems: [Option<SymId>; CODING_CAT_MAX],
-    pub charset: Option<CharsetDetectionPlan>,
+    pub(crate) systems: [Option<SymId>; CODING_CAT_MAX],
+    pub(crate) charset: Option<CharsetDetectionPlan>,
 }
 
 fn coding_category_bindings(
@@ -6341,3 +6341,15 @@ pub fn register_bootstrap_vars<S: TextVariableStore>(vars: &mut S) {
 #[cfg(test)]
 #[path = "tests/coding_test.rs"]
 mod tests;
+
+/// VIS write route (lead #1052): the priorities field stays pub(crate) for
+/// this crate; the authority fence delegates here instead of touching it.
+#[cfg(any(test, feature = "test-support"))]
+impl CodingDetectionBindings {
+    pub(crate) fn with_priorities_mut_for_test<R>(
+        &mut self,
+        f: impl FnOnce(&mut Vec<usize>) -> R,
+    ) -> R {
+        f(&mut self.priorities)
+    }
+}

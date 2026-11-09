@@ -2674,8 +2674,8 @@ pub(crate) struct DecodedSource {
 /// What one decoder produced: the characters, their `(charset NAME)` runs, and
 /// GNU's `coding->consumed`.
 pub struct DecodedSource {
-    pub bytes: Vec<u8>,
-    pub runs: Vec<StringTextPropertyRun>,
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) runs: Vec<StringTextPropertyRun>,
     consumed: SourceConsumed,
 }
 
@@ -6337,3 +6337,16 @@ impl<'a> RuntimeCodingMetadata<'a> {
 #[cfg(test)]
 #[path = "encoding/tests/encoding_test.rs"]
 mod tests;
+
+/// VIS read rows (lead #1052): reference getters for the decoder output.
+#[cfg(any(test, feature = "test-support"))]
+impl DecodedSource {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn runs(&self) -> &[StringTextPropertyRun] {
+        &self.runs
+    }
+}

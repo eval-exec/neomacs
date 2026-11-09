@@ -342,7 +342,7 @@ impl WarmRegexCaches {
                 LISP_REGEX_PATTERN_CACHE.with(|cache| cache
                     .borrow()
                     .iter()
-                    .any(|entry| Rc::ptr_eq(&entry.compiled, original))),
+                    .any(|entry| Rc::ptr_eq(entry.compiled(), original))),
                 "owning-thread collection discarded a Lisp-regexp entry"
             );
         }

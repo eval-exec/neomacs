@@ -303,7 +303,7 @@ pub fn with_coding_detection_priorities_mut_for_test<R>(
     bindings: &mut CodingDetectionBindings,
     f: impl FnOnce(&mut Vec<usize>) -> R,
 ) -> R {
-    f(&mut bindings.priorities)
+    bindings.with_priorities_mut_for_test(f)
 }
 
 /// FENCE (peer #816 write-arm): run the anchored existence search on the

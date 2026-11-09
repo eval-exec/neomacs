@@ -974,7 +974,7 @@ fn decode_sjis_attaches_charset_property() {
     let kanji_sjis = jis_to_sjis(0x2433);
     let mut input = vec![b'A', 0xA1, kanji_sjis.0, kanji_sjis.1];
     let decoded = decode_via_sjis(&input, &charsets, DosEolLookahead::NotRequired);
-    let (bytes, runs) = (decoded.bytes, decoded.runs);
+    let (bytes, runs) = (decoded.bytes().to_vec(), decoded.runs().to_vec());
     let text = neovm_value::emacs_char::to_utf8_lossy(&bytes);
     assert_eq!(text.chars().count(), 3); // A + katakana + kanji
     // Two runs: katakana at [1,2), kanji at [2,3).

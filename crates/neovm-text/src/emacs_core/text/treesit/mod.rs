@@ -351,11 +351,11 @@ pub struct ParserEntry {
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub struct ParserEntry {
-    pub value: Value,
+    pub(crate) value: Value,
     pub(crate) orig_buffer_id: BufferId,
     pub(crate) root_buffer_id: BufferId,
     pub(crate) language: SymId,
-    pub tag: Value,
+    pub(crate) tag: Value,
     pub(crate) parser: Parser,
     pub(crate) tree: Option<ParsedTree>,
     pub(crate) freshness: ParserFreshness,
@@ -1449,5 +1449,15 @@ impl LineColCache {
     #[doc(hidden)]
     pub fn from_parts(line: i64, col: i64, bytepos: usize) -> Self {
         Self { line, col, bytepos }
+    }
+}
+
+/// VIS read row (lead #1052): copy getter for the parser tag; `value` already
+/// has the plain-pub value()/set_value() accessors.
+#[cfg(any(test, feature = "test-support"))]
+impl ParserEntry {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn tag(&self) -> Value {
+        self.tag
     }
 }
