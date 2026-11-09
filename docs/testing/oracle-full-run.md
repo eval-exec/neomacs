@@ -66,6 +66,11 @@ Three consumers enforce it:
    next to the existing pdump attestation. The Lisp root there is
    `NEOMACS_RUNTIME_ROOT/lisp` when that variable selects an out-of-tree or
    staged runtime, and the workspace's `lisp/` otherwise.
+4. The MELPA support resolver (`neomacs-melpa-test-support::neomacs_binary`,
+   the `NEOMACS_BIN` runtime handed to MELPA and treesit probes) verifies the
+   same stamp before returning the binary, so an ad-hoc nextest filter over a
+   MELPA-backed oracle family cannot spawn an unattested editor either.  The
+   runtime root there is `NEOMACS_RUNTIME_ROOT/lisp`, else the workspace's.
 
 The loadup requirement is taken from `lisp/loadup.el` with GNU's own
 `src/Makefile.in` rule (the parser is shared with `xtask`), never from a glob,
@@ -156,7 +161,10 @@ splits them out:
 
 `ORACLE_FULL_PHASE=1` or `=2` runs a single phase, which keeps a remote job
 inside its host slot's time cap; phase 2 reuses the test binaries phase 1
-built. The exact slow-group filter is the same in `.config/nextest.toml` and
+built.  Phase 1's nextest "skipped" count is exactly the `-E`-filtered slow
+group (15 tests), not feature skips: `cargo nextest list` with the slow filter
+returns those 15 names and the complement returns 39709, so the package's
+39724 tests are provably covered as 39709 (phase 1) + 15 (phase 2). The exact slow-group filter is the same in `.config/nextest.toml` and
 the script: the `inlined_call_semantics::` module,
 `backtrace_frame_semantics::oracle_inline_` (o1/o2), and
 `debug_on_next_call::oracle_inline_` (o3/o4).

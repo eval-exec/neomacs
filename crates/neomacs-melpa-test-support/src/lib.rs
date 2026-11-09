@@ -625,10 +625,46 @@ pub use neomacs_infra::packages::install::{
     publish_package_preparation_failure,
 };
 /// The path to the `neomacs` binary (override with `NEOMACS_BIN`).
+///
+/// The resolved binary is attested against its fresh-build stamp before it is
+/// returned.  A MELPA/treesit probe that spawns an editor whose Lisp tree was
+/// synced, stripped or regenerated after the build measures a bootstrap, not
+/// the product: the treesit oracle family once spawned an unattested editor
+/// from an ad-hoc nextest filter because this resolver read `NEOMACS_BIN`
+/// without checking the stamp, and six oracle tests appeared to diverge from
+/// GNU until a fresh build was run.  The check is the same cached verification
+/// the oracle and TUI harnesses use: one full content check per nextest run,
+/// keyed by the stamp's sha256 and `NEXTEST_RUN_ID`;
+/// `NEOVM_SKIP_FRESH_BUILD_STAMP=<non-empty>` is the shared documented
+/// override and its value is echoed.
 pub fn neomacs_binary() -> PathBuf {
-    std::env::var_os("NEOMACS_BIN")
+    let binary = std::env::var_os("NEOMACS_BIN")
         .map(PathBuf::from)
-        .unwrap_or_else(|| workspace_root().join("target/release/neomacs"))
+        .unwrap_or_else(|| workspace_root().join("target/release/neomacs"));
+    attested_neomacs_binary(binary)
+}
+
+/// [`neomacs_binary`]'s attestation half, split out so the pinning test can
+/// point it at a temporary binary and Lisp tree without mutating the process
+/// environment.
+pub(crate) fn attest_binary(binary: &Path, runtime_root: &Path) -> Result<(), String> {
+    let lisp_root = runtime_root.join("lisp");
+    neomacs_test_env::fresh_build_stamp::verify(binary, &lisp_root).map(|_| ())
+}
+
+fn attested_neomacs_binary(binary: PathBuf) -> PathBuf {
+    static ATTESTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    ATTESTED.get_or_init(|| {
+        // The runtime tree is the one the spawned editor reads: an
+        // out-of-tree or staged runtime is selected by NEOMACS_RUNTIME_ROOT.
+        let runtime_root = std::env::var_os("NEOMACS_RUNTIME_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(workspace_root);
+        if let Err(message) = attest_binary(&binary, &runtime_root) {
+            panic!("{message}");
+        }
+    });
+    binary
 }
 
 /// Environment entry exported by a prepared package set.
