@@ -7522,10 +7522,18 @@ fn auto_save_1(
 /// `ding` / `bitch_at_user` (src/dispnew.c:6875-6887): it never writes BEL to
 /// stdout and never signals the keyboard-macro `user-error`.
 fn ring_bell(eval: &mut Context) -> Result<(), Flow> {
-    let function = eval.visible_variable_value_or_nil("ring-bell-function");
+    // GNU reads and writes the C variable Vring_bell_function, i.e. the
+    // symbol's DEFAULT value: a let-binding or buffer-local of
+    // `ring-bell-function` is invisible to ring_bell. Read the default cell,
+    // never the visible binding.
+    let function = eval
+        .default_value_only_by_name("ring-bell-function")
+        .unwrap_or(Value::NIL);
     if function.is_nil() {
         return Ok(());
     }
+    // No specbind: a failing function must leave the variable nil so the next
+    // auto-save error cannot re-enter it (src/terminal.c:56-79).
     eval.set_variable("ring-bell-function", Value::NIL);
     let result = eval.funcall_general(function, Vec::new());
     if result.is_ok() {
