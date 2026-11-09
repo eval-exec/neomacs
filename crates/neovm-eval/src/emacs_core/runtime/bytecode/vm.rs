@@ -5653,7 +5653,12 @@ impl<'a> Vm<'a> {
                         // Cleanup watcher/unwind-protect exits, and a count the
                         // frame does not own, supersede normal bytecode
                         // execution and re-enter the VM's nonlocal dispatcher
-                        // through the one published-cursor path.
+                        // through the one published-cursor path. Unbinding an
+                        // `unwind-protect` evaluates its cleanup forms and a
+                        // `let` of a watched variable runs its watchers, both
+                        // arbitrary Lisp that re-enters bytecode through the
+                        // mirror: publish the active frame's position first.
+                        release_bytecode_frame(self.ctx, bc_position);
                         let _ = vm_try!(self.unbind_frame_target(target));
                     }
 
@@ -6115,6 +6120,11 @@ impl<'a> Vm<'a> {
                         // minibuffer lifecycle, so a new Rust `?`/flow path cannot
                         // bypass restoration.
                         publish_phase!();
+                        // The body is evaluated here (`Fprogn`), a Lisp
+                        // re-entry that charges from the mirror: publish the
+                        // active frame's position first, as GNU's bc->fp
+                        // still names this frame during the body.
+                        release_bytecode_frame(self.ctx, bc_position);
                         let root_scope = self.ctx.save_vm_roots();
                         self.push_dynamic_vm_root(progn_form);
                         let body_result = self.ctx.with_unwind_scope(|ctx| {

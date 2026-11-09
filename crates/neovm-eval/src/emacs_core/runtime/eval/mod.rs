@@ -4659,6 +4659,12 @@ impl Context {
         // the panic destroyed. Drop them BEFORE running cleanups so a signal
         // raised inside a cleanup can never select a dead resume target.
         self.condition_stack.truncate(snap.condition_len);
+        // The cleanups below run Lisp (and GC), and a re-entrant bytecode
+        // call charges from the Context mirror: restore the boundary's
+        // position BEFORE them, not after. The snapshot was taken at the
+        // module boundary, where the caller published the active frame's
+        // position.
+        self.bytecode_stack_position = snap.bytecode_stack_position;
         // Defense in depth for the `BacktraceNative` contract: a native frame
         // above the boundary may name a call-args slot of a frame the panic
         // destroyed, and the cleanups below run Lisp (and GC). Keep each one's
@@ -4696,7 +4702,6 @@ impl Context {
         // depth is exact. Safe direction: extra roots only ever pin.
         restore_scratch_gc_roots(snap.scratch_gc_roots_len);
         self.depth = snap.depth;
-        self.bytecode_stack_position = snap.bytecode_stack_position;
         self.lexenv = snap.lexenv;
         self.macro_expansion_scope_depth = snap.macro_expansion_scope_depth;
         self.lexenv_assq_cache.clear();
