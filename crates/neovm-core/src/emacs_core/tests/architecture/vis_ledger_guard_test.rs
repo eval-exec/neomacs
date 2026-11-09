@@ -7477,6 +7477,9 @@ fn authority_items_have_rows_and_existing_defining_files() {
         assert!(
             matches!(
                 kind,
+                // Peer #828 / lead #809: the original-path rows for the
+                // body-classified test-support surface include trait writers
+                // and pub-field writers; the KINDS table already carries both.
                 "fn" | "unsafe fn"
                     | "method"
                     | "type"
@@ -7485,6 +7488,8 @@ fn authority_items_have_rows_and_existing_defining_files() {
                     | "const"
                     | "static"
                     | "mod"
+                    | "trait"
+                    | "field"
             ),
             "AUTHORITY-ITEMS.tsv line {}: kind {kind:?}",
             index + 2
@@ -7864,9 +7869,10 @@ fn auth_items_declare_public(items: &[syn::Item], leaf: &str, impl_owner: Option
                 syn::Item::Trait(item) => {
                     leaf_arms
                         && matches!(item.vis, syn::Visibility::Public(_))
-                        && item.items.iter().any(|member| {
-                            matches!(member, syn::TraitItem::Fn(function) if function.sig.ident == leaf)
-                        })
+                        && (item.ident == leaf
+                            || item.items.iter().any(|member| {
+                                matches!(member, syn::TraitItem::Fn(function) if function.sig.ident == leaf)
+                            }))
                 }
                 syn::Item::Const(item) => {
                     leaf_arms
@@ -8741,9 +8747,10 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
                         &[owner.to_string()],
                         leaf,
                     )?
+                    && !auth_file_pub_field(&workspace.join(&row.defining_file), owner, leaf)?
                 {
                     return Err(format!(
-                        "AUTHORITY_PATHS {expected}: the defining file does not expose {owner}::{leaf} as a pub inherent method"
+                        "AUTHORITY_PATHS {expected}: the defining file does not expose {owner}::{leaf} as a pub inherent method or pub field"
                     ));
                 }
                 if let Some(fence) = &fence {
@@ -9585,4 +9592,43 @@ mod disjointness_ratchet_tests {
             .expect_err("re-added row 333 is red");
         assert!(error.contains("exactly one cross-crate route"), "{error}");
     }
+}
+
+/// Peer #828 / lead #809: a pub named field of the owner struct/union in the
+/// defining file is a public route for the field row (the field-row shape of
+/// an original-path AUTHORITY row).  Named fields only: tuple fields have no
+/// own item path.
+fn auth_file_pub_field(file: &Path, owner: &str, field: &str) -> Result<bool, String> {
+    let text = read(file)?;
+    let ast = syn::parse_file(&text)
+        .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", file.display()))?;
+    fn declares(items: &[syn::Item], owner: &str, field: &str) -> bool {
+        items.iter().any(|item| match item {
+            syn::Item::Struct(item) => {
+                item.ident == owner
+                    && matches!(item.vis, syn::Visibility::Public(_))
+                    && match &item.fields {
+                        syn::Fields::Named(named) => named.named.iter().any(|f| {
+                            f.ident.as_ref().is_some_and(|i| i == field)
+                                && matches!(f.vis, syn::Visibility::Public(_))
+                        }),
+                        _ => false,
+                    }
+            }
+            syn::Item::Union(item) => {
+                item.ident == owner
+                    && matches!(item.vis, syn::Visibility::Public(_))
+                    && item.fields.named.iter().any(|f| {
+                        f.ident.as_ref().is_some_and(|i| i == field)
+                            && matches!(f.vis, syn::Visibility::Public(_))
+                    })
+            }
+            syn::Item::Mod(module) => module
+                .content
+                .as_ref()
+                .is_some_and(|(_, inner)| declares(inner, owner, field)),
+            _ => false,
+        })
+    }
+    Ok(declares(&ast.items, owner, field))
 }
