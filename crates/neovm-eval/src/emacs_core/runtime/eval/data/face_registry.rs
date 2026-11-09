@@ -9,17 +9,17 @@ use neovm_value::display_vocab::LFaceAttr;
 use neovm_value::heap_registry::HeapRegistryHandle;
 use neovm_value::intern::SymId;
 use neovm_value::value::Value;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 
 pub const FIRST_DYNAMIC_FACE_ID: i64 = 186;
 
 pub struct FaceAttrState {
-    pub selected_created: HashSet<SymId>,
-    pub selected_overrides: HashMap<SymId, HashMap<LFaceAttr, Value>>,
-    pub defaults_overrides: HashMap<SymId, HashMap<LFaceAttr, Value>>,
-    pub created_lisp_faces: HashSet<SymId>,
-    pub created_face_ids: HashMap<SymId, i64>,
+    pub selected_created: FxHashSet<SymId>,
+    pub selected_overrides: FxHashMap<SymId, FxHashMap<LFaceAttr, Value>>,
+    pub defaults_overrides: FxHashMap<SymId, FxHashMap<LFaceAttr, Value>>,
+    pub created_lisp_faces: FxHashSet<SymId>,
+    pub created_face_ids: FxHashMap<SymId, i64>,
     pub next_created_face_id: i64,
     pub face_set_generation: u64,
     // The sorted name cache follows the same Context as its face definitions.
@@ -29,11 +29,11 @@ pub struct FaceAttrState {
 impl Default for FaceAttrState {
     fn default() -> Self {
         Self {
-            selected_created: HashSet::default(),
-            selected_overrides: HashMap::default(),
-            defaults_overrides: HashMap::default(),
-            created_lisp_faces: HashSet::default(),
-            created_face_ids: HashMap::default(),
+            selected_created: FxHashSet::default(),
+            selected_overrides: FxHashMap::default(),
+            defaults_overrides: FxHashMap::default(),
+            created_lisp_faces: FxHashSet::default(),
+            created_face_ids: FxHashMap::default(),
             next_created_face_id: FIRST_DYNAMIC_FACE_ID,
             face_set_generation: 0,
             face_name_list_cache: None,
