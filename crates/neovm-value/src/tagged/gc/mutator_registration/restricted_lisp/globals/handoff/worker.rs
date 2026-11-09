@@ -1,7 +1,7 @@
 //! Own each frame/token until cleanup, independently of execution's outcome.
 use super::*;
 
-#[cfg(not(miri))]
+#[cfg(all(any(test, feature = "test-support"), not(miri)))]
 pub(crate) mod contention_tests;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
