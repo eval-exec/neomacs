@@ -123,13 +123,15 @@ fn input_after_idle_timer_wakes_wait(read: InputRead) {
 fn command_loop_uses_selected_buffers_map_after_async_switch() {
     let _policy = legacy_redisplay_fixture_policy();
     let mut ev = runtime_startup_context();
-    let scratch = ev.buffers.create_buffer("*async-old*");
-    ev.buffers.set_current(scratch);
-    let frame = ev.frames.create_frame("F1", 80, 24, scratch);
-    assert!(ev.frames.select_frame(frame));
+    let scratch = ev.edit.buffers.create_buffer("*async-old*");
+    ev.edit.buffers.set_current(scratch);
+    let frame = ev
+        .frame_manager_mut()
+        .create_frame("F1", 80, 24, scratch);
+    assert!(ev.frame_manager_mut().select_frame(frame));
     let _input_owner = InputGateOwner::install(&mut ev);
     fn stop(ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
-        ctx.command_loop.running = false;
+        ctx.command_loop_mut().running = false;
         Ok(Value::NIL)
     }
     ev.register_subr(SubrSpec::new(
@@ -153,7 +155,7 @@ fn command_loop_uses_selected_buffers_map_after_async_switch() {
                  (setq unread-command-events (list ?a ?a ?b)))))"#,
     )
     .unwrap();
-    ev.command_loop.running = true;
+    ev.command_loop_mut().running = true;
     ev.recursive_edit_inner().unwrap();
     assert_eq!(
         ev.eval_symbol("neo-old-map-count").unwrap(),
@@ -171,10 +173,12 @@ fn command_loop_uses_selected_buffers_map_after_async_switch() {
 fn lisp_key_reader_preserves_current_buffer_after_async_display() {
     let _policy = legacy_redisplay_fixture_policy();
     let mut ev = runtime_startup_context();
-    let old = ev.buffers.create_buffer("*reader-old*");
-    ev.buffers.set_current(old);
-    let frame = ev.frames.create_frame("F1", 80, 24, old);
-    assert!(ev.frames.select_frame(frame));
+    let old = ev.edit.buffers.create_buffer("*reader-old*");
+    ev.edit.buffers.set_current(old);
+    let frame = ev
+        .frame_manager_mut()
+        .create_frame("F1", 80, 24, old);
+    assert!(ev.frame_manager_mut().select_frame(frame));
     let _input_owner = InputGateOwner::install(&mut ev);
     ev.eval_str(
         r#"(progn
@@ -195,7 +199,7 @@ fn lisp_key_reader_preserves_current_buffer_after_async_display() {
         .unwrap();
     assert_eq!(keys, vec![Value::fixnum('a' as i64)]);
     assert_eq!(binding.original(), Value::symbol("neo-old-key"));
-    assert_eq!(ev.buffers.current_buffer_id(), Some(old));
+    assert_eq!(ev.edit.buffers.current_buffer_id(), Some(old));
 }
 
 #[test]

@@ -2131,7 +2131,7 @@ fn layout_buffer_snapshot_is_text_backend_neutral_for_positions_bytes_and_proper
 /// and remains tied to the immutable source rather than later buffer mutation.
 #[test]
 fn layout_property_absence_proof_is_complete_and_snapshot_stable() {
-    let _eval = neovm_core::emacs_core::Context::new();
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     for kind in BufferTextBackendKind::implemented_variants() {
         let mut buffer =
             test_buffer_with_backend(300 + u64::from(u8::from(kind)), "*property-proof*", kind);

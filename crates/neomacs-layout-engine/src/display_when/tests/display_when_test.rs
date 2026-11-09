@@ -446,8 +446,8 @@ fn a_disable_eval_wrapper_makes_its_when_forms_fail_like_gnu() {
 /// fails, and under `(disable-eval …)' it is nil like any other FORM.
 #[test]
 fn an_uninterned_symbol_named_t_is_a_form_like_any_other() {
-    let mut eval = Context::new();
-    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = eval.buffer_manager().current_buffer_id().expect("buffer");
     let plain = eval
         .eval_str("(cons 'when (cons (make-symbol \"t\") \"SHOWN\"))")
         .expect("plain");
@@ -455,7 +455,7 @@ fn an_uninterned_symbol_named_t_is_a_form_like_any_other() {
         .eval_str("(list 'disable-eval (cons 'when (cons (make-symbol \"t\") \"SHOWN\")))")
         .expect("disabled");
     {
-        let buffer = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buffer = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
         buffer.insert("abcdef\n");
         for (from, to, value) in [(0, 2, plain), (3, 5, disabled)] {
             let start = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(from));

@@ -4,7 +4,7 @@ use super::*;
 /// of a currently winning candidate; relevant interval writes revoke it.
 #[test]
 fn ordinary_cursor_proof_observes_original_string_absence() {
-    let mut context = Context::new();
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
     for (expression, ordinary) in [
         ("(copy-sequence \"XY\")", true),
         ("(propertize \"XY\" 'face 'bold)", true),
@@ -37,7 +37,7 @@ fn ordinary_cursor_proof_observes_original_string_absence() {
 /// historical chain, and repeating the same union does not consume more budget.
 #[test]
 fn original_authority_unions_are_flattened_deduplicated_and_bounded() {
-    let context = Context::new();
+    let context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut originals = Vec::new();
     for index in 0..33 {
         let source = Value::string(format!("source-{index}"));
@@ -60,7 +60,7 @@ fn original_authority_unions_are_flattened_deduplicated_and_bounded() {
 /// was already observed. Detaching an observed descendant invalidates before GC.
 #[test]
 fn decoded_payload_domains_and_ancestor_mutations_keep_original_authority() {
-    let mut context = Context::new();
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let first = context
         .eval_str("(setq neo-original-face (list :height 2.0))")
         .unwrap();
@@ -100,7 +100,7 @@ fn decoded_payload_domains_and_ancestor_mutations_keep_original_authority() {
 #[test]
 fn equal_content_sources_keep_distinct_roots() {
     use neovm_core::emacs_core::value::{mutate_string_text_properties, positions::*};
-    let mut context = Context::new();
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
     context.gc_collect_exact();
     let allocated = || neovm_core::tagged::gc::with_tagged_heap(|heap| heap.allocated_count());
     let baseline = allocated();
@@ -152,7 +152,7 @@ fn equal_content_sources_keep_distinct_roots() {
 /// text compares equal; the skipped rows' original authority cannot cover it.
 #[test]
 fn equal_content_new_source_expands_partial_domain() {
-    let context = Context::new();
+    let context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let first = Value::string("same");
     let second = Value::string("same");
     assert_ne!(first.bits(), second.bits());
@@ -175,7 +175,7 @@ fn equal_content_new_source_expands_partial_domain() {
 /// while all original content/interval observations remain freshness evidence.
 #[test]
 fn repeated_string_projections_share_one_root_lease() {
-    let context = Context::new();
+    let context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let value = Value::string("repeated source");
     let capture = Capture::begin(&context);
     for _ in 0..100 {
@@ -201,7 +201,7 @@ fn repeated_string_projections_share_one_root_lease() {
 #[test]
 fn partial_source_domains_preserve_original_authority_and_bound_history() {
     for target in ["neo-source-first", "neo-source-second"] {
-        let mut context = Context::new();
+        let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
         let first = context
             .eval_str("(setq neo-source-first \"first\")")
             .unwrap();

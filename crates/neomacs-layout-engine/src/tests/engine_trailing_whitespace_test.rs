@@ -49,7 +49,7 @@ fn trailing_source_predicate_respects_cr_zv_narrowing_and_character_coordinates(
         ("x  hidden", true, 1, 0, true),
         ("x  hidden", false, 1, 0, false),
     ] {
-        let mut eval = Context::new();
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         eval.buffer_manager_mut()
             .current_buffer_mut()
             .unwrap()

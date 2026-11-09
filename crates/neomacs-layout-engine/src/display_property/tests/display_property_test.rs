@@ -832,7 +832,7 @@ fn disable_eval_classifies_the_wrapped_spec() {
 /// `t' is a FORM like any other, so its clause is nil, without evaluation.
 #[test]
 fn disable_eval_keeps_a_when_clause_only_for_t_itself() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let classify = |value: Value| {
         classify_display_property(
             value,
@@ -869,7 +869,7 @@ fn disable_eval_classifies_no_neomacs_media_spec_in_any_shape() {
     // Inside it the neomacs media heads are not display specs, whatever shape
     // carries them, so the classifier hands the media resolver nothing to
     // open; GNU's own `image' spec still replaces the text.
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let classify = |value: Value| {
         classify_display_property(
             value,

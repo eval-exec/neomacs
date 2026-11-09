@@ -2,7 +2,7 @@ use super::*;
 use neovm_core::emacs_core::{Context, Value};
 
 fn viewport() -> (Context, PreparedViewport) {
-    let mut context = Context::new();
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buffer = context.buffer_manager().current_buffer().unwrap().id();
     context
         .buffer_manager_mut()
@@ -187,7 +187,7 @@ fn historical_rows_keep_original_string_authority_after_a_newer_capture() {
 #[test]
 fn forward_completion_certificate_keeps_prefix_and_multiple_original_pages() {
     for changed in ["prepared-prefix", "prepared-page-a", "prepared-page-b"] {
-        let mut context = Context::new();
+        let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
         let originals: Vec<_> = ["prepared-prefix", "prepared-page-a", "prepared-page-b"]
             .into_iter()
             .map(|name| {

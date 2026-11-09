@@ -6811,9 +6811,9 @@ fn do_auto_save_creates_the_auto_save_file_with_the_visited_file_modes() {
         fs::set_permissions(&visited, fs::Permissions::from_mode(visited_modes))
             .expect("chmod visited file");
 
-        let mut eval = Context::new();
+        let mut eval = crate::test_utils::new_context();
         prepare_buffer_for_auto_save(
-            eval.buffers.current_buffer_mut().expect("current buffer"),
+            eval.edit.buffers.current_buffer_mut().expect("current buffer"),
             Some(&visited.to_string_lossy()),
             &auto_save,
         );
@@ -6875,9 +6875,9 @@ fn do_auto_save_uses_0666_without_an_existing_visited_file() {
 
     // A buffer that visits no file, such as a mail draft.
     let draft_auto_save = dir.path().join("#*mail*#");
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     prepare_buffer_for_auto_save(
-        eval.buffers.current_buffer_mut().expect("current buffer"),
+        eval.edit.buffers.current_buffer_mut().expect("current buffer"),
         None,
         &draft_auto_save,
     );
@@ -6887,9 +6887,9 @@ fn do_auto_save_uses_0666_without_an_existing_visited_file() {
     // A buffer visiting a file that has never been saved.
     let new_file = dir.path().join("new.txt");
     let new_auto_save = dir.path().join("#new.txt#");
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     prepare_buffer_for_auto_save(
-        eval.buffers.current_buffer_mut().expect("current buffer"),
+        eval.edit.buffers.current_buffer_mut().expect("current buffer"),
         Some(&new_file.to_string_lossy()),
         &new_auto_save,
     );
@@ -6905,9 +6905,9 @@ fn do_auto_save_uses_0666_without_an_existing_visited_file() {
     fs::write(&plain_file, "not a directory\n").expect("write regular file");
     let under_file = plain_file.join("new.txt");
     let under_file_auto_save = dir.path().join("#plain.txt!new.txt#");
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     prepare_buffer_for_auto_save(
-        eval.buffers.current_buffer_mut().expect("current buffer"),
+        eval.edit.buffers.current_buffer_mut().expect("current buffer"),
         Some(&under_file.to_string_lossy()),
         &under_file_auto_save,
     );
@@ -6945,15 +6945,15 @@ fn do_auto_save_writes_nothing_when_the_visited_file_cannot_be_stat_ed() {
     // The superuser can still stat it; the EACCES case needs an ordinary user.
     let locked_is_unreadable = fs::metadata(&locked).is_err();
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     prepare_buffer_for_auto_save(
-        eval.buffers.current_buffer_mut().expect("current buffer"),
+        eval.edit.buffers.current_buffer_mut().expect("current buffer"),
         Some(&looped.to_string_lossy()),
         &looped_auto_save,
     );
-    let locked_id = eval.buffers.create_buffer("secret.txt");
+    let locked_id = eval.edit.buffers.create_buffer("secret.txt");
     prepare_buffer_for_auto_save(
-        eval.buffers.get_mut(locked_id).expect("locked buffer"),
+        eval.edit.buffers.get_mut(locked_id).expect("locked buffer"),
         Some(&locked.to_string_lossy()),
         &locked_auto_save,
     );
@@ -6992,9 +6992,9 @@ fn do_auto_save_keeps_the_modes_of_an_existing_auto_save_file() {
         fs::set_permissions(&auto_save, fs::Permissions::from_mode(existing_modes))
             .expect("chmod old auto-save file");
 
-        let mut eval = Context::new();
+        let mut eval = crate::test_utils::new_context();
         prepare_buffer_for_auto_save(
-            eval.buffers.current_buffer_mut().expect("current buffer"),
+            eval.edit.buffers.current_buffer_mut().expect("current buffer"),
             Some(&visited.to_string_lossy()),
             &auto_save,
         );
@@ -7024,7 +7024,7 @@ fn do_auto_save_takes_a_remote_visited_file_modes_from_its_handler() {
     let dir = tempfile::tempdir().expect("tempdir");
     let auto_save = dir.path().join("#!m2-remote:host:!secret.txt#");
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         "(fset 'm2-remote-modes-handler \
          '(lambda (operation &rest args) \
@@ -7037,17 +7037,17 @@ fn do_auto_save_takes_a_remote_visited_file_modes_from_its_handler() {
     .expect("define the stand-in handler");
     eval.eval_str("(setq m2-remote-modes-asked nil m2-remote-modes-buffer nil)")
         .expect("seed the witnesses");
-    eval.obarray.set_symbol_value(
+    eval.obarray_mut().set_symbol_value(
         "file-name-handler-alist",
         Value::list(vec![Value::cons(
             Value::string("\\`/m2-remote:"),
             Value::symbol("m2-remote-modes-handler"),
         )]),
     );
-    let entry_buffer = eval.buffers.current_buffer_id();
-    let remote_id = eval.buffers.create_buffer("secret.txt");
+    let entry_buffer = eval.edit.buffers.current_buffer_id();
+    let remote_id = eval.edit.buffers.create_buffer("secret.txt");
     prepare_buffer_for_auto_save(
-        eval.buffers.get_mut(remote_id).expect("remote buffer"),
+        eval.edit.buffers.get_mut(remote_id).expect("remote buffer"),
         Some("/m2-remote:host:/secret.txt"),
         &auto_save,
     );
@@ -7066,7 +7066,7 @@ fn do_auto_save_takes_a_remote_visited_file_modes_from_its_handler() {
         Some("secret.txt"),
         "the handler runs in the buffer being auto-saved"
     );
-    assert_eq!(eval.buffers.current_buffer_id(), entry_buffer);
+    assert_eq!(eval.edit.buffers.current_buffer_id(), entry_buffer);
     assert_eq!(file_permission_bits(&auto_save), 0o600);
 }
 
@@ -7087,7 +7087,7 @@ fn do_auto_save_skips_a_buffer_whose_modes_handler_signals() {
     fs::write(&local, "saved secret\n").expect("write visited file");
     fs::set_permissions(&local, fs::Permissions::from_mode(0o600)).expect("chmod visited file");
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         "(fset 'm2-failing-modes-handler \
          '(lambda (operation &rest args) \
@@ -7097,7 +7097,7 @@ fn do_auto_save_skips_a_buffer_whose_modes_handler_signals() {
                   (t nil))))",
     )
     .expect("define the failing handler");
-    eval.obarray.set_symbol_value(
+    eval.obarray_mut().set_symbol_value(
         "file-name-handler-alist",
         Value::list(vec![Value::cons(
             Value::string("\\`/m2-remote:"),
@@ -7105,13 +7105,13 @@ fn do_auto_save_skips_a_buffer_whose_modes_handler_signals() {
         )]),
     );
     prepare_buffer_for_auto_save(
-        eval.buffers.current_buffer_mut().expect("current buffer"),
+        eval.edit.buffers.current_buffer_mut().expect("current buffer"),
         Some("/m2-remote:host:/secret.txt"),
         &remote_auto_save,
     );
-    let local_id = eval.buffers.create_buffer("local.txt");
+    let local_id = eval.edit.buffers.create_buffer("local.txt");
     prepare_buffer_for_auto_save(
-        eval.buffers.get_mut(local_id).expect("local buffer"),
+        eval.edit.buffers.get_mut(local_id).expect("local buffer"),
         Some(&local.to_string_lossy()),
         &local_auto_save,
     );
@@ -7137,7 +7137,7 @@ fn do_auto_save_writes_the_text_a_modes_handler_inserted() {
     let dir = tempfile::tempdir().expect("tempdir");
     let auto_save = dir.path().join("#!m2-remote:host:!secret.txt#");
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         "(fset 'm2-editing-modes-handler \
          '(lambda (operation &rest args) \
@@ -7149,7 +7149,7 @@ fn do_auto_save_writes_the_text_a_modes_handler_inserted() {
                   (t nil))))",
     )
     .expect("define the editing handler");
-    eval.obarray.set_symbol_value(
+    eval.obarray_mut().set_symbol_value(
         "file-name-handler-alist",
         Value::list(vec![Value::cons(
             Value::string("\\`/m2-remote:"),
@@ -7157,7 +7157,7 @@ fn do_auto_save_writes_the_text_a_modes_handler_inserted() {
         )]),
     );
     prepare_buffer_for_auto_save(
-        eval.buffers.current_buffer_mut().expect("current buffer"),
+        eval.edit.buffers.current_buffer_mut().expect("current buffer"),
         Some("/m2-remote:host:/secret.txt"),
         &auto_save,
     );
@@ -7167,7 +7167,7 @@ fn do_auto_save_writes_the_text_a_modes_handler_inserted() {
         fs::read_to_string(&auto_save).expect("read auto-save file"),
         "unsaved secret\nhandler edit\n"
     );
-    let buf = eval.buffers.current_buffer().expect("current buffer");
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
     assert_eq!(
         buf.autosave_modified_tick,
         buf.modified_tick(),
@@ -7191,7 +7191,7 @@ fn do_auto_save_warns_about_a_buffer_it_cannot_auto_save() {
     // The directory does not exist, so open(2) fails with ENOENT.
     let unwritable_auto_save = dir.path().join("missing").join("#notes#");
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         "(fset 'display-warning \
          '(lambda (type message &optional level _buffer-name) \
@@ -7210,23 +7210,23 @@ fn do_auto_save_warns_about_a_buffer_it_cannot_auto_save() {
                   (t nil))))",
     )
     .expect("define the failing handler");
-    eval.obarray.set_symbol_value(
+    eval.obarray_mut().set_symbol_value(
         "file-name-handler-alist",
         Value::list(vec![Value::cons(
             Value::string("\\`/m2-remote:"),
             Value::symbol("m2-failing-modes-handler"),
         )]),
     );
-    let entry_buffer = eval.buffers.current_buffer_id();
-    let remote_id = eval.buffers.create_buffer("secret.txt");
+    let entry_buffer = eval.edit.buffers.current_buffer_id();
+    let remote_id = eval.edit.buffers.create_buffer("secret.txt");
     prepare_buffer_for_auto_save(
-        eval.buffers.get_mut(remote_id).expect("remote buffer"),
+        eval.edit.buffers.get_mut(remote_id).expect("remote buffer"),
         Some("/m2-remote:host:/secret.txt"),
         &remote_auto_save,
     );
-    let notes_id = eval.buffers.create_buffer("notes");
+    let notes_id = eval.edit.buffers.create_buffer("notes");
     prepare_buffer_for_auto_save(
-        eval.buffers.get_mut(notes_id).expect("notes buffer"),
+        eval.edit.buffers.get_mut(notes_id).expect("notes buffer"),
         None,
         &unwritable_auto_save,
     );
@@ -7246,7 +7246,7 @@ fn do_auto_save_warns_about_a_buffer_it_cannot_auto_save() {
         unwritable_auto_save.display()
     );
     assert_eq!(warnings(&mut eval), expected);
-    assert_eq!(eval.buffers.current_buffer_id(), entry_buffer);
+    assert_eq!(eval.edit.buffers.current_buffer_id(), entry_buffer);
     assert!(!remote_auto_save.exists());
 
     builtin_do_auto_save(&mut eval, vec![]).expect("second pass");
@@ -7256,7 +7256,7 @@ fn do_auto_save_warns_about_a_buffer_it_cannot_auto_save() {
         "a failed buffer is not retried before it changes"
     );
 
-    eval.buffers
+    eval.edit.buffers
         .get_mut(notes_id)
         .expect("notes buffer")
         .insert("more\n");
