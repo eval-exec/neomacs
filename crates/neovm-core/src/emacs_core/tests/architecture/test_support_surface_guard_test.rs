@@ -7,15 +7,17 @@
 //! `all`, and not inside `not`. Pub fields of a hit struct or union are hits
 //! (lead #768). Enum variant fields, modules, and `pub use` are not hits.
 //!
-//! Hits present at `d01843729a` are listed in
-//! `TEST-SUPPORT-SURFACE-BASELINE.tsv` and are not rowed. That list is also
-//! the hit list of main `7c2ee06f69`. Every other hit needs exactly one VIS,
-//! AUTHORITY, or PC11 row. The `class` column is a name heuristic for the
-//! main-hit report. The ledger row, when one exists, is the routing.
+//! `TEST-SUPPORT-SURFACE-BASELINE.tsv` is a shrink-only identity list (lead
+//! #782): crate, item path, kind, defining file. Git history may remove
+//! identities and may not add one. A baseline line that is now rowed, or
+//! that is no longer a hit, is RED. Every hit outside the list needs exactly
+//! one VIS, AUTHORITY, or PC11 row. The `class` column is a name heuristic,
+//! not the routing.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use syn::punctuated::Punctuated;
 use syn::{Attribute, Fields, Item, Meta, Visibility};
@@ -714,58 +716,190 @@ fn leaf(path: &str) -> &str {
     path.rsplit("::").next().unwrap_or(path)
 }
 
-/// Baseline identity is crate, file, path, and kind. Path alone collides:
-/// `IntervalBPlusTree::records` is both a field and a method at `d01843729a`.
-fn load_baseline(path: &Path) -> BTreeSet<(String, String, String, String)> {
-    let mut keys = BTreeSet::new();
-    for line in fs::read_to_string(path).unwrap().lines().skip(1) {
+const BASELINE_HEADER: &str = "crate\tfile\titem\tkind\tclass\torigin";
+const BASELINE_REL: &str =
+    "crates/neovm-core/src/emacs_core/tests/architecture/TEST-SUPPORT-SURFACE-BASELINE.tsv";
+
+/// Identity is crate, item path, kind, defining file (lead #782). Path alone
+/// collides: `IntervalBPlusTree::records` is both a field and a method.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct SurfaceId {
+    crate_name: String,
+    path: String,
+    kind: String,
+    file: String,
+}
+
+fn format_id(id: &SurfaceId) -> String {
+    format!("{}\t{}\t{}\t{}", id.crate_name, id.path, id.kind, id.file)
+}
+
+fn parse_baseline(text: &str) -> Result<BTreeSet<SurfaceId>, String> {
+    let mut lines = text.lines();
+    let header = lines.next().unwrap_or("");
+    if header != BASELINE_HEADER {
+        return Err(format!("RED baseline header {header:?}"));
+    }
+    let mut ids = BTreeSet::new();
+    for (index, line) in lines.enumerate() {
         if line.is_empty() {
             continue;
         }
         let fields: Vec<&str> = line.split('\t').collect();
-        keys.insert((
-            fields[0].to_string(),
-            fields[1].to_string(),
-            fields[2].to_string(),
-            fields[3].to_string(),
-        ));
+        if fields.len() != 6 || fields.iter().any(|field| field.is_empty()) {
+            return Err(format!(
+                "RED baseline line {} is not a six-column identity",
+                index + 2
+            ));
+        }
+        let id = SurfaceId {
+            crate_name: fields[0].to_string(),
+            path: fields[2].to_string(),
+            kind: fields[3].to_string(),
+            file: fields[1].to_string(),
+        };
+        if !ids.insert(id.clone()) {
+            return Err(format!(
+                "RED duplicate baseline identity {}",
+                format_id(&id)
+            ));
+        }
     }
-    keys
+    Ok(ids)
 }
 
-fn baseline_path(root: &Path) -> PathBuf {
-    root.join(
-        "crates/neovm-core/src/emacs_core/tests/architecture/TEST-SUPPORT-SURFACE-BASELINE.tsv",
-    )
+fn added_identities(previous: &BTreeSet<SurfaceId>, next: &BTreeSet<SurfaceId>) -> Vec<SurfaceId> {
+    next.difference(previous).cloned().collect()
+}
+
+fn hit_id(hit: &Hit) -> SurfaceId {
+    SurfaceId {
+        crate_name: hit.crate_name.clone(),
+        path: hit.path.clone(),
+        kind: hit.kind.clone(),
+        file: hit.file.clone(),
+    }
+}
+
+fn stale_baseline(hits: &[Hit], rows: &Rows, base: &BTreeSet<SurfaceId>) -> Vec<String> {
+    let mut by_id = BTreeMap::new();
+    for hit in hits {
+        by_id.insert(hit_id(hit), hit);
+    }
+    let mut stale = Vec::new();
+    for id in base {
+        match by_id.get(id) {
+            None => stale.push(format!("RED stale missing {}", format_id(id))),
+            Some(hit) => {
+                let covered = cover_count(rows, hit);
+                if covered != 0 {
+                    stale.push(format!("RED stale rowed {covered} {}", format_id(id)));
+                }
+            }
+        }
+    }
+    stale
+}
+
+fn git_text(workspace: &Path, args: &[&str]) -> Result<String, String> {
+    let output = Command::new("git")
+        .current_dir(workspace)
+        .args(args)
+        .output()
+        .map_err(|error| format!("RED baseline git: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "RED baseline git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|error| format!("RED baseline non-UTF8 history: {error}"))
+}
+
+/// First-parent history of the baseline, same walk as the PC11 ceiling
+/// ratchet. The first tracked revision is the anchor. Every later revision,
+/// and the working tree, may only remove identities.
+fn baseline_growth(workspace: &Path) -> Result<(), String> {
+    let log = git_text(
+        workspace,
+        &[
+            "log",
+            "--first-parent",
+            "--reverse",
+            "--format=%H",
+            "HEAD",
+            "--",
+            BASELINE_REL,
+        ],
+    )?;
+    let revisions: Vec<&str> = log.lines().filter(|line| !line.is_empty()).collect();
+    if revisions.is_empty() {
+        return Err("RED baseline has no tracked history anchor".into());
+    }
+    let mut previous = None;
+    for revision in &revisions {
+        let text = git_text(workspace, &["show", &format!("{revision}:{BASELINE_REL}")])?;
+        let ids = parse_baseline(&text)?;
+        if let Some(earlier) = &previous {
+            let added = added_identities(earlier, &ids);
+            if !added.is_empty() {
+                return Err(format!(
+                    "RED baseline added {} identities at {revision}; first {}",
+                    added.len(),
+                    format_id(&added[0])
+                ));
+            }
+        }
+        previous = Some(ids);
+    }
+    let head = previous.ok_or("RED baseline missing history anchor")?;
+    let current = parse_baseline(
+        &fs::read_to_string(workspace.join(BASELINE_REL))
+            .map_err(|error| format!("RED baseline read: {error}"))?,
+    )?;
+    let added = added_identities(&head, &current);
+    if !added.is_empty() {
+        return Err(format!(
+            "RED uncommitted baseline addition {}; first {}",
+            added.len(),
+            format_id(&added[0])
+        ));
+    }
+    Ok(())
+}
+
+fn load_baseline(workspace: &Path) -> BTreeSet<SurfaceId> {
+    parse_baseline(&fs::read_to_string(workspace.join(BASELINE_REL)).expect("read baseline"))
+        .unwrap_or_else(|error| panic!("{error}"))
 }
 
 #[test]
 fn test_support_surface_branch_items_have_one_row() {
     let workspace = workspace_root();
     let hits = scan_root(&workspace);
-    let base = load_baseline(&baseline_path(&workspace));
-    assert_eq!(base.len(), 531, "d01843729a baseline");
+    let base = load_baseline(&workspace);
     let rows = load_rows(&workspace);
+    let stale = stale_baseline(&hits, &rows, &base);
+    assert!(
+        stale.is_empty(),
+        "stale baseline lines:\n{}",
+        stale.join("\n")
+    );
     let mut unrowed = Vec::new();
     let mut saw_branch_item = false;
     for hit in &hits {
         if hit.path == "symbol::parallel::test_facts::FreshRegistryFacts" {
             saw_branch_item = true;
         }
-        let key = (
-            hit.crate_name.clone(),
-            hit.file.clone(),
-            hit.path.clone(),
-            hit.kind.clone(),
-        );
-        if base.contains(&key) {
+        if base.contains(&hit_id(hit)) {
             continue;
         }
         let covered = cover_count(&rows, hit);
         if covered != 1 {
             unrowed.push(format!(
-                "{covered}\t{}\t{}\t{}",
-                hit.crate_name, hit.path, hit.file
+                "{covered}\t{}\t{}\t{}\t{}",
+                hit.crate_name, hit.path, hit.kind, hit.file
             ));
         }
     }
@@ -778,10 +912,79 @@ fn test_support_surface_branch_items_have_one_row() {
 }
 
 #[test]
+fn test_support_surface_baseline_only_shrinks() {
+    let workspace = workspace_root();
+    baseline_growth(&workspace).unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
+fn test_support_surface_replaced_identity_is_red() {
+    let before = parse_baseline(
+        "crate\tfile\titem\tkind\tclass\torigin\nneovm-value\ta.rs\told_item\tfn\tVIS\td01843729a\n",
+    )
+    .expect("before");
+    let replaced = parse_baseline(
+        "crate\tfile\titem\tkind\tclass\torigin\nneovm-value\ta.rs\tnew_item\tfn\tVIS\td01843729a\n",
+    )
+    .expect("replaced");
+    let added = added_identities(&before, &replaced);
+    assert_eq!(
+        added.len(),
+        1,
+        "a same-count replacement is an added identity"
+    );
+    assert_eq!(added[0].path, "new_item");
+    let shrunk = parse_baseline("crate\tfile\titem\tkind\tclass\torigin\n").expect("shrunk");
+    assert!(added_identities(&before, &shrunk).is_empty());
+}
+
+#[test]
+fn test_support_surface_stale_rowed_or_missing_is_red() {
+    let live = Hit {
+        crate_name: "neovm-value".to_string(),
+        file: "a.rs".to_string(),
+        path: "live_item".to_string(),
+        kind: "fn".to_string(),
+        class: "VIS".to_string(),
+    };
+    let rowed = Hit {
+        crate_name: "neovm-value".to_string(),
+        file: "a.rs".to_string(),
+        path: "rowed_item".to_string(),
+        kind: "fn".to_string(),
+        class: "VIS".to_string(),
+    };
+    let missing = SurfaceId {
+        crate_name: "neovm-value".to_string(),
+        path: "missing_item".to_string(),
+        kind: "fn".to_string(),
+        file: "a.rs".to_string(),
+    };
+    let mut rows = Rows {
+        vis: BTreeSet::new(),
+        authority: Vec::new(),
+        pc11: Vec::new(),
+    };
+    rows.vis
+        .insert(("neovm-value".to_string(), "rowed_item".to_string()));
+    let mut base = BTreeSet::new();
+    base.insert(hit_id(&live));
+    base.insert(hit_id(&rowed));
+    base.insert(missing);
+    let stale = stale_baseline(&[live, rowed], &rows, &base);
+    let text = stale.join("\n");
+    assert!(text.contains("stale missing"), "{text}");
+    assert!(text.contains("missing_item"), "{text}");
+    assert!(text.contains("stale rowed 1"), "{text}");
+    assert!(text.contains("rowed_item"), "{text}");
+    assert!(!text.contains("live_item"), "{text}");
+}
+
+#[test]
 fn test_support_surface_planted_unrowed_fn_is_red() {
     let workspace = workspace_root();
     let rows = load_rows(&workspace);
-    let base = load_baseline(&baseline_path(&workspace));
+    let base = load_baseline(&workspace);
     let planted = Hit {
         crate_name: "neovm-value".to_string(),
         file: "crates/neovm-value/src/symbol/parallel/test_facts.rs".to_string(),
@@ -789,13 +992,10 @@ fn test_support_surface_planted_unrowed_fn_is_red() {
         kind: "fn".to_string(),
         class: "AUTHORITY".to_string(),
     };
-    let key = (
-        planted.crate_name.clone(),
-        planted.file.clone(),
-        planted.path.clone(),
-        planted.kind.clone(),
+    assert!(
+        !base.contains(&hit_id(&planted)),
+        "the plant must not be a baseline hit"
     );
-    assert!(!base.contains(&key), "the plant must not be a baseline hit");
     assert_eq!(
         cover_count(&rows, &planted),
         0,

@@ -65,14 +65,11 @@ neovm-edit	crates/neovm-edit/src/buffer/buffer.rs	buffer::buffer::jit_layout::BU
 neovm-edit	crates/neovm-edit/src/buffer/buffer.rs	buffer::buffer::jit_layout::BUFFER_STORAGE_BUFFERS_OFFSET	const	VIS	d01843729a
 neovm-edit	crates/neovm-edit/src/buffer/buffer_text.rs	buffer::buffer_text::BufferText	struct	VIS	d01843729a
 neovm-edit	crates/neovm-edit/src/buffer/buffer_text.rs	buffer::buffer_text::BufferText::chain_walk_collect	method	VIS	d01843729a
-neovm-edit	crates/neovm-edit/src/buffer/buffer_text.rs	buffer::buffer_text::BufferText::storage	field	VIS	d01843729a
 neovm-edit	crates/neovm-edit/src/buffer/buffer_text.rs	buffer::buffer_text::BufferText::with_syntax_parse_body	method	AUTHORITY	d01843729a
 neovm-edit	crates/neovm-edit/src/buffer/buffer_text.rs	buffer::buffer_text::BufferText::with_syntax_parse_body_ref	method	AUTHORITY	d01843729a
-neovm-edit	crates/neovm-edit/src/buffer/buffer_text.rs	buffer::buffer_text::BufferTextStorage::anchor_cache	field	VIS	d01843729a
 neovm-edit	crates/neovm-edit/src/buffer/buffer_text/line_index.rs	buffer::buffer_text::line_index::BufferText::lines_backward_emacs_byte	method	VIS	d01843729a
 neovm-edit	crates/neovm-edit/src/buffer/buffer_text/source_authority.rs	buffer::buffer_text::source_authority::Buffer::capture_motion_source_authority	method	VIS	d01843729a
 neovm-edit	crates/neovm-edit/src/buffer/buffer_text/source_authority.rs	buffer::buffer_text::source_authority::BufferSourceAuthority	struct	VIS	d01843729a
-neovm-edit	crates/neovm-edit/src/buffer/buffer_text/source_authority.rs	buffer::buffer_text::source_authority::BufferSourceAuthority::owner	field	VIS	d01843729a
 neovm-edit	crates/neovm-edit/src/buffer/buffer_text/source_authority.rs	buffer::buffer_text::source_authority::BufferSourceReadLease	struct	VIS	d01843729a
 neovm-edit	crates/neovm-edit/src/buffer/edit_transaction.rs	buffer::edit_transaction::CasifyExpansion	struct	VIS	d01843729a
 neovm-edit	crates/neovm-edit/src/buffer/edit_transaction.rs	buffer::edit_transaction::CasifyExpansion::new	method	VIS	d01843729a
@@ -256,8 +253,6 @@ neovm-value	crates/neovm-value/src/hashtab/mod.rs	hashtab::builtin_sxhash_equal_
 neovm-value	crates/neovm-value/src/hashtab/mod.rs	hashtab::hash_test_parity_enabled	fn	AUTHORITY	d01843729a
 neovm-value	crates/neovm-value/src/hashtab/mod.rs	hashtab::reduce_emacs_uint_to_hash_hash	fn	AUTHORITY	d01843729a
 neovm-value	crates/neovm-value/src/hashtab/mod.rs	hashtab::sxhash_for	fn	AUTHORITY	d01843729a
-neovm-value	crates/neovm-value/src/heap_types/overlay_storage/mod.rs	heap_types::overlay_storage::IntervalKey::attachment_order	field	VIS	d01843729a
-neovm-value	crates/neovm-value/src/heap_types/overlay_storage/mod.rs	heap_types::overlay_storage::IntervalRecord::key	field	VIS	d01843729a
 neovm-value	crates/neovm-value/src/heap_types/threading.rs	heap_types::threading::MutexReference::id	method	VIS	d01843729a
 neovm-value	crates/neovm-value/src/heap_types/threading.rs	heap_types::threading::ThreadIds::new	method	VIS	d01843729a
 neovm-value	crates/neovm-value/src/heap_types/threading.rs	heap_types::threading::ThreadPayload::id	method	VIS	d01843729a
