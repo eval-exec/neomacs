@@ -71,5 +71,9 @@ pub use symbol::function_cell_observer::{
 #[cfg(feature = "sqlite")]
 pub use tagged::header::sqlite_finalizer::{SqliteObjFinalizer, install_sqlite_obj_finalizer};
 pub use value::bytecode_semantics::{BytecodeSemantics, install_bytecode_semantics};
+// K1: the evaluator's hook-set publisher and `value::hook_publication::publish`
+// share this one identity-selection rule; the module path stays `pub(crate)`.
+#[doc(hidden)]
+pub use value::hook_publication::select_published_identity;
 pub use value::hook_publication::{HookInstallError, HookInstallStatus};
 pub use value::scratch_bridge::{ScratchRootHooks, install_scratch_root_hooks};

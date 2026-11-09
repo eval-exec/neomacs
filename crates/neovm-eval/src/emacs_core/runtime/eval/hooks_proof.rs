@@ -268,19 +268,13 @@ fn publish<T: 'static>(
     slot: &'static OnceLock<&'static T>,
     table: &'static T,
 ) -> Result<(), HookInstallError> {
-    // `OnceLock::set` cannot answer a conflict: its `Err` payload is the
-    // REJECTED ARGUMENT (this caller's own table), not the resident value.
-    // `get_or_init` serializes concurrent first publications and returns the
-    // winner, so the identity comparison below sees what the cell actually
-    // holds.  Same contract as `hook_publication::publish`'s identity check:
-    // re-publishing the same descriptor is idempotent, a different descriptor
-    // is the typed refusal.
-    let selected = slot.get_or_init(|| table);
-    if std::ptr::eq(*selected, table) {
-        Ok(())
-    } else {
-        Err(HookInstallError::DifferentTable)
-    }
+    // The identity rule is the one `neovm_value` exports so that this
+    // publisher and `value::hook_publication::publish` cannot drift apart:
+    // the first offered descriptor wins, re-publishing the same descriptor is
+    // idempotent, and a different descriptor is the typed refusal.  See the
+    // helper's docstring for why `OnceLock::set`'s error cannot answer the
+    // conflict (its payload is the rejected argument, not the resident value).
+    neovm_value::select_published_identity(slot, table).map(|_| ())
 }
 
 fn installed() -> &'static EvalHookSet {
