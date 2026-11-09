@@ -200,3 +200,45 @@ fn set_buffer_auto_saved_sets_save_length_to_z_beg() {
         expect_test::expect![[r#""VALUE OK (nil 2 autosaved t nil 2)""#]],
     );
 }
+
+#[test]
+fn set_buffer_auto_saved_counts_multibyte_characters() {
+    // Live GNU 31.1: "éé" is two characters (`#xE9`), so `Z - BEG` is 2.
+    // A byte count would store 4.
+    let form = r#"(let ((buf (generate-new-buffer "as-set-mb")))
+  (with-current-buffer buf
+    (insert (string #xE9 #xE9))
+    (setq buffer-saved-size 9)
+    (list (set-buffer-auto-saved)
+          buffer-saved-size
+          (buffer-modified-p)
+          (recent-auto-save-p)
+          (clear-buffer-auto-save-failure)
+          buffer-saved-size)))"#;
+    assert_oracle_batch_stderr_and_value_expect(
+        form,
+        expect_test::expect![[r#""VALUE OK (nil 2 autosaved t nil 2)""#]],
+    );
+}
+
+#[test]
+fn do_auto_save_multibyte_shrink_uses_character_length() {
+    // Live GNU 31.1: 4000 characters of `#xE9` against `save_length` 6000.
+    // `4*4000 < 3*6000` (16000 < 18000) disables. The same text is 8000
+    // bytes, and `4*8000 < 18000` is false, so a byte compare would save.
+    let form = r##"(let ((buf (generate-new-buffer "as-shrink-mb")))
+  (with-current-buffer buf
+    (setq buffer-file-name (expand-file-name "as-shrink-mb.txt" temporary-file-directory))
+    (insert (make-string 4000 #xE9))
+    (setq buffer-saved-size 6000)
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#as-shrink-mb#" temporary-file-directory)))
+  (do-auto-save)
+  (with-current-buffer buf buffer-saved-size))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        form,
+        expect_test::expect![[
+            r#""Buffer as-shrink-mb has shrunk a lot; auto save disabled in that buffer until next real save\nVALUE OK -1""#
+        ]],
+    );
+}

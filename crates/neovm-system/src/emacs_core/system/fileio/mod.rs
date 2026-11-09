@@ -7803,7 +7803,9 @@ pub fn builtin_do_auto_save(
             (
                 auto_name,
                 visit_name,
-                buf.total_emacs_byte_len().get() as i64,
+                // GNU `save_length` is `Z - BEG` in characters
+                // (`fileio.c:6481`), not the byte length of the auto-save file.
+                buf.total_char_len().get() as i64,
                 buf.name_value(),
                 saved_size,
             )
@@ -7841,8 +7843,9 @@ pub fn builtin_do_auto_save(
         // Shrink-a-lot (`fileio.c:6450-6474`) runs before the progress
         // line and does not count as a save. `4*(Z-BEG) < 3*save_length`
         // is `(growth_factor) * size < (growth_factor - 1) * save_length`
-        // with `growth_factor = 4`. A non-nil NO-MESSAGE skips the whole
-        // conjunction, so the save proceeds and `save_length` is not -1.
+        // with `growth_factor = 4` and `Z - BEG` in characters. A non-nil
+        // NO-MESSAGE skips the whole conjunction, so the save proceeds and
+        // `save_length` is not -1.
         let include_big_deletions = eval
             .builtin_var_value_by_name("auto-save-include-big-deletions")
             .is_some_and(|value| value.is_truthy());
@@ -7889,7 +7892,7 @@ pub fn builtin_do_auto_save(
         if result.is_ok() {
             let _ = eval.edit.buffers.set_buffer_auto_saved(buf_id);
             if let Some(buf) = eval.edit.buffers.get_mut(buf_id) {
-                let saved_size = buf.total_emacs_byte_len().get() as i64;
+                let saved_size = buf.total_char_len().get() as i64;
                 buf.set_buffer_local("buffer-saved-size", Value::fixnum(saved_size));
             }
         }
