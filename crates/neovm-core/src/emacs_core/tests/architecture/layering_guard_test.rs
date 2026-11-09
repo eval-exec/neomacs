@@ -19,7 +19,7 @@ use super::architecture_production_source_roots::{crates_dir, production_source_
 /// the approved M1-M3 derivation. The row count is pinned and may only
 /// shrink; an unmapped item falls back to the current module model (M-b).
 const ITEM_MAP_TSV: &str = include_str!("layering_item_map.tsv");
-const ITEM_MAP_ROWS: usize = 127;
+const ITEM_MAP_ROWS: usize = 129;
 
 fn item_map() -> &'static BTreeMap<(String, String), String> {
     static MAP: std::sync::OnceLock<BTreeMap<(String, String), String>> =
@@ -2616,6 +2616,86 @@ fn layering_item_map_proxy_hooks_are_lateral() {
             walker.classify(&segments, Span::call_site()),
             Classification::NotUpward
         ));
+    }
+}
+
+/// (g1) A `super::`-chain upward reference is invisible without the frozen
+/// map row: the post-split physical sibling `super::kbd` must resolve to the
+/// historical `ec:kbd` row (the signed T1 transfer: pre
+/// keyboard.rs:524/525/680/681 -> post :476/:477/:635/:636). Without the two
+/// transfer rows this test is RED: classify falls through to the `super`
+/// branch and returns NotUpward.
+#[test]
+fn layering_item_map_super_chain_upward_ref_counts() {
+    let walker = real_tree_walker_for(
+        "crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs",
+        "keyboard",
+    );
+    for segments in [
+        ["super", "kbd", "parse_kbd_string"],
+        ["super", "kbd", "key_events_from_designator"],
+    ] {
+        let segments = segments.map(str::to_owned);
+        match walker.classify(&segments, Span::call_site()) {
+            Classification::Upward(pair) => assert_eq!(pair.upper.text(), "kbd"),
+            other => panic!("super::kbd chain must count as upward kbd, got {other:?}"),
+        }
+    }
+}
+
+/// (g2) A use-rename alias does not hide the edge: the walker pushes the
+/// original name for `UseTree::Rename`, so
+/// `use crate::emacs_core::eval::Context as Ctx;` still records one eval
+/// site. The alias is the imported name only; the written path is the
+/// original one.
+#[test]
+fn layering_guard_use_rename_alias_counts() {
+    let mut walker = real_tree_walker_for(
+        "crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs",
+        "keyboard",
+    );
+    let item: syn::ItemUse =
+        syn::parse_str("use crate::emacs_core::eval::Context as Ctx;").expect("use item");
+    let mut prefix = Vec::new();
+    walker.use_references(&item.tree, &mut prefix, Span::call_site());
+    let sites: Vec<_> = walker
+        .sites
+        .iter()
+        .filter(|(pair, _)| pair.upper.text() == "eval")
+        .collect();
+    assert_eq!(sites.len(), 1, "aliased use must record one eval site");
+    let (pair, list) = sites[0];
+    assert_eq!(pair.lower.name(), "keyboard");
+    assert_eq!(list.len(), 1);
+    assert!(
+        list[0].reference.ends_with("Context"),
+        "alias must not replace the written path: {}",
+        list[0].reference
+    );
+}
+
+/// (g3) A renamed item resolves through the frozen map instead of vanishing
+/// into the module model: the post `eval::lifecycle::dbusbind_drain_events`
+/// is the pre `dbusbind::drain_events` signed transfer, so it must stay on
+/// the historical `ec:dbusbind` row. Without the map it would land on the
+/// `eval` module row (the rename dodges the facade).
+#[test]
+fn layering_item_map_renamed_item_resolves_through_map() {
+    let walker = real_tree_walker_for(
+        "crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs",
+        "keyboard",
+    );
+    let segments = [
+        "crate",
+        "emacs_core",
+        "eval",
+        "lifecycle",
+        "dbusbind_drain_events",
+    ]
+    .map(str::to_owned);
+    match walker.classify(&segments, Span::call_site()) {
+        Classification::Upward(pair) => assert_eq!(pair.upper.text(), "dbusbind"),
+        other => panic!("renamed item must resolve to ec:dbusbind, got {other:?}"),
     }
 }
 

@@ -21,6 +21,7 @@ keyboard display_host 10
 keyboard eval 17
 keyboard hook_runtime 8
 keyboard jit 1
+keyboard kbd 4
 keyboard keymap 28
 keyboard print 5
 keyboard terminal 4
