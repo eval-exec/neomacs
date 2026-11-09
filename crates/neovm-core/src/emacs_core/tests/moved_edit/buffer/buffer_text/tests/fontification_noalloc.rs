@@ -161,9 +161,10 @@ fn fontification_no_alloc_raw_and_resolved_boundaries_leave_anchors_unchanged() 
 }
 
 fn anchor_storage(text: &BufferText) -> (usize, usize) {
-    let storage = text.storage.borrow();
-    let anchors = storage.anchor_cache.borrow();
-    (anchors.len(), anchors.capacity())
+    text.with_storage_observe(|storage| {
+        let anchors = storage.anchor_cache.borrow();
+        (anchors.len(), anchors.capacity())
+    })
 }
 
 fn assert_conversions(text: &BufferText, expected: &str) {

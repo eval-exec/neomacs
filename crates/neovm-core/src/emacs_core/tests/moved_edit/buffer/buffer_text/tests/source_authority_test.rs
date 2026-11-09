@@ -5,7 +5,6 @@ use std::cell::{Ref, RefCell};
 
 use neovm_edit::buffer::buffer_text::*;
 use neovm_eval::emacs_core::eval::Context;
-use std::rc::Rc;
 
 use neovm_edit::buffer::{
     BufferId, BufferManager, CharPos0, CharRange, EmacsBytePos, EmacsByteRange,
@@ -95,7 +94,7 @@ fn production_property_write_refuses_numeric_tick_collision_after_ack() {
         property_tick,
         "GNU-facing number really collides"
     );
-    let revision = SourceRevision::of(&after.text.storage.borrow());
+    let revision = after.text.with_storage_observe(SourceRevision::of);
     assert_eq!(revision.content_epoch, epoch);
     assert_ne!(revision.all_properties, authority.revision.all_properties);
     assert!(
@@ -135,9 +134,11 @@ fn production_multibyte_mode_toggles_refuse_after_tick_restore_and_ack() {
         let after = evaluator.buffer_manager_mut().get_mut(id).unwrap();
         assert_eq!(after.get_multibyte(), multibyte);
         assert_eq!(after.full_text_string(), text, "ASCII bytes stay unchanged");
-        assert_eq!(authority.owner.as_ptr(), Rc::as_ptr(&after.text.storage));
+        assert!(authority.is_owner_of(&after.text));
         assert_ne!(
-            after.text.storage.borrow().content_epoch,
+            after
+                .text
+                .with_storage_observe(|storage| storage.content_epoch),
             authority.revision.content_epoch,
         );
         assert!(
@@ -201,12 +202,14 @@ fn production_same_byte_transposition_with_distinct_property_runs_refuses() {
         text,
         "the two byte slices are equal"
     );
-    assert_eq!(authority.owner.as_ptr(), Rc::as_ptr(&after.text.storage));
+    assert!(authority.is_owner_of(&after.text));
     // The actual production transposition advances content_epoch in its
     // same-length byte replacement before installing the prepared table.
     // This checks the resulting epoch, not an instrumented intermediate step.
     assert_ne!(
-        after.text.storage.borrow().content_epoch,
+        after
+            .text
+            .with_storage_observe(|storage| storage.content_epoch),
         authority.revision.content_epoch,
     );
     assert!(
@@ -254,13 +257,14 @@ fn production_text_edit_refuses_after_tick_restore_and_ack(setup: &str, edit: &s
         text,
         "the operation must really change text"
     );
-    assert_eq!(
-        authority.owner.as_ptr(),
-        Rc::as_ptr(&after.text.storage),
+    assert!(
+        authority.is_owner_of(&after.text),
         "the live outer owner remains the same"
     );
     assert_ne!(
-        after.text.storage.borrow().content_epoch,
+        after
+            .text
+            .with_storage_observe(|storage| storage.content_epoch),
         authority.revision.content_epoch
     );
     assert!(

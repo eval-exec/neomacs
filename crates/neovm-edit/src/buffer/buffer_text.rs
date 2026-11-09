@@ -644,7 +644,24 @@ pub struct BufferText {
 }
 #[cfg(any(test, feature = "test-support"))]
 pub struct BufferText {
-    pub storage: Rc<RefCell<BufferTextStorage>>,
+    storage: Rc<RefCell<BufferTextStorage>>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl BufferText {
+    /// Observe the live text storage in a read-only, scoped borrow.
+    ///
+    /// The `RefCell` carrier stays private in both cfg arms, so this is the
+    /// only cross-crate route to its contents and it exposes no `borrow_mut`
+    /// path: the borrow is scoped to `observe` and the reference cannot
+    /// escape the call.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn with_storage_observe<R>(
+        &self,
+        observe: impl FnOnce(&BufferTextStorage) -> R,
+    ) -> R {
+        observe(&self.storage.borrow())
+    }
 }
 
 impl Clone for BufferText {
