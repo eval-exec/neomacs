@@ -484,6 +484,10 @@ fn recorded_answer(label: &str) -> (String, String, u64) {
         // arm (Op::Unbind), the two opcodes that inline a Lisp evaluation.
         "watcher-let" => 4_884,
         "watcher-unlet" => 4_884,
+        // A buffer-changing primitive opcode runs after-change-functions,
+        // so the helper's K charged frames must remain in the base the hook
+        // recurses from (K=1000 loses about 999 frames when they are not).
+        "change-hook" => 3_883,
         "handler" => 4_886,
         "unwind-protect" => 4_885,
         "save-window-excursion" => 4_885,
@@ -712,7 +716,10 @@ fn reentry_tier_form(event: &str) -> String {
                  (when (> n 1000) (neovm--sg-deep 0))
                  (when (= n neovm--sg-trigger) (funcall neovm--sg-event))
                  (1+ (neovm--sg-deep (1- n))))))
+           (defun neovm--sg-insert-deep (k)
+             (if (= k 0) (insert \"x\") (neovm--sg-insert-deep (1- k))))
            (byte-compile 'neovm--sg-deep)
+           (byte-compile 'neovm--sg-insert-deep)
            (setq neovm--sg-event
                  (byte-compile (lambda () (setq neovm--sg-event nil) {event})))
            (dotimes (_ 40) (neovm--sg-deep 100))
@@ -757,7 +764,7 @@ fn assert_reentry_matches_gnu(event: &str, label: &str) {
 #[test]
 #[cfg(feature = "release-pdump-tests")]
 fn batch_bytecode_stack_depth_matches_gnu_through_reentry_boundaries() {
-    let events: [(&str, &str); 9] = [
+    let events: [(&str, &str); 10] = [
         (
             "funcall",
             "(funcall (byte-compile (lambda (n) (neovm--sg-deep n))) 100000000)",
@@ -796,6 +803,16 @@ fn batch_bytecode_stack_depth_matches_gnu_through_reentry_boundaries() {
                  (byte-compile (lambda (_sym _val op _where)
                    (when (eq op 'unlet) (neovm--sg-deep 100000000)))))
                (progn (let ((neovm--sg-watched 1)) (neovm--sg-deep 0)) nil))",
+        ),
+        // A primitive opcode that runs Lisp inline: `insert` runs
+        // after-change-functions, and the helper's 1,000 iterative frames
+        // must remain charged when the hook recurses.
+        (
+            "change-hook",
+            "(progn
+               (add-hook 'after-change-functions
+                 (byte-compile (lambda (&rest _) (neovm--sg-deep 100000000))))
+               (neovm--sg-insert-deep 1000))",
         ),
         (
             "handler",

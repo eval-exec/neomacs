@@ -960,8 +960,8 @@ enum ResolvedStackCallTarget {
 /// word [`InterpreterFrame::bytecode_position`] needs: the release frame then
 /// stays one 64-byte cache line. A 32-bit base is unrepresentable in any real
 /// run (a specpdl entry alone is tens of bytes, so 2^32 entries would need
-/// more than the process can address); the debug assertion pins the invariant
-/// on every construction.
+/// more than the process can address); a checked conversion in every build
+/// pins the invariant on every construction.
 #[derive(Clone, Copy)]
 struct InterpreterFrameCleanup {
     condition_stack_base: u32,
@@ -972,11 +972,16 @@ impl InterpreterFrameCleanup {
     #[inline(always)]
     #[doc(hidden)]
     fn new(condition_stack_base: usize, specpdl_base: usize) -> Self {
-        debug_assert!(condition_stack_base <= u32::MAX as usize);
-        debug_assert!(specpdl_base <= u32::MAX as usize);
+        // Checked in every build: a base that does not fit the packed word
+        // must never be silently truncated. The bound is unreachable in
+        // practice (a specpdl entry alone is tens of bytes, so 2^32 entries
+        // exceed any addressable heap), so the failure is a loud invariant
+        // break rather than a recoverable interpreter error.
         Self {
-            condition_stack_base: condition_stack_base as u32,
-            specpdl_base: specpdl_base as u32,
+            condition_stack_base: u32::try_from(condition_stack_base)
+                .expect("an interpreter frame's condition-stack base exceeds the packed word"),
+            specpdl_base: u32::try_from(specpdl_base)
+                .expect("an interpreter frame's specpdl base exceeds the packed word"),
         }
     }
 
@@ -7134,6 +7139,12 @@ impl<'a> Vm<'a> {
                         // This is the internal representation of a primitive
                         // opcode, never a Bcall specialization. GNU calls the
                         // primitive directly; genuine calls remain Op::Call.
+                        // A primitive opcode can still run Lisp (a buffer
+                        // change runs before/after-change-functions, a word
+                        // motion runs word-boundary-function, ...): publish
+                        // the active frame's position before the primitive,
+                        // as GNU's bc->fp still names this frame.
+                        release_bytecode_frame(self.ctx, bc_position);
                         let result = vm_try!(
                             self.dispatch_vm_builtin_by_id_from_stack(func, name_id, args_start, n)
                         );
@@ -7157,18 +7168,28 @@ impl<'a> Vm<'a> {
                         use crate::emacs_core::eval::InlineSubrKind;
                         let inline = crate::emacs_core::eval::inline_subr(*sym);
                         let result = match inline.kind {
+                            // The four read-only fast paths cannot run Lisp.
                             InlineSubrKind::Point => vm_try!(self.op_point()),
                             InlineSubrKind::PointMin => vm_try!(self.op_point_min()),
                             InlineSubrKind::PointMax => vm_try!(self.op_point_max()),
                             InlineSubrKind::CurrentBuffer => vm_try!(self.op_current_buffer()),
-                            InlineSubrKind::Direct => vm_try!(Self::call_fixed_builtin_direct(
-                                self.ctx,
-                                inline.function,
-                                *sym,
-                                args_start,
-                                n,
-                            )),
+                            // A registered primitive can run Lisp (insert runs
+                            // the change hooks, forward-word runs its boundary
+                            // function, ...): publish the active frame's
+                            // position first, as GNU's bc->fp still names this
+                            // frame when the primitive runs.
+                            InlineSubrKind::Direct => {
+                                release_bytecode_frame(self.ctx, bc_position);
+                                vm_try!(Self::call_fixed_builtin_direct(
+                                    self.ctx,
+                                    inline.function,
+                                    *sym,
+                                    args_start,
+                                    n,
+                                ))
+                            }
                             InlineSubrKind::Generic => {
+                                release_bytecode_frame(self.ctx, bc_position);
                                 vm_try!(self.dispatch_call_builtin_sym(func, *sym, args_start, n))
                             }
                         };
