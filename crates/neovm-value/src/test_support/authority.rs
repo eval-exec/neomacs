@@ -1021,3 +1021,23 @@ pub fn reset_symbol_with_pos_plist_comparisons() {
 /// guard resolvers identical (`test_support/authority/`).
 #[cfg(test)]
 mod test_heap_scope_tests;
+
+/// Setter fence for `SignalData::search_complete` (peer #816 write arm): the
+/// moved signal-payload test rewrites the payload's resume-search state in
+/// place. The field stays a read surface.
+pub fn set_signal_search_complete_for_test(
+    signal: &mut crate::error::SignalData,
+    search_complete: bool,
+) {
+    signal.search_complete = search_complete;
+}
+
+/// Setter fence for `SignalData::selected_resume` (peer #816 write arm): the
+/// moved signal-payload test records the selected resume target in place. The
+/// field stays a read surface.
+pub fn set_signal_selected_resume_for_test(
+    signal: &mut crate::error::SignalData,
+    selected_resume: Option<crate::value::flow_vocab::ResumeTarget>,
+) {
+    signal.selected_resume = selected_resume;
+}

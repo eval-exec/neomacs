@@ -263,8 +263,11 @@ fn as_signal_mut_edits_in_place() {
         condition_stack_base: 11,
     };
     let payload = flow.as_signal_mut().expect("signal payload");
-    payload.search_complete = true;
-    payload.selected_resume = Some(target.clone());
+    neovm_value::test_support::authority::set_signal_search_complete_for_test(payload, true);
+    neovm_value::test_support::authority::set_signal_selected_resume_for_test(
+        payload,
+        Some(target.clone()),
+    );
     assert_eq!(borrowed_payload_address(&flow), address);
     let FlowKind::Signal(payload) = flow.into_kind() else {
         panic!("Signal owned view")
