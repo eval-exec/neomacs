@@ -7,40 +7,44 @@
 //! before it evaluates OBSERVE. Fixtures come from GNU only with
 //! UPDATE_EXPECT=1.
 
-use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
-use crate::emacs_core::jit::RuntimeStateTieringExt;
-use crate::emacs_core::jit::bg::{BgMode, TestModeScope};
-use crate::emacs_core::jit::compile::{self, Inline2Mode, OptMode};
 use crate::emacs_core::print::print_value;
+use neovm_eval::test_support::authority::{
+    TestInline2Mode, TestOptMode, enter_test_mode_for_test, force_hof_inline_for_test,
+    force_inline_for_test, force_inline2_token_for_test, force_profit_gate_for_test,
+    jit_compiled_id_or_assign_for_test, opt_mode_token_scope_for_test, with_cached_leaf_for_test,
+};
 use neovm_value::intern::intern;
 use std::path::PathBuf;
 
 /// The production front with in-line tier-ups: Opt backend, INLINE2 off,
 /// profit gate on, HOF inlining on, sync compiles. Threading: scalar
 /// overrides on this test thread.
-struct Production(Box<dyn std::any::Any>, TestModeScope);
+struct Production(Box<dyn std::any::Any>, Box<dyn std::any::Any>);
 
 impl Production {
     #[doc(hidden)]
     pub fn enter() -> Self {
-        compile::force_inline2_for_test(Some(Inline2Mode::Off));
-        compile::force_profit_gate_for_test(true);
-        compile::force_hof_inline_for_test(Some(true));
-        crate::emacs_core::jit::inline::force_inline_for_test(Some(true));
+        force_inline2_token_for_test(Some(TestInline2Mode::Off));
+        force_profit_gate_for_test(true);
+        force_hof_inline_for_test(Some(true));
+        force_inline_for_test(Some(true));
+        let backend = opt_mode_token_scope_for_test(TestOptMode::Opt);
         Self(
-            Box::new(compile::opt_mode_scope_for_test(OptMode::Opt)),
-            TestModeScope::enter(BgMode::Sync),
+            Box::new(backend),
+            Box::new(enter_test_mode_for_test(
+                crate::emacs_core::jit::BgMode::Sync,
+            )),
         )
     }
 }
 
 impl Drop for Production {
     fn drop(&mut self) {
-        compile::force_inline2_for_test(None);
-        compile::force_hof_inline_for_test(None);
-        crate::emacs_core::jit::inline::force_inline_for_test(None);
+        force_inline2_token_for_test(None);
+        force_hof_inline_for_test(None);
+        force_inline_for_test(None);
     }
 }
 
@@ -71,7 +75,7 @@ fn gnu_expect(name: &str, setup: &str, observe: &str, fixture: &str) -> String {
     if std::env::var("UPDATE_EXPECT").as_deref() != Ok("1") {
         return fixture.trim_end().to_owned();
     }
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../neovm-eval");
     let tmp = root.join("../../tmp");
     std::fs::create_dir_all(&tmp).expect("oracle temporary directory");
     let script = tmp.join(format!("hof-semantics-{name}-{}.el", std::process::id()));
@@ -111,19 +115,15 @@ fn assert_inlined(ctx: &mut Context, caller: &str, hof: &str) {
         .eval_str(&format!("(symbol-function '{caller})"))
         .expect("caller");
     let data = function.get_bytecode_data().expect("byte-compiled caller");
-    let id = data
-        .jit_runtime()
-        .compiled_id()
-        .unwrap_or_else(|| panic!("{caller} did not tier up during SETUP"));
-    let leaf = crate::emacs_core::jit::cache::compiled_leaf_ptr_for_test(id)
-        .unwrap_or_else(|| panic!("{caller} has no installed leaf"));
-    // SAFETY: the cache owns the leaf until eviction; nothing evicts while
-    // this test thread only reads it.
-    let deps = unsafe { &*leaf }.inline_deps();
-    assert!(
-        deps.contains(&intern(hof)),
-        "{caller} inlined its {hof} callback loop: {deps:?}"
-    );
+    let id = jit_compiled_id_or_assign_for_test(&data);
+    with_cached_leaf_for_test(id, |leaf| {
+        let deps = leaf.inline_deps();
+        assert!(
+            deps.contains(&intern(hof)),
+            "{caller} inlined its {hof} callback loop: {deps:?}"
+        );
+    })
+    .unwrap_or_else(|| panic!("{caller} has no installed leaf"));
 }
 
 /// Run SETUP, check CALLER inlined HOF, then OBSERVE; compare with GNU and
@@ -136,13 +136,13 @@ fn assert_gnu(name: &str, setup: &str, caller: &str, hof: &str, observe: &str, f
         .expect("prelude");
     ctx.eval_str(&format!("(eval '{setup} t)")).expect("setup");
     assert_inlined(&mut ctx, caller, hof);
-    let specpdl = ctx.specpdl.len();
-    let depth = ctx.depth;
+    let specpdl = ctx.specpdl().len();
+    let depth = ctx.depth_for_test();
     let value = ctx
         .eval_str(&format!("(eval '{observe} t)"))
         .expect("observe");
-    assert_eq!(ctx.specpdl.len(), specpdl, "{name}: specpdl balanced");
-    assert_eq!(ctx.depth, depth, "{name}: depth balanced");
+    assert_eq!(ctx.specpdl().len(), specpdl, "{name}: specpdl balanced");
+    assert_eq!(ctx.depth_for_test(), depth, "{name}: depth balanced");
     assert_eq!(print_value(&value), expected, "GNU {name}");
 }
 
@@ -164,7 +164,10 @@ fn mid_callback_error_unwinds_to_a_condition_case_two_frames_out() {
          (wrong-type-argument (list 'caught err neovm--hs-special)))
        neovm--hs-special
        (neovm--hs-cars '((5) (6))))"#,
-        include_str!("hof_default_semantics/condition-case.expect"),
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../neovm-eval/src/emacs_core/runtime/jit/tests/hof_default_semantics/condition-case.expect"
+        )),
     );
 }
 
@@ -188,7 +191,10 @@ fn a_throw_from_the_debugger_crosses_the_inlined_mapping() {
         r#"(let ((debug-on-error t) (debugger #'neovm--hs-debugger))
   (list (neovm--hs-entry '(1 2 a 4))
         (neovm--hs-incs '(7))))"#,
-        include_str!("hof_default_semantics/debug-on-error-throw.expect"),
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../neovm-eval/src/emacs_core/runtime/jit/tests/hof_default_semantics/debug-on-error-throw.expect"
+        )),
     );
 }
 
@@ -222,7 +228,10 @@ fn debug_on_next_call_enters_the_debugger_at_the_mapping_and_its_callback() {
   (setq neovm--hs-log nil neovm--hs-rearm t)
   (let ((result (neovm--hs-entry '(1 2 3))))
     (list result debug-on-next-call (nreverse neovm--hs-log))))"#,
-        include_str!("hof_default_semantics/debug-on-next-call.expect"),
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../neovm-eval/src/emacs_core/runtime/jit/tests/hof_default_semantics/debug-on-next-call.expect"
+        )),
     );
 }
 
@@ -240,6 +249,9 @@ fn a_callback_that_lengthens_the_list_stops_at_the_original_length() {
         "mapcar",
         r#"(let* ((l (list 1 2 3)) (r (neovm--hs-grow l (last l))))
   (list r l))"#,
-        include_str!("hof_default_semantics/lengthen.expect"),
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../neovm-eval/src/emacs_core/runtime/jit/tests/hof_default_semantics/lengthen.expect"
+        )),
     );
 }

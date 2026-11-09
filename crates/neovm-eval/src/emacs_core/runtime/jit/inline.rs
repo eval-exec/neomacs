@@ -839,10 +839,6 @@ mod v2_closure_tests;
 mod v2_hof_tests;
 
 #[cfg(test)]
-#[path = "tests/inline_closure_test.rs"]
-mod closure_tests;
-
-#[cfg(test)]
 #[path = "tests/inline_entry_cache_test.rs"]
 mod entry_cache_tests;
 

@@ -1,12 +1,26 @@
-//! Stage 2c: GNU 31.1 observations for actual `EntryShape::Framed` calls.
+//! Stage 2c: GNU 31.1 observations for actual `crate::emacs_core::jit::compile::EntryShape::Framed` calls.
 //! GNU bytecode.c records the original call before setup_frame, Bvarbind can
 //! collect, and eval.c:unwind_to_catch unbinds before restoring handlers/depth.
 //! Fixtures are produced by GNU only with UPDATE_EXPECT=1. Each observation
 //! includes an eligible call and proves it entered the direct framed helper.
 
-use super::*;
+use super::{Mode, Run, WARM, cached_leaf_id, run_in_with};
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
-use crate::test_support::jit_fixture::eval_fixture_program;
+use crate::emacs_core::eval::Context;
+use crate::emacs_core::jit::compile::{CompiledLeaf, STATUS_SIGNAL, take_pending_flow};
+use neovm_eval::test_support::authority::{
+    TestDirectShapes, TestDirectSitesMode, TestLeafAbi, bc_frames_len_for_test,
+    bytecode_slot_direct_entry_identity_for_test,
+    bytecode_slot_direct_entry_is_framed_tag_for_test, bytecode_slot_index_for_callee_for_test,
+    direct_framed_call_for_test, direct_framed_calls_for_test, direct_shapes_parse_for_test,
+    eval_fixture_program, force_direct_call_for_test, force_direct_shapes_token_for_test,
+    force_direct_sites_token_for_test, force_inline_for_test, force_profit_defer_for_test,
+    force_profit_gate_for_test, leaf_abi_for_test, leaf_entry_identity_for_test,
+    leaf_entry_shape_name_for_test, leaf_has_binds_for_test, leaf_has_handlers_for_test,
+    null_identity_for_test, shim_panic_pending_for_test, with_cached_leaf_for_test,
+};
+use neovm_value::intern::intern;
+use neovm_value::value::Value;
 use std::path::PathBuf;
 
 fn gnu_expect(name: &str, program: &str, observe: &str, fixture: &str) -> String {
@@ -33,8 +47,10 @@ fn gnu_expect(name: &str, program: &str, observe: &str, fixture: &str) -> String
     let output = String::from_utf8(result.stdout).expect("UTF-8 GNU output");
     assert!(!output.is_empty(), "GNU produced an expectation");
     std::fs::write(
-        root.join("src/emacs_core/runtime/jit/tests/direct_call_framed")
-            .join(format!("{name}.expect")),
+        root.join(
+            "src/emacs_core/tests/moved_eval/emacs_core/runtime/jit/tests/direct_call_framed",
+        )
+        .join(format!("{name}.expect")),
         format!("{}\n", output.trim_end()),
     )
     .expect("write GNU fixture");
@@ -58,12 +74,12 @@ fn assert_gnu_framed(
         .join(",");
     let expected = gnu_expect(name, program, observe, fixture);
     let modes = [
-        (Mode::Shim, DirectShapesKnob::OFF),
-        (Mode::Direct, DirectShapesKnob::parse(Some(&without))),
-        (Mode::Direct, DirectShapesKnob::parse(Some(shapes))),
+        (Mode::Shim, TestDirectShapes::OFF),
+        (Mode::Direct, direct_shapes_parse_for_test(Some(&without))),
+        (Mode::Direct, direct_shapes_parse_for_test(Some(shapes))),
         (
             Mode::DirectForcedSlow,
-            DirectShapesKnob::parse(Some(shapes)),
+            direct_shapes_parse_for_test(Some(shapes)),
         ),
     ];
     let runs = modes.map(|(mode, knob)| run_in_with(mode, knob, program, observe));
@@ -453,13 +469,13 @@ fn gnu_framed_zero_and_eight_argument_memory_calls_hit_but_nine_falls_back() {
     );
     let baseline = run_in_with(
         Mode::Direct,
-        DirectShapesKnob::OFF,
+        TestDirectShapes::OFF,
         BOUNDARY_PROGRAM,
         NINE_OBSERVE,
     );
     let framed = run_in_with(
         Mode::Direct,
-        DirectShapesKnob::parse(Some("framed")),
+        direct_shapes_parse_for_test(Some("framed")),
         BOUNDARY_PROGRAM,
         NINE_OBSERVE,
     );
@@ -479,36 +495,48 @@ fn framed_slots_arm_a_memory_dispatch_tag_only_with_the_framed_bit() {
     for enabled in [false, true] {
         std::thread::spawn(move || {
             force_profit_gate_for_test(false);
-            crate::emacs_core::jit::inline::force_inline_for_test(Some(false));
-            crate::emacs_core::jit::force_profit_defer_for_test(Some(1));
+            force_inline_for_test(Some(false));
+            force_profit_defer_for_test(Some(1));
             force_direct_call_for_test(Some(true));
-            force_direct_sites_for_test(Some(DirectSitesMode::All));
-            force_direct_shapes_for_test(Some(if enabled {
-                DirectShapesKnob::parse(Some("framed"))
+            force_direct_sites_token_for_test(Some(TestDirectSitesMode::All));
+            force_direct_shapes_token_for_test(Some(if enabled {
+                direct_shapes_parse_for_test(Some("framed"))
             } else {
-                DirectShapesKnob::OFF
+                TestDirectShapes::OFF
             }));
             let mut ev = crate::test_utils::runtime_startup_context();
             ev.eval_str(WARM).expect("warm count");
             eval_fixture_program(&mut ev, FRAME_PROGRAM).expect("warm exact framed calls");
-            let caller = cached_leaf(&ev, "neovm--ff-caller").expect("compiled caller");
-            let callee = cached_leaf(&ev, "neovm--ff-named").expect("compiled callee");
-            assert!(callee.has_binds);
-            assert_eq!(callee.entry_shape, EntryShape::Framed);
-            assert_eq!(callee.abi, LeafAbi::Memory);
-            let slot = slot_calling(caller, callee).expect("armed named slot");
-            if enabled {
-                assert_eq!(
-                    slot.direct_entry() as usize,
-                    crate::emacs_core::jit::compile::spec_slot::DirectEntryTag::Framed as usize
-                );
-                assert_ne!(slot.direct_entry(), callee.entry);
-            } else {
-                assert!(slot.direct_entry().is_null());
-            }
-            force_direct_shapes_for_test(None);
+            let caller_id = cached_leaf_id(&ev, "neovm--ff-caller").expect("compiled caller");
+            let callee_id = cached_leaf_id(&ev, "neovm--ff-named").expect("compiled callee");
+            with_cached_leaf_for_test(caller_id, |caller| {
+                with_cached_leaf_for_test(callee_id, |callee| {
+                    assert!(leaf_has_binds_for_test(callee));
+                    assert_eq!(leaf_entry_shape_name_for_test(callee), "Framed");
+                    assert_eq!(leaf_abi_for_test(callee), TestLeafAbi::Memory);
+                    let slot = bytecode_slot_index_for_callee_for_test(caller, callee)
+                        .expect("armed named slot");
+                    if enabled {
+                        assert!(bytecode_slot_direct_entry_is_framed_tag_for_test(
+                            caller, slot
+                        ));
+                        assert_ne!(
+                            bytecode_slot_direct_entry_identity_for_test(caller, slot),
+                            leaf_entry_identity_for_test(callee)
+                        );
+                    } else {
+                        assert!(
+                            bytecode_slot_direct_entry_identity_for_test(caller, slot)
+                                == null_identity_for_test()
+                        );
+                    }
+                })
+                .expect("compiled callee");
+            })
+            .expect("compiled caller");
+            force_direct_shapes_token_for_test(None);
             force_direct_call_for_test(None);
-            force_direct_sites_for_test(None);
+            force_direct_sites_token_for_test(None);
         })
         .join()
         .expect("arming assertions");
@@ -523,11 +551,11 @@ fn framed_slots_arm_a_memory_dispatch_tag_only_with_the_framed_bit() {
 fn a_contained_framed_panic_detaches_three_args_before_gc_and_caller_healing() {
     std::thread::Builder::new().stack_size(128 * 1024 * 1024).spawn(|| {
         force_profit_gate_for_test(false);
-        crate::emacs_core::jit::inline::force_inline_for_test(Some(false));
-        crate::emacs_core::jit::force_profit_defer_for_test(Some(1));
+        force_inline_for_test(Some(false));
+        force_profit_defer_for_test(Some(1));
         force_direct_call_for_test(Some(true));
-        force_direct_sites_for_test(Some(DirectSitesMode::All));
-        force_direct_shapes_for_test(Some(DirectShapesKnob::parse(Some("framed"))));
+        force_direct_sites_token_for_test(Some(TestDirectSitesMode::All));
+        force_direct_shapes_token_for_test(Some(direct_shapes_parse_for_test(Some("framed"))));
         let mut ev = crate::test_utils::runtime_startup_context();
         eval_fixture_program(&mut ev, r#"(progn
           (defvar neovm--fp-arm nil)
@@ -539,68 +567,71 @@ fn a_contained_framed_panic_detaches_three_args_before_gc_and_caller_healing() {
           (byte-compile 'neovm--fp-target)
           (dotimes (_ 1500) (neovm--fp-target 'warm 1 2))
           (setq neovm--fp-arm t))"#).expect("warm binding framed leaf");
-        let callee = ev.obarray.symbol_function_id(intern("neovm--fp-target")).expect("function");
-        let leaf = cached_leaf(&ev, "neovm--fp-target").expect("native leaf");
-        assert_eq!(leaf.entry_shape, EntryShape::Framed);
-        assert!(leaf.has_binds && !leaf.has_handlers, "a binding extent parks the marker across its cleanup");
-        let constants = callee.get_bytecode_data().expect("bytecode").constants.as_ptr();
-        let depth0 = ev.depth;
-        let spec0 = ev.specpdl.len();
-        let frames0 = ev.bc_frames.len();
-        let buf0 = ev.bc_buf.len();
-        let cond0 = ev.condition_stack.len();
-        let roots0 = crate::emacs_core::eval::save_scratch_gc_roots();
-        let caller_boundary = ev.module_boundary_snapshot();
-        let calls0 = super::super::direct_call::DIRECT_FRAMED_CALLS.load(Ordering::Relaxed);
-        let expired_span;
-        {
-            let args = [Value::string("first fresh heap arg").bits() as i64,
-                        Value::string("second fresh heap arg").bits() as i64,
-                        Value::string("third fresh heap arg").bits() as i64];
-            expired_span = args.as_ptr();
-            // SAFETY: all three tagged words remain live through the helper.
-            unsafe { ev.push_backtrace_frame_from_native_args(Value::symbol("neovm--fp-target"), args.as_ptr(), args.len()) };
-            ev.depth += 1;
-            let mut output = i64::MIN;
-            // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
-            let status = unsafe { super::super::direct_call::neovm_jit_direct_framed(
-                &mut ev as *mut Context as *mut u8, callee.bits() as i64,
-                leaf as *const CompiledLeaf as usize as i64, constants as usize as i64,
-                args.as_ptr(), args.len() as i64, spec0 as i64, &mut output) };
-            assert_eq!(status, STATUS_SIGNAL);
-            assert_eq!(output, i64::MIN, "signal leaves the output slot unreadable");
-        }
-        assert!(shim_panic_pending(), "the caller's heal has not consumed the marker");
-        assert_eq!(ev.depth, depth0 + 1, "pending panic leaves counted depth for caller healing");
-        assert_eq!(super::super::direct_call::DIRECT_FRAMED_CALLS.load(Ordering::Relaxed), calls0 + 1);
-        assert!(ev.specpdl.iter().all(|entry| !matches!(entry,
-            crate::emacs_core::eval::SpecBinding::BacktraceNative { args_ptr, .. } if args_ptr == expired_span)),
-            "no frame reads the expired three-word argument span");
-        assert!(ev.specpdl[spec0..].iter().any(|entry| matches!(entry,
-            crate::emacs_core::eval::SpecBinding::Backtrace { function, .. }
-                if function == Value::symbol("neovm--fp-target"))),
-            "the original called symbol remains on an owned detached frame before healing");
-        let collected0 = ev.tagged_heap.gc_collections();
-        ev.gc_collect_exact();
-        assert!(ev.tagged_heap.gc_collections() > collected0, "collection occurs while the panic is pending");
-        assert!(shim_panic_pending(), "GC did not materialize the pending panic");
-        // The enclosing caller's depth-based unwind after that collection.
-        ev.restore_jit_shim_boundary(&caller_boundary, cond0);
-        ev.unbind_to(spec0);
-        let flow = take_pending_flow().expect("panic materializes at the caller boundary");
-        let neovm_value::error::FlowKind::Signal(signal) = flow.into_kind() else { panic!("panic must become a Lisp signal") };
-        assert_eq!(signal.symbol_name(), "error");
-        assert!(signal.data[0].as_str_owned().expect("message").contains("framed-before-heal"));
-        assert!(!shim_panic_pending());
-        assert_eq!((ev.depth, ev.specpdl.len(), ev.bc_frames.len(), ev.bc_buf.len(), ev.condition_stack.len()),
-            (depth0, spec0, frames0, buf0, cond0));
-        assert_eq!(crate::emacs_core::eval::save_scratch_gc_roots(), roots0);
-        ev.eval_str("(setq neovm--fp-arm nil)").expect("disarm");
-        let value = ev.eval_str("(neovm--fp-target 'recovered 1 2)").expect("caller recovers");
-        assert_eq!(crate::emacs_core::print::print_value(&value), "(recovered 1 2)");
-        force_direct_shapes_for_test(None);
+        let callee = ev.obarray().symbol_function_id(intern("neovm--fp-target")).expect("function");
+        let leaf_id = cached_leaf_id(&ev, "neovm--fp-target").expect("native leaf");
+        with_cached_leaf_for_test(leaf_id, |leaf| {
+            assert_eq!(leaf_entry_shape_name_for_test(leaf), "Framed");
+            assert!(leaf_has_binds_for_test(leaf) && !leaf_has_handlers_for_test(leaf), "a binding extent parks the marker across its cleanup");
+            let constants = callee.get_bytecode_data().expect("bytecode").constants.as_ptr();
+            let depth0 = ev.depth_for_test();
+            let spec0 = ev.specpdl().len();
+            let frames0 = bc_frames_len_for_test(&ev);
+            let buf0 = ev.bc_buf_for_test().len();
+            let cond0 = ev.condition_stack_for_test().len();
+            let roots0 = crate::emacs_core::eval::save_scratch_gc_roots();
+            let caller_boundary = ev.module_boundary_snapshot();
+            let calls0 = direct_framed_calls_for_test();
+            let expired_span;
+            {
+                let args = [Value::string("first fresh heap arg").bits() as i64,
+                            Value::string("second fresh heap arg").bits() as i64,
+                            Value::string("third fresh heap arg").bits() as i64];
+                expired_span = args.as_ptr();
+                // SAFETY: all three tagged words remain live through the helper.
+                unsafe { ev.push_backtrace_frame_from_native_args(Value::symbol("neovm--fp-target"), args.as_ptr(), args.len()) };
+                let next_depth = ev.depth_for_test() + 1;
+                neovm_eval::test_support::authority::set_depth_for_test(&mut ev, next_depth);
+                let mut output = i64::MIN;
+                // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
+                let status = unsafe { direct_framed_call_for_test(
+                    &mut ev as *mut Context as *mut u8, callee.bits() as i64,
+                    leaf as *const CompiledLeaf as usize as i64, constants as usize as i64,
+                    args.as_ptr(), args.len() as i64, spec0 as i64, &mut output) };
+                assert_eq!(status, STATUS_SIGNAL);
+                assert_eq!(output, i64::MIN, "signal leaves the output slot unreadable");
+            }
+            assert!(shim_panic_pending_for_test(), "the caller's heal has not consumed the marker");
+            assert_eq!(ev.depth_for_test(), depth0 + 1, "pending panic leaves counted depth for caller healing");
+            assert_eq!(direct_framed_calls_for_test(), calls0 + 1);
+            assert!(ev.specpdl().iter().all(|entry| !matches!(entry,
+                crate::emacs_core::eval::SpecBinding::BacktraceNative { args_ptr, .. } if *args_ptr == expired_span)),
+                "no frame reads the expired three-word argument span");
+            assert!(ev.specpdl()[spec0..].iter().any(|entry| matches!(entry,
+                crate::emacs_core::eval::SpecBinding::Backtrace { function, .. }
+                    if *function == Value::symbol("neovm--fp-target"))),
+                "the original called symbol remains on an owned detached frame before healing");
+            let collected0 = ev.tagged_heap().gc_collections();
+            ev.gc_collect_exact();
+            assert!(ev.tagged_heap().gc_collections() > collected0, "collection occurs while the panic is pending");
+            assert!(shim_panic_pending_for_test(), "GC did not materialize the pending panic");
+            // The enclosing caller's depth-based unwind after that collection.
+            ev.restore_jit_shim_boundary(&caller_boundary, cond0);
+            ev.unbind_to(spec0);
+            let flow = take_pending_flow().expect("panic materializes at the caller boundary");
+            let neovm_value::error::FlowKind::Signal(signal) = flow.into_kind() else { panic!("panic must become a Lisp signal") };
+            assert_eq!(signal.symbol_name(), "error");
+            assert!(signal.data[0].as_str_owned().expect("message").contains("framed-before-heal"));
+            assert!(!shim_panic_pending_for_test());
+            assert_eq!((ev.depth_for_test(), ev.specpdl().len(), bc_frames_len_for_test(&ev), ev.bc_buf_for_test().len(), ev.condition_stack_for_test().len()),
+                (depth0, spec0, frames0, buf0, cond0));
+            assert_eq!(crate::emacs_core::eval::save_scratch_gc_roots(), roots0);
+            ev.eval_str("(setq neovm--fp-arm nil)").expect("disarm");
+            let value = ev.eval_str("(neovm--fp-target 'recovered 1 2)").expect("caller recovers");
+            assert_eq!(crate::emacs_core::print::print_value(&value), "(recovered 1 2)");
+        }).expect("native leaf");
+        force_direct_shapes_token_for_test(None);
         force_direct_call_for_test(None);
-        force_direct_sites_for_test(None);
+        force_direct_sites_token_for_test(None);
     }).expect("spawn").join().expect("contained panic never crosses JIT/C frames");
 }
 
@@ -621,16 +652,16 @@ fn a_panic_from_a_generated_framed_site_is_caught_by_its_caller_and_recovers() {
       (let ((neovm--fg-arm t)) (neovm--fg-caller "fresh-one" '(fresh-two) "fresh-three"))
       (progn (garbage-collect) (neovm--fg-caller 'recovered "two" '(three)))
       neovm--fg-special)"#;
-    let baseline = run_in_with(Mode::Direct, DirectShapesKnob::OFF, PROGRAM, OBSERVE);
+    let baseline = run_in_with(Mode::Direct, TestDirectShapes::OFF, PROGRAM, OBSERVE);
     let direct = run_in_with(
         Mode::Direct,
-        DirectShapesKnob::parse(Some("framed")),
+        direct_shapes_parse_for_test(Some("framed")),
         PROGRAM,
         OBSERVE,
     );
     let forced = run_in_with(
         Mode::DirectForcedSlow,
-        DirectShapesKnob::parse(Some("framed")),
+        direct_shapes_parse_for_test(Some("framed")),
         PROGRAM,
         OBSERVE,
     );

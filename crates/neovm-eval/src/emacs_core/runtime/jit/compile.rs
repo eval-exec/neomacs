@@ -4255,6 +4255,8 @@ pub use lowering::*;
 
 mod shims;
 pub use shims::*;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use shims::var_shim_calls;
 
 pub(crate) mod sink;
 pub(crate) use sink::{LeafEntry, LeafSink};
@@ -4329,9 +4331,6 @@ pub(crate) mod heap_inline;
 #[path = "tests/hof_default_front_test.rs"]
 mod hof_default_front_tests;
 #[cfg(test)]
-#[path = "tests/hof_default_semantics_test.rs"]
-mod hof_default_semantics_tests;
-#[cfg(test)]
 #[path = "tests/inline_heap_ops_test.rs"]
 mod inline_heap_ops_tests;
 
@@ -4363,9 +4362,6 @@ mod mir_inline_guards;
 #[path = "tests/mir_named_calls_test.rs"]
 mod mir_named_calls_tests;
 #[cfg(test)]
-#[path = "tests/mir_reach_dead_test.rs"]
-mod mir_reach_dead_tests;
-#[cfg(test)]
 #[path = "tests/observability_test.rs"]
 mod observability_tests;
 #[cfg(test)]
@@ -4383,12 +4379,6 @@ pub use knobs::jit_inline_switch_on;
 #[cfg(feature = "test-support")]
 pub use switch_dispatch::inline_switch_sites_for_test;
 
-#[cfg(test)]
-#[path = "tests/direct_call_test.rs"]
-mod direct_call_tests;
-#[cfg(test)]
-#[path = "tests/direct_self_test.rs"]
-mod direct_self_tests;
 #[cfg(test)]
 #[path = "tests/eq_swp_prefilter_test.rs"]
 mod eq_swp_prefilter_tests;
@@ -4409,9 +4399,6 @@ mod osr_entry_guard_tests;
 mod osr_raw_tests;
 
 #[cfg(test)]
-#[path = "tests/inline_vars_test.rs"]
-mod inline_vars_tests;
-#[cfg(test)]
 #[path = "tests/native_frame_detach_test.rs"]
 mod native_frame_detach_tests;
 #[cfg(test)]
@@ -4430,14 +4417,8 @@ mod source_slot_tests;
 #[path = "tests/spec_gate_test.rs"]
 mod spec_gate_tests;
 #[cfg(test)]
-#[path = "tests/stack_guard_test.rs"]
-mod stack_guard_tests;
-#[cfg(test)]
 #[path = "tests/switch_inline_test.rs"]
 mod switch_inline_tests;
-#[cfg(test)]
-#[path = "tests/tail_calls_test.rs"]
-mod tail_call_tests;
 #[cfg(test)]
 #[path = "tests/compile_test.rs"]
 mod tests;

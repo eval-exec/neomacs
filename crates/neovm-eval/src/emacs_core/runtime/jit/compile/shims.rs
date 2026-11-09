@@ -1322,16 +1322,28 @@ pub unsafe extern "C" fn neovm_jit_symbolp_slow(ctx: *mut u8, v: i64) -> i64 {
     }) as i64
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Test hook: calls that reached `neovm_jit_varref` instead of the inline
-    /// plain-cell read.
+    /// plain-cell read. The feature arm is what a core test build sees;
+    /// production without test-support does not store the census.
     pub(crate) static VARREF_SHIM_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Test hooks: calls that reached `neovm_jit_varset`, `_varbind` and
     /// `_unbind` instead of an inline variable op (`inline_vars`).
     pub(crate) static VARSET_SHIM_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static VARBIND_SHIM_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static UNBIND_SHIM_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Copied var-shim census. The counters stay in this module.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn var_shim_calls() -> (usize, usize, usize, usize) {
+    (
+        VARREF_SHIM_CALLS.with(std::cell::Cell::get),
+        VARSET_SHIM_CALLS.with(std::cell::Cell::get),
+        VARBIND_SHIM_CALLS.with(std::cell::Cell::get),
+        UNBIND_SHIM_CALLS.with(std::cell::Cell::get),
+    )
 }
 
 /// Read a variable from JIT code (`Op::VarRef` semantics via
@@ -1346,7 +1358,7 @@ thread_local! {
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn neovm_jit_varref(ctx: *mut u8, sym: i64, out: *mut i64) -> i64 {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     VARREF_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
         use neovm_value::intern::SymId;
@@ -1406,7 +1418,7 @@ pub unsafe extern "C" fn neovm_jit_varref(ctx: *mut u8, sym: i64, out: *mut i64)
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn neovm_jit_varset_collection(ctx: *mut u8, sym: i64, val: i64) -> i64 {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     VARSET_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
         use neovm_value::intern::SymId;
@@ -1460,7 +1472,7 @@ pub unsafe extern "C" fn neovm_jit_varset_collection(ctx: *mut u8, sym: i64, val
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i64 {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     VARSET_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
         use neovm_value::intern::SymId;
@@ -1512,7 +1524,7 @@ pub unsafe extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i
 /// Same vmctx contract as [`neovm_jit_call`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn neovm_jit_varbind_collection(ctx: *mut u8, sym: i64, val: i64) -> i64 {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     VARBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
         use neovm_value::intern::SymId;
@@ -1568,7 +1580,7 @@ pub unsafe extern "C" fn neovm_jit_varbind_collection(ctx: *mut u8, sym: i64, va
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> i64 {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     VARBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
         use neovm_value::intern::SymId;
@@ -1627,7 +1639,7 @@ pub unsafe extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> 
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn neovm_jit_unbind_collection(ctx: *mut u8, n: i64) -> i64 {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     UNBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     // SAFETY: see neovm_jit_call's function-level contract.
     // SAFETY (owner chain): Context work here uses this owner or its
@@ -1678,7 +1690,7 @@ pub unsafe extern "C" fn neovm_jit_unbind_collection(ctx: *mut u8, n: i64) -> i6
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn neovm_jit_unbind(ctx: *mut u8, n: i64) -> i64 {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     UNBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     // SAFETY: see neovm_jit_call's function-level contract.
     // SAFETY (owner chain): Context work here uses this owner or its

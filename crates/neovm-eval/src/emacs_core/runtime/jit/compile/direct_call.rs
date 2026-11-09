@@ -81,7 +81,7 @@ pub(crate) use heat::DirectSelfHeat;
 mod profile;
 #[path = "direct_call/self_only.rs"]
 mod self_only;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use framed::DIRECT_FRAMED_CALLS;
 pub(crate) use framed::neovm_jit_direct_framed;
 pub(crate) use self_only::{
@@ -1179,8 +1179,8 @@ thread_local! {
 }
 
 /// Direct sites emitted on this thread so far. Copy count; the cell stays here.
+/// The cross-crate route is the authority fence.
 #[cfg(any(test, feature = "test-support"))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn direct_sites_emitted_for_test() -> usize {
     DIRECT_SITES_EMITTED_HERE.with(core::cell::Cell::get)
 }

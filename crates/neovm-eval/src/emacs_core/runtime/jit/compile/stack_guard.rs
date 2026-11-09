@@ -153,8 +153,8 @@ thread_local! {
 }
 
 /// Entry guards emitted on this thread so far. Copy count; the cell stays here.
+/// The cross-crate route is the authority fence.
 #[cfg(any(test, feature = "test-support"))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn stack_guards_emitted_for_test() -> usize {
     STACK_GUARDS_EMITTED.with(core::cell::Cell::get)
 }

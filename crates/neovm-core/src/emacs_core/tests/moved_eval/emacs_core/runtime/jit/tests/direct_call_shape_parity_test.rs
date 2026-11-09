@@ -8,7 +8,8 @@
 //! only byte-code implementation bytes, preserving object identity, arity,
 //! every argument and complete error data.
 
-use super::*;
+use super::{Mode, Run, WARM, run_in_with};
+use neovm_eval::test_support::authority::{TestDirectShapes, direct_shapes_parse_for_test};
 
 #[cfg(test)]
 #[path = "direct_call_shape_edges_test.rs"]
@@ -45,8 +46,10 @@ fn gnu_expect(name: &str, program: &str, observe: &str, fixture: &str) -> String
     let output = String::from_utf8(result.stdout).expect("GNU output is UTF-8");
     assert!(!output.is_empty(), "GNU produced an expectation");
     std::fs::write(
-        root.join("src/emacs_core/runtime/jit/tests/direct_call_shape_parity")
-            .join(format!("{name}.expect")),
+        root.join(
+            "src/emacs_core/tests/moved_eval/emacs_core/runtime/jit/tests/direct_call_shape_parity",
+        )
+        .join(format!("{name}.expect")),
         format!("{}\n", output.trim_end()),
     )
     .expect("write GNU fixture");
@@ -67,11 +70,11 @@ fn assert_gnu_shape(
     fixture: &str,
     named_hit: bool,
 ) -> [Run; 4] {
-    let knob = DirectShapesKnob::parse(Some(shape));
+    let knob = direct_shapes_parse_for_test(Some(shape));
     let expected = gnu_expect(name, program, observe, fixture);
     let modes = [
-        (Mode::Shim, DirectShapesKnob::OFF),
-        (Mode::Direct, DirectShapesKnob::OFF),
+        (Mode::Shim, TestDirectShapes::OFF),
+        (Mode::Direct, TestDirectShapes::OFF),
         (Mode::Direct, knob),
         (Mode::DirectForcedSlow, knob),
     ];

@@ -5888,7 +5888,7 @@ fn build_byte_code_function(
     Ok(bc)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static MAKE_BYTE_CODE_VALIDATE_ONLY_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
         const { std::cell::Cell::new(None) };
@@ -5896,7 +5896,7 @@ std::thread_local! {
 
 /// Force `make-byte-code`'s validate-only check on/off on the current
 /// thread (tests only).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_make_byte_code_validate_only_for_test(on: bool) {
     MAKE_BYTE_CODE_VALIDATE_ONLY_TEST_OVERRIDE.with(|c| c.set(Some(on)));
 }
@@ -5906,7 +5906,7 @@ pub(crate) fn force_make_byte_code_validate_only_for_test(on: bool) {
 /// decodes in full and discards the instructions, as before — the
 /// single-build A/B.
 fn make_byte_code_validates_only() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(on) = MAKE_BYTE_CODE_VALIDATE_ONLY_TEST_OVERRIDE.with(|c| c.get()) {
         return on;
     }

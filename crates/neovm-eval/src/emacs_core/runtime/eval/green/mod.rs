@@ -287,10 +287,6 @@ mod tests;
 mod switch_tests;
 
 #[cfg(test)]
-#[path = "../tests/green_p15_condition_wait_test.rs"]
-mod p15_condition_wait_tests;
-
-#[cfg(test)]
 #[path = "../tests/green_p15_completion_test.rs"]
 mod p15_completion_tests;
 

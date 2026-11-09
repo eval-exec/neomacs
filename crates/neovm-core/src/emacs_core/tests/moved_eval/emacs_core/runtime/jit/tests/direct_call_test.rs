@@ -9,18 +9,29 @@
 //! redefinition, deopts, contained panics -- between direct calls on, off,
 //! `NEOVM_JIT_FORCE_SLOW_SPEC`, and the interpreter.
 
-use super::*;
-use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
-use crate::test_support::jit_fixture::{eval_fixture_program, eval_fixture_program_named};
+use neovm_eval::test_support::authority::{
+    LeafIdentity, TestDirectShapes, TestDirectSitesMode, TestOptMode, TestRegallocPolicy,
+    bytecode_slot_clear_leaf_for_test, bytecode_slot_direct_entry_identity_for_test,
+    bytecode_slot_index_for_callee_for_test, bytecode_slot_leaf_identity_for_test,
+    compile_with_regalloc_for_test, direct_cold_exits_for_test, direct_framed_calls_for_test,
+    direct_sites_emitted_for_test, eval_fixture_program, force_direct_call_for_test,
+    force_direct_memory_for_test, force_direct_shapes_token_for_test,
+    force_direct_sites_token_for_test, force_inline_for_test, force_profit_defer_for_test,
+    force_profit_gate_for_test, force_register_abi_for_test, force_slow_spec_for_test,
+    jit_compiled_id_or_assign_for_test, jit_opt_mode_token_for_test, leaf_entry_identity_for_test,
+    null_identity_for_test, opt_mode_token_scope_for_test, unlink_spec_slots_for_test,
+    with_cached_leaf_for_test,
+};
 use neovm_value::intern::intern;
+use neovm_value::value::Value;
 
 #[test]
 fn ordered_direct_fixture_preparation_preserves_effects_gc_and_error_roots() {
     force_profit_gate_for_test(false);
     let mut ev = crate::test_utils::runtime_startup_context();
-    let roots0 = ev.specpdl.len();
+    let roots0 = ev.specpdl().len();
     let result = eval_fixture_program(
         &mut ev,
         r#"(progn
@@ -38,7 +49,7 @@ fn ordered_direct_fixture_preparation_preserves_effects_gc_and_error_roots() {
         crate::emacs_core::print::print_value(&result),
         "(17 (\"future parsed form survives GC\"))"
     );
-    assert_eq!(ev.specpdl.len(), roots0, "success restores loader roots");
+    assert_eq!(ev.specpdl().len(), roots0, "success restores loader roots");
     let failed = eval_fixture_program(
         &mut ev,
         r#"(progn
@@ -48,7 +59,7 @@ fn ordered_direct_fixture_preparation_preserves_effects_gc_and_error_roots() {
           (setq neovm--direct-fixture-count 999))"#,
     );
     assert!(failed.is_err(), "public error still stops the fixture");
-    assert_eq!(ev.specpdl.len(), roots0, "error restores loader roots");
+    assert_eq!(ev.specpdl().len(), roots0, "error restores loader roots");
     assert_eq!(
         ev.eval_str("neovm--direct-fixture-count").expect("witness"),
         Value::make_int(1),
@@ -56,21 +67,10 @@ fn ordered_direct_fixture_preparation_preserves_effects_gc_and_error_roots() {
     );
 }
 
-/// The compiled leaf the cache holds for the function SYM names.
-fn cached_leaf(ev: &Context, sym: &str) -> Option<&'static CompiledLeaf> {
-    let f = ev.obarray.symbol_function_id(intern(sym))?;
-    let id = f.get_bytecode_data()?.jit_runtime().compiled_id_or_assign();
-    let ptr = crate::emacs_core::jit::cache::compiled_leaf_ptr_for_test(id)?;
-    // SAFETY: a cached leaf, alive while the cache holds it (the test does
-    // not clear the cache while it looks).
-    Some(unsafe { &*ptr })
-}
-
-/// The caller's Bytecode spec slot that caches CALLEE's leaf.
-fn slot_calling<'a>(caller: &'a CompiledLeaf, callee: &CompiledLeaf) -> Option<&'a SpecSlot> {
-    caller
-        .bytecode_spec_slots()
-        .find(|slot| std::ptr::eq(slot.leaf_ptr(), callee))
+/// The cache id for the function SYM names. Leaf access stays in the fence closure.
+fn cached_leaf_id(ev: &Context, sym: &str) -> Option<u64> {
+    let f = ev.obarray().symbol_function_id(intern(sym))?;
+    Some(jit_compiled_id_or_assign_for_test(f.get_bytecode_data()?))
 }
 
 /// Callees of every arming shape. Each has a branch or an allocation, so
@@ -93,39 +93,51 @@ const ARMING: &str = r#"(progn
 /// Warm the arming program with direct calls ON or OFF and answer each
 /// callee's slot in the caller: `(name, leaf entry, the slot's direct
 /// entry)`.
-fn armed_entries(direct: bool) -> Vec<(&'static str, *const u8, *const u8)> {
+fn armed_entries(direct: bool) -> Vec<(&'static str, LeafIdentity, LeafIdentity)> {
     crate::test_utils::init_test_tracing();
     force_profit_gate_for_test(false);
     // The calls must stay calls: the fuser would inline these callees.
-    crate::emacs_core::jit::inline::force_inline_for_test(Some(false));
-    crate::emacs_core::jit::force_profit_defer_for_test(Some(1));
+    force_inline_for_test(Some(false));
+    force_profit_defer_for_test(Some(1));
     force_direct_call_for_test(Some(direct));
     // This helper checks the original exact-only arming contract.
-    force_direct_shapes_for_test(Some(DirectShapesKnob::OFF));
+    force_direct_shapes_token_for_test(Some(TestDirectShapes::OFF));
     // Every caller here is a small straight-line body: pin direct sites on
-    // for every body, not only the unbounded ones (`DirectSitesMode`).
-    force_direct_sites_for_test(Some(DirectSitesMode::All));
+    // for every body, not only the unbounded ones (`TestDirectSitesMode`).
+    force_direct_sites_token_for_test(Some(TestDirectSitesMode::All));
     let mut ev = crate::test_utils::runtime_startup_context();
     eval_fixture_program(&mut ev, ARMING).expect("warmed");
-    let caller = cached_leaf(&ev, "neovm--dc-caller").expect("the caller is compiled");
-    let out = [
-        "neovm--dc-exact",
-        "neovm--dc-framed",
-        "neovm--dc-opt",
-        "neovm--dc-rest",
-        "neovm--dc-wide",
-    ]
-    .into_iter()
-    .map(|name| {
-        let callee = cached_leaf(&ev, name).unwrap_or_else(|| panic!("{name} is compiled"));
-        let slot = slot_calling(caller, callee)
-            .unwrap_or_else(|| panic!("the caller's slot caches {name}"));
-        (name, callee.entry, slot.direct_entry())
+    let caller_id = cached_leaf_id(&ev, "neovm--dc-caller").expect("the caller is compiled");
+    let out = with_cached_leaf_for_test(caller_id, |caller| {
+        let out = [
+            "neovm--dc-exact",
+            "neovm--dc-framed",
+            "neovm--dc-opt",
+            "neovm--dc-rest",
+            "neovm--dc-wide",
+        ]
+        .into_iter()
+        .map(|name| {
+            let callee_id =
+                cached_leaf_id(&ev, name).unwrap_or_else(|| panic!("{name} is compiled"));
+            with_cached_leaf_for_test(callee_id, |callee| {
+                let slot = bytecode_slot_index_for_callee_for_test(caller, callee)
+                    .unwrap_or_else(|| panic!("the caller's slot caches {name}"));
+                (
+                    name,
+                    leaf_entry_identity_for_test(callee),
+                    bytecode_slot_direct_entry_identity_for_test(caller, slot),
+                )
+            })
+            .unwrap_or_else(|| panic!("{name} is compiled"))
+        })
+        .collect();
+        out
     })
-    .collect();
+    .expect("the caller is compiled");
     force_direct_call_for_test(None);
-    force_direct_sites_for_test(None);
-    force_direct_shapes_for_test(None);
+    force_direct_sites_token_for_test(None);
+    force_direct_shapes_token_for_test(None);
     out
 }
 
@@ -137,27 +149,32 @@ fn spec_slots_arm_a_direct_entry_only_for_exact_frameless_register_callees() {
         if name == "neovm--dc-exact" {
             assert_eq!(direct, entry, "{name}: armed with the leaf's entry");
         } else {
-            assert!(direct.is_null(), "{name}: not directly callable");
+            assert!(
+                direct == null_identity_for_test(),
+                "{name}: not directly callable"
+            );
         }
     }
     for (name, _, direct) in armed_entries(false) {
-        assert!(direct.is_null(), "{name}: knob off arms nothing");
+        assert!(
+            direct == null_identity_for_test(),
+            "{name}: knob off arms nothing"
+        );
     }
 }
 
 /// Direct sites go where they pay their compile back
-/// (`DirectSitesMode::Unbounded`, explicitly selected): a caller whose body loops or
+/// (`TestDirectSitesMode::Unbounded`, explicitly selected): a caller whose body loops or
 /// calls itself, or a re-tier of one that proved hot; a straight-line caller
 /// keeps the shim call. `NEOVM_JIT_DIRECT_SITES=all` emits them in every
 /// body.
 #[test]
 fn only_callers_that_loop_recurse_or_proved_hot_emit_direct_sites() {
-    use crate::emacs_core::jit::compile::lowering::RegallocPolicy;
     crate::test_utils::init_test_tracing();
     force_profit_gate_for_test(false);
-    crate::emacs_core::jit::inline::force_inline_for_test(Some(false));
+    force_inline_for_test(Some(false));
     force_direct_call_for_test(Some(true));
-    force_direct_sites_for_test(Some(DirectSitesMode::Unbounded));
+    force_direct_sites_token_for_test(Some(TestDirectSitesMode::Unbounded));
     let mut ev = crate::test_utils::runtime_startup_context();
     ev.eval_str(
         r#"(progn
@@ -172,43 +189,43 @@ fn only_callers_that_loop_recurse_or_proved_hot_emit_direct_sites() {
     (byte-compile f)))"#,
     )
     .expect("defined");
-    let sites = |ev: &Context, name: &str, policy: RegallocPolicy| {
+    let sites = |ev: &Context, name: &str, policy: TestRegallocPolicy| {
         let f = ev
-            .obarray
+            .obarray()
             .symbol_function_id(intern(name))
             .expect("defined");
         let bc = f.get_bytecode_data().expect("byte-compiled");
-        let before = direct_call::direct_sites_emitted_for_test();
-        compile_bytecode_function_tiered(bc, Some(&ev.obarray), policy).expect("compiles");
-        direct_call::direct_sites_emitted_for_test() - before
+        let before = direct_sites_emitted_for_test();
+        compile_with_regalloc_for_test(bc, Some(ev.obarray()), policy).expect("compiles");
+        direct_sites_emitted_for_test() - before
     };
     assert_eq!(
-        sites(&ev, "neovm--dcu-straight", RegallocPolicy::Auto),
+        sites(&ev, "neovm--dcu-straight", TestRegallocPolicy::Auto),
         0,
         "a straight-line caller keeps the shim call"
     );
     assert_eq!(
-        sites(&ev, "neovm--dcu-straight", RegallocPolicy::Full),
+        sites(&ev, "neovm--dcu-straight", TestRegallocPolicy::Full),
         1,
         "a re-tier of a caller that proved hot calls directly"
     );
     assert_eq!(
-        sites(&ev, "neovm--dcu-loop", RegallocPolicy::Auto),
+        sites(&ev, "neovm--dcu-loop", TestRegallocPolicy::Auto),
         1,
         "a caller that loops calls directly"
     );
     assert_eq!(
-        sites(&ev, "neovm--dcu-rec", RegallocPolicy::Auto),
+        sites(&ev, "neovm--dcu-rec", TestRegallocPolicy::Auto),
         2,
         "a caller that recurses calls itself and its callee directly"
     );
-    force_direct_sites_for_test(Some(DirectSitesMode::All));
+    force_direct_sites_token_for_test(Some(TestDirectSitesMode::All));
     assert_eq!(
-        sites(&ev, "neovm--dcu-straight", RegallocPolicy::Auto),
+        sites(&ev, "neovm--dcu-straight", TestRegallocPolicy::Auto),
         1,
         "`all`: every caller"
     );
-    force_direct_sites_for_test(None);
+    force_direct_sites_token_for_test(None);
     force_direct_call_for_test(None);
 }
 
@@ -219,36 +236,57 @@ fn only_callers_that_loop_recurse_or_proved_hot_emit_direct_sites() {
 fn clearing_a_slot_drops_its_direct_entry_and_the_next_call_rearms_it() {
     crate::test_utils::init_test_tracing();
     force_profit_gate_for_test(false);
-    crate::emacs_core::jit::inline::force_inline_for_test(Some(false));
-    crate::emacs_core::jit::force_profit_defer_for_test(Some(1));
+    force_inline_for_test(Some(false));
+    force_profit_defer_for_test(Some(1));
     force_direct_call_for_test(Some(true));
     // Every caller here is a small straight-line body: pin direct sites on
-    // for every body, not only the unbounded ones (`DirectSitesMode`).
-    force_direct_sites_for_test(Some(DirectSitesMode::All));
+    // for every body, not only the unbounded ones (`TestDirectSitesMode`).
+    force_direct_sites_token_for_test(Some(TestDirectSitesMode::All));
     let mut ev = crate::test_utils::runtime_startup_context();
     eval_fixture_program(&mut ev, ARMING).expect("warmed");
-    let caller = cached_leaf(&ev, "neovm--dc-caller").expect("caller");
-    let callee = cached_leaf(&ev, "neovm--dc-exact").expect("callee");
-    let slot = slot_calling(caller, callee).expect("slot");
-    assert_eq!(slot.direct_entry(), callee.entry);
-    slot.clear_leaf();
-    assert!(slot.direct_entry().is_null() && slot.leaf_ptr().is_null());
-    ev.eval_str("(neovm--dc-caller 5)").expect("runs");
-    assert_eq!(
-        slot.direct_entry(),
-        callee.entry,
-        "re-armed by the next call"
-    );
-    assert_eq!(
-        crate::emacs_core::jit::cache::unlink_spec_slots(callee),
-        1,
-        "the caller's slot unlinks"
-    );
-    assert!(slot.direct_entry().is_null(), "unlinked with its leaf");
-    ev.eval_str("(neovm--dc-caller 6)").expect("runs");
-    assert_eq!(slot.direct_entry(), callee.entry);
+    let caller_id = cached_leaf_id(&ev, "neovm--dc-caller").expect("caller");
+    let callee_id = cached_leaf_id(&ev, "neovm--dc-exact").expect("callee");
+    with_cached_leaf_for_test(caller_id, |caller| {
+        with_cached_leaf_for_test(callee_id, |callee| {
+            let slot = bytecode_slot_index_for_callee_for_test(caller, callee).expect("slot");
+            assert_eq!(
+                bytecode_slot_direct_entry_identity_for_test(caller, slot),
+                leaf_entry_identity_for_test(callee)
+            );
+            bytecode_slot_clear_leaf_for_test(caller, slot);
+            assert!(
+                bytecode_slot_direct_entry_identity_for_test(caller, slot)
+                    == null_identity_for_test()
+                    && bytecode_slot_leaf_identity_for_test(caller, slot)
+                        == null_identity_for_test()
+            );
+            ev.eval_str("(neovm--dc-caller 5)").expect("runs");
+            assert_eq!(
+                bytecode_slot_direct_entry_identity_for_test(caller, slot),
+                leaf_entry_identity_for_test(callee),
+                "re-armed by the next call"
+            );
+            assert_eq!(
+                unlink_spec_slots_for_test(callee),
+                1,
+                "the caller's slot unlinks"
+            );
+            assert!(
+                bytecode_slot_direct_entry_identity_for_test(caller, slot)
+                    == null_identity_for_test(),
+                "unlinked with its leaf"
+            );
+            ev.eval_str("(neovm--dc-caller 6)").expect("runs");
+            assert_eq!(
+                bytecode_slot_direct_entry_identity_for_test(caller, slot),
+                leaf_entry_identity_for_test(callee)
+            );
+        })
+        .expect("callee");
+    })
+    .expect("caller");
     force_direct_call_for_test(None);
-    force_direct_sites_for_test(None);
+    force_direct_sites_token_for_test(None);
 }
 
 // ---------------------------------------------------------------------------
@@ -297,26 +335,26 @@ struct Run {
 /// the run's own. Asserts the observation leaves `depth` and the specpdl as
 /// it found them.
 fn run_in(mode: Mode, program: &'static str, observe: &'static str) -> Run {
-    run_in_with(mode, DirectShapesKnob::OFF, program, observe)
+    run_in_with(mode, TestDirectShapes::OFF, program, observe)
 }
 
 /// [`run_in`] with the call shapes direct sites take
 /// (`NEOVM_JIT_DIRECT_SHAPES`) in the modes that call directly.
 fn run_in_with(
     mode: Mode,
-    shapes: DirectShapesKnob,
+    shapes: TestDirectShapes,
     program: &'static str,
     observe: &'static str,
 ) -> Run {
-    let backend = jit_opt_mode();
+    let backend = jit_opt_mode_token_for_test();
     std::thread::Builder::new()
         .name(format!("direct-call-{mode:?}"))
         .stack_size(128 * 1024 * 1024)
         .spawn(move || {
-            let _backend = opt_mode_scope_for_test(backend);
+            let _backend = opt_mode_token_scope_for_test(backend);
             crate::test_utils::init_test_tracing();
             force_profit_gate_for_test(false);
-            crate::emacs_core::jit::inline::force_inline_for_test(Some(false));
+            force_inline_for_test(Some(false));
             force_direct_call_for_test(Some(mode != Mode::Shim));
             force_direct_memory_for_test(Some(matches!(
                 mode,
@@ -324,44 +362,43 @@ fn run_in_with(
             )));
             force_register_abi_for_test(Some(false));
             // Every caller here is a small straight-line body: pin direct sites on
-            // for every body, not only the unbounded ones (`DirectSitesMode`).
-            force_direct_sites_for_test(Some(DirectSitesMode::All));
+            // for every body, not only the unbounded ones (`TestDirectSitesMode`).
+            force_direct_sites_token_for_test(Some(TestDirectSitesMode::All));
             force_slow_spec_for_test(Some(matches!(
                 mode,
                 Mode::DirectForcedSlow | Mode::DirectMemoryForcedSlow
             )));
-            force_direct_shapes_for_test(Some(shapes));
+            force_direct_shapes_token_for_test(Some(shapes));
             // Tier up at the hot threshold, callers included, so the
             // warm-ups stay short (they run under GC stress too).
-            crate::emacs_core::jit::force_profit_defer_for_test(Some(1));
+            force_profit_defer_for_test(Some(1));
             let mut ev = crate::test_utils::runtime_startup_context();
             ev.refresh_attention_for_test();
             ev.eval_str(WARM).expect("warm-up count");
             eval_fixture_program(&mut ev, program).expect("the scenario's program runs");
-            let depth0 = ev.depth;
-            let spec0 = ev.specpdl.len();
-            let calls0 = SPEC_CALL_COUNT.load(Ordering::Relaxed);
-            let cold0 = super::direct_call::DIRECT_COLD_EXITS.load(Ordering::Relaxed);
-            let framed0 = super::direct_call::DIRECT_FRAMED_CALLS.load(Ordering::Relaxed);
+            let depth0 = ev.depth_for_test();
+            let spec0 = ev.specpdl().len();
+            let calls0 = neovm_eval::test_support::spec_call_count_for_test();
+            let cold0 = direct_cold_exits_for_test();
+            let framed0 = direct_framed_calls_for_test();
             let out = match ev.eval_str(observe) {
                 Ok(v) => crate::emacs_core::print::print_value(&v),
                 Err(e) => format!("escaped {e:?}"),
             };
-            let shim_calls = SPEC_CALL_COUNT.load(Ordering::Relaxed) - calls0;
-            let cold_exits = super::direct_call::DIRECT_COLD_EXITS.load(Ordering::Relaxed) - cold0;
-            let framed_calls =
-                super::direct_call::DIRECT_FRAMED_CALLS.load(Ordering::Relaxed) - framed0;
-            assert_eq!(ev.depth, depth0, "{mode:?}: depth restored");
-            assert_eq!(ev.specpdl.len(), spec0, "{mode:?}: specpdl restored");
-            let direct_sites = super::direct_call::direct_sites_emitted_for_test();
+            let shim_calls = neovm_eval::test_support::spec_call_count_for_test() - calls0;
+            let cold_exits = direct_cold_exits_for_test() - cold0;
+            let framed_calls = direct_framed_calls_for_test() - framed0;
+            assert_eq!(ev.depth_for_test(), depth0, "{mode:?}: depth restored");
+            assert_eq!(ev.specpdl().len(), spec0, "{mode:?}: specpdl restored");
+            let direct_sites = direct_sites_emitted_for_test();
             force_slow_spec_for_test(None);
-            force_direct_shapes_for_test(None);
+            force_direct_shapes_token_for_test(None);
             force_direct_call_for_test(None);
             force_direct_memory_for_test(None);
             force_register_abi_for_test(None);
-            force_direct_sites_for_test(None);
-            crate::emacs_core::jit::inline::force_inline_for_test(None);
-            crate::emacs_core::jit::force_profit_defer_for_test(None);
+            force_direct_sites_token_for_test(None);
+            force_inline_for_test(None);
+            force_profit_defer_for_test(None);
             Run {
                 out,
                 direct_sites,
@@ -601,13 +638,13 @@ fn a_cross_thread_quit_request_stops_a_direct_recursion() {
             .spawn(move || {
                 crate::test_utils::init_test_tracing();
                 force_profit_gate_for_test(false);
-                crate::emacs_core::jit::inline::force_inline_for_test(Some(false));
+                force_inline_for_test(Some(false));
                 force_direct_call_for_test(Some(mode != Mode::Shim));
                 force_direct_memory_for_test(Some(mode == Mode::DirectMemory));
                 force_register_abi_for_test(Some(false));
                 // Every caller here is a small straight-line body: pin direct sites on
-                // for every body, not only the unbounded ones (`DirectSitesMode`).
-                force_direct_sites_for_test(Some(DirectSitesMode::All));
+                // for every body, not only the unbounded ones (`TestDirectSitesMode`).
+                force_direct_sites_token_for_test(Some(TestDirectSitesMode::All));
                 let mut ev = crate::test_utils::runtime_startup_context();
                 eval_fixture_program(
                     &mut ev,
@@ -622,7 +659,7 @@ fn a_cross_thread_quit_request_stops_a_direct_recursion() {
                     std::thread::sleep(std::time::Duration::from_millis(50));
                     request.request();
                 });
-                let depth0 = ev.depth;
+                let depth0 = ev.depth_for_test();
                 let out = ev
                     .eval_str(
                         r#"(let ((max-lisp-eval-depth 5000))
@@ -633,11 +670,11 @@ fn a_cross_thread_quit_request_stops_a_direct_recursion() {
                     .map(|v| crate::emacs_core::print::print_value(&v))
                     .map_err(|e| format!("{e:?}"));
                 raiser.join().expect("raiser");
-                assert_eq!(ev.depth, depth0);
+                assert_eq!(ev.depth_for_test(), depth0);
                 force_direct_call_for_test(None);
                 force_direct_memory_for_test(None);
                 force_register_abi_for_test(None);
-                force_direct_sites_for_test(None);
+                force_direct_sites_token_for_test(None);
                 out
             })
             .expect("spawn")
@@ -687,9 +724,7 @@ fn a_redefinition_under_a_direct_activation_keeps_the_old_code_running() {
 /// Tier-0 with the frame still pushed, and the caller continues natively.
 #[test]
 fn deopts_in_a_direct_callee_resume_and_return_to_the_caller() {
-    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
-        crate::emacs_core::jit::compile::OptMode::Legacy,
-    );
+    let _backend = opt_mode_token_scope_for_test(TestOptMode::Legacy);
     const PROGRAM: &str = r#"(progn
   (defun neovm--dco-add (x y) (if (> x 0) (+ x y) (- y x)))
   (defun neovm--dco-car (x y) (if y (car x) x))

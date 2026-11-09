@@ -5,12 +5,16 @@
 //! every wait, signal and Green yield happens once, and every observation is an
 //! exact assertion. No sleep or external readiness can hide a product hang.
 
-use crate::emacs_core::eval::{Context, ThreadingMode};
+use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
 #[doc(hidden)]
 pub use crate::emacs_core::subr::{FixedMin1, SubrSpec};
-use crate::emacs_core::threads::MutexOwnership;
+use neovm_eval::test_support::authority::{
+    green_mutex_unlock_value_for_test, green_teardown_for_test, mutex_owned_by_current_for_test,
+    set_threading_mode_at_construction,
+};
 use neovm_value::error::EvalResult;
+use neovm_value::heap_types::threading::MutexOwnership;
 use neovm_value::tagged::header::MutexObj;
 use neovm_value::value::Value;
 
@@ -32,20 +36,16 @@ fn green() -> Context {
     // differential tests do), then select Green before thread admission.
     // No fixture expansion replaces its lock/unwind behavior under test.
     let mut context = crate::test_utils::runtime_startup_context();
-    context.set_threading_mode_at_construction(ThreadingMode::Green);
+    set_threading_mode_at_construction(&mut context);
     context
 }
 
 fn assert_owned_depth_inside_handler(context: &mut Context, mutex: Value) -> EvalResult {
     // The active subr argument is the root. Check allocation membership before
     // decoding the saved ownership, so a missing edge cannot pass by UAF.
-    assert!(context.tagged_heap.owns_heap_value_for_test(mutex));
-    let handle = context
-        .threads
-        .mutex_id_from_handle(&mutex)
-        .expect("same-World mutex argument");
-    assert!(context.threads.mutex_owned_by_current_thread(handle));
-    let current = context.threads.current_thread_id();
+    assert!(context.tagged_heap().owns_heap_value_for_test(mutex));
+    assert!(mutex_owned_by_current_for_test(context, &mutex));
+    let current = context.threads().current_thread_id();
     let ptr = mutex
         .as_veclike_ptr()
         .expect("mutex layout")
@@ -59,7 +59,7 @@ fn assert_owned_depth_inside_handler(context: &mut Context, mutex: Value) -> Eva
         }
         MutexOwnership::Unlocked => panic!("signal raised before reacquisition"),
     }
-    assert_eq!(context.threads.thread_blocker(current), Some(Value::NIL));
+    assert_eq!(context.threads().thread_blocker(current), Some(Value::NIL));
     Ok(Value::T)
 }
 
@@ -102,7 +102,7 @@ fn p15_condition_wait_signal_restores_exact_depth_before_inner_handler() {
         .unwrap();
     let condition = context.default_value_only_by_name("p15-wait-c").unwrap();
     assert_eq!(
-        context.threads.thread_blocker_for_value(worker),
+        context.threads().thread_blocker_for_value(worker),
         Some(condition)
     );
     // Main still owns the mutex. FIFO Green yield must run the signalled
@@ -113,7 +113,7 @@ fn p15_condition_wait_signal_restores_exact_depth_before_inner_handler() {
                 (thread-yield))",
     );
     assert_eq!(
-        context.threads.thread_blocker_for_value(worker),
+        context.threads().thread_blocker_for_value(worker),
         Some(Value::NIL)
     );
     assert_eq!(
@@ -131,7 +131,7 @@ fn p15_condition_wait_signal_restores_exact_depth_before_inner_handler() {
     assert_eq!(print_value(&joined), "(raised (error p15-wait-signal))");
     let result = eval(&mut context, "p15-wait-seen");
     assert_eq!(print_value(&result), "(t nil nil nil released)");
-    context.green_teardown();
+    green_teardown_for_test(&mut context);
 }
 
 #[test]
@@ -167,20 +167,20 @@ fn p15_condition_wait_argument_is_the_only_reacquiring_condition_root() {
         .default_value_only_by_name("p15-sole-worker")
         .unwrap();
     assert_eq!(
-        context.threads.thread_blocker_for_value(worker),
+        context.threads().thread_blocker_for_value(worker),
         Some(condition)
     );
     context.gc_collect_exact();
     context.gc_collect_exact();
-    assert!(context.tagged_heap.owns_heap_value_for_test(condition));
-    assert!(context.tagged_heap.owns_heap_value_for_test(mutex));
+    assert!(context.tagged_heap().owns_heap_value_for_test(condition));
+    assert!(context.tagged_heap().owns_heap_value_for_test(mutex));
     // apply.rs:1373-1389 intentionally retains the previous call's argument
     // array until overwritten, matching GNU's eval_sub C-frame residue. The
     // notification therefore runs inside Feval's separate boundary above
     // (GNU eval.c:2548-2562), whose argument temps end before condition-wait.
     // Otherwise ready itself is an alternate root to the mutex under test.
     assert!(
-        !context.tagged_heap.owns_heap_value_for_test(ready),
+        !context.tagged_heap().owns_heap_value_for_test(ready),
         "completed ready handshake must not retain an alternate mutex edge"
     );
 
@@ -190,17 +190,16 @@ fn p15_condition_wait_argument_is_the_only_reacquiring_condition_root() {
                 (thread-yield))",
     );
     assert_eq!(
-        context.threads.thread_blocker_for_value(worker),
+        context.threads().thread_blocker_for_value(worker),
         Some(Value::NIL)
     );
     // event_object is now nil; only the parked subr argument keeps the
     // condition, and only its canonical association keeps the mutex.
     context.gc_collect_exact();
     context.gc_collect_exact();
-    assert!(context.tagged_heap.owns_heap_value_for_test(condition));
-    assert!(context.tagged_heap.owns_heap_value_for_test(mutex));
-    let handle = context.threads.mutex_id_from_handle(&mutex).unwrap();
-    context.green_mutex_unlock(handle).unwrap();
+    assert!(context.tagged_heap().owns_heap_value_for_test(condition));
+    assert!(context.tagged_heap().owns_heap_value_for_test(mutex));
+    green_mutex_unlock_value_for_test(&mut context, &mutex).unwrap();
     // GNU thread.c:1135-1143 snapshots an injected signal at join entry and
     // can re-raise it even though the worker handles it before exiting. Join
     // still waits for completion; assert the worker's actual result exactly.
@@ -212,11 +211,11 @@ fn p15_condition_wait_argument_is_the_only_reacquiring_condition_root() {
     );
     assert_eq!(print_value(&joined), "(raised (error p15-sole-signal))");
     assert_eq!(
-        print_value(&context.threads.thread_result_for_value(worker)),
+        print_value(&context.threads().thread_result_for_value(worker)),
         "signalled"
     );
     context.gc_collect_exact();
-    assert!(!context.tagged_heap.owns_heap_value_for_test(condition));
-    assert!(!context.tagged_heap.owns_heap_value_for_test(mutex));
-    context.green_teardown();
+    assert!(!context.tagged_heap().owns_heap_value_for_test(condition));
+    assert!(!context.tagged_heap().owns_heap_value_for_test(mutex));
+    green_teardown_for_test(&mut context);
 }

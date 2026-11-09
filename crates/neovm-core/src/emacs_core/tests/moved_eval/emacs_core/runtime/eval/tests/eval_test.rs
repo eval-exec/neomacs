@@ -27915,13 +27915,13 @@ fn make_closure_instances_share_the_deferred_gnu_decode() {
              (funcall neomacs--decode-share-a 1))"#,
     )
     .expect("setup");
-    let decodes_after_a = crate::emacs_core::bytecode::chunk::lazy_gnu_decode_count_for_test();
+    let decodes_after_a = neovm_eval::test_support::authority::lazy_gnu_decode_count_for_test();
     let r = ev
         .eval_str("(list (funcall neomacs--decode-share-b 1) (funcall neomacs--decode-share-c 1))")
         .expect("calls");
     assert_eq!(r, Value::list(vec![Value::fixnum(11), Value::fixnum(101)]));
     assert_eq!(
-        crate::emacs_core::bytecode::chunk::lazy_gnu_decode_count_for_test(),
+        neovm_eval::test_support::authority::lazy_gnu_decode_count_for_test(),
         decodes_after_a,
         "instances b and c must reuse the prototype's decode, not re-decode"
     );

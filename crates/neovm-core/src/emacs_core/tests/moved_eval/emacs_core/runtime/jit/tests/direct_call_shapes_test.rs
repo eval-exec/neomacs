@@ -13,15 +13,23 @@
 //! exact calls may enter memory leaves, while optional short/rest calls
 //! retain their reference marshaling.
 
-use super::*;
-use crate::test_support::jit_fixture::eval_fixture_program;
+use super::{Mode, Run, cached_leaf_id, run_in_with};
+use neovm_eval::test_support::authority::{
+    TestDirectShapes, TestDirectSitesMode, bytecode_slot_direct_entry_identity_for_test,
+    bytecode_slot_direct_entry_is_framed_tag_for_test, bytecode_slot_index_for_callee_for_test,
+    eval_fixture_program, force_direct_call_for_test, force_direct_shapes_token_for_test,
+    force_direct_sites_token_for_test, force_inline_for_test, force_profit_defer_for_test,
+    force_profit_gate_for_test, leaf_entry_identity_for_test, leaf_entry_shape_is_framed_for_test,
+    null_identity_for_test, source_slots_any_direct_entry_matches_pointed_leaf_for_test,
+    with_cached_leaf_for_test,
+};
 
 /// The modes a shaped scenario runs in, in [`shaped_differential`]'s order.
-const SHAPED_MODES: [(Mode, DirectShapesKnob); 4] = [
-    (Mode::Shim, DirectShapesKnob::OFF),
-    (Mode::Direct, DirectShapesKnob::OFF),
-    (Mode::Direct, DirectShapesKnob::ALL),
-    (Mode::DirectForcedSlow, DirectShapesKnob::ALL),
+const SHAPED_MODES: [(Mode, TestDirectShapes); 4] = [
+    (Mode::Shim, TestDirectShapes::OFF),
+    (Mode::Direct, TestDirectShapes::OFF),
+    (Mode::Direct, TestDirectShapes::ALL),
+    (Mode::DirectForcedSlow, TestDirectShapes::ALL),
 ];
 
 /// Run a scenario in every [`SHAPED_MODES`] mode: the observations must be
@@ -45,7 +53,7 @@ fn shaped_differential(program: &'static str, observe: &'static str) -> [Run; 4]
         runs[1].direct_sites
     );
     for mode in [Mode::DirectMemory, Mode::DirectMemoryForcedSlow] {
-        let run = run_in_with(mode, DirectShapesKnob::ALL, program, observe);
+        let run = run_in_with(mode, TestDirectShapes::ALL, program, observe);
         assert_eq!(
             run.out, runs[0].out,
             "{mode:?} with every shape observes what the shim does"
@@ -325,59 +333,64 @@ fn shaped_slots_arm_the_callee_entry_only_under_the_knob() {
   (dolist (f '(neovm--dsa-opt neovm--dsa-rest neovm--dsa-framed neovm--dsa-caller))
     (byte-compile f))
   (dotimes (i 1500) (neovm--dsa-caller i)))"#;
-    for shapes in [DirectShapesKnob::ALL, DirectShapesKnob::OFF] {
+    for shapes in [TestDirectShapes::ALL, TestDirectShapes::OFF] {
         let armed: Vec<(&str, bool)> = std::thread::Builder::new()
             .stack_size(64 * 1024 * 1024)
             .spawn(move || {
                 crate::test_utils::init_test_tracing();
                 force_profit_gate_for_test(false);
-                crate::emacs_core::jit::inline::force_inline_for_test(Some(false));
-                crate::emacs_core::jit::force_profit_defer_for_test(Some(1));
+                force_inline_for_test(Some(false));
+                force_profit_defer_for_test(Some(1));
                 force_direct_call_for_test(Some(true));
-                force_direct_sites_for_test(Some(DirectSitesMode::All));
-                force_direct_shapes_for_test(Some(shapes));
+                force_direct_sites_token_for_test(Some(TestDirectSitesMode::All));
+                force_direct_shapes_token_for_test(Some(shapes));
                 let mut ev = crate::test_utils::runtime_startup_context();
                 eval_fixture_program(&mut ev, PROGRAM).expect("warmed");
-                let caller = cached_leaf(&ev, "neovm--dsa-caller").expect("caller");
-                let mut out: Vec<(&str, bool)> =
-                    ["neovm--dsa-opt", "neovm--dsa-rest", "neovm--dsa-framed"]
-                        .into_iter()
-                        .map(|name| {
-                            let callee = cached_leaf(&ev, name).expect("compiled");
-                            let slot = slot_calling(caller, callee).expect("slot");
-                            let direct = slot.direct_entry();
-                            let framed_tag =
-                                crate::emacs_core::jit::compile::spec_slot::DirectEntryTag::Framed
-                                    as usize;
-                            assert!(
-                                direct.is_null()
-                                    || direct == callee.entry
-                                    || (callee.entry_shape == EntryShape::Framed
-                                        && direct as usize == framed_tag),
+                let caller_id = cached_leaf_id(&ev, "neovm--dsa-caller").expect("caller");
+                let out = with_cached_leaf_for_test(caller_id, |caller| {
+                    let mut out: Vec<(&str, bool)> =
+                        ["neovm--dsa-opt", "neovm--dsa-rest", "neovm--dsa-framed"]
+                            .into_iter()
+                            .map(|name| {
+                                let callee_id = cached_leaf_id(&ev, name).expect("compiled");
+                                with_cached_leaf_for_test(callee_id, |callee| {
+                                    let slot =
+                                        bytecode_slot_index_for_callee_for_test(caller, callee)
+                                            .expect("slot");
+                                    let direct =
+                                        bytecode_slot_direct_entry_identity_for_test(caller, slot);
+                                    assert!(
+                                direct == null_identity_for_test()
+                                    || direct == leaf_entry_identity_for_test(callee)
+                                    || (leaf_entry_shape_is_framed_for_test(callee)
+                                        && bytecode_slot_direct_entry_is_framed_tag_for_test(
+                                            caller, slot
+                                        )),
                                 "{name}"
                             );
-                            (name, !direct.is_null())
-                        })
-                        .collect();
-                // The `cl-flet` local's site: a source slot holding its
-                // own leaf's entry.
-                out.push((
-                    "constant",
-                    caller.source_spec_slots().any(|slot| {
-                        !slot.direct_entry().is_null()
-                            // SAFETY: an armed source slot's leaf is live.
-                            && unsafe { (*slot.leaf_ptr()).entry } == slot.direct_entry()
-                    }),
-                ));
-                force_direct_shapes_for_test(None);
-                force_direct_sites_for_test(None);
+                                    (name, direct != null_identity_for_test())
+                                })
+                                .expect("compiled")
+                            })
+                            .collect();
+                    // The `cl-flet` local's site: a source slot holding its
+                    // own leaf's entry.
+                    out.push((
+                        "constant",
+                        source_slots_any_direct_entry_matches_pointed_leaf_for_test(caller),
+                    ));
+                    out
+                })
+                .expect("caller");
+                force_direct_shapes_token_for_test(None);
+                force_direct_sites_token_for_test(None);
                 force_direct_call_for_test(None);
                 out
             })
             .expect("spawn")
             .join()
             .expect("no crash");
-        let on = shapes == DirectShapesKnob::ALL;
+        let on = shapes == TestDirectShapes::ALL;
         assert_eq!(
             armed,
             vec![

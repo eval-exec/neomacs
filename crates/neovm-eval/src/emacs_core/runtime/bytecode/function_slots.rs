@@ -271,7 +271,7 @@ impl FormalCursor {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn next_binding(&mut self) -> Result<Option<FormalBinding>, FormalListError> {
         loop {

@@ -7,21 +7,25 @@
 //! The Stage A transcripts (`eval/tests/var_fast.rs`) run every scenario on
 //! each knob value too (`INLINE_ENGINES`).
 
-use super::inline_vars::{
-    InlineVarOp, inline_var_sites, reset_inline_var_sites, with_compile_env_for_test,
-};
-use super::shims::{UNBIND_SHIM_CALLS, VARBIND_SHIM_CALLS, VARREF_SHIM_CALLS, VARSET_SHIM_CALLS};
-use super::*;
-use crate::emacs_core::bytecode::ByteCodeFunctionExt;
-use crate::emacs_core::bytecode::Vm;
+use crate::emacs_core::bytecode::{ByteCodeFunction, Op, Vm};
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::jit::compile::{CompiledLeaf, NativeRun, lower_leaf, take_pending_flow};
 use crate::emacs_core::print::print_value;
-use crate::test_support::jit_fixture::eval_fixture_program_named;
+use neovm_eval::test_support::authority::{
+    TestInlineVars, captured_clif_for_test, clear_jit_bind_stack_for_test,
+    clear_jit_cache_for_test, eval_fixture_program_named, force_inline_vars_token_for_test,
+    force_osr_for_test, force_profit_defer_for_test, force_profit_gate_for_test,
+    inline_var_bind_sites_for_test, inline_var_read_sites_for_test, inline_var_set_sites_for_test,
+    inline_var_unbind_sites_for_test, inline_vars_parse_for_test, jit_bind_stack_is_empty_for_test,
+    jit_bind_stack_len_for_test, jit_bind_stack_reserve_for_test, jit_mark_hot_for_test,
+    osr_transfer_count_for_test, prepare_osr_for_test, reset_inline_var_sites_for_test,
+    seal_hand_assembled_ops_for_test, var_shim_calls_for_test, with_compile_env_for_test,
+};
 use neovm_value::intern::intern;
-use neovm_value::value::LambdaParams;
+use neovm_value::value::{LambdaParams, Value};
 
-const OFF: InlineVarsKnob = InlineVarsKnob::OFF;
-const ALL: InlineVarsKnob = InlineVarsKnob::ALL;
+const OFF: TestInlineVars = TestInlineVars::OFF;
+const ALL: TestInlineVars = TestInlineVars::ALL;
 
 /// A bytecode body over the variable (constant 0) and the body function
 /// `ivt-body` (constant 1).
@@ -129,10 +133,10 @@ fn interpret(ev: &mut Context, prog: &Prog, var: &str, args: &[Value]) -> String
 }
 
 /// PROG over VAR compiled against EV with the knob forced to KNOB.
-fn compile(ev: &Context, knob: InlineVarsKnob, prog: &Prog, var: &str) -> CompiledLeaf {
-    force_inline_vars_for_test(Some(knob));
+fn compile(ev: &Context, knob: TestInlineVars, prog: &Prog, var: &str) -> CompiledLeaf {
+    force_inline_vars_token_for_test(Some(knob));
     let leaf = with_compile_env_for_test(ev, || lower_leaf(&prog.ops, &constants(var), prog.arity));
-    force_inline_vars_for_test(None);
+    force_inline_vars_token_for_test(None);
     leaf.expect("program lowers")
 }
 
@@ -146,11 +150,12 @@ struct Shims {
 }
 
 fn shims() -> Shims {
+    let (varref, varset, varbind, unbind) = var_shim_calls_for_test();
     Shims {
-        varref: VARREF_SHIM_CALLS.with(|c| c.get()),
-        varset: VARSET_SHIM_CALLS.with(|c| c.get()),
-        varbind: VARBIND_SHIM_CALLS.with(|c| c.get()),
-        unbind: UNBIND_SHIM_CALLS.with(|c| c.get()),
+        varref,
+        varset,
+        varbind,
+        unbind,
     }
 }
 
@@ -220,21 +225,21 @@ fn observe(ev: &mut Context, var: &str) -> String {
 fn fixture() -> Context {
     use crate::emacs_core::defvar_bool::ByteBooleanVars;
     use neovm_value::forward::alloc_objfwd;
-    let mut ev = Context::new(crate::test_utils::unit_runtime());
-    crate::emacs_core::jit::cache::clear();
+    let mut ev = crate::test_utils::new_context();
+    clear_jit_cache_for_test();
     // A fresh context's bind stack has no capacity yet; an inline bind never
     // grows it (its first push is the shim's), and a session's first `let`
     // made it long ago.
-    ev.jit_bind_stack.reserve(16);
-    ev.obarray.intern("ivt-obj");
-    ev.obarray
+    jit_bind_stack_reserve_for_test(&mut ev, 16);
+    ev.obarray_mut().intern("ivt-obj");
+    ev.obarray_mut()
         .install_objfwd(intern("ivt-obj"), alloc_objfwd(Value::symbol("obj0")));
-    ev.obarray
+    ev.obarray_mut()
         .define_bool_variable("ivt-bool", false, ByteBooleanVars::ErasedByLreadInit);
-    ev.obarray
+    ev.obarray_mut()
         .define_bool_variable("ivt-lbool", true, ByteBooleanVars::ErasedByLreadInit);
-    ev.obarray.define_int_variable("ivt-int", 7);
-    ev.obarray.define_int_variable("ivt-lint", 8);
+    ev.obarray_mut().define_int_variable("ivt-int", 7);
+    ev.obarray_mut().define_int_variable("ivt-lint", 8);
     eval_ok(
         &mut ev,
         "(progn
@@ -275,35 +280,27 @@ fn warm(ev: &mut Context, vars: &[&str]) {
 #[test]
 fn inline_vars_knob_parses_every_spelling() {
     assert_eq!(
-        InlineVarsKnob::parse(None),
-        InlineVarsKnob { read: true, ..OFF },
+        inline_vars_parse_for_test(None),
+        TestInlineVars::parts(true, false, false),
         "default read only"
     );
-    assert_eq!(InlineVarsKnob::parse(Some("bogus")), OFF);
+    assert_eq!(inline_vars_parse_for_test(Some("bogus")), OFF);
     for off in ["", "0", "off", "no", "none", "false"] {
-        assert_eq!(InlineVarsKnob::parse(Some(off)), OFF, "{off:?}");
+        assert_eq!(inline_vars_parse_for_test(Some(off)), OFF, "{off:?}");
     }
     for all in ["1", "on", "all", "ALL", "yes"] {
-        assert_eq!(InlineVarsKnob::parse(Some(all)), ALL, "{all:?}");
+        assert_eq!(inline_vars_parse_for_test(Some(all)), ALL, "{all:?}");
     }
     assert_eq!(
-        InlineVarsKnob::parse(Some("read")),
-        InlineVarsKnob {
-            read: true,
-            set: false,
-            bind: false
-        }
+        inline_vars_parse_for_test(Some("read")),
+        TestInlineVars::parts(true, false, false)
     );
     assert_eq!(
-        InlineVarsKnob::parse(Some("set, bind,bogus")),
-        InlineVarsKnob {
-            read: false,
-            set: true,
-            bind: true
-        },
+        inline_vars_parse_for_test(Some("set, bind,bogus")),
+        TestInlineVars::parts(false, true, true),
         "an unknown part is ignored"
     );
-    assert_eq!(InlineVarsKnob::parse(Some("read,set,bind")), ALL);
+    assert_eq!(inline_vars_parse_for_test(Some("read,set,bind")), ALL);
 }
 
 /// Every shape a fast path takes answers as the interpreter does and calls
@@ -333,20 +330,20 @@ fn cached_shapes_take_no_shim_and_answer_as_the_interpreter() {
     for &var in VARS {
         for (name, prog, args) in &progs {
             // Each engine in its own fixture: a `setq` changes the variable.
-            let mut ev = crate::test_utils::with_legacy_gc(fixture);
+            let mut ev = neovm_value::test_support::authority::with_legacy_gc(fixture);
             // This test measures the original emitter's shim counts.
             warm(&mut ev, VARS);
             let want = interpret(&mut ev, prog, var, args);
             let want_after = observe(&mut ev, var);
-            let mut ev = crate::test_utils::with_legacy_gc(fixture);
+            let mut ev = neovm_value::test_support::authority::with_legacy_gc(fixture);
             warm(&mut ev, VARS);
-            reset_inline_var_sites();
+            reset_inline_var_sites_for_test();
             let leaf = compile(&ev, ALL, prog, var);
             let (got, called) = run(&mut ev, &leaf, args);
             assert_eq!(got, want, "{var} {name}");
             assert_eq!(observe(&mut ev, var), want_after, "{var} {name}: after");
             assert_eq!(called, Shims::default(), "{var} {name}: inline");
-            assert!(inline_var_sites(InlineVarOp::Read) > 0, "{var} {name}");
+            assert!(inline_var_read_sites_for_test() > 0, "{var} {name}");
         }
     }
 }
@@ -354,16 +351,19 @@ fn cached_shapes_take_no_shim_and_answer_as_the_interpreter() {
 /// With the knob off nothing is inlined: every op calls its shim.
 #[test]
 fn knob_off_inlines_nothing() {
-    let mut ev = crate::test_utils::with_legacy_gc(fixture);
+    let mut ev = neovm_value::test_support::authority::with_legacy_gc(fixture);
     // Isolate the inline-variable knob's legacy fast-path counts.
     warm(&mut ev, &["ivt-plain", "ivt-loc"]);
     for (knob, inline) in [(OFF, false), (ALL, true)] {
-        reset_inline_var_sites();
+        reset_inline_var_sites_for_test();
         let leaf = compile(&ev, knob, &Prog::let_call(), "ivt-loc");
         let (got, called) = run(&mut ev, &leaf, &[Value::make_int(3)]);
         assert_eq!(got, "(body 11)");
-        let sites =
-            [InlineVarOp::Read, InlineVarOp::Bind, InlineVarOp::Unbind].map(inline_var_sites);
+        let sites = [
+            inline_var_read_sites_for_test(),
+            inline_var_bind_sites_for_test(),
+            inline_var_unbind_sites_for_test(),
+        ];
         if inline {
             assert_eq!(sites, [1, 1, 1]);
             assert_eq!(called, Shims::default());
@@ -413,13 +413,13 @@ fn a_class_change_after_compile_takes_the_shim() {
     ];
     for &(what, change, refused) in changes {
         for ((name, prog, args), refused) in progs.iter().zip(refused) {
-            let mut ev = crate::test_utils::with_legacy_gc(fixture);
+            let mut ev = neovm_value::test_support::authority::with_legacy_gc(fixture);
             // This test identifies class guards through original shim counts.
             eval_ok(&mut ev, change);
             let want = interpret(&mut ev, prog, "ivt-plain", args);
             let want_after = observe(&mut ev, "ivt-plain");
             let want_log = eval(&mut ev, "(prog1 (reverse ivt-log) (setq ivt-log nil))");
-            let mut ev = crate::test_utils::with_legacy_gc(fixture);
+            let mut ev = neovm_value::test_support::authority::with_legacy_gc(fixture);
             // Compiled while the variable was a plain special.
             let leaf = compile(&ev, ALL, prog, "ivt-plain");
             eval_ok(&mut ev, change);
@@ -445,7 +445,7 @@ fn a_class_change_after_compile_takes_the_shim() {
 /// run hits again.
 #[test]
 fn a_cache_miss_takes_the_shim_and_the_next_run_hits() {
-    let mut ev = crate::test_utils::with_legacy_gc(fixture);
+    let mut ev = neovm_value::test_support::authority::with_legacy_gc(fixture);
     // A subsequent zero-shim store is a legacy emitter assertion.
     warm(&mut ev, &["ivt-locd"]);
     let leaf = compile(&ev, ALL, &Prog::read(), "ivt-locd");
@@ -494,7 +494,7 @@ fn type_rules_match_the_interpreter() {
             .map(|knob| {
                 let mut ev = fixture();
                 warm(&mut ev, &[var]);
-                let depth = ev.specpdl.len();
+                let depth = ev.specpdl().len();
                 let got = match knob {
                     None => interpret(&mut ev, prog, var, args),
                     Some(knob) => {
@@ -503,10 +503,10 @@ fn type_rules_match_the_interpreter() {
                     }
                 };
                 // A signal leaves the leaf's frame to its caller's unwinder.
-                if ev.specpdl.len() > depth {
+                if ev.specpdl().len() > depth {
                     ev.unbind_to(depth);
                 }
-                ev.jit_bind_stack.clear();
+                clear_jit_bind_stack_for_test(&mut ev);
                 (got, observe(&mut ev, var))
             })
             .collect();
@@ -518,22 +518,22 @@ fn type_rules_match_the_interpreter() {
 /// symbol cell, a forwarder and a BLV cons go to the shims, which bracket
 /// the seqlock and log the pre-image; after it ends stores are inline again.
 fn check_concurrent_mark_store_shims() {
-    let mut ev = crate::test_utils::with_legacy_gc(fixture);
+    let mut ev = neovm_value::test_support::authority::with_legacy_gc(fixture);
     // This test pins the legacy window's shim counts. Generational Stage A
     // keeps ALL until C2.8, including the BLV store guard's marking test.
     warm(&mut ev, &["ivt-loc"]);
     eval_ok(&mut ev, "(setq ivt-plain (list 'old-plain))");
-    reset_inline_var_sites();
+    reset_inline_var_sites_for_test();
     let set_plain = compile(&ev, ALL, &Prog::setq(), "ivt-plain");
     let let_loc = compile(&ev, ALL, &Prog::let_call(), "ivt-loc");
     let set_obj = compile(&ev, ALL, &Prog::setq(), "ivt-obj");
-    assert_eq!(inline_var_sites(InlineVarOp::Set), 2);
-    assert_eq!(inline_var_sites(InlineVarOp::Bind), 1);
-    assert_eq!(inline_var_sites(InlineVarOp::Unbind), 1);
-    let depths = (ev.specpdl.len(), ev.jit_bind_stack.len());
+    assert_eq!(inline_var_set_sites_for_test(), 2);
+    assert_eq!(inline_var_bind_sites_for_test(), 1);
+    assert_eq!(inline_var_unbind_sites_for_test(), 1);
+    let depths = (ev.specpdl().len(), jit_bind_stack_len_for_test(&ev));
     ev.with_gc_inhibited(|context| {
-        let heap = std::ptr::from_mut(&mut *context.tagged_heap);
-        let depth = context.gc_inhibit_depth;
+        let heap = std::ptr::from_mut(&mut **unsafe { context.tagged_heap_mut() });
+        let depth = context.gc_inhibit_depth_for_test();
         unsafe {
             neovm_value::test_support::authority::with_synthetic_concurrent_barrier_for_test(
                 heap,
@@ -542,16 +542,19 @@ fn check_concurrent_mark_store_shims() {
                     let ev = &mut *context;
                     let (got, called) = run(ev, &set_plain, &[Value::make_int(1)]);
                     assert_eq!((got.as_str(), called.varset), ("1", 1));
-                    // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
                     let logged = unsafe {
+                        // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
                         neovm_value::test_support::authority::take_satb_shared_for_test(
-                            &mut *ev.tagged_heap,
+                            &mut **ev.tagged_heap_mut(),
                         )
                     };
                     let (got, called) = run(ev, &let_loc, &[Value::make_int(2)]);
                     assert_eq!(got, "(body 11)");
                     assert_eq!((called.varbind, called.unbind), (1, 1));
-                    assert_eq!((ev.specpdl.len(), ev.jit_bind_stack.len()), depths);
+                    assert_eq!(
+                        (ev.specpdl().len(), jit_bind_stack_len_for_test(&ev)),
+                        depths
+                    );
                     let (got, called) = run(ev, &set_obj, &[Value::make_int(3)]);
                     assert_eq!((got.as_str(), called.varset), ("3", 1));
                     assert!(
@@ -574,12 +577,17 @@ fn check_concurrent_mark_store_shims() {
     ] {
         let (got, called) = run(&mut ev, leaf, &args);
         assert_eq!((got.as_str(), called), (expected, expected_shims));
-        assert_eq!((ev.specpdl.len(), ev.jit_bind_stack.len()), depths);
+        assert_eq!(
+            (ev.specpdl().len(), jit_bind_stack_len_for_test(&ev)),
+            depths
+        );
     }
     assert!(
         unsafe {
             // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
-            neovm_value::test_support::authority::take_satb_shared_for_test(&mut *ev.tagged_heap)
+            neovm_value::test_support::authority::take_satb_shared_for_test(
+                &mut **ev.tagged_heap_mut(),
+            )
         }
         .is_empty()
     );
@@ -632,13 +640,15 @@ fn let_bodies_that_change_the_world_unbind_as_the_interpreter() {
 
 /// Warm SRC's functions into compiled leaves with the knob at KNOB and
 /// return the context.
-fn warmed_runtime(knob: InlineVarsKnob, src: &str, legacy_gc: bool) -> Context {
+fn warmed_runtime(knob: TestInlineVars, src: &str, legacy_gc: bool) -> Context {
     crate::test_utils::init_test_tracing();
     force_profit_gate_for_test(false);
-    crate::emacs_core::jit::force_profit_defer_for_test(Some(1));
-    force_inline_vars_for_test(Some(knob));
+    force_profit_defer_for_test(Some(1));
+    force_inline_vars_token_for_test(Some(knob));
     let mut ev = if legacy_gc {
-        crate::test_utils::with_legacy_gc(crate::test_utils::runtime_startup_context)
+        neovm_value::test_support::authority::with_legacy_gc(
+            crate::test_utils::runtime_startup_context,
+        )
     } else {
         crate::test_utils::runtime_startup_context()
     };
@@ -672,7 +682,7 @@ fn a_dumped_runtime_reads_inline() {
             );
             let before = shims();
             let answer = eval(&mut ev, "(ivt-r)");
-            force_inline_vars_for_test(None);
+            force_inline_vars_token_for_test(None);
             (answer, shims_since(before))
         })
         .collect();
@@ -724,7 +734,7 @@ fn a_dumped_runtime_answers_the_same_with_binds_inline() {
             eval_ok(&mut ev, setup);
             let before = shims();
             let answer = eval(&mut ev, probe);
-            force_inline_vars_for_test(None);
+            force_inline_vars_token_for_test(None);
             (answer, shims_since(before))
         })
         .collect();
@@ -800,40 +810,37 @@ fn binding_sum(nested: bool) -> ByteCodeFunction {
 /// nested variant binds and unbinds inline on every iteration.
 #[test]
 fn osr_into_a_let_unbinds_inline_what_the_interpreter_bound() {
-    use std::sync::atomic::Ordering;
     for nested in [false, true] {
         let mut answers = Vec::new();
         for knob in [OFF, ALL] {
-            force_inline_vars_for_test(Some(knob));
-            crate::emacs_core::jit::force_osr_for_test(true);
-            let mut ctx = crate::test_utils::with_legacy_gc(|| {
-                Context::new(crate::test_utils::unit_runtime())
+            force_inline_vars_token_for_test(Some(knob));
+            force_osr_for_test(true);
+            let mut ctx = neovm_value::test_support::authority::with_legacy_gc(|| {
+                crate::test_utils::new_context()
             });
             // This test requires the original inline bind/unbind counts.
-            crate::emacs_core::jit::cache::clear();
+            clear_jit_cache_for_test();
             ctx.eval_str("(setq osr-bound 17)").unwrap();
-            let depth = ctx.specpdl.len();
+            let depth = ctx.specpdl().len();
             let mut f = binding_sum(nested);
-            f.seal_hand_assembled_ops();
-            f.jit_runtime().set_hot_for_test();
-            crate::emacs_core::jit::test_support::prepare_osr(&mut ctx, &f, 4);
-            let transfers =
-                crate::emacs_core::jit::cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed);
+            seal_hand_assembled_ops_for_test(&mut f);
+            jit_mark_hot_for_test(&f);
+            prepare_osr_for_test(&mut ctx, &f, 4);
+            let transfers = osr_transfer_count_for_test();
             let before = shims();
             let value = Vm::from_context(&mut ctx)
                 .execute(&f, vec![Value::make_int(2000)])
                 .unwrap();
             let called = shims_since(before);
             assert_eq!(
-                crate::emacs_core::jit::cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed)
-                    - transfers,
+                osr_transfer_count_for_test() - transfers,
                 1,
                 "the loop transferred"
             );
-            crate::emacs_core::jit::force_osr_for_test(false);
-            force_inline_vars_for_test(None);
-            assert_eq!(ctx.specpdl.len(), depth);
-            assert!(ctx.jit_bind_stack.is_empty());
+            force_osr_for_test(false);
+            force_inline_vars_token_for_test(None);
+            assert_eq!(ctx.specpdl().len(), depth);
+            assert!(jit_bind_stack_is_empty_for_test(&ctx));
             answers.push((
                 print_value(&value),
                 print_value(&ctx.eval_str("osr-bound").unwrap()),
@@ -885,7 +892,7 @@ fn unbind_sites_meet_across_paths() {
         ("ivt-plain", "ivt-plain", true),
         ("ivt-plain", "ivt-loc", false),
     ] {
-        let mut ev = crate::test_utils::with_legacy_gc(fixture);
+        let mut ev = neovm_value::test_support::authority::with_legacy_gc(fixture);
         // The CFG test identifies inlined sites through original shim counts.
         warm(&mut ev, &["ivt-loc"]);
         eval_ok(
@@ -893,13 +900,13 @@ fn unbind_sites_meet_across_paths() {
             "(fset 'ivt-body (lambda () (list ivt-plain ivt-loc)))",
         );
         let (ops, constants) = two_path_bind(a, b);
-        force_inline_vars_for_test(Some(ALL));
-        reset_inline_var_sites();
+        force_inline_vars_token_for_test(Some(ALL));
+        reset_inline_var_sites_for_test();
         let leaf =
             with_compile_env_for_test(&ev, || lower_leaf(&ops, &constants, 1)).expect("lowers");
-        force_inline_vars_for_test(None);
+        force_inline_vars_token_for_test(None);
         assert_eq!(
-            inline_var_sites(InlineVarOp::Unbind),
+            inline_var_unbind_sites_for_test(),
             u32::from(inline),
             "{a} {b}"
         );
@@ -927,14 +934,14 @@ fn atomic_forwarder_active_mark_routes_set_bind_and_unbind_through_satb() {
     let mut ev = fixture();
     eval_ok(&mut ev, "(setq ivt-obj (list 'old-object))");
     let before_set = ev
-        .obarray
+        .obarray()
         .forwarder(intern("ivt-obj"))
         .and_then(|descriptor| descriptor.owned_value())
         .expect("rooted object forwarder");
     // Archive complete construction CLIF only if the gate runner requests
     // its own scratch directory. Both bind and unbind live in the let body.
     let mut leaves = None;
-    let clif = super::compile_pipeline_tests::captured_clif(|| {
+    let clif = captured_clif_for_test(|| {
         let set = compile(&ev, ALL, &Prog::setq(), "ivt-obj");
         let bind_unbind = compile(&ev, ALL, &Prog::let_call(), "ivt-obj");
         leaves = Some((set, bind_unbind));
@@ -952,8 +959,8 @@ fn atomic_forwarder_active_mark_routes_set_bind_and_unbind_through_satb() {
     let replacement = Value::list(vec![Value::symbol("new-object")]);
     let binding = Value::list(vec![Value::symbol("bound-object")]);
     ev.with_gc_inhibited(|context| {
-        let heap = std::ptr::from_mut(&mut *context.tagged_heap);
-        let depth = context.gc_inhibit_depth;
+        let heap = std::ptr::from_mut(&mut **unsafe { context.tagged_heap_mut() });
+        let depth = context.gc_inhibit_depth_for_test();
         unsafe {
             neovm_value::test_support::authority::with_synthetic_concurrent_barrier_for_test(
                 heap,
@@ -961,17 +968,17 @@ fn atomic_forwarder_active_mark_routes_set_bind_and_unbind_through_satb() {
                 || {
                     let ev = &mut *context;
                     let (set_result, set_calls) = run(ev, &set, &[replacement]);
-                    // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
                     let set_preimages = unsafe {
+                        // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
                         neovm_value::test_support::authority::take_satb_shared_for_test(
-                            &mut *ev.tagged_heap,
+                            &mut **ev.tagged_heap_mut(),
                         )
                     };
                     let (let_result, let_calls) = run(ev, &bind_unbind, &[binding]);
-                    // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
                     let let_preimages = unsafe {
+                        // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
                         neovm_value::test_support::authority::take_satb_shared_for_test(
-                            &mut *ev.tagged_heap,
+                            &mut **ev.tagged_heap_mut(),
                         )
                     };
                     assert_eq!(set_result, "(new-object)");

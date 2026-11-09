@@ -511,3 +511,43 @@ mod emacs_core_runtime_eval_tests_redisplay_mode_line_flow_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/tests/tty_rows_observation_test.rs"]
 mod emacs_core_runtime_eval_tests_tty_rows_observation_test_rs;
+
+// F1 runtime-startup compiler tests. Nested children stay registered from
+// their parent files. Assertions are unchanged. The signed knob tokens and
+// the leaf/slot/shim observers are eval authority routes.
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/tests/direct_call_test.rs"]
+mod emacs_core_runtime_jit_tests_direct_call_test_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/tests/direct_self_test.rs"]
+mod emacs_core_runtime_jit_tests_direct_self_test_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/tests/stack_guard_test.rs"]
+mod emacs_core_runtime_jit_tests_stack_guard_test_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/tests/tail_calls_test.rs"]
+mod emacs_core_runtime_jit_tests_tail_calls_test_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/tests/mir_reach_dead_test.rs"]
+mod emacs_core_runtime_jit_tests_mir_reach_dead_test_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/tests/hof_default_semantics_test.rs"]
+mod emacs_core_runtime_jit_tests_hof_default_semantics_test_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/tests/inline_closure_test.rs"]
+mod emacs_core_runtime_jit_tests_inline_closure_test_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/tests/inline_vars_test.rs"]
+mod emacs_core_runtime_jit_tests_inline_vars_test_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/compile/call_census/tests/call_census_test.rs"]
+mod emacs_core_runtime_jit_compile_call_census_tests_call_census_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/runtime/bytecode/tests/decode_test.rs"]
+mod emacs_core_runtime_bytecode_tests_decode_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tier_i/tests/list_bindings_test.rs"]
+mod emacs_core_runtime_eval_tier_i_tests_list_bindings_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/green_p15_condition_wait_test.rs"]
+mod emacs_core_runtime_eval_tests_green_p15_condition_wait_test_rs;

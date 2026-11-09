@@ -209,6 +209,18 @@ fn named_shape(slot: &SpecSlot) -> CallShape {
     }
 }
 
+/// Shape name of a named site. `CallShape` stays pub(crate).
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn named_shape_name_for_test(slot: &SpecSlot) -> &'static str {
+    named_shape(slot).name()
+}
+
+/// Record one accepted spec-fast entry. The counters stay in this module.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn record_spec_fast_for_census_for_test(framed: bool) {
+    record_spec_fast_for_census(framed);
+}
+
 /// The armed leaf of a called value, when it is byte code with one.
 fn armed_leaf_of(callee: Value) -> Result<&'static CompiledLeaf, CallShape> {
     if !callee.is_bytecode() {
@@ -425,7 +437,3 @@ pub(crate) fn render_call_census() -> Option<String> {
         )
     })
 }
-
-#[cfg(test)]
-#[path = "call_census/tests/call_census_test.rs"]
-mod tests;

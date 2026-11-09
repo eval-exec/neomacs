@@ -15,7 +15,7 @@ use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
 use neovm_value::value::Value;
 
-#[cfg(any(test, debug_assertions))]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 pub(crate) static DIRECT_FRAMED_CALLS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
@@ -52,7 +52,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_framed(
     bt_count: i64,
     out: *mut i64,
 ) -> i64 {
-    #[cfg(any(test, debug_assertions))]
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
     DIRECT_FRAMED_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     {
         // SAFETY: the generated site's captured leaf and dormant Context.

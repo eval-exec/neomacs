@@ -1,12 +1,17 @@
 //! GNU-backed live-spine regressions for already lowered interpreted let forms.
 
-use super::super::compile::{Node, Op};
 use crate::emacs_core::eval::{TierIEvent, TierIMode};
 use crate::emacs_core::format_eval_result;
+use neovm_eval::test_support::authority::{
+    clear_tier_i_for_test, configure_tier_i_for_test, tier_i_lowered_binding_body_count_for_test,
+    tier_i_stats_for_test,
+};
 
 fn gnu_fixture(form: &str) -> String {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let fixture = root.join("src/emacs_core/runtime/eval/tier_i/tests/list_bindings_cases.expect");
+    let fixture = root.join(
+        "src/emacs_core/tests/moved_eval/emacs_core/runtime/eval/tier_i/tests/list_bindings_cases.expect",
+    );
     if std::env::var("UPDATE_EXPECT").as_deref() != Ok("1") {
         return std::fs::read_to_string(fixture)
             .expect("cached GNU tier-I binding fixture")
@@ -44,9 +49,8 @@ fn circular_lists_tier_i_live_binding_spines_match_gnu() {
     let expected = gnu_fixture(form);
     for mode in [TierIMode::Off, TierIMode::On, TierIMode::Verify] {
         let mut context = crate::test_utils::runtime_startup_context();
-        context.tier_i.set_mode(mode);
-        context.tier_i.set_threshold(1);
-        context.tier_i.clear_for_test();
+        configure_tier_i_for_test(&mut context, mode, 1);
+        clear_tier_i_for_test(&mut context);
         let forms = crate::emacs_core::value_reader::read_all(form, context.variables())
             .expect("parse GNU-backed tier-I binding form");
         assert_eq!(forms.len(), 1);
@@ -56,26 +60,16 @@ fn circular_lists_tier_i_live_binding_spines_match_gnu() {
         context.restore_specpdl_roots(roots);
         assert_eq!(actual, expected, "mode {mode:?}");
         if mode != TierIMode::Off {
-            let lowered_binding_bodies = context
-                .tier_i
-                .entries
-                .values()
-                .filter(|entry| {
-                    entry.calls >= 3
-                        && entry.code.as_ref().is_some_and(|code| {
-                            matches!(code.seq.get(0), Some(Node::Form(form))
-                                 if matches!(&form.op, Op::Let(_) | Op::LetStar(_)))
-                        })
-                })
-                .count();
+            let lowered_binding_bodies = tier_i_lowered_binding_body_count_for_test(&context);
             assert_eq!(
                 lowered_binding_bodies, 32,
                 "each live binding spine must belong to an already lowered body"
             );
+            let stats = tier_i_stats_for_test(&context);
             assert!(
-                context.tier_i.stats().count(TierIEvent::Run) >= 96,
+                stats.count(TierIEvent::Run) >= 96,
                 "warm and mutated interpreted functions must run compiled bodies: {}",
-                context.tier_i.stats().report()
+                stats.report()
             );
         }
     }

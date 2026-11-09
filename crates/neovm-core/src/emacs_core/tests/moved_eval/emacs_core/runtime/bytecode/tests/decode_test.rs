@@ -1,10 +1,18 @@
-use super::*;
-use crate::emacs_core::bytecode::function_slots::DynamicArglistExt as _;
+use crate::emacs_core::bytecode::decode::{
+    DecodeError, decode_gnu_bytecode, decode_gnu_bytecode_with_offset_map,
+    parse_arglist_descriptor, parse_arglist_value, string_value_to_bytes,
+};
 use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
-use crate::emacs_core::bytecode::function_slots::StackParamShapeExt as _;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+use crate::emacs_core::bytecode::{FunctionParams, Op};
+use neovm_eval::test_support::authority::{
+    dynamic_formal_bindings_for_test, eager_gnu_bytecode_for_test,
+    force_make_byte_code_validate_only_for_test, full_decode_count_for_test,
+    lazy_gnu_decode_count_for_test, stack_param_optional_for_test, validate_gnu_bytecode_for_test,
+};
 use neovm_value::intern::intern;
 use neovm_value::value::HashTableTest;
+use neovm_value::value::Value;
 
 #[test]
 fn string_value_to_bytes_basic() {
@@ -286,7 +294,7 @@ fn parse_arglist_descriptor_no_rest() {
         .stack_shape()
         .unwrap();
     assert_eq!(params.required(), 2);
-    assert_eq!(params.optional().unwrap(), 1);
+    assert_eq!(stack_param_optional_for_test(params).unwrap(), 1);
     assert!(!params.rest().is_present());
 }
 
@@ -298,7 +306,7 @@ fn parse_arglist_descriptor_with_rest() {
         .stack_shape()
         .unwrap();
     assert_eq!(params.required(), 1);
-    assert_eq!(params.optional().unwrap(), 0);
+    assert_eq!(stack_param_optional_for_test(params).unwrap(), 0);
     assert!(params.rest().is_present());
 }
 
@@ -310,7 +318,7 @@ fn parse_arglist_descriptor_with_optional_and_rest_slot() {
         .stack_shape()
         .unwrap();
     assert_eq!(params.required(), 3);
-    assert_eq!(params.optional().unwrap(), 1);
+    assert_eq!(stack_param_optional_for_test(params).unwrap(), 1);
     assert!(params.rest().is_present());
 }
 
@@ -319,7 +327,7 @@ fn parse_arglist_descriptor_zero_args() {
     crate::test_utils::init_test_tracing();
     let params = parse_arglist_descriptor(0).stack_shape().unwrap();
     assert_eq!(params.required(), 0);
-    assert_eq!(params.optional().unwrap(), 0);
+    assert_eq!(stack_param_optional_for_test(params).unwrap(), 0);
     assert!(!params.rest().is_present());
 }
 
@@ -335,20 +343,18 @@ fn parse_arglist_value_from_list() {
         Value::symbol("z"),
     ]);
     let params = parse_arglist_value(&arglist).unwrap();
-    let super::super::FunctionParams::Dynamic(params) = params else {
+    let FunctionParams::Dynamic(params) = params else {
         panic!("list arglist remains dynamic");
     };
-    use super::super::function_slots::FormalBinding;
-    let mut cursor = params.invocation();
-    for expected in [
-        FormalBinding::Required(intern("x")),
-        FormalBinding::Optional(intern("y")),
-        FormalBinding::Rest(intern("z")),
-    ] {
-        assert_eq!(cursor.next_binding().unwrap(), Some(expected));
-        cursor.finish_binding().unwrap();
-    }
-    assert_eq!(cursor.next_binding().unwrap(), None);
+    use neovm_value::tagged::bytecode::function_slots::FormalBinding;
+    assert_eq!(
+        dynamic_formal_bindings_for_test(params),
+        vec![
+            FormalBinding::Required(intern("x")),
+            FormalBinding::Optional(intern("y")),
+            FormalBinding::Rest(intern("z")),
+        ]
+    );
 }
 
 #[test]
@@ -359,7 +365,7 @@ fn parse_arglist_value_int() {
         .stack_shape()
         .unwrap();
     assert_eq!(params.required(), 1);
-    assert_eq!(params.optional().unwrap(), 1);
+    assert_eq!(stack_param_optional_for_test(params).unwrap(), 1);
     assert!(!params.rest().is_present());
 }
 
@@ -375,7 +381,7 @@ fn decode_verdict(bytes: &[u8]) -> Result<(), DecodeError> {
 
 fn assert_same_verdict(bytes: &[u8]) {
     assert_eq!(
-        validate_gnu_bytecode(bytes),
+        validate_gnu_bytecode_for_test(bytes),
         decode_verdict(bytes),
         "validator and decoder disagree on {bytes:?}"
     );
@@ -437,7 +443,7 @@ fn validate_matches_decode_on_every_error_kind() {
     for (bytes, want) in cases {
         assert_eq!(&decode_verdict(bytes), want, "decoder on {bytes:?}");
         assert_eq!(
-            &validate_gnu_bytecode(bytes),
+            &validate_gnu_bytecode_for_test(bytes),
             want,
             "validator on {bytes:?}"
         );
@@ -484,7 +490,7 @@ fn validate_matches_decode_on_random_byte_strings() {
             }
         }
         assert_same_verdict(&bytes);
-        accepted += usize::from(validate_gnu_bytecode(&bytes).is_ok());
+        accepted += usize::from(validate_gnu_bytecode_for_test(&bytes).is_ok());
     }
     assert!(accepted > 1_000, "the corpus must exercise acceptance too");
 }
@@ -531,7 +537,7 @@ fn validate_matches_decode_on_real_elc_functions() {
 
     let mut rng = Prng(0xD1B5_4A32_D192_ED03);
     for body in &bodies {
-        assert_eq!(validate_gnu_bytecode(body), Ok(()), "{body:?}");
+        assert_eq!(validate_gnu_bytecode_for_test(body), Ok(()), "{body:?}");
         assert_same_verdict(body);
         if body.is_empty() {
             continue;
@@ -554,12 +560,12 @@ fn validate_matches_decode_on_real_elc_functions() {
 #[test]
 fn make_byte_code_decodes_lazily_at_first_execution() {
     crate::test_utils::init_test_tracing();
-    if crate::emacs_core::bytecode::chunk::eager_gnu_bytecode() {
+    if eager_gnu_bytecode_for_test() {
         return;
     }
-    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let full = super::full_decode_count_for_test;
-    let lazy = crate::emacs_core::bytecode::chunk::lazy_gnu_decode_count_for_test;
+    let mut eval = crate::test_utils::new_context();
+    let full = full_decode_count_for_test;
+    let lazy = lazy_gnu_decode_count_for_test;
 
     let (full0, lazy0) = (full(), lazy());
     let made = eval
@@ -611,13 +617,13 @@ fn make_byte_code_decodes_lazily_at_first_execution() {
 #[test]
 fn make_byte_code_full_decode_baseline_still_defers() {
     crate::test_utils::init_test_tracing();
-    if crate::emacs_core::bytecode::chunk::eager_gnu_bytecode() {
+    if eager_gnu_bytecode_for_test() {
         return;
     }
-    crate::emacs_core::builtins::symbols::force_make_byte_code_validate_only_for_test(false);
-    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let full = super::full_decode_count_for_test;
-    let lazy = crate::emacs_core::bytecode::chunk::lazy_gnu_decode_count_for_test;
+    force_make_byte_code_validate_only_for_test(false);
+    let mut eval = crate::test_utils::new_context();
+    let full = full_decode_count_for_test;
+    let lazy = lazy_gnu_decode_count_for_test;
     let (full0, lazy0) = (full(), lazy());
     let made = eval
         .eval_str("(setq mbc-full (make-byte-code 0 \"\\300\\207\" [mbc-ran] 1))")

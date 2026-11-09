@@ -77,7 +77,7 @@ impl RootWinCounts {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl From<RootWinCounts> for (u32, u32) {
     fn from(counts: RootWinCounts) -> Self {
         (counts.emitted.into(), counts.elided.into())
@@ -127,7 +127,10 @@ impl RootWinCounterScope {
     /// unwound compilations never publish a last-completed test observation.
     #[doc(hidden)]
     pub fn finish(self) {
-        #[cfg(test)]
+        // Recorded under test-support so a core test can read the same
+        // completed-leaf census the eval unit test read. Production builds
+        // without the feature do not store it.
+        #[cfg(any(test, feature = "test-support"))]
         LAST_COMPLETED.with(|counts| counts.set(self.snapshot()));
     }
 }
@@ -140,14 +143,14 @@ impl Drop for RootWinCounterScope {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Test-only completed-leaf observer; active scopes never read this cell.
     static LAST_COMPLETED: std::cell::Cell<RootWinCounts> =
         const { std::cell::Cell::new(RootWinCounts::ZERO) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn last_completed_counts() -> RootWinCounts {
     LAST_COMPLETED.with(|counts| counts.get())
 }

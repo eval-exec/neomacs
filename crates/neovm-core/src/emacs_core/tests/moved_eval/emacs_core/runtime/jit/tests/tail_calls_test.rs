@@ -4,15 +4,19 @@
 //! site stores none of them into the GC root window -- in the baseline and
 //! the MIR tier alike -- while every other call still does.
 
-use super::lowering::{TAIL_CALLS_UNROOTED, rootwin_counters};
-use super::*;
-use crate::emacs_core::eval::Context;
+use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
+use crate::emacs_core::jit::compile::compile_bytecode_function_with;
 use crate::emacs_core::print::print_value;
+use neovm_eval::test_support::authority::{
+    force_profit_gate_for_test, force_tail_unrooted_for_test, rootwin_counters_for_test,
+    tail_calls_unrooted_for_test,
+};
 use neovm_value::intern::SymId;
 use neovm_value::value::LambdaParams;
+use neovm_value::value::Value;
 
 fn tail_calls_unrooted() -> usize {
-    TAIL_CALLS_UNROOTED.with(std::cell::Cell::get)
+    tail_calls_unrooted_for_test()
 }
 
 /// `(lambda (l) (h1 l) (h2 (cdr l)))`, and with `tail` false the same body
@@ -48,25 +52,31 @@ fn two_calls(tail: bool) -> ByteCodeFunction {
 
 #[test]
 fn a_tail_call_stores_no_residual_and_other_calls_still_do() {
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    force_profit_gate_for_test(false);
     force_tail_unrooted_for_test(Some(true));
-    let ev = Context::new(crate::test_utils::unit_runtime());
+    let ev = crate::test_utils::new_context();
     let before = tail_calls_unrooted();
     let leaf =
-        compile_bytecode_function_with(&two_calls(true), Some(&ev.obarray)).expect("compiles");
-    assert_eq!(leaf.tier, super::leaf::LeafTier::Baseline);
+        compile_bytecode_function_with(&two_calls(true), Some(ev.obarray())).expect("compiles");
     assert_eq!(
-        rootwin_counters(),
+        neovm_eval::test_support::compiled_leaf_copy_for_test(&leaf).tier_name,
+        "baseline"
+    );
+    assert_eq!(
+        rootwin_counters_for_test(),
         (1, 0),
         "only the first call roots `l`; the tail call roots nothing"
     );
     assert_eq!(tail_calls_unrooted(), before + 1);
 
     let leaf =
-        compile_bytecode_function_with(&two_calls(false), Some(&ev.obarray)).expect("compiles");
-    assert_eq!(leaf.tier, super::leaf::LeafTier::Baseline);
+        compile_bytecode_function_with(&two_calls(false), Some(ev.obarray())).expect("compiles");
     assert_eq!(
-        rootwin_counters(),
+        neovm_eval::test_support::compiled_leaf_copy_for_test(&leaf).tier_name,
+        "baseline"
+    );
+    assert_eq!(
+        rootwin_counters_for_test(),
         (1, 1),
         "a call followed by more code keeps `l` rooted (carried from the first site)"
     );
@@ -75,9 +85,16 @@ fn a_tail_call_stores_no_residual_and_other_calls_still_do() {
     // `NEOVM_JIT_TAIL_UNROOTED=off`: the tail call roots `l` as before.
     force_tail_unrooted_for_test(Some(false));
     let leaf =
-        compile_bytecode_function_with(&two_calls(true), Some(&ev.obarray)).expect("compiles");
-    assert_eq!(leaf.tier, super::leaf::LeafTier::Baseline);
-    assert_eq!(rootwin_counters(), (1, 1), "the knob restores the rooting");
+        compile_bytecode_function_with(&two_calls(true), Some(ev.obarray())).expect("compiles");
+    assert_eq!(
+        neovm_eval::test_support::compiled_leaf_copy_for_test(&leaf).tier_name,
+        "baseline"
+    );
+    assert_eq!(
+        rootwin_counters_for_test(),
+        (1, 1),
+        "the knob restores the rooting"
+    );
     force_tail_unrooted_for_test(None);
 }
 

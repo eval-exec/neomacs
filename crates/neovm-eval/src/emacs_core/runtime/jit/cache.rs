@@ -4023,7 +4023,7 @@ pub(crate) fn prepare_entry_for_test(ctx: *mut Context, func: &ByteCodeFunction)
 
 /// Compile/await OSR without transferring control into it: observations retain
 /// their original counters, side effects, stack snapshot and binding depths.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn prepare_osr_for_test(ctx: *mut Context, func: &ByteCodeFunction, pc: usize) {
     use std::time::Duration;
     assert!(

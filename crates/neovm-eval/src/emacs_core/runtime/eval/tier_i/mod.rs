@@ -499,6 +499,28 @@ impl TierI {
         self.stats = TierIStats::default();
     }
 
+    /// How many warm bodies start with an already-lowered `let` or `let*`.
+    /// The registry stays private; the relocated binding test asserts the count.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn lowered_binding_body_count_for_test(&self) -> usize {
+        self.entries
+            .values()
+            .filter(|entry| {
+                entry.calls >= 3
+                    && entry.code.as_ref().is_some_and(|code| {
+                        matches!(
+                            code.seq.get(0),
+                            Some(compile::Node::Form(form))
+                                if matches!(
+                                    &form.op,
+                                    compile::Op::Let(_) | compile::Op::LetStar(_)
+                                )
+                        )
+                    })
+            })
+            .count()
+    }
+
     /// Every heap value a compiled body's nodes hold (module docs).
     #[doc(hidden)]
     pub fn trace_roots(&self, visit: &mut dyn FnMut(Value)) {

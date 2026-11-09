@@ -6,6 +6,3 @@
 
 #[path = "knobs_test.rs"]
 mod knobs;
-#[cfg(test)]
-#[path = "list_bindings_test.rs"]
-mod list_bindings;

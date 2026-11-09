@@ -2,7 +2,8 @@
 //! GNU fixture helper and fresh-thread harness. This module is a test-only
 //! child of `direct_call_shape_parity`.
 
-use super::*;
+use super::{Mode, assert_gnu_shape, gnu_expect, run_in_with};
+use neovm_eval::test_support::authority::{TestDirectShapes, direct_shapes_parse_for_test};
 
 /// A noneligible site still calls its native callee through the spec shim.
 /// Both runs use the same caller body and differ only in the one shape bit.
@@ -14,10 +15,10 @@ fn assert_shape_falls_back(
     fixture: &str,
 ) {
     let expected = gnu_expect(name, program, observe, fixture);
-    let baseline = run_in_with(Mode::Direct, DirectShapesKnob::OFF, program, observe);
+    let baseline = run_in_with(Mode::Direct, TestDirectShapes::OFF, program, observe);
     let shaped = run_in_with(
         Mode::Direct,
-        DirectShapesKnob::parse(Some(shape)),
+        direct_shapes_parse_for_test(Some(shape)),
         program,
         observe,
     );
@@ -39,10 +40,10 @@ fn assert_rest_boundary_hits(
     fixture: &str,
 ) {
     let expected = gnu_expect(name, program, observe, fixture);
-    let baseline = run_in_with(Mode::Direct, DirectShapesKnob::OFF, program, observe);
+    let baseline = run_in_with(Mode::Direct, TestDirectShapes::OFF, program, observe);
     let shaped = run_in_with(
         Mode::Direct,
-        DirectShapesKnob::parse(Some("rest")),
+        direct_shapes_parse_for_test(Some("rest")),
         program,
         observe,
     );

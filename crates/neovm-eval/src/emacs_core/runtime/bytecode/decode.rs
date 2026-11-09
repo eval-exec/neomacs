@@ -1112,12 +1112,12 @@ pub(crate) fn validate_gnu_bytecode(bytecodes: &[u8]) -> Result<(), DecodeError>
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static FULL_DECODE_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Test-only: how many instruction-building decodes (eager or deferred) ran
 /// on any thread so far.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn full_decode_count_for_test() -> usize {
     FULL_DECODE_COUNT.load(std::sync::atomic::Ordering::Relaxed)
 }
@@ -1128,7 +1128,7 @@ fn decode_pass1(
     bytecodes: &[u8],
     _constants: &mut Vec<Value>,
 ) -> Result<(Vec<RawOp>, InstrStarts, Vec<JumpPatch>), DecodeError> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     FULL_DECODE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut sink = RawOpSink {
         // Every instruction is at least one byte, so this is an upper bound.
@@ -1303,10 +1303,6 @@ pub fn parse_arglist_value(
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-#[cfg(test)]
-#[path = "tests/decode_test.rs"]
-mod tests;
-
 #[cfg(test)]
 #[path = "tests/verify_switch_test.rs"]
 mod verify_switch_tests;

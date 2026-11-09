@@ -37,8 +37,8 @@ pub(crate) fn eager_gnu_bytecode() -> bool {
 static LAZY_GNU_DECODE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Test-only: how many deferred GNU decodes ran on any thread so far.
+/// Stays `pub(crate)`. The cross-crate route is the authority fence.
 #[cfg(any(test, feature = "test-support"))]
-#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn lazy_gnu_decode_count_for_test() -> usize {
     LAZY_GNU_DECODE_COUNT.load(Ordering::Relaxed)
 }

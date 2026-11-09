@@ -1,8 +1,19 @@
 //! The call-shape census (`NEOVM_JIT_CALL_CENSUS`): every shape a JIT call
 //! site meets lands in its own cell, and the knob off counts nothing.
 
-use super::*;
+use crate::emacs_core::bytecode::Op;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+use crate::emacs_core::jit::compile::{NativeRun, lower_nullary_leaf};
+use neovm_eval::test_support::authority::{
+    TestDirectShapes, bytecode_spec_slot_count_for_test,
+    bytecode_spec_slots_all_consts_armed_for_test, bytecode_spec_slots_all_unarmed_for_test,
+    call_census_reset_for_test, call_census_spec_fast_counts_for_test, census_counts_for_test,
+    eval_fixture_program, force_call_census_for_test, force_deopt_for_test,
+    force_direct_call_for_test, force_direct_shapes_token_for_test, force_inline_for_test,
+    force_profit_defer_for_test, force_profit_gate_for_test, force_slow_spec_for_test,
+    record_spec_fast_for_census_for_test, sidecar_census_shape_names_for_test,
+};
+use neovm_value::value::Value;
 
 /// Callees of every shape, called from a compiled caller: a named exact,
 /// `&optional` (short), `&rest` and framed callee, a `cl-flet` local (a
@@ -38,23 +49,22 @@ fn census_delta(on: bool) -> Vec<(&'static str, &'static str, u64)> {
         .spawn(move || {
             crate::test_utils::init_test_tracing();
             force_profit_gate_for_test(false);
-            crate::emacs_core::jit::inline::force_inline_for_test(Some(true));
-            crate::emacs_core::jit::force_profit_defer_for_test(Some(1));
+            force_inline_for_test(Some(true));
+            force_profit_defer_for_test(Some(1));
             force_direct_call_for_test(Some(false));
-            force_direct_shapes_for_test(Some(DirectShapesKnob::OFF));
+            force_direct_shapes_token_for_test(Some(TestDirectShapes::OFF));
             force_call_census_for_test(Some(on));
             let mut ev = crate::test_utils::runtime_startup_context();
-            crate::test_support::jit_fixture::eval_fixture_program(&mut ev, PROGRAM)
-                .expect("warmed");
-            let before = census_counts();
+            eval_fixture_program(&mut ev, PROGRAM).expect("warmed");
+            let before = census_counts_for_test();
             ev.eval_str("(dotimes (i 100) (neovm--cc-caller i))")
                 .expect("runs");
-            let after = census_counts();
+            let after = census_counts_for_test();
             force_call_census_for_test(None);
-            force_direct_shapes_for_test(None);
+            force_direct_shapes_token_for_test(None);
             force_direct_call_for_test(None);
-            crate::emacs_core::jit::inline::force_inline_for_test(None);
-            crate::emacs_core::jit::force_profit_defer_for_test(None);
+            force_inline_for_test(None);
+            force_profit_defer_for_test(None);
             after
                 .into_iter()
                 .map(|(site, shape, n)| {
@@ -110,21 +120,20 @@ fn the_census_counts_apply_opcode_and_builtin_targets() {
         .spawn(|| {
             crate::test_utils::init_test_tracing();
             force_profit_gate_for_test(false);
-            crate::emacs_core::jit::inline::force_inline_for_test(Some(true));
-            crate::emacs_core::jit::force_profit_defer_for_test(Some(1));
+            force_inline_for_test(Some(true));
+            force_profit_defer_for_test(Some(1));
             force_direct_call_for_test(Some(false));
-            force_direct_shapes_for_test(Some(DirectShapesKnob::OFF));
+            force_direct_shapes_token_for_test(Some(TestDirectShapes::OFF));
             force_call_census_for_test(Some(true));
             let mut ev = crate::test_utils::runtime_startup_context();
-            crate::test_support::jit_fixture::eval_fixture_program(&mut ev, PROGRAM)
-                .expect("warmed");
+            eval_fixture_program(&mut ev, PROGRAM).expect("warmed");
             let symbol = Value::symbol("neovm--cc-applied");
             let object = ev
-                .obarray
+                .obarray()
                 .symbol_function_id(symbol.as_bare_symbol_id().unwrap())
                 .unwrap();
             let tail = Value::list_from_slice(&[Value::make_int(2), Value::make_int(3)]);
-            let before = calls(&census_counts(), "apply", "exact");
+            let before = calls(&census_counts_for_test(), "apply", "exact");
             // Exercise the actual emission, not only the classification shim.
             for callee in [symbol, object] {
                 let leaf = lower_nullary_leaf(
@@ -137,9 +146,12 @@ fn the_census_counts_apply_opcode_and_builtin_targets() {
                     NativeRun::Ok(_)
                 ));
             }
-            assert_eq!(calls(&census_counts(), "apply", "exact") - before, 2);
+            assert_eq!(
+                calls(&census_counts_for_test(), "apply", "exact") - before,
+                2
+            );
 
-            let before = calls(&census_counts(), "apply", "exact");
+            let before = calls(&census_counts_for_test(), "apply", "exact");
             for callee in [symbol, object] {
                 let leaf = lower_nullary_leaf(
                     &[
@@ -157,12 +169,15 @@ fn the_census_counts_apply_opcode_and_builtin_targets() {
                     NativeRun::Ok(_)
                 ));
             }
-            assert_eq!(calls(&census_counts(), "apply", "exact") - before, 2);
+            assert_eq!(
+                calls(&census_counts_for_test(), "apply", "exact") - before,
+                2
+            );
             force_call_census_for_test(None);
-            force_direct_shapes_for_test(None);
+            force_direct_shapes_token_for_test(None);
             force_direct_call_for_test(None);
-            crate::emacs_core::jit::inline::force_inline_for_test(None);
-            crate::emacs_core::jit::force_profit_defer_for_test(None);
+            force_inline_for_test(None);
+            force_profit_defer_for_test(None);
         })
         .expect("spawn")
         .join()
@@ -175,28 +190,15 @@ fn the_census_counts_apply_opcode_and_builtin_targets() {
 fn the_census_does_not_count_a_sidecar_as_a_lisp_frame() {
     crate::test_utils::init_test_tracing();
     force_direct_call_for_test(Some(false));
-    force_direct_shapes_for_test(Some(DirectShapesKnob::OFF));
+    force_direct_shapes_token_for_test(Some(TestDirectShapes::OFF));
     let mut leaf = lower_nullary_leaf(&[Op::Nil, Op::Return], &[]).expect("leaf");
-    leaf.sidecar = Some(Box::new(LeafSidecar {
-        reloc_base: core::ptr::null(),
-        spill_base: core::ptr::null(),
-        meta_pc: core::ptr::null(),
-        meta_depth: core::ptr::null(),
-        meta_handlers: core::ptr::null(),
-        spec_slot_base: core::ptr::null(),
-        spec_expected_base: core::ptr::null(),
-    }));
-    assert!(!leaf.direct_call_eligible());
-    let slot = SpecSlot::at_epoch(0);
-    let consts = [Value::NIL];
-    slot.arm_leaf(&leaf, consts.as_ptr(), false, true, false);
-    assert_eq!(named_shape(&slot), CallShape::Exact);
-    leaf.has_binds = true;
-    assert_eq!(named_shape(&slot), CallShape::Framed);
-    leaf.has_binds = false;
-    leaf.has_handlers = true;
-    assert_eq!(named_shape(&slot), CallShape::Framed);
-    force_direct_shapes_for_test(None);
+    let (eligible, exact, after_binds, after_handlers) =
+        sidecar_census_shape_names_for_test(&mut leaf);
+    assert!(!eligible);
+    assert_eq!(exact, "exact");
+    assert_eq!(after_binds, "framed");
+    assert_eq!(after_handlers, "framed");
+    force_direct_shapes_token_for_test(None);
     force_direct_call_for_test(None);
 }
 
@@ -229,35 +231,33 @@ fn accepted_spec_fast_counts(on: bool) -> ((u64, u64), (u64, u64)) {
             force_profit_gate_for_test(false);
             force_deopt_for_test(false);
             force_slow_spec_for_test(Some(false));
-            crate::emacs_core::jit::inline::force_inline_for_test(Some(true));
-            crate::emacs_core::jit::force_profit_defer_for_test(Some(1));
+            force_inline_for_test(Some(true));
+            force_profit_defer_for_test(Some(1));
             force_direct_call_for_test(Some(false));
-            force_direct_shapes_for_test(Some(DirectShapesKnob::OFF));
+            force_direct_shapes_token_for_test(Some(TestDirectShapes::OFF));
             force_call_census_for_test(Some(on));
             let mut ev = crate::test_utils::runtime_startup_context();
             ev.refresh_attention_for_test();
-            crate::test_support::jit_fixture::eval_fixture_program(&mut ev, SPEC_FAST_PROGRAM)
-                .expect("callees warmed");
+            eval_fixture_program(&mut ev, SPEC_FAST_PROGRAM).expect("callees warmed");
             let caller = ev
-                .obarray
+                .obarray()
                 .symbol_function_id(neovm_value::intern::intern("neovm--cc-fast-caller"))
                 .expect("caller defined");
-            let leaf = compile_bytecode_function_with(
+            let leaf = crate::emacs_core::jit::compile::compile_bytecode_function_with(
                 caller.get_bytecode_data().expect("caller byte-compiled"),
-                Some(&ev.obarray),
+                Some(ev.obarray()),
             )
             .expect("caller compiles");
             assert_eq!(
-                leaf.bytecode_spec_slots().count(),
+                bytecode_spec_slot_count_for_test(&leaf),
                 2,
                 "calls remain named sites"
             );
             assert!(
-                leaf.bytecode_spec_slots()
-                    .all(|slot| slot.leaf_ptr().is_null()),
+                bytecode_spec_slots_all_unarmed_for_test(&leaf),
                 "the caller's spec slots are cold"
             );
-            reset_for_test();
+            call_census_reset_for_test();
             let mut first = (0, 0);
             for pass in 0..2 {
                 assert!(matches!(
@@ -265,22 +265,21 @@ fn accepted_spec_fast_counts(on: bool) -> ((u64, u64), (u64, u64)) {
                     NativeRun::Ok(_)
                 ));
                 if pass == 0 {
-                    first = spec_fast_counts_for_test();
+                    first = call_census_spec_fast_counts_for_test();
                     assert_eq!(first, (0, 0), "first calls arm the slots");
                     assert!(
-                        leaf.bytecode_spec_slots()
-                            .all(|slot| slot.direct_consts.load(Ordering::Relaxed) != 0),
+                        bytecode_spec_slots_all_consts_armed_for_test(&leaf),
                         "both named sites are armed for the second call"
                     );
                 }
             }
-            let fast = spec_fast_counts_for_test();
+            let fast = call_census_spec_fast_counts_for_test();
             force_call_census_for_test(None);
-            force_direct_shapes_for_test(None);
+            force_direct_shapes_token_for_test(None);
             force_direct_call_for_test(None);
             force_slow_spec_for_test(None);
-            crate::emacs_core::jit::inline::force_inline_for_test(None);
-            crate::emacs_core::jit::force_profit_defer_for_test(None);
+            force_inline_for_test(None);
+            force_profit_defer_for_test(None);
             (first, fast)
         })
         .expect("spawn")
@@ -302,11 +301,11 @@ fn the_normal_spec_shim_does_not_record_exact_fast_census_counts() {
 /// sidecar entry that needs that protocol without binding Lisp variables.
 #[test]
 fn the_exact_fast_census_accumulates_the_actual_framed_entry_bit_and_resets() {
-    reset_for_test();
-    record_spec_fast_for_census(false);
-    record_spec_fast_for_census(true);
-    record_spec_fast_for_census(true);
-    assert_eq!(spec_fast_counts_for_test(), (3, 2));
-    reset_for_test();
-    assert_eq!(spec_fast_counts_for_test(), (0, 0));
+    call_census_reset_for_test();
+    record_spec_fast_for_census_for_test(false);
+    record_spec_fast_for_census_for_test(true);
+    record_spec_fast_for_census_for_test(true);
+    assert_eq!(call_census_spec_fast_counts_for_test(), (3, 2));
+    call_census_reset_for_test();
+    assert_eq!(call_census_spec_fast_counts_for_test(), (0, 0));
 }

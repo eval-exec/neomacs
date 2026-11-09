@@ -1807,6 +1807,1226 @@ pub mod authority {
     pub fn admit_threads(ctx: &mut Context) -> Result<(), crate::emacs_core::eval::AdmissionError> {
         ctx.admit_threads()
     }
+
+    /// FENCE: copied count of warm Tier-I bodies whose first node is an
+    /// already-lowered `let` or `let*`. The registry stays private.
+    pub fn tier_i_lowered_binding_body_count_for_test(ctx: &Context) -> usize {
+        ctx.tier_i.lowered_binding_body_count_for_test()
+    }
+
+    /// FENCE: drop a Green World's thread state. `green_teardown` stays
+    /// pub(crate).
+    pub fn green_teardown_for_test(ctx: &mut Context) {
+        ctx.green_teardown();
+    }
+
+    /// FENCE: unlock the mutex Value. The `MutexHandle` newtype stays
+    /// pub(crate); the lookup and the unlock happen here.
+    pub fn green_mutex_unlock_value_for_test(
+        ctx: &mut Context,
+        mutex: &neovm_value::value::Value,
+    ) -> neovm_value::error::EvalResult {
+        let handle = ctx
+            .threads()
+            .mutex_id_from_handle(mutex)
+            .expect("same-World mutex argument");
+        ctx.green_mutex_unlock(handle)
+    }
+
+    /// FENCE: the decoder's acceptance verdict. `validate_gnu_bytecode` stays
+    /// pub(crate).
+    pub fn validate_gnu_bytecode_for_test(
+        bytecodes: &[u8],
+    ) -> Result<(), crate::emacs_core::bytecode::decode::DecodeError> {
+        crate::emacs_core::bytecode::decode::validate_gnu_bytecode(bytecodes)
+    }
+
+    /// FENCE: full-decode counter. The counter stays pub(crate).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn full_decode_count_for_test() -> usize {
+        crate::emacs_core::bytecode::decode::full_decode_count_for_test()
+    }
+
+    /// FENCE: whether this build decodes GNU bytecode eagerly.
+    pub fn eager_gnu_bytecode_for_test() -> bool {
+        crate::emacs_core::bytecode::chunk::eager_gnu_bytecode()
+    }
+
+    /// FENCE: lazy GNU decode counter. The counter stays pub(crate).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn lazy_gnu_decode_count_for_test() -> usize {
+        crate::emacs_core::bytecode::chunk::lazy_gnu_decode_count_for_test()
+    }
+
+    /// FENCE: the make-byte-code validate-only override. The setter stays
+    /// pub(crate).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn force_make_byte_code_validate_only_for_test(on: bool) {
+        crate::emacs_core::builtins::symbols::force_make_byte_code_validate_only_for_test(on);
+    }
+
+    // Signed knob tokens for re-homed compiler tests. Each converts to the
+    // pub(crate) original inside this module. Eval's own tests keep calling
+    // the originals. No `TestOptAdmit::ALL`: callers write the six fields.
+
+    #[cfg(feature = "jit")]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum TestDirectSitesMode {
+        All,
+        Unbounded,
+        SelfOnly,
+    }
+
+    #[cfg(feature = "jit")]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+    pub struct TestDirectShapes {
+        pub(crate) optional: bool,
+        pub(crate) rest: bool,
+        pub(crate) constant: bool,
+        pub(crate) framed: bool,
+    }
+
+    #[cfg(feature = "jit")]
+    impl TestDirectShapes {
+        pub const OFF: Self = Self {
+            optional: false,
+            rest: false,
+            constant: false,
+            framed: false,
+        };
+        pub const ALL: Self = Self {
+            optional: true,
+            rest: true,
+            constant: true,
+            framed: true,
+        };
+    }
+
+    #[cfg(feature = "jit")]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum TestDirectSelfHeat {
+        #[default]
+        Off,
+        Seen,
+        Hot,
+    }
+
+    #[cfg(feature = "jit")]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum TestInline2Mode {
+        #[default]
+        Off,
+        Named,
+        Closure,
+        Hof,
+        All,
+    }
+
+    #[cfg(feature = "jit")]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+    pub struct TestInlineVars {
+        pub(crate) read: bool,
+        pub(crate) set: bool,
+        pub(crate) bind: bool,
+    }
+
+    #[cfg(feature = "jit")]
+    impl TestInlineVars {
+        pub const OFF: Self = Self {
+            read: false,
+            set: false,
+            bind: false,
+        };
+        pub const ALL: Self = Self {
+            read: true,
+            set: true,
+            bind: true,
+        };
+        pub const DEFAULT: Self = Self {
+            read: true,
+            set: false,
+            bind: false,
+        };
+
+        /// Fields stay pub(crate). Cross-crate construction uses this Copy constructor.
+        pub fn parts(read: bool, set: bool, bind: bool) -> Self {
+            Self { read, set, bind }
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+    pub struct TestMirReach {
+        pub(crate) dead: bool,
+    }
+
+    #[cfg(feature = "jit")]
+    impl TestMirReach {
+        pub const OFF: Self = Self { dead: false };
+        pub const ALL: Self = Self { dead: true };
+    }
+
+    #[cfg(feature = "jit")]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum TestOptMode {
+        #[default]
+        Legacy,
+        Off,
+        Opt,
+    }
+
+    /// Full literal only. There is no `ALL` constant.
+    #[cfg(feature = "jit")]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub struct TestOptAdmit {
+        pub(crate) args: bool,
+        pub(crate) env: bool,
+        pub(crate) vars: bool,
+        pub(crate) binds: bool,
+        pub(crate) switch: bool,
+        pub(crate) handlers: bool,
+    }
+
+    #[cfg(feature = "jit")]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum TestOptPasses {
+        All,
+        FoldBoolRepsReads,
+        AllWithPrimitiveOverride { sink: bool },
+    }
+
+    #[cfg(feature = "jit")]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum TestRegallocPolicy {
+        Auto,
+        Full,
+    }
+
+    #[cfg(feature = "jit")]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum TestLeafAbi {
+        Memory,
+        Register { arity: u8 },
+    }
+
+    #[cfg(feature = "jit")]
+    fn to_sites(
+        mode: TestDirectSitesMode,
+    ) -> crate::emacs_core::jit::compile::DirectSitesMode {
+        use crate::emacs_core::jit::compile::DirectSitesMode;
+        match mode {
+            TestDirectSitesMode::All => DirectSitesMode::All,
+            TestDirectSitesMode::Unbounded => DirectSitesMode::Unbounded,
+            TestDirectSitesMode::SelfOnly => DirectSitesMode::SelfOnly,
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    fn to_shapes(knob: TestDirectShapes) -> crate::emacs_core::jit::compile::DirectShapesKnob {
+        crate::emacs_core::jit::compile::DirectShapesKnob {
+            optional: knob.optional,
+            rest: knob.rest,
+            constant: knob.constant,
+            framed: knob.framed,
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    fn from_shapes(knob: crate::emacs_core::jit::compile::DirectShapesKnob) -> TestDirectShapes {
+        TestDirectShapes {
+            optional: knob.optional,
+            rest: knob.rest,
+            constant: knob.constant,
+            framed: knob.framed,
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    fn to_heat(
+        mode: TestDirectSelfHeat,
+    ) -> crate::emacs_core::jit::compile::direct_call::DirectSelfHeat {
+        use crate::emacs_core::jit::compile::direct_call::DirectSelfHeat;
+        match mode {
+            TestDirectSelfHeat::Off => DirectSelfHeat::Off,
+            TestDirectSelfHeat::Seen => DirectSelfHeat::Seen,
+            TestDirectSelfHeat::Hot => DirectSelfHeat::Hot,
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    fn to_inline2(mode: TestInline2Mode) -> crate::emacs_core::jit::compile::Inline2Mode {
+        use crate::emacs_core::jit::compile::Inline2Mode;
+        match mode {
+            TestInline2Mode::Off => Inline2Mode::Off,
+            TestInline2Mode::Named => Inline2Mode::Named,
+            TestInline2Mode::Closure => Inline2Mode::Closure,
+            TestInline2Mode::Hof => Inline2Mode::Hof,
+            TestInline2Mode::All => Inline2Mode::All,
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    fn to_inline_vars(knob: TestInlineVars) -> crate::emacs_core::jit::compile::InlineVarsKnob {
+        crate::emacs_core::jit::compile::InlineVarsKnob {
+            read: knob.read,
+            set: knob.set,
+            bind: knob.bind,
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    fn from_inline_vars(knob: crate::emacs_core::jit::compile::InlineVarsKnob) -> TestInlineVars {
+        TestInlineVars {
+            read: knob.read,
+            set: knob.set,
+            bind: knob.bind,
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    fn to_reach(reach: TestMirReach) -> crate::emacs_core::jit::compile::MirReach {
+        crate::emacs_core::jit::compile::MirReach { dead: reach.dead }
+    }
+
+    #[cfg(feature = "jit")]
+    fn from_reach(reach: crate::emacs_core::jit::compile::MirReach) -> TestMirReach {
+        TestMirReach { dead: reach.dead }
+    }
+
+    #[cfg(feature = "jit")]
+    fn to_opt_mode(mode: TestOptMode) -> crate::emacs_core::jit::compile::OptMode {
+        use crate::emacs_core::jit::compile::OptMode;
+        match mode {
+            TestOptMode::Legacy => OptMode::Legacy,
+            TestOptMode::Off => OptMode::Off,
+            TestOptMode::Opt => OptMode::Opt,
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    fn to_admit(admit: TestOptAdmit) -> crate::emacs_core::jit::compile::OptAdmit {
+        crate::emacs_core::jit::compile::OptAdmit {
+            args: admit.args,
+            env: admit.env,
+            vars: admit.vars,
+            binds: admit.binds,
+            switch: admit.switch,
+            handlers: admit.handlers,
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    fn to_passes(passes: TestOptPasses) -> crate::emacs_core::jit::compile::OptPasses {
+        use crate::emacs_core::jit::compile::OptPasses;
+        match passes {
+            TestOptPasses::All => OptPasses::ALL,
+            TestOptPasses::FoldBoolRepsReads => OptPasses::parse(Some("fold,bool,reps,reads")),
+            TestOptPasses::AllWithPrimitiveOverride { sink } => OptPasses {
+                sink,
+                ..OptPasses::ALL
+            },
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    fn to_policy(policy: TestRegallocPolicy) -> crate::emacs_core::jit::compile::lowering::RegallocPolicy {
+        use crate::emacs_core::jit::compile::lowering::RegallocPolicy;
+        match policy {
+            TestRegallocPolicy::Auto => RegallocPolicy::Auto,
+            TestRegallocPolicy::Full => RegallocPolicy::Full,
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    fn from_abi(abi: crate::emacs_core::jit::compile::reg_abi::LeafAbi) -> TestLeafAbi {
+        use crate::emacs_core::jit::compile::reg_abi::LeafAbi;
+        match abi {
+            LeafAbi::Memory => TestLeafAbi::Memory,
+            LeafAbi::Register { arity } => TestLeafAbi::Register { arity },
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn force_direct_sites_token_for_test(mode: Option<TestDirectSitesMode>) {
+        force_direct_sites_for_test(mode.map(to_sites));
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn force_direct_shapes_token_for_test(knob: Option<TestDirectShapes>) {
+        force_direct_shapes_for_test(knob.map(to_shapes));
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn direct_shapes_parse_for_test(value: Option<&str>) -> TestDirectShapes {
+        from_shapes(crate::emacs_core::jit::compile::DirectShapesKnob::parse(value))
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn force_direct_self_heat_token_for_test(mode: Option<TestDirectSelfHeat>) {
+        force_direct_self_heat_for_test(mode.map(to_heat));
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn force_inline2_token_for_test(mode: Option<TestInline2Mode>) {
+        force_inline2_for_test(mode.map(to_inline2));
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn force_inline_vars_token_for_test(knob: Option<TestInlineVars>) {
+        force_inline_vars_for_test(knob.map(to_inline_vars));
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn inline_vars_parse_for_test(value: Option<&str>) -> TestInlineVars {
+        from_inline_vars(crate::emacs_core::jit::compile::InlineVarsKnob::parse(value))
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn force_mir_reach_token_for_test(reach: Option<TestMirReach>) {
+        force_mir_reach_for_test(reach.map(to_reach));
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn mir_reach_parse_for_test(value: Option<&str>) -> TestMirReach {
+        from_reach(crate::emacs_core::jit::compile::MirReach::parse(value))
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn force_opt_token_for_test(mode: Option<TestOptMode>, admit: Option<TestOptAdmit>) {
+        crate::emacs_core::jit::compile::force_opt_for_test(mode.map(to_opt_mode), admit.map(to_admit));
+    }
+
+    #[cfg(feature = "jit")]
+    #[must_use = "the backend override ends when the returned guard is dropped"]
+    pub fn opt_mode_token_scope_for_test(mode: TestOptMode) -> impl Drop {
+        opt_mode_scope_for_test(to_opt_mode(mode))
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn force_opt_passes_token_for_test(passes: Option<TestOptPasses>) {
+        force_opt_passes_for_test(passes.map(to_passes));
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn compile_with_regalloc_for_test(
+        function: &crate::emacs_core::bytecode::ByteCodeFunction,
+        obarray: Option<&neovm_value::symbol::Obarray>,
+        policy: TestRegallocPolicy,
+    ) -> Result<
+        crate::emacs_core::jit::compile::CompiledLeaf,
+        crate::emacs_core::jit::compile::CompileError,
+    > {
+        crate::emacs_core::jit::compile::compile_bytecode_function_tiered(
+            function,
+            obarray,
+            to_policy(policy),
+        )
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn leaf_abi_for_test(leaf: &crate::emacs_core::jit::compile::CompiledLeaf) -> TestLeafAbi {
+        from_abi(leaf.abi)
+    }
+
+    /// The cache retains the leaf. Only the ABI word is copied out; the
+    /// pointer stays inside eval.
+    #[cfg(feature = "jit")]
+    pub fn cached_leaf_abi_for_test(id: u64) -> Option<TestLeafAbi> {
+        let ptr = crate::emacs_core::jit::cache::compiled_leaf_ptr_for_test(id)?;
+        // SAFETY: the calling test retains this cache entry and does not clear
+        // it across the read. The copy is a two-word ABI discriminant.
+        Some(from_abi(unsafe { (*ptr).abi }))
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn leaf_chains_empty_for_test(leaf: &crate::emacs_core::jit::compile::CompiledLeaf) -> bool {
+        leaf.chains.is_empty()
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn leaf_abi_for_build_for_test(
+        aot: bool,
+        osr: bool,
+        arity: usize,
+        frameless: bool,
+        dynamic_prefix: usize,
+        self_site: bool,
+    ) -> TestLeafAbi {
+        from_abi(crate::emacs_core::jit::compile::reg_abi::LeafAbi::for_build(
+            aot,
+            osr,
+            arity,
+            frameless,
+            dynamic_prefix,
+            self_site,
+        ))
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn direct_sites_emitted_for_test() -> usize {
+        crate::emacs_core::jit::compile::direct_call::direct_sites_emitted_for_test()
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn rootwin_counters_for_test() -> (u32, u32) {
+        crate::emacs_core::jit::compile::lowering::rootwin_counters()
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn tail_calls_unrooted_for_test() -> usize {
+        crate::emacs_core::jit::compile::lowering::TAIL_CALLS_UNROOTED.with(std::cell::Cell::get)
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn stack_guards_emitted_for_test() -> usize {
+        crate::emacs_core::jit::compile::stack_guard::stack_guards_emitted_for_test()
+    }
+
+    /// FENCE: bytecode-frame count. `bc_frames` stays pub(crate).
+    pub fn bc_frames_len_for_test(ctx: &Context) -> usize {
+        ctx.bc_frames.len()
+    }
+
+    /// FENCE: JIT bind-stack depth. `jit_bind_stack` stays pub(crate).
+    pub fn jit_bind_stack_len_for_test(ctx: &Context) -> usize {
+        ctx.jit_bind_stack.len()
+    }
+
+    /// FENCE: the three observability booleans. `ObserveOverride` stays
+    /// pub(crate); this is not a new mode type.
+    #[cfg(feature = "jit")]
+    pub fn force_observe_knobs_for_test(stats: bool, naming: bool, entry_count: bool) {
+        crate::emacs_core::jit::stats::force_observe_for_test(
+            crate::emacs_core::jit::stats::ObserveOverride {
+                stats,
+                naming,
+                entry_count,
+            },
+        );
+    }
+
+    /// FENCE: install named byte-compiled functions without running them.
+    /// `prepare_entry_for_test` stays pub(crate).
+    #[cfg(feature = "jit")]
+    pub fn prepare_named_for_test(ctx: &mut Context, names: &[&str]) {
+        use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+        for name in names {
+            let value = ctx
+                .obarray()
+                .symbol_function_id(neovm_value::intern::intern(name))
+                .expect("fixture function defined");
+            let function = value
+                .get_bytecode_data()
+                .expect("fixture function bytecompiled");
+            crate::emacs_core::jit::cache::prepare_entry_for_test(ctx, function);
+        }
+    }
+
+    /// FENCE: run `body` on a fresh stack segment and restore the caller's
+    /// limit. `grow_tracking_jit_limit` stays pub(crate).
+    pub fn grow_tracking_jit_limit_for_test<R>(
+        ctx: &mut Context,
+        segment: usize,
+        body: impl FnOnce(&mut Context) -> R,
+    ) -> R {
+        crate::emacs_core::eval::native_stack::grow_tracking_jit_limit(
+            ctx,
+            Context::jit_stack_limit_mut,
+            segment,
+            body,
+        )
+    }
+
+    /// FENCE: the red-zone constant, as a number. The const stays pub(crate).
+    pub fn jit_stack_red_zone_for_test() -> usize {
+        crate::emacs_core::eval::native_stack::JIT_STACK_RED_ZONE
+    }
+
+    /// FENCE: this thread's stack-limit address. The helper stays pub(crate).
+    pub fn jit_stack_limit_here_for_test() -> usize {
+        crate::emacs_core::eval::native_stack::jit_stack_limit_here()
+    }
+
+    /// FENCE: address identity of a compiled leaf. The pointer stays here.
+    #[cfg(feature = "jit")]
+    pub fn leaf_identity_for_test(
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+    ) -> LeafIdentity {
+        LeafIdentity::from_address(leaf as *const crate::emacs_core::jit::compile::CompiledLeaf as usize)
+    }
+
+    /// FENCE: address identity of a leaf's raw entry word.
+    #[cfg(feature = "jit")]
+    pub fn leaf_entry_identity_for_test(
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+    ) -> LeafIdentity {
+        LeafIdentity::from_address(leaf.entry as usize)
+    }
+
+    /// FENCE: the identity of a null entry or leaf pointer.
+    #[cfg(feature = "jit")]
+    pub fn null_identity_for_test() -> LeafIdentity {
+        LeafIdentity::from_address(0)
+    }
+
+    /// FENCE: index in the bytecode spec-slot list of the slot whose leaf
+    /// pointer is `callee`. `SpecSlot` stays pub(crate).
+    #[cfg(feature = "jit")]
+    pub fn bytecode_slot_index_for_callee_for_test(
+        caller: &crate::emacs_core::jit::compile::CompiledLeaf,
+        callee: &crate::emacs_core::jit::compile::CompiledLeaf,
+    ) -> Option<usize> {
+        caller
+            .bytecode_spec_slots()
+            .position(|slot| std::ptr::eq(slot.leaf_ptr(), callee))
+    }
+
+    /// FENCE: direct-entry identity of bytecode spec slot `index`.
+    #[cfg(feature = "jit")]
+    pub fn bytecode_slot_direct_entry_identity_for_test(
+        caller: &crate::emacs_core::jit::compile::CompiledLeaf,
+        index: usize,
+    ) -> LeafIdentity {
+        let slot = caller
+            .bytecode_spec_slots()
+            .nth(index)
+            .expect("bytecode spec slot");
+        LeafIdentity::from_address(slot.direct_entry_ptr_for_test() as usize)
+    }
+
+    /// FENCE: leaf-pointer identity of bytecode spec slot `index`.
+    #[cfg(feature = "jit")]
+    pub fn bytecode_slot_leaf_identity_for_test(
+        caller: &crate::emacs_core::jit::compile::CompiledLeaf,
+        index: usize,
+    ) -> LeafIdentity {
+        let slot = caller
+            .bytecode_spec_slots()
+            .nth(index)
+            .expect("bytecode spec slot");
+        LeafIdentity::from_address(slot.leaf_ptr() as usize)
+    }
+
+    /// FENCE: entry identity of the leaf a bytecode spec slot points at.
+    /// A null leaf pointer is the null identity. The pointer is not returned.
+    #[cfg(feature = "jit")]
+    pub fn bytecode_slot_pointed_entry_identity_for_test(
+        caller: &crate::emacs_core::jit::compile::CompiledLeaf,
+        index: usize,
+    ) -> LeafIdentity {
+        let slot = caller
+            .bytecode_spec_slots()
+            .nth(index)
+            .expect("bytecode spec slot");
+        let ptr = slot.leaf_ptr();
+        if ptr.is_null() {
+            return LeafIdentity::from_address(0);
+        }
+        // SAFETY: a non-null spec-slot leaf word addresses a cache-retained
+        // CompiledLeaf. The calling test keeps that cache entry alive across
+        // this read. Only the entry address is copied out.
+        LeafIdentity::from_address(unsafe { (*ptr).entry } as usize)
+    }
+
+    /// FENCE: every armed bytecode slot's direct entry equals the entry of
+    /// the leaf it points at, and that direct entry is non-null.
+    #[cfg(feature = "jit")]
+    pub fn bytecode_slots_direct_entries_match_pointed_leaves_for_test(
+        caller: &crate::emacs_core::jit::compile::CompiledLeaf,
+    ) -> bool {
+        caller.bytecode_spec_slots().all(|slot| {
+            let direct = slot.direct_entry_ptr_for_test();
+            // SAFETY: the predicate only runs when the direct entry is
+            // non-null, and an armed slot's leaf word then addresses a
+            // cache-retained CompiledLeaf. The calling test retains it.
+            !direct.is_null() && unsafe { (*slot.leaf_ptr()).entry } == direct
+        })
+    }
+
+    /// The cache retains the leaf. The closure sees it by reference; the
+    /// pointer is not returned.
+    #[cfg(feature = "jit")]
+    pub fn with_cached_leaf_for_test<R>(
+        id: u64,
+        body: impl FnOnce(&crate::emacs_core::jit::compile::CompiledLeaf) -> R,
+    ) -> Option<R> {
+        let ptr = crate::emacs_core::jit::cache::compiled_leaf_ptr_for_test(id)?;
+        // SAFETY: the calling test retains this cache entry and does not clear
+        // it across `body`. The reference does not outlive the closure.
+        Some(body(unsafe { &*ptr }))
+    }
+
+    /// FENCE: resume a precise deopt on the Tier-0 interpreter.
+    /// `resume_deopt` stays pub(crate).
+    #[cfg(feature = "jit")]
+    pub fn resume_deopt_for_test(
+        ctx: &mut Context,
+        func: &crate::emacs_core::bytecode::ByteCodeFunction,
+        func_value: neovm_value::value::Value,
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+        resume: crate::emacs_core::jit::compile::DeoptResume,
+    ) -> Result<neovm_value::value::Value, neovm_value::error::Flow> {
+        crate::emacs_core::jit::compile::resumed_chain::resume_deopt(
+            ctx, func, func_value, leaf, resume,
+        )
+    }
+
+    /// FENCE: whether this mutex Value is owned by the current thread.
+    /// `MutexHandle` stays pub(crate).
+    pub fn mutex_owned_by_current_for_test(
+        ctx: &Context,
+        mutex: &neovm_value::value::Value,
+    ) -> bool {
+        let handle = ctx
+            .threads()
+            .mutex_id_from_handle(mutex)
+            .expect("same-World mutex argument");
+        ctx.threads().mutex_owned_by_current_thread(handle)
+    }
+
+    /// FENCE: var-shim census. The counters stay pub(crate). Order is
+    /// varref, varset, varbind, unbind.
+    #[cfg(feature = "jit")]
+    pub fn var_shim_calls_for_test() -> (usize, usize, usize, usize) {
+        crate::emacs_core::jit::compile::var_shim_calls()
+    }
+
+    /// FENCE: forget the inline-var site census. The counter stays pub(crate).
+    #[cfg(feature = "jit")]
+    pub fn reset_inline_var_sites_for_test() {
+        crate::emacs_core::jit::compile::inline_vars::reset_inline_var_sites();
+    }
+
+    /// FENCE: inline varref sites since the last reset. No new op type.
+    #[cfg(feature = "jit")]
+    pub fn inline_var_read_sites_for_test() -> u32 {
+        crate::emacs_core::jit::compile::inline_vars::inline_var_sites(
+            crate::emacs_core::jit::compile::inline_vars::InlineVarOp::Read,
+        )
+    }
+
+    /// FENCE: inline varset sites since the last reset.
+    #[cfg(feature = "jit")]
+    pub fn inline_var_set_sites_for_test() -> u32 {
+        crate::emacs_core::jit::compile::inline_vars::inline_var_sites(
+            crate::emacs_core::jit::compile::inline_vars::InlineVarOp::Set,
+        )
+    }
+
+    /// FENCE: inline varbind sites since the last reset.
+    #[cfg(feature = "jit")]
+    pub fn inline_var_bind_sites_for_test() -> u32 {
+        crate::emacs_core::jit::compile::inline_vars::inline_var_sites(
+            crate::emacs_core::jit::compile::inline_vars::InlineVarOp::Bind,
+        )
+    }
+
+    /// FENCE: inline unbind sites since the last reset.
+    #[cfg(feature = "jit")]
+    pub fn inline_var_unbind_sites_for_test() -> u32 {
+        crate::emacs_core::jit::compile::inline_vars::inline_var_sites(
+            crate::emacs_core::jit::compile::inline_vars::InlineVarOp::Unbind,
+        )
+    }
+
+    /// FENCE: enter the compile environment for a direct `lower_leaf`.
+    /// `with_compile_env_for_test` stays pub(crate).
+    #[cfg(feature = "jit")]
+    pub fn with_compile_env_for_test<R>(ctx: &Context, body: impl FnOnce() -> R) -> R {
+        crate::emacs_core::jit::compile::inline_vars::with_compile_env_for_test(ctx, body)
+    }
+    /// FENCE: optional count of a stack parameter shape.
+    /// `StackParamShapeExt` stays pub(crate).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn stack_param_optional_for_test(
+        shape: crate::emacs_core::bytecode::StackParamShape,
+    ) -> Option<usize> {
+        use crate::emacs_core::bytecode::function_slots::StackParamShapeExt as _;
+        shape.optional()
+    }
+
+    /// FENCE: the formal bindings of a dynamic arglist, in GNU walk order.
+    /// `FormalCursor` stays pub(crate). The walk finishes each binding and
+    /// stops at the cursor's end, so the returned list is the whole arglist.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn dynamic_formal_bindings_for_test(
+        arglist: crate::emacs_core::bytecode::DynamicArglist,
+    ) -> Vec<neovm_value::tagged::bytecode::function_slots::FormalBinding> {
+        use crate::emacs_core::bytecode::function_slots::DynamicArglistExt as _;
+        let mut cursor = arglist.invocation();
+        let mut out = Vec::new();
+        loop {
+            match cursor.next_binding().expect("formal walk") {
+                Some(binding) => {
+                    cursor.finish_binding().expect("finish binding");
+                    out.push(binding);
+                }
+                None => return out,
+            }
+        }
+    }
+
+    /// FENCE: JIT bind-stack reserve. The vec stays pub(crate).
+    pub fn jit_bind_stack_reserve_for_test(ctx: &mut Context, additional: usize) {
+        ctx.jit_bind_stack.reserve(additional);
+    }
+
+    /// FENCE: clear the JIT bind stack. The vec stays pub(crate).
+    pub fn clear_jit_bind_stack_for_test(ctx: &mut Context) {
+        ctx.jit_bind_stack.clear();
+    }
+
+    /// FENCE: whether the JIT bind stack is empty.
+    pub fn jit_bind_stack_is_empty_for_test(ctx: &Context) -> bool {
+        ctx.jit_bind_stack.is_empty()
+    }
+
+    /// FENCE: JIT root-stack top. The field stays pub(crate).
+    pub fn jit_root_stack_top_for_test(ctx: &Context) -> usize {
+        ctx.jit_root_stack_top
+    }
+
+    /// FENCE: whether a body may re-enter Lisp. The predicate stays pub(crate).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn body_may_reenter_lisp_for_test(ops: &[crate::emacs_core::bytecode::Op]) -> bool {
+        crate::emacs_core::jit::compile::stack_guard::body_may_reenter_lisp(ops)
+    }
+
+    /// FENCE: current opt-mode token. `OptMode` stays pub(crate).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn jit_opt_mode_token_for_test() -> TestOptMode {
+        match crate::emacs_core::jit::compile::jit_opt_mode() {
+            crate::emacs_core::jit::compile::OptMode::Legacy => TestOptMode::Legacy,
+            crate::emacs_core::jit::compile::OptMode::Off => TestOptMode::Off,
+            crate::emacs_core::jit::compile::OptMode::Opt => TestOptMode::Opt,
+        }
+    }
+
+    /// FENCE: cold-exit counter. The atomic stays pub(crate).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn direct_cold_exits_for_test() -> u64 {
+        crate::emacs_core::jit::compile::direct_call::DIRECT_COLD_EXITS
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// FENCE: framed-call counter. The atomic stays pub(crate).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn direct_framed_calls_for_test() -> u64 {
+        crate::emacs_core::jit::compile::direct_call::DIRECT_FRAMED_CALLS
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// FENCE: whether a shim panic is still pending.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn shim_panic_pending_for_test() -> bool {
+        crate::emacs_core::jit::compile::shim_panic_pending()
+    }
+
+    /// FENCE: the framed direct trampoline. The extern stays pub(crate).
+    /// The bits are the test's existing call words. No pointer is returned.
+    ///
+    /// # Safety
+    /// The same contract as `neovm_jit_direct_framed`: `ctx` is the dormant
+    /// Context, `leaf_bits` names the live entered leaf, `args_ptr` addresses
+    /// `nargs` live call words, and `out` is a writable slot.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub unsafe fn direct_framed_call_for_test(
+        ctx: *mut u8,
+        callee_bits: i64,
+        leaf_bits: i64,
+        const_base: i64,
+        args_ptr: *const i64,
+        nargs: i64,
+        bt_count: i64,
+        out: *mut i64,
+    ) -> i64 {
+        crate::emacs_core::jit::compile::direct_call::neovm_jit_direct_framed(
+            ctx,
+            callee_bits,
+            leaf_bits,
+            const_base,
+            args_ptr,
+            nargs,
+            bt_count,
+            out,
+        )
+    }
+
+    /// FENCE: `direct_consts` register-ABI flag of bytecode spec slot `index`.
+    /// The key constant stays pub(crate). The returned word is the masked flag.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn bytecode_slot_register_key_for_test(
+        caller: &crate::emacs_core::jit::compile::CompiledLeaf,
+        index: usize,
+    ) -> u64 {
+        use crate::emacs_core::jit::compile::spec_slot::SpecSlot;
+        let slot = caller
+            .bytecode_spec_slots()
+            .nth(index)
+            .expect("bytecode spec slot");
+        slot.direct_consts_for_test() & SpecSlot::KEY_REGISTER
+    }
+
+    /// FENCE: drop the cached leaf of bytecode spec slot `index`.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn bytecode_slot_clear_leaf_for_test(
+        caller: &crate::emacs_core::jit::compile::CompiledLeaf,
+        index: usize,
+    ) {
+        caller
+            .bytecode_spec_slots()
+            .nth(index)
+            .expect("bytecode spec slot")
+            .clear_leaf();
+    }
+
+    /// FENCE: whether bytecode spec slot `index` holds the framed dispatch tag.
+    /// `DirectEntryTag` stays pub(crate).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn bytecode_slot_direct_entry_is_framed_tag_for_test(
+        caller: &crate::emacs_core::jit::compile::CompiledLeaf,
+        index: usize,
+    ) -> bool {
+        use crate::emacs_core::jit::compile::spec_slot::DirectEntryTag;
+        let slot = caller
+            .bytecode_spec_slots()
+            .nth(index)
+            .expect("bytecode spec slot");
+        slot.direct_entry_ptr_for_test() as usize == DirectEntryTag::Framed as usize
+    }
+
+    /// FENCE: entry-shape discriminant. `EntryShape` stays pub(crate).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn leaf_entry_shape_name_for_test(
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+    ) -> &'static str {
+        use crate::emacs_core::jit::compile::EntryShape;
+        match leaf.entry_shape {
+            EntryShape::RawMemory => "RawMemory",
+            EntryShape::RawRegister => "RawRegister",
+            EntryShape::Framed => "Framed",
+        }
+    }
+
+    /// FENCE: whether the leaf's entry shape is framed.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn leaf_entry_shape_is_framed_for_test(
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+    ) -> bool {
+        use crate::emacs_core::jit::compile::EntryShape;
+        matches!(leaf.entry_shape, EntryShape::Framed)
+    }
+
+    /// FENCE: whether the leaf has dynamic bindings. The flag stays pub(crate).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn leaf_has_binds_for_test(leaf: &crate::emacs_core::jit::compile::CompiledLeaf) -> bool {
+        leaf.has_binds
+    }
+
+    /// FENCE: whether the leaf has condition handlers. The flag stays pub(crate).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn leaf_has_handlers_for_test(
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+    ) -> bool {
+        leaf.has_handlers
+    }
+
+    /// FENCE: whether the leaf's entry guards read Context. The flag stays pub(crate).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn leaf_needs_vmctx_for_test(leaf: &crate::emacs_core::jit::compile::CompiledLeaf) -> bool {
+        leaf.needs_vmctx
+    }
+
+    /// FENCE: how many bytecode spec slots this leaf has. `SpecSlot` stays pub(crate).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn bytecode_spec_slot_count_for_test(
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+    ) -> usize {
+        leaf.bytecode_spec_slots().count()
+    }
+
+    /// FENCE: every bytecode spec slot's leaf word is null.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn bytecode_spec_slots_all_unarmed_for_test(
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+    ) -> bool {
+        leaf.bytecode_spec_slots().all(|slot| slot.leaf_ptr().is_null())
+    }
+
+    /// FENCE: every bytecode spec slot's fast-path key is armed (nonzero).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn bytecode_spec_slots_all_consts_armed_for_test(
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+    ) -> bool {
+        leaf.bytecode_spec_slots()
+            .all(|slot| slot.direct_consts_for_test() != 0)
+    }
+
+    /// FENCE: some source spec slot's direct entry is the entry of the leaf
+    /// it points at, and that entry is non-null. No pointer is returned.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn source_slots_any_direct_entry_matches_pointed_leaf_for_test(
+        caller: &crate::emacs_core::jit::compile::CompiledLeaf,
+    ) -> bool {
+        caller.source_spec_slots().any(|slot| {
+            let direct = slot.direct_entry_ptr_for_test();
+            // SAFETY: the predicate only runs when the direct entry is
+            // non-null, and an armed source slot's leaf word then addresses
+            // a cache-retained CompiledLeaf. The calling test retains it.
+            !direct.is_null() && unsafe { (*slot.leaf_ptr()).entry } == direct
+        })
+    }
+
+    /// FENCE: clear every bytecode spec slot that caches `leaf`. The pointer
+    /// stays inside. Returns how many slots were cleared.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn unlink_spec_slots_for_test(
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+    ) -> usize {
+        crate::emacs_core::jit::cache::unlink_spec_slots(leaf)
+    }
+
+    /// FENCE: nonzero call-census cells, `(site, shape, calls)`.
+    /// `CallShape` stays pub(crate). Shape names are `CallShape::name`.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn census_counts_for_test() -> Vec<(&'static str, &'static str, u64)> {
+        crate::emacs_core::jit::compile::call_census::census_counts()
+    }
+
+    /// FENCE: spec-fast census `(armed, framed)`. The atomics stay pub(crate).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn call_census_spec_fast_counts_for_test() -> (u64, u64) {
+        crate::emacs_core::jit::compile::call_census::spec_fast_counts_for_test()
+    }
+
+    /// FENCE: record one accepted spec-fast entry. `framed` counts a frame.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn record_spec_fast_for_census_for_test(framed: bool) {
+        crate::emacs_core::jit::compile::call_census::record_spec_fast_for_census_for_test(framed);
+    }
+
+    /// FENCE: sidecar, then bind, then handler, as census shape names.
+    /// Returns `(still_direct_eligible, exact, after_binds, after_handlers)`.
+    /// `LeafSidecar` and `CallShape` stay pub(crate). The names are
+    /// `CallShape::name` (`exact`, `framed`).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn sidecar_census_shape_names_for_test(
+        leaf: &mut crate::emacs_core::jit::compile::CompiledLeaf,
+    ) -> (bool, &'static str, &'static str, &'static str) {
+        use crate::emacs_core::jit::compile::call_census::named_shape_name_for_test;
+        use crate::emacs_core::jit::compile::spec_slot::SpecSlot;
+        use crate::emacs_core::jit::compile::LeafSidecar;
+        leaf.sidecar = Some(Box::new(LeafSidecar {
+            reloc_base: core::ptr::null(),
+            spill_base: core::ptr::null(),
+            meta_pc: core::ptr::null(),
+            meta_depth: core::ptr::null(),
+            meta_handlers: core::ptr::null(),
+            spec_slot_base: core::ptr::null(),
+            spec_expected_base: core::ptr::null(),
+        }));
+        let eligible = leaf.direct_call_eligible();
+        let slot = SpecSlot::at_epoch(0);
+        let consts = [neovm_value::value::Value::NIL];
+        slot.arm_leaf(leaf, consts.as_ptr(), false, true, false);
+        let exact = named_shape_name_for_test(&slot);
+        leaf.has_binds = true;
+        let binds = named_shape_name_for_test(&slot);
+        leaf.has_binds = false;
+        leaf.has_handlers = true;
+        let handlers = named_shape_name_for_test(&slot);
+        let _keep_consts = consts;
+        (eligible, exact, binds, handlers)
+    }
+
+    /// FENCE: deopt-cause discriminant. `DeoptCause` stays pub(crate).
+    /// `None` is a deopt whose cold block stored no reason.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn deopt_cause_name_for_test(
+        resume: &crate::emacs_core::jit::compile::DeoptResume,
+    ) -> Option<&'static str> {
+        use crate::emacs_core::jit::reopt::DeoptCause;
+        resume.cause.map(|cause| match cause {
+            DeoptCause::ArithOperands(_) => "ArithOperands",
+            DeoptCause::ArithOverflow => "ArithOverflow",
+            DeoptCause::InlinedCall => "InlinedCall",
+            DeoptCause::InlineEpochMoved => "InlineEpochMoved",
+            DeoptCause::TypeError => "TypeError",
+            DeoptCause::OsrEntry => "OsrEntry",
+            DeoptCause::Rerun => "Rerun",
+            DeoptCause::Unattributed => "Unattributed",
+            DeoptCause::EntryGuard(_) => "EntryGuard",
+            DeoptCause::Unreached => "Unreached",
+            DeoptCause::InlineIdentity => "InlineIdentity",
+            DeoptCause::InlineAttention => "InlineAttention",
+            DeoptCause::DepthLimit => "DepthLimit",
+            DeoptCause::ColdFlagged => "ColdFlagged",
+        })
+    }
+
+    /// FENCE: the deopt has no inlined-frame chain.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn deopt_inlined_is_none_for_test(
+        resume: &crate::emacs_core::jit::compile::DeoptResume,
+    ) -> bool {
+        resume.inlined.is_none()
+    }
+
+    /// FENCE: how many inlined frames the deopt read back. `None` when the
+    /// chain itself is absent. `InlinedResume` stays pub(crate).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn deopt_inlined_frame_count_for_test(
+        resume: &crate::emacs_core::jit::compile::DeoptResume,
+    ) -> Option<usize> {
+        resume.inlined.as_ref().map(|chain| chain.frames.len())
+    }
+
+    /// FENCE: pc of inlined frame `index`. The frame type stays pub(crate).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn deopt_inlined_frame_pc_for_test(
+        resume: &crate::emacs_core::jit::compile::DeoptResume,
+        index: usize,
+    ) -> usize {
+        resume
+            .inlined
+            .as_ref()
+            .expect("inlined chain")
+            .frames[index]
+            .pc
+    }
+
+    /// FENCE: operand stack of inlined frame `index`, copied out.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn deopt_inlined_frame_stack_for_test(
+        resume: &crate::emacs_core::jit::compile::DeoptResume,
+        index: usize,
+    ) -> Vec<neovm_value::value::Value> {
+        resume
+            .inlined
+            .as_ref()
+            .expect("inlined chain")
+            .frames[index]
+            .stack
+            .clone()
+    }
+
+    /// FENCE: OSR transfers taken. The atomic stays pub(crate).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn osr_transfer_count_for_test() -> u64 {
+        crate::emacs_core::jit::cache::OSR_TRANSFER_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// FENCE: compile and install an OSR entry without transferring.
+    /// `prepare_osr_for_test` stays pub(crate).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn prepare_osr_for_test(
+        ctx: &mut Context,
+        func: &crate::emacs_core::bytecode::ByteCodeFunction,
+        pc: usize,
+    ) {
+        crate::emacs_core::jit::cache::prepare_osr_for_test(ctx, func, pc);
+    }
+
+    /// FENCE: CLIF text of every function `compile` lowers on this thread.
+    /// The dump override stays pub(crate).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn captured_clif_for_test(compile: impl FnOnce()) -> Vec<String> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("leaves.clif");
+        crate::emacs_core::jit::compile::lowering::force_clif_dump_for_test(Some(
+            path.to_string_lossy().into_owned(),
+        ));
+        compile();
+        crate::emacs_core::jit::compile::lowering::force_clif_dump_for_test(None);
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        text.split("\n;; ")
+            .filter(|chunk| !chunk.trim().is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// FENCE: hold the self-source compiler token. `SelfSourceScope` stays
+    /// pub(crate). The guard restores the previous token on drop.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[must_use = "the self-source token ends when the guard drops"]
+    pub fn self_source_scope_for_test(
+        function: &crate::emacs_core::bytecode::ByteCodeFunction,
+        may_call_self: bool,
+        call_heavy: bool,
+    ) -> impl Drop {
+        // `SelfSourceScope` restores its token through the field drop glue.
+        // That glue does not implement `Drop`, so the opaque guard does.
+        struct Hold(crate::emacs_core::jit::compile::direct_call::SelfSourceScope);
+        impl Drop for Hold {
+            fn drop(&mut self) {}
+        }
+        Hold(
+            crate::emacs_core::jit::compile::direct_call::SelfSourceScope::enter_for(
+                function,
+                may_call_self,
+                call_heavy,
+            ),
+        )
+    }
+
+    /// FENCE: write the JIT stack-limit word. The field stays pub(crate).
+    pub fn set_jit_stack_limit_for_test(ctx: &mut Context, limit: usize) {
+        ctx.jit_stack_limit = limit;
+    }
+
+    /// FENCE: `(compiled id, entry-counted, native entries)` for every leaf
+    /// the report still holds. `LeafRow` stays pub(crate).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn leaf_report_entry_rows_for_test() -> Vec<(u64, bool, u64)> {
+        let (rows, _) = crate::emacs_core::jit::cache::leaf_report_rows();
+        rows.into_iter()
+            .map(|row| (row.id, row.obs.entry_counted, row.obs.entries))
+            .collect()
+    }
+
+    /// FENCE: MIR census `(build_failed, reach_dead, taken, dead_leaders)`.
+    /// `CompileStats` stays pub(crate).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn compile_stats_mir_census_for_test() -> (u64, u64, u64, u64) {
+        let stats = crate::emacs_core::jit::stats::compile_stats_snapshot();
+        (
+            stats.mir_build_failed,
+            stats.mir_reach_dead,
+            stats.mir_taken,
+            stats.mir_dead_leaders,
+        )
+    }
+
+    /// FENCE: owned GNU byte-offset map. The trait that reads it stays
+    /// pub(crate). `GnuByteOffsetMapEntry` is the existing public entry.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn executable_gnu_byte_offset_map_for_test(
+        function: &crate::emacs_core::bytecode::ByteCodeFunction,
+    ) -> Option<Vec<crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry>> {
+        use crate::emacs_core::bytecode::ByteCodeFunctionExt as _;
+        function
+            .executable_gnu_byte_offset_map()
+            .map(|map| map.to_vec())
+    }
+
+    /// FENCE: every bytecode spec slot's direct-entry word is null.
+    /// `SpecSlot` stays pub(crate).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn bytecode_spec_slots_all_direct_entries_null_for_test(
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+    ) -> bool {
+        leaf.bytecode_spec_slots()
+            .all(|slot| slot.direct_entry_ptr_for_test().is_null())
+    }
+
+    /// FENCE: how many source spec slots this leaf has. `SpecSlot` stays
+    /// private to the compile module. The count is the only word returned.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn source_spec_slot_count_for_test(
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+    ) -> usize {
+        leaf.source_spec_slots().count()
+    }
 }
 
 /// Re-homed jit switch_dispatch BOOT-FULL batch: copied inline-switch census.

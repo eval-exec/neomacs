@@ -209,7 +209,22 @@ impl SpecSlot {
     #[cfg(test)]
     #[doc(hidden)]
     pub fn direct_entry(&self) -> *const u8 {
+        self.direct_entry_ptr_for_test()
+    }
+
+    /// The armed direct-entry word. `direct_entry` stays `cfg(test)` for the
+    /// in-crate tests; this copy is what a test-support fence reads. The
+    /// pointer does not leave the fence.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn direct_entry_ptr_for_test(&self) -> *const u8 {
         self.direct_entry.load(Ordering::Acquire) as usize as *const u8
+    }
+
+    /// The fast-path key word, including the `KEY_*` flags. `direct_consts`
+    /// stays `pub(super)`. A test-support fence reads this copy.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn direct_consts_for_test(&self) -> u64 {
+        self.direct_consts.load(Ordering::Relaxed)
     }
 
     /// Cache `leaf` for the armed callee; `direct_consts` is the callee's

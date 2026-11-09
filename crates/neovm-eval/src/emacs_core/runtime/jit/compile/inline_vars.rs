@@ -691,26 +691,28 @@ pub(crate) enum InlineVarOp {
     Unbind = 3,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static SITES_EMITTED: [Cell<u32>; 4] = const { [const { Cell::new(0) }; 4] };
 }
 
 fn note_site(op: InlineVarOp) {
-    #[cfg(test)]
+    // The feature arm is what a core test build sees. Production without
+    // test-support does not store the census.
+    #[cfg(any(test, feature = "test-support"))]
     SITES_EMITTED.with(|s| s[op as usize].set(s[op as usize].get() + 1));
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "test-support")))]
     let _ = op;
 }
 
 /// Inline sites of OP emitted on this thread since the last reset (tests).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn inline_var_sites(op: InlineVarOp) -> u32 {
     SITES_EMITTED.with(|s| s[op as usize].get())
 }
 
 /// Forget the census (tests).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn reset_inline_var_sites() {
     SITES_EMITTED.with(|s| s.iter().for_each(|c| c.set(0)));
 }
@@ -718,7 +720,7 @@ pub(crate) fn reset_inline_var_sites() {
 /// Run F with CTX's compile environment entered: the compiles of a test
 /// that lowers bytecode directly (`lower_leaf`) instead of through the JIT
 /// cache.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn with_compile_env_for_test<R>(ctx: &Context, f: impl FnOnce() -> R) -> R {
     let _scope = CompileEnvScope::enter(ctx);
     f()

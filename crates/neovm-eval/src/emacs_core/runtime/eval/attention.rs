@@ -208,7 +208,7 @@ impl Context {
     /// Re-derive the word after a test flipped the force harness's
     /// thread-local override (`jit::compile::force_slow_spec_for_test`), or
     /// the callback census's scalar test override.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn refresh_attention_for_test(&mut self) {
         self.refresh_attention();

@@ -4820,7 +4820,7 @@ pub(crate) fn rootwin_carry_restore(snapshot: &[Option<ClifValue>]) {
 
 /// Test observer: `(stores emitted, elided)` for the last successfully defined
 /// leaf. Production headers read their compilation scope's typed snapshot.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn rootwin_counters() -> (u32, u32) {
     rootwin_census::last_completed_counts().into()
 }
@@ -4950,7 +4950,7 @@ pub(crate) fn emit_entry_count(
 /// sharing the file (a parallel test run) interleave whole records, never
 /// fragments of them: a before/after comparison can then sort the records.
 pub(crate) fn dump_clif(func: &cranelift_codegen::ir::Function, header: &str) {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(forced) = CLIF_DUMP_TEST_OVERRIDE.with(|p| p.borrow().clone()) {
         if let Some(path) = forced {
             append_clif_record(&path, func, header);
@@ -4965,7 +4965,7 @@ pub(crate) fn dump_clif(func: &cranelift_codegen::ir::Function, header: &str) {
     append_clif_record(path, func, header);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static CLIF_DUMP_TEST_OVERRIDE: std::cell::RefCell<Option<Option<String>>> =
         const { std::cell::RefCell::new(None) };
@@ -4973,7 +4973,7 @@ thread_local! {
 
 /// Point the CLIF dump at `path` (or turn it off) for compiles on this
 /// thread (tests only), without the process-global environment variable.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_clif_dump_for_test(path: Option<String>) {
     CLIF_DUMP_TEST_OVERRIDE.with(|p| *p.borrow_mut() = Some(path));
 }
@@ -6909,12 +6909,12 @@ pub(crate) fn tail_call_dead_residuals(
     {
         return None;
     }
-    #[cfg(any(test, debug_assertions))]
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
     TAIL_CALLS_UNROOTED.with(|c| c.set(c.get() + 1));
     stack_len.checked_sub(*n as usize + 1)
 }
 
-#[cfg(any(test, debug_assertions))]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 thread_local! {
     /// Tail calls lowered without rooting their dead residuals (tests).
     pub(crate) static TAIL_CALLS_UNROOTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
