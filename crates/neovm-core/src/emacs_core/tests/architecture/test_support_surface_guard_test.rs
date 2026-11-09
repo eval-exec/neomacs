@@ -7,6 +7,14 @@
 //! `all`, and not inside `not`. Pub fields of a hit struct or union are hits
 //! (lead #768). Enum variant fields, modules, and `pub use` are not hits.
 //!
+//! An inherent method is a hit only when its owner type is publicly
+//! reachable in that crate (lead #905, the AUTHORITY reachability test):
+//! a public module chain, and a `pub` struct, enum, union, type, trait,
+//! non-glob `pub use`, or an item widened by
+//! `cfg_attr(..., visibility::make(pub))`. A private or `pub(crate)` owner
+//! drops the method. Widened modules count for this name set only, so the
+//! filter removes hits and does not add any.
+//!
 //! `TEST-SUPPORT-SURFACE-BASELINE.tsv` is a shrink-only identity list (lead
 //! #782): crate, item path, kind, defining file. Git history may remove
 //! identities and may not add one. A baseline line that is now rowed, or
@@ -56,6 +64,7 @@ struct Frame {
 }
 
 fn scan_root(root: &Path) -> Vec<Hit> {
+    let reachable = reachable_type_names(root);
     let mut hits = Vec::new();
     for crate_name in CRATES {
         let lib = root.join("crates").join(crate_name).join("src/lib.rs");
@@ -69,6 +78,9 @@ fn scan_root(root: &Path) -> Vec<Hit> {
         };
         walk_file(root, crate_name, &lib, &frame, &mut hits);
     }
+    hits.retain(|hit| {
+        hit.kind != "method" || method_owner_reachable(&reachable, &hit.crate_name, &hit.path)
+    });
     hits.sort();
     hits.dedup();
     hits
@@ -442,7 +454,167 @@ fn item_attrs(item: &Item) -> &[Attribute] {
         Item::Const(item) => &item.attrs,
         Item::Static(item) => &item.attrs,
         Item::Impl(item) => &item.attrs,
+        Item::Use(item) => &item.attrs,
         _ => &[],
+    }
+}
+
+fn method_owner_reachable(
+    reachable: &BTreeSet<(String, String)>,
+    crate_name: &str,
+    path: &str,
+) -> bool {
+    let Some(owner) = path.rsplit("::").nth(1) else {
+        return false;
+    };
+    reachable.contains(&(crate_name.to_string(), owner.to_string()))
+}
+
+/// Type names another crate can name in the test-support build. A public
+/// item inside a private module is not included. `visibility::make(pub)` on
+/// a module counts here so a widened module's public type stays reachable;
+/// the hit walk does not use that widening, so no hit is added.
+fn reachable_type_names(root: &Path) -> BTreeSet<(String, String)> {
+    let mut names = BTreeSet::new();
+    for crate_name in CRATES {
+        let lib = root.join("crates").join(crate_name).join("src/lib.rs");
+        let frame = Frame {
+            segments: Vec::new(),
+            public: true,
+            gated: false,
+        };
+        collect_type_file(&lib, crate_name, &frame, &mut names);
+    }
+    names
+}
+
+fn collect_type_file(
+    file: &Path,
+    crate_name: &str,
+    frame: &Frame,
+    names: &mut BTreeSet<(String, String)>,
+) {
+    let Ok(text) = fs::read_to_string(file) else {
+        return;
+    };
+    let Ok(parsed) = syn::parse_file(&text) else {
+        return;
+    };
+    if cfg_inactive(&parsed.attrs) {
+        return;
+    }
+    collect_type_items(&parsed.items, file, crate_name, frame.public, names);
+}
+
+fn collect_type_items(
+    items: &[Item],
+    file: &Path,
+    crate_name: &str,
+    public: bool,
+    names: &mut BTreeSet<(String, String)>,
+) {
+    for item in items {
+        if cfg_inactive(item_attrs(item)) {
+            continue;
+        }
+        match item {
+            Item::Mod(module) => {
+                let child_public =
+                    public && (is_pub(&module.vis) || test_support_widened(&module.attrs));
+                if let Some((_, inner)) = &module.content {
+                    collect_type_items(inner, file, crate_name, child_public, names);
+                } else if let Some(target) = module_file(file, module) {
+                    let child = Frame {
+                        segments: Vec::new(),
+                        public: child_public,
+                        gated: false,
+                    };
+                    collect_type_file(&target, crate_name, &child, names);
+                }
+            }
+            Item::Struct(item) if public && owner_item_public(&item.vis, &item.attrs) => {
+                names.insert((crate_name.to_string(), item.ident.to_string()));
+            }
+            Item::Enum(item) if public && owner_item_public(&item.vis, &item.attrs) => {
+                names.insert((crate_name.to_string(), item.ident.to_string()));
+            }
+            Item::Union(item) if public && owner_item_public(&item.vis, &item.attrs) => {
+                names.insert((crate_name.to_string(), item.ident.to_string()));
+            }
+            Item::Type(item) if public && owner_item_public(&item.vis, &item.attrs) => {
+                names.insert((crate_name.to_string(), item.ident.to_string()));
+            }
+            Item::Trait(item) if public && owner_item_public(&item.vis, &item.attrs) => {
+                names.insert((crate_name.to_string(), item.ident.to_string()));
+            }
+            Item::Use(item) if public && owner_item_public(&item.vis, &item.attrs) => {
+                let mut leaves = Vec::new();
+                use_leaves(&item.tree, &mut Vec::new(), &mut leaves);
+                for (path, alias, glob) in leaves {
+                    if glob {
+                        continue;
+                    }
+                    if let Some(name) = alias.or_else(|| path.last().cloned()) {
+                        names.insert((crate_name.to_string(), name));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn owner_item_public(vis: &Visibility, attrs: &[Attribute]) -> bool {
+    is_pub(vis) || test_support_widened(attrs)
+}
+
+/// Item-level `#[cfg_attr(..., visibility::make(pub))]` is public in the
+/// test-support build. On a field the attribute is a silent no-op (lead
+/// #830); this helper is applied only to items.
+fn test_support_widened(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("cfg_attr")
+            && attr
+                .meta
+                .require_list()
+                .map(|list| {
+                    let text = list.tokens.to_string();
+                    text.contains("test-support")
+                        && text.contains("visibility")
+                        && text.contains("make")
+                        && text.contains("pub")
+                })
+                .unwrap_or(false)
+    })
+}
+
+fn use_leaves(
+    tree: &syn::UseTree,
+    prefix: &mut Vec<String>,
+    out: &mut Vec<(Vec<String>, Option<String>, bool)>,
+) {
+    match tree {
+        syn::UseTree::Path(path) => {
+            prefix.push(path.ident.to_string());
+            use_leaves(&path.tree, prefix, out);
+            prefix.pop();
+        }
+        syn::UseTree::Name(name) => {
+            let mut path = prefix.clone();
+            path.push(name.ident.to_string());
+            out.push((path, None, false));
+        }
+        syn::UseTree::Rename(rename) => {
+            let mut path = prefix.clone();
+            path.push(rename.ident.to_string());
+            out.push((path, Some(rename.rename.to_string()), false));
+        }
+        syn::UseTree::Glob(_) => out.push((prefix.clone(), None, true)),
+        syn::UseTree::Group(group) => {
+            for tree in &group.items {
+                use_leaves(tree, prefix, out);
+            }
+        }
     }
 }
 
@@ -904,6 +1076,21 @@ fn test_support_surface_branch_items_have_one_row() {
         }
     }
     assert!(saw_branch_item, "branch test_facts surface was not scanned");
+    for private_owner in [
+        "buffer::buffer::LiveBuffers::get",
+        "buffer::buffer::LocalVariableBindings::value",
+        "host_effect::wake::NativeEndpoint::new",
+        "host_effect::wake::NativeHealthCell::load",
+        "host_effect::wake::native_wait::BlockingNativeWait::execute",
+        "host_effect::wake::ControlPublication::epoch",
+        "error::registry_support::InFlightRegistryObserver::same_registry",
+        "tagged::gc::mutator_registration::symbol_authority::GenericProofEra::admit_plain_symbol",
+    ] {
+        assert!(
+            !hits.iter().any(|hit| hit.path == private_owner),
+            "private-owner method stayed on the surface: {private_owner}"
+        );
+    }
     assert!(
         unrowed.is_empty(),
         "unrowed branch hits:\n{}",
