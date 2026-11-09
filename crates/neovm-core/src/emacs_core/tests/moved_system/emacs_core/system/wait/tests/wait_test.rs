@@ -223,11 +223,11 @@ fn block_for_wait_request_zero_timeout_returns_poll_activity() {
 
 #[test]
 fn deadline_timeout_without_activity_suppresses_timers_after_block() {
-    let timeout = WaitTimeoutChoice {
-        duration: Duration::from_millis(20),
-        finite_deadline_timeout: true,
-        shortened_by_timer: false,
-    };
+    let timeout = neovm_system::test_support::authority::wait_timeout_choice_for_test(
+        Duration::from_millis(20),
+        true,
+        false,
+    );
     let activity = WaitBlockActivity::poll();
 
     assert!(!timeout.run_timers_after_block(&activity, false));
@@ -235,11 +235,11 @@ fn deadline_timeout_without_activity_suppresses_timers_after_block() {
 
 #[test]
 fn timer_shortened_timeout_runs_timers_after_block_before_deadline() {
-    let timeout = WaitTimeoutChoice {
-        duration: Duration::from_millis(1),
-        finite_deadline_timeout: false,
-        shortened_by_timer: true,
-    };
+    let timeout = neovm_system::test_support::authority::wait_timeout_choice_for_test(
+        Duration::from_millis(1),
+        false,
+        true,
+    );
     let activity = WaitBlockActivity::poll();
 
     assert!(timeout.run_timers_after_block(&activity, false));
@@ -248,11 +248,11 @@ fn timer_shortened_timeout_runs_timers_after_block_before_deadline() {
 
 #[test]
 fn external_activity_before_deadline_allows_timers_after_block() {
-    let timeout = WaitTimeoutChoice {
-        duration: Duration::from_millis(20),
-        finite_deadline_timeout: true,
-        shortened_by_timer: false,
-    };
+    let timeout = neovm_system::test_support::authority::wait_timeout_choice_for_test(
+        Duration::from_millis(20),
+        true,
+        false,
+    );
     let activity = WaitBlockActivity::ready_processes(vec![1]);
 
     assert!(timeout.run_timers_after_block(&activity, false));

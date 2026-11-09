@@ -6,3 +6,30 @@
 pub fn reset_new_child_command_calls_for_test() {
     crate::emacs_core::callproc::reset_new_child_command_calls_for_test();
 }
+
+/// Constructor fence for `WaitTimeoutChoice` (peer #816 write arm): every
+/// field explicit, no hidden defaults. The wait tests' struct literals switch
+/// to it; the type stays crate-private with its test-support widening.
+pub fn wait_timeout_choice_for_test(
+    duration: std::time::Duration,
+    finite_deadline_timeout: bool,
+    shortened_by_timer: bool,
+) -> crate::emacs_core::wait::WaitTimeoutChoice {
+    crate::emacs_core::wait::WaitTimeoutChoice {
+        duration,
+        finite_deadline_timeout,
+        shortened_by_timer,
+    }
+}
+
+/// Constructor fence for `TlsClientParameters` (peer #816 write arm): every
+/// field explicit. The TLS runtime test's literal switches to it.
+pub fn tls_client_parameters_for_test(
+    hostname: String,
+    trust_roots: crate::emacs_core::tls::TlsTrustRoots,
+) -> crate::emacs_core::tls::TlsClientParameters {
+    crate::emacs_core::tls::TlsClientParameters {
+        hostname,
+        trust_roots,
+    }
+}

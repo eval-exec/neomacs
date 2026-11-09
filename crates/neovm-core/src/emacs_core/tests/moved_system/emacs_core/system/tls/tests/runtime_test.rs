@@ -633,9 +633,7 @@ pub(super) mod loopback;
 
 #[test]
 fn tls_backend_verifies_the_peer_before_exposing_encrypted_output() {
-    use neovm_system::emacs_core::tls::{
-        RustlsBackend, TlsClientBackend, TlsClientParameters, TlsHandshakeProgress,
-    };
+    use neovm_system::emacs_core::tls::{RustlsBackend, TlsClientBackend, TlsHandshakeProgress};
     let ca = loopback::resources().join("ca.pem");
     for (hostname, trust_roots, accepted) in [
         (
@@ -655,10 +653,10 @@ fn tls_backend_verifies_the_peer_before_exposing_encrypted_output() {
         let socket = TcpStream::connect(("127.0.0.1", port)).unwrap();
         let mut tls = RustlsBackend::start_client(
             socket,
-            &TlsClientParameters {
-                hostname: hostname.to_owned(),
+            &neovm_system::test_support::authority::tls_client_parameters_for_test(
+                hostname.to_owned(),
                 trust_roots,
-            },
+            ),
         )
         .unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
