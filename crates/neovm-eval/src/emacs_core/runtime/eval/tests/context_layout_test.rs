@@ -9,6 +9,12 @@ use crate::emacs_core::eval::data::process_state::NativeConnectObservationSlot;
 use neovm_text::emacs_core::regex::MatchData;
 use std::mem::{offset_of, size_of};
 
+/// Offset of a private `EditRuntime` field inside `Context`.
+/// The field offset is read in neovm-edit; `edit` itself stays public.
+fn edit_field(offset_in_edit: usize) -> usize {
+    offset_of!(Context, edit) + offset_in_edit
+}
+
 #[test]
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 fn every_context_offset_is_mains() {
@@ -43,7 +49,7 @@ fn every_context_offset_is_mains() {
     let table: &[(usize, usize, &str)] = &[
         (
             2312,
-            offset_of!(Context, edit.combine_after_change_buffer),
+            edit_field(neovm_edit::test_support::offset_of_combine_after_change_buffer()),
             "combine_after_change_buffer",
         ),
         (
@@ -105,27 +111,27 @@ fn every_context_offset_is_mains() {
         (2248, offset_of!(Context, edit.buffers), "edit.buffers"),
         (
             2312,
-            offset_of!(Context, edit.combine_after_change_buffer),
+            edit_field(neovm_edit::test_support::offset_of_combine_after_change_buffer()),
             "edit.combine_after_change_buffer",
         ),
         (
             2328,
-            offset_of!(Context, edit.combine_after_change_list),
+            edit_field(neovm_edit::test_support::offset_of_combine_after_change_list()),
             "edit.combine_after_change_list",
         ),
         (
             2352,
-            offset_of!(Context, edit.last_overlay_modification_hooks),
+            edit_field(neovm_edit::test_support::offset_of_last_overlay_modification_hooks()),
             "edit.last_overlay_modification_hooks",
         ),
         (
             2376,
-            offset_of!(Context, edit.interval_insert_behind_hooks),
+            edit_field(neovm_edit::test_support::offset_of_interval_insert_behind_hooks()),
             "edit.interval_insert_behind_hooks",
         ),
         (
             2384,
-            offset_of!(Context, edit.interval_insert_in_front_hooks),
+            edit_field(neovm_edit::test_support::offset_of_interval_insert_in_front_hooks()),
             "edit.interval_insert_in_front_hooks",
         ),
         (
@@ -170,12 +176,12 @@ fn every_context_offset_is_mains() {
         ),
         (
             2352,
-            offset_of!(Context, edit.last_overlay_modification_hooks),
+            edit_field(neovm_edit::test_support::offset_of_last_overlay_modification_hooks()),
             "last_overlay_modification_hooks",
         ),
         (
             2328,
-            offset_of!(Context, edit.combine_after_change_list),
+            edit_field(neovm_edit::test_support::offset_of_combine_after_change_list()),
             "combine_after_change_list",
         ),
         (3192, offset_of!(Context, bookmarks), "bookmarks"),
@@ -356,12 +362,12 @@ fn every_context_offset_is_mains() {
         ),
         (
             2376,
-            offset_of!(Context, edit.interval_insert_behind_hooks),
+            edit_field(neovm_edit::test_support::offset_of_interval_insert_behind_hooks()),
             "interval_insert_behind_hooks",
         ),
         (
             2384,
-            offset_of!(Context, edit.interval_insert_in_front_hooks),
+            edit_field(neovm_edit::test_support::offset_of_interval_insert_in_front_hooks()),
             "interval_insert_in_front_hooks",
         ),
         (
