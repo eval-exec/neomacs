@@ -550,6 +550,7 @@ fn create_image_wrong_arity() {
 #[test]
 fn create_image_bad_type() {
     crate::test_utils::init_test_tracing();
+    let _unit = crate::test_utils::unit_context();
     let result = builtin_create_image(vec![
         Value::string("test.png"),
         Value::fixnum(42), // not a symbol
@@ -734,6 +735,7 @@ fn put_image_bad_point() {
 #[test]
 fn put_image_invalid_area() {
     crate::test_utils::init_test_tracing();
+    let _unit = crate::test_utils::unit_context();
     let spec = builtin_create_image(vec![Value::string("test.png"), Value::symbol("png")]).unwrap();
     let result = builtin_put_image(vec![
         spec,
@@ -757,6 +759,7 @@ fn put_image_invalid_area() {
 #[test]
 fn put_image_not_image() {
     crate::test_utils::init_test_tracing();
+    let _unit = crate::test_utils::unit_context();
     let result = builtin_put_image(vec![Value::fixnum(1), Value::fixnum(1)]);
     assert!(if matches!(
         result.kinded_ref(),
@@ -788,6 +791,7 @@ fn insert_image_without_position_returns_true() {
 #[test]
 fn insert_image_not_image() {
     crate::test_utils::init_test_tracing();
+    let _unit = crate::test_utils::unit_context();
     let result = builtin_insert_image(vec![Value::fixnum(42)]);
     assert!(if matches!(
         result.kinded_ref(),
@@ -805,6 +809,7 @@ fn insert_image_not_image() {
 #[test]
 fn insert_image_invalid_area() {
     crate::test_utils::init_test_tracing();
+    let _unit = crate::test_utils::unit_context();
     let spec = builtin_create_image(vec![Value::string("test.png"), Value::symbol("png")]).unwrap();
     let result = builtin_insert_image(vec![spec, Value::NIL, Value::symbol("center")]);
     assert!(if matches!(
@@ -1491,6 +1496,7 @@ fn image_type_svg() {
 #[test]
 fn image_type_not_image() {
     crate::test_utils::init_test_tracing();
+    let _unit = crate::test_utils::unit_context();
     let result = builtin_image_type(vec![Value::fixnum(42)]);
     assert!(result.is_err());
 }
@@ -1513,6 +1519,7 @@ fn image_type_from_filename_extension() {
 #[test]
 fn image_type_explicit_type() {
     crate::test_utils::init_test_tracing();
+    let _unit = crate::test_utils::unit_context();
     let result = builtin_image_type(vec![
         Value::string("no-extension"),
         Value::symbol("png"),
@@ -2274,6 +2281,7 @@ fn a_file_image_is_named_by_its_file() {
 #[test]
 fn a_data_image_is_named_by_its_princ_printed_specification() {
     crate::test_utils::init_test_tracing();
+    let _unit = crate::test_utils::unit_context();
     let spec = builtin_create_image(vec![
         Value::string("definitely not an image"),
         Value::symbol("png"),
@@ -2297,6 +2305,7 @@ fn a_data_image_is_named_by_its_princ_printed_specification() {
 #[test]
 fn image_spec_animation_policy_parses_the_neomacs_extension() {
     crate::test_utils::init_test_tracing();
+    let _unit = crate::test_utils::unit_context();
     // The domain is deliberately narrow: `t` opts in at the default
     // sampling ceiling, a positive fixnum sets the ceiling, and anything
     // else (absent, nil, zero, symbols) is the GNU-compatible static

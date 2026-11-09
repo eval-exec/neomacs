@@ -560,6 +560,7 @@ fn snapshot_fontset_registry_preserves_lisp_string_names() {
 #[test]
 fn fontset_registry_pdump_uses_lisp_string_names_and_loads_legacy_strings() {
     crate::test_utils::init_test_tracing();
+    let _unit = crate::test_utils::unit_context();
     reset_fontset_registry();
 
     let fresh_name = fontset_name_lisp_string("fontset-pdump");
@@ -658,6 +659,7 @@ fn fontset_registry_pdump_uses_lisp_string_names_and_loads_legacy_strings() {
 #[test]
 fn fontset_registry_pdump_uses_symbol_identity_for_charset_repertories() {
     crate::test_utils::init_test_tracing();
+    let _unit = crate::test_utils::unit_context();
     reset_fontset_registry();
 
     let repertory_sym = intern("unicode-bmp");

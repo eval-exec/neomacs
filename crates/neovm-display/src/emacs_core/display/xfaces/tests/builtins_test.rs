@@ -2282,6 +2282,7 @@ fn color_defined_p_known_and_unknown() {
 #[test]
 fn color_queries_validate_optional_device_arg() {
     crate::test_utils::init_test_tracing();
+    let _unit = crate::test_utils::unit_context();
     assert!(builtin_color_defined_p(vec![Value::string("red"), Value::fixnum(1)]).is_err());
     assert!(builtin_color_values(vec![Value::string("red"), Value::fixnum(1)]).is_err());
     assert!(builtin_defined_colors(vec![Value::fixnum(1)]).is_err());
@@ -2457,6 +2458,7 @@ fn face_id_assigns_dynamic_id_for_created_faces() {
 #[test]
 fn face_id_rejects_invalid_face() {
     crate::test_utils::init_test_tracing();
+    let _unit = crate::test_utils::unit_context();
     let result = builtin_face_id(vec![Value::fixnum(1)]);
     assert!(result.is_err());
 }

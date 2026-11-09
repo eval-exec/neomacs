@@ -1326,6 +1326,15 @@ mod unit_runtime {
                 .expect("the display unit hook set publishes at first use")
         })
     }
+
+    /// Build the display unit fixture Context: the canonical boot path for a
+    /// cfg(test) display test.  The hook set publishes through the one entry
+    /// (unit_runtime), so code reached from a builtin under test (the printer's
+    /// terminal-handle path, face/fontset queries) sees the real installed
+    /// lifecycle tables instead of the fail-closed expect.
+    pub(crate) fn unit_context() -> Context {
+        Context::new(unit_runtime())
+    }
     /// T7 construction census (LEAD 06:4xZ (3)): plain
     /// `Context::new(unit_runtime())` plus one trivial form must reach only
     /// absent-by-construction UNLINKED slots. A construction-reached Refused
@@ -1380,7 +1389,7 @@ mod unit_runtime {
 
 #[cfg(test)]
 #[allow(unused_imports)]
-pub(crate) use unit_runtime::unit_runtime;
+pub(crate) use unit_runtime::{unit_context, unit_runtime};
 /// Display-side T6 pin: a fresh display unit-runtime context registers exactly
 /// the shared expectation builder's sequence (the plan's host-active rows plus
 /// the event marker). This is display's half of the literal-equality gate;
