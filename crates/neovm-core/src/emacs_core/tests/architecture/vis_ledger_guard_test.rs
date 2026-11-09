@@ -4554,6 +4554,309 @@ fn expanded_mod_rows_violation(
     }
 }
 
+// ---------------------------------------------------------------------------
+// ROW -> ITEM VISIBILITY (display re-home r2, peer #981 R2).
+//
+// Forward coverage proves that every widening site has a row. The reverse
+// direction is the peer's stale-row finding: `mode_line_numeric_padding::
+// force_for_test` was a pub(crate) TLS writer with a VIS row and NO widening,
+// and the old guard accepted it because it only checked that the leaf occurred
+// in the file. This arm parses the row's defining file and requires the named
+// item to be cross-crate visible in the test-support build:
+//   * a plain `pub` declaration (production-public surface), or
+//   * a `visibility::make(pub)` attribute (possibly under cfg_attr), or
+//   * the pub arm of a cfg-split item/field pair.
+// A `pub(crate)`/private item with no such route is red: it is not
+// test-support surface and cannot be named cross-crate at all.
+//
+// Scope: this arm is enabled for the display ledger (VIS_ROW_VISIBILITY_CRATES)
+// because other provider ledgers still carry signed mod-row blanket widenings
+// and owned-instance seam rows whose classes are owned by their lanes' re-cuts.
+// The checker itself is generic; widening the enabled set is a per-lane step.
+// ---------------------------------------------------------------------------
+
+const VIS_ROW_VISIBILITY_CRATES: &[&str] = &["neovm-display"];
+
+fn meta_makes_pub(meta: &syn::Meta) -> bool {
+    match meta {
+        syn::Meta::List(list) => {
+            list.path
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "make")
+                && list.tokens.to_string().trim() == "pub"
+        }
+        _ => false,
+    }
+}
+
+fn attr_makes_public(attr: &syn::Attribute) -> bool {
+    if meta_makes_pub(&attr.meta) {
+        return true;
+    }
+    if !attr.path().is_ident("cfg_attr") {
+        return false;
+    }
+    let Ok(args) = attr.parse_args_with(
+        syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+    ) else {
+        return false;
+    };
+    args.iter().skip(1).any(meta_makes_pub)
+}
+
+fn decl_cross_crate_visible(vis: &syn::Visibility, attrs: &[syn::Attribute]) -> bool {
+    matches!(vis, syn::Visibility::Public(_)) || attrs.iter().any(attr_makes_public)
+}
+
+fn named_fields_visible<'a>(
+    fields: impl Iterator<Item = &'a syn::Field>,
+    leaf: &str,
+) -> Option<bool> {
+    let mut found = false;
+    for field in fields {
+        if field.ident.as_ref().is_some_and(|ident| ident == leaf) {
+            found = true;
+            if decl_cross_crate_visible(&field.vis, &field.attrs) {
+                return Some(true);
+            }
+        }
+    }
+    found.then_some(false)
+}
+
+fn fields_visible_in_item(item: &syn::Item, leaf: &str) -> Option<bool> {
+    match item {
+        syn::Item::Struct(item) => match &item.fields {
+            syn::Fields::Named(named) => named_fields_visible(named.named.iter(), leaf),
+            _ => None,
+        },
+        syn::Item::Union(item) => named_fields_visible(item.fields.named.iter(), leaf),
+        _ => None,
+    }
+}
+
+/// Whether the source declares `item` (qualified path spelling) and whether
+/// the declaration is cross-crate visible in the test-support build.
+/// `Ok(None)` means no matching declaration was found (other checks own that
+/// case); `Ok(Some(false))` is the stale-row condition this arm rejects.
+fn visible_decl_in_source(source: &str, item: &str, kind: &str) -> Result<Option<bool>, String> {
+    let parsed = syn::parse_file(source).map_err(|error| format!("row defining file: {error}"))?;
+    let segments: Vec<&str> = item.split("::").collect();
+    let leaf = segments.last().copied().unwrap_or(item);
+    let parent = segments
+        .get(segments.len().saturating_sub(2))
+        .copied()
+        .unwrap_or(leaf);
+
+    fn visit_use_tree(tree: &syn::UseTree, leaf: &str) -> bool {
+        match tree {
+            syn::UseTree::Path(path) => visit_use_tree(&path.tree, leaf),
+            syn::UseTree::Name(name) => name.ident == leaf,
+            syn::UseTree::Rename(rename) => rename.rename == leaf || rename.ident == leaf,
+            syn::UseTree::Glob(_) => false,
+            syn::UseTree::Group(group) => group.items.iter().any(|t| visit_use_tree(t, leaf)),
+        }
+    }
+
+    fn visit_impl_methods(
+        items: &[syn::Item],
+        leaf: &str,
+        parent: &str,
+        kind: &str,
+        found: &mut Option<bool>,
+    ) {
+        for item in items {
+            match item {
+                syn::Item::Mod(module) => {
+                    if let Some((_, inner)) = &module.content {
+                        visit_impl_methods(inner, leaf, parent, kind, found);
+                    }
+                }
+                syn::Item::Impl(item_impl) => {
+                    let owner = match &*item_impl.self_ty {
+                        syn::Type::Path(path) => path
+                            .path
+                            .segments
+                            .last()
+                            .map(|segment| segment.ident.to_string()),
+                        _ => None,
+                    };
+                    for impl_item in &item_impl.items {
+                        match impl_item {
+                            syn::ImplItem::Fn(method) if method.sig.ident == leaf => {
+                                let visible = decl_cross_crate_visible(&method.vis, &method.attrs);
+                                if owner.as_deref() == Some(parent) {
+                                    // The row's own type names the declaration.
+                                    *found = Some(visible);
+                                } else if found.is_none() {
+                                    *found = Some(visible);
+                                } else if visible && *found == Some(false) {
+                                    *found = Some(true);
+                                }
+                            }
+                            syn::ImplItem::Const(constant)
+                                if kind == "const" && constant.ident == leaf =>
+                            {
+                                let visible =
+                                    decl_cross_crate_visible(&constant.vis, &constant.attrs);
+                                *found = Some(found.unwrap_or(false) || visible);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                syn::Item::Trait(item_trait) => {
+                    // A trait method has no visibility of its own: it is part
+                    // of the trait's surface, and the trait declaration is the
+                    // item a `trait` row checks.
+                    for trait_item in &item_trait.items {
+                        if let syn::TraitItem::Fn(method) = trait_item {
+                            if method.sig.ident == leaf {
+                                *found = Some(true);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn visit_items(
+        items: &[syn::Item],
+        leaf: &str,
+        parent: &str,
+        kind: &str,
+        found: &mut Option<bool>,
+    ) {
+        for item in items {
+            match item {
+                syn::Item::Mod(module) => {
+                    if module.ident == leaf && kind == "mod" {
+                        *found = Some(
+                            found.unwrap_or(false)
+                                || decl_cross_crate_visible(&module.vis, &module.attrs),
+                        );
+                    }
+                    if let Some((_, inner)) = &module.content {
+                        visit_items(inner, leaf, parent, kind, found);
+                    }
+                }
+                syn::Item::Fn(function) if kind.ends_with("fn") && kind != "method" => {
+                    if function.sig.ident == leaf {
+                        *found = Some(
+                            found.unwrap_or(false)
+                                || decl_cross_crate_visible(&function.vis, &function.attrs),
+                        );
+                    }
+                }
+                syn::Item::Struct(data) if kind == "struct" && data.ident == leaf => {
+                    *found = Some(
+                        found.unwrap_or(false) || decl_cross_crate_visible(&data.vis, &data.attrs),
+                    );
+                }
+                syn::Item::Enum(data) if kind == "enum" && data.ident == leaf => {
+                    *found = Some(
+                        found.unwrap_or(false) || decl_cross_crate_visible(&data.vis, &data.attrs),
+                    );
+                }
+                syn::Item::Union(data) if kind == "union" && data.ident == leaf => {
+                    *found = Some(
+                        found.unwrap_or(false) || decl_cross_crate_visible(&data.vis, &data.attrs),
+                    );
+                }
+                syn::Item::Trait(data) if kind == "trait" && data.ident == leaf => {
+                    *found = Some(
+                        found.unwrap_or(false) || decl_cross_crate_visible(&data.vis, &data.attrs),
+                    );
+                }
+                syn::Item::Type(data) if kind == "type" && data.ident == leaf => {
+                    *found = Some(
+                        found.unwrap_or(false) || decl_cross_crate_visible(&data.vis, &data.attrs),
+                    );
+                }
+                syn::Item::Const(data) if kind == "const" && data.ident == leaf => {
+                    *found = Some(
+                        found.unwrap_or(false) || decl_cross_crate_visible(&data.vis, &data.attrs),
+                    );
+                }
+                syn::Item::Static(data) if kind == "static" && data.ident == leaf => {
+                    *found = Some(
+                        found.unwrap_or(false) || decl_cross_crate_visible(&data.vis, &data.attrs),
+                    );
+                }
+                syn::Item::Use(item_use)
+                    if kind == "use" && visit_use_tree(&item_use.tree, leaf) =>
+                {
+                    *found = Some(
+                        found.unwrap_or(false)
+                            || decl_cross_crate_visible(&item_use.vis, &item_use.attrs),
+                    );
+                }
+                syn::Item::Macro(item_macro)
+                    if kind == "macro"
+                        && item_macro.ident.as_ref().is_some_and(|ident| ident == leaf) =>
+                {
+                    let exported = item_macro
+                        .attrs
+                        .iter()
+                        .any(|attr| attr.path().is_ident("macro_export"));
+                    *found = Some(found.unwrap_or(false) || exported);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut found = None;
+    if kind == "field" {
+        fn visit_field_structs(
+            items: &[syn::Item],
+            parent: &str,
+            leaf: &str,
+            found: &mut Option<bool>,
+        ) {
+            for item in items {
+                match item {
+                    syn::Item::Mod(module) => {
+                        if let Some((_, inner)) = &module.content {
+                            visit_field_structs(inner, parent, leaf, found);
+                        }
+                    }
+                    syn::Item::Struct(data) if data.ident == parent => {
+                        if let Some(visible) = fields_visible_in_item(item, leaf) {
+                            *found = Some(found.unwrap_or(false) || visible);
+                        }
+                    }
+                    syn::Item::Union(data) if data.ident == parent => {
+                        if let Some(visible) = fields_visible_in_item(item, leaf) {
+                            *found = Some(found.unwrap_or(false) || visible);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        visit_field_structs(&parsed.items, parent, leaf, &mut found);
+    } else if kind == "method" {
+        visit_impl_methods(&parsed.items, leaf, parent, kind, &mut found);
+    } else {
+        visit_items(&parsed.items, leaf, parent, kind, &mut found);
+    }
+    Ok(found)
+}
+
+fn vis_row_visibility_violation(row: &VisRow, source: &str) -> Result<(), String> {
+    let what = format!("{} {} {}", row.crate_dir, row.kind, row.item);
+    match visible_decl_in_source(source, &row.item, &row.kind)? {
+        Some(false) => Err(format!(
+            "{what}: the defining file declares this item without a cross-crate route in the test-support build (no plain pub, no visibility::make(pub), no cfg-split pub arm); remove the VIS row or widen the item through the signed route (peer #981 R2)"
+        )),
+        _ => Ok(()),
+    }
+}
+
 fn validate(workspace: &Path) -> Result<(), String> {
     let architecture = workspace.join(ARCHITECTURE_DIR);
     let mut ledger_paths = Vec::new();
@@ -4608,6 +4911,13 @@ fn validate(workspace: &Path) -> Result<(), String> {
     }
     check_cfg_split_arm_identity(workspace, &all_rows)?;
     check_visibility_coverage(workspace, &all_rows)?;
+    for row in &all_rows {
+        if !VIS_ROW_VISIBILITY_CRATES.contains(&row.crate_dir.as_str()) {
+            continue;
+        }
+        let source = read(&workspace.join(&row.file))?;
+        vis_row_visibility_violation(row, &source)?;
+    }
     let auth = auth_rows(workspace);
     let vis_entries: Vec<VisEntry> = all_rows
         .iter()
@@ -9827,6 +10137,64 @@ mod disjointness_ratchet_tests {
         let error = vis_authority_disjoint_violation(dir.path(), &[clone_vis], &[clone_auth])
             .expect_err("re-added row 333 is red");
         assert!(error.contains("exactly one cross-crate route"), "{error}");
+    }
+
+    fn vis_row_for(item: &str, kind: &str) -> VisRow {
+        VisRow {
+            crate_dir: "neovm-display".to_owned(),
+            item: item.to_owned(),
+            kind: kind.to_owned(),
+            file: "crates/neovm-display/src/emacs_core/display/xdisp/mod.rs".to_owned(),
+            tests: vec![
+                "crates/neovm-core/src/emacs_core/tests/moved_display/xdisp_upper_layer_test.rs"
+                    .to_owned(),
+            ],
+        }
+    }
+
+    /// Peer #981 R2 red fixture: the historical stale row shape
+    /// (`mode_line_numeric_padding::force_for_test`) was a pub(crate) item with
+    /// a VIS row and no widening. The row-to-item arm must reject it.
+    #[test]
+    fn vis_row_visibility_arm_rejects_an_unwidened_pub_crate_item() {
+        let row = vis_row_for("emacs_core::xdisp::stale_helper", "fn");
+        let source = "pub(crate) fn stale_helper() {}\n";
+        assert_eq!(
+            visible_decl_in_source(source, &row.item, &row.kind).unwrap(),
+            Some(false)
+        );
+        let error =
+            vis_row_visibility_violation(&row, source).expect_err("stale VIS row must be red");
+        assert!(error.contains("without a cross-crate route"), "{error}");
+    }
+
+    #[test]
+    fn vis_row_visibility_arm_accepts_plain_pub_and_visibility_make() {
+        let row = vis_row_for("emacs_core::xdisp::live_helper", "fn");
+        assert!(vis_row_visibility_violation(&row, "pub fn live_helper() {}\n").is_ok());
+        let widened = "#[cfg_attr(any(test, feature = \"test-support\"), visibility::make(pub))]\npub(crate) fn live_helper() {}\n";
+        assert!(vis_row_visibility_violation(&row, widened).is_ok());
+        let feature_only =
+            "#[cfg(all(not(test), feature = \"test-support\"))]\npub fn live_helper() {}\n";
+        assert!(vis_row_visibility_violation(&row, feature_only).is_ok());
+    }
+
+    #[test]
+    fn vis_row_visibility_arm_reads_cfg_split_fields() {
+        let row = vis_row_for("emacs_core::xdisp::Thing::field", "field");
+        let split = "struct Thing {\n#[cfg(any(test, feature = \"test-support\"))]\npub field: u8,\n#[cfg(not(any(test, feature = \"test-support\")))]\nfield: u8,\n}\n";
+        assert!(vis_row_visibility_violation(&row, split).is_ok());
+        let private = "struct Thing {\nfield: u8,\n}\n";
+        assert!(vis_row_visibility_violation(&row, private).is_err());
+    }
+
+    #[test]
+    fn vis_row_visibility_arm_reads_pub_crate_use_with_widening() {
+        let row = vis_row_for("emacs_core::display::xdisp::SUBRS", "use");
+        let widened = "#[cfg_attr(any(test, feature = \"test-support\"), visibility::make(pub))]\npub(crate) use self::subrs::SUBRS;\n";
+        assert!(vis_row_visibility_violation(&row, widened).is_ok());
+        let plain = "pub(crate) use self::subrs::SUBRS;\n";
+        assert!(vis_row_visibility_violation(&row, plain).is_err());
     }
 }
 
