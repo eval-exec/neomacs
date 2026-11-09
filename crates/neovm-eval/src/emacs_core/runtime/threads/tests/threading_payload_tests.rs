@@ -238,9 +238,8 @@ fn exercise(cycles: &[Cycle]) {
                             // The typed refusal preceded AllStopped::trace. A
                             // no-op acknowledgement permits normal fixture cleanup;
                             // it performs no collection or payload traversal.
-                            stopped
-                                .acknowledge_refused_minor_for_threading_test()
-                                .unwrap();
+                            // That helper is this public trace with an empty body.
+                            stopped.trace(|_, _| Ok(())).unwrap();
                         }
                         Err(error @ MinorCollectionError::Collection(_)) => {
                             panic!("threading adapter minor failed: {error:?}");
