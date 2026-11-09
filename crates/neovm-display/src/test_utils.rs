@@ -1802,6 +1802,9 @@ pub mod xfaces_upper_layer_helpers {
             .get_mut(frame)
             .unwrap()
             .set_window_system(Some(neovm_value::value::Value::symbol("neo")));
+        eval.eval_str("(internal-set-lisp-face-attribute 'default :height 150 nil)")
+            .unwrap();
+        eval.set_display_host(Box::new(PointSizeFontHost));
         eval
     }
 }

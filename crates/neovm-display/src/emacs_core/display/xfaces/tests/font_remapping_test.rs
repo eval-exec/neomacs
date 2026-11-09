@@ -1,6 +1,5 @@
 use crate::emacs_core::display_host::FontResolveRequest;
 use crate::face::{FaceHeight, FontSlant, FontWeight, FontWidth};
-use crate::test_utils::xfaces_upper_layer_helpers::PointSizeFontHost;
 use neovm_eval::emacs_core::eval::{
     Context, DisplayHost, FontPxProbeResult, GuiFrameHostRequest, ResolvedFontMatch,
 };
@@ -9,11 +8,9 @@ use neovm_value::value::Value;
 /// Harness-bound wrapper over the shared upper-layer helper (one home:
 /// display test_utils); display tests keep their unit-runtime Context.
 fn context() -> Context {
-    let mut eval = crate::test_utils::xfaces_upper_layer_helpers::font_remapping_context(|| {
+    crate::test_utils::xfaces_upper_layer_helpers::font_remapping_context(|| {
         Context::new(crate::test_utils::unit_runtime())
-    });
-    eval.set_display_host(Box::new(PointSizeFontHost));
-    eval
+    })
 }
 
 /// Deterministic font-system adapter: point sizes at 96 DPI, no font cache.

@@ -14,7 +14,6 @@ use neovm_value::value::Value;
 #[test]
 fn font_at_named_face_remapping_uses_the_same_precedence_as_face_font() {
     let mut eval = font_remapping_context(crate::test_utils::new_context);
-    eval.set_display_host(Box::new(PointSizeFontHost));
     eval.eval_str("(internal-make-lisp-face 'issue360-font)")
         .unwrap();
     eval.eval_str("(internal-set-lisp-face-attribute 'issue360-font :height 150 nil)")
