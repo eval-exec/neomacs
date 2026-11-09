@@ -2189,10 +2189,7 @@ impl Context {
         // to set it to t") are `Qnil' in C.  The third `syms_of_xfns' name
         // this port was short of, `x-max-tooltip-size' (`10436'), is shared
         // with `nsfns.m:4245' and is seeded in the common path.
-        for name in [
-            "x-gtk-resize-child-frames",
-            "x-no-window-manager",
-        ] {
+        for name in ["x-gtk-resize-child-frames", "x-no-window-manager"] {
             obarray.define_special_variable(name, Value::NIL);
         }
         // --- src/xselect.c: syms_of_xselect ---
@@ -2214,32 +2211,32 @@ impl Context {
         // and `xsettings.el' passes it to `read'.  The other name in this file,
         // `font-use-system-font', is already declared here.
         obarray.define_special_variable("xft-settings", Value::unibyte_string(""));
-            // Mouse pointer shapes — GNU defines these in
-            // src/xfns.c (and parallel files w32fns.c, pgtkfns.c,
-            // haikufns.c, androidfns.c) as integer Lisp_Object
-            // variables that hold X cursor font codes. neomacs has
-            // no native window-system bindings for these yet, so
-            // they default to nil. Cursor audit Finding 9 in
-            // drafts/cursor-audit.md flagged the symbols as
-            // missing entirely; Lisp code that tried
-            // (setq x-pointer-shape ...) hit void-variable.
-            //
-            // `x-nontext-pointer-shape' and `x-mode-pointer-shape' are NOT in
-            // this list, and the omission is the point.  Every `DEFVAR_LISP'
-            // GNU has for either is inside
-            // `#if false /* This doesn't really do anything.  */' --
-            // `src/xfns.c:10333-10338' and `10347-10352', and the same pair in
-            // `src/androidfns.c'; `w32fns.c' and `haikufns.c' do not declare
-            // them at all.  A declaration in a dead preprocessor branch is not
-            // a declaration, so no GNU build binds the symbol and
-            // `(boundp 'x-mode-pointer-shape)' is nil under GNU 31.0.90.
-            // Seeding one here is entry 138's invented existence, reached
-            // through a case that is not about a platform: the C global
-            // `Vx_mode_pointer_shape' still exists and is still assigned
-            // `Qnil' on the line after the `#endif', which is what makes the
-            // seed look justified from the C side.  Nothing in GNU's `lisp/',
-            // this tree's `lisp/', or either editor's own sources reads
-            // either name.  (Ledger 168.)
+        // Mouse pointer shapes — GNU defines these in
+        // src/xfns.c (and parallel files w32fns.c, pgtkfns.c,
+        // haikufns.c, androidfns.c) as integer Lisp_Object
+        // variables that hold X cursor font codes. neomacs has
+        // no native window-system bindings for these yet, so
+        // they default to nil. Cursor audit Finding 9 in
+        // drafts/cursor-audit.md flagged the symbols as
+        // missing entirely; Lisp code that tried
+        // (setq x-pointer-shape ...) hit void-variable.
+        //
+        // `x-nontext-pointer-shape' and `x-mode-pointer-shape' are NOT in
+        // this list, and the omission is the point.  Every `DEFVAR_LISP'
+        // GNU has for either is inside
+        // `#if false /* This doesn't really do anything.  */' --
+        // `src/xfns.c:10333-10338' and `10347-10352', and the same pair in
+        // `src/androidfns.c'; `w32fns.c' and `haikufns.c' do not declare
+        // them at all.  A declaration in a dead preprocessor branch is not
+        // a declaration, so no GNU build binds the symbol and
+        // `(boundp 'x-mode-pointer-shape)' is nil under GNU 31.0.90.
+        // Seeding one here is entry 138's invented existence, reached
+        // through a case that is not about a platform: the C global
+        // `Vx_mode_pointer_shape' still exists and is still assigned
+        // `Qnil' on the line after the `#endif', which is what makes the
+        // seed look justified from the C side.  Nothing in GNU's `lisp/',
+        // this tree's `lisp/', or either editor's own sources reads
+        // either name.  (Ledger 168.)
         for name in [
             "x-pointer-shape",
             "x-sensitive-text-pointer-shape",

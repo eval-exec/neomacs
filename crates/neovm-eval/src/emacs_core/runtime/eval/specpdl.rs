@@ -430,9 +430,7 @@ impl Context {
                     // GNU print_unwind. The LispCleanup path runs this via
                     // `NativeUnwindAction::run`; the PureStorage replay (Rust
                     // panic containment) must not skip the restore.
-                    NativeUnwindAction::PrintBufferUnwind => {
-                        self.world_print().unwind_recorded()
-                    }
+                    NativeUnwindAction::PrintBufferUnwind => self.world_print().unwind_recorded(),
                 },
                 SpecBinding::GcRoot { .. }
                 | SpecBinding::Backtrace1 { .. }

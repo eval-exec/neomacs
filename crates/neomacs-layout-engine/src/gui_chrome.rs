@@ -669,11 +669,9 @@ fn current_tool_bar_icon_theme(eval: &Context) -> ToolBarIconTheme {
 }
 
 fn custom_tool_bar_icon_path(eval: &Context, icon_name: &str) -> Option<String> {
-    let directory = crate::neovm_bridge::visible_value_by_name(
-        eval,
-        "neomacs-toolbar-icon-directory",
-    )
-    .and_then(|value| value.as_runtime_string_owned())?;
+    let directory =
+        crate::neovm_bridge::visible_value_by_name(eval, "neomacs-toolbar-icon-directory")
+            .and_then(|value| value.as_runtime_string_owned())?;
     let directory = directory.trim();
     if directory.is_empty() {
         return None;

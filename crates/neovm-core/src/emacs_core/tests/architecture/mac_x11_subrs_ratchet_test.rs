@@ -177,9 +177,7 @@ fn x_only_gnu_subrs_carry_the_surface_class_of_their_gnu_hosts() {
     for name in x11_only_names() {
         match cfg_of(name) {
             Some("x11-only") => {}
-            Some(other) => {
-                problems.push(format!("{name}: cfg {other:?}, expected \"x11-only\""))
-            }
+            Some(other) => problems.push(format!("{name}: cfg {other:?}, expected \"x11-only\"")),
             None => problems.push(format!("{name}: missing from the canonical plan")),
         }
     }

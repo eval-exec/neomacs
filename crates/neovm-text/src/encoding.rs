@@ -8,12 +8,12 @@
 //! |---|---|---|
 //! | `NEOVM_EMACS_MULE_PREPARED` | off | Prepare emacs-mule encoder candidates once per conversion, honoring charset priority. |
 
-use crate::emacs_core::text_host::TextHost;
 use crate::emacs_core::coding::EolType;
-use std::collections::HashMap;
+use crate::emacs_core::text_host::TextHost;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{expect_args, expect_args_range, expect_min_args};
 use neovm_value::intern::{SymId, intern, resolve_sym};
+use std::collections::HashMap;
 // encoding.rs: sentinel imports removed; using emacs_char + LispString directly
 use encoding_rs::{BIG5, GBK};
 use neovm_edit::buffer::{EmacsBytePos, EmacsByteRange, LispCharPos1, TextPositionAnchor};
@@ -660,10 +660,7 @@ pub fn coding_inherit_unix_eol_type(
     coding_systems: &crate::emacs_core::coding::CodingSystemManager,
     coding_system: &str,
 ) -> String {
-    if !matches!(
-        coding_name_eol(coding_system),
-        EolType::Undecided
-    ) {
+    if !matches!(coding_name_eol(coding_system), EolType::Undecided) {
         return coding_system.to_owned();
     }
     coding_systems
@@ -3866,11 +3863,8 @@ fn run_coding_with_conversion_hook<H: TextHost>(
                     vec![Value::symbol("stringp"), args[0]],
                 )
             })?);
-        let dos_eol = if matches!(
-            coding_name_eol(&body),
-            EolType::Dos
-        ) && ctx.eol_conversion()
-            == crate::emacs_core::coding::EolConversion::Enabled
+        let dos_eol = if matches!(coding_name_eol(&body), EolType::Dos)
+            && ctx.eol_conversion() == crate::emacs_core::coding::EolConversion::Enabled
         {
             DosEolLookahead::Required
         } else {
@@ -4162,7 +4156,6 @@ fn runtime_ccl_spec<H: TextHost>(
 }
 
 fn ccl_encoding_input(source: &neovm_value::heap_types::LispString, coding: &str) -> Vec<i64> {
-
     let mut input = Vec::with_capacity(source.schars());
     for code in coding_source_codepoints(source) {
         if code == u32::from(b'\n') {
@@ -4179,7 +4172,6 @@ fn ccl_encoding_input(source: &neovm_value::heap_types::LispString, coding: &str
 }
 
 fn decode_ccl_eol(mut codes: Vec<i64>, coding: &str) -> Vec<i64> {
-
     match coding_name_eol(coding) {
         EolType::Dos => {
             let mut decoded = Vec::with_capacity(codes.len());
@@ -6025,10 +6017,7 @@ fn builtin_char_width_with_display_table(
 
 /// `(string-bytes STRING)` -> integer byte length of STRING.
 #[doc(hidden)]
-pub fn builtin_string_bytes_1<H: TextHost>(
-    _ctx: &mut H,
-    arg: Value,
-) -> EvalResult {
+pub fn builtin_string_bytes_1<H: TextHost>(_ctx: &mut H, arg: Value) -> EvalResult {
     let string = arg.as_lisp_string().ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,
@@ -6040,10 +6029,7 @@ pub fn builtin_string_bytes_1<H: TextHost>(
 
 /// `(multibyte-string-p STRING)` -> t or nil
 #[doc(hidden)]
-pub fn builtin_multibyte_string_p_1<H: TextHost>(
-    _ctx: &mut H,
-    arg: Value,
-) -> EvalResult {
+pub fn builtin_multibyte_string_p_1<H: TextHost>(_ctx: &mut H, arg: Value) -> EvalResult {
     match arg.kind() {
         ValueKind::String => Ok(Value::bool_val(arg.string_is_multibyte())),
         _ => Ok(Value::NIL),
@@ -6234,10 +6220,7 @@ pub(crate) fn builtin_decode_coding_string_with_known(
 
 /// `(char-or-string-p OBJ)` -> t or nil
 #[doc(hidden)]
-pub fn builtin_char_or_string_p_1<H: TextHost>(
-    _ctx: &mut H,
-    arg: Value,
-) -> EvalResult {
+pub fn builtin_char_or_string_p_1<H: TextHost>(_ctx: &mut H, arg: Value) -> EvalResult {
     // GNU `Fchar_or_string_p` (`src/data.c`) only accepts fixnums in
     // the valid character code range [0, MAX_CHAR_CODE = 0x3FFFFF].
     // Negative or out-of-range integers must return nil.

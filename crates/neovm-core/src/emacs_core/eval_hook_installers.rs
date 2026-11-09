@@ -195,8 +195,8 @@ pub fn new_context() -> Context {
 #[cfg(test)]
 mod concurrent_boot_tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     /// Concurrent boot of several Contexts must not conflict with itself.
     ///
@@ -318,8 +318,16 @@ mod concurrent_boot_tests {
                 .collect()
         });
 
-        let a_results: Vec<_> = results.iter().filter(|(b, _)| !*b).map(|(_, r)| *r).collect();
-        let b_results: Vec<_> = results.iter().filter(|(b, _)| *b).map(|(_, r)| *r).collect();
+        let a_results: Vec<_> = results
+            .iter()
+            .filter(|(b, _)| !*b)
+            .map(|(_, r)| *r)
+            .collect();
+        let b_results: Vec<_> = results
+            .iter()
+            .filter(|(b, _)| *b)
+            .map(|(_, r)| *r)
+            .collect();
         let a_any_ok = a_results.contains(&Ok(()));
         let b_any_ok = b_results.contains(&Ok(()));
         assert_ne!(

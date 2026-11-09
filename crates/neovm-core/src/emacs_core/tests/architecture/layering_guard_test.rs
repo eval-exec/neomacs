@@ -27,7 +27,10 @@ fn item_map() -> &'static BTreeMap<(String, String), String> {
     MAP.get_or_init(|| {
         let mut map = BTreeMap::new();
         for line in ITEM_MAP_TSV.lines() {
-            if line.is_empty() || line.starts_with("source_file") || line.starts_with("source_crate") {
+            if line.is_empty()
+                || line.starts_with("source_file")
+                || line.starts_with("source_crate")
+            {
                 continue;
             }
             let columns = line.split('\t').collect::<Vec<_>>();
@@ -1097,12 +1100,7 @@ impl ProductionWalker {
     /// Attribute the subtree under an already-upward prefix to its first
     /// upward leaf; the whole subtree is ONE site (pre-split shared-prefix
     /// rule). Every leaf is observed for the frozen-map completeness test.
-    fn record_use_subtree(
-        &mut self,
-        subtree: &syn::UseTree,
-        prefix: &mut Vec<String>,
-        span: Span,
-    ) {
+    fn record_use_subtree(&mut self, subtree: &syn::UseTree, prefix: &mut Vec<String>, span: Span) {
         let mut leaves = Vec::new();
         use_leaves(subtree, prefix, &mut leaves);
         let mut chosen: Option<(Pair, String)> = None;
@@ -2258,13 +2256,19 @@ fn layering_guard_counts_a_ref_through_the_own_facade() {
 #[test]
 fn layering_guard_bottom_crate_crate_root_module_is_not_upward() {
     let value_source = Path::new("crates/neovm-value/src/alloc/mod.rs");
-    assert!(source_crate_is_bottom(value_source), "value must derive bottom");
+    assert!(
+        source_crate_is_bottom(value_source),
+        "value must derive bottom"
+    );
     assert!(
         same_crate_bottom_module(value_source, "symbol"),
         "crate::symbol in the bottom value crate must stay internal"
     );
     let core_source = Path::new("crates/neovm-core/src/lib.rs");
-    assert!(!source_crate_is_bottom(core_source), "core must derive layered");
+    assert!(
+        !source_crate_is_bottom(core_source),
+        "core must derive layered"
+    );
     assert!(!same_crate_bottom_module(core_source, "emacs_core"));
 }
 
@@ -2330,10 +2334,7 @@ fn real_tree_walker_for(source: &str, logical: &str) -> ProductionWalker {
 }
 
 fn real_tree_walker() -> ProductionWalker {
-    real_tree_walker_for(
-        "crates/neovm-edit/src/buffer/buffer.rs",
-        "buffer",
-    )
+    real_tree_walker_for("crates/neovm-edit/src/buffer/buffer.rs", "buffer")
 }
 
 /// M-d: a mapped lateral item stays NotUpward.

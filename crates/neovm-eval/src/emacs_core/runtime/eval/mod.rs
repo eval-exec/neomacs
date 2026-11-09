@@ -7446,9 +7446,9 @@ pub(crate) use allocation_flow::AllocationFailureContextExt;
 #[cfg(feature = "test-support")]
 pub use allocation_flow::AllocationFailureContextExt;
 mod construct;
-mod ns_surface;
 mod dispatch_class;
 mod form_head_cache;
+mod ns_surface;
 mod tree_walk;
 use dispatch_class::{CallTarget, EvalDispatch, FormHead};
 pub(crate) use form_head_cache::FormHeadCache;

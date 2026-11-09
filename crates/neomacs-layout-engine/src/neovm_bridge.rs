@@ -734,11 +734,7 @@ pub(crate) fn window_parameter_by_name(window: &Window, name: &str) -> Option<Va
 /// displayed buffer current (`set_buffer_internal_1`, xdisp.c:20555): the
 /// buffer's own binding wins, else the default.  The old `vars.value` read
 /// answered the default cell only, so a buffer-local binding was invisible.
-fn effective_buffer_bool_id(
-    buffer: &Buffer,
-    vars: VariableView<'_>,
-    symbol: &WellKnown,
-) -> bool {
+fn effective_buffer_bool_id(buffer: &Buffer, vars: VariableView<'_>, symbol: &WellKnown) -> bool {
     vars.value_in_buffer(Some(buffer), symbol.id())
         .is_some_and(|value| !value.is_nil())
 }
@@ -746,10 +742,7 @@ fn effective_buffer_bool_id(
 /// GNU's display-time `mode-line-in-non-selected-windows` read
 /// (dispextern.h:1542/1583/1618 macros, evaluated while the window's buffer is
 /// current): nil means every window shows its mode line.
-fn display_mode_line_in_non_selected_windows(
-    buffer: &Buffer,
-    vars: VariableView<'_>,
-) -> bool {
+fn display_mode_line_in_non_selected_windows(buffer: &Buffer, vars: VariableView<'_>) -> bool {
     vars.value_in_buffer(Some(buffer), MODE_LINE_IN_NON_SELECTED_WINDOWS.id())
         .is_some_and(Value::is_nil)
 }
@@ -757,10 +750,7 @@ fn display_mode_line_in_non_selected_windows(
 /// GNU redisplay_window's `scroll-minibuffer-conservatively` read
 /// (xdisp.c:21092/21103) with the window's buffer current (xdisp.c:20555);
 /// void keeps the GNU default t.
-fn effective_scroll_minibuffer_conservatively(
-    buffer: &Buffer,
-    vars: VariableView<'_>,
-) -> bool {
+fn effective_scroll_minibuffer_conservatively(buffer: &Buffer, vars: VariableView<'_>) -> bool {
     vars.value_in_buffer(Some(buffer), SCROLL_MINIBUFFER_CONSERVATIVELY.id())
         .is_none_or(|value| !value.is_nil())
 }

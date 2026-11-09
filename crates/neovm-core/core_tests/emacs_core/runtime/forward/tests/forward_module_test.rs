@@ -335,8 +335,7 @@ fn defvar_bool_registration_lists_the_symbol_in_byte_boolean_vars_like_gnu() {
 #[test]
 fn byte_boolean_vars_holds_gnus_list_and_not_the_erased_ones() {
     let mut eval = ev();
-    let ns_surface =
-        neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
+    let ns_surface = neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
 
     // GNU NS has 108 listed entries: 116 minus the 15 X11-only bools plus
     // the 7 NS-only ones (nsterm.m/nsfns.m).
@@ -368,16 +367,16 @@ fn byte_boolean_vars_holds_gnus_list_and_not_the_erased_ones() {
         ("font-use-system-font", "ns-use-native-fullscreen")
     };
     assert_eq!(
-        format_eval_result(
-            &eval.eval_str(&format!("(and (memq '{surface_listed} byte-boolean-vars) t)"))
-        ),
+        format_eval_result(&eval.eval_str(&format!(
+            "(and (memq '{surface_listed} byte-boolean-vars) t)"
+        ))),
         "OK t",
         "{surface_listed} should be on byte-boolean-vars"
     );
     assert_eq!(
-        format_eval_result(
-            &eval.eval_str(&format!("(and (memq '{surface_absent} byte-boolean-vars) t)"))
-        ),
+        format_eval_result(&eval.eval_str(&format!(
+            "(and (memq '{surface_absent} byte-boolean-vars) t)"
+        ))),
         "OK nil",
         "{surface_absent} belongs to the other reference surface"
     );
@@ -409,8 +408,7 @@ fn byte_boolean_vars_holds_gnus_list_and_not_the_erased_ones() {
 #[test]
 fn byte_boolean_vars_is_in_gnus_reverse_declaration_order() {
     let mut eval = ev();
-    let ns_surface =
-        neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
+    let ns_surface = neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
 
     // The car is the last DEFVAR_BOOL the reference build's `main` reaches:
     // syms_of_xsettings ends the X arm (font-use-system-font), while the NS
@@ -500,11 +498,7 @@ fn every_gnu_defvar_bool_variable_is_bound_and_reads_back_canonically() {
         // `Context` is past that point, so it is the expected default there.
         assert_eq!(
             format_eval_result(&eval.eval_str(&format!("(default-value '{name})"))),
-            if expected_default {
-                "OK t"
-            } else {
-                "OK nil"
-            },
+            if expected_default { "OK t" } else { "OK nil" },
             "{name} default"
         );
     }
@@ -619,8 +613,7 @@ fn buffer_local_defvar_int_keeps_its_type_rule_like_gnu() {
 #[test]
 fn the_remaining_gnu_defvar_int_variables_are_declared_with_gnus_values() {
     let mut eval = ev();
-    let ns_surface =
-        neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
+    let ns_surface = neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
 
     // The two xterm.c DEFVAR_INTs belong to the X11 C surface only.
     let mut ints: Vec<(&str, &str)> = vec![
@@ -637,7 +630,10 @@ fn the_remaining_gnu_defvar_int_variables_are_declared_with_gnus_values() {
         assert_eq!(format_eval_result(&eval.eval_str(name)), expected, "{name}");
     }
     if ns_surface {
-        for name in ["x-color-cache-bucket-size", "x-mouse-click-focus-ignore-time"] {
+        for name in [
+            "x-color-cache-bucket-size",
+            "x-mouse-click-focus-ignore-time",
+        ] {
             assert_eq!(
                 format_eval_result(&eval.eval_str(&format!("(boundp '{name})"))),
                 "OK nil",
@@ -701,8 +697,7 @@ fn baud_rate_starts_at_the_c_globals_zero_like_gnu() {
 #[test]
 fn platform_variables_gnu_leaves_unbound_here_are_not_bound() {
     let mut eval = ev();
-    let ns_surface =
-        neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
+    let ns_surface = neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
 
     // These are void in every GNU reference build, whichever window system
     // the reference was configured with.
@@ -774,8 +769,7 @@ fn every_cus_start_platform_row_matches_its_declaration_claim() {
     use crate::emacs_core::cus_start_platform_vars::{CUS_START_PLATFORM_VARIABLES, GnuBinding};
 
     let mut eval = ev();
-    let ns_surface =
-        neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
+    let ns_surface = neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
 
     for var in CUS_START_PLATFORM_VARIABLES {
         let bound = format_eval_result(&eval.eval_str(&format!("(boundp '{})", var.name)));
@@ -842,8 +836,7 @@ fn every_cus_start_platform_row_matches_its_declaration_claim() {
 #[test]
 fn the_x_platform_variables_hold_gnus_defaults_and_bind_dynamically() {
     let mut eval = ev();
-    let ns_surface =
-        neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
+    let ns_surface = neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
 
     let bitmap_path = crate::emacs_core::platform_facts::X_BITMAP_FILE_PATH;
     let bitmap_printed = if bitmap_path.is_empty() {

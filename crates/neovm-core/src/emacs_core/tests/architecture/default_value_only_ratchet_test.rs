@@ -350,10 +350,7 @@ impl<'ast> syn::visit::Visit<'ast> for VariableViewBindings {
 /// `label:line: NAME.value` entries.  Fails closed: an unparseable file or a
 /// `VariableView` binding whose receiver name cannot be recovered is an
 /// error, never a silent skip.
-fn variable_view_default_reads_in_source(
-    label: &str,
-    text: &str,
-) -> Result<Vec<String>, String> {
+fn variable_view_default_reads_in_source(label: &str, text: &str) -> Result<Vec<String>, String> {
     let file = syn::parse_file(text).map_err(|error| {
         format!("{label}: the VariableView ratchet cannot parse this source: {error}")
     })?;
@@ -394,13 +391,10 @@ fn variable_view_default_reads_in_source(
 /// Count `VariableView::value` callers in a crate's production sources, for
 /// every name the source binds to the view type.  Fails closed on unreadable
 /// directories/files and on unnameable binding shapes.
-fn count_variable_view_default_reads(
-    root: &Path,
-    crate_name: &str,
-) -> Result<Vec<String>, String> {
+fn count_variable_view_default_reads(root: &Path, crate_name: &str) -> Result<Vec<String>, String> {
     fn walk(dir: &Path, out: &mut Vec<String>) -> Result<(), String> {
-        let entries = std::fs::read_dir(dir)
-            .map_err(|error| format!("{}: {error}", dir.display()))?;
+        let entries =
+            std::fs::read_dir(dir).map_err(|error| format!("{}: {error}", dir.display()))?;
         for entry in entries {
             let path = entry
                 .map_err(|error| format!("{}: {error}", dir.display()))?
@@ -507,8 +501,7 @@ fn read(variables: Option<VariableView<'_>>) {
     let _ = variables?.value(sym);
 }
 "#;
-        let sites =
-            variable_view_default_reads_in_source("planted.rs", source).expect("scan");
+        let sites = variable_view_default_reads_in_source("planted.rs", source).expect("scan");
         assert_eq!(sites, vec!["planted.rs:4: variables.value".to_string()]);
     }
 
@@ -553,8 +546,7 @@ fn read(eval: &Context, widget: &Widget) {
     let _ = other.value(sym);
 }
 "#;
-        let sites =
-            variable_view_default_reads_in_source("green_chain.rs", source).expect("scan");
+        let sites = variable_view_default_reads_in_source("green_chain.rs", source).expect("scan");
         assert!(sites.is_empty(), "{sites:?}");
     }
 
@@ -567,8 +559,7 @@ fn read(vars: VariableView<'_>, other: &Widget) {
     let _ = other.value(sym);
 }
 "#;
-        let sites =
-            variable_view_default_reads_in_source("green.rs", source).expect("scan");
+        let sites = variable_view_default_reads_in_source("green.rs", source).expect("scan");
         assert!(sites.is_empty(), "{sites:?}");
     }
 

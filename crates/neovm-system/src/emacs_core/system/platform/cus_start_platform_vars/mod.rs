@@ -226,21 +226,36 @@ pub static CUS_START_PLATFORM_VARIABLES: &[CusStartPlatformVariable] = &[
         "xwidget.c, a feature name, never a DEFVAR",
     ),
     // src/nsterm.m, src/nsfns.m -- `(featurep 'ns)'.
-    unbound("ns-control-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
-    unbound("ns-right-control-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
-    unbound("ns-command-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
-    unbound("ns-right-command-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
-    unbound("ns-alternate-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
-    unbound("ns-right-alternate-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
-    unbound("ns-function-modifier", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
-    unbound("ns-antialias-text", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
-    unbound("ns-auto-hide-menu-bar", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
-    unbound("ns-confirm-quit", "nsfns.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
-    unbound("ns-use-native-fullscreen", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
-    unbound("ns-use-fullscreen-animation", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
-    unbound("ns-use-srgb-colorspace", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
-    unbound("ns-scroll-event-delta-factor", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
-    unbound("ns-click-through", "nsterm.m, HAVE_NS").ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-control-modifier", "nsterm.m, HAVE_NS")
+        .ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-right-control-modifier", "nsterm.m, HAVE_NS")
+        .ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-command-modifier", "nsterm.m, HAVE_NS")
+        .ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-right-command-modifier", "nsterm.m, HAVE_NS")
+        .ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-alternate-modifier", "nsterm.m, HAVE_NS")
+        .ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-right-alternate-modifier", "nsterm.m, HAVE_NS")
+        .ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-function-modifier", "nsterm.m, HAVE_NS")
+        .ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-antialias-text", "nsterm.m, HAVE_NS")
+        .ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-auto-hide-menu-bar", "nsterm.m, HAVE_NS")
+        .ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-confirm-quit", "nsfns.m, HAVE_NS")
+        .ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-use-native-fullscreen", "nsterm.m, HAVE_NS")
+        .ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-use-fullscreen-animation", "nsterm.m, HAVE_NS")
+        .ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-use-srgb-colorspace", "nsterm.m, HAVE_NS")
+        .ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-scroll-event-delta-factor", "nsterm.m, HAVE_NS")
+        .ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
+    unbound("ns-click-through", "nsterm.m, HAVE_NS")
+        .ns_binding(GnuBinding::DeclaredInC { site: NS_C_SITE }),
     // src/w32*.c -- `(eq system-type 'windows-nt)'.
     unbound("w32-follow-system-dark-mode", "w32fns.c, HAVE_NTGUI"),
     // src/msdos.c, src/dosfns.c -- `(eq system-type 'ms-dos)'.

@@ -3332,7 +3332,10 @@ fn frame_host_title(eval: &mut Context, frame_id: FrameId) -> LispString {
     // (xdisp.c:14163-14171), so the buffer's binding and a live `let` decide.
     let format = match buffer_id {
         Some(buffer_id) => eval
-            .variable_value_in_buffer(eval.buffer_manager().get(buffer_id), intern("frame-title-format"))
+            .variable_value_in_buffer(
+                eval.buffer_manager().get(buffer_id),
+                intern("frame-title-format"),
+            )
             .unwrap_or(Value::NIL),
         None => eval
             .builtin_var_value_by_name("frame-title-format")

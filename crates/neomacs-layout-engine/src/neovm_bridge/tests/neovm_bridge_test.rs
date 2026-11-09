@@ -238,11 +238,14 @@ fn collect_layout_params_reads_nobreak_char_display_global() {
 #[test]
 fn collect_layout_params_reads_the_buffers_local_nobreak_char_display() {
     let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let buf_id = evaluator.buffer_manager_mut().create_buffer("*nobreak-local*");
+    let buf_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("*nobreak-local*");
     evaluator.buffer_manager_mut().set_current(buf_id);
-    let frame_id = evaluator
-        .frame_manager_mut()
-        .create_frame("nobreak-local-frame", 800, 600, buf_id);
+    let frame_id =
+        evaluator
+            .frame_manager_mut()
+            .create_frame("nobreak-local-frame", 800, 600, buf_id);
     evaluator.store_variable_by_name("nobreak-char-display", Value::T);
     evaluator
         .eval_str("(set (make-local-variable 'nobreak-char-display) nil)")
@@ -262,11 +265,14 @@ fn collect_layout_params_reads_the_buffers_local_nobreak_char_display() {
 #[test]
 fn collect_layout_params_honours_a_live_let_on_nobreak_char_display() {
     let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let buf_id = evaluator.buffer_manager_mut().create_buffer("*nobreak-let*");
+    let buf_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("*nobreak-let*");
     evaluator.buffer_manager_mut().set_current(buf_id);
-    let frame_id = evaluator
-        .frame_manager_mut()
-        .create_frame("nobreak-let-frame", 800, 600, buf_id);
+    let frame_id =
+        evaluator
+            .frame_manager_mut()
+            .create_frame("nobreak-let-frame", 800, 600, buf_id);
     evaluator.store_variable_by_name("nobreak-char-display", Value::T);
     evaluator
         .eval_str("(make-local-variable 'nobreak-char-display)")
@@ -293,7 +299,9 @@ fn collect_layout_params_honours_a_live_let_on_nobreak_char_display() {
 #[test]
 fn layout_var_capture_reads_the_buffers_local_alias_alist() {
     let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let buf_id = evaluator.buffer_manager_mut().create_buffer("*alias-local*");
+    let buf_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("*alias-local*");
     evaluator.buffer_manager_mut().set_current(buf_id);
     let expected = evaluator
         .eval_str(
@@ -302,8 +310,7 @@ fn layout_var_capture_reads_the_buffers_local_alias_alist() {
         )
         .expect("buffer-local alias alist");
     let buffer = evaluator.buffer_manager().get(buf_id).expect("buffer");
-    let snapshot =
-        LayoutBufferSnapshot::from_buffer_with_obarray(buffer, evaluator.variables());
+    let snapshot = LayoutBufferSnapshot::from_buffer_with_obarray(buffer, evaluator.variables());
     assert_eq!(
         snapshot.layout_buffer_local_value(LayoutVar::CharPropertyAliasAlist),
         Some(expected)
@@ -1518,12 +1525,8 @@ fn buffer_local_scroll_minibuffer_conservatively_wins_over_the_global() {
 #[test]
 fn buffer_local_composition_function_table_applies_only_in_its_buffer() {
     let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let a_id = evaluator
-        .buffer_manager_mut()
-        .create_buffer("comp-local-a");
-    let b_id = evaluator
-        .buffer_manager_mut()
-        .create_buffer("comp-local-b");
+    let a_id = evaluator.buffer_manager_mut().create_buffer("comp-local-a");
+    let b_id = evaluator.buffer_manager_mut().create_buffer("comp-local-b");
     // The global table has a rule at ?x; each local buffer installs its own
     // table (a distinct char-table object) with a different rule.
     evaluator.buffer_manager_mut().set_current(a_id);
@@ -1551,9 +1554,7 @@ fn buffer_local_composition_function_table_applies_only_in_its_buffer() {
     let function = evaluator
         .eval_str("'auto-compose-chars")
         .expect("auto-compose-chars symbol");
-    let global_id = evaluator
-        .buffer_manager_mut()
-        .create_buffer("comp-global");
+    let global_id = evaluator.buffer_manager_mut().create_buffer("comp-global");
     let table_for = |buffer_id| {
         let buffer = evaluator.buffer_manager().get(buffer_id).expect("buffer");
         super::buffer_snapshot::active_composition_table(

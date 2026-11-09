@@ -1156,8 +1156,8 @@ fn print_value_bytes_in_context_inner(
     // A caller may pre-fill the accumulator before rendering (GNU Fprint
     // writes its leading newline there first). In that case the cursor is not
     // at 0 and the no-copy install path must not run.
-    let world_sink_prefilled = active
-        .is_some_and(|active| scope.context.world_print().pending_len(active) > 0);
+    let world_sink_prefilled =
+        active.is_some_and(|active| scope.context.world_print().pending_len(active) > 0);
     let mut state = PrintState {
         options,
         circle: (options.print_circle && number_table.is_none()).then_some(&mut circle),
@@ -1179,7 +1179,9 @@ fn print_value_bytes_in_context_inner(
     let flushed = state.world_sink_flushed.take();
     let touched = state.world_sink_touched;
     drop(state);
-    if failure.is_none() && let Some(active) = active {
+    if failure.is_none()
+        && let Some(active) = active
+    {
         if touched {
             if let Some(already) = flushed
                 && output.len() > already
@@ -1992,7 +1994,9 @@ fn flush_print_output_to_accumulator(
     let active = active.expect("world sink without a prepare token");
     *touched = true;
     if out.len() > *already {
-        context.world_print().append(active, out.bytes_from(*already));
+        context
+            .world_print()
+            .append(active, out.bytes_from(*already));
         *already = out.len();
     }
 }

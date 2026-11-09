@@ -39,7 +39,10 @@ fn ns_surface_binds_ns_bools_and_omits_x11_bools() {
         assert_eq!(surface_rows(), 139);
     });
     // The override is scoped: the host surface is back afterwards.
-    assert_eq!(surface_rows(), if cfg!(target_os = "macos") { 139 } else { 147 });
+    assert_eq!(
+        surface_rows(),
+        if cfg!(target_os = "macos") { 139 } else { 147 }
+    );
 }
 
 #[test]
@@ -148,7 +151,10 @@ fn ns_surface_binds_the_ns_c_family_and_omits_the_x11_c_family() {
             "OK t"
         );
         assert_eq!(
-            value(&mut eval, "(symbol-value 'x-use-underline-position-properties)"),
+            value(
+                &mut eval,
+                "(symbol-value 'x-use-underline-position-properties)"
+            ),
             "OK nil"
         );
     });
@@ -209,7 +215,10 @@ fn x11_surface_binds_the_x11_c_family_and_omits_the_ns_c_family() {
             "OK gtk"
         );
         assert_eq!(
-            value(&mut eval, "(symbol-value 'x-use-underline-position-properties)"),
+            value(
+                &mut eval,
+                "(symbol-value 'x-use-underline-position-properties)"
+            ),
             "OK t"
         );
     });

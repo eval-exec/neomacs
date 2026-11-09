@@ -208,11 +208,7 @@ impl WorldPrintAccess<'_> {
 
     /// GNU `print_buffer`'s byte append.
     #[inline]
-    pub(crate) fn append(
-        &mut self,
-        active: super::print_buffer::PrintActive,
-        bytes: &[u8],
-    ) {
+    pub(crate) fn append(&mut self, active: super::print_buffer::PrintActive, bytes: &[u8]) {
         self.context
             .global_state_mut()
             .print_state

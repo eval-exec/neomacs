@@ -90,8 +90,7 @@ fn the_obarray_agrees_with_every_row() {
         "the scan did not answer for every row: {result}"
     );
 
-    let ns_surface =
-        neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
+    let ns_surface = neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns";
     let mut wrong = Vec::new();
     for (var, bit) in PROVIDE_COUPLED_VARIABLES.iter().zip(bits.chars()) {
         let bound = bit == 't';
@@ -182,7 +181,8 @@ fn no_toolkit_coupled_variable_is_bound_and_the_gtk_named_survivors_are_gnus() {
     // (two DEFVAR_BOOL families plus the xterm.c/xfns.c block) and the alias
     // comes from term/x-win.el, which only the X dump loads.  GNU's NS build
     // binds none of them either.
-    let expected = if neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns" {
+    let expected = if neovm_eval::test_support::authority::platform_surface_name_for_test() == "ns"
+    {
         // An empty `mapatoms` result prints as nil, not ().
         "OK ((nil nil nil nil) nil)"
     } else {

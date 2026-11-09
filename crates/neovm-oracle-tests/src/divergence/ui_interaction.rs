@@ -176,8 +176,7 @@ fn x_file_dialog_gui_arm_does_not_recurse_through_read_file_name() {
                     (display-graphic-p))))
             ((symbol-function 'completing-read) (lambda (&rest _) "/tmp/picked")))
     (x-file-dialog "p" "/tmp")))"#;
-    let outcome =
-        crate::common::run_neovm_eval(form).expect("Neomacs evaluates the mocked dialog");
+    let outcome = crate::common::run_neovm_eval(form).expect("Neomacs evaluates the mocked dialog");
     assert!(
         outcome.contains("/tmp/picked"),
         "the inner read-file-name must reach completing-read instead of \

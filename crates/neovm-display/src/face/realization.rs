@@ -5,8 +5,8 @@
 //! | `NEOVM_FACE_REALIZATION_LIFECYCLE` | on | GNU basic/demand realization through Lisp TTY color callbacks. Set to `0` for the previous path. |
 
 use super::{Face, FaceTable};
-use crate::window::DisplayFrameExt;
 use crate::emacs_core::xfaces::realization::RecordedDefinitionsRefresh;
+use crate::window::DisplayFrameExt;
 use enum_map::EnumMap;
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::tagged::transport::SharedRoot;

@@ -231,7 +231,10 @@ pub(super) fn active_composition_table(
     // buffer-local binding (set by ligature/auto-composition setups) applies
     // to that buffer only; the old `vars.value` read answered the default
     // cell for every buffer.
-    vars.value_in_buffer(Some(buffer), crate::fixed_symbols::COMPOSITION_FUNCTION_TABLE.id())
+    vars.value_in_buffer(
+        Some(buffer),
+        crate::fixed_symbols::COMPOSITION_FUNCTION_TABLE.id(),
+    )
 }
 
 fn capture_layout_category_symbol_plists(

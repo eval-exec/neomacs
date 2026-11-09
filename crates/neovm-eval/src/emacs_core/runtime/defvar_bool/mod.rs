@@ -50,8 +50,8 @@
 //! variable on one line, and makes the two counts checkable in a test rather
 //! than re-derived per site.
 
+use crate::platform_surface::{PlatformSurface, SurfaceSet, platform_surface};
 pub use neovm_value::symbol::ByteBooleanVars;
-use crate::platform_surface::{platform_surface, PlatformSurface, SurfaceSet};
 use neovm_value::symbol::Obarray;
 
 /// One GNU `DEFVAR_BOOL' declaration.
@@ -327,34 +327,34 @@ pub static GNU_BOOL_VARIABLES: &[GnuBoolVariable] = &[
     V::listed("query-all-font-backends", false),   // font.c:6046
     V::listed("cross-disabled-images", false),     // image.c:13259
     V::listed("x-use-underline-position-properties", true).ns_initial(false), // xterm.c:32667; nsterm.m:11704 declares it 0
-    V::listed("x-underline-at-descent-line", false), // xterm.c:32678
-    V::listed("x-mouse-click-focus-ignore-position", false).x11_only(), // xterm.c:32689
-    V::listed("x-frame-normalize-before-maximize", false).x11_only(), // xterm.c:32812
-    V::listed("x-gtk-use-window-move", true).x11_only(),      // xterm.c:32825
-    V::listed("x-gtk-use-native-input", false).x11_only(),    // xterm.c:32839
-    V::listed("x-input-grab-touch-events", true).x11_only(),  // xterm.c:32860
-    V::listed("x-dnd-fix-motif-leave", true).x11_only(),      // xterm.c:32870
-    V::listed("x-dnd-disable-motif-drag", false).x11_only(),  // xterm.c:32878
-    V::listed("x-dnd-preserve-selection-data", false).x11_only(), // xterm.c:32947
-    V::listed("x-dnd-disable-motif-protocol", false).x11_only(), // xterm.c:32954
-    V::listed("x-dnd-use-unsupported-drop", true).x11_only(), // xterm.c:32960
-    V::listed("x-fast-protocol-requests", false).x11_only(),  // xterm.c:32967
-    V::listed("x-gtk-use-old-file-dialog", false).x11_only(), // xfns.c:10460
-    V::listed("x-gtk-show-hidden-files", false).x11_only(),   // xfns.c:10467
-    V::listed("x-gtk-file-dialog-help-text", true).x11_only(), // xfns.c:10473
+    V::listed("x-underline-at-descent-line", false),                          // xterm.c:32678
+    V::listed("x-mouse-click-focus-ignore-position", false).x11_only(),       // xterm.c:32689
+    V::listed("x-frame-normalize-before-maximize", false).x11_only(),         // xterm.c:32812
+    V::listed("x-gtk-use-window-move", true).x11_only(),                      // xterm.c:32825
+    V::listed("x-gtk-use-native-input", false).x11_only(),                    // xterm.c:32839
+    V::listed("x-input-grab-touch-events", true).x11_only(),                  // xterm.c:32860
+    V::listed("x-dnd-fix-motif-leave", true).x11_only(),                      // xterm.c:32870
+    V::listed("x-dnd-disable-motif-drag", false).x11_only(),                  // xterm.c:32878
+    V::listed("x-dnd-preserve-selection-data", false).x11_only(),             // xterm.c:32947
+    V::listed("x-dnd-disable-motif-protocol", false).x11_only(),              // xterm.c:32954
+    V::listed("x-dnd-use-unsupported-drop", true).x11_only(),                 // xterm.c:32960
+    V::listed("x-fast-protocol-requests", false).x11_only(),                  // xterm.c:32967
+    V::listed("x-gtk-use-old-file-dialog", false).x11_only(),                 // xfns.c:10460
+    V::listed("x-gtk-show-hidden-files", false).x11_only(),                   // xfns.c:10467
+    V::listed("x-gtk-file-dialog-help-text", true).x11_only(),                // xfns.c:10473
     // ---- NS only (nsterm.m/nsfns.m); GNU's X11 build leaves these unbound.
     // Registered before use-default-font-for-symbols so that, on an NS build,
     // the last registered row is still fontset.c's (the appkit arm runs
     // syms_of_fontset last) and byte-boolean-vars' car matches GNU NS.
     V::listed("ns-use-native-fullscreen", true).ns_only(), // nsterm.m:11662
     V::listed("ns-use-fullscreen-animation", false).ns_only(), // nsterm.m:11670
-    V::listed("ns-use-srgb-colorspace", true).ns_only(),       // nsterm.m:11676
-    V::listed("ns-use-mwheel-acceleration", true).ns_only(),   // nsterm.m:11682
-    V::listed("ns-use-mwheel-momentum", true).ns_only(),       // nsterm.m:11694
-    V::listed("ns-click-through", true).ns_only(),             // nsterm.m:11720
-    V::listed("ns-use-proxy-icon", true).ns_only(),            // nsfns.m:4235
-    V::listed("use-default-font-for-symbols", true), // fontset.c:2206
-    V::listed("font-use-system-font", false).x11_only(),      // xsettings.c:1395
+    V::listed("ns-use-srgb-colorspace", true).ns_only(),   // nsterm.m:11676
+    V::listed("ns-use-mwheel-acceleration", true).ns_only(), // nsterm.m:11682
+    V::listed("ns-use-mwheel-momentum", true).ns_only(),   // nsterm.m:11694
+    V::listed("ns-click-through", true).ns_only(),         // nsterm.m:11720
+    V::listed("ns-use-proxy-icon", true).ns_only(),        // nsfns.m:4235
+    V::listed("use-default-font-for-symbols", true),       // fontset.c:2206
+    V::listed("font-use-system-font", false).x11_only(),   // xsettings.c:1395
 ];
 
 /// Install every row as a GNU `DEFVAR_BOOL' variable.

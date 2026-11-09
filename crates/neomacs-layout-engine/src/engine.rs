@@ -2031,7 +2031,12 @@ impl LayoutEngine {
         self.load_retained_frame(frame_id);
         let arrow_buffer = purpose
             .query_window()
-            .and_then(|window_id| evaluator.frame_manager().get(frame_id)?.find_window(window_id))
+            .and_then(|window_id| {
+                evaluator
+                    .frame_manager()
+                    .get(frame_id)?
+                    .find_window(window_id)
+            })
             .and_then(|window| window.buffer_id());
         if !scroll_coverage::inactive_overlay_arrows(evaluator, arrow_buffer) {
             self.scroll_coverage.cancel();

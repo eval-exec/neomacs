@@ -82,7 +82,7 @@ pub mod authority {
     /// compose). Production never reads a runtime override; the override
     /// module exists only under `cfg(any(test, feature = "test-support"))`.
     pub fn with_platform_surface_for_test(surface: &str, f: &mut dyn FnMut()) {
-        use crate::platform_surface::{test_override, PlatformSurface};
+        use crate::platform_surface::{PlatformSurface, test_override};
         let surface = match surface {
             "x11" => PlatformSurface::X11,
             "ns" => PlatformSurface::Ns,
@@ -114,9 +114,7 @@ pub mod authority {
     /// bytes. The accumulator, its token and its operations stay `pub(crate)`;
     /// this fixture is the one cross-crate route, called only by the
     /// print-accumulator pin in neovm-core's moved print tests.
-    pub fn print_accumulator_stale_token_for_test(
-        context: &mut crate::emacs_core::eval::Context,
-    ) {
+    pub fn print_accumulator_stale_token_for_test(context: &mut crate::emacs_core::eval::Context) {
         let active = context.world_print().prepare();
         context.world_print().unwind(active);
         // A stale `Copy` token after the unwind: post-fix the accumulator is
@@ -128,9 +126,7 @@ pub mod authority {
     /// prepare used while a NEWER print is Active must panic. The state's top
     /// is an (epoch, depth) pair; "something is active" alone would let this
     /// stale token corrupt the newer print's cursor.
-    pub fn print_accumulator_aba_stale_for_test(
-        context: &mut crate::emacs_core::eval::Context,
-    ) {
+    pub fn print_accumulator_aba_stale_for_test(context: &mut crate::emacs_core::eval::Context) {
         let first = context.world_print().prepare();
         context.world_print().unwind(first);
         let _second = context.world_print().prepare();

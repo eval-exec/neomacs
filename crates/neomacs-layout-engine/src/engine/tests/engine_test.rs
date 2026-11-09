@@ -33686,9 +33686,9 @@ fn tty_overlay_arrow_reads_the_window_buffers_local_string() {
     )
     .expect("buffer-local overlay-arrow-string");
 
-    let frame_id = eval
-        .frame_manager_mut()
-        .create_frame("tty-arrow-local-string", 400, 200, buf_id);
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("tty-arrow-local-string", 400, 200, buf_id);
     let selected_window = eval
         .frame_manager()
         .get(frame_id)
