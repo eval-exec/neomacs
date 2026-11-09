@@ -301,10 +301,7 @@ impl OrderedTreeQuery<IntervalRecord> for IntervalBPlusQuery {
 #[derive(Clone, Debug)]
 #[doc(hidden)]
 pub struct IntervalBPlusTree {
-    #[cfg(feature = "test-support")]
-    pub records: OrderedShiftTree<IntervalRecord>,
-    #[cfg(not(feature = "test-support"))]
-    pub(crate) records: OrderedShiftTree<IntervalRecord>,
+    records: OrderedShiftTree<IntervalRecord>,
     next_attachment_order: u64,
 }
 

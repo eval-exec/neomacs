@@ -26,7 +26,7 @@ fn cl2_local_start_moves_do_not_materialize_positions_during_mirror_descent() {
     index
         .intervals
         .read()
-        .records
+        .records()
         .reset_identity_position_resolution_count();
 
     let mut previous = original;
@@ -44,7 +44,7 @@ fn cl2_local_start_moves_do_not_materialize_positions_during_mirror_descent() {
     let resolutions = index
         .intervals
         .read()
-        .records
+        .records()
         .identity_position_resolution_count();
     assert!(
         resolutions <= moves * 2,
@@ -183,7 +183,7 @@ fn cl2_local_moves_update_ordered_record_without_membership_mutations() {
     index
         .intervals
         .read()
-        .records
+        .records()
         .reset_membership_mutation_count();
 
     let moves = 64;
@@ -214,7 +214,7 @@ fn cl2_local_moves_update_ordered_record_without_membership_mutations() {
         initial_attachment + moves
     );
     assert_eq!(
-        intervals.records.membership_mutation_count(),
+        intervals.records().membership_mutation_count(),
         0,
         "genuine neighbor-preserving moves should update the occupied record \
          rather than remove/reinsert B+ membership"
@@ -252,7 +252,7 @@ fn cl2_local_move_attempts_consume_one_attachment_order_and_keep_equal_start_ord
         let previous_record = index
             .intervals
             .read()
-            .records
+            .records()
             .record(OverlayIdentity::of(moving))
             .unwrap();
         let next_attachment = index.intervals.read().next_attachment_order_for_test();
@@ -261,7 +261,7 @@ fn cl2_local_move_attempts_consume_one_attachment_order_and_keep_equal_start_ord
         let record = index
             .intervals
             .read()
-            .records
+            .records()
             .record(OverlayIdentity::of(moving))
             .unwrap();
         if previous.start() != next.start() {
@@ -327,7 +327,7 @@ fn cl2_local_moves_keep_leaf_edges_and_reject_crossing_neighbors() {
     index
         .intervals
         .read()
-        .records
+        .records()
         .reset_membership_mutation_count();
 
     // Balanced construction puts 25 records in the first leaf and 24 in
@@ -342,7 +342,7 @@ fn cl2_local_moves_keep_leaf_edges_and_reject_crossing_neighbors() {
         index.assert_invariants();
     }
     assert_eq!(
-        index.intervals.read().records.membership_mutation_count(),
+        index.intervals.read().records().membership_mutation_count(),
         0
     );
 
@@ -354,7 +354,7 @@ fn cl2_local_moves_keep_leaf_edges_and_reject_crossing_neighbors() {
     assert_eq!(index.move_to(moving, equal), Some(previous));
     assert_eq!(index.overlays_at(equal.start())[0].bits(), moving.bits());
     assert_eq!(
-        index.intervals.read().records.membership_mutation_count(),
+        index.intervals.read().records().membership_mutation_count(),
         0
     );
     index.assert_invariants();
@@ -364,7 +364,7 @@ fn cl2_local_moves_keep_leaf_edges_and_reject_crossing_neighbors() {
     let crossing = range(next.start().get() + 1, next.end().get() + 1);
     assert_eq!(index.move_to(moving, crossing), Some(equal));
     assert_eq!(
-        index.intervals.read().records.membership_mutation_count(),
+        index.intervals.read().records().membership_mutation_count(),
         2
     );
     index.assert_invariants();

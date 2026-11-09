@@ -19,12 +19,12 @@ fn gde_review_erase_overlays_restore_each_record_once() {
     index
         .intervals
         .read()
-        .records
+        .records()
         .reset_membership_mutation_count();
     index.adjust_for_text_edit(OverlayTextEdit::Delete {
         range: range(0, 514),
     });
-    let mutations = index.intervals.read().records.membership_mutation_count();
+    let mutations = index.intervals.read().records().membership_mutation_count();
     assert_eq!(
         mutations,
         257 * 2,
@@ -50,12 +50,12 @@ fn gde_review_middle_delete_preserves_suffix_boundary_without_second_restore() {
     index
         .intervals
         .read()
-        .records
+        .records()
         .reset_membership_mutation_count();
     index.adjust_for_text_edit(OverlayTextEdit::Delete {
         range: range(128, 384),
     });
-    let mutations = index.intervals.read().records.membership_mutation_count();
+    let mutations = index.intervals.read().records().membership_mutation_count();
     assert_eq!(
         mutations,
         129 * 2,
