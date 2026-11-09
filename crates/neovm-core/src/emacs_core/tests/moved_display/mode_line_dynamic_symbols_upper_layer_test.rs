@@ -27,7 +27,7 @@ fn mode_line_symbol_object_risk_property_matches_gnu() {
         .expect("GNU probe value");
     ctx.obarray_mut().set_symbol_value_id(canonical, value);
     ctx.obarray_mut().set_symbol_value_id(actual, value);
-    let risk = neovm_display::test_support::authority::mode_line_risky_local_variable_id_for_test();
+    let risk = crate::emacs_core::xdisp::risky_local_variable_symbol_id();
     ctx.obarray_mut()
         .put_property_id(actual, risk, Value::T)
         .expect("valid risk plist");

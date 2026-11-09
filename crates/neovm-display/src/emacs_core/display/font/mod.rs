@@ -275,6 +275,25 @@ pub fn capture_alternative_font_families(
     Ok(state.capture(family))
 }
 
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+fn alternative_font_registry_alist_snapshot_for_test() -> Vec<(
+    neovm_value::heap_types::LispString,
+    Vec<neovm_value::heap_types::LispString>,
+)> {
+    alternative_font_registry_alist()
+        .read()
+        .unwrap()
+        .iter()
+        .map(|(name, aliases)| {
+            (
+                name.to_lisp_string(),
+                aliases.iter().map(|alias| alias.to_lisp_string()).collect(),
+            )
+        })
+        .collect()
+}
+
 pub(crate) fn alternative_font_registry_alist() -> &'static RwLock<AlternativeFontRegistryAlist> {
     ALTERNATIVE_FONT_REGISTRY_ALIST.get_or_init(|| RwLock::new(Vec::new()))
 }

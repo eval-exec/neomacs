@@ -293,29 +293,6 @@ pub fn replace_mode_line_prop_borrow_for_test(enabled: Option<bool>) -> Option<b
     crate::emacs_core::xdisp::replace_mode_line_prop_borrow_for_test(enabled)
 }
 
-/// Snapshot the alternative-font registry without exposing the lock (moved gc test).
-pub fn alternative_font_registry_alist_for_test() -> Vec<(
-    neovm_value::heap_types::LispString,
-    Vec<neovm_value::heap_types::LispString>,
-)> {
-    crate::emacs_core::font::alternative_font_registry_alist()
-        .read()
-        .unwrap()
-        .iter()
-        .map(|(name, aliases)| {
-            (
-                name.to_lisp_string(),
-                aliases.iter().map(|alias| alias.to_lisp_string()).collect(),
-            )
-        })
-        .collect()
-}
-
-/// GNU `risky-local-variable` symbol id used by the moved dynamic-symbol test.
-pub fn mode_line_risky_local_variable_id_for_test() -> neovm_value::intern::SymId {
-    crate::emacs_core::xdisp::risky_local_variable_symbol_id()
-}
-
 /// Record one display (min-width) transition on a rendered accumulator.
 pub fn mode_line_rendered_note_display_min_width_transition(
     rendered: &mut crate::emacs_core::xdisp::ModeLineRendered,

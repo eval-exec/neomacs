@@ -18,7 +18,7 @@ fn gc_tls_ownership_font_registry_names_do_not_retain_unrooted_properties() {
             .has_intervals(),
         "the normalized Lisp result must preserve GNU-visible properties"
     );
-    let state = neovm_display::test_support::authority::alternative_font_registry_alist_for_test();
+    let state = crate::emacs_core::font::alternative_font_registry_alist_snapshot_for_test();
     assert!(
         state.iter().all(|(name, aliases)| !name.has_intervals()
             && aliases.iter().all(|alias| !alias.has_intervals())),

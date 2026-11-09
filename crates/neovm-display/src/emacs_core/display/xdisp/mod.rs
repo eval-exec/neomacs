@@ -2718,7 +2718,8 @@ enum ModeLineSymbol {
 }
 
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) fn risky_local_variable_symbol_id() -> neovm_value::intern::SymId {
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+fn risky_local_variable_symbol_id() -> neovm_value::intern::SymId {
     ModeLineSymbol::RiskyLocalVariable.id()
 }
 
