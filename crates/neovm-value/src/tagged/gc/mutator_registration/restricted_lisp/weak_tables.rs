@@ -18,11 +18,11 @@ fn every_stop(_: usize, _: usize) -> Option<Go> {
 
 /// Serial transport roots retain TABLES ONLY. All weak payloads are actual
 /// owner allocations; the snapshots below contain inert bits, not GC roots.
-fn session(
+fn session<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     setup: &str,
     programs: Vec<Vec<Op>>,
     env: &HtEnv<'_>,
-    body: impl FnOnce(&mut Session<'_, '_>, &Overlap, &[usize]),
+    body: impl FnOnce(&mut Session<'_, '_, K>, &Overlap, &[usize]),
 ) {
     let n = programs.len();
     let mut context = Context::new();
@@ -130,7 +130,11 @@ fn counts(stopped: &AllStopped<'_>, tables: &[usize]) -> Vec<usize> {
         .collect()
 }
 
-fn live_payloads(era: &ParallelHeapEra<'_>, stopped: &AllStopped<'_>, snaps: &[Snap]) -> usize {
+fn live_payloads<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
+    stopped: &AllStopped<'_>,
+    snaps: &[Snap],
+) -> usize {
     // Freed slots may be reused by the next allocation batch. Count current
     // addresses once rather than counting every historical birth at that slot.
     let words: HashSet<_> = snaps
@@ -140,8 +144,8 @@ fn live_payloads(era: &ParallelHeapEra<'_>, stopped: &AllStopped<'_>, snaps: &[S
     live_words(era, stopped, words.iter().copied())
 }
 
-fn live_words(
-    era: &ParallelHeapEra<'_>,
+fn live_words<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
     stopped: &AllStopped<'_>,
     words: impl IntoIterator<Item = usize>,
 ) -> usize {

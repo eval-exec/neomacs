@@ -101,8 +101,8 @@ enum AdmissionError {
 impl GlobalSession {
     /// No participants may exist: real handle admission enforces that
     /// precondition. Every participating tape is checked before registration.
-    fn admit(
-        era: &ParallelHeapEra<'_>,
+    fn admit<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+        era: &ParallelHeapEra<'_, K>,
         ids: &[SymId],
         sources: &[Source],
     ) -> Result<Self, AdmissionError> {

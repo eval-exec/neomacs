@@ -62,7 +62,10 @@ pub(super) fn age(heap: &TaggedHeap, word: WordIdentity) -> Age {
         }
     }
 }
-fn rebind(era: &ParallelHeapEra<'_>, stopped: &AllStopped<'_>) -> YoungCredit {
+fn rebind<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
+    stopped: &AllStopped<'_>,
+) -> YoungCredit {
     let (legacy, peer) = {
         let gate = era.registry().lock().unwrap();
         (
@@ -98,8 +101,8 @@ fn rebind(era: &ParallelHeapEra<'_>, stopped: &AllStopped<'_>) -> YoungCredit {
         registration,
     }
 }
-pub(super) fn exercise(
-    era: &ParallelHeapEra<'_>,
+pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
     graph: GraphWords,
     cohort: Cohort,
     commands: &Commands,

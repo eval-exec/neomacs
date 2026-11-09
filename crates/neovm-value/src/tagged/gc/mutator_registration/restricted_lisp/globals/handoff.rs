@@ -70,7 +70,11 @@ struct Cycle {
     frozen: usize,
 }
 
-fn collect(era: &ParallelHeapEra<'_>, before: Vec<Snapshot>, phase: usize) -> Cycle {
+fn collect<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
+    before: Vec<Snapshot>,
+    phase: usize,
+) -> Cycle {
     let mut stopped = era.stop().unwrap();
     era.return_cons_storage(&stopped).unwrap();
     let roots = gc::ledger(era, &mut stopped);

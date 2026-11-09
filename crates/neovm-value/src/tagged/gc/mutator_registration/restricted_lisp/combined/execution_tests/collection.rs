@@ -136,7 +136,10 @@ impl Ledger {
             .chain(self.owners.iter().flat_map(|(_, roots)| roots))
     }
 }
-fn ledger(era: &ParallelHeapEra<'_>, stopped: &mut AllStopped<'_>) -> Ledger {
+fn ledger<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
+    stopped: &mut AllStopped<'_>,
+) -> Ledger {
     let mut result = Ledger::default();
     let mut words = Vec::new();
     era.core
@@ -241,7 +244,11 @@ struct CollectionReceipt {
     epoch: CollectionEpoch,
     cycle: CollectionCycle,
 }
-fn round(era: &ParallelHeapEra<'_>, graph: GraphWords, cohort: Cohort) -> CollectionReceipt {
+fn round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
+    graph: GraphWords,
+    cohort: Cohort,
+) -> CollectionReceipt {
     let mut stopped = contention::retry(
         Deadline::contention(),
         || era.stop(),
@@ -497,7 +504,7 @@ fn cohort(
             names,
         );
     };
-    let execute = |era: ParallelHeapEra<'_>, ids: Vec<crate::intern::SymId>| {
+    let execute = |era, ids: Vec<crate::intern::SymId>| {
         let (graph, lambda, names) =
             match std::mem::replace(&mut *setup.borrow_mut(), GraphSetup::Empty) {
                 GraphSetup::Empty => panic!("missing serial cohort graph"),

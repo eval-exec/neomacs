@@ -65,7 +65,12 @@ fn program(index: usize) -> Vec<Op> {
     ]
 }
 
-fn owns(era: &ParallelHeapEra<'_>, stopped: &AllStopped<'_>, snaps: &[Snap], expected: bool) {
+fn owns<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
+    stopped: &AllStopped<'_>,
+    snaps: &[Snap],
+    expected: bool,
+) {
     on_heap(era, stopped, |heap| {
         for snap in snaps {
             assert_eq!(snap.conses.len(), 3);

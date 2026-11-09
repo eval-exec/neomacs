@@ -81,8 +81,8 @@ struct Round {
     major: bool,
     owners: usize,
 }
-fn collect(
-    era: &ParallelHeapEra<'_>,
+fn collect<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
     stopped: &mut AllStopped<'_>,
     graphs: &[Vec<usize>],
     reconcile: bool,
@@ -105,8 +105,8 @@ fn collect(
         owners: report.frozen_owners,
     }
 }
-fn round(
-    era: &ParallelHeapEra<'_>,
+fn round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
     owner: &mut Mutator<'_>,
     graphs: &[Vec<usize>],
     reconcile: bool,

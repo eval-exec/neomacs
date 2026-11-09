@@ -122,8 +122,8 @@ struct Receipt {
     epoch: CollectionEpoch,
     cycle: CollectionCycle,
 }
-fn round(
-    era: &ParallelHeapEra<'_>,
+fn round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
     graph: GraphWords,
     names: &Setup,
     cohort: Cohort,
@@ -279,8 +279,8 @@ fn advance(commands: &Commands, await_all: &impl Fn()) {
     }
     await_all();
 }
-pub(super) fn exercise(
-    era: &ParallelHeapEra<'_>,
+pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
     graph: GraphWords,
     names: &Setup,
     cohort: Cohort,

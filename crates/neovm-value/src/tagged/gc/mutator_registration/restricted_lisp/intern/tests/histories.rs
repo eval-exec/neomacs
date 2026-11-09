@@ -153,8 +153,8 @@ fn actor<'era>(
     })
 }
 
-fn observe<T>(
-    era: &ParallelHeapEra<'_>,
+fn observe<T, K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
     observer_id: u64,
     body: impl FnOnce(&mut RunAccess<'_, '_>) -> Result<T, ExecError>,
 ) -> Result<T, String> {
@@ -166,8 +166,8 @@ fn observe<T>(
         |owner| with_run(owner, body).map_err(|error| format!("C5 executor facts: {error:?}")),
     )
 }
-fn exercise(
-    era: &ParallelHeapEra<'_>,
+fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
     ids: &[SymId],
     scenario: Scenario,
     partial_seed: bool,

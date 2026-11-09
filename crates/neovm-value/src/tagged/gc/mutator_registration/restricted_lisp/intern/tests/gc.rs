@@ -23,7 +23,10 @@ impl Ledger {
     }
 }
 
-fn ledger(era: &ParallelHeapEra<'_>, stopped: &mut AllStopped<'_>) -> Ledger {
+fn ledger<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
+    stopped: &mut AllStopped<'_>,
+) -> Ledger {
     let mut result = Ledger::default();
     let mut names = Vec::new();
     stopped
@@ -77,16 +80,16 @@ fn ledger(era: &ParallelHeapEra<'_>, stopped: &mut AllStopped<'_>) -> Ledger {
 
 /// Return the actual slice catalog around collection. Recover the catalog,
 /// stop and owner before checking observations or propagating a test assertion.
-fn round(
-    era: &ParallelHeapEra<'_>,
+fn round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
     owner: &mut Mutator<'_>,
     names: [usize; 2],
 ) -> (Ledger, [bool; 2], Option<Vec<u8>>, u64) {
     round_with_preflight(era, owner, names, || {})
 }
 
-fn round_with_preflight(
-    era: &ParallelHeapEra<'_>,
+fn round_with_preflight<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
     owner: &mut Mutator<'_>,
     names: [usize; 2],
     before_collection: impl FnOnce(),

@@ -14,9 +14,8 @@ use super::symbol_functions::retry::{self as contention, Deadline, Retry, SPIN_W
 use super::symbol_globals::GlobalOp;
 use super::symbol_intern::InternOp;
 use super::{
-    AllStopped, HeapIdentity, Mutator, MutatorPermit, OwnerRootSlot, ProofEra as ParallelHeapEra,
-    RegistrationError, Registry, RendezvousError, RunAccess, RunSlice, SealedTableAccess,
-    SliceRoot, TableMut, TableRef,
+    AllStopped, HeapIdentity, Mutator, MutatorPermit, OwnerRootSlot, RegistrationError, Registry,
+    RendezvousError, RunAccess, RunSlice, SealedTableAccess, SliceRoot, TableMut, TableRef,
 };
 
 mod combined;
@@ -25,6 +24,7 @@ mod globals;
 mod intern;
 use crate::emacs_core::builtins::maybe_resize_hash_table_for_insert;
 use crate::emacs_core::eval::Context;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::{Fixnum, TaggedValue};
 use crate::value::{HashProbe, HashTableEntry, HashTableTest};
@@ -2397,16 +2397,16 @@ fn complete(stopped: AllStopped<'_>) {
     .unwrap_or_else(|failure| panic!("complete: {:?}", failure.reason))
 }
 
-fn on_heap<R>(
-    era: &ParallelHeapEra<'_>,
+fn on_heap<R, K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
     stopped: &AllStopped<'_>,
     body: impl Fn(&crate::tagged::gc::TaggedHeap) -> R,
 ) -> R {
     retry_rv(|| era.with_stopped_heap_for_test(stopped, &body))
 }
 
-fn open_collection<'a>(
-    era: &'a ParallelHeapEra<'_>,
+fn open_collection<'a, K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &'a ParallelHeapEra<'_, K>,
     go_txs: &[Sender<Go>],
     kind: Go,
     next_epoch: &mut u64,
@@ -2424,12 +2424,19 @@ fn open_collection<'a>(
     stopped
 }
 
-fn collect_major(era: &ParallelHeapEra<'_>, stopped: &mut AllStopped<'_>) {
+fn collect_major<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
+    stopped: &mut AllStopped<'_>,
+) {
     let report = retry_rv(|| era.collect_stopped(stopped));
     assert!(report.major, "restricted overlap collects a major cycle");
 }
 
-fn release_cycle(era: &ParallelHeapEra<'_>, stopped: AllStopped<'_>, resume: bool) {
+fn release_cycle<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
+    stopped: AllStopped<'_>,
+    resume: bool,
+) {
     if resume {
         retry_reg(|| era.resume_cons_storage(&stopped));
     }
@@ -2642,7 +2649,9 @@ fn run_program<'era>(
     }
 }
 
-fn with_admitted(body: impl FnOnce(&ParallelHeapEra, bool, &SharedRoot, &SharedRoot)) {
+fn with_admitted<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    body: impl FnOnce(&ParallelHeapEra<'_, K>, bool, &SharedRoot, &SharedRoot),
+) {
     let mut context = Context::new();
     let generational = context.tagged_heap.tagged_heap_generational_enabled();
     // SAFETY: nil and a fixnum are immediates of this Context's heap.
@@ -2664,8 +2673,8 @@ fn with_admitted(body: impl FnOnce(&ParallelHeapEra, bool, &SharedRoot, &SharedR
         .unwrap_or_else(|error| panic!("admit: {error:?}"));
 }
 
-struct Session<'body, 'heap> {
-    era: &'body ParallelHeapEra<'heap>,
+struct Session<'body, 'heap, K: crate::tagged::gc::mutator_registration::EraKeeper> {
+    era: &'body ParallelHeapEra<'heap, K>,
     go_txs: Vec<Sender<Go>>,
     done_txs: Vec<Sender<()>>,
     pause_rx: Receiver<Snap>,
@@ -2675,9 +2684,9 @@ struct Session<'body, 'heap> {
     next_epoch: u64,
 }
 
-impl<'body, 'heap> Session<'body, 'heap> {
+impl<'body, 'heap, K: crate::tagged::gc::mutator_registration::EraKeeper> Session<'body, 'heap, K> {
     fn launch<'scope, 'env>(
-        era: &'body ParallelHeapEra<'heap>,
+        era: &'body ParallelHeapEra<'heap, K>,
         nil: &'env SharedRoot,
         id_base: u64,
         programs: &[Vec<Op>],
@@ -2768,7 +2777,7 @@ impl<'body, 'heap> Session<'body, 'heap> {
         &mut self,
         kind: Go,
         resume: bool,
-        after: impl FnOnce(&ParallelHeapEra<'heap>, &AllStopped<'_>),
+        after: impl FnOnce(&ParallelHeapEra<'heap, K>, &AllStopped<'_>),
     ) {
         let mut stopped = open_collection(self.era, &self.go_txs, kind, &mut self.next_epoch);
         collect_major(self.era, &mut stopped);
@@ -2780,8 +2789,8 @@ impl<'body, 'heap> Session<'body, 'heap> {
         &mut self,
         kind: Go,
         resume: bool,
-        before: impl FnOnce(&ParallelHeapEra<'heap>, &AllStopped<'_>),
-        after: impl FnOnce(&ParallelHeapEra<'heap>, &AllStopped<'_>),
+        before: impl FnOnce(&ParallelHeapEra<'heap, K>, &AllStopped<'_>),
+        after: impl FnOnce(&ParallelHeapEra<'heap, K>, &AllStopped<'_>),
     ) {
         let mut stopped = open_collection(self.era, &self.go_txs, kind, &mut self.next_epoch);
         before(self.era, &stopped);
@@ -2792,7 +2801,7 @@ impl<'body, 'heap> Session<'body, 'heap> {
 
     fn finish_owners(
         &mut self,
-        after: impl FnOnce(&ParallelHeapEra<'heap>, &AllStopped<'_>),
+        after: impl FnOnce(&ParallelHeapEra<'heap, K>, &AllStopped<'_>),
     ) -> Vec<EndState> {
         let ends = gather(&self.end_rx, self.go_txs.len(), |end| end.index);
         let mut seen = vec![false; self.go_txs.len()];
@@ -4332,7 +4341,9 @@ fn read_tp_catalog_waits() -> (u64, u64, u64, u64, u64, u64) {
 
 /// One timed round: every owner is parked at its threshold safepoint before
 /// the window opens, and the window closes when `complete` returns.
-fn tp_round(session: &mut Session<'_, '_>) -> (usize, u64) {
+fn tp_round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    session: &mut Session<'_, '_, K>,
+) -> (usize, u64) {
     let _ = session.pauses();
     let t0 = Instant::now();
     let mut stopped = open_collection(
@@ -4351,8 +4362,8 @@ fn tp_round(session: &mut Session<'_, '_>) -> (usize, u64) {
 
 /// [`Session::launch`] for the throughput rows: each owner runs its program
 /// `reps` times, so per-owner work is a plain product.
-fn tp_launch<'body, 'heap, 'scope, 'env>(
-    era: &'body ParallelHeapEra<'heap>,
+fn tp_launch<'body, 'heap, 'scope, 'env, K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &'body ParallelHeapEra<'heap, K>,
     nil: &'env SharedRoot,
     programs: &[Vec<Op>],
     reps: usize,
@@ -4362,7 +4373,7 @@ fn tp_launch<'body, 'heap, 'scope, 'env>(
     overlap: Option<&'env Overlap>,
     abort: &'env AtomicBool,
     scope: &'scope thread::Scope<'scope, 'env>,
-) -> Session<'body, 'heap>
+) -> Session<'body, 'heap, K>
 where
     'body: 'env,
 {

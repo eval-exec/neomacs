@@ -21,7 +21,10 @@ impl Ledger {
             .any(|word| graph.contains(word))
     }
 }
-pub(super) fn ledger(era: &ParallelHeapEra<'_>, stopped: &mut AllStopped<'_>) -> Ledger {
+pub(super) fn ledger<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
+    stopped: &mut AllStopped<'_>,
+) -> Ledger {
     let mut result = Ledger::default();
     let mut roots = Vec::new();
     era.core
@@ -70,8 +73,8 @@ pub(super) fn ledger(era: &ParallelHeapEra<'_>, stopped: &mut AllStopped<'_>) ->
     result.journal = roots.into_iter().map(TaggedValue::bits).collect();
     result
 }
-pub(super) fn graph(
-    era: &ParallelHeapEra<'_>,
+pub(super) fn graph<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
     stopped: &AllStopped<'_>,
     head: usize,
 ) -> Vec<usize> {
@@ -90,8 +93,8 @@ pub(super) fn graph(
     })
     .unwrap()
 }
-pub(super) fn live(
-    era: &ParallelHeapEra<'_>,
+pub(super) fn live<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
     stopped: &AllStopped<'_>,
     graphs: &[Vec<usize>],
 ) -> Vec<Vec<bool>> {

@@ -116,8 +116,8 @@ enum AdmissionError {
     Function(FunctionError),
 }
 impl Session {
-    fn admit(
-        era: &ParallelHeapEra<'_>,
+    fn admit<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+        era: &ParallelHeapEra<'_, K>,
         ids: &[SymId],
         sources: &[Source],
     ) -> Result<Self, AdmissionError> {

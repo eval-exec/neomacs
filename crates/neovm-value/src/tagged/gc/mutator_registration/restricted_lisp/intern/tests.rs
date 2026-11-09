@@ -71,20 +71,20 @@ fn words<'era>(owner: &mut Mutator<'era>, frame: &Frame<'era>) -> Vec<usize> {
 
 /// Seed failure, typed execution errors and assertion unwind all erase the
 /// actual owner root bank before retirement and ordinary era finish.
-fn case(
+fn case<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     kind: PlainSymbolBacking,
     ops: Vec<Op>,
     nslots: usize,
-    body: impl for<'era> FnOnce(&ParallelHeapEra<'_>, &Session, &mut Mutator<'era>, &mut Frame<'era>),
+    body: impl for<'era> FnOnce(&ParallelHeapEra<'_, K>, &Session, &mut Mutator<'era>, &mut Frame<'era>),
 ) {
     case_capacity(kind, ops, nslots, nslots, body).unwrap();
 }
-fn case_capacity(
+fn case_capacity<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     kind: PlainSymbolBacking,
     ops: Vec<Op>,
     nslots: usize,
     capacity: usize,
-    body: impl for<'era> FnOnce(&ParallelHeapEra<'_>, &Session, &mut Mutator<'era>, &mut Frame<'era>),
+    body: impl for<'era> FnOnce(&ParallelHeapEra<'_, K>, &Session, &mut Mutator<'era>, &mut Frame<'era>),
 ) -> std::thread::Result<()> {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let spelling = format!("p3sym-c5-executor-{}", NEXT.fetch_add(1, Ordering::Relaxed));

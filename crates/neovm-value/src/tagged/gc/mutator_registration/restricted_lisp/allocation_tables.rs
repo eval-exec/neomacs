@@ -52,8 +52,8 @@ fn program(index: usize) -> Vec<Op> {
     ]
 }
 
-fn check_graphs(
-    era: &ParallelHeapEra<'_>,
+fn check_graphs<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
     stopped: &AllStopped<'_>,
     snaps: &[Snap],
     expected: bool,
@@ -71,8 +71,8 @@ fn check_graphs(
     });
 }
 
-fn check_shells(
-    era: &ParallelHeapEra<'_>,
+fn check_shells<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
     stopped: &AllStopped<'_>,
     snaps: &[Snap],
     live: bool,

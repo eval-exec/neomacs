@@ -95,12 +95,12 @@ fn words<'era>(owner: &mut Mutator<'era>, frame: &Frame<'era>) -> Vec<usize> {
 }
 
 /// Finish the real era independently of an executor refusal or assertion.
-pub(super) fn case(
+pub(super) fn case<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     kind: PlainSymbolBacking,
     ops: Vec<Op>,
     nslots: usize,
     body: impl for<'era> FnOnce(
-        &ParallelHeapEra<'_>,
+        &ParallelHeapEra<'_, K>,
         &Session,
         &mut Mutator<'era>,
         &mut Frame<'era>,

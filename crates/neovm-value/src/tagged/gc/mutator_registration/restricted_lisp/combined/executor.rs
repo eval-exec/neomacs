@@ -182,8 +182,8 @@ impl<'era> Frame<'era> {
 }
 
 impl Session {
-    pub(super) fn admit(
-        era: &ParallelHeapEra<'_>,
+    pub(super) fn admit<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+        era: &ParallelHeapEra<'_, K>,
         target: &SymbolHandle,
         inputs: &[CombinedInput],
         programs: Vec<CombinedTape>,

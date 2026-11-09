@@ -13,7 +13,10 @@ pub(super) struct Ledger {
     pub(super) extra_work: usize,
 }
 
-pub(super) fn ledger(era: &ParallelHeapEra<'_>, stopped: &mut AllStopped<'_>) -> Ledger {
+pub(super) fn ledger<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
+    stopped: &mut AllStopped<'_>,
+) -> Ledger {
     let mut result = Ledger::default();
     let keeper = era.core.keeper.as_ref().unwrap();
     let mut world = Vec::new();
@@ -59,8 +62,8 @@ pub(super) fn ledger(era: &ParallelHeapEra<'_>, stopped: &mut AllStopped<'_>) ->
 
 /// Capture all assertions as facts, and resume the owner before checking them.
 /// A failing witness must not strand its otherwise healthy fixture in Native.
-fn round(
-    era: &ParallelHeapEra<'_>,
+fn round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
     owner: &mut Mutator<'_>,
     graph: &[usize],
 ) -> (Ledger, Vec<bool>, u64) {

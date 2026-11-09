@@ -18,8 +18,8 @@ pub(super) enum Preparation {
     Enabled(Arc<Atoms>),
 }
 impl Preparation {
-    pub(super) fn admit(
-        era: &ParallelHeapEra<'_>,
+    pub(super) fn admit<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+        era: &ParallelHeapEra<'_, K>,
         lambda: crate::intern::SymId,
         scenario: Scenario,
     ) -> Self {
@@ -150,7 +150,10 @@ pub(super) enum Placement {
     Collector(Cycle),
 }
 impl Placement {
-    pub(super) fn start(era: &ParallelHeapEra<'_>, scenario: Scenario) -> Self {
+    pub(super) fn start<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+        era: &ParallelHeapEra<'_, K>,
+        scenario: Scenario,
+    ) -> Self {
         match scenario {
             Scenario::Transfer
             | Scenario::Noop
@@ -186,9 +189,9 @@ impl Placement {
             }
         }
     }
-    pub(super) fn return_for_finish(
+    pub(super) fn return_for_finish<K: crate::tagged::gc::mutator_registration::EraKeeper>(
         &mut self,
-        era: &ParallelHeapEra<'_>,
+        era: &ParallelHeapEra<'_, K>,
         stopped: &AllStopped<'_>,
     ) {
         match *self {
@@ -204,7 +207,11 @@ impl Placement {
             }
         }
     }
-    pub(super) fn resume(&mut self, era: &ParallelHeapEra<'_>, stopped: &AllStopped<'_>) {
+    pub(super) fn resume<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+        &mut self,
+        era: &ParallelHeapEra<'_, K>,
+        stopped: &AllStopped<'_>,
+    ) {
         match *self {
             Self::Collector(cycle) => {
                 contention::retry(
@@ -329,8 +336,8 @@ struct Receipt {
     epoch: CollectionEpoch,
     cycle: CollectionCycle,
 }
-fn round(
-    era: &ParallelHeapEra<'_>,
+fn round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
     cohort: Cohort,
     placement: &RefCell<Placement>,
     observation: Observation,
@@ -498,8 +505,8 @@ fn sole_world(roots: &Ledger, graph: FreshGraph) {
         "fresh World root masked: {roots:?}"
     );
 }
-pub(super) fn exercise(
-    era: &ParallelHeapEra<'_>,
+pub(super) fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &ParallelHeapEra<'_, K>,
     cohort: Cohort,
     scenario: Scenario,
     commands: &Commands,
