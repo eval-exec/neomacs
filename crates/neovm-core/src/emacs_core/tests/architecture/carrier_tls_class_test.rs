@@ -1265,6 +1265,55 @@ fn duplicate_classification_keys(rows: &[(&str, &str, TlsClass)]) -> Vec<String>
     duplicates
 }
 
+/// Same-file multi-occurrence keys and the exact number of `thread_local!`
+/// statics each covers.
+///
+/// The scan's module unit is the source file, so two statics with one name in
+/// two function bodies of one file share one (module, name) row and its class.
+/// The expected count makes a third occurrence fail the guard until the row
+/// (and its class) is re-reviewed; keys with a single occurrence need no row.
+const SAME_FILE_MULTI_OCCURRENCE: &[(&str, &str, usize)] = &[(
+    "neovm-eval/src/emacs_core/runtime/eval/absent_layer.rs",
+    "HANDLE",
+    2,
+)];
+
+/// Violations of the same-file occurrence contract:
+/// - a key scanned more than once must carry an expected-count row with
+///   exactly that count, and a listed key must not drift from its count;
+/// - an expected-count row must name a key the scan actually finds;
+/// - single-occurrence keys need no row and are not violations.
+fn same_file_occurrence_violations(
+    occurrences: &std::collections::BTreeMap<(String, String), usize>,
+    expected: &[(&str, &str, usize)],
+) -> Vec<String> {
+    let mut violations = Vec::new();
+    for ((module, name), count) in occurrences {
+        match expected.iter().find(|(expected_module, expected_name, _)| {
+            expected_module == module && expected_name == name
+        }) {
+            Some((_, _, expected_count)) if expected_count == count => {}
+            Some((_, _, expected_count)) => violations.push(format!(
+                "{module}::{name}: {count} scanned occurrence(s), expected {expected_count}"
+            )),
+            None if *count > 1 => violations.push(format!(
+                "{module}::{name}: {count} scanned occurrences with no expected-count row"
+            )),
+            None => {}
+        }
+    }
+    for (module, name, expected_count) in expected {
+        let key = ((*module).to_owned(), (*name).to_owned());
+        if !occurrences.contains_key(&key) {
+            violations.push(format!(
+                "{module}::{name}: expected-count row names no scanned static \
+                 (expected {expected_count})"
+            ));
+        }
+    }
+    violations
+}
+
 fn is_test_only_block(before: &str) -> bool {
     before.contains("#[cfg(test)]")
         || before.contains("cfg(all(test")
@@ -1367,6 +1416,17 @@ fn every_production_thread_local_has_a_carrier_tls_class() {
         missing.is_empty(),
         "unclassified thread_local! statics (add a carrier TLS class): {missing:?}"
     );
+    let mut occurrences: std::collections::BTreeMap<(String, String), usize> =
+        std::collections::BTreeMap::new();
+    for (name, file) in &scanned {
+        *occurrences.entry((file.clone(), name.clone())).or_insert(0) += 1;
+    }
+    let occurrence_violations =
+        same_file_occurrence_violations(&occurrences, SAME_FILE_MULTI_OCCURRENCE);
+    assert!(
+        occurrence_violations.is_empty(),
+        "same-file carrier TLS occurrence counts drifted: {occurrence_violations:?}"
+    );
 }
 
 /// Mutation plant: a table with one duplicated `(module, name)` key and one
@@ -1397,6 +1457,55 @@ fn planted_duplicate_carrier_tls_key_turns_the_surface_red() {
         vec!["neovm-value/src/tagged/gc.rs::TAGGED_HEAP".to_owned()],
         "a duplicate (module, name) key must be rejected; the same name under a \
          different module is a distinct record"
+    );
+}
+
+/// Mutation plant for K2: a same-file key whose occurrence count drifts from
+/// its expected count must be reported, as must an unregistered second
+/// occurrence; a single occurrence needs no row.
+#[test]
+fn planted_same_file_occurrence_drift_turns_the_surface_red() {
+    let absent_layer = "neovm-eval/src/emacs_core/runtime/eval/absent_layer.rs";
+    let mut drifted = std::collections::BTreeMap::new();
+    drifted.insert((absent_layer.to_owned(), "HANDLE".to_owned()), 3);
+    let violations = same_file_occurrence_violations(&drifted, &[(absent_layer, "HANDLE", 2)]);
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert!(
+        violations[0].contains("3 scanned occurrence(s), expected 2"),
+        "{violations:?}"
+    );
+
+    let mut unregistered = std::collections::BTreeMap::new();
+    unregistered.insert(
+        (
+            "neovm-value/src/tagged/gc.rs".to_owned(),
+            "TAGGED_HEAP".to_owned(),
+        ),
+        2,
+    );
+    let violations = same_file_occurrence_violations(&unregistered, &[]);
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert!(
+        violations[0].contains("no expected-count row"),
+        "{violations:?}"
+    );
+
+    let mut single = std::collections::BTreeMap::new();
+    single.insert(
+        (
+            "neovm-value/src/tagged/gc.rs".to_owned(),
+            "TAGGED_HEAP".to_owned(),
+        ),
+        1,
+    );
+    assert!(same_file_occurrence_violations(&single, &[]).is_empty());
+
+    // A stale expected-count row for a key the scan no longer finds is red.
+    let violations = same_file_occurrence_violations(&single, &[(absent_layer, "HANDLE", 2)]);
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert!(
+        violations[0].contains("names no scanned static"),
+        "{violations:?}"
     );
 }
 
