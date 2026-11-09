@@ -34,6 +34,29 @@ pub struct DecodedGnuCode {
     pub(crate) stack_verified: bool,
 }
 
+impl DecodedGnuCode {
+    /// Layout pin. The field stays `pub(crate)`.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub const fn offset_of_ops() -> usize {
+        std::mem::offset_of!(Self, ops)
+    }
+
+    /// Layout pin. The field stays `pub(crate)`.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub const fn offset_of_byte_offset_map() -> usize {
+        std::mem::offset_of!(Self, byte_offset_map)
+    }
+
+    /// Layout pin. The field stays `pub(crate)`.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub const fn offset_of_stack_verified() -> usize {
+        std::mem::offset_of!(Self, stack_verified)
+    }
+}
+
 /// Lazily decoded IR for a GNU byte-code string.
 ///
 /// Loading validates each byte-code string once before installing this cell,
@@ -97,6 +120,20 @@ impl LazyGnuCode {
     #[doc(hidden)]
     pub fn iterative_admission(&self) -> Option<&Option<IterativeArgRange>> {
         self.iterative_admission.get()
+    }
+
+    /// Layout pin. The field stays `pub(crate)`.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub const fn offset_of_decoded() -> usize {
+        std::mem::offset_of!(Self, decoded)
+    }
+
+    /// Layout pin. The field stays `pub(crate)`.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub const fn offset_of_proof() -> usize {
+        std::mem::offset_of!(Self, proof)
     }
 
     /// SEAL: publish decoded + proof together in the existing order.
@@ -268,6 +305,15 @@ pub struct ByteCodeFunction {
     /// decodes = 8% of the type-sim window; GNU runs its byte string directly
     /// and never pays a decode at all).
     pub(crate) lazy_gnu_code: Option<std::sync::Arc<LazyGnuCode>>,
+}
+
+impl ByteCodeFunction {
+    /// Layout pin. The field stays `pub(crate)`.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub const fn offset_of_lazy_gnu_code() -> usize {
+        std::mem::offset_of!(Self, lazy_gnu_code)
+    }
 }
 
 #[cfg(any(test, feature = "test-support"))]
