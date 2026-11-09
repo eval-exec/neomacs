@@ -9756,6 +9756,84 @@ fn authority_kind_keyed_route_mutations() {
     assert!(error.contains("does not publicly expose"), "{error}");
 }
 
+/// Peer r2 C2 re-cut (lead #977): a cross-file owner row is signed at the
+/// owner's PUBLIC module (its own public module or a `pub use` route), and
+/// the guard must NOT fall back to a name match elsewhere in the crate.
+/// Red fixtures: a privately-imported owner, and a same-named pub type
+/// elsewhere.
+#[test]
+fn authority_rejects_name_only_owner_resolution() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let value_src = dir.path().join("crates/neovm-value/src");
+    let core_src = dir.path().join("crates/neovm-core/src");
+    std::fs::create_dir_all(value_src.join("test_support")).expect("value src");
+    std::fs::create_dir_all(&core_src).expect("core src");
+    std::fs::write(
+        value_src.join("lib.rs"),
+        "pub mod test_support;\npub mod api;\npub mod impls;\npub mod other;\npub(crate) mod hidden;\n",
+    )
+    .expect("lib");
+    std::fs::write(value_src.join("test_support.rs"), "pub mod authority;\n").expect("support");
+    std::fs::write(value_src.join("test_support/authority.rs"), "").expect("fence");
+    // The owner types live in a private module; `api` re-exports one.
+    std::fs::write(
+        value_src.join("hidden.rs"),
+        "pub struct Owner;\npub struct AliasName;\n",
+    )
+    .expect("hidden");
+    std::fs::write(value_src.join("api.rs"), "pub use crate::hidden::Owner;\n").expect("api");
+    // The impl file imports both owners privately.
+    std::fs::write(
+        value_src.join("impls.rs"),
+        "use crate::hidden::{AliasName, Owner};\n\
+         impl Owner {\n    pub fn method(&self) {}\n}\n\
+         impl AliasName {\n    pub fn alias_method(&self) {}\n}\n",
+    )
+    .expect("impls");
+    // An unrelated public type with the same name as a private import.
+    std::fs::write(value_src.join("other.rs"), "pub struct AliasName;\n").expect("other");
+    std::fs::write(core_src.join("lib.rs"), "").expect("core lib");
+    let row = |item: &str, defining: &str, fence: &str| AuthRow {
+        crate_name: "neovm-value".to_owned(),
+        item: item.to_owned(),
+        kind: "method".to_owned(),
+        defining_file: defining.to_owned(),
+        fence_path: fence.to_owned(),
+    };
+    let check =
+        |row: &AuthRow| authority_public_paths_violation(dir.path(), std::slice::from_ref(row));
+
+    // Green: the signed module is the public re-export; the impl (and its
+    // private import) live in another file.
+    let exported = row(
+        "api::Owner::method",
+        "crates/neovm-value/src/impls.rs",
+        "neovm_value::api::Owner::method",
+    );
+    assert!(check(&exported).is_ok());
+
+    // Red: signing the impl module's own path cannot borrow the owner's
+    // public declaration elsewhere: a privately-imported owner is not a
+    // public route.
+    let private_import = row(
+        "impls::Owner::method",
+        "crates/neovm-value/src/impls.rs",
+        "neovm_value::impls::Owner::method",
+    );
+    let error = check(&private_import).expect_err("privately-imported owner");
+    assert!(error.contains("does not publicly expose"), "{error}");
+
+    // Red: a same-named pub type elsewhere must not satisfy the row (the
+    // rejected name-anywhere fallback would have accepted it).
+    let same_name_elsewhere = row(
+        "impls::AliasName::alias_method",
+        "crates/neovm-value/src/impls.rs",
+        "neovm_value::impls::AliasName::alias_method",
+    );
+    let error = check(&same_name_elsewhere).expect_err("same-named pub type elsewhere");
+    assert!(error.contains("does not publicly expose"), "{error}");
+}
+
 #[test]
 fn authority_pub_use_method_rows_are_method_aware() {
     // A fence `pub use` of a type from a private module exposes the type at
