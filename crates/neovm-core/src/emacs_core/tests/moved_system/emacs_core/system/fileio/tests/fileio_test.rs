@@ -7169,7 +7169,7 @@ fn do_auto_save_writes_the_text_a_modes_handler_inserted() {
     );
     let buf = eval.edit.buffers.current_buffer().expect("current buffer");
     assert_eq!(
-        buf.autosave_modified_tick,
+        buf.autosave_modified_tick(),
         buf.modified_tick(),
         "the recorded auto-save covers the handler's edit"
     );
