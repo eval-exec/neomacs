@@ -532,7 +532,11 @@ fn full_check(binary: &Path, lisp_root: &Path, stamp: &Stamp) -> Result<StampVer
     })
 }
 
-fn read_cache(binary: &Path, stamp_sha: &str, run_id: &str) -> Option<Result<StampVerdict, String>> {
+fn read_cache(
+    binary: &Path,
+    stamp_sha: &str,
+    run_id: &str,
+) -> Option<Result<StampVerdict, String>> {
     let text = fs::read_to_string(verification_cache_path(binary)).ok()?;
     let mut lines = text.splitn(2, '\n');
     let key = lines.next()?;
@@ -559,7 +563,12 @@ fn read_cache(binary: &Path, stamp_sha: &str, run_id: &str) -> Option<Result<Sta
     }
 }
 
-fn write_cache(binary: &Path, stamp_sha: &str, run_id: &str, verdict: &Result<StampVerdict, String>) {
+fn write_cache(
+    binary: &Path,
+    stamp_sha: &str,
+    run_id: &str,
+    verdict: &Result<StampVerdict, String>,
+) {
     let payload = match verdict {
         Ok(StampVerdict::Verified {
             binary_sha256,
@@ -668,8 +677,8 @@ mod tests {
     fn a_deleted_preloaded_elc_refuses() {
         let fixture = fixture();
         fs::remove_file(fixture.lisp_root.join("subr.elc")).expect("delete .elc");
-        let message = verify_with(&fixture.binary, &fixture.lisp_root, None, None)
-            .expect_err("must refuse");
+        let message =
+            verify_with(&fixture.binary, &fixture.lisp_root, None, None).expect_err("must refuse");
         assert!(
             message.contains("subr.elc"),
             "the refusal must name the missing bytecode: {message}"
@@ -691,8 +700,8 @@ mod tests {
         );
         assert_ne!(tampered, text, "the test must actually change the stamp");
         fs::write(&path, tampered).expect("tamper");
-        let message = verify_with(&fixture.binary, &fixture.lisp_root, None, None)
-            .expect_err("must refuse");
+        let message =
+            verify_with(&fixture.binary, &fixture.lisp_root, None, None).expect_err("must refuse");
         assert!(
             message.contains("belongs to a different binary"),
             "the refusal must name the binary mismatch: {message}"
@@ -703,8 +712,8 @@ mod tests {
     fn a_missing_stamp_refuses() {
         let fixture = fixture();
         fs::remove_file(stamp_path(&fixture.binary)).expect("delete stamp");
-        let message = verify_with(&fixture.binary, &fixture.lisp_root, None, None)
-            .expect_err("must refuse");
+        let message =
+            verify_with(&fixture.binary, &fixture.lisp_root, None, None).expect_err("must refuse");
         assert!(
             message.contains("fresh-build"),
             "the refusal must name the build recipe: {message}"
@@ -744,8 +753,11 @@ mod tests {
         write_stamp(&fixture.binary, &fixture.lisp_root).expect("rewrite stamp");
         // The new stamp's key must miss the old cache entry; prove it by
         // breaking the tree after the stamp was written.
-        fs::write(fixture.lisp_root.join("data.txt"), "changed after the stamp\n")
-            .expect("edit the tree");
+        fs::write(
+            fixture.lisp_root.join("data.txt"),
+            "changed after the stamp\n",
+        )
+        .expect("edit the tree");
         let message = verify_with(&fixture.binary, &fixture.lisp_root, None, Some("run-a"))
             .expect_err("the new stamp must re-verify and refuse the changed tree");
         assert!(
@@ -799,8 +811,8 @@ mod tests {
             ";; edited after the stamp\n",
         )
         .expect("edit ldefs-boot");
-        let message = verify_with(&fixture.binary, &fixture.lisp_root, None, None)
-            .expect_err("must refuse");
+        let message =
+            verify_with(&fixture.binary, &fixture.lisp_root, None, None).expect_err("must refuse");
         assert!(
             message.contains("does not match the manifest"),
             "the refusal must name the manifest: {message}"
@@ -844,7 +856,12 @@ mod tests {
         );
         let rendered = sources
             .iter()
-            .map(|path| path.strip_prefix(&root).unwrap().to_string_lossy().into_owned())
+            .map(|path| {
+                path.strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
             .collect::<Vec<_>>();
         assert!(rendered.contains(&"subr.el".to_string()));
         assert!(rendered.contains(&"emacs-lisp/cl-lib.el".to_string()));

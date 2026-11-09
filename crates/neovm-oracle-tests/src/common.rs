@@ -471,10 +471,8 @@ fn ensure_fresh_build_attested(binary: &str) {
     static ATTESTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     ATTESTED.get_or_init(|| {
         let lisp_root = project_lisp_dir();
-        match neomacs_test_env::fresh_build_stamp::verify(
-            std::path::Path::new(binary),
-            &lisp_root,
-        ) {
+        match neomacs_test_env::fresh_build_stamp::verify(std::path::Path::new(binary), &lisp_root)
+        {
             Ok(neomacs_test_env::fresh_build_stamp::StampVerdict::Verified { .. }) => {}
             Ok(neomacs_test_env::fresh_build_stamp::StampVerdict::Overridden { .. }) => {
                 // `verify` already echoed the override; the run is unattested.

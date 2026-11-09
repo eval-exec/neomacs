@@ -1279,11 +1279,11 @@ fn run_fresh_build_pipeline(
     // file loaded as source.  Written last, after the final dump and the
     // compile-main pass, so both the binary and every .elc are final.
     if !options.dry_run {
-        print_synthetic_step("write the fresh-build stamp (binary sha256 + generated-Lisp manifest)");
-        let stamp = neomacs_test_env::fresh_build_stamp::write_stamp(
-            &paths.final_bin,
-            &paths.lisp_root,
-        )?;
+        print_synthetic_step(
+            "write the fresh-build stamp (binary sha256 + generated-Lisp manifest)",
+        );
+        let stamp =
+            neomacs_test_env::fresh_build_stamp::write_stamp(&paths.final_bin, &paths.lisp_root)?;
         println!("  INFO  stamp {}", stamp.display());
     }
 
@@ -4381,9 +4381,7 @@ fn parse_compile_first_sources(
 /// The loadup preloaded list, from the single implementation shared with the
 /// oracle attestation (`neomacs-test-env`): GNU's own `src/Makefile.in` rule.
 fn parse_preloaded_lisp_sources(loadup: &Path, lisp_root: &Path) -> Result<Vec<PathBuf>> {
-    Ok(neomacs_test_env::fresh_build_stamp::parse_preloaded_sources(
-        loadup, lisp_root,
-    )?)
+    Ok(neomacs_test_env::fresh_build_stamp::parse_preloaded_sources(loadup, lisp_root)?)
 }
 
 #[cfg(test)]

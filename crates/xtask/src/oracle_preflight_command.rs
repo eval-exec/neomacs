@@ -19,8 +19,7 @@ use std::path::{Path, PathBuf};
 
 use crate::Result;
 
-const USAGE: &str =
-    "usage: cargo xtask oracle-preflight --binary <path> [--lisp-root <path>]";
+const USAGE: &str = "usage: cargo xtask oracle-preflight --binary <path> [--lisp-root <path>]";
 
 pub fn run(repo_root: &Path, args: impl Iterator<Item = OsString>) -> Result<()> {
     let mut binary: Option<PathBuf> = None;
@@ -43,10 +42,9 @@ pub fn run(repo_root: &Path, args: impl Iterator<Item = OsString>) -> Result<()>
                 return Ok(());
             }
             other => {
-                return Err(format!(
-                    "oracle-preflight: unexpected argument {other:?}\n{USAGE}"
-                )
-                .into());
+                return Err(
+                    format!("oracle-preflight: unexpected argument {other:?}\n{USAGE}").into(),
+                );
             }
         }
     }
