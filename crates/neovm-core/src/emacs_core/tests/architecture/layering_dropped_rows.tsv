@@ -1,0 +1,8 @@
+lower	upper	post_file	post_line	written	pre_ref	reason
+keyboard	keyboard	crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	19	neovm_value::keyboard_pure::KEY_CHAR_META	773d:keyboard.rs:16	r1-cross-crate:neovm_value
+keyboard	keyboard	crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	206	neovm_value::keyboard_pure	773d:keyboard.rs:259	r1-cross-crate:neovm_value
+keyboard	keyboard	crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	234	neovm_value::keyboard_pure	773d:keyboard.rs:287	r1-cross-crate:neovm_value
+keyboard	keyboard	crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	469	neovm_value::keyboard_pure::describe_single_key_value	773d:keyboard.rs:513	r1-cross-crate:neovm_value
+keyboard	keyboard	crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	5754	neovm_value::keyboard_pure::split_symbol_modifiers	773d:keyboard.rs:7105	r1-cross-crate:neovm_value
+keyboard	image_catalog	crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	1354	neomacs_display_protocol::image::ImageStateEvent	773d:keyboard.rs:1470	r1-cross-crate:neomacs_display_protocol
+frontend_events	image_catalog	crates/neovm-eval/src/emacs_core/runtime/eval/frontend_events.rs	147	neomacs_display_protocol::image::ImageStateEvent	773d:frontend_events.rs:133	r1-cross-crate:neomacs_display_protocol

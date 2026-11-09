@@ -2699,6 +2699,47 @@ fn layering_item_map_renamed_item_resolves_through_map() {
     }
 }
 
+const DROPPED_ROWS_TSV: &str = include_str!("layering_dropped_rows.tsv");
+const CEILINGS_LIST: &str = include_str!("layering_ceilings.list");
+
+/// #149 decrease accounting. The three historical rows dropped by the 2i
+/// ceiling commit are dropped by MEASUREMENT, not by silence: every ref in
+/// the ledger must classify NotUpward with the recorded cross-crate reason,
+/// and the row must be absent from the ceilings. A ref that vanishes or
+/// turns upward fails this test (R1: cross-crate edges are never upward).
+#[test]
+fn layering_dropped_rows_are_measured_cross_crate() {
+    let mut rows = 0;
+    for (index, line) in DROPPED_ROWS_TSV.lines().enumerate() {
+        if index == 0 || line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields: Vec<&str> = line.split('\t').collect();
+        assert_eq!(fields.len(), 7, "bad dropped-row ledger line {}", index + 1);
+        let (lower, upper, post_file, _post_line, written, _pre_ref, reason) = (
+            fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6],
+        );
+        assert!(
+            !CEILINGS_LIST
+                .lines()
+                .any(|ceiling| ceiling.starts_with(&format!("{lower} {upper} "))),
+            "dropped row {lower} {upper} must not reappear in the ceilings"
+        );
+        let mut walker = new_walker();
+        walker.phase = ScanPhase::References;
+        walker.logical_path = vec![lower.to_owned()];
+        walker.source = Path::new(post_file).to_path_buf();
+        let segments: Vec<String> = written.split("::").map(str::to_owned).collect();
+        assert_eq!(
+            walker.not_upward_reason(&segments),
+            reason,
+            "dropped ref {post_file}:{written} must stay measured as {reason}"
+        );
+        rows += 1;
+    }
+    assert_eq!(rows, 7, "the drop ledger is pinned to seven measured refs");
+}
+
 /// Counting-rule plant: a grouped use under ONE shared upward prefix records
 /// ONE site no matter how many leaves it names (the pre-split rule). The
 /// second statement spans two modules and correctly records two sites, one
