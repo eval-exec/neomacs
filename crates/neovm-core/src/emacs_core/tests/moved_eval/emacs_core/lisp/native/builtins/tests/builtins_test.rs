@@ -2034,7 +2034,7 @@ fn kill_buffer_of_an_unshown_buffer_does_not_create_scratch() {
         .buffers
         .current_buffer()
         .expect("bootstrap scratch")
-        .id;
+        .id();
     eval.edit
         .buffers
         .rename_buffer(scratch, Value::string("renamed-scratch"))
@@ -2305,7 +2305,7 @@ fn buffer_size_counts_full_buffer_characters_ignoring_narrowing() {
 fn buffer_base_buffer_and_last_name_semantics() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let base_id = eval.edit.buffers.current_buffer().unwrap().id;
+    let base_id = eval.edit.buffers.current_buffer().unwrap().id();
     // Make it indirect the way `make-indirect-buffer` does.  Writing
     // `base_buffer` behind the manager's back leaves its count of live
     // indirect buffers -- which `kill-buffer` trusts when it decides whether
@@ -3467,7 +3467,7 @@ fn delete_all_overlays_clears_current_buffer() {
     .expect("second overlay should be created");
 
     let buf = eval.edit.buffers.current_buffer().expect("current buffer");
-    assert_eq!(buf.overlays.len(), 2);
+    assert_eq!(buf.overlays().len(), 2);
 
     assert_eq!(
         builtin_delete_all_overlays(&mut eval.edit.buffers, vec![]).unwrap(),
@@ -3475,7 +3475,7 @@ fn delete_all_overlays_clears_current_buffer() {
     );
 
     let buf = eval.edit.buffers.current_buffer().expect("current buffer");
-    assert_eq!(buf.overlays.len(), 0);
+    assert_eq!(buf.overlays().len(), 0);
 }
 
 #[test]
@@ -4193,8 +4193,10 @@ fn buffer_swap_text_swaps_owned_backend_and_state() {
                 .buffers
                 .get_mut(first_id)
                 .expect("first buffer should exist");
-            first.slots[neovm_edit::buffer::buffer::BUFFER_SLOT_MARK_ACTIVE.index()] = Value::T;
-            first.slots[neovm_edit::buffer::buffer::BUFFER_SLOT_POINT_BEFORE_SCROLL.index()] =
+            first.slots_mut()[neovm_edit::buffer::buffer::BUFFER_SLOT_MARK_ACTIVE.index()] =
+                Value::T;
+            first.slots_mut()
+                [neovm_edit::buffer::buffer::BUFFER_SLOT_POINT_BEFORE_SCROLL.index()] =
                 Value::fixnum(2);
             first.set_undo_list(Value::symbol("first-undo"));
         }
@@ -4204,8 +4206,10 @@ fn buffer_swap_text_swaps_owned_backend_and_state() {
                 .buffers
                 .get_mut(second_id)
                 .expect("second buffer should exist");
-            second.slots[neovm_edit::buffer::buffer::BUFFER_SLOT_MARK_ACTIVE.index()] = Value::NIL;
-            second.slots[neovm_edit::buffer::buffer::BUFFER_SLOT_POINT_BEFORE_SCROLL.index()] =
+            second.slots_mut()[neovm_edit::buffer::buffer::BUFFER_SLOT_MARK_ACTIVE.index()] =
+                Value::NIL;
+            second.slots_mut()
+                [neovm_edit::buffer::buffer::BUFFER_SLOT_POINT_BEFORE_SCROLL.index()] =
                 Value::fixnum(4);
             second.set_undo_list(Value::symbol("second-undo"));
         }
@@ -4250,26 +4254,26 @@ fn buffer_swap_text_swaps_owned_backend_and_state() {
         assert_eq!(second.point_max_emacs_byte_pos().get(), 4);
         assert_eq!(second.mark_emacs_byte_pos().map(|pos| pos.get()), Some(3));
         assert_eq!(
-            first.slots[neovm_edit::buffer::buffer::BUFFER_SLOT_MARK_ACTIVE.index()],
+            first.slots()[neovm_edit::buffer::buffer::BUFFER_SLOT_MARK_ACTIVE.index()],
             Value::NIL
         );
         assert_eq!(
-            second.slots[neovm_edit::buffer::buffer::BUFFER_SLOT_MARK_ACTIVE.index()],
+            second.slots()[neovm_edit::buffer::buffer::BUFFER_SLOT_MARK_ACTIVE.index()],
             Value::T
         );
         assert_eq!(
-            first.slots[neovm_edit::buffer::buffer::BUFFER_SLOT_POINT_BEFORE_SCROLL.index()],
+            first.slots()[neovm_edit::buffer::buffer::BUFFER_SLOT_POINT_BEFORE_SCROLL.index()],
             Value::NIL
         );
         assert_eq!(
-            second.slots[neovm_edit::buffer::buffer::BUFFER_SLOT_POINT_BEFORE_SCROLL.index()],
+            second.slots()[neovm_edit::buffer::buffer::BUFFER_SLOT_POINT_BEFORE_SCROLL.index()],
             Value::NIL
         );
         assert_eq!(first.get_undo_list(), Value::symbol("second-undo"));
         assert_eq!(second.get_undo_list(), Value::symbol("first-undo"));
         assert_eq!(overlay.as_overlay_data().unwrap().buffer, Some(first_id));
-        assert_eq!(first.overlays.len(), 1);
-        assert!(second.overlays.is_empty());
+        assert_eq!(first.overlays().len(), 1);
+        assert!(second.overlays().is_empty());
     }
 }
 
@@ -4327,7 +4331,7 @@ fn buffer_swap_text_self_keeps_gnu_side_effects() {
             .buffers
             .get_mut(buffer_id)
             .expect("buffer should exist");
-        buffer.slots[neovm_edit::buffer::buffer::BUFFER_SLOT_POINT_BEFORE_SCROLL.index()] =
+        buffer.slots_mut()[neovm_edit::buffer::buffer::BUFFER_SLOT_POINT_BEFORE_SCROLL.index()] =
             Value::fixnum(2);
     }
     let before_modified = eval.edit.buffers.get(buffer_id).unwrap().modified_tick();
@@ -4360,7 +4364,7 @@ fn buffer_swap_text_self_keeps_gnu_side_effects() {
     assert_eq!(buffer.chars_modified_tick(), before_chars_modified + 2);
     assert_eq!(buffer.overlay_modified_tick(), before_overlay_modified + 2);
     assert_eq!(
-        buffer.slots[neovm_edit::buffer::buffer::BUFFER_SLOT_POINT_BEFORE_SCROLL.index()],
+        buffer.slots()[neovm_edit::buffer::buffer::BUFFER_SLOT_POINT_BEFORE_SCROLL.index()],
         Value::NIL
     );
 }
@@ -9935,7 +9939,7 @@ fn delete_and_extract_region_preserves_buffer_text_properties() {
         .edit
         .buffers
         .put_buffer_text_property_in_emacs_byte_range(
-            buf.id,
+            buf.id(),
             EmacsByteRange::from_usize(3, 6),
             Value::symbol("face"),
             Value::symbol("italic"),
@@ -18792,7 +18796,7 @@ fn buffer_text_pixel_size_honors_display_align_to() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("buf-pixel-align-to", 200, 24, buf_id);
@@ -18849,7 +18853,7 @@ fn buffer_text_pixel_size_honors_display_space_width() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("buf-pixel-space-width", 200, 24, buf_id);
@@ -18912,7 +18916,7 @@ fn window_text_pixel_size_includes_overlay_after_string_align_to() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("win-pixel-overlay-after", 200, 24, buf_id);
@@ -18977,7 +18981,7 @@ fn buffer_text_pixel_size_includes_overlay_before_string_multiline() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("buf-pixel-overlay-before", 200, 24, buf_id);
@@ -19027,7 +19031,7 @@ fn buffer_text_pixel_size_plain_text_unchanged() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("buf-pixel-plain", 200, 24, buf_id);

@@ -69,7 +69,11 @@ fn assert_live_delete(prepared: UndoRecording, committed: UndoRecording) {
     }
     let live = buffers.get_mut(id).unwrap();
     live.set_modified(false);
-    live.saved_point_before_command.save(id, CharPos0::new(6));
+    neovm_edit::test_support::authority::save_point_before_command_for_test(
+        live,
+        id,
+        CharPos0::new(6),
+    );
     live.set_undo_list(match prepared {
         UndoRecording::Enabled => Value::NIL,
         UndoRecording::Disabled => Value::T,
@@ -120,7 +124,7 @@ fn assert_live_delete(prepared: UndoRecording, committed: UndoRecording) {
 
 fn anchor(buffer: &Buffer, position: usize) -> TextPositionAnchor {
     let chars = CharPos0::new(position);
-    TextPositionAnchor::new(chars, buffer.text.char_pos_to_emacs_byte_pos(chars))
+    TextPositionAnchor::new(chars, buffer.char_pos_to_emacs_byte_pos_for_test(chars))
 }
 
 fn normalized_undo(mut undo: Value, markers: &[Value]) -> Value {

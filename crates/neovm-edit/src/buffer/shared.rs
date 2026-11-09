@@ -96,6 +96,14 @@ impl SavedPointBeforeCommand {
     pub(crate) fn shares_cell_with(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.cell, &other.cell)
     }
+
+    /// Address of the editor-global cell, for identity comparisons that must
+    /// not carry the `Rc` handle across a crate boundary (VIS read arm, lead
+    /// #1052).
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn cell_address(&self) -> usize {
+        Rc::as_ptr(&self.cell) as usize
+    }
 }
 
 #[derive(Clone)]

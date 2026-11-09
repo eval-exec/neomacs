@@ -14,7 +14,7 @@ fn assert_point_only_warm_query_reuse(setup: &str, reuse_after_move: bool) {
     use crate::window::{WindowLayoutQuery, WindowLayoutQueryOutcome, WindowLayoutQueryScope};
 
     let mut eval = interactive_context(crate::test_utils::new_context);
-    let buffer = eval.edit.buffers.current_buffer().unwrap().id;
+    let buffer = eval.edit.buffers.current_buffer().unwrap().id();
     eval.edit.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
     let frame = eval
         .frame_manager_mut()

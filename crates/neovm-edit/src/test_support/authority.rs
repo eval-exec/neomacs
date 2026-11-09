@@ -99,3 +99,35 @@ pub fn casing_property_context_for_test<'a>(
 ) -> crate::buffer::text_props::casing_insertion::CasingPropertyContext<'a> {
     crate::buffer::text_props::casing_insertion::CasingPropertyContext { obarray, controls }
 }
+
+/// LEAD #1052 FENCE: write `BufferText::set_modified_tick` through the
+/// buffer.  The raw method stays pub(crate) and cfg(any(test, feature));
+/// this fence is the only cross-crate write route (the `text` field is
+/// pub(crate) in every arm).
+pub fn set_text_modified_tick_for_test(buffer: &mut crate::buffer::buffer::Buffer, tick: i64) {
+    buffer.set_text_modified_tick_raw(tick);
+}
+
+/// LEAD #1052 FENCE: write `BufferText::set_modification_state` through the
+/// buffer.  The raw method stays pub(crate) and cfg(any(test, feature)); this
+/// fence is the only cross-crate write route.
+pub fn set_text_modification_state_for_test(
+    buffer: &mut crate::buffer::buffer::Buffer,
+    modified_tick: i64,
+    chars_modified_tick: i64,
+    save_modified_tick: i64,
+) {
+    buffer.set_text_modification_state_raw(modified_tick, chars_modified_tick, save_modified_tick);
+}
+
+/// LEAD #1052 FENCE: record the editor-global saved point through the
+/// buffer's `SavedPointBeforeCommand` cell.  The raw method stays pub(crate)
+/// and cfg(any(test, feature)); this fence is the only cross-crate write
+/// route and the interior `Rc<Cell<_>>` never escapes this crate.
+pub fn save_point_before_command_for_test(
+    buffer: &mut crate::buffer::buffer::Buffer,
+    buffer_id: crate::buffer::BufferId,
+    point: crate::buffer::CharPos0,
+) {
+    buffer.save_point_before_command_raw(buffer_id, point);
+}

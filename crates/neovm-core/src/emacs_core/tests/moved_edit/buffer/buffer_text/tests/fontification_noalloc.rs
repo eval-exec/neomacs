@@ -204,5 +204,8 @@ fn assert_conversions(text: &BufferText, expected: &str) {
 }
 
 fn current_anchor_storage(ctx: &Context) -> (usize, usize) {
-    anchor_storage(&ctx.buffer_manager().current_buffer().unwrap().text)
+    ctx.buffer_manager()
+        .current_buffer()
+        .unwrap()
+        .anchor_storage_snapshot_for_test()
 }

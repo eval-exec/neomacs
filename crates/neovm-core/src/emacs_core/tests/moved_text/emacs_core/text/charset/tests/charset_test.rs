@@ -918,7 +918,7 @@ fn find_charset_region_eval_out_of_range_errors() {
             .buffers
             .current_buffer()
             .expect("current buffer")
-            .id,
+            .id(),
     );
     for (beg, end) in [(0, 2), (1, 5)] {
         match builtin_find_charset_region(&mut eval, vec![Value::fixnum(beg), Value::fixnum(end)])

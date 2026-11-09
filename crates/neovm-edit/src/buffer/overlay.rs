@@ -218,7 +218,7 @@ pub struct OverlayList {
 }
 #[cfg(any(test, feature = "test-support"))]
 pub struct OverlayList {
-    pub index: OverlayIndex,
+    pub(crate) index: OverlayIndex,
     snapshot: RefCell<Option<OverlaySnapshot>>,
     // Permanent symbol identities only: no additional Lisp roots. A small
     // negative cache prevents Bloom collisions from causing full scans on
@@ -274,6 +274,29 @@ impl OverlayList {
     fn invalidate_snapshot(&mut self) {
         self.absent_properties.set([None; 8]);
         self.snapshot.get_mut().take();
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Run the index's invariant check (VIS read arm, lead #1052).  The
+    /// `index` field is `pub(crate)` in every arm; these forwarders are the
+    /// only cross-crate read routes, and they never expose the index handle.
+    pub(crate) fn assert_index_invariants_for_test(&self) {
+        self.index.assert_invariants();
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied index range lookup (VIS read arm, lead #1052).
+    pub(crate) fn index_range_for_test(&self, overlay: Value) -> Option<EmacsByteRange> {
+        self.index.range(overlay)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied index property-filter answer (VIS read arm, lead #1052).
+    pub(crate) fn index_may_contain_property_for_test(&self, property: Value) -> bool {
+        self.index.may_contain_property(property)
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]

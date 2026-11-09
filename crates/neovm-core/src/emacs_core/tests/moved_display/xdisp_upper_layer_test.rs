@@ -41,7 +41,7 @@ fn assert_point_only_warm_query_reuse_with_face_setup(
     use crate::window::{WindowLayoutQuery, WindowLayoutQueryOutcome, WindowLayoutQueryScope};
 
     let mut eval = interactive_context(crate::test_utils::new_context);
-    let buffer = eval.edit.buffers.current_buffer().unwrap().id;
+    let buffer = eval.edit.buffers.current_buffer().unwrap().id();
     eval.edit.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
     let frame = eval
         .frame_manager_mut()
@@ -522,7 +522,7 @@ fn window_text_pixel_size_rejects_snapshot_after_overlay_change() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     eval.edit
         .buffers
         .get_mut(buf_id)
@@ -614,7 +614,7 @@ fn window_text_pixel_size_rejects_snapshot_after_narrowing() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     eval.edit
         .buffers
         .get_mut(buf_id)
@@ -745,7 +745,7 @@ fn retained_display_rows_reject_window_display_table_changes() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let window_id = crate::window::WindowId(selected_window as u64);
     let frame_id = eval
         .frame_manager()
@@ -800,7 +800,7 @@ fn retained_display_rows_reject_window_display_table_changes() {
 fn pos_visible_queries_target_rows_but_last_row_still_queries_the_viewport() {
     use crate::window::{WindowLayoutQueryOutcome, WindowLayoutQueryScope};
     let mut eval = interactive_context(crate::test_utils::new_context);
-    let buffer = eval.edit.buffers.current_buffer().unwrap().id;
+    let buffer = eval.edit.buffers.current_buffer().unwrap().id();
     eval.edit
         .buffers
         .get_mut(buffer)
@@ -875,7 +875,7 @@ fn posn_at_point_requeries_warm_rows_after_point_moves_with_default_relative_num
     use crate::window::{WindowLayoutQueryOutcome, WindowLayoutQueryScope};
 
     let mut eval = interactive_context(crate::test_utils::new_context);
-    let buffer = eval.edit.buffers.current_buffer().unwrap().id;
+    let buffer = eval.edit.buffers.current_buffer().unwrap().id();
     eval.edit.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
     let frame = eval
         .frame_manager_mut()
@@ -977,7 +977,7 @@ fn posn_at_point_requeries_warm_rows_after_face_overlay_height_changes_or_moves(
         ),
     ] {
         let mut eval = interactive_context(crate::test_utils::new_context);
-        let buffer = eval.edit.buffers.current_buffer().unwrap().id;
+        let buffer = eval.edit.buffers.current_buffer().unwrap().id();
         eval.edit.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
         let frame = eval
             .frame_manager_mut()
@@ -1162,7 +1162,7 @@ fn test_vertical_motion_eval_uses_live_redisplay_rows() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("xdisp-vertical-motion-rows", 160, 96, buf_id);
@@ -1253,7 +1253,7 @@ fn test_vertical_motion_eval_uses_live_redisplay_goal_column() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("xdisp-vertical-motion-column", 160, 96, buf_id);
@@ -1361,7 +1361,7 @@ fn test_vertical_motion_goal_column_past_row_end_lands_on_the_row_end_like_gnu()
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("xdisp-vertical-motion-row-end", 160, 96, buf_id);

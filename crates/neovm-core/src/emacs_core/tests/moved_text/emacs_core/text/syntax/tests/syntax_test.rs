@@ -675,7 +675,7 @@ fn set_syntax_table_updates_current_buffer_only() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let other_id = eval.edit.buffers.create_buffer("*syntax-other*");
 
     let out = builtin_set_syntax_table(&mut eval, vec![custom]).unwrap();

@@ -58,7 +58,7 @@ fn install_mouse_help_echo_snapshot_with_value(eval: &mut Context, help: Value) 
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     {
         let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("abc");

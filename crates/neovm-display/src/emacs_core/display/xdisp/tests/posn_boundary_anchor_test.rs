@@ -11,7 +11,7 @@ use neomacs_display_protocol::posn_object_extent::{PosnMatrixRow, PosnMatrixSnap
 fn tty_extent_on_retains_canonical_eol_and_synthetic_tail_offsets() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer = eval.edit.buffers.current_buffer().expect("buffer").id;
+    let buffer = eval.edit.buffers.current_buffer().expect("buffer").id();
     eval.edit
         .buffers
         .get_mut(buffer)
@@ -162,7 +162,7 @@ fn tty_extent_on_retains_canonical_eol_and_synthetic_tail_offsets() {
 fn tty_extent_on_empty_hscrolled_eob_offsets_preserve_off_geometry() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer = eval.edit.buffers.current_buffer().expect("buffer").id;
+    let buffer = eval.edit.buffers.current_buffer().expect("buffer").id();
     eval.edit
         .buffers
         .get_mut(buffer)

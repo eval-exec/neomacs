@@ -34,7 +34,12 @@ fn shared_overlay_modiff_invalidates_peers_without_sharing_overlay_lists() {
             .expect("actual overlay property change");
         assert_eq!(tick(&eval, peer), before.wrapping_add(1));
         assert_eq!(
-            eval.edit.buffers.get(owner).expect("owner").overlays.len(),
+            eval.edit
+                .buffers
+                .get(owner)
+                .expect("owner")
+                .overlays()
+                .len(),
             1
         );
         assert!(
@@ -42,7 +47,7 @@ fn shared_overlay_modiff_invalidates_peers_without_sharing_overlay_lists() {
                 .buffers
                 .get(peer)
                 .expect("peer")
-                .overlays
+                .overlays()
                 .is_empty()
         );
         let before = tick(&eval, peer);
@@ -82,7 +87,7 @@ fn shared_overlay_modiff_invalidates_peers_without_sharing_overlay_lists() {
                 .buffers
                 .get(owner)
                 .expect("owner")
-                .overlays
+                .overlays()
                 .is_empty()
         );
         assert!(
@@ -90,7 +95,7 @@ fn shared_overlay_modiff_invalidates_peers_without_sharing_overlay_lists() {
                 .buffers
                 .get(peer)
                 .expect("peer")
-                .overlays
+                .overlays()
                 .is_empty()
         );
     }

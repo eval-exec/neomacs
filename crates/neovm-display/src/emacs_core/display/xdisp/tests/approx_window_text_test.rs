@@ -122,7 +122,7 @@ fn window_over(text: &str, window_start: usize) -> (Context, FrameId, WindowId) 
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("approx-window-text", 40 * 8, 12 * 16, buf_id);

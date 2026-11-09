@@ -27,7 +27,7 @@ fn render(eval: &mut Context, elements: Vec<Value>) -> ModeLineDisplayOutput {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("mode-line-multibyte-identity", 800, 600, buffer_id);

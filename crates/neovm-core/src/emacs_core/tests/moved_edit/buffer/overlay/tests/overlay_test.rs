@@ -134,10 +134,10 @@ fn lazy_edit_index_matches_simple_overlay_reference_model() {
             }
         }
 
-        list.index.assert_invariants();
+        list.assert_index_invariants_for_test();
         for expected in &model {
             assert_eq!(
-                list.index.range(expected.value),
+                list.index_range_for_test(expected.value),
                 Some(emacs_byte_range(expected.start, expected.end)),
                 "range diverged at edit step {step}, position {position}, length {length}, serial {}",
                 expected.value.as_overlay_data().unwrap().serial.get(),
@@ -170,7 +170,7 @@ fn cached_overlay_snapshot_survives_exact_evaluator_gc() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
     eval.eval_str("(progn (insert \"abcd\") (overlay-put (make-overlay 1 4) 'before-string (copy-sequence \"frozen\")))").unwrap();
-    let buffer = eval.edit.buffers.current_buffer().unwrap().id;
+    let buffer = eval.edit.buffers.current_buffer().unwrap().id();
     // No Rust-held Value roots the copied overlay. The cache belongs to the
     // live buffer and must keep its independent overlay/plist objects alive.
     drop(eval.edit.buffers.get(buffer).unwrap().overlays().snapshot());

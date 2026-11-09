@@ -172,7 +172,7 @@ fn create_indirect_buffer_shares_root_text_and_updates_siblings() {
         let indirect = mgr.get(indirect_id).expect("indirect buffer");
         assert_eq!(base.text_backend_kind(), kind);
         assert_eq!(indirect.text_backend_kind(), kind);
-        assert_eq!(indirect.base_buffer, Some(base_id));
+        assert_eq!(indirect.base_buffer(), Some(base_id));
         assert!(base.shares_text_storage_with(indirect));
         assert_eq!(indirect.buffer_string(), "abcd");
 
@@ -261,8 +261,8 @@ fn create_indirect_buffer_flattens_double_indirection() {
         .create_indirect_buffer(first_id, "*indirect-two*", false)
         .expect("second indirect");
 
-    assert_eq!(mgr.get(first_id).unwrap().base_buffer, Some(base_id));
-    assert_eq!(mgr.get(second_id).unwrap().base_buffer, Some(base_id));
+    assert_eq!(mgr.get(first_id).unwrap().base_buffer(), Some(base_id));
+    assert_eq!(mgr.get(second_id).unwrap().base_buffer(), Some(base_id));
     let base = mgr.get(base_id).expect("base buffer");
     let second = mgr.get(second_id).expect("second indirect buffer");
     assert!(base.shares_text_storage_with(second));
@@ -322,8 +322,8 @@ fn casify_region_records_undo_even_when_unchanged() {
         let buf = mgr.get_mut(id).expect("scratch buffer");
         // Point at buffer position 6 (end of region) == Emacs byte pos 5.
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(5));
-        buf.saved_point_before_command
-            .save(id, buf.point_char_pos());
+        let point = buf.point_char_pos();
+        neovm_edit::test_support::authority::save_point_before_command_for_test(buf, id, point);
         let mut ul = buf.get_undo_list();
         neovm_edit::buffer::undo::undo_list_boundary(&mut ul);
         buf.set_undo_list(ul);
@@ -476,7 +476,7 @@ fn from_dump_restores_indirect_buffer_shared_text_state() {
         assert_eq!(base.text_backend_kind(), kind);
         assert_eq!(indirect.text_backend_kind(), kind);
         assert!(base.shares_text_storage_with(indirect));
-        assert!(base.undo_state.shares_with(&indirect.undo_state));
+        assert!(base.shares_undo_state_with_for_test(indirect));
         assert_eq!(
             indirect.text_props_get_property_at_emacs_byte_pos(
                 neovm_edit::buffer::EmacsBytePos::new(1),
@@ -642,7 +642,7 @@ fn cloned_indirect_buffers_copy_overlay_objects_and_indexes() {
     let copied = mgr
         .get(indirect_id)
         .expect("indirect buffer")
-        .overlays
+        .overlays()
         .overlays_in_gnu_lists_order();
     assert_eq!(copied.len(), 1);
     let copied = copied[0];
@@ -880,8 +880,8 @@ fn implemented_text_backends_match_buffer_swap_text_side_effects() {
                 "right buffer after swap should have left payload for {left_kind:?}->{right_kind:?}"
             );
 
-            assert_eq!(left_after.overlays.len(), 1);
-            assert_eq!(right_after.overlays.len(), 1);
+            assert_eq!(left_after.overlays().len(), 1);
+            assert_eq!(right_after.overlays().len(), 1);
             assert_eq!(
                 right_overlay.as_overlay_data().unwrap().buffer,
                 Some(left_id)
@@ -1486,8 +1486,12 @@ fn delete_records_point_entry_before_marker_adjustment() {
     }
     // GNU records `point_before_last_command_or_undo`; here point == 7
     // (0-indexed char 6).
-    buf.saved_point_before_command
-        .save(buf.id, neovm_edit::buffer::CharPos0::new(6));
+    let buf_id = buf.id();
+    neovm_edit::test_support::authority::save_point_before_command_for_test(
+        &mut buf,
+        buf_id,
+        neovm_edit::buffer::CharPos0::new(6),
+    );
 
     // delete-region chars 3..5 (1-indexed) == Emacs bytes [2, 4).
     buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(2, 4));
@@ -1534,8 +1538,12 @@ fn delete_records_point_entry_without_marker_adjustment() {
         neovm_edit::buffer::undo::undo_list_boundary(&mut ul);
         buf.set_undo_list(ul);
     }
-    buf.saved_point_before_command
-        .save(buf.id, neovm_edit::buffer::CharPos0::new(6));
+    let buf_id = buf.id();
+    neovm_edit::test_support::authority::save_point_before_command_for_test(
+        &mut buf,
+        buf_id,
+        neovm_edit::buffer::CharPos0::new(6),
+    );
 
     buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(2, 4));
 
@@ -1699,14 +1707,13 @@ fn every_buffer_of_one_editor_shares_the_saved_point_cell() {
     let expected = mgr
         .get(scratch)
         .expect("scratch buffer")
-        .saved_point_before_command
-        .clone();
+        .saved_point_cell_address_for_test();
     for id in [scratch, plain, indirect, cloned] {
-        assert!(
+        assert_eq!(
             mgr.get(id)
                 .expect("live buffer")
-                .saved_point_before_command
-                .shares_cell_with(&expected),
+                .saved_point_cell_address_for_test(),
+            expected,
             "buffer {id:?} must share the editor's one saved-point cell"
         );
     }
@@ -2843,14 +2850,13 @@ fn state_markers_survive_gc_without_lisp_references() {
             .get(indirect_id)
             .expect("indirect buffer present");
         let sm = buffer
-            .state_markers
-            .as_ref()
+            .state_markers()
             .expect("state markers populated by create_indirect_buffer");
         (
             sm.pt_marker.as_ptr(),
             sm.begv_marker.as_ptr(),
             sm.zv_marker.as_ptr(),
-            buffer.id,
+            buffer.id(),
         )
     };
 
@@ -2960,7 +2966,7 @@ fn buffer_mark_marker_survives_gc_without_lisp_reference() {
         .buffers
         .get(buffer_id)
         .expect("buffer present")
-        .mark_marker
+        .mark_marker()
         .as_ptr();
     assert!(!mark_ptr.is_null(), "mark marker should be materialized");
 
@@ -3279,7 +3285,13 @@ fn buffer_property_overlay_and_symbol_roots_survive_collection_after_edits() {
         // Keep the evaluator's immutable overlay copy rooted as well as the
         // live overlay objects; GC must preserve both enumeration paths.
         let current = eval.edit.buffers.current_buffer_id().unwrap();
-        let _snapshot = eval.edit.buffers.get(current).unwrap().overlays.snapshot();
+        let _snapshot = eval
+            .edit
+            .buffers
+            .get(current)
+            .unwrap()
+            .overlays()
+            .snapshot();
         eval.gc_collect_exact();
         assert_eq!(
             eval.eval_str(r#"(symbol-name major-mode)"#).unwrap(),
@@ -3400,13 +3412,13 @@ fn char_pos_for_byte(buf: &Buffer, byte_pos: usize) -> usize {
 }
 
 fn overlay_start_for_test(buf: &Buffer, overlay: Value) -> Option<usize> {
-    buf.overlays
+    buf.overlays()
         .overlay_start_emacs_byte_pos(overlay)
         .map(EmacsBytePos::get)
 }
 
 fn overlay_end_for_test(buf: &Buffer, overlay: Value) -> Option<usize> {
-    buf.overlays
+    buf.overlays()
         .overlay_end_emacs_byte_pos(overlay)
         .map(EmacsBytePos::get)
 }
@@ -3430,7 +3442,7 @@ fn marker_chain_lookup_for_test(
 /// register it on `buf` at an Emacs byte position.
 fn register_marker_for_test(buf: &mut Buffer, pos: usize, insertion_type: InsertionType) -> Value {
     let marker_value = Value::make_marker(neovm_value::heap_types::LispMarker::new(
-        neovm_value::heap_types::MarkerBuffer::attached(buf.id),
+        neovm_value::heap_types::MarkerBuffer::attached(buf.id()),
         neovm_edit::buffer::CharPos0::new(0),
         neovm_edit::buffer::EmacsBytePos::new(0),
         insertion_type == InsertionType::After,
@@ -3461,7 +3473,7 @@ fn casify_manager_with_text(text: &str) -> (BufferManager, BufferId) {
     {
         let buf = mgr.get_mut(id).expect("scratch buffer");
         let end_char = buf.point_char_pos();
-        buf.saved_point_before_command.save(id, end_char);
+        neovm_edit::test_support::authority::save_point_before_command_for_test(buf, id, end_char);
         // GNU inserts an undo boundary between the buffer fill and the case op.
         let mut ul = buf.get_undo_list();
         neovm_edit::buffer::undo::undo_list_boundary(&mut ul);
@@ -3920,7 +3932,7 @@ fn run_backend_migration_script(
     let overlay = Value::make_overlay(OverlayDataInit {
         serial: neovm_value::heap_types::OverlaySerialSource::Mint,
         plist: Value::NIL,
-        buffer: Some(buf.id),
+        buffer: Some(buf.id()),
         start: 3,
         end: 8,
         front_advance: false,

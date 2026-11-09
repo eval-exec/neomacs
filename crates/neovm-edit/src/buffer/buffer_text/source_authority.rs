@@ -1,8 +1,6 @@
 //! Read-only authority for motion observations of one shared live text owner.
 //! Raw property-table installation retains its existing paired-byte-edit or
 //! fresh-construction precondition; see BufferText::text_props_replace.
-#[cfg(any(test, feature = "test-support"))]
-use super::BufferText;
 use super::BufferTextStorage;
 use crate::buffer::Buffer;
 use std::cell::{Ref, RefCell};
@@ -19,8 +17,8 @@ struct SourceRevision {
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SourceRevision {
-    pub content_epoch: u64,
-    pub all_properties: u64,
+    pub(crate) content_epoch: u64,
+    pub(crate) all_properties: u64,
 }
 
 impl SourceRevision {
@@ -30,6 +28,22 @@ impl SourceRevision {
             content_epoch: source.content_epoch,
             all_properties: source.text_props.mutation_tick(),
         }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied content epoch (VIS read arm, lead #1052).  The field is
+    /// `pub(crate)` in every arm; these getters are the only cross-crate
+    /// read routes.
+    pub(crate) fn content_epoch_for_test(&self) -> u64 {
+        self.content_epoch
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied all-properties mutation tick (VIS read arm, lead #1052).
+    pub(crate) fn all_properties_for_test(&self) -> u64 {
+        self.all_properties
     }
 }
 
@@ -49,7 +63,7 @@ pub struct BufferSourceAuthority {
 #[derive(Clone, Debug)]
 pub struct BufferSourceAuthority {
     owner: Weak<RefCell<BufferTextStorage>>,
-    pub revision: SourceRevision,
+    pub(crate) revision: SourceRevision,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -57,11 +71,20 @@ impl BufferSourceAuthority {
     /// Whether this captured authority still names `text`'s live storage owner.
     ///
     /// Observe-only identity check: it compares the `Weak` owner pointer with
-    /// the text's `Rc` storage pointer.  The carrier field stays private in
-    /// both cfg arms, so this exposes neither a borrow nor an upgrade handle.
+    /// the buffer text's `Rc` storage pointer.  The carrier field stays
+    /// private in both cfg arms, so this exposes neither a borrow nor an
+    /// upgrade handle.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn is_owner_of(&self, text: &BufferText) -> bool {
-        self.owner.as_ptr() == Rc::as_ptr(&text.storage)
+    pub(crate) fn is_owner_of(&self, buffer: &Buffer) -> bool {
+        self.owner.as_ptr() == Rc::as_ptr(&buffer.text.storage)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied captured revision (VIS read arm, lead #1052).  The field is
+    /// `pub(crate)` in every arm; this getter is the only cross-crate route.
+    pub(crate) fn revision_for_test(&self) -> SourceRevision {
+        self.revision
     }
 }
 

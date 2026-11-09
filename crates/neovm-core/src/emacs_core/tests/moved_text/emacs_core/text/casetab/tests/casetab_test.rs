@@ -161,7 +161,7 @@ fn evaluator_case_table_roundtrip_and_isolation() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let other_id = eval.edit.buffers.create_buffer("*case-other*");
 
     let custom = make_empty_case_table();

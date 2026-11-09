@@ -2500,16 +2500,16 @@ pub struct Buffer {
     /// BEG_UNCHANGED analog) at each use.
     pub(crate) line_number_anchor: std::cell::Cell<Option<ModeLineNumberAnchor>>,
     /// Unique identifier.
-    pub id: BufferId,
+    pub(crate) id: BufferId,
     /// Buffer name (e.g. `"*scratch*"`). Mirrors GNU `struct buffer.name_`.
     pub(crate) name: Value,
     /// Buffer name before the last rename, or before death after kill.
     /// Mirrors GNU `struct buffer.last_name_` and `BVAR (buf, last_name)`.
     pub(crate) last_name: Value,
     /// Base buffer when this is an indirect buffer.
-    pub base_buffer: Option<BufferId>,
+    pub(crate) base_buffer: Option<BufferId>,
     /// The underlying text storage.
-    pub text: BufferText,
+    pub(crate) text: BufferText,
     /// Point — paired character and Emacs-byte cursor position.
     pub(crate) point: TextPositionAnchor,
     /// GNU `BVAR(buf, mark)` — a real Lisp_Marker.  This IS the mark;
@@ -2517,7 +2517,7 @@ pub struct Buffer {
     /// The marker tracks its own position through the chain; read it via
     /// `mark_byte()` / `mark_char()` / `mark()`. The reference is a GC root:
     /// `BufferManager`'s trace synthesizes its `Value`.
-    pub mark_marker: MarkerRef,
+    pub(crate) mark_marker: MarkerRef,
     /// Beginning of accessible (narrowed) portion, inclusive.
     pub(crate) accessible_start: TextPositionAnchor,
     /// End of accessible (narrowed) portion, exclusive.
@@ -2539,7 +2539,7 @@ pub struct Buffer {
     /// temporary/internal buffers.
     pub(crate) inhibit_buffer_hooks: bool,
     /// GNU-style noncurrent PT/BEGV/ZV markers for buffers that share text.
-    pub state_markers: Option<BufferStateMarkers>,
+    pub(crate) state_markers: Option<BufferStateMarkers>,
     /// `local_var_alist` — list of `(SYMBOL . VALUE)` per-buffer
     /// bindings for `SYMBOL_LOCALIZED` variables. Mirrors GNU
     /// `BVAR(buffer, local_var_alist)` (`buffer.h:362`). This is
@@ -2567,7 +2567,7 @@ pub struct Buffer {
     /// Phase 8b will migrate the hardcoded fields ([`Self::file_name`],
     /// [`Self::auto_save_file_name`], [`Self::read_only`],
     /// [`Self::multibyte`]) into slots and remove the duplicates.
-    pub slots: [neovm_value::value::Value; BUFFER_SLOT_COUNT],
+    pub(crate) slots: [neovm_value::value::Value; BUFFER_SLOT_COUNT],
     /// Per-slot "is buffer-local in this buffer" bitmap. Bit `N` is
     /// set when this buffer has its own local value for the slot at
     /// offset `N`. Mirrors GNU `b->local_flags[]` (`buffer.h:646`,
@@ -2587,7 +2587,7 @@ pub struct Buffer {
     /// always-local arm.
     pub(crate) local_flags: u64,
     /// Overlays attached to the buffer.
-    pub overlays: OverlayList,
+    pub(crate) overlays: OverlayList,
     /// GNU `BUF_OVERLAY_MODIFF`: incremented when live overlay ranges or
     /// properties change so redisplay observes overlay-only UI updates.
     pub(crate) overlay_modified_tick: i64,
@@ -2616,14 +2616,14 @@ pub struct Buffer {
         )>,
     >,
     /// Shared undo owner for this text.
-    pub undo_state: SharedUndoState,
+    pub(crate) undo_state: SharedUndoState,
     /// Handle on the editor's ONE saved point-before-command-or-undo, GNU's
     /// `point_before_last_command_or_undo` / `buffer_before_last_command_or_undo`
     /// globals (src/keyboard.c:232-233).  Every buffer a `BufferManager` owns
     /// holds a clone of the same cell, so a command-loop iteration in one
     /// buffer supersedes the point saved for every other one -- see
     /// [`SavedPointBeforeCommand`].
-    pub saved_point_before_command: SavedPointBeforeCommand,
+    pub(crate) saved_point_before_command: SavedPointBeforeCommand,
 }
 
 /// Stand-in digest for an overlay set that cannot be content-addressed. Mixed
@@ -3379,6 +3379,72 @@ impl Buffer {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn shares_text_storage_with(&self, other: &Self) -> bool {
         self.text.shares_storage_with(&other.text)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Whether both buffers share the one undo owner (VIS read arm, lead
+    /// #1052).  The `undo_state` field is `pub(crate)` in every arm; this
+    /// forwarder returns a bool and never exposes the `Rc<RefCell<_>>`.
+    pub(crate) fn shares_undo_state_with_for_test(&self, other: &Self) -> bool {
+        self.undo_state.shares_with(&other.undo_state)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied char-to-byte conversion through the live text (VIS read arm,
+    /// lead #1052); the `text` field is `pub(crate)` in every arm.
+    pub(crate) fn char_pos_to_emacs_byte_pos_for_test(&self, char_pos: CharPos0) -> EmacsBytePos {
+        self.text.char_pos_to_emacs_byte_pos(char_pos)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied anchor-storage snapshot through the live text (VIS read arm,
+    /// lead #1052); a plain `(lisp, emacs)` tuple, never a storage borrow.
+    pub(crate) fn anchor_storage_snapshot_for_test(&self) -> (usize, usize) {
+        self.text.anchor_storage_snapshot()
+    }
+
+    /// Test-support raw write for `BufferText::set_modified_tick`; the
+    /// authority fence `test_support::authority::set_text_modified_tick_for_
+    /// test` is the only cross-crate write route.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn set_text_modified_tick_raw(&self, tick: i64) {
+        self.text.set_modified_tick(tick);
+    }
+
+    /// Test-support raw write for `BufferText::set_modification_state`; the
+    /// authority fence `test_support::authority::set_text_modification_state_
+    /// for_test` is the only cross-crate write route.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn set_text_modification_state_raw(
+        &self,
+        modified_tick: i64,
+        chars_modified_tick: i64,
+        save_modified_tick: i64,
+    ) {
+        self.text
+            .set_modification_state(modified_tick, chars_modified_tick, save_modified_tick);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Address of the editor-global saved-point cell (VIS read arm, lead
+    /// #1052).  The `saved_point_before_command` field is `pub(crate)` in
+    /// every arm; the address is a plain scalar, so no `Rc<Cell<_>>` handle
+    /// crosses the crate boundary.
+    pub(crate) fn saved_point_cell_address_for_test(&self) -> usize {
+        self.saved_point_before_command.cell_address()
+    }
+
+    /// Test-support raw write for `SavedPointBeforeCommand::save`; the
+    /// authority fence `test_support::authority::save_point_before_command_
+    /// for_test` is the only cross-crate write route and the interior
+    /// `Rc<Cell<_>>` cell stays inside this crate.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn save_point_before_command_raw(&self, buffer: BufferId, point: CharPos0) {
+        self.saved_point_before_command.save(buffer, point);
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -6101,14 +6167,57 @@ pub struct BufferManager {
 /// No second mutable view or thread-switch authority is created by this type.
 #[repr(C)]
 pub struct BufferManager {
-    pub storage_ptr: NonNull<BufferStorage>,
+    pub(crate) storage_ptr: NonNull<BufferStorage>,
     /// Written only by `set_current_id`, along with the raw id and pointer.
     current: Option<BufferId>,
     /// Zero means there is no current buffer; real ids begin at one.
-    pub current_raw: u64,
+    pub(crate) current_raw: u64,
     /// Points into a stable live-buffer allocation, or is null for no selection.
     current_ptr: Option<NonNull<Buffer>>,
-    pub backing: BufferBacking,
+    pub(crate) backing: BufferBacking,
+}
+
+/// Plain-data projection of `BufferBacking` for the moved storage tests
+/// (VIS read arm, lead #1052).  The backing enum itself carries owned
+/// storage handles, so the tests classify it through this copy-only view;
+/// the exhaustive match below forces a future backing variant to update it.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BufferBackingKindForTest {
+    Standalone,
+    LeasedAttached,
+    LeasedDetached,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl BufferManager {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Address of the manager's storage allocation (VIS read arm, lead
+    /// #1052): a plain scalar for the identity assertions, never the
+    /// `NonNull` handle.
+    pub(crate) fn storage_address_for_test(&self) -> usize {
+        self.storage_ptr.as_ptr() as usize
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied raw current-buffer id (VIS read arm, lead #1052).
+    pub(crate) fn current_raw_for_test(&self) -> u64 {
+        self.current_raw
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied backing classification (VIS read arm, lead #1052).
+    pub(crate) fn backing_kind_for_test(&self) -> BufferBackingKindForTest {
+        match &self.backing {
+            BufferBacking::Standalone(_) => BufferBackingKindForTest::Standalone,
+            BufferBacking::Leased { detached: None, .. } => {
+                BufferBackingKindForTest::LeasedAttached
+            }
+            BufferBacking::Leased {
+                detached: Some(_), ..
+            } => BufferBackingKindForTest::LeasedDetached,
+        }
+    }
 }
 
 /// Stable editor-owned storage behind a BufferManager view.

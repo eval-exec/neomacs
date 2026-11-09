@@ -380,6 +380,6 @@ fn assert_row(
     let step = next_screen_line_start_from(context, buffer, start, width, wrap)
         .expect("scan fixture")
         .expect("nonempty accessible row");
-    assert_eq!(step.next, next, "next byte for {wrap:?}");
-    assert_eq!(step.end, end, "row end for {wrap:?}");
+    assert_eq!(step.next_for_test(), next, "next byte for {wrap:?}");
+    assert_eq!(step.end_for_test(), end, "row end for {wrap:?}");
 }

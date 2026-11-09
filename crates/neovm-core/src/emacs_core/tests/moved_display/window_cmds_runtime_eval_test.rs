@@ -304,7 +304,7 @@ fn an_integer_is_not_a_frame_even_when_it_matches_a_frame_id() {
         .buffer_manager()
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let fid = ev.frame_manager_mut().create_frame("probe", 800, 600, buf);
     let as_integer = Value::fixnum(fid.0 as i64);
 
@@ -354,7 +354,7 @@ fn live_frame_subrs_reject_a_deleted_frame_like_gnu() {
         .buffer_manager()
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let doomed = ev.frame_manager_mut().create_frame("doomed", 800, 600, buf);
     let dead = Value::make_frame(doomed.0);
     assert!(ev.frame_manager_mut().delete_frame(doomed).was_deleted());

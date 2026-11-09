@@ -10,7 +10,7 @@ fn displayed_string_keymap_precedes_buffer_position_maps() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("displayed-string-keymap", 800, 600, buffer_id);
@@ -79,7 +79,7 @@ fn chrome_string_without_maps_preserves_tab_line_but_clears_mode_line_maps() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let buffer_local_map = make_sparse_list_keymap();
     eval.edit
         .buffers
@@ -1532,7 +1532,7 @@ fn event_position_past_point_max_falls_back_to_the_buffer_local_map() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let point_max = eval
         .edit
         .buffers
@@ -1596,7 +1596,7 @@ fn event_position_outside_narrowing_clips_before_full_buffer_property_lookup() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let property_map = make_sparse_list_keymap();
     crate::emacs_core::textprop::builtin_put_text_property(
         &mut eval,
@@ -1655,7 +1655,7 @@ fn event_position_before_narrowing_inherits_map_from_preceding_full_buffer_char(
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let property_map = make_sparse_list_keymap();
     crate::emacs_core::textprop::builtin_put_text_property(
         &mut eval,

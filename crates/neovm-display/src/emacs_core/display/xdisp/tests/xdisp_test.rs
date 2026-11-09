@@ -241,7 +241,7 @@ fn test_format_mode_line_eval_optional_designators() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-format", 80, 24, buffer_id);
@@ -325,7 +325,7 @@ fn test_resolve_live_window_display_context_uses_selected_window_buffer_point() 
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("xdisp-selected-point", 800, 600, selected_buffer_id);
@@ -829,7 +829,7 @@ fn mode_line_display_preserves_nested_literal_string_sources() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("mode-line-string-sources", 800, 600, buffer_id);
@@ -1107,7 +1107,7 @@ fn format_mode_line_line_uses_the_target_windows_point_not_the_buffer_point() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     {
         let buffer = eval.edit.buffers.get_mut(buffer_id).expect("buffer");
         buffer.insert("line1\nline2\nline3\nline4\n");
@@ -1655,7 +1655,7 @@ fn mode_line_display_does_not_flush_a_terminal_min_width_run() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("mode-line-min-width", 800, 600, buffer_id);
@@ -1704,7 +1704,7 @@ fn mode_line_display_closes_a_min_width_run_when_another_one_starts() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval.frame_manager_mut().create_frame(
         "mode-line-min-width-transition",
         800,
@@ -2038,7 +2038,7 @@ fn test_window_text_pixel_size_from_t_starts_at_first_non_empty_line() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-test", 80, 24, buf_id);
@@ -2079,7 +2079,7 @@ fn test_window_text_pixel_size_eval_window_validation() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-test", 80, 24, buf_id);
@@ -2117,7 +2117,7 @@ fn test_window_text_pixel_size_tty_frame_uses_char_cell_metrics() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-test", 80, 24, buf_id);
@@ -2165,7 +2165,7 @@ fn window_text_pixel_size_counts_tty_wrapped_screen_rows() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-wrap-test", 10, 24, buf_id);
@@ -2217,7 +2217,7 @@ fn window_text_pixel_size_honors_tty_truncate_lines() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-truncate-test", 10, 24, buf_id);
@@ -2270,7 +2270,7 @@ fn test_window_text_pixel_size_ctx_coerces_bignum_positions_like_gnu() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-test", 80, 24, buf_id);
@@ -2322,7 +2322,7 @@ fn test_window_text_pixel_size_matches_gnu_trailing_line_semantics() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-test", 80, 24, buf_id);
@@ -2383,7 +2383,7 @@ fn test_window_text_pixel_size_uses_char_positions_for_multibyte_range() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-test", 80, 24, buf_id);
@@ -2444,7 +2444,7 @@ fn pixel_size_image_context() -> (Context, i64) {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-image-pixels", 200, 24, buf_id);
@@ -2612,7 +2612,7 @@ impl ImageProbe {
             .buffers
             .current_buffer()
             .expect("current buffer")
-            .id;
+            .id();
         {
             let buffer = eval.edit.buffers.get_mut(buf_id).expect("buffer");
             buffer.insert(&self.text);
@@ -2921,7 +2921,7 @@ fn window_text_pixel_size_ignores_images_on_a_terminal_frame() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     {
         let buffer = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buffer.insert("ab cd\n");
@@ -2960,7 +2960,7 @@ fn test_window_text_pixel_size_honors_display_align_to_column() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     // "AB" + space + "XY": the space is at column 2; align-to 80 pushes "XY" to
     // columns 80,81 so the widest column reached is 82.
     eval.edit
@@ -3012,7 +3012,7 @@ fn test_window_text_pixel_size_honors_display_align_to_plus_left() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     eval.edit
         .buffers
         .get_mut(buf_id)
@@ -3056,7 +3056,7 @@ fn test_window_text_pixel_size_honors_display_space_width() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     // "AB" (cols 0,1) + width-20 space (cols 2..22) + "XY" (cols 22,23) => 24.
     eval.edit
         .buffers
@@ -3115,7 +3115,7 @@ fn test_window_text_pixel_size_measures_overlay_before_string_at_point_max() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     // The minibuffer text: a short prompt "M-x ".  point-max is right after it.
     eval.edit
         .buffers
@@ -3217,7 +3217,7 @@ fn test_window_text_pixel_size_plain_text_unchanged_by_fix() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     eval.edit
         .buffers
         .get_mut(buf_id)
@@ -3242,7 +3242,7 @@ fn window_text_pixel_size_cons_from_reports_offset_start() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     eval.edit
         .buffers
         .get_mut(buf_id)
@@ -3276,7 +3276,7 @@ fn window_text_pixel_size_clips_to_before_applying_from_offset() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     eval.edit
         .buffers
         .get_mut(buf_id)
@@ -3308,7 +3308,7 @@ fn window_text_pixel_size_keeps_row_height_when_offset_moves_past_to() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     eval.edit
         .buffers
         .get_mut(buf_id)
@@ -3340,7 +3340,7 @@ fn window_text_pixel_size_negative_offset_at_clipped_to_has_zero_height() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     eval.edit
         .buffers
         .get_mut(buf_id)
@@ -3372,7 +3372,7 @@ fn window_text_pixel_size_offset_to_trailing_empty_row_has_zero_height() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     eval.edit
         .buffers
         .get_mut(buf_id)
@@ -3424,7 +3424,7 @@ fn window_text_pixel_size_zero_cons_offset_preserves_pair_shape() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     eval.edit
         .buffers
         .get_mut(buf_id)
@@ -3453,7 +3453,7 @@ fn window_text_pixel_size_positive_cons_offset_moves_forward() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     eval.edit
         .buffers
         .get_mut(buf_id)
@@ -3489,7 +3489,7 @@ fn window_text_pixel_size_positive_subrow_offset_stays_on_current_row() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     eval.edit
         .buffers
         .get_mut(buf_id)
@@ -3525,7 +3525,7 @@ fn window_text_pixel_size_offset_uses_live_row_pixel_heights() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     eval.edit
         .buffers
         .get_mut(buf_id)
@@ -3580,7 +3580,7 @@ fn retained_display_rows_reject_window_system_changes() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     eval.edit
         .buffers
         .get_mut(buf_id)
@@ -3629,7 +3629,7 @@ fn retained_display_rows_reject_window_margin_changes() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let window_id = crate::window::WindowId(selected_window as u64);
     let frame_id = eval
         .frame_manager()
@@ -3671,7 +3671,7 @@ fn retained_display_rows_reject_window_face_filter_parameter_changes() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let window_id = crate::window::WindowId(selected_window as u64);
     let frame_id = eval
         .frame_manager()
@@ -3713,7 +3713,7 @@ fn retained_display_rows_reject_restored_window_parameter_state() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let window_id = crate::window::WindowId(selected_window as u64);
     let frame_id = eval
         .frame_manager()
@@ -3781,7 +3781,7 @@ fn window_text_pixel_size_preserves_pixel_progress_beyond_live_rows() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     eval.edit
         .buffers
         .get_mut(buf_id)
@@ -3832,7 +3832,7 @@ fn window_text_pixel_size_forward_offset_stays_on_final_unterminated_row() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     eval.edit
         .buffers
         .get_mut(buf_id)
@@ -3863,7 +3863,7 @@ fn window_text_pixel_size_cons_offset_counts_wrapped_rows() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     eval.edit
         .buffers
         .get_mut(buf_id)
@@ -3899,7 +3899,7 @@ fn window_text_pixel_size_logs_invalid_named_face_property_runs() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     eval.edit
         .buffers
         .get_mut(buf_id)
@@ -3966,7 +3966,7 @@ fn window_text_pixel_size_backend_trace(kind: BufferTextBackendKind) -> (i64, i6
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-backend-pixels", 80, 24, buf_id);
@@ -4090,7 +4090,7 @@ fn test_pos_visible_in_window_p_eval_returns_partial_geometry_for_live_window() 
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-pos", 160, 64, buf_id);
@@ -4141,7 +4141,7 @@ fn test_pos_visible_in_window_p_eval_returns_partial_geometry_for_live_window() 
 fn posn_at_point_queries_the_target_instead_of_completing_the_viewport() {
     use crate::window::{WindowLayoutQueryOutcome, WindowLayoutQueryScope};
     let mut eval = interactive_context();
-    let buffer = eval.edit.buffers.current_buffer().unwrap().id;
+    let buffer = eval.edit.buffers.current_buffer().unwrap().id();
     eval.edit
         .buffers
         .get_mut(buffer)
@@ -4197,7 +4197,7 @@ fn line_numbers_point_independence_uses_defaults_and_local_overrides() {
         ),
     ] {
         let mut eval = interactive_context();
-        let buffer = eval.edit.buffers.current_buffer().unwrap().id;
+        let buffer = eval.edit.buffers.current_buffer().unwrap().id();
         let frame = eval.frame_manager_mut().create_frame(
             "line-number-point-independence",
             160,
@@ -4218,7 +4218,7 @@ fn line_number_faces_use_gnu_frame_local_inherit_equality() {
     use crate::emacs_core::xfaces::lisp_faces_equal_in_frame;
 
     let mut eval = interactive_context();
-    let buffer = eval.edit.buffers.current_buffer().unwrap().id;
+    let buffer = eval.edit.buffers.current_buffer().unwrap().id();
     let frame = eval
         .frame_manager_mut()
         .create_frame("line-number-face-equality", 160, 96, buffer);
@@ -4288,7 +4288,7 @@ fn pos_visible_in_new_live_window_falls_back_when_active_presentation_predates_i
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("xdisp-new-window", 800, 600, original_buffer);
@@ -4351,7 +4351,7 @@ fn test_pos_visible_in_window_p_noninteractive_returns_nil_like_gnu_batch() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-batch-pos", 160, 64, buf_id);
@@ -4401,7 +4401,7 @@ fn test_window_line_height_eval_returns_live_gui_row_metrics() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-line-height", 160, 64, buf_id);
@@ -4497,7 +4497,7 @@ fn test_window_line_height_eval_uses_exact_chrome_rows() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("xdisp-line-height-chrome", 160, 80, buf_id);
@@ -4633,7 +4633,7 @@ fn test_window_line_height_eval_reports_text_rows_relative_to_text_area() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("xdisp-line-height-text-origin", 160, 80, buf_id);
@@ -4749,7 +4749,7 @@ fn test_posn_at_point_eval_uses_exact_redisplay_snapshot() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-posn", 160, 64, buf_id);
@@ -4880,7 +4880,7 @@ fn test_posn_at_point_reports_text_area_relative_y_below_window_chrome() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-posn-chrome", 800, 600, buf_id);
@@ -4981,7 +4981,7 @@ fn posn_at_point_recomputes_a_terminal_window_redisplay_has_not_drawn_yet() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-posn-cold", 800, 600, buf_id);
@@ -5106,7 +5106,7 @@ fn posn_at_point_recomputes_a_terminal_window_redisplay_has_not_drawn_yet() {
 fn gui_posn_at_point_uses_next_presented_glyph_only_within_the_same_body_row() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer = eval.edit.buffers.current_buffer().expect("buffer").id;
+    let buffer = eval.edit.buffers.current_buffer().expect("buffer").id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("posn-hidden", 800, 600, buffer);
@@ -5220,7 +5220,7 @@ fn tty_posn_at_x_y_uses_the_named_live_grid_approximation() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-posn-xy-chrome", 160, 80, buf_id);
@@ -5254,7 +5254,7 @@ fn tty_posn_at_x_y_uses_the_named_live_grid_approximation() {
 fn posn_at_x_y_uses_one_presented_transform_for_text_window_and_frame_coordinates() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer = eval.edit.buffers.current_buffer().expect("buffer").id;
+    let buffer = eval.edit.buffers.current_buffer().expect("buffer").id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("posn-presented", 800, 600, buffer);
@@ -5369,7 +5369,7 @@ fn posn_at_x_y_uses_one_presented_transform_for_text_window_and_frame_coordinate
 fn frame_relative_posn_at_x_y_rejects_new_surface_area_outside_stale_presentation() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer = eval.edit.buffers.current_buffer().expect("buffer").id;
+    let buffer = eval.edit.buffers.current_buffer().expect("buffer").id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("posn-expose", 800, 600, buffer);
@@ -5461,7 +5461,7 @@ fn test_posn_at_x_y_eval_uses_exact_redisplay_snapshot() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-posn-xy", 160, 64, buf_id);
@@ -5665,7 +5665,7 @@ fn posn_at_x_y_on_the_mode_line_answers_the_mode_line() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-posn-mode-line", 640, 384, buf_id);
@@ -5789,7 +5789,7 @@ fn posn_at_x_y_at_y_zero_of_a_window_with_a_header_line_answers_row_minus_one() 
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("xdisp-posn-header-line", 640, 384, buf_id);
@@ -5908,7 +5908,7 @@ fn posn_at_x_y_past_a_window_with_no_mode_line_resolves_the_window_below_it() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("xdisp-posn-no-mode-line", 640, 384, buf_id);
@@ -6032,7 +6032,7 @@ fn posn_at_x_y_outside_every_window_answers_the_frame() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-posn-off-frame", 640, 384, buf_id);
@@ -6169,7 +6169,7 @@ fn test_posn_at_point_eval_returns_nil_outside_visible_snapshot_span() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-posn-offscreen", 160, 64, buf_id);
@@ -6293,7 +6293,7 @@ fn test_posn_at_point_eval_returns_nil_for_positions_missing_entire_visible_row(
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-posn-missing-row", 160, 96, buf_id);
@@ -6628,7 +6628,7 @@ fn test_tool_bar_height_eval_frame_validation() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-test", 80, 24, buf_id);
@@ -6678,7 +6678,7 @@ fn test_tab_bar_height_eval_frame_validation() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-test", 80, 24, buf_id);
@@ -7091,7 +7091,7 @@ fn fringe_bitmaps_at_pos_fixture() -> (Context, crate::window::FrameId) {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     eval.edit
         .buffers
         .get_mut(buf_id)
@@ -7227,7 +7227,7 @@ fn test_fringe_bitmaps_at_pos_defaults_pos_to_point_in_selected_window() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let buffer = eval.edit.buffers.get_mut(buf_id).expect("current buffer");
     // The fixture text is ASCII, so char and byte offsets coincide; Lisp
     // position 7 is the start of the second row.
@@ -7310,7 +7310,7 @@ fn window_line_height_refuses_every_line_form_without_a_current_matrix_like_gnu(
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("l217-no-current-matrix", 160, 64, buf_id);
@@ -7442,7 +7442,7 @@ fn probe_text_region(
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     eval.edit
         .buffers
         .get_mut(buf_id)

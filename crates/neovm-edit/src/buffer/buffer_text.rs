@@ -13,7 +13,7 @@ use std::rc::Rc;
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::value::Value;
 
-use super::buffer::{BufferId, InsertionType};
+use super::buffer::{Buffer, BufferId, InsertionType};
 
 /// A prepared interval table belongs to the calling Lisp mutator. Scratch
 /// roots keep new plists alive through undo allocation until publication.
@@ -382,7 +382,7 @@ pub struct BufferTextStorage {
     /// `text_snapshot::buffer_text_cow_copies`). `Rc` has no `DerefMut`, so
     /// the compiler forces every mutation site through that one function.
     backend: Rc<TextBackend>,
-    pub content_epoch: u64,
+    pub(crate) content_epoch: u64,
     virtual_gap: GapCompatState,
     modified_tick: i64,
     chars_modified_tick: i64,
@@ -518,6 +518,14 @@ impl BufferTextStorage {
 
     fn uses_virtual_gap_compat_state(&self) -> bool {
         self.backend.real_gap_compat_state().is_none()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied content epoch (VIS read arm, lead #1052).  The field is
+    /// `pub(crate)` in every arm; this getter is the only cross-crate route.
+    pub(crate) fn content_epoch_for_test(&self) -> u64 {
+        self.content_epoch
     }
 }
 
@@ -673,14 +681,30 @@ pub struct BufferText {
 }
 
 #[cfg(any(test, feature = "test-support"))]
+impl Buffer {
+    /// Scoped read of the live text storage through the buffer (VIS read
+    /// arm, lead #1052).  The `text` field is `pub(crate)` in every arm and
+    /// the borrow cannot escape `observe`, so the storage's
+    /// interior-mutability fields stay behind the existing
+    /// `with_storage_observe` fence.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn with_text_storage_observe_for_test<R>(
+        &self,
+        observe: impl FnOnce(&BufferTextStorage) -> R,
+    ) -> R {
+        self.text.with_storage_observe(observe)
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
 impl BufferText {
     /// Observe the live text storage in a read-only, scoped borrow.
     ///
     /// The `RefCell` carrier and every interior-mutability field of the
     /// storage stay private in both cfg arms, so this view exposes no
     /// `borrow_mut` route: the borrow is scoped to `observe`, the reference
-    /// cannot escape the call, and the only public field left on
-    /// `BufferTextStorage` is plain data (`content_epoch`).
+    /// cannot escape the call, and the only cross-crate read of the storage
+    /// is the copy getter `BufferTextStorage::content_epoch_for_test`.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn with_storage_observe<R>(
         &self,

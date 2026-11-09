@@ -26,7 +26,7 @@ fn gde_overlay_restored_live_identity_preserves_the_creation_serial() {
             .buffers
             .current_buffer()
             .expect("restored buffer")
-            .overlays
+            .overlays()
             .overlays_in_gnu_lists_order()
             .into_iter()
             .any(|overlay| overlay_identity_key(overlay) == original_serial),

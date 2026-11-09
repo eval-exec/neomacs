@@ -189,8 +189,26 @@ struct ScreenLineStep {
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug)]
 pub struct ScreenLineStep {
-    pub next: EmacsBytePos,
-    pub end: ScreenLineEnd,
+    pub(crate) next: EmacsBytePos,
+    pub(crate) end: ScreenLineEnd,
+}
+
+impl ScreenLineStep {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied next byte position (VIS read arm, lead #1052).  The fields are
+    /// `pub(crate)` in every arm; these getters are the only cross-crate
+    /// read routes.
+    pub(crate) fn next_for_test(&self) -> EmacsBytePos {
+        self.next
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied row-end classification (VIS read arm, lead #1052).
+    pub(crate) fn end_for_test(&self) -> ScreenLineEnd {
+        self.end
+    }
 }
 
 impl ScreenLineStep {
@@ -1666,10 +1684,27 @@ pub(crate) struct DisplayAdvance {
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug)]
 pub struct DisplayAdvance {
-    pub next_byte: usize,
-    pub width: usize,
+    pub(crate) next_byte: usize,
+    pub(crate) width: usize,
     pub(crate) hard_newline: bool,
     pub(crate) unbreakable_wide: bool,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl DisplayAdvance {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied next byte offset (VIS read arm, lead #1052).  The fields are
+    /// `pub(crate)` in every arm; these getters are the only cross-crate
+    /// read routes.
+    pub(crate) fn next_byte_for_test(&self) -> usize {
+        self.next_byte
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied display width (VIS read arm, lead #1052).
+    pub(crate) fn width_for_test(&self) -> usize {
+        self.width
+    }
 }
 
 fn line_bounds(buf: &Buffer, point: EmacsBytePos) -> EmacsByteRange {

@@ -438,7 +438,7 @@ fn test_builtin_point_to_register_stores_marker() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
 
     builtin_point_to_register(&mut eval, vec![Value::char('p')]).expect("point-to-register");
 

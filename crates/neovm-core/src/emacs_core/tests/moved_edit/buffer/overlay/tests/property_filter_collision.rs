@@ -53,7 +53,7 @@ fn colliding_property_signatures_keep_filtered_sweeps_and_extents_exact() {
     // preserve the signature. The filter still admits false positives, so
     // exact absence and every winning value must come from the resolver.
     replace_carrier_property(&mut list, carrier, collision, 22);
-    assert!(list.index.may_contain_property(property));
+    assert!(list.index_may_contain_property_for_test(property));
     assert!(!list.may_contain_property(property));
     assert_eq!(filtered_runs(&list, property), [(0, 12, None)]);
     assert_eq!(filtered_runs(&list, collision), overlapping_collision);
@@ -204,5 +204,5 @@ fn replace_carrier_property(list: &mut OverlayList, carrier: Value, property: Va
         })
         .expect("test carrier is live");
     list.index_mut().overlay_properties_changed(carrier);
-    list.index.assert_invariants();
+    list.assert_index_invariants_for_test();
 }

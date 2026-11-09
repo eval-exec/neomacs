@@ -1075,11 +1075,11 @@ fn display_advance_interns_no_symbols_per_character() {
             break;
         };
         assert!(
-            advance.next_byte > byte,
+            advance.next_byte_for_test() > byte,
             "advance must progress at byte {byte}"
         );
-        byte = advance.next_byte;
-        column = column.saturating_add(advance.width);
+        byte = advance.next_byte_for_test();
+        column = column.saturating_add(advance.width_for_test());
     }
     assert_eq!(byte, end, "scan must reach the buffer end");
     let calls = neovm_value::intern::intern_calls();

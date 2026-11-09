@@ -61,10 +61,10 @@ fn category_front_stickiness_respects_positioned_symbol_equality() {
             ctx.obarray(),
             neovm_edit::test_support::authority::casing_property_controls_for_test(
                 equality,
-                base_controls.nonsticky,
-                base_controls.aliases,
-                base_controls.defaults,
-                base_controls.mutator,
+                base_controls.nonsticky_for_test(),
+                base_controls.aliases_for_test(),
+                base_controls.defaults_for_test(),
+                std::marker::PhantomData,
             ),
         );
         let mut table = TextPropertyTable::new();

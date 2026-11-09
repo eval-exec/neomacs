@@ -10961,7 +10961,7 @@ fn internal_default_process_filter_inserts_while_another_buffer_is_read_only() {
     // GNU leaves the process buffer current (only `read_process_output''s unwind
     // restores it), which is what a Lisp caller observes.
     assert_eq!(
-        ev.edit.buffers.current_buffer().map(|buffer| buffer.id),
+        ev.edit.buffers.current_buffer().map(|buffer| buffer.id()),
         Some(process_buffer)
     );
     // The read-only buffer is untouched, and still read-only.

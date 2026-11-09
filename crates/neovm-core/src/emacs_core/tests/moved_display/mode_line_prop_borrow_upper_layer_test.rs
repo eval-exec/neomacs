@@ -313,7 +313,7 @@ fn output_trace(setup: &str, case: PropertyReadCase) -> OutputTrace {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("property-borrow", 800, 600, buffer_id);

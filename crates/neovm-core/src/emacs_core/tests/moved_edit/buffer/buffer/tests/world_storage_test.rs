@@ -25,21 +25,21 @@ use neovm_edit::buffer::buffer::*;
 #[test]
 fn world_installation_reuses_the_existing_storage_allocation() {
     let context = crate::test_utils::new_context();
-    assert!(matches!(
-        context.edit.buffers.backing,
-        BufferBacking::Leased { detached: None, .. }
-    ));
+    assert_eq!(
+        context.edit.buffers.backing_kind_for_test(),
+        BufferBackingKindForTest::LeasedAttached
+    );
     assert_selection_matches_storage(&context.edit.buffers);
     let clone = context.edit.buffers.clone();
-    assert!(matches!(
-        clone.backing,
-        BufferBacking::Leased {
-            detached: Some(_),
-            ..
-        }
-    ));
+    assert_eq!(
+        clone.backing_kind_for_test(),
+        BufferBackingKindForTest::LeasedDetached
+    );
     assert_selection_matches_storage(&clone);
-    assert_ne!(clone.storage_ptr, context.edit.buffers.storage_ptr);
+    assert_ne!(
+        clone.storage_address_for_test(),
+        context.edit.buffers.storage_address_for_test()
+    );
 }
 
 #[test]
@@ -161,25 +161,25 @@ fn owned_parts_adapter_rejects_both_runtime_and_detached_world_views() {
         BufferStorageOwnershipError::WorldBacked,
     );
     let standalone = BufferManager::new();
-    let pointer = standalone.storage_ptr;
+    let pointer = standalone.storage_address_for_test();
     let owned = OwnedBufferStorageParts::try_from(standalone).unwrap();
     let restored = BufferManager::from(owned);
-    assert_eq!(pointer, restored.storage_ptr);
+    assert_eq!(pointer, restored.storage_address_for_test());
     assert_selection_matches_storage(&restored);
 }
 
 #[test]
 fn cold_reset_retires_selection_and_preserves_the_storage_address() {
     let mut context = crate::test_utils::new_context();
-    let pointer = context.edit.buffers.storage_ptr;
+    let pointer = context.edit.buffers.storage_address_for_test();
     let temporary = context.edit.buffers.create_buffer("*before-minimal-reset*");
     assert!(context.edit.buffers.switch_current(temporary));
     context.edit.buffers.reset_for_minimal_runtime();
-    assert!(matches!(
-        context.edit.buffers.backing,
-        BufferBacking::Leased { detached: None, .. }
-    ));
-    assert_eq!(context.edit.buffers.storage_ptr, pointer);
+    assert_eq!(
+        context.edit.buffers.backing_kind_for_test(),
+        BufferBackingKindForTest::LeasedAttached
+    );
+    assert_eq!(context.edit.buffers.storage_address_for_test(), pointer);
     assert_eq!(context.edit.buffers.buffer_list().len(), 1);
     assert_eq!(
         context
@@ -201,7 +201,7 @@ fn assert_selection_matches_storage(manager: &BufferManager) {
         expected
     );
     assert_eq!(
-        manager.current_raw,
+        manager.current_raw_for_test(),
         manager.current_buffer_id().map_or(0, |id| id.0)
     );
 }

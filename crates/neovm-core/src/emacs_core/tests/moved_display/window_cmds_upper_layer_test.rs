@@ -541,7 +541,12 @@ fn window_old_buffer_reports_the_recorded_buffer_after_a_change_epoch() {
     // `runtime/eval/command_loop.rs`.
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    let buffer = ev.edit.buffers.current_buffer().expect("current buffer").id;
+    let buffer = ev
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
 
     // Before any epoch: the window was created since the last record, so it has
     // no old buffer at all.

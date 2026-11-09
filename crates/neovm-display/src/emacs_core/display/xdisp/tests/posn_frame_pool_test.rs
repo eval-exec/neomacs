@@ -16,7 +16,7 @@ use std::sync::Arc;
 fn tty_posn_split_without_local_output_reads_the_accepted_frame_pool() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer = eval.edit.buffers.current_buffer().expect("buffer").id;
+    let buffer = eval.edit.buffers.current_buffer().expect("buffer").id();
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("posn-pool-split", 12, 8, buffer);

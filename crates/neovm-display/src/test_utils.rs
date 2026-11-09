@@ -2306,7 +2306,7 @@ pub mod mode_line_plain_field_test_upper_layer_helpers {
             .buffers
             .current_buffer()
             .expect("current buffer")
-            .id;
+            .id();
         let frame_id = eval
             .frame_manager_mut()
             .create_frame("plain-field", 800, 600, buffer_id);
@@ -2688,7 +2688,7 @@ pub mod xdisp_test_upper_layer_helpers {
             .buffers
             .current_buffer()
             .expect("current buffer")
-            .id;
+            .id();
         let frame_id = eval
             .frame_manager_mut()
             .create_frame("xdisp-display-spec", 200, 24, buf_id);

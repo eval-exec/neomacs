@@ -45,29 +45,37 @@ impl CasingPropertyEquality {
 #[derive(Clone, Copy, Debug)]
 #[doc(hidden)]
 pub struct CasingPropertyControls {
-    #[cfg(feature = "test-support")]
-    pub equality: CasingPropertyEquality,
-    #[cfg(not(feature = "test-support"))]
-    equality: CasingPropertyEquality,
-    #[cfg(feature = "test-support")]
-    pub nonsticky: Value,
-    #[cfg(not(feature = "test-support"))]
-    nonsticky: Value,
-    #[cfg(feature = "test-support")]
-    pub aliases: Value,
-    #[cfg(not(feature = "test-support"))]
-    aliases: Value,
-    #[cfg(feature = "test-support")]
-    pub defaults: Value,
-    #[cfg(not(feature = "test-support"))]
-    defaults: Value,
-    #[cfg(feature = "test-support")]
-    pub mutator: std::marker::PhantomData<*const ()>,
-    #[cfg(not(feature = "test-support"))]
-    mutator: std::marker::PhantomData<*const ()>,
+    pub(crate) equality: CasingPropertyEquality,
+    pub(crate) nonsticky: Value,
+    pub(crate) aliases: Value,
+    pub(crate) defaults: Value,
+    pub(crate) mutator: std::marker::PhantomData<*const ()>,
 }
 
 impl CasingPropertyControls {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied nonsticky alist (VIS read arm, lead #1052).  The fields are
+    /// `pub(crate)` in every arm; these getters are the only cross-crate
+    /// read routes.
+    pub(crate) fn nonsticky_for_test(&self) -> Value {
+        self.nonsticky
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied char-property alias alist (VIS read arm, lead #1052).
+    pub(crate) fn aliases_for_test(&self) -> Value {
+        self.aliases
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied default text properties (VIS read arm, lead #1052).
+    pub(crate) fn defaults_for_test(&self) -> Value {
+        self.defaults
+    }
+
     #[doc(hidden)]
     pub fn for_host<H: crate::emacs_core::edit_host::EditHost>(host: &H) -> Self {
         // GNU reads these three through the swapped C globals (the current
@@ -120,14 +128,8 @@ impl<'a> CasingPropertyMode<'a> {
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Immutable, call-local category and dynamic-property resolution.
 pub(crate) struct CasingPropertyContext<'a> {
-    #[cfg(feature = "test-support")]
-    pub obarray: &'a Obarray,
-    #[cfg(not(feature = "test-support"))]
-    obarray: &'a Obarray,
-    #[cfg(feature = "test-support")]
-    pub controls: CasingPropertyControls,
-    #[cfg(not(feature = "test-support"))]
-    controls: CasingPropertyControls,
+    pub(crate) obarray: &'a Obarray,
+    pub(crate) controls: CasingPropertyControls,
 }
 
 impl std::fmt::Debug for CasingPropertyContext<'_> {

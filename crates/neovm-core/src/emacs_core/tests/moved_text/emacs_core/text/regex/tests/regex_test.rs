@@ -2067,7 +2067,7 @@ fn literal_register_reuse_discards_captures_and_publishes_character_positions() 
                             assert_eq!(point.get(), if backward { byte_start } else { byte_end });
                             regs.publish_buffer_into(&buf, &mut published);
                             let data = published.as_ref().unwrap();
-                            assert_eq!(data.source(), MatchDataSource::Buffer(buf.id));
+                            assert_eq!(data.source(), MatchDataSource::Buffer(buf.id()));
                             assert_eq!(
                                 data.group(0),
                                 Some(MatchGroup::new(

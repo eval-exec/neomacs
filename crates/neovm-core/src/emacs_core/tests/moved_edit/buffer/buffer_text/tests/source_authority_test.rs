@@ -78,12 +78,12 @@ fn production_property_write_refuses_numeric_tick_collision_after_ack() {
         .eval_str("(erase-buffer) (insert \"abc\\n\")")
         .unwrap();
     let id = evaluator.buffer_manager().current_buffer_id().unwrap();
-    let before = evaluator.buffer_manager().get(id).unwrap();
+    let before = evaluator.buffer_manager_mut().get_mut(id).unwrap();
     let authority = before.capture_motion_source_authority().unwrap();
     let text = before.full_text_string();
     let property_tick = before.props_modified_tick();
-    let epoch = authority.revision.content_epoch;
-    before.text.set_modified_tick(property_tick - 1);
+    let epoch = authority.revision_for_test().content_epoch_for_test();
+    neovm_edit::test_support::authority::set_text_modified_tick_for_test(before, property_tick - 1);
     evaluator
         .eval_str("(put-text-property 1 2 'fontified t)")
         .unwrap();
@@ -94,9 +94,12 @@ fn production_property_write_refuses_numeric_tick_collision_after_ack() {
         property_tick,
         "GNU-facing number really collides"
     );
-    let revision = after.text.with_storage_observe(SourceRevision::of);
-    assert_eq!(revision.content_epoch, epoch);
-    assert_ne!(revision.all_properties, authority.revision.all_properties);
+    let revision = after.with_text_storage_observe_for_test(SourceRevision::of);
+    assert_eq!(revision.content_epoch_for_test(), epoch);
+    assert_ne!(
+        revision.all_properties_for_test(),
+        authority.revision_for_test().all_properties_for_test()
+    );
     assert!(
         // SAFETY: This temporary guard drops in this inert assertion, before any edit, Lisp or GC.
         unsafe { authority.validate(after) }.is_none()
@@ -134,18 +137,19 @@ fn production_multibyte_mode_toggles_refuse_after_tick_restore_and_ack() {
         let after = evaluator.buffer_manager_mut().get_mut(id).unwrap();
         assert_eq!(after.get_multibyte(), multibyte);
         assert_eq!(after.full_text_string(), text, "ASCII bytes stay unchanged");
-        assert!(authority.is_owner_of(&after.text));
+        assert!(authority.is_owner_of(after));
         assert_ne!(
             after
-                .text
-                .with_storage_observe(|storage| storage.content_epoch),
-            authority.revision.content_epoch,
+                .with_text_storage_observe_for_test(|storage| { storage.content_epoch_for_test() }),
+            authority.revision_for_test().content_epoch_for_test(),
         );
         assert!(
             // SAFETY: This temporary guard drops in this inert assertion, before any edit, Lisp or GC.
             unsafe { authority.validate(after) }.is_none()
         );
-        after.text.set_modification_state(ticks.0, ticks.1, ticks.2);
+        neovm_edit::test_support::authority::set_text_modification_state_for_test(
+            after, ticks.0, ticks.1, ticks.2,
+        );
         assert_eq!(
             (
                 after.modified_tick(),
@@ -202,21 +206,21 @@ fn production_same_byte_transposition_with_distinct_property_runs_refuses() {
         text,
         "the two byte slices are equal"
     );
-    assert!(authority.is_owner_of(&after.text));
+    assert!(authority.is_owner_of(after));
     // The actual production transposition advances content_epoch in its
     // same-length byte replacement before installing the prepared table.
     // This checks the resulting epoch, not an instrumented intermediate step.
     assert_ne!(
-        after
-            .text
-            .with_storage_observe(|storage| storage.content_epoch),
-        authority.revision.content_epoch,
+        after.with_text_storage_observe_for_test(|storage| storage.content_epoch_for_test()),
+        authority.revision_for_test().content_epoch_for_test(),
     );
     assert!(
         // SAFETY: This temporary guard drops in this inert assertion, before any edit, Lisp or GC.
         unsafe { authority.validate(after) }.is_none()
     );
-    after.text.set_modification_state(ticks.0, ticks.1, ticks.2);
+    neovm_edit::test_support::authority::set_text_modification_state_for_test(
+        after, ticks.0, ticks.1, ticks.2,
+    );
     assert_eq!(
         (
             after.modified_tick(),
@@ -258,20 +262,20 @@ fn production_text_edit_refuses_after_tick_restore_and_ack(setup: &str, edit: &s
         "the operation must really change text"
     );
     assert!(
-        authority.is_owner_of(&after.text),
+        authority.is_owner_of(after),
         "the live outer owner remains the same"
     );
     assert_ne!(
-        after
-            .text
-            .with_storage_observe(|storage| storage.content_epoch),
-        authority.revision.content_epoch
+        after.with_text_storage_observe_for_test(|storage| storage.content_epoch_for_test()),
+        authority.revision_for_test().content_epoch_for_test()
     );
     assert!(
         // SAFETY: This temporary guard drops in this inert assertion, before any edit, Lisp or GC.
         unsafe { authority.validate(after) }.is_none()
     );
-    after.text.set_modification_state(ticks.0, ticks.1, ticks.2);
+    neovm_edit::test_support::authority::set_text_modification_state_for_test(
+        after, ticks.0, ticks.1, ticks.2,
+    );
     assert_eq!(
         (
             after.modified_tick(),

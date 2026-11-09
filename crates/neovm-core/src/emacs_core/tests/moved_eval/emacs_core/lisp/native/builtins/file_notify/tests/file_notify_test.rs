@@ -632,7 +632,7 @@ fn kqueue_watch_expands_relative_file_against_default_directory() {
         .buffers
         .current_buffer()
         .expect("current buffer")
-        .id;
+        .id();
     eval.edit
         .buffers
         .get_mut(current_buffer)

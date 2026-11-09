@@ -6044,7 +6044,7 @@ fn test_write_region_bounds_and_order_semantics() {
         .current_buffer_mut()
         .unwrap()
         .insert("abc");
-    let current = Value::make_buffer(eval.edit.buffers.current_buffer().unwrap().id);
+    let current = Value::make_buffer(eval.edit.buffers.current_buffer().unwrap().id());
 
     builtin_write_region(
         &mut eval,

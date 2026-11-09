@@ -5767,7 +5767,7 @@ fn window_lines_pixel_dimensions_refuses_what_gnu_refuses() {
 
     // A dead window is `window-live-p`, whatever the other arguments say.
     let fid = ev.frame_manager().find_window_frame_id(wid).expect("frame");
-    let buffer = ev.edit.buffers.current_buffer().expect("buffer").id;
+    let buffer = ev.edit.buffers.current_buffer().expect("buffer").id();
     let dead = ev
         .frame_manager_mut()
         .split_window(

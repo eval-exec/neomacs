@@ -248,7 +248,7 @@ fn check_model(lists: &[OverlayList; 2], model: &[Option<ModelOverlay>], step: u
             live.len(),
             "membership count: step {step}, owner {owner}"
         );
-        list.index.assert_invariants();
+        list.assert_index_invariants_for_test();
         // This assertion is a membership set, not a fabricated GNU topology
         // oracle. Fixed GNU fixtures below retain their exact vector order.
         assert_eq!(

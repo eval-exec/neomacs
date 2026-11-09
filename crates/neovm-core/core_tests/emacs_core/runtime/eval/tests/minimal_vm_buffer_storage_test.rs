@@ -7,7 +7,7 @@
 //! helper are byte-identical to the original apart from imports and the boot.
 
 use crate::test_utils;
-use neovm_edit::buffer::buffer::BufferBacking;
+use neovm_edit::buffer::buffer::BufferBackingKindForTest;
 use neovm_edit::buffer::buffer::BufferManager;
 use neovm_edit::buffer::buffer::jit_layout;
 use neovm_eval::test_support::authority::new_minimal_vm_harness;
@@ -16,10 +16,10 @@ use neovm_eval::test_support::authority::new_minimal_vm_harness;
 fn minimal_runtime_keeps_buffers_in_its_world_allocation() {
     let boot = test_utils::new_context();
     let context = new_minimal_vm_harness(boot.hooks_installed());
-    assert!(matches!(
-        context.edit.buffers.backing,
-        BufferBacking::Leased { detached: None, .. }
-    ));
+    assert_eq!(
+        context.edit.buffers.backing_kind_for_test(),
+        BufferBackingKindForTest::LeasedAttached
+    );
     assert_selection_matches_storage(&context.edit.buffers);
     assert_eq!(context.edit.buffers.buffer_list().len(), 1);
 }
@@ -32,7 +32,7 @@ fn assert_selection_matches_storage(manager: &BufferManager) {
         expected
     );
     assert_eq!(
-        manager.current_raw,
+        manager.current_raw_for_test(),
         manager.current_buffer_id().map_or(0, |id| id.0)
     );
 }
