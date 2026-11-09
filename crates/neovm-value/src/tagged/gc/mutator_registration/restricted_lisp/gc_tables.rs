@@ -76,8 +76,11 @@ fn owns<K: crate::tagged::gc::mutator_registration::EraKeeper>(
         for snap in snaps {
             assert_eq!(snap.conses.len(), 3);
             for &bits in &snap.conses {
+                // SAFETY: `bits` is a cons word recorded by `home_bits` when
+                // this owner allocated the cell. Rehydrating it only asks
+                // whether the stopped heap still owns that word.
                 assert_eq!(
-                    heap.owns_heap_value_for_test(TaggedValue::from_bits(bits)),
+                    heap.owns_heap_value_for_test(unsafe { TaggedValue::from_bits(bits) }),
                     expected,
                     "owner {} graph word {bits:#x}",
                     snap.index

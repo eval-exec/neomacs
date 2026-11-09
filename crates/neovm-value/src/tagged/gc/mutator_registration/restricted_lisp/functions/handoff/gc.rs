@@ -80,7 +80,9 @@ pub(super) fn graph<K: crate::tagged::gc::mutator_registration::EraKeeper>(
 ) -> Vec<usize> {
     era.with_stopped_heap_for_test(stopped, |heap| {
         let mut graph = Vec::new();
-        let mut value = TaggedValue::from_bits(head);
+        // SAFETY: `head` is a slot word from the owner snapshot taken before
+        // this stop. The loop only walks a cons spine the heap still owns.
+        let mut value = unsafe { TaggedValue::from_bits(head) };
         // The serially prepared closed lambda spine has exactly three nodes.
         for _ in 0..3 {
             if !value.is_cons() || !heap.owns_heap_value_for_test(value) {
@@ -104,7 +106,11 @@ pub(super) fn live<K: crate::tagged::gc::mutator_registration::EraKeeper>(
             .map(|graph| {
                 graph
                     .iter()
-                    .map(|&word| heap.owns_heap_value_for_test(TaggedValue::from_bits(word)))
+                    .map(|&word| {
+                        // SAFETY: `word` was recorded by `graph` via
+                        // `TaggedValue::bits` on that same stopped spine.
+                        heap.owns_heap_value_for_test(unsafe { TaggedValue::from_bits(word) })
+                    })
                     .collect()
             })
             .collect()

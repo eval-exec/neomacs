@@ -154,7 +154,12 @@ fn live_words<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     on_heap(era, stopped, |heap| {
         words
             .iter()
-            .filter(|&&bits| heap.owns_heap_value_for_test(TaggedValue::from_bits(bits)))
+            .filter(|&&bits| {
+                // SAFETY: `bits` is a cons word recorded from the owner
+                // snapshot. Rehydrating it only asks whether the stopped
+                // heap still owns that word.
+                heap.owns_heap_value_for_test(unsafe { TaggedValue::from_bits(bits) })
+            })
             .count()
     })
 }
