@@ -26,11 +26,11 @@
 //! further than the notes account for (a mutation path that bypassed them)
 //! clears everything, so a missed hook costs hits, never answers.
 //!
-//! The recorded runs live in this module's registry, keyed by the
-//! `SyntaxCacheId` the buffer storage issues (stage-3 C7): the substrate owns
-//! the identity and the invalidation notes, the text layer owns the runs.  A
-//! snapshot clone gets a fresh id and starts empty (P3.0 §3.9).  The cache
-//! holds positions and parse states, and descriptor conses as bits (below): no
+//! The recorded runs live in an opaque slot on the buffer text (stage-3 C7).
+//! The substrate owns the invalidation notes and cannot name this cache, so
+//! the slot is `Option<Box<dyn Any>>` and this module downcasts it. A snapshot
+//! clone gets a fresh id and an empty slot (P3.0 §3.9). The cache holds
+//! positions and parse states, and descriptor conses as bits (below): no
 //! `Value` it keeps alive, nothing to trace.
 //!
 //! # L1: runs, snapshots and exact answers
@@ -80,15 +80,16 @@
 //!
 //! # Mutator ownership
 //!
-//! Runs are keyed by the buffer text storage's `SyntaxCacheId` and live in the
-//! text layer's registry, whose shard lock serializes access; the storage's
-//! drop forgets its entry.  Cache borrows end before a scan. Future mutators
-//! sharing one text storage must additionally serialize text/property,
-//! syntax-table and descriptor access across validation, scanning and
-//! publication; the shard lock does not itself synchronize other threads.
-//! Process-wide knobs contain only scalar policy, and relaxed publication
-//! carries no Lisp state. Existing thread-local counters are diagnostics, not
-//! cached answers.
+//! Runs live in the buffer text's opaque slot. The slot is taken out for a
+//! query, so the storage borrow is not held across the scan, and a re-entrant
+//! lookup sees an empty slot. The outer call stores its body back afterwards.
+//! A storage drop drops the slot with it. Indirect buffers share the storage,
+//! so they share the runs, and `buffer-swap-text` moves the slot with the
+//! text. Future mutators sharing one text storage must serialize text,
+//! property, syntax-table and descriptor access across validation, scanning
+//! and publication. Process-wide knobs contain only scalar policy, and
+//! relaxed publication carries no Lisp state. Existing thread-local counters
+//! are diagnostics, not cached answers.
 
 use super::parse_loop::{
     Entry, LoopState, LoopTop, Plain, ScanEnd, ScanFinish, ScanMode, TopAction, run_parse_loop,
@@ -253,62 +254,17 @@ impl SyntaxParseCache {
 }
 
 // ---------------------------------------------------------------------------
-// The text-layer cache registry (stage-3 C7)
+// Per-buffer cache slot (stage-3 C7)
 // ---------------------------------------------------------------------------
-
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
-
-/// Recorded runs per buffer text, keyed by the substrate-issued cache id.
-///
-/// The substrate owns the identity and the invalidation notes; the runs live
-/// here because their keys and states are syntax data.  Cache access is
-/// serialized per shard, and only the owning (thread-confined) storage's id
-/// can reach an entry; a storage's drop forgets it.
-const CACHE_SHARDS: usize = 16;
-
-static CACHES: LazyLock<[Mutex<HashMap<u64, SyntaxParseCache>>; CACHE_SHARDS]> =
-    LazyLock::new(|| std::array::from_fn(|_| Mutex::new(HashMap::new())));
-
-#[inline]
-fn cache_shard(id: u64) -> &'static Mutex<HashMap<u64, SyntaxParseCache>> {
-    &CACHES[(id as usize) % CACHE_SHARDS]
-}
-
-fn take_cache(id: u64) -> SyntaxParseCache {
-    cache_shard(id)
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .remove(&id)
-        .unwrap_or_default()
-}
-
-fn put_cache(id: u64, cache: SyntaxParseCache) {
-    cache_shard(id)
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .insert(id, cache);
-}
-
-fn forget_cache(id: u64) {
-    cache_shard(id)
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .remove(&id);
-}
-
-fn ensure_forget_hook() {
-    static INSTALLED: std::sync::Once = std::sync::Once::new();
-    INSTALLED.call_once(|| neovm_edit::buffer::syntax_cache::install_forget_hook(forget_cache));
-}
 
 /// The text layer's handle on a buffer text's syntax parse cache (stage-3 C7).
 ///
-/// Taking the cache out of the registry while a caller holds it keeps the
-/// shard lock off the callback; a re-entrant lookup sees a fresh cache and
-/// the outer call replaces the entry afterwards.  Losing an entry to a panic
-/// only costs the next lookups their hits: the cache never answers from a
-/// state it did not validate after the substrate's invalidation.
+/// The runs sit in an opaque slot on the buffer text. The slot is taken out
+/// while a caller holds the cache, so no storage borrow is held across the
+/// scan. A re-entrant lookup sees an empty slot and the outer call stores its
+/// body back afterwards. Losing the body to a panic only costs the next
+/// lookups their hits: the cache never answers from a state it did not
+/// validate after the substrate's invalidation.
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) trait BufferSyntaxParseCache {
     /// Run `f` with the cache and what changed since its last use.
@@ -323,28 +279,32 @@ pub(crate) trait BufferSyntaxParseCache {
     fn syntax_parse_cache_has_run_from(&self, from_char: usize) -> bool;
 }
 
+fn cache_from_slot(slot: &mut Option<Box<dyn std::any::Any>>) -> &mut SyntaxParseCache {
+    if slot.is_none() {
+        *slot = Some(Box::new(SyntaxParseCache::default()));
+    }
+    slot.as_mut()
+        .and_then(|body| body.downcast_mut::<SyntaxParseCache>())
+        .expect("syntax parse body is a SyntaxParseCache")
+}
+
 impl BufferSyntaxParseCache for Buffer {
     fn with_syntax_parse_cache<R>(
         &self,
         f: impl FnOnce(&mut SyntaxParseCache, Invalidation) -> R,
     ) -> R {
-        ensure_forget_hook();
-        let id = self.syntax_cache_id().get();
-        let invalidation = self.take_syntax_invalidation();
-        let mut cache = take_cache(id);
-        cache.apply_invalidation(invalidation);
-        let out = f(&mut cache, invalidation);
-        put_cache(id, cache);
-        out
+        self.with_syntax_parse_body(|slot, invalidation| {
+            let cache = cache_from_slot(slot);
+            cache.apply_invalidation(invalidation);
+            f(cache, invalidation)
+        })
     }
 
     fn syntax_parse_cache_has_run_from(&self, from_char: usize) -> bool {
-        let id = self.syntax_cache_id().get();
-        let map = cache_shard(id)
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        map.get(&id)
-            .is_some_and(|cache| cache.has_run_from(from_char))
+        self.with_syntax_parse_body_ref(|body| {
+            body.and_then(|b| b.downcast_ref::<SyntaxParseCache>())
+                .is_some_and(|cache| cache.has_run_from(from_char))
+        })
     }
 }
 

@@ -351,11 +351,16 @@ struct BufferTextStorage {
     /// live text and its snapshots; created only while the knob is on.
     text_index_demand: OnceCell<Rc<Cell<bool>>>,
     line_index_role: LineIndexRole,
-    /// Identity of and invalidation notes for the syntax parse cache whose
-    /// recorded runs live in the text layer (P3.4, stage-3 C7). Outside the
-    /// copy-on-write backend: a snapshot starts with a fresh identity and no
-    /// notes (P3.0 §3.9).
+    /// Identity of and invalidation notes for the syntax parse cache (P3.4,
+    /// stage-3 C7). Outside the copy-on-write backend: a snapshot starts with
+    /// a fresh identity and no notes (P3.0 §3.9).
     syntax_cache: SyntaxCacheState,
+    /// Recorded syntax-parse runs. The text crate stores its cache here and
+    /// downcasts it; this crate never names that type. A snapshot starts
+    /// empty, so a clone does not copy another storage's runs. Indirect
+    /// buffers share this storage, so they share the slot, and
+    /// `buffer-swap-text` moves it with the text.
+    syntax_parse_body: RefCell<Option<Box<dyn std::any::Any>>>,
     /// Per-buffer GNU clip_changed witness. Indirect buffers share this heap
     /// allocation but retain distinct restrictions. No Buffer/JIT layout change.
     /// Kept after existing fields to avoid intentionally displacing hot fields.
@@ -447,11 +452,16 @@ pub struct BufferTextStorage {
     /// live text and its snapshots; created only while the knob is on.
     text_index_demand: OnceCell<Rc<Cell<bool>>>,
     line_index_role: LineIndexRole,
-    /// Identity of and invalidation notes for the syntax parse cache whose
-    /// recorded runs live in the text layer (P3.4, stage-3 C7). Outside the
-    /// copy-on-write backend: a snapshot starts with a fresh identity and no
-    /// notes (P3.0 §3.9).
+    /// Identity of and invalidation notes for the syntax parse cache (P3.4,
+    /// stage-3 C7). Outside the copy-on-write backend: a snapshot starts with
+    /// a fresh identity and no notes (P3.0 §3.9).
     syntax_cache: SyntaxCacheState,
+    /// Recorded syntax-parse runs. The text crate stores its cache here and
+    /// downcasts it; this crate never names that type. A snapshot starts
+    /// empty, so a clone does not copy another storage's runs. Indirect
+    /// buffers share this storage, so they share the slot, and
+    /// `buffer-swap-text` moves it with the text.
+    syntax_parse_body: RefCell<Option<Box<dyn std::any::Any>>>,
     /// Per-buffer GNU clip_changed witness. Indirect buffers share this heap
     /// allocation but retain distinct restrictions. No Buffer/JIT layout change.
     /// Kept after existing fields to avoid intentionally displacing hot fields.
@@ -627,6 +637,7 @@ impl Clone for BufferTextStorage {
             text_index_demand,
             line_index_role: LineIndexRole::Snapshot,
             syntax_cache: SyntaxCacheState::fresh(),
+            syntax_parse_body: RefCell::new(None),
             mode_line_clipped: self.mode_line_clipped.clone(),
         }
     }
@@ -744,6 +755,7 @@ impl BufferText {
                 text_index_demand: OnceCell::new(),
                 line_index_role: LineIndexRole::Live,
                 syntax_cache: SyntaxCacheState::fresh(),
+                syntax_parse_body: RefCell::new(None),
                 mode_line_clipped: HashSet::new(),
             })),
         }
@@ -1819,15 +1831,58 @@ impl BufferText {
 
     /// What changed since the syntax parse cache last consumed the notes.
     ///
-    /// The text layer keys its recorded runs by [`Self::syntax_cache_id`] and
-    /// applies this invalidation before answering from them; the substrate
-    /// never names a syntax type.
+    /// The text layer applies this to the runs stored on this text before
+    /// answering from them. This crate never names that cache type.
     #[doc(hidden)]
     pub fn take_syntax_invalidation(&self) -> Invalidation {
         let storage = self.storage.borrow();
         storage
             .syntax_cache
             .take_invalidation(storage.content_epoch, storage.text_props.syntax_prop_tick())
+    }
+
+    /// Hand the text crate its syntax-parse cache and the notes since the last
+    /// use.
+    ///
+    /// The body is taken out for the callback, so a re-entrant call sees an
+    /// empty slot and this call's store replaces it afterwards. A panic drops
+    /// the body: the next lookup misses, and does not answer from a cache that
+    /// never saw this invalidation. Moving the box does not copy the runs.
+    #[doc(hidden)]
+    pub fn with_syntax_parse_body<R>(
+        &self,
+        f: impl FnOnce(&mut Option<Box<dyn std::any::Any>>, Invalidation) -> R,
+    ) -> R {
+        let (mut body, invalidation) = {
+            let storage = self.storage.borrow();
+            let invalidation = storage
+                .syntax_cache
+                .take_invalidation(storage.content_epoch, storage.text_props.syntax_prop_tick());
+            let body = storage.syntax_parse_body.borrow_mut().take();
+            (body, invalidation)
+        };
+        let out = f(&mut body, invalidation);
+        *self.storage.borrow().syntax_parse_body.borrow_mut() = body;
+        out
+    }
+
+    /// Read the syntax-parse cache without draining invalidation notes.
+    ///
+    /// Invalidation removes runs and never creates a FROM, so a pending clear
+    /// can still report a stale hit. A real lookup has to drain the notes.
+    #[doc(hidden)]
+    pub fn with_syntax_parse_body_ref<R>(
+        &self,
+        f: impl FnOnce(Option<&dyn std::any::Any>) -> R,
+    ) -> R {
+        let storage = self.storage.borrow();
+        let body = storage.syntax_parse_body.borrow();
+        f(body.as_deref())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn syntax_parse_body_is_empty(&self) -> bool {
+        self.storage.borrow().syntax_parse_body.borrow().is_none()
     }
 
     /// The content epoch and the text-property table's syntax tick: the

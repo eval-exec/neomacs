@@ -8,11 +8,10 @@
 //! the notes are checked against.  That account is plain integers and lives
 //! here, next to the text it describes.
 //!
-//! The text layer keeps its runs keyed by the [`SyntaxCacheId`] issued here.
-//! Its only contact from this side is the cold drop path: when a storage dies
-//! the installed [`install_forget_hook`] hook lets it forget the runs, so a
-//! long-lived editor does not accumulate dead buffers' caches.  Nothing on the
-//! insert, delete or property paths calls into the text layer.
+//! The text layer keeps its runs in the storage's opaque `syntax_parse_body`
+//! slot and downcasts them. This crate never names that cache type. A snapshot
+//! starts with an empty slot, so a clone does not copy another storage's runs.
+//! Nothing on the insert, delete or property paths calls into the text layer.
 
 use std::cell::Cell;
 use std::sync::OnceLock;
@@ -129,8 +128,8 @@ impl SyntaxCacheId {
 static NEXT_CACHE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// The substrate half of the syntax parse cache: a storage's cache identity
-/// and the invalidation notes its mutators leave.  The recorded runs stay in
-/// the text layer, keyed by [`SyntaxCacheId`].
+/// and the invalidation notes its mutators leave. The recorded runs live in
+/// the storage's opaque `syntax_parse_body` slot, which the text crate owns.
 pub(crate) struct SyntaxCacheState {
     id: SyntaxCacheId,
     /// `Cell` rather than `RefCell`: the notes are `Copy` plain data and no
@@ -182,7 +181,9 @@ impl SyntaxCacheState {
     }
 }
 
-/// The text layer installs this to drop the runs it kept for a dying storage.
+/// Optional cold-drop hook. The runs live on the storage now, so dropping a
+/// storage drops them. A caller that still keeps an out-of-line entry can
+/// install a hook; nothing in this crate does.
 type ForgetHook = fn(u64);
 
 static FORGET_HOOK: OnceLock<ForgetHook> = OnceLock::new();

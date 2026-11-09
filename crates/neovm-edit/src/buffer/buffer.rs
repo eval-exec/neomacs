@@ -3728,6 +3728,24 @@ impl Buffer {
         self.text.take_syntax_invalidation()
     }
 
+    /// See [`buffer_text::BufferText::with_syntax_parse_body`].
+    #[doc(hidden)]
+    pub fn with_syntax_parse_body<R>(
+        &self,
+        f: impl FnOnce(&mut Option<Box<dyn std::any::Any>>, super::syntax_cache::Invalidation) -> R,
+    ) -> R {
+        self.text.with_syntax_parse_body(f)
+    }
+
+    /// See [`buffer_text::BufferText::with_syntax_parse_body_ref`].
+    #[doc(hidden)]
+    pub fn with_syntax_parse_body_ref<R>(
+        &self,
+        f: impl FnOnce(Option<&dyn std::any::Any>) -> R,
+    ) -> R {
+        self.text.with_syntax_parse_body_ref(f)
+    }
+
     /// See [`crate::buffer::buffer_text::SyntaxSafePositions`].
     #[doc(hidden)]
     pub fn take_syntax_safe_positions(&self) -> crate::buffer::buffer_text::SyntaxSafePositions {

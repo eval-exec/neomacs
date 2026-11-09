@@ -1345,10 +1345,9 @@ mod cow_snapshot_test;
 mod line_index_test;
 
 /// A layout snapshot starts without the syntax parse cache (P3.4 S3, P3.0
-/// §3.9): the clone gets a fresh cache identity and its own invalidation
-/// account that has seen nothing and reports everything changed, while the
-/// live text's account keeps its own state.  The recorded runs live in the
-/// text layer, keyed by this substrate identity (stage-3 C7).
+/// §3.9): the clone gets a fresh cache identity, an empty opaque run slot,
+/// and its own invalidation account that has seen nothing and reports
+/// everything changed, while the live text keeps its own state and its runs.
 #[test]
 fn a_text_clone_starts_without_the_syntax_parse_cache() {
     use crate::buffer::syntax_cache::Invalidation;
@@ -1356,8 +1355,37 @@ fn a_text_clone_starts_without_the_syntax_parse_cache() {
     let text = BufferText::from_str("(a b) ; c");
     let _ = text.take_syntax_invalidation();
     assert_eq!(text.take_syntax_invalidation(), Invalidation::Nothing);
+    text.with_syntax_parse_body(|slot, invalidation| {
+        assert_eq!(invalidation, Invalidation::Nothing);
+        *slot = Some(Box::new(1u8));
+    });
     let snapshot = text.clone();
     assert_ne!(snapshot.syntax_cache_id(), text.syntax_cache_id());
     assert_eq!(snapshot.take_syntax_invalidation(), Invalidation::All);
     assert_eq!(text.take_syntax_invalidation(), Invalidation::Nothing);
+    assert!(snapshot.syntax_parse_body_is_empty());
+    assert!(!text.syntax_parse_body_is_empty());
+}
+
+/// A re-entrant body callback sees the empty slot. The outer store is what
+/// remains afterwards, matching the old registry's take/put.
+#[test]
+fn a_reentrant_syntax_parse_body_sees_empty_and_the_outer_body_returns() {
+    crate::test_utils::init_test_tracing();
+    let text = BufferText::from_str("x");
+    let _ = text.take_syntax_invalidation();
+    text.with_syntax_parse_body(|slot, _| {
+        *slot = Some(Box::new(7u8));
+        text.with_syntax_parse_body(|inner, _| {
+            assert!(inner.is_none());
+            *inner = Some(Box::new(9u8));
+        });
+        assert_eq!(
+            slot.as_ref().unwrap().downcast_ref::<u8>().copied(),
+            Some(7)
+        );
+    });
+    text.with_syntax_parse_body_ref(|body| {
+        assert_eq!(body.and_then(|b| b.downcast_ref::<u8>().copied()), Some(7));
+    });
 }
