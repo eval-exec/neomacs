@@ -70,6 +70,7 @@ never	emacs_core/runtime/bytecode/vm.rs	Vm::op_point	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::op_point_max	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::op_point_min	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::osr_transfer	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::reject_bytecode_frame_for_budget	run_loop	# #[cold] #[inline(never)]: the bytecode-stack-overflow reject is a cold exit, never inlined into run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::resolve_stack_call_target	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::resume_flow_out_of_line	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	invalid_bytecode_flow	run_loop
@@ -123,6 +124,7 @@ always	emacs_core/runtime/bytecode/vm.rs	BytecodeTierPolicy::records_call_feedba
 always	emacs_core/runtime/bytecode/vm.rs	ConsumedCallOperandRootSlot::from_args_start	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	ConsumedCallOperandRootSlot::install_exact_callee	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	FrameArgumentCopy::for_count	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerReturn::with_saved_budget	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerStack::active	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerStack::active_mut	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerStack::enter_callee	run_loop,inline
@@ -153,10 +155,13 @@ always	emacs_core/runtime/bytecode/vm.rs	Vm::resolve_interpreter_stack_call_targ
 always	emacs_core/runtime/bytecode/vm.rs	Vm::run_interpreter_driver	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::uses_interpreter_only_tier	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::with_dynamic_vm_roots	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	bytecode_frame_bytes	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	charge_bytecode_frame	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	fixnum_ge	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	fixnum_gt	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	fixnum_le	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	fixnum_lt	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	release_bytecode_frame	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	vm_stack_return_after_push_enabled	run_loop,inline
 always	emacs_core/runtime/debug_on_call/mod.rs	Context::debug_on_next_call_is_armed	run_loop,inline
 always	emacs_core/runtime/error/flow_word.rs	Flow::tag	run_loop,inline
@@ -398,9 +403,11 @@ never	emacs_core/runtime/jit/cache.rs	run_resolved_leaf_native_outlined	run_arme
 never	emacs_core/runtime/jit/stats.rs	record_native_entry_enabled	run_armed_leaf
 always	emacs_core/runtime/bytecode/chunk.rs	<ByteCodeFunction as ByteCodeFunctionExt>::jit_constant_base	run_armed_leaf,inline
 always	emacs_core/runtime/jit/cache.rs	run_resolved_leaf_native	run_armed_leaf,inline
+always	emacs_core/runtime/jit/cache.rs	run_with_bytecode_stack_probe	run_armed_leaf,inline
 always	emacs_core/runtime/jit/compile/leaf.rs	CompiledLeaf::entry_call_raw_memory	run_armed_leaf,inline
 always	emacs_core/runtime/jit/stats.rs	record_native_entry	run_armed_leaf,inline
 exempt	emacs_core/runtime/jit/cache.rs	count_native_status	run_armed_leaf	# called by run_resolved_leaf_native, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	emacs_core/runtime/jit/cache.rs	run_resolved_leaf_native_inner	run_armed_leaf	# no inline attribute in source: the raw memory-ABI shape test and entry; the attribute is left alone
 never	emacs_core/lisp/native/builtins/higher_order.rs	mapcar1_with_callee	root,builtin_mapcar_2,builtin_mapc_2
 never	emacs_core/lisp/native/builtins/higher_order.rs	map_sequence_length	builtin_mapcar_2,builtin_mapc_2
 never	emacs_core/runtime/eval/apply.rs	Context::reserve_vm_frame_root_slots	builtin_mapcar_2
