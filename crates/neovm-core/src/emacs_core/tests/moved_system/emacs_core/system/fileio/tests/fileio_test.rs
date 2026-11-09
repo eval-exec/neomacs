@@ -7295,6 +7295,127 @@ fn do_auto_save_warns_about_a_buffer_it_cannot_auto_save() {
     );
 }
 
+/// A context that reaches `auto_save_error` (src/fileio.c:6234-6245): a
+/// remote visited file whose `file-modes` handler signals, so `auto_save_1`
+/// fails before it writes anything.
+fn auto_save_error_fixture() -> (tempfile::TempDir, Context, std::path::PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let auto_save = dir.path().join("#!m2-remote:host:!secret.txt#");
+    let mut eval = crate::test_utils::new_context();
+    eval.eval_str(
+        "(fset 'm2-bell-modes-handler \
+         '(lambda (operation &rest args) \
+            (cond ((eq operation 'file-modes) \
+                   (signal 'file-error '\"m2 bell failure\")) \
+                  ((eq operation 'expand-file-name) (car args)) \
+                  (t nil))))",
+    )
+    .expect("define the failing handler");
+    eval.obarray_mut().set_symbol_value(
+        "file-name-handler-alist",
+        Value::list(vec![Value::cons(
+            Value::string("\\`/m2-remote:"),
+            Value::symbol("m2-bell-modes-handler"),
+        )]),
+    );
+    let remote_id = eval.edit.buffers.create_buffer("secret.txt");
+    prepare_buffer_for_auto_save(
+        eval.edit.buffers.get_mut(remote_id).expect("remote buffer"),
+        Some("/m2-remote:host:/secret.txt"),
+        &auto_save,
+    );
+    (dir, eval, auto_save)
+}
+
+/// `auto_save_error` calls `ring_bell` directly (src/fileio.c:6239), and GNU's
+/// `ring_bell` runs a non-nil `ring-bell-function` with the variable set to nil
+/// for the call, restoring it after a normal return (src/terminal.c:56-79).
+#[cfg(unix)]
+#[test]
+fn auto_save_error_calls_ring_bell_function_with_the_variable_nil() {
+    let _modes = DefaultFileModesScope::set(0o755);
+    let (_dir, mut eval, _auto_save) = auto_save_error_fixture();
+    eval.eval_str(
+        r#"(progn
+             (setq m2-bell-called nil m2-bell-saw-nil nil)
+             (setq ring-bell-function
+                   (lambda ()
+                     (setq m2-bell-called t
+                           m2-bell-saw-nil (null ring-bell-function)))))"#,
+    )
+    .expect("install the ring-bell witness");
+    builtin_do_auto_save(&mut eval, vec![]).expect("the error stays inside do-auto-save");
+    assert_eq!(eval.eval_symbol("m2-bell-called").unwrap(), Value::T);
+    assert_eq!(
+        eval.eval_symbol("m2-bell-saw-nil").unwrap(),
+        Value::T,
+        "ring-bell-function must be nil while the function runs"
+    );
+    assert!(
+        eval.eval_str("(functionp ring-bell-function)")
+            .unwrap()
+            .is_truthy(),
+        "the original ring-bell-function is restored after a normal return"
+    );
+}
+
+/// GNU's `ring_bell` never signals the keyboard-macro `user-error` that
+/// `bitch_at_user` would (src/dispnew.c:6875-6887): `auto_save_error` calls
+/// `ring_bell` directly, not `ding`.
+#[cfg(unix)]
+#[test]
+fn auto_save_error_ring_bell_does_not_signal_inside_a_keyboard_macro() {
+    let _modes = DefaultFileModesScope::set(0o755);
+    let (_dir, mut eval, _auto_save) = auto_save_error_fixture();
+    eval.eval_str("(setq executing-kbd-macro t)")
+        .expect("enter a keyboard macro");
+    builtin_do_auto_save(&mut eval, vec![]).expect("ring_bell never signals a user-error");
+}
+
+const BELL_PROBE_ENV: &str = "NEOVM_AUTO_SAVE_BELL_PROBE";
+const BELL_PROBE_MARKER: &str = "AUTO-SAVE-BELL-PROBE ";
+
+/// `ring_bell` does not write BEL in batch: `auto_save_error` reaches the
+/// terminal-hook arm only when `ring-bell-function` is nil, and a batch frame
+/// has no terminal bell hook. The probe re-runs this test in a fresh process
+/// so the whole stdout of one auto-save error can be inspected.
+#[cfg(unix)]
+#[test]
+fn auto_save_error_never_writes_bel_in_batch() {
+    let name = "auto_save_error_never_writes_bel_in_batch";
+    if std::env::var_os(BELL_PROBE_ENV).is_some() {
+        let _modes = DefaultFileModesScope::set(0o755);
+        let (_dir, mut eval, _auto_save) = auto_save_error_fixture();
+        builtin_do_auto_save(&mut eval, vec![]).expect("probe do-auto-save");
+        println!("{BELL_PROBE_MARKER}");
+        return;
+    }
+    let module = module_path!();
+    let module = module.split_once("::").map_or(module, |(_, rest)| rest);
+    let exe = std::env::current_exe().expect("test binary path");
+    let output = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg(format!("{module}::{name}"))
+        .arg("--nocapture")
+        .env(BELL_PROBE_ENV, "1")
+        .output()
+        .expect("spawn auto-save bell probe");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "probe child failed: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains(BELL_PROBE_MARKER),
+        "probe child printed no marker: {stdout:?}"
+    );
+    assert!(
+        !output.stdout.contains(&0x07u8),
+        "auto-save error wrote BEL to stdout: {stdout:?}"
+    );
+}
+
 /// The same report through the Lisp layer: `display-warning` is autoloaded
 /// from warnings.el and logs the warning in `*Warnings*`.
 #[cfg(unix)]

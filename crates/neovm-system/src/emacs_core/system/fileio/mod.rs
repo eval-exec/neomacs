@@ -7509,6 +7509,31 @@ fn auto_save_1(
     Ok(())
 }
 
+/// GNU `ring_bell` (src/terminal.c:56-79), the direct call `auto_save_error`
+/// makes (src/fileio.c:6239).
+///
+/// A non-nil `ring-bell-function` is called with no arguments while the
+/// variable is set to nil: GNU assigns the C variable WITHOUT specbind, so a
+/// failing function leaves it nil and cannot loop through itself; the original
+/// value is restored only when the call returns normally, and an error from
+/// the function propagates to the caller. With no function, GNU calls the
+/// selected terminal's `ring_bell_hook`; Neomacs has no terminal bell hook,
+/// and a batch frame has none either, so that arm is a no-op. This is NOT
+/// `ding` / `bitch_at_user` (src/dispnew.c:6875-6887): it never writes BEL to
+/// stdout and never signals the keyboard-macro `user-error`.
+fn ring_bell(eval: &mut Context) -> Result<(), Flow> {
+    let function = eval.visible_variable_value_or_nil("ring-bell-function");
+    if function.is_nil() {
+        return Ok(());
+    }
+    eval.set_variable("ring-bell-function", Value::NIL);
+    let result = eval.funcall_general(function, Vec::new());
+    if result.is_ok() {
+        eval.set_variable("ring-bell-function", function);
+    }
+    result.map(|_| ())
+}
+
 /// GNU `auto_save_error` (src/fileio.c:6233-6245), the handler
 /// `Fdo_auto_save` gives `internal_condition_case`: ring the bell, then
 /// display the error as an `auto-save` warning of level `:error`, "Auto-saving
@@ -7523,8 +7548,10 @@ fn auto_save_error(eval: &mut Context, flow: &Flow) -> Result<(), Flow> {
     let Some(sig) = flow.as_signal() else {
         return Ok(());
     };
-    // `ring_bell (XFRAME (selected_frame))`.
-    let _ = neovm_eval::emacs_core::builtins::dispatch_builtin(eval, "ding", vec![]);
+    // `ring_bell (XFRAME (selected_frame))` (src/fileio.c:6239), called
+    // DIRECTLY: this is not `ding`, which would write BEL to stdout in batch
+    // and signal a keyboard-macro user-error.
+    ring_bell(eval)?;
     if !eval.obarray().fboundp("display-warning") {
         return Ok(());
     }
