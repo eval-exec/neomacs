@@ -142,11 +142,11 @@ fn bytecode_lazy_iterative_admission_preserves_shared_layout_and_eager_fallback(
         proof: OnceLock<super::super::decode::StackProof>,
     }
     assert_eq!(
-        std::mem::offset_of!(LazyGnuCode, decoded),
+        LazyGnuCode::offset_of_decoded(),
         std::mem::offset_of!(OriginalPrefix, decoded)
     );
     assert_eq!(
-        std::mem::offset_of!(LazyGnuCode, proof),
+        LazyGnuCode::offset_of_proof(),
         std::mem::offset_of!(OriginalPrefix, proof)
     );
     // The decoded payload the hot projection returns: run_loop inlines these
@@ -157,15 +157,15 @@ fn bytecode_lazy_iterative_admission_preserves_shared_layout_and_eager_fallback(
         stack_verified: bool,
     }
     assert_eq!(
-        std::mem::offset_of!(DecodedGnuCode, ops),
+        DecodedGnuCode::offset_of_ops(),
         std::mem::offset_of!(OriginalDecoded, ops)
     );
     assert_eq!(
-        std::mem::offset_of!(DecodedGnuCode, byte_offset_map),
+        DecodedGnuCode::offset_of_byte_offset_map(),
         std::mem::offset_of!(OriginalDecoded, byte_offset_map)
     );
     assert_eq!(
-        std::mem::offset_of!(DecodedGnuCode, stack_verified),
+        DecodedGnuCode::offset_of_stack_verified(),
         std::mem::offset_of!(OriginalDecoded, stack_verified)
     );
     // The enclosing function projection: the VM admission/decode path reads
@@ -228,7 +228,7 @@ fn bytecode_lazy_iterative_admission_preserves_shared_layout_and_eager_fallback(
         std::mem::offset_of!(OriginalFunction, gnu_bytecode_bytes)
     );
     assert_eq!(
-        std::mem::offset_of!(ByteCodeFunction, lazy_gnu_code),
+        ByteCodeFunction::offset_of_lazy_gnu_code(),
         std::mem::offset_of!(OriginalFunction, lazy_gnu_code)
     );
     fn require_shared<T: Send + Sync>() {}
