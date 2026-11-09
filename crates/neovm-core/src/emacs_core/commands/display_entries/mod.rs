@@ -551,10 +551,9 @@ pub(crate) fn builtin_neomacs_display_monitor_attributes_list(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("neomacs-display-monitor-attributes-list", &args, 0, 1)?;
-    let frames = eval
-        .frame_manager()
-        .frame_list()
-        .into_iter()
+    let frame_ids = eval.frame_manager().frame_list();
+    let frames = frame_ids
+        .iter()
         .map(|fid| Value::make_frame(fid.0))
         .collect::<Vec<_>>();
     let monitor_values = neomacs_monitor_info_snapshot();
@@ -565,8 +564,8 @@ pub(crate) fn builtin_neomacs_display_monitor_attributes_list(
     // The monitor snapshot comes from the one graphical frontend, so its
     // backend decides, whichever frame is selected. Wayland is the PGTK case:
     // device-pixel geometry plus a scale factor.
-    let on_wayland = eval.frames.frame_list().into_iter().any(|fid| {
-        eval.frames.get(fid).is_some_and(|frame| {
+    let on_wayland = frame_ids.iter().any(|&fid| {
+        eval.frame_manager().get(fid).is_some_and(|frame| {
             matches!(
                 frame.display_identity(),
                 crate::window::FrameDisplayIdentity::Graphical(identity)

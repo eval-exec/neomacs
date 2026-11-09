@@ -11,8 +11,6 @@
 //! buffer) and evaluates them here, so this is the one place that
 //! evaluation lives.
 
-use crate::window::DisplayFrameExt;
-use crate::window::DisplayFrameManagerExt;
 use crate::window::{Window, WindowId};
 use neovm_edit::buffer::BufferId;
 use neovm_edit::emacs_core::edit_host::EditHost;

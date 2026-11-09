@@ -17,9 +17,9 @@ pkg-config.workspace = true
 visibility = { version = "0.1.1", optional = true }
 bitflags.workspace = true
 bytemuck.workspace = true
-getrandom.workspace = true
 hashbrown.workspace = true
 libc.workspace = true
+getrandom.workspace = true
 malachite.workspace = true
 memchr.workspace = true
 neovm-display-identity.workspace = true

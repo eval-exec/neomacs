@@ -69,7 +69,7 @@ fn fresh_processes_do_not_draw_the_same_server_key() {
     crate::test_utils::init_test_tracing();
     const NAME: &str = "fresh_processes_do_not_draw_the_same_server_key";
     if is_probe() {
-        let mut ev = Context::new();
+        let mut ev = crate::test_utils::new_context();
         println!("{PROBE_MARKER}{}", eval_one(&mut ev, SERVER_KEY_DRAWS));
         return;
     }
@@ -95,7 +95,7 @@ fn string_seed_repeats_its_sequence_in_any_process() {
     crate::test_utils::init_test_tracing();
     const NAME: &str = "string_seed_repeats_its_sequence_in_any_process";
     let seeded = format!("(progn (random \"neovm-random-seed-probe\") {SERVER_KEY_DRAWS})");
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     if is_probe() {
         println!("{PROBE_MARKER}{}", eval_one(&mut ev, &seeded));
         return;
@@ -129,7 +129,7 @@ fn entropy_or_another_string_replaces_a_string_seed() {
     let _serial = IN_PROCESS_DRAWS
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let mut draws_after = |prefix: &str| {
         let result = eval_one(&mut ev, &format!("(progn {prefix} {SERVER_KEY_DRAWS})"));
         assert!(
