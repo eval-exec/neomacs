@@ -197,12 +197,11 @@ fn assert_slot_probe(index: usize) {
         |code, admission, run, home| {
             let covered = admission
                 .with_activation(run, home, |activation| {
-                    let view = activation.table_view();
-                    let table = view.table();
-                    index < table.slots().get()
-                        && table
-                            .chunk((index / table.chunk_slots().get()).into())
-                            .is_some()
+                    // Copied census of the same published table. A chunk is
+                    // present exactly when its index is below the chunk count.
+                    let (slots, chunks, chunk_slots, _) =
+                        activation.published_table_census_for_test();
+                    index < slots && index / chunk_slots < chunks
                 })
                 .unwrap();
             code.run(admission, run, home, ImmediateResult::Nil)
