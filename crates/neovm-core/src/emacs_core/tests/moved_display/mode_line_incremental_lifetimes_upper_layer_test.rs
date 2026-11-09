@@ -41,7 +41,11 @@ fn display_setup(setup: &str) -> (Context, ModeLineDisplayOutput) {
         Value::make_buffer(buffer_id),
         24,
     );
-    assert_eq!(eval.gc_count_for_test(), gc + 1, "fixture must collect exactly once");
+    assert_eq!(
+        eval.gc_count_for_test(),
+        gc + 1,
+        "fixture must collect exactly once"
+    );
     assert_eq!(
         save_scratch_gc_roots(),
         before,

@@ -1977,7 +1977,11 @@ pub mod mode_line_gc_roots_test_upper_layer_helpers {
                 (output.value(), sources)
             }
         };
-        assert_eq!(eval.gc_count_for_test(), before + 1, "the later :eval must collect");
+        assert_eq!(
+            eval.gc_count_for_test(),
+            before + 1,
+            "the later :eval must collect"
+        );
         let expected = if matches!(
             source,
             PropertySource::DetachedFormatElements | PropertySource::FreshEvalString
