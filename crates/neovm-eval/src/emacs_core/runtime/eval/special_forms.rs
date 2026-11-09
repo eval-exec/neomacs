@@ -1309,22 +1309,23 @@ impl Context {
                 }
                 Err(Flow::signal_boxed(sig))
             }
-            Err(flow @ FlowKind::ThreadBlocked(_)) => {
+            Err(FlowKind::ThreadBlocked(blocked)) => {
                 self.truncate_condition_stack(condition_stack_base);
-                if let FlowKind::ThreadBlocked(ref blocked) = flow
-                    && !blocked.remaining_forms.is_nil()
-                {
-                    return Err(Flow::thread_blocked(
-                        blocked.blocker,
-                        crate::emacs_core::threads::make_thread_condition_case_continuation(
-                            var,
-                            blocked.remaining_forms,
-                            Value::list(handlers_vec.to_vec()),
-                            self.lexenv,
-                        ),
-                    ));
-                }
-                Err(Flow::from_kind(flow))
+                // The blocking call is the whole body when nothing follows it,
+                // so `remaining_forms` is nil. GNU still raises into these
+                // handlers at the next reacquire (src/thread.c:141-154). Save
+                // them either way. A non-nil list is the forms inside this
+                // `condition-case`, or an inner continuation; resume enters
+                // only this outermost wrapper.
+                Err(Flow::thread_blocked(
+                    blocked.blocker,
+                    crate::emacs_core::threads::make_thread_condition_case_continuation(
+                        var,
+                        blocked.remaining_forms,
+                        Value::list(handlers_vec.to_vec()),
+                        self.lexenv,
+                    ),
+                ))
             }
             // A shutdown is not a condition: condition-case cannot handle it,
             // matching GNU, where Fkill_emacs exits and no handler ever runs.

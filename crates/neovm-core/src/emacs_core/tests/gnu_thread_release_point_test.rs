@@ -429,3 +429,378 @@ fn green_main_condition_wait_is_notified_by_a_worker() {
     assert_eq!(outer[2], nil());
     assert_eq!(outer[3], Value::symbol("yes"));
 }
+
+// ---------------------------------------------------------------------------
+// thread-signal delivery (GNU 31.1 src/thread.c).
+//
+// C2: a signal stored before the worker runs is raised by Fsignal inside the
+// worker at the next post_acquire_global_lock after handlerlist exists
+// (thread.c:141-154, first acquire at :805 is before the sentinel at :810).
+// In these forms that reacquire is sleep-for's select return. The worker's
+// condition-case therefore runs, and thread-join still reports the error
+// because it snapshotted error_symbol before waiting (C3, :1118-1140).
+// C4: thread-last-error changes only when the error escapes the thread
+// function (record_thread_error, :754-758).
+// C1: sleep-for is not woken by thread-signal; only a condvar wait is.
+//
+// Globals, not a dynamic `let`: a worker does not see the parent's dynamic
+// bindings (Fmake_thread, :913-919). The log is updated with `setq`/`cons`,
+// not `push`: a bare test Context has no subr.el, so `push` is void-function.
+// `cons` onto nil prints the same list GNU's `push` produced. Pinned GNU 31.1
+// (a360712c9d27, batch) printed the expected strings below.
+// ---------------------------------------------------------------------------
+
+/// Signal before the worker's first run. GNU:
+/// `(nil (join-err arith-error ("bad")) nil nil ((caught arith-error ("bad"))))`.
+const SIGNAL_BEFORE_RUN_CAUGHT_FORM: &str = r#"
+(progn
+  (setq gnu-ts-log nil)
+  (setq gnu-ts-w
+        (make-thread
+         (lambda ()
+           (condition-case err
+               (progn (sleep-for 0.05) 'done)
+             (arith-error
+              (setq gnu-ts-log (cons (list 'caught (car err) (cdr err)) gnu-ts-log))
+              'caught)))))
+  (list (thread-signal gnu-ts-w 'arith-error '("bad"))
+        (condition-case err
+            (thread-join gnu-ts-w)
+          (error (list 'join-err (car err) (cdr err))))
+        (thread-live-p gnu-ts-w)
+        (thread-last-error)
+        gnu-ts-log))
+"#;
+
+/// No handler in the worker. The top-level catcher records the error and
+/// join still signals its pre-wait snapshot. GNU:
+/// `(nil (join-err arith-error ("bad")) nil (arith-error "bad"))`.
+const SIGNAL_NO_HANDLER_FORM: &str = r#"
+(progn
+  (setq gnu-ts-w (make-thread (lambda () (sleep-for 0.05) 'done)))
+  (list (thread-signal gnu-ts-w 'arith-error '("bad"))
+        (condition-case err
+            (thread-join gnu-ts-w)
+          (error (list 'join-err (car err) (cdr err))))
+        (thread-live-p gnu-ts-w)
+        (thread-last-error)))
+"#;
+
+/// Worker blocked in `mutex-lock`. `thread-signal` broadcasts that condvar,
+/// the handler catches the error, and an immediate join still reports the
+/// snapshot. GNU:
+/// `(t nil (join-err arith-error ("bad")) nil nil ((caught arith-error ("bad"))))`.
+const SIGNAL_MUTEX_CAUGHT_FORM: &str = r#"
+(progn
+  (setq gnu-ts-log nil gnu-ts-m (make-mutex))
+  (mutex-lock gnu-ts-m)
+  (setq gnu-ts-w
+        (make-thread
+         (lambda ()
+           (condition-case err
+               (progn (mutex-lock gnu-ts-m) 'done)
+             (arith-error
+              (setq gnu-ts-log (cons (list 'caught (car err) (cdr err)) gnu-ts-log))
+              'caught)))))
+  (sleep-for 0.05)
+  (setq gnu-ts-blocked (eq (thread--blocker gnu-ts-w) gnu-ts-m))
+  (setq gnu-ts-sig (thread-signal gnu-ts-w 'arith-error '("bad")))
+  (setq gnu-ts-join
+        (condition-case err
+            (thread-join gnu-ts-w)
+          (error (list 'join-err (car err) (cdr err)))))
+  (mutex-unlock gnu-ts-m)
+  (list gnu-ts-blocked gnu-ts-sig gnu-ts-join (thread-live-p gnu-ts-w)
+        (thread-last-error) gnu-ts-log))
+"#;
+
+const SIGNAL_BEFORE_RUN_EXPECT: &str =
+    "(nil (join-err arith-error (\"bad\")) nil nil ((caught arith-error (\"bad\"))))";
+const SIGNAL_NO_HANDLER_EXPECT: &str =
+    "(nil (join-err arith-error (\"bad\")) nil (arith-error \"bad\"))";
+const SIGNAL_MUTEX_CAUGHT_EXPECT: &str =
+    "(t nil (join-err arith-error (\"bad\")) nil nil ((caught arith-error (\"bad\"))))";
+
+#[test]
+fn gnu_thread_signal_before_run_runs_condition_handler() {
+    assert_eq!(
+        sim_printed(SIGNAL_BEFORE_RUN_CAUGHT_FORM),
+        SIGNAL_BEFORE_RUN_EXPECT
+    );
+}
+
+#[test]
+fn green_thread_signal_before_run_runs_condition_handler() {
+    assert_eq!(
+        green_printed(SIGNAL_BEFORE_RUN_CAUGHT_FORM),
+        SIGNAL_BEFORE_RUN_EXPECT
+    );
+}
+
+#[test]
+fn gnu_thread_signal_without_handler_records_last_error() {
+    assert_eq!(
+        sim_printed(SIGNAL_NO_HANDLER_FORM),
+        SIGNAL_NO_HANDLER_EXPECT
+    );
+}
+
+#[test]
+fn green_thread_signal_without_handler_records_last_error() {
+    assert_eq!(
+        green_printed(SIGNAL_NO_HANDLER_FORM),
+        SIGNAL_NO_HANDLER_EXPECT
+    );
+}
+
+#[test]
+fn gnu_thread_signal_wakes_mutex_wait_into_handler() {
+    assert_eq!(
+        sim_printed(SIGNAL_MUTEX_CAUGHT_FORM),
+        SIGNAL_MUTEX_CAUGHT_EXPECT
+    );
+}
+
+#[test]
+fn green_thread_signal_wakes_mutex_wait_into_handler() {
+    assert_eq!(
+        green_printed(SIGNAL_MUTEX_CAUGHT_FORM),
+        SIGNAL_MUTEX_CAUGHT_EXPECT
+    );
+}
+
+/// R5. Two signals before delivery: `thread_set_error` overwrites, so only
+/// the last pair is delivered and snapshotted. GNU 31.1 batch:
+/// `((join-err error ("last")) nil nil ((caught error ("last"))))`.
+const SIGNAL_LAST_OF_TWO_FORM: &str = r#"
+(progn
+  (setq gnu-ts-log nil)
+  (setq gnu-ts-w
+        (make-thread
+         (lambda ()
+           (condition-case err
+               (progn (thread-yield) 'ran)
+             (arith-error
+              (setq gnu-ts-log (cons (list 'caught (car err) (cdr err)) gnu-ts-log))
+              'arith)
+             (error
+              (setq gnu-ts-log (cons (list 'caught (car err) (cdr err)) gnu-ts-log))
+              'other)))))
+  (thread-signal gnu-ts-w 'arith-error '("first"))
+  (thread-signal gnu-ts-w 'error '("last"))
+  (list
+   (condition-case err
+       (thread-join gnu-ts-w)
+     (error (list 'join-err (car err) (cdr err))))
+   (thread-live-p gnu-ts-w)
+   (thread-last-error)
+   gnu-ts-log))
+"#;
+
+const SIGNAL_LAST_OF_TWO_EXPECT: &str =
+    "((join-err error (\"last\")) nil nil ((caught error (\"last\"))))";
+
+/// R6. Signal a thread that has already exited (`thread.c:76`, `m_specpdl`
+/// is NULL). Join still signals the stored pair; liveness and
+/// `thread-last-error` stay unchanged. The wait is bounded so a sim
+/// `thread-live-p` that stays true cannot hang. GNU 31.1 batch, after the
+/// worker had exited:
+/// `(nil nil nil nil (join-err arith-error ("bad")) nil nil)`.
+const SIGNAL_EXITED_THREAD_FORM: &str = r#"
+(progn
+  (setq gnu-ts-w (make-thread (lambda () 42)))
+  (setq gnu-r6-deadline (+ (float-time) 0.5))
+  (while (and (thread-live-p gnu-ts-w) (< (float-time) gnu-r6-deadline))
+    (thread-yield))
+  (setq gnu-r6-live1 (thread-live-p gnu-ts-w))
+  (setq gnu-r6-le1 (thread-last-error))
+  (thread-signal gnu-ts-w 'arith-error '("bad"))
+  (list gnu-r6-live1
+        (thread-live-p gnu-ts-w)
+        gnu-r6-le1
+        (thread-last-error)
+        (condition-case err
+            (list :ok (thread-join gnu-ts-w))
+          (error (list 'join-err (car err) (cdr err))))
+        (thread-last-error)
+        (thread-live-p gnu-ts-w)))
+"#;
+
+const SIGNAL_EXITED_THREAD_EXPECT: &str =
+    "(nil nil nil nil (join-err arith-error (\"bad\")) nil nil)";
+
+/// R7. The first join re-raises the pre-wait snapshot. Delivery clears the
+/// pair, so a second join returns the handler's result. GNU 31.1 batch:
+/// `((join-err arith-error ("bad")) (:ok caught) nil nil ((caught arith-error ("bad"))))`.
+const SIGNAL_SECOND_JOIN_FORM: &str = r#"
+(progn
+  (setq gnu-ts-log nil)
+  (setq gnu-ts-w
+        (make-thread
+         (lambda ()
+           (condition-case err
+               (progn (thread-yield) 'ran)
+             (arith-error
+              (setq gnu-ts-log (cons (list 'caught (car err) (cdr err)) gnu-ts-log))
+              'caught)))))
+  (thread-signal gnu-ts-w 'arith-error '("bad"))
+  (setq gnu-r7-j1
+        (condition-case err
+            (list :ok (thread-join gnu-ts-w))
+          (error (list 'join-err (car err) (cdr err)))))
+  (setq gnu-r7-j2
+        (condition-case err
+            (list :ok (thread-join gnu-ts-w))
+          (error (list 'join-err (car err) (cdr err)))))
+  (list gnu-r7-j1 gnu-r7-j2 (thread-live-p gnu-ts-w) (thread-last-error) gnu-ts-log))
+"#;
+
+const SIGNAL_SECOND_JOIN_EXPECT: &str =
+    "((join-err arith-error (\"bad\")) (:ok caught) nil nil ((caught arith-error (\"bad\"))))";
+
+/// R8 pins K1. The top-level handler exists before the user's
+/// `condition-case`, so a yield that reacquires first lets the signal
+/// escape. GNU 31.1 batch:
+/// `((join-err arith-error ("bad")) nil (arith-error "bad") nil)`.
+const SIGNAL_YIELD_BEFORE_HANDLER_FORM: &str = r#"
+(progn
+  (setq gnu-ts-log nil)
+  (setq gnu-ts-w
+        (make-thread
+         (lambda ()
+           (thread-yield)
+           (condition-case err
+               'body
+             (arith-error
+              (setq gnu-ts-log (cons (list 'caught (car err) (cdr err)) gnu-ts-log))
+              'caught)))))
+  (thread-signal gnu-ts-w 'arith-error '("bad"))
+  (list
+   (condition-case err
+       (thread-join gnu-ts-w)
+     (error (list 'join-err (car err) (cdr err))))
+   (thread-live-p gnu-ts-w)
+   (thread-last-error)
+   gnu-ts-log))
+"#;
+
+const SIGNAL_YIELD_BEFORE_HANDLER_EXPECT: &str =
+    "((join-err arith-error (\"bad\")) nil (arith-error \"bad\") nil)";
+
+/// R9. Cleanup runs after the handler, while the dynamic binding is still
+/// in force, and the binding is restored afterwards. GNU 31.1 batch
+/// (lexical-binding t, `defvar` makes the let dynamic):
+/// `(t (join-err arith-error ("bad")) nil nil ((caught arith-error ("bad"))) (inner t) outer)`.
+const SIGNAL_UNWIND_LET_FORM: &str = r#"
+(progn
+  (defvar gnu-r9-x)
+  (setq gnu-r9-x 'outer gnu-r9-caught nil gnu-r9-cleanup nil gnu-r9-log nil)
+  (setq gnu-r9-m (make-mutex))
+  (mutex-lock gnu-r9-m)
+  (setq gnu-r9-w
+        (make-thread
+         (lambda ()
+           (let ((gnu-r9-x 'inner))
+             (unwind-protect
+                 (condition-case err
+                     (mutex-lock gnu-r9-m)
+                   (arith-error
+                    (setq gnu-r9-caught t)
+                    (setq gnu-r9-log
+                          (cons (list 'caught (car err) (cdr err)) gnu-r9-log))
+                    'caught))
+               (setq gnu-r9-cleanup (list gnu-r9-x gnu-r9-caught)))))))
+  (sleep-for 0.05)
+  (setq gnu-r9-blocked (eq (thread--blocker gnu-r9-w) gnu-r9-m))
+  (thread-signal gnu-r9-w 'arith-error '("bad"))
+  (setq gnu-r9-join
+        (condition-case err
+            (list :ok (thread-join gnu-r9-w))
+          (error (list 'join-err (car err) (cdr err)))))
+  (mutex-unlock gnu-r9-m)
+  (list gnu-r9-blocked gnu-r9-join (thread-live-p gnu-r9-w) (thread-last-error)
+        gnu-r9-log gnu-r9-cleanup gnu-r9-x))
+"#;
+
+const SIGNAL_UNWIND_LET_EXPECT: &str =
+    "(t (join-err arith-error (\"bad\")) nil nil ((caught arith-error (\"bad\"))) (inner t) outer)";
+
+#[test]
+fn gnu_thread_signal_keeps_only_the_last() {
+    assert_eq!(
+        sim_printed(SIGNAL_LAST_OF_TWO_FORM),
+        SIGNAL_LAST_OF_TWO_EXPECT
+    );
+}
+
+#[test]
+fn green_thread_signal_keeps_only_the_last() {
+    assert_eq!(
+        green_printed(SIGNAL_LAST_OF_TWO_FORM),
+        SIGNAL_LAST_OF_TWO_EXPECT
+    );
+}
+
+#[test]
+fn gnu_thread_signal_of_an_exited_thread_stays_dead() {
+    assert_eq!(
+        sim_printed(SIGNAL_EXITED_THREAD_FORM),
+        SIGNAL_EXITED_THREAD_EXPECT
+    );
+}
+
+#[test]
+fn green_thread_signal_of_an_exited_thread_stays_dead() {
+    assert_eq!(
+        green_printed(SIGNAL_EXITED_THREAD_FORM),
+        SIGNAL_EXITED_THREAD_EXPECT
+    );
+}
+
+#[test]
+fn gnu_thread_signal_second_join_returns_the_result() {
+    assert_eq!(
+        sim_printed(SIGNAL_SECOND_JOIN_FORM),
+        SIGNAL_SECOND_JOIN_EXPECT
+    );
+}
+
+#[test]
+fn green_thread_signal_second_join_returns_the_result() {
+    assert_eq!(
+        green_printed(SIGNAL_SECOND_JOIN_FORM),
+        SIGNAL_SECOND_JOIN_EXPECT
+    );
+}
+
+#[test]
+fn gnu_thread_signal_before_handler_escapes() {
+    assert_eq!(
+        sim_printed(SIGNAL_YIELD_BEFORE_HANDLER_FORM),
+        SIGNAL_YIELD_BEFORE_HANDLER_EXPECT
+    );
+}
+
+#[test]
+fn green_thread_signal_before_handler_escapes() {
+    assert_eq!(
+        green_printed(SIGNAL_YIELD_BEFORE_HANDLER_FORM),
+        SIGNAL_YIELD_BEFORE_HANDLER_EXPECT
+    );
+}
+
+#[test]
+fn gnu_thread_signal_unwind_protect_and_let_survive_the_wait() {
+    assert_eq!(
+        sim_printed(SIGNAL_UNWIND_LET_FORM),
+        SIGNAL_UNWIND_LET_EXPECT
+    );
+}
+
+#[test]
+fn green_thread_signal_unwind_protect_and_let_survive_the_wait() {
+    assert_eq!(
+        green_printed(SIGNAL_UNWIND_LET_FORM),
+        SIGNAL_UNWIND_LET_EXPECT
+    );
+}

@@ -54,6 +54,30 @@ impl Context {
     /// then lets the caller block in its own wait. With no worker ever
     /// created the pass is a single flag test, so hot wait paths that never
     /// use Elisp threads keep their pre-threading cost.
+    /// Raise a pending `thread-signal` in the current simulated worker.
+    ///
+    /// GNU does this in `post_acquire_global_lock` (src/thread.c:141-154),
+    /// after the lock is held again, and only when `handlerlist` is set.
+    /// The first acquire (`run_thread`, :805) happens before
+    /// `handlerlist_sentinel` (:810-815), so this is a no-op until
+    /// [`ThreadManager::mark_handlerlist_installed`] runs. Callers invoke
+    /// this when their wait returns, not inside the release itself: a
+    /// `sleep-for` must finish sleeping before the signal is raised.
+    #[doc(hidden)]
+    pub fn deliver_pending_sim_signal(&mut self) -> Result<(), Flow> {
+        if self.green_threads_running() {
+            return Ok(());
+        }
+        let id = self.threads.current_thread_id();
+        if id == 0 || !self.threads.handlerlist_installed(id) {
+            return Ok(());
+        }
+        if let Some(flow) = self.threads.take_pending_thread_signal(id) {
+            return Err(flow);
+        }
+        Ok(())
+    }
+
     #[doc(hidden)]
     pub fn sim_release_point(&mut self, _point: SimReleasePoint) -> Result<bool, Flow> {
         if self.green_threads_running() || !self.threads.any_thread_created() {

@@ -1838,6 +1838,10 @@ struct ThreadDynamicBindingState {
     lexenv: Value,
     specpdl: Vec<SpecBinding>,
     condition_stack: Vec<ConditionFrame>,
+    /// `Some` is a simulated worker parked across a wait. `None` is the
+    /// caller `enter_thread_runtime` suspended. Parked frames share this vec
+    /// so a wait does not add a `Context` field.
+    parked_thread: Option<u64>,
 }
 
 #[derive(Debug)]

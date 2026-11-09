@@ -127,6 +127,9 @@ mod oracle_shift_selection;
 #[path = "oracle_tab_line.rs"]
 mod oracle_tab_line;
 
+#[path = "oracle_thread_signal.rs"]
+mod oracle_thread_signal;
+
 #[path = "oracle_tls_loopback.rs"]
 mod oracle_tls_loopback;
 

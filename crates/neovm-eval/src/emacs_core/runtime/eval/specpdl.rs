@@ -1676,8 +1676,74 @@ impl Context {
                 lexenv,
                 specpdl: std::mem::take(&mut self.specpdl),
                 condition_stack: std::mem::take(&mut self.condition_stack),
+                parked_thread: None,
             });
         Ok(ThreadDynamicBindingToken { suspended_depth })
+    }
+
+    /// Park the running simulated worker's specpdl across a blocking wait.
+    ///
+    /// GNU leaves the waiter inside its Lisp stack (`unwind-protect` and
+    /// dynamic `let` run when the wait returns). The frame is appended to
+    /// the existing switch vec; it is not a `Context` field. `BacktraceNative`
+    /// points at a JIT frame that `apply` has already left, so those entries
+    /// are dropped before the parked state can be traced.
+    #[doc(hidden)]
+    pub fn park_sim_worker_bindings(&mut self, thread_id: u64) -> Result<(), Flow> {
+        self.specpdl
+            .retain(|binding| !matches!(binding, SpecBinding::BacktraceNative { .. }));
+        if self.specpdl.is_empty() && self.condition_stack.is_empty() && self.lexenv.is_nil() {
+            return Ok(());
+        }
+        self.specpdl_unrewind_vars_for_thread_switch(false)?;
+        let state = ThreadDynamicBindingState {
+            lexenv: std::mem::replace(&mut self.lexenv, Value::NIL),
+            specpdl: std::mem::take(&mut self.specpdl),
+            condition_stack: std::mem::take(&mut self.condition_stack),
+            parked_thread: Some(thread_id),
+        };
+        self.lexenv_assq_cache.clear();
+        self.lexenv_special_cache.clear();
+        self.suspended_thread_bindings.push(state);
+        Ok(())
+    }
+
+    /// Install the specpdl [`Self::park_sim_worker_bindings`] saved for THREAD_ID.
+    ///
+    /// Removing a frame that sits below TOKEN's caller shifts that caller.
+    /// TOKEN's index moves with it so the matching exit still pops the caller.
+    #[doc(hidden)]
+    pub fn restore_sim_worker_bindings(
+        &mut self,
+        thread_id: u64,
+        token: &mut ThreadDynamicBindingToken,
+    ) -> Result<(), Flow> {
+        let Some(index) = self
+            .suspended_thread_bindings
+            .iter()
+            .rposition(|state| state.parked_thread == Some(thread_id))
+        else {
+            return Ok(());
+        };
+        let state = self.suspended_thread_bindings.remove(index);
+        if index < token.suspended_depth {
+            token.suspended_depth -= 1;
+        }
+        debug_assert!(
+            self.specpdl.is_empty(),
+            "a parked worker stack is installed onto an empty specpdl"
+        );
+        debug_assert!(
+            self.condition_stack.is_empty(),
+            "a parked worker stack is installed onto an empty handler list"
+        );
+        self.specpdl = state.specpdl;
+        self.condition_stack = state.condition_stack;
+        let rewound = self.specpdl_unrewind_vars_for_thread_switch(true);
+        self.lexenv = state.lexenv;
+        self.lexenv_assq_cache.clear();
+        self.lexenv_special_cache.clear();
+        rewound
     }
 
     #[doc(hidden)]
@@ -1693,15 +1759,17 @@ impl Context {
             self.condition_stack.is_empty(),
             "a simulated thread must unwind its active handlers before switching out"
         );
-        assert_eq!(
-            self.suspended_thread_bindings.len(),
-            token.suspended_depth + 1,
+        assert!(
+            self.suspended_thread_bindings.len() > token.suspended_depth,
             "simulated thread binding stacks must resume in LIFO order"
         );
-        let state = self
-            .suspended_thread_bindings
-            .pop()
-            .expect("validated suspended thread binding depth");
+        // Parked worker frames may sit above or below this caller. Remove
+        // the caller by the index recorded at suspend, not by popping the top.
+        let state = self.suspended_thread_bindings.remove(token.suspended_depth);
+        assert!(
+            state.parked_thread.is_none(),
+            "a thread switch resumes the caller frame, not a parked worker"
+        );
         self.specpdl = state.specpdl;
         self.condition_stack = state.condition_stack;
         let result = self.specpdl_unrewind_vars_for_thread_switch(true);

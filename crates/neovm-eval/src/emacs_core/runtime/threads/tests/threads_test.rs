@@ -197,7 +197,9 @@ fn thread_lifecycle_created_running_finished() {
         mgr.get_thread(id).unwrap().native.phase,
         ThreadPhase::Completing(ThreadOutcome::Returned)
     );
-    assert!(mgr.thread_alive_p(id));
+    // GNU `thread_live_p` is false once `run_thread` clears `m_specpdl`
+    // (src/thread.c:76, :822-823), which is before `thread-join`.
+    assert!(!mgr.thread_alive_p(id));
     assert_eq!(mgr.thread_result(id).as_int(), Some(42));
 
     mgr.join_thread(id);
@@ -210,12 +212,18 @@ fn thread_signal_records_error() {
     let mut mgr = ThreadManager::new();
     let id = mgr.create_thread(Value::NIL, ThreadName::UNNAMED);
     mgr.start_thread(id);
-    mgr.signal_thread(id, Value::symbol("test-error"));
+    // GNU `Fthread_signal` (src/thread.c:993-1034) stores the pair and leaves
+    // the thread live. The Lisp builtin passes `(ERROR-SYMBOL . DATA)`.
+    mgr.signal_thread(
+        id,
+        Value::cons(Value::symbol("test-error"), Value::string("bad")),
+    );
     assert_eq!(
         mgr.get_thread(id).unwrap().native.phase,
-        ThreadPhase::Completing(ThreadOutcome::Signaled)
+        ThreadPhase::Active(RunState::Running)
     );
-    assert!(!mgr.thread_alive_p(id));
+    assert!(mgr.thread_alive_p(id));
+    assert!(mgr.has_pending_thread_signal(id));
 }
 
 #[test]
@@ -239,7 +247,9 @@ fn all_thread_ids_excludes_finished_thread() {
 
     mgr.finish_thread(id, Value::fixnum(1));
     let after_finish = mgr.all_thread_ids();
-    assert!(after_finish.contains(&id));
+    // Dead when the thread function returns, before join (src/thread.c:76,
+    // :822-823). `all-threads` lists live threads only (:1146-1160).
+    assert!(!after_finish.contains(&id));
 
     mgr.join_thread(id);
     let after_join = mgr.all_thread_ids();

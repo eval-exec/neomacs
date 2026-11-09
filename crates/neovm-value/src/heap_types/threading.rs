@@ -319,6 +319,21 @@ pub enum BlockedWait {
     ConditionWait(RecursionDepth),
 }
 
+/// Whether `run_thread` has installed its top-level handler.
+///
+/// GNU `run_thread` calls `acquire_global_lock` (`src/thread.c:805`) before
+/// it installs `handlerlist_sentinel` (`:810-815`). `post_acquire_global_lock`
+/// delivers a pending signal only when `handlerlist` is non-NULL (`:141-154`),
+/// and that sentinel — not the user's `condition-case` — is what makes the
+/// guard true. `Absent` is the first acquisition. `Installed` is every
+/// reacquire after it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub enum HandlerList {
+    Absent,
+    Installed,
+}
+
 /// Scalar runtime state that carries no Lisp children or owned storage. Its
 /// mutable view cannot change heap identity or introduce an unbarriered edge.
 #[derive(Clone, Copy, Debug)]
@@ -341,6 +356,8 @@ pub struct ThreadNativeState {
     /// on the stack right now; a release point reached from a running
     /// worker must not re-enter another running worker as "created".
     pub(crate) executing: bool,
+    /// `run_thread`'s top-level handler (`src/thread.c:810-815`).
+    pub(crate) handlerlist: HandlerList,
 }
 
 impl ThreadNativeState {
@@ -353,6 +370,7 @@ impl ThreadNativeState {
             blocked_wait: None,
             woken: false,
             executing: false,
+            handlerlist: HandlerList::Absent,
         }
     }
 }
@@ -415,6 +433,7 @@ impl ThreadPayload {
             blocked_wait: _,
             woken: _,
             executing: _,
+            handlerlist: _,
         } = native;
         children.visit_children(visit);
     }
@@ -863,6 +882,16 @@ impl ThreadNativeState {
     #[doc(hidden)]
     pub fn executing_mut(&mut self) -> &mut bool {
         &mut self.executing
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn handlerlist(&self) -> HandlerList {
+        self.handlerlist
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn handlerlist_mut(&mut self) -> &mut HandlerList {
+        &mut self.handlerlist
     }
 }
 

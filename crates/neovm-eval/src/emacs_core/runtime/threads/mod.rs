@@ -192,9 +192,9 @@ pub(crate) use completion::{CompletingThread, CompletionExit, RetiredCompletion}
 pub use release_point::SimReleasePoint;
 
 pub(crate) use neovm_value::heap_types::threading::{
-    BlockedWait, CondVarId, CondVarPayload, JoinObservation, MutexId, MutexOwnership, MutexPayload,
-    MutexReference, RecursionDepth, RunState, StoredThreadEvent, ThreadChildren, ThreadId,
-    ThreadIds, ThreadNativeState, ThreadOutcome, ThreadPayload, ThreadPhase,
+    BlockedWait, CondVarId, CondVarPayload, HandlerList, JoinObservation, MutexId, MutexOwnership,
+    MutexPayload, MutexReference, RecursionDepth, RunState, StoredThreadEvent, ThreadChildren,
+    ThreadId, ThreadIds, ThreadNativeState, ThreadOutcome, ThreadPayload, ThreadPhase,
 };
 
 /// A validated object identity. This word is not a GC root by itself: Lisp
@@ -467,7 +467,11 @@ pub(crate) fn run_pending_sim_thread(
                 return Err(flow);
             }
         };
+        // GNU installs `handlerlist_sentinel` after the first acquire
+        // (src/thread.c:805 then :810-815) and does not raise there.
+        eval.threads.mark_handlerlist_installed(thread_id);
         let result = eval.apply(function, vec![]);
+        let result = preserve_blocked_sim_worker(eval, thread_id, result);
         let exit_result = exit_thread_runtime(eval, thread_id, runtime_state);
         let thread_result = finish_make_thread_result(&mut eval.threads, thread_id, result);
         finish_sim_thread_registration(&mut eval.threads, completion_id)?;
@@ -536,6 +540,40 @@ pub(crate) fn enter_thread_runtime(
         previous_buffer_id,
         previous_dynamic_bindings,
     })
+}
+
+/// Keep a blocking worker's specpdl for the resume that continues it.
+///
+/// An `Ok` or a real signal has already unwound. `ThreadBlocked` has not:
+/// [`Context::unbind_to_with_result_slow`] leaves those frames in place.
+fn preserve_blocked_sim_worker(
+    eval: &mut super::eval::Context,
+    thread_id: u64,
+    result: EvalResult,
+) -> EvalResult {
+    if !matches!(result.as_ref(), Err(flow) if flow.is_thread_blocked()) {
+        return result;
+    }
+    match eval.park_sim_worker_bindings(thread_id) {
+        Ok(()) => result,
+        Err(flow) => eval.unbind_to_with_result(0, Err(flow)),
+    }
+}
+
+/// After a resumed continuation, run parked `unwind-protect` and `let`
+/// cleanups. A fresh `ThreadBlocked` parks those frames again instead.
+fn settle_resumed_sim_worker(
+    ctx: &mut crate::emacs_core::eval::Context,
+    thread_id: u64,
+    result: EvalResult,
+) -> EvalResult {
+    if matches!(result.as_ref(), Err(flow) if flow.is_thread_blocked()) {
+        return match ctx.park_sim_worker_bindings(thread_id) {
+            Ok(()) => result,
+            Err(flow) => ctx.unbind_to_with_result(0, Err(flow)),
+        };
+    }
+    ctx.unbind_to_with_result(0, result)
 }
 
 pub(crate) fn exit_thread_runtime(
@@ -648,9 +686,11 @@ pub fn builtin_thread_join(
     let pending_join_signal = ctx.threads.pending_thread_signal_for_value(args[0]);
     // GNU `Fthread_join` (src/thread.c:1095-1144) waits on the target's exit
     // condition and thereby releases the global lock; created workers run and
-    // suspended waiters resume at that release point. A worker that was
-    // already sent a signal is no longer pending (its phase moved to
-    // Completing(Signaled)), matching GNU's injected-error-before-run order.
+    // suspended waiters resume at that release point. A signal stored before
+    // the target's first acquire stays pending: `run_thread` acquires at
+    // :805 before `handlerlist_sentinel` (:810-815), and
+    // `post_acquire_global_lock` (:141-154) raises only once that handler
+    // exists. The snapshot above is what join re-raises.
     ctx.sim_release_point(SimReleasePoint::Join)?;
     if ctx.threads.thread_ready_to_resume(id) {
         resume_blocked_thread(ctx, id)?;
@@ -684,7 +724,7 @@ pub(crate) fn resume_blocked_thread(
         .id();
     let wait = ctx.threads.blocked_wait(thread_id);
     let signaled = ctx.threads.has_pending_thread_signal(thread_id);
-    let runtime_state = enter_thread_runtime(ctx, thread_id)?;
+    let mut runtime_state = enter_thread_runtime(ctx, thread_id)?;
 
     // GNU re-runs part of the blocked operation before the saved
     // continuation: `lisp_mutex_lock_for_thread` re-checks the mutex
@@ -728,7 +768,10 @@ pub(crate) fn resume_blocked_thread(
                 None => Ok(true),
             }
         }
-        _ => Ok(true),
+        // A pending signal skips the mutex retry (`lisp_mutex_lock_for_thread`
+        // returns before taking the lock when `error_symbol` is set,
+        // src/thread.c:232-238).
+        Some(BlockedWait::MutexLock) | None => Ok(true),
     };
     let retry_error = match retry {
         Ok(true) => None,
@@ -755,37 +798,52 @@ pub(crate) fn resume_blocked_thread(
     ctx.threads.set_blocked_wait(thread_id, None);
     ctx.threads.clear_thread_woken(thread_id);
 
-    // GNU raises an injected signal after the wait's reacquisition and
-    // before the continuation; the unfinished form does not run again.
-    let interrupted = retry_error.or_else(|| ctx.threads.take_pending_thread_signal(thread_id));
-    if let Some(flow) = interrupted {
-        let _ = ctx.threads.take_blocked_remaining_forms(thread_id);
-        let result: EvalResult = Err(flow);
-        let exit_result = exit_thread_runtime(ctx, thread_id, runtime_state);
-        let thread_result = finish_make_thread_result(&mut ctx.threads, thread_id, result);
-        finish_sim_thread_registration(&mut ctx.threads, completion_id)?;
-        exit_result?;
-        thread_result?;
-        return Ok(Value::NIL);
-    }
+    // The wait parked `unwind-protect` and dynamic `let` frames. Put them
+    // back before the continuation, so a cleanup sees the inner binding
+    // and a handler flag set by the continuation.
+    let restore_error = ctx
+        .restore_sim_worker_bindings(thread_id, &mut runtime_state.previous_dynamic_bindings)
+        .err();
 
-    let taken_forms = ctx
-        .threads
-        .take_blocked_remaining_forms(thread_id)
-        .expect("ready blocked continuation remains installed across runtime entry");
-    debug_assert_eq!(taken_forms, remaining_forms);
-    let result = if remaining_forms
-        .closure_slot(neovm_value::tagged::header::CLOSURE_ARGLIST)
-        .is_some()
-    {
-        ctx.apply(remaining_forms, vec![])
-    } else if let Some((var, body, handlers, lexenv)) =
-        thread_condition_case_continuation_parts(remaining_forms)
-    {
-        ctx.resume_thread_condition_case_continuation(var, body, handlers, lexenv)
+    let handler = thread_condition_case_continuation_parts(remaining_forms);
+    let result = if let Some(flow) = restore_error.or(retry_error) {
+        let _ = ctx.threads.take_blocked_remaining_forms(thread_id);
+        Err(flow)
+    } else if let Some((var, body, handlers, lexenv)) = handler {
+        // GNU raises inside the handlers that were active at the wait
+        // (`post_acquire_global_lock`, thread.c:141-154). This continuation
+        // takes the pending pair itself, which is the same path as `signal`.
+        match ctx.threads.take_blocked_remaining_forms(thread_id) {
+            Some(taken_forms) => {
+                debug_assert!(eq_value(&taken_forms, &remaining_forms));
+                ctx.resume_thread_condition_case_continuation(var, body, handlers, lexenv)
+            }
+            None => Err(missing_live_thread_registration()),
+        }
+    } else if let Some(flow) = ctx.threads.take_pending_thread_signal(thread_id) {
+        // No handler was saved around the wait, so the forms after the
+        // blocking call do not run (src/thread.c:238-241). Dispatch so
+        // `signal-hook-function` and `debug-on-signal` run in the target,
+        // the same path as `signal` (src/eval.c:1966-1976).
+        let _ = ctx.threads.take_blocked_remaining_forms(thread_id);
+        ctx.dispatch_signal_result_if_needed(Err(flow))
     } else {
-        ctx.eval_lambda_body_value(remaining_forms)
+        match ctx.threads.take_blocked_remaining_forms(thread_id) {
+            Some(taken_forms) => {
+                debug_assert!(eq_value(&taken_forms, &remaining_forms));
+                if remaining_forms
+                    .closure_slot(neovm_value::tagged::header::CLOSURE_ARGLIST)
+                    .is_some()
+                {
+                    ctx.apply(remaining_forms, vec![])
+                } else {
+                    ctx.eval_lambda_body_value(remaining_forms)
+                }
+            }
+            None => Err(missing_live_thread_registration()),
+        }
     };
+    let result = settle_resumed_sim_worker(ctx, thread_id, result);
     let exit_result = exit_thread_runtime(ctx, thread_id, runtime_state);
     let thread_result = finish_make_thread_result(&mut ctx.threads, thread_id, result);
     finish_sim_thread_registration(&mut ctx.threads, completion_id)?;
@@ -809,6 +867,10 @@ pub fn builtin_thread_yield(
     // point names that operation; a worker continues in place afterwards,
     // exactly as yield_callback reacquires for its caller.
     ctx.sim_release_point(SimReleasePoint::Yield)?;
+    // Yield's reacquire is this return. `post_acquire_global_lock`
+    // (src/thread.c:141-154) raises a pending signal here, after the
+    // top-level handler exists and before the next form.
+    ctx.deliver_pending_sim_signal()?;
     Ok(Value::NIL)
 }
 

@@ -207,43 +207,30 @@ impl ThreadManager {
 
     #[doc(hidden)]
     pub fn signal_thread_for_value(&mut self, value: Value, error: Value) {
-        let Some(phase) = self
-            .thread_payload(value)
-            .map(|thread| thread.native().phase())
-        else {
+        if self.thread_payload(value).is_none() {
             return;
-        };
+        }
+        // GNU `thread_set_error` (src/thread.c:985-991) overwrites the pending
+        // pair and leaves the thread's phase alone. `Fthread_signal`
+        // (:993-1034) wakes only `wait_condvar` (mutex-lock, condition-wait,
+        // thread-join) via `thread_signal_callback` (:974-982). A select wait
+        // (`sleep-for`) is not woken. A finished thread stays dead.
         let signal = split_signal_binding_value(error);
-        // A thread inside its own typed wait is parked in GNU terms even
-        // though the simulation has not suspended its Lisp stack yet (its
-        // release point is running other threads): the wake must reach that
-        // wait and the thread must stay live until it raises the error.
-        let in_typed_wait = self
-            .thread_payload(value)
-            .is_some_and(|thread| thread.native().blocked_wait().is_some());
-        let waiting = phase == ThreadPhase::Active(RunState::Blocked) || in_typed_wait;
+        let wake = signal_wakes_blocked_wait(
+            self.thread_payload(value)
+                .and_then(|thread| thread.native().blocked_wait()),
+        );
         self.update_thread_value(value, |children| {
             *children.last_error_mut() = Some(error);
             let (symbol, data) = signal.unwrap_or((Value::NIL, Value::NIL));
             *children.error_symbol_mut() = symbol;
             *children.error_data_mut() = data;
         });
-        self.update_thread_native_value(value, |state| {
-            // GNU `thread_signal_callback` (thread.c:974-982) broadcasts the
-            // wait the target is parked in. The target keeps `event_object`
-            // until its own wait code clears it; only the wake is recorded.
-            if waiting {
+        if wake {
+            self.update_thread_native_value(value, |state| {
                 *state.woken_mut() = true;
-            }
-            *state.phase_mut() = match phase {
-                ThreadPhase::Active(RunState::Blocked) => phase,
-                ThreadPhase::Active(RunState::Running) if in_typed_wait => phase,
-                ThreadPhase::New
-                | ThreadPhase::Active(RunState::Running)
-                | ThreadPhase::Completing(_) => ThreadPhase::Completing(ThreadOutcome::Signaled),
-                ThreadPhase::Terminal(_) => ThreadPhase::Terminal(ThreadOutcome::Signaled),
-            };
-        });
+            });
+        }
     }
 
     pub fn record_thread_internal_error(&mut self, native: u64, error: Value) {
@@ -305,6 +292,21 @@ impl ThreadManager {
     /// (src/thread.c:757+) executes only after `acquire_global_lock`. The
     /// simulation runs that body at the caller's next release point instead of
     /// during construction, so `New`/`Active(Running)` means "created, not run".
+    /// `run_thread` has passed its first `acquire_global_lock` (thread.c:805)
+    /// and installed `handlerlist_sentinel` (:810-815).
+    #[doc(hidden)]
+    pub fn handlerlist_installed(&self, native: u64) -> bool {
+        self.get_thread(native)
+            .is_some_and(|thread| thread.native().handlerlist() == HandlerList::Installed)
+    }
+
+    #[doc(hidden)]
+    pub fn mark_handlerlist_installed(&mut self, native: u64) {
+        self.update_thread_native(native, |state| {
+            *state.handlerlist_mut() = HandlerList::Installed;
+        });
+    }
+
     pub(crate) fn thread_is_pending_sim_run(&self, native: u64) -> bool {
         self.get_thread(native).is_some_and(|thread| {
             !thread.native().executing()
@@ -971,15 +973,20 @@ fn thread_is_running(thread: &ThreadPayload) -> bool {
     }
 }
 
-fn thread_is_live(thread: &ThreadPayload) -> bool {
-    match thread.native().phase() {
-        ThreadPhase::New | ThreadPhase::Active(_) => true,
-        ThreadPhase::Completing(ThreadOutcome::Returned) => {
-            thread.native().join_observation() == JoinObservation::Unobserved
-        }
-        ThreadPhase::Completing(ThreadOutcome::InternalError | ThreadOutcome::Signaled)
-        | ThreadPhase::Terminal(_) => false,
+fn signal_wakes_blocked_wait(wait: Option<BlockedWait>) -> bool {
+    // Exhaustive so a future select-class wait cannot be woken by accident.
+    // GNU broadcasts only `wait_condvar` (src/thread.c:974-982, :1029-1030).
+    match wait {
+        Some(BlockedWait::MutexLock | BlockedWait::ConditionWait(_)) => true,
+        None => false,
     }
+}
+
+fn thread_is_live(thread: &ThreadPayload) -> bool {
+    // GNU `thread_live_p` is `(STATE)->m_specpdl != NULL` (src/thread.c:76).
+    // `run_thread` clears that pointer at :822-823, before join, and then
+    // unlinks the thread (:853-859). A finished thread is dead either way.
+    thread_is_running(thread)
 }
 
 impl ThreadManager {

@@ -1842,6 +1842,18 @@ impl Context {
     #[inline(never)]
     #[doc(hidden)]
     pub fn unbind_to_with_result_slow(&mut self, count: usize, result: EvalResult) -> EvalResult {
+        // A simulated worker's blocking wait keeps the Lisp stack. GNU parks
+        // the thread inside `lisp_mutex_lock_for_thread` / `thread_select`
+        // and runs `unwind-protect` and `let` only when the wait returns
+        // (eval.c `unbind_to`). The inline fast path above is unchanged: a
+        // single trivial frame may still pop. Main-thread `ThreadBlocked`
+        // (a deadlock report) still unwinds.
+        if self.threads.current_thread_id() != 0
+            && !self.green_threads_running()
+            && matches!(result.as_ref(), Err(flow) if flow.is_thread_blocked())
+        {
+            return result;
+        }
         // GNU's six `if (backtrace_debug_on_exit (...)) val = call_debugger
         // (list2 (Qexit, val));` sites, as one.  Reaching here means the suffix
         // is not all-trivial, and `trivial_spec_binding_pop` treats exactly the
