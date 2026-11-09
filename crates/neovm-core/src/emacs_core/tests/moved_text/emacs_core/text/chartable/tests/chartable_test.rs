@@ -2087,3 +2087,84 @@ fn make_run_length_uniprop_table() -> Value {
     .unwrap();
     table
 }
+
+// `ct_ascii_raw_values` is the batch form of `ct_lookup` over the 128 ASCII
+// codes.  These tests pin the equality against the per-code lookup on every
+// shape the ascii-slot/default/parent resolution order can meet.
+mod ascii_raw_values_batch {
+    use super::*;
+
+    fn assert_matches_ct_lookup(table: Value) {
+        let mut raw = [Value::NIL; 128];
+        assert!(ct_ascii_raw_values(&table, &mut raw), "a char-table");
+        for code in 0..128i64 {
+            let expected = ct_lookup(&table, code).expect("ct_lookup");
+            assert_eq!(
+                raw[code as usize], expected,
+                "code {code}: the batch slot must equal ct_lookup's value"
+            );
+        }
+    }
+
+    fn table(default: Value) -> Value {
+        make_char_table_value(Value::symbol("syntax-table"), default)
+    }
+
+    fn ascii_sub_table(mut entries: Vec<Value>) -> Value {
+        entries.resize(128, Value::NIL);
+        Value::make_sub_char_table(1, 0, entries)
+    }
+
+    fn set_parent(table: Value, parent: Value) {
+        let _ = table.with_char_table_mut(|obj| obj.set_parent(parent));
+    }
+
+    #[test]
+    fn sub_table_ascii_slot_with_nil_holes() {
+        crate::test_utils::init_test_tracing();
+        let _eval = crate::test_utils::new_context();
+        let mut entries = vec![Value::NIL; 128];
+        entries[0] = Value::fixnum(11);
+        entries[65] = Value::fixnum(22);
+        entries[127] = Value::fixnum(33);
+        let table = table(Value::fixnum(5));
+        set_char_table_ascii(table, ascii_sub_table(entries));
+        assert_matches_ct_lookup(table);
+    }
+
+    #[test]
+    fn whole_value_ascii_slot() {
+        crate::test_utils::init_test_tracing();
+        let _eval = crate::test_utils::new_context();
+        let table = table(Value::fixnum(5));
+        set_char_table_ascii(table, Value::fixnum(9));
+        assert_matches_ct_lookup(table);
+    }
+
+    #[test]
+    fn non_nil_default_without_ascii_slot() {
+        crate::test_utils::init_test_tracing();
+        let _eval = crate::test_utils::new_context();
+        let table = table(Value::fixnum(7));
+        assert_matches_ct_lookup(table);
+    }
+
+    #[test]
+    fn two_level_parent_chain_with_nil_child_entries() {
+        crate::test_utils::init_test_tracing();
+        let _eval = crate::test_utils::new_context();
+        // Child and middle have no ascii slot and a nil default; the
+        // grandparent's ascii sub-table has holes of its own, so every
+        // code walks at least one level and some walk two.
+        let mut entries = vec![Value::NIL; 128];
+        entries[3] = Value::fixnum(44);
+        entries[70] = Value::fixnum(55);
+        let grandparent = table(Value::fixnum(6));
+        set_char_table_ascii(grandparent, ascii_sub_table(entries));
+        let middle = table(Value::NIL);
+        set_parent(middle, grandparent);
+        let child = table(Value::NIL);
+        set_parent(child, middle);
+        assert_matches_ct_lookup(child);
+    }
+}
