@@ -61,6 +61,20 @@ fn register_core_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray
     crate::emacs_core::xfaces::register_bootstrap_vars(obarray);
 }
 
+/// Register the platform bootstrap variables owned by the system crate.
+///
+/// GNU registers the w32 family's `syms_of_w32*` DEFVARs/DEFSYMs before
+/// loadup reads them. The platform module moved above eval in the split, so
+/// the call comes from this core-side boot hook at the same construction
+/// point the evaluator used before the move; eval never names the module.
+#[cfg(windows)]
+fn register_platform_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray) {
+    crate::emacs_core::w32::register_bootstrap_symbols(obarray);
+}
+
+#[cfg(not(windows))]
+fn register_platform_bootstrap_vars(_obarray: &mut crate::emacs_core::symbol::Obarray) {}
+
 /// Core-side char-property window lookup (the lookup body itself lives with
 /// the window state in eval data; eval receives a plain fn pointer).
 fn char_property_window_lookup(
@@ -158,6 +172,7 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
         crate::emacs_core::shell_file_name::install_dump_default,
         seed_batch_startup_frame,
         register_core_bootstrap_vars,
+        register_platform_bootstrap_vars,
         crate::emacs_core::xfaces::init_frame_lisp_faces,
         crate::emacs_core::xfaces::realization::prepare_runtime_faces,
         crate::emacs_core::xfaces::sync_runtime_face_table_from_frame_lisp_faces,

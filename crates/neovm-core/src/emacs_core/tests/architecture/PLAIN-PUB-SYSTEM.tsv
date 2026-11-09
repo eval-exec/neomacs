@@ -305,6 +305,7 @@ crates/neovm-system/src/emacs_core/system/platform/cus_start_platform_vars/mod.r
 crates/neovm-system/src/emacs_core/system/platform/cus_start_platform_vars/mod.rs	fn	fn is_name_gnu_leaves_unbound_here
 crates/neovm-system/src/emacs_core/system/platform/cus_start_platform_vars/mod.rs	static	static CUS_START_PLATFORM_VARIABLES
 crates/neovm-system/src/emacs_core/system/platform/cus_start_platform_vars/mod.rs	struct	struct CusStartPlatformVariable
+crates/neovm-system/src/emacs_core/system/platform/w32/mod.rs	fn	fn register_bootstrap_symbols
 crates/neovm-system/src/emacs_core/system/platform/w32/mod.rs	mod	mod subrs
 crates/neovm-system/src/emacs_core/system/post_image_init/mod.rs	enum	enum PostImageInit
 crates/neovm-system/src/emacs_core/system/post_image_init/mod.rs	enum	enum ResetValue

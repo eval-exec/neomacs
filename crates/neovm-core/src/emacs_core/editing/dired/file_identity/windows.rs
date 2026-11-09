@@ -2,7 +2,7 @@ use super::{IdentityDetail, Ownership, Principal};
 use std::fs;
 use std::path::Path;
 
-fn from_windows(identity: crate::emacs_core::w32::security::Ownership) -> Ownership {
+fn from_windows(identity: neovm_value::system_vocab::w32_security::Ownership) -> Ownership {
     Ownership {
         user: Principal {
             id: identity.user.id,
@@ -23,8 +23,8 @@ pub(super) fn query(
     _metadata: &fs::Metadata,
     _detail: IdentityDetail,
 ) -> Ownership {
-    crate::emacs_core::w32::security::file_ownership(path)
-        .or_else(crate::emacs_core::w32::security::current_process_ownership)
+    neovm_value::system_vocab::w32_security::file_ownership(path)
+        .or_else(neovm_value::system_vocab::w32_security::current_process_ownership)
         .map(from_windows)
         .unwrap_or(Ownership {
             user: Principal { id: 0, name: None },

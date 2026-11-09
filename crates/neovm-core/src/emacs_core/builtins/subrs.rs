@@ -28,7 +28,7 @@ use crate::emacs_core::subr::SubrBatch;
 #[cfg(test)]
 const LOCALIZED_SUBR_CATALOG: &[SubrBatch] = &[
     #[cfg(windows)]
-    crate::emacs_core::w32::SUBRS,
+    crate::emacs_core::w32::subrs::SUBRS,
     #[cfg(neomacs_have_lcms2)]
     lcms::SUBRS,
     crate::emacs_core::data::SUBRS,
@@ -158,7 +158,7 @@ fn push_onto_charset_list(
 
 pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     #[cfg(windows)]
-    crate::emacs_core::w32::register_subrs(ctx);
+    crate::emacs_core::w32::subrs::register_subrs(ctx);
     lcms::register_subrs(ctx);
     let evaluator_compatibility = EvaluatorCompatibility::begin()
         .register_data(ctx)

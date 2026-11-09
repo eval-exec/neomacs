@@ -42,9 +42,11 @@ thread_local! {
     static W32_VALID_CODEPAGES: std::cell::RefCell<Vec<i64>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) fn register_bootstrap_symbols(obarray: &mut Obarray) {
+/// Register GNU's w32 `syms_of_w32*` DEFVARs/DEFSYMs at bootstrap.
+///
+/// Public because core installs it in the evaluator's platform boot hook; the
+/// platform module itself stays above eval, which never names it.
+pub fn register_bootstrap_symbols(obarray: &mut Obarray) {
     register_w32term_symbols(obarray);
     register_w32proc_symbols(obarray);
     register_w32fns_symbols(obarray);

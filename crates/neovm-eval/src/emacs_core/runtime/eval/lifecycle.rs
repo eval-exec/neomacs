@@ -144,6 +144,7 @@ pub struct BootHooks {
     shell_file_name_install_dump_default: fn(&mut Context),
     seed_batch_startup_frame: fn(&mut Context) -> FrameId,
     register_core_bootstrap_vars: fn(&mut Obarray),
+    register_platform_bootstrap_vars: fn(&mut Obarray),
     init_frame_lisp_faces: fn(&mut Frame),
     prepare_runtime_faces: fn(&mut Context, FrameId) -> bool,
     sync_runtime_face_table: fn(&mut Context, FrameId),
@@ -167,6 +168,7 @@ impl BootHooks {
         shell_file_name_install_dump_default: fn(&mut Context),
         seed_batch_startup_frame: fn(&mut Context) -> FrameId,
         register_core_bootstrap_vars: fn(&mut Obarray),
+        register_platform_bootstrap_vars: fn(&mut Obarray),
         init_frame_lisp_faces: fn(&mut Frame),
         prepare_runtime_faces: fn(&mut Context, FrameId) -> bool,
         sync_runtime_face_table: fn(&mut Context, FrameId),
@@ -186,6 +188,7 @@ impl BootHooks {
             shell_file_name_install_dump_default,
             seed_batch_startup_frame,
             register_core_bootstrap_vars,
+            register_platform_bootstrap_vars,
             init_frame_lisp_faces,
             prepare_runtime_faces,
             sync_runtime_face_table,
@@ -1035,6 +1038,12 @@ pub fn seed_batch_startup_frame(ctx: &mut Context) -> FrameId {
 /// eval (fileio, process, dbusbind), at the same bootstrap seam.
 pub fn register_core_bootstrap_vars(obarray: &mut Obarray) {
     (lifecycle_hooks().boot.register_core_bootstrap_vars)(obarray)
+}
+
+/// Register the platform bootstrap variables installed by the core crate at
+/// the same construction point the pre-split platform call used.
+pub(crate) fn register_platform_bootstrap_vars(obarray: &mut Obarray) {
+    (lifecycle_hooks().boot.register_platform_bootstrap_vars)(obarray)
 }
 
 /// Apply one loaded dynamic-module function.

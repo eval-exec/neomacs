@@ -337,6 +337,10 @@ mod unit_runtime {
         s::bind_absent_bootstrap_vars(obarray, &absent);
     }
 
+    /// The production arm is core's real platform hook; the display unit
+    /// harness does not need the w32 symbol block, so this slot is a no-op.
+    fn boot_register_platform_bootstrap_vars(_obarray: &mut neovm_value::symbol::Obarray) {}
+
     /// The signed canonical plan (gapsurvey T6 r2): the full name table and
     /// the step plan. Test-only data inclusion, source-level, no re-export.
     const CANONICAL_NAMES: &str = include_str!(concat!(
@@ -1134,6 +1138,7 @@ mod unit_runtime {
             s::boot_shell_file_name_install_dump_default,
             seed_batch_startup_frame,
             boot_register_core_bootstrap_vars,
+            boot_register_platform_bootstrap_vars,
             crate::emacs_core::xfaces::init_frame_lisp_faces,
             crate::emacs_core::xfaces::realization::prepare_runtime_faces,
             crate::emacs_core::xfaces::sync_runtime_face_table_from_frame_lisp_faces,

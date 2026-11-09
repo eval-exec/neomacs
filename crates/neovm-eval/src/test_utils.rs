@@ -246,6 +246,10 @@ mod unit_runtime {
         s::bind_absent_bootstrap_vars(obarray, UPPER_BOOTSTRAP_VARS);
     }
 
+    /// The production arm is core's real platform hook; the eval unit harness
+    /// does not need the w32 symbol block, so this slot is a no-op here.
+    fn boot_register_platform_bootstrap_vars(_obarray: &mut neovm_value::symbol::Obarray) {}
+
     /// Walk the canonical production registration plan. Eval-owned steps call
     /// the same registrars production calls; the event step runs the same
     /// production initialization through the same wrapper core uses; upper
@@ -383,6 +387,7 @@ mod unit_runtime {
             s::boot_shell_file_name_install_dump_default,
             s::boot_seed_batch_startup_frame,
             boot_register_core_bootstrap_vars,
+            boot_register_platform_bootstrap_vars,
             s::boot_init_frame_lisp_faces,
             s::boot_prepare_runtime_faces,
             s::boot_sync_runtime_face_table,
