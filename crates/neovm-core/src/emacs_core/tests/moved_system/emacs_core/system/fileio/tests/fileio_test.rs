@@ -452,6 +452,34 @@ fn auto_save_failure_time_on_the_buffer_skips_and_lisp_clears() {
     );
 }
 
+/// GNU copies `auto_save_failure_time` (`pdumper.c:2855`). Buffer section
+/// version 9 stores the i64 after `modtime_size`, and a load installs it
+/// through `Buffer::from_dump_parts`.
+#[test]
+fn auto_save_failure_time_survives_a_pdump_round_trip() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .set_auto_save_failure_time(1_700_000_000);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dump_path = dir.path().join("auto-save-failure-time.pdump");
+    crate::emacs_core::pdump::dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    let loaded =
+        crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load should succeed");
+    assert_eq!(
+        loaded
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("restored buffer")
+            .auto_save_failure_time(),
+        1_700_000_000
+    );
+}
+
 // -----------------------------------------------------------------------
 // Path operations
 // -----------------------------------------------------------------------
