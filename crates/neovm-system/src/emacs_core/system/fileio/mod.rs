@@ -7522,22 +7522,38 @@ fn auto_save_1(
 /// `ding` / `bitch_at_user` (src/dispnew.c:6875-6887): it never writes BEL to
 /// stdout and never signals the keyboard-macro `user-error`.
 fn ring_bell(eval: &mut Context) -> Result<(), Flow> {
-    // GNU reads and writes the C variable Vring_bell_function, i.e. the
-    // symbol's DEFAULT value: a let-binding or buffer-local of
-    // `ring-bell-function` is invisible to ring_bell. Read the default cell,
-    // never the visible binding.
+    // GNU reads and writes the C variable Vring_bell_function, which carries
+    // the CURRENT binding of the special variable: a dynamic `let` writes it
+    // through specbind, and a buffer-local value is swapped in for the current
+    // buffer (src/terminal.c:56-75). Read the dynamic value visible in the
+    // current buffer; a defvar'd variable cannot be lexically shadowed, so no
+    // lexical-env lookup applies.
+    let symbol = intern("ring-bell-function");
     let function = eval
-        .default_value_only_by_name("ring-bell-function")
+        .visible_runtime_variable_value_by_id(symbol)
+        .ok()
+        .flatten()
         .unwrap_or(Value::NIL);
     if function.is_nil() {
         return Ok(());
     }
-    // No specbind: a failing function must leave the variable nil so the next
-    // auto-save error cannot re-enter it (src/terminal.c:56-79).
-    eval.set_variable("ring-bell-function", Value::NIL);
+    // Set THAT binding to nil, without specbind: a failing function must
+    // leave the binding nil so the next auto-save error cannot re-enter it,
+    // and the assignment happens even while a let/buffer-local binding is
+    // current (src/terminal.c:56-75). Restore only on a normal return, so an
+    // error from the function propagates.
+    eval.set_internal_after_watchers(
+        symbol,
+        Value::NIL,
+        neovm_value::symbol::SetInternalBind::Set,
+    )?;
     let result = eval.funcall_general(function, Vec::new());
     if result.is_ok() {
-        eval.set_variable("ring-bell-function", function);
+        eval.set_internal_after_watchers(
+            symbol,
+            function,
+            neovm_value::symbol::SetInternalBind::Set,
+        )?;
     }
     result.map(|_| ())
 }

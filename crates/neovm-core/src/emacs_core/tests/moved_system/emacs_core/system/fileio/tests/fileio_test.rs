@@ -7416,6 +7416,98 @@ fn auto_save_error_never_writes_bel_in_batch() {
     );
 }
 
+/// GNU's `ring_bell` reads the CURRENT binding: a dynamic `let` of
+/// `ring-bell-function` writes the C variable through specbind, so the
+/// let-bound function rings and the default function is never called
+/// (lead #867 pinned-GNU probe).
+#[cfg(unix)]
+#[test]
+fn auto_save_error_calls_a_dynamically_let_bound_ring_bell_function() {
+    let _modes = DefaultFileModesScope::set(0o755);
+    let (_dir, mut eval, _auto_save) = auto_save_error_fixture();
+    eval.eval_str(
+        r#"(progn
+             (setq m2-bell-events nil)
+             (setq ring-bell-function
+                   (lambda () (setq m2-bell-events
+                                    (cons (list 'm2-default (null ring-bell-function))
+                                          m2-bell-events))))
+             (let ((ring-bell-function
+                    (lambda () (setq m2-bell-events
+                                     (cons (list 'm2-let (null ring-bell-function))
+                                           m2-bell-events)))))
+               (do-auto-save t)))"#,
+    )
+    .expect("do-auto-save inside a dynamic let");
+    assert_eq!(
+        eval.eval_str("(equal m2-bell-events '((m2-let t)))")
+            .unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        eval.eval_str("(functionp ring-bell-function)").unwrap(),
+        Value::T
+    );
+}
+
+/// A buffer-local `ring-bell-function` is the current binding in the
+/// auto-saved buffer, so GNU rings it, never the default, and the function
+/// sees the variable nil while it runs (lead #867 pinned-GNU probe).
+#[cfg(unix)]
+#[test]
+fn auto_save_error_calls_a_buffer_local_ring_bell_function() {
+    let _modes = DefaultFileModesScope::set(0o755);
+    let (_dir, mut eval, _auto_save) = auto_save_error_fixture();
+    eval.eval_str(
+        r#"(progn
+             (setq m2-bell-events nil)
+             (setq ring-bell-function
+                   (lambda () (setq m2-bell-events
+                                    (cons (list 'm2-default (null ring-bell-function))
+                                          m2-bell-events))))
+             (set-buffer (get-buffer-create "secret.txt"))
+             (set (make-local-variable 'ring-bell-function)
+                  (lambda () (setq m2-bell-events
+                                   (cons (list 'm2-local (null ring-bell-function))
+                                         m2-bell-events))))
+             (do-auto-save t))"#,
+    )
+    .expect("do-auto-save with a buffer-local ring-bell-function");
+    assert_eq!(
+        eval.eval_str("(equal m2-bell-events '((m2-local t)))")
+            .unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        eval.eval_str("(functionp ring-bell-function)").unwrap(),
+        Value::T
+    );
+}
+
+/// The let / buffer-local / default protocol against pinned GNU 31.1.
+#[test]
+fn auto_save_ring_bell_matches_live_gnu() {
+    crate::test_utils::init_test_tracing();
+    let forms = include_str!("auto_save_ring_bell.el");
+    let gnu_form =
+        format!("(mapc (lambda (form) (princ \"OK \") (prin1 (eval form)) (terpri)) '({forms}))");
+    let output = crate::test_utils::gnu_probe_command()
+        .args(["-Q", "--batch", "--eval", &gnu_form])
+        .output()
+        .expect("run pinned GNU Emacs oracle");
+    assert!(
+        output.status.success(),
+        "GNU ring-bell oracle failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let gnu = String::from_utf8(output.stdout).expect("GNU oracle UTF-8 output");
+    assert_eq!(
+        bootstrap_eval(forms),
+        gnu.lines().collect::<Vec<_>>(),
+        "ring_bell must read/write the current ring-bell-function binding like pinned GNU"
+    );
+}
+
 /// The same report through the Lisp layer: `display-warning` is autoloaded
 /// from warnings.el and logs the warning in `*Warnings*`.
 #[cfg(unix)]
