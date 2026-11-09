@@ -83,7 +83,7 @@ pub trait DisplayWhenContextExt {
         buf_id: BufferId,
         window_id: Option<WindowId>,
         sites: &[DisplayWhenSite],
-        replaces_text: impl FnMut(Value) -> bool,
+        replaces_text: impl FnMut(Value, DisplayEval) -> bool,
     ) -> Result<FxHashMap<DisplayWhenSiteKey, bool>, Flow>;
 
     fn display_when_form_holds(

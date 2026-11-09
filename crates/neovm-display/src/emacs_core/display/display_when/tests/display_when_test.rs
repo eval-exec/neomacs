@@ -22,8 +22,8 @@ fn nil_and_t_are_taken_literally_without_evaluation() {
 /// is an ordinary variable: it is evaluated, and its value decides.
 #[test]
 fn an_uninterned_symbol_named_t_is_evaluated_not_taken_as_t() {
-    let mut eval = Context::new();
-    let buffer = Value::make_buffer(eval.buffers.current_buffer_id().expect("buffer"));
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let buffer = Value::make_buffer(eval.edit.buffers.current_buffer_id().expect("buffer"));
     let unbound = eval.eval_str("(make-symbol \"t\")").expect("make-symbol");
     assert!(
         !eval
