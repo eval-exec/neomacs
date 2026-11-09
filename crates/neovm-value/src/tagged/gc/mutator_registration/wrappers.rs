@@ -218,7 +218,8 @@ impl<'heap, K: EraKeeper> ProofEra<'heap, K> {
     /// prepare must return the original retained keeper's epoch and backing,
     /// without executing Lisp, resuming owners, or leaking a manager reference.
     #[cold]
-    pub(crate) unsafe fn admit_rooted_with_weak_tables_for_test_inner(
+    #[doc(hidden)]
+    pub unsafe fn admit_rooted_with_weak_tables_for_test_inner(
         collector: QuiescentCollector<'heap>,
         keeper: K,
         roots: FrozenLegacyRoots,
