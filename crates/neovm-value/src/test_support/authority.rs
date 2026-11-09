@@ -1436,6 +1436,34 @@ pub fn run_combined_executor_test_for_test<K, W>(
     );
 }
 
+/// FENCE: one re-homed NMJIT construction test. The core shell opens the
+/// symbol era and passes the World keeper preparation. The original
+/// dispatcher stays `pub(crate)`.
+#[doc(hidden)]
+pub fn run_construction_nmjit_test_for_test<K>(
+    name: &str,
+    with_symbol_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ProofEra<'e, K>)),
+    prepare: &mut dyn FnMut(
+        &K,
+    ) -> Result<
+        (
+            crate::tagged::gc::FacadeEpochRetention,
+            crate::symbol::parallel::SymbolBacking,
+        ),
+        crate::tagged::gc::RegistrationError,
+    >,
+    held_here: &dyn Fn(&K) -> bool,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+{
+    crate::tagged::gc::mutator_registration::run_construction_nmjit_test(
+        name,
+        with_symbol_era,
+        prepare,
+        held_here,
+    );
+}
+
 /// FENCE: process collection-read configuration. The original stays
 /// `pub(crate)`. This is the only public path; it writes the process gate.
 #[cfg(any(test, feature = "test-support"))]

@@ -20,6 +20,8 @@ mod collection;
 mod cons_allocation;
 mod cons_catalog;
 mod construction;
+#[cfg(feature = "test-support")]
+pub(crate) use construction::run_construction_nmjit_test;
 #[cfg(not(feature = "test-support"))]
 mod execution;
 #[cfg(feature = "test-support")]

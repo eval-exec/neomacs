@@ -1,9 +1,36 @@
 //! Actual minimal World/collector inputs; no bootstrap or setup collection.
-use super::super::{EraCore, InitialTablePreparation};
+//! The symbol-era boot and the keeper preparation live in the core shell.
+//! Assertions stay here.
+use super::super::{
+    EraAdmissionFailure, EraCore, EraKeeper, InitialTablePreparation, RegistrationError,
+};
 use super::*;
-use crate::emacs_core::eval::Context;
-use crate::emacs_core::eval::world::{ParallelHeapEraWorldExt, WorldProofEraExt};
-use crate::tagged::gc::{Gen1Admission, Gen1AdmissionError};
+use crate::symbol::parallel::SymbolBacking;
+use crate::tagged::gc::{FacadeEpochRetention, Gen1Admission, Gen1AdmissionError, ProofEra};
+
+type SymbolEra<'a, K> = dyn FnMut(&mut dyn for<'e> FnMut(ProofEra<'e, K>)) + 'a;
+
+fn admit_production<'heap, K: EraKeeper>(
+    admission: Gen1Admission<'heap>,
+    keeper: K,
+    prepare: &mut dyn FnMut(&K) -> Result<(FacadeEpochRetention, SymbolBacking), RegistrationError>,
+) -> Result<super::super::ParallelHeapEra<'heap, K>, EraAdmissionFailure<'heap, K>> {
+    // SAFETY: the core shell passes the World retained-keeper adapter. It
+    // returns the original epoch and backing and does not execute Lisp,
+    // resume owners, or leak a manager reference.
+    unsafe {
+        super::super::ParallelHeapEra::admit_with(admission, keeper, |keeper| prepare(keeper))
+    }
+}
+
+fn admit_proof<'heap, K: EraKeeper>(
+    collector: crate::tagged::gc::QuiescentCollector<'heap>,
+    keeper: K,
+    prepare: &mut dyn FnMut(&K) -> Result<(FacadeEpochRetention, SymbolBacking), RegistrationError>,
+) -> Result<ProofEra<'heap, K>, EraAdmissionFailure<'heap, K>> {
+    // SAFETY: same retained-keeper contract as the production admission.
+    unsafe { ProofEra::admit_with(collector, keeper, |keeper| prepare(keeper)) }
+}
 
 #[derive(Debug)]
 enum ActualMode {
@@ -11,9 +38,12 @@ enum ActualMode {
     Gen1,
 }
 
-#[test]
-fn nmjit_n2_actual_constructor_checks_mode_and_returns_complete_ownership() {
-    Context::with_test_symbol_era(|era, _| {
+fn nmjit_n2_actual_constructor_checks_mode_and_returns_complete_ownership<K: EraKeeper>(
+    with_symbol_era: &mut SymbolEra<'_, K>,
+    prepare: &mut dyn FnMut(&K) -> Result<(FacadeEpochRetention, SymbolBacking), RegistrationError>,
+    held_here: &dyn Fn(&K) -> bool,
+) {
+    with_symbol_era(&mut |era| {
         let (mut collector, keeper) = era
             .finish()
             .expect("empty fixture ends before admission probe");
@@ -32,7 +62,7 @@ fn nmjit_n2_actual_constructor_checks_mode_and_returns_complete_ownership() {
                 (failure.collector, keeper)
             }
             (ActualMode::Gen1, Ok(admission)) => {
-                let era = super::super::ParallelHeapEra::admit(admission, keeper)
+                let era = admit_production(admission, keeper, prepare)
                     .expect("production era consumes actual GEN1 admission");
                 assert_eq!(era.heap_identity(), heap);
                 let permit = era
@@ -49,10 +79,10 @@ fn nmjit_n2_actual_constructor_checks_mode_and_returns_complete_ownership() {
         };
         assert_eq!(collector.heap_identity(), heap);
         assert_eq!(keeper.parallel_heap_identity(), heap);
-        assert!(keeper.held_here());
+        assert!(held_here(&keeper));
         // Inputs remain usable, not merely pointer-identical. Re-admission
         // uses the nominal proof-only route, including under GEN0.
-        let era = crate::tagged::gc::ProofEra::admit(collector, keeper)
+        let era = admit_proof(collector, keeper, prepare)
             .expect("complete ownership permits fixture re-admission");
         let (collector, keeper) = era.finish().expect("re-admitted fixture ends");
         drop(collector);
@@ -60,9 +90,13 @@ fn nmjit_n2_actual_constructor_checks_mode_and_returns_complete_ownership() {
     });
 }
 
-#[test]
-fn nmjit_n2_proof_inputs_preserve_collector_mode_without_production_capability() {
-    Context::with_test_symbol_era(|era, _| {
+fn nmjit_n2_proof_inputs_preserve_collector_mode_without_production_capability<K: EraKeeper>(
+    with_symbol_era: &mut SymbolEra<'_, K>,
+    prepare: &mut dyn FnMut(&K) -> Result<(FacadeEpochRetention, SymbolBacking), RegistrationError>,
+    held_here: &dyn Fn(&K) -> bool,
+) {
+    let _ = (prepare, held_here);
+    with_symbol_era(&mut |era| {
         let (mut collector, keeper) = era.finish().expect("empty proof fixture ends");
         let heap = collector.heap_identity();
         let mode = collector
@@ -83,15 +117,18 @@ fn nmjit_n2_proof_inputs_preserve_collector_mode_without_production_capability()
     });
 }
 
-#[test]
-fn nmjit_n3_initial_table_preparation_refusal_returns_complete_ownership() {
+fn nmjit_n3_initial_table_preparation_refusal_returns_complete_ownership<K: EraKeeper>(
+    with_symbol_era: &mut SymbolEra<'_, K>,
+    prepare: &mut dyn FnMut(&K) -> Result<(FacadeEpochRetention, SymbolBacking), RegistrationError>,
+    held_here: &dyn Fn(&K) -> bool,
+) {
     #[derive(Debug, PartialEq, Eq)]
     enum PreparationOutcome {
         Refused(RegistrationError),
         Admitted,
     }
 
-    Context::with_test_symbol_era(|era, _| {
+    with_symbol_era(&mut |era| {
         let (mut collector, keeper) = era.finish().expect("empty proof fixture ends");
         let original_heap = collector.heap_identity();
         let original_mode = collector
@@ -103,7 +140,7 @@ fn nmjit_n3_initial_table_preparation_refusal_returns_complete_ownership() {
         let (outcome, mut collector, keeper) = match EraCore::admit_checked(
             checked,
             witness,
-            crate::emacs_core::eval::world::prepare_keeper_backing,
+            |keeper| prepare(keeper),
             InitialTablePreparation::RefuseOnce,
         ) {
             Err(failure) => (
@@ -123,10 +160,10 @@ fn nmjit_n3_initial_table_preparation_refusal_returns_complete_ownership() {
             .registration_heap_mut()
             .tagged_heap_generational_enabled();
         let returned_keeper_heap = keeper.parallel_heap_identity();
-        let returned_keeper_held = keeper.held_here();
+        let returned_keeper_held = held_here(&keeper);
         // The one-shot refusal must preserve usable ownership, not just scalar
         // identities. Finish the second admission before any semantic assertion.
-        let era = crate::tagged::gc::ProofEra::admit(collector, keeper)
+        let era = admit_proof(collector, keeper, prepare)
             .expect("initial preparation refusal preserves re-admission inputs");
         let (mut collector, keeper) = era.finish().expect("re-admitted empty fixture ends");
         let recovered_heap = collector.heap_identity();
@@ -134,7 +171,7 @@ fn nmjit_n3_initial_table_preparation_refusal_returns_complete_ownership() {
             .registration_heap_mut()
             .tagged_heap_generational_enabled();
         let recovered_keeper_heap = keeper.parallel_heap_identity();
-        let recovered_keeper_held = keeper.held_here();
+        let recovered_keeper_held = held_here(&keeper);
         drop(collector);
         drop(keeper);
         assert_eq!(
@@ -151,4 +188,38 @@ fn nmjit_n3_initial_table_preparation_refusal_returns_complete_ownership() {
         assert!(recovered_keeper_held);
         eprintln!("NMJIT_N3_INITIAL_TABLE_REFUSAL_OWNERSHIP_RETURNED");
     });
+}
+
+/// One moved construction test. The core shell opens the symbol era and
+/// passes the World keeper preparation.
+pub(crate) fn run_construction_nmjit_test<K: EraKeeper>(
+    name: &str,
+    with_symbol_era: &mut SymbolEra<'_, K>,
+    prepare: &mut dyn FnMut(&K) -> Result<(FacadeEpochRetention, SymbolBacking), RegistrationError>,
+    held_here: &dyn Fn(&K) -> bool,
+) {
+    match name {
+        "nmjit_n2_actual_constructor_checks_mode_and_returns_complete_ownership" => {
+            nmjit_n2_actual_constructor_checks_mode_and_returns_complete_ownership(
+                with_symbol_era,
+                prepare,
+                held_here,
+            )
+        }
+        "nmjit_n2_proof_inputs_preserve_collector_mode_without_production_capability" => {
+            nmjit_n2_proof_inputs_preserve_collector_mode_without_production_capability(
+                with_symbol_era,
+                prepare,
+                held_here,
+            )
+        }
+        "nmjit_n3_initial_table_preparation_refusal_returns_complete_ownership" => {
+            nmjit_n3_initial_table_preparation_refusal_returns_complete_ownership(
+                with_symbol_era,
+                prepare,
+                held_here,
+            )
+        }
+        other => panic!("unknown construction nmjit test {other}"),
+    }
 }

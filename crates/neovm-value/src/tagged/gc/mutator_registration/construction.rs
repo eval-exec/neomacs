@@ -199,5 +199,7 @@ mod admission_auto_traits {
     );
 }
 
-#[cfg(test)]
+#[cfg(feature = "test-support")]
 mod tests;
+#[cfg(feature = "test-support")]
+pub(crate) use tests::run_construction_nmjit_test;
