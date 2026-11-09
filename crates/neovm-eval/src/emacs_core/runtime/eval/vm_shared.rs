@@ -371,7 +371,10 @@ impl Context {
             self.edit.buffers.switch_current_unrecorded(buffer_id);
             if let Some(buffer) = self.edit.buffers.get(buffer_id) {
                 let byte_pos = buffer.lisp_pos_to_emacs_byte_pos(point);
-                let _ = self.edit.buffers.goto_buffer_emacs_byte_pos(buffer_id, byte_pos);
+                let _ = self
+                    .edit
+                    .buffers
+                    .goto_buffer_emacs_byte_pos(buffer_id, byte_pos);
             }
         }
         let _ = self.sync_current_buffer_runtime_state();

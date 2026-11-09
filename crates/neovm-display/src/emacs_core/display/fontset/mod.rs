@@ -534,9 +534,7 @@ pub fn reset_fontset_registry() {
     // layer publishes the preferred identities through this hook whenever the
     // order changes (`set-charset-priority`, dump restore). Every Context
     // construction runs this reset, so the hook is installed before any change.
-    neovm_text::emacs_core::substrate_hooks::install_charset_preference(
-        publish_charset_preference,
-    );
+    neovm_text::emacs_core::substrate_hooks::install_charset_preference(publish_charset_preference);
     if let Ok(mut slot) = registry().write() {
         *slot = FontsetRegistry::with_defaults();
     }

@@ -435,11 +435,7 @@ pub(crate) fn display_prop_replacing_p(spec: Value, frame_window_p: bool) -> boo
 /// `it == NULL` paths of GNU `xdisp.c:handle_single_display_spec`. The head
 /// taxonomy comes from [`display_spec_kind`], so this reads as the
 /// decision alone. `eval` is the policy of the `display` value SPEC belongs to.
-fn display_single_spec_replacing_p(
-    spec: Value,
-    eval: DisplayEval,
-    frame_window_p: bool,
-) -> bool {
+fn display_single_spec_replacing_p(spec: Value, eval: DisplayEval, frame_window_p: bool) -> bool {
     match display_spec_kind(spec, eval).replaces_text(frame_window_p) {
         Some(replacing) => replacing,
         // `(when FORM . VALUE)`: a nil FORM disables the spec; otherwise the

@@ -125,9 +125,7 @@ fn command_loop_uses_selected_buffers_map_after_async_switch() {
     let mut ev = runtime_startup_context();
     let scratch = ev.edit.buffers.create_buffer("*async-old*");
     ev.edit.buffers.set_current(scratch);
-    let frame = ev
-        .frame_manager_mut()
-        .create_frame("F1", 80, 24, scratch);
+    let frame = ev.frame_manager_mut().create_frame("F1", 80, 24, scratch);
     assert!(ev.frame_manager_mut().select_frame(frame));
     let _input_owner = InputGateOwner::install(&mut ev);
     fn stop(ctx: &mut Context, _args: Vec<Value>) -> EvalResult {
@@ -175,9 +173,7 @@ fn lisp_key_reader_preserves_current_buffer_after_async_display() {
     let mut ev = runtime_startup_context();
     let old = ev.edit.buffers.create_buffer("*reader-old*");
     ev.edit.buffers.set_current(old);
-    let frame = ev
-        .frame_manager_mut()
-        .create_frame("F1", 80, 24, old);
+    let frame = ev.frame_manager_mut().create_frame("F1", 80, 24, old);
     assert!(ev.frame_manager_mut().select_frame(frame));
     let _input_owner = InputGateOwner::install(&mut ev);
     ev.eval_str(

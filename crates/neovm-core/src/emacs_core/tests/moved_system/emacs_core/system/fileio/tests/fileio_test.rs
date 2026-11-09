@@ -6813,7 +6813,10 @@ fn do_auto_save_creates_the_auto_save_file_with_the_visited_file_modes() {
 
         let mut eval = crate::test_utils::new_context();
         prepare_buffer_for_auto_save(
-            eval.edit.buffers.current_buffer_mut().expect("current buffer"),
+            eval.edit
+                .buffers
+                .current_buffer_mut()
+                .expect("current buffer"),
             Some(&visited.to_string_lossy()),
             &auto_save,
         );
@@ -6877,7 +6880,10 @@ fn do_auto_save_uses_0666_without_an_existing_visited_file() {
     let draft_auto_save = dir.path().join("#*mail*#");
     let mut eval = crate::test_utils::new_context();
     prepare_buffer_for_auto_save(
-        eval.edit.buffers.current_buffer_mut().expect("current buffer"),
+        eval.edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer"),
         None,
         &draft_auto_save,
     );
@@ -6889,7 +6895,10 @@ fn do_auto_save_uses_0666_without_an_existing_visited_file() {
     let new_auto_save = dir.path().join("#new.txt#");
     let mut eval = crate::test_utils::new_context();
     prepare_buffer_for_auto_save(
-        eval.edit.buffers.current_buffer_mut().expect("current buffer"),
+        eval.edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer"),
         Some(&new_file.to_string_lossy()),
         &new_auto_save,
     );
@@ -6907,7 +6916,10 @@ fn do_auto_save_uses_0666_without_an_existing_visited_file() {
     let under_file_auto_save = dir.path().join("#plain.txt!new.txt#");
     let mut eval = crate::test_utils::new_context();
     prepare_buffer_for_auto_save(
-        eval.edit.buffers.current_buffer_mut().expect("current buffer"),
+        eval.edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer"),
         Some(&under_file.to_string_lossy()),
         &under_file_auto_save,
     );
@@ -6947,7 +6959,10 @@ fn do_auto_save_writes_nothing_when_the_visited_file_cannot_be_stat_ed() {
 
     let mut eval = crate::test_utils::new_context();
     prepare_buffer_for_auto_save(
-        eval.edit.buffers.current_buffer_mut().expect("current buffer"),
+        eval.edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer"),
         Some(&looped.to_string_lossy()),
         &looped_auto_save,
     );
@@ -6994,7 +7009,10 @@ fn do_auto_save_keeps_the_modes_of_an_existing_auto_save_file() {
 
         let mut eval = crate::test_utils::new_context();
         prepare_buffer_for_auto_save(
-            eval.edit.buffers.current_buffer_mut().expect("current buffer"),
+            eval.edit
+                .buffers
+                .current_buffer_mut()
+                .expect("current buffer"),
             Some(&visited.to_string_lossy()),
             &auto_save,
         );
@@ -7105,7 +7123,10 @@ fn do_auto_save_skips_a_buffer_whose_modes_handler_signals() {
         )]),
     );
     prepare_buffer_for_auto_save(
-        eval.edit.buffers.current_buffer_mut().expect("current buffer"),
+        eval.edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer"),
         Some("/m2-remote:host:/secret.txt"),
         &remote_auto_save,
     );
@@ -7157,7 +7178,10 @@ fn do_auto_save_writes_the_text_a_modes_handler_inserted() {
         )]),
     );
     prepare_buffer_for_auto_save(
-        eval.edit.buffers.current_buffer_mut().expect("current buffer"),
+        eval.edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer"),
         Some("/m2-remote:host:/secret.txt"),
         &auto_save,
     );
@@ -7256,7 +7280,8 @@ fn do_auto_save_warns_about_a_buffer_it_cannot_auto_save() {
         "a failed buffer is not retried before it changes"
     );
 
-    eval.edit.buffers
+    eval.edit
+        .buffers
         .get_mut(notes_id)
         .expect("notes buffer")
         .insert("more\n");
