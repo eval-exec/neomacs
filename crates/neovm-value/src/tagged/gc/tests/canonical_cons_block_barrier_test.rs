@@ -216,7 +216,7 @@ fn canonical_block_black_partial_close_keeps_color_and_unmarks_only_refunded_tai
         assert_eq!(heap.chunk_map.is_some(), chunk_map);
         heap.set_sweep_in_progress_for_test(true);
         let before = counts(&heap);
-        let refills_before = heap.region_stats.cons_refills;
+        let refills_before = heap.region_stats.cons_refills();
         let n = 2 * CONS_REGION_MAX_CELLS + 1;
         let handed: Vec<_> = (0..n)
             .map(|i| heap.alloc_cons(TaggedValue::fixnum(i as i64), TaggedValue::NIL))
@@ -224,7 +224,7 @@ fn canonical_block_black_partial_close_keeps_color_and_unmarks_only_refunded_tai
         let first = handed[0].bits() & !TAG_MASK;
         assert!(heap.region_book.no_old_cons_block_contains(first));
         assert_eq!(heap.region_book.cons_color(), RegionColor::Black);
-        assert_eq!(heap.region_stats.cons_refills - refills_before, 3);
+        assert_eq!(heap.region_stats.cons_refills() - refills_before, 3);
         assert!(handed.iter().all(|v| marked(&heap, v.bits() & !TAG_MASK)));
         let (cur, lim) = heap.cons_region_for_test();
         assert!(cur < lim);

@@ -275,8 +275,8 @@ fn fully_used_regions_log_before_the_zero_unused_early_return() {
     phase.stop();
     assert_eq!(cons_births(&phase), conses);
     assert_eq!(float_births(&phase), floats);
-    assert_eq!(phase.region_stats.cons_tail_closes, 0);
-    assert_eq!(phase.region_stats.float_tail_closes, 0);
+    assert_eq!(phase.region_stats.cons_tail_closes(), 0);
+    assert_eq!(phase.region_stats.float_tail_closes(), 0);
 }
 
 #[test]

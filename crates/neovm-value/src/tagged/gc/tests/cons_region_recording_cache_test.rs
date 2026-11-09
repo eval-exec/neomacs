@@ -161,7 +161,7 @@ fn recording_cache_same_block_tail_grants_keep_canonical_capture_complete() {
             .collect();
         let block = ConsBlockBase::of_cell(cells[0].as_cons_ptr().unwrap());
         assert!(cells.iter().all(|&value| base(value) == block.addr()));
-        assert_eq!(heap.region_stats.cons_refills, 3);
+        assert_eq!(heap.region_stats.cons_refills(), 3);
         assert_eq!(logged(&mut heap), vec![block]);
         assert_eq!(
             RegionBook::recorded_cons_age(heap.region_book.cons_block_and_color, block.addr()),

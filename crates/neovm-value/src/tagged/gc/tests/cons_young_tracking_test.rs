@@ -67,8 +67,8 @@ fn cons_young_tracking_records_fresh_bump_and_free_list_region_carves() {
     let allocated: Vec<_> = (0..CONS_REGION_MAX_CELLS + 1)
         .map(|_| heap.alloc_cons(TaggedValue::T, TaggedValue::NIL))
         .collect();
-    assert_eq!(heap.region_stats.cons_from_fresh_block, 1);
-    assert!(heap.region_stats.cons_from_block_tail > 0);
+    assert_eq!(heap.region_stats.cons_from_fresh_block(), 1);
+    assert!(heap.region_stats.cons_from_block_tail() > 0);
     let expected: FxHashSet<_> = allocated.iter().copied().map(base).collect();
     heap.begin_minor_collection().unwrap();
     assert_eq!(captured_bases(&heap), expected);
@@ -77,7 +77,7 @@ fn cons_young_tracking_records_fresh_bump_and_free_list_region_carves() {
     assert!(heap.cons_allocator.free_count() > 0);
 
     let reused = heap.alloc_cons(TaggedValue::fixnum(251), TaggedValue::NIL);
-    assert!(heap.region_stats.cons_from_free_list > 0);
+    assert!(heap.region_stats.cons_from_free_list() > 0);
     assert_eq!(base(reused), base(allocated[0]));
     heap.begin_minor_collection().unwrap();
     assert_eq!(captured_bases(&heap), FxHashSet::from_iter([base(reused)]));
@@ -199,7 +199,7 @@ fn check_cons_young_tracking_preserves_mid_sweep_carve_for_the_next_minor(mut he
     let unrooted = heap.alloc_cons(TaggedValue::fixnum(269), TaggedValue::NIL);
     assert_eq!(base(rooted), first_base);
     assert_eq!(base(unrooted), first_base);
-    assert!(heap.region_stats.cons_from_free_list > 0);
+    assert!(heap.region_stats.cons_from_free_list() > 0);
     assert!(!heap.value_is_old_for_test(rooted));
     assert!(!heap.value_is_old_for_test(unrooted));
     heap.finish_incremental_sweep_now();

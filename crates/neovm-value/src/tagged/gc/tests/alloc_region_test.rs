@@ -70,7 +70,7 @@ fn regions_bump_a_block_tail_in_order() {
         assert_eq!(next, prev + size_of::<ConsCell>(), "cell {i} follows");
         prev = next;
     }
-    assert_eq!(heap.region_stats.cons_refills, 3);
+    assert_eq!(heap.region_stats.cons_refills(), 3);
     assert_eq!(heap.cons_blocks.len(), 1);
     assert_eq!(
         heap.cons_blocks[0].next_index as usize,

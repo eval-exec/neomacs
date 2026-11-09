@@ -32,9 +32,9 @@ fn refill_refund_panic_text(panic: Box<dyn std::any::Any + Send>) -> String {
 
 fn refill_refund_source_counts(heap: &TaggedHeap) -> (u64, u64, u64) {
     (
-        heap.region_stats.cons_from_fresh_block,
-        heap.region_stats.cons_from_block_tail,
-        heap.region_stats.cons_from_free_list,
+        heap.region_stats.cons_from_fresh_block(),
+        heap.region_stats.cons_from_block_tail(),
+        heap.region_stats.cons_from_free_list(),
     )
 }
 
@@ -163,10 +163,10 @@ fn check_refused_cons_grant_refunded(source: RefusedGrantSource, access: Refused
     // Exercise the actual allocation path after restoring the protocol, before
     // an empty fresh block could be released by a collection. The refunded
     // grant is now the allocator's free-list source in ALL three cases.
-    let free_sources_before = heap.region_stats.cons_from_free_list;
+    let free_sources_before = heap.region_stats.cons_from_free_list();
     let recovered = heap.alloc_cons(TaggedValue::fixnum(1013), TaggedValue::NIL);
     assert_eq!(
-        heap.region_stats.cons_from_free_list,
+        heap.region_stats.cons_from_free_list(),
         free_sources_before + 1
     );
     heap.close_alloc_regions();

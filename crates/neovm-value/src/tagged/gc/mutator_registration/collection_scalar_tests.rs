@@ -119,8 +119,8 @@ fn stopped_scalar_fold_preserves_history_and_rebases_real_live_credits_once() {
     assert_eq!(heap.total_allocated_bytes(), before_bytes);
     assert_eq!(heap.current_mutator_gc().bytes_since_gc, 0);
     assert_eq!(
-        heap.region_stats.cons_refills,
-        RegionStats::default().cons_refills
+        heap.region_stats.cons_refills(),
+        RegionStats::default().cons_refills()
     );
     // A later stopped cycle with no new allocations must not bank twice.
     let started = std::time::Instant::now();

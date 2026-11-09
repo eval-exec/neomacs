@@ -206,17 +206,17 @@ pub(crate) struct RegionStats {
 #[cfg(feature = "test-support")]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RegionStats {
-    pub cons_refills: u64,
-    pub cons_cells_granted: u64,
-    pub cons_short_runs: u64,
-    pub cons_from_free_list: u64,
-    pub cons_from_block_tail: u64,
-    pub cons_from_fresh_block: u64,
-    pub cons_tail_closes: u64,
-    pub float_refills: u64,
-    pub float_slots_granted: u64,
-    pub float_short_runs: u64,
-    pub float_tail_closes: u64,
+    pub(crate) cons_refills: u64,
+    pub(crate) cons_cells_granted: u64,
+    pub(crate) cons_short_runs: u64,
+    pub(crate) cons_from_free_list: u64,
+    pub(crate) cons_from_block_tail: u64,
+    pub(crate) cons_from_fresh_block: u64,
+    pub(crate) cons_tail_closes: u64,
+    pub(crate) float_refills: u64,
+    pub(crate) float_slots_granted: u64,
+    pub(crate) float_short_runs: u64,
+    pub(crate) float_tail_closes: u64,
 }
 
 impl TaggedHeap {
@@ -667,3 +667,54 @@ impl TaggedHeap {
 #[cfg(test)]
 #[path = "tests/cons_region_recording_cache_test.rs"]
 mod recording_cache_tests;
+
+/// VIS read rows (lead #1052): the region counters stay private in every
+/// arm; these copy getters are the cross-crate test route and the value
+/// crate's own unit-test route.
+#[cfg(any(test, feature = "test-support"))]
+impl RegionStats {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn cons_refills(&self) -> u64 {
+        self.cons_refills
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn cons_cells_granted(&self) -> u64 {
+        self.cons_cells_granted
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn cons_short_runs(&self) -> u64 {
+        self.cons_short_runs
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn cons_from_free_list(&self) -> u64 {
+        self.cons_from_free_list
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn cons_from_block_tail(&self) -> u64 {
+        self.cons_from_block_tail
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn cons_from_fresh_block(&self) -> u64 {
+        self.cons_from_fresh_block
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn cons_tail_closes(&self) -> u64 {
+        self.cons_tail_closes
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn float_refills(&self) -> u64 {
+        self.float_refills
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn float_slots_granted(&self) -> u64 {
+        self.float_slots_granted
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn float_short_runs(&self) -> u64 {
+        self.float_short_runs
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn float_tail_closes(&self) -> u64 {
+        self.float_tail_closes
+    }
+}

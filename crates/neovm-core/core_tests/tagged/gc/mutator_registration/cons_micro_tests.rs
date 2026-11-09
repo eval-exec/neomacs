@@ -22,12 +22,12 @@ struct Counts {
 impl Counts {
     fn of(stats: &RegionStats) -> Self {
         Self {
-            refills: stats.cons_refills,
-            granted: stats.cons_cells_granted,
+            refills: stats.cons_refills(),
+            granted: stats.cons_cells_granted(),
             sources: [
-                stats.cons_from_free_list,
-                stats.cons_from_block_tail,
-                stats.cons_from_fresh_block,
+                stats.cons_from_free_list(),
+                stats.cons_from_block_tail(),
+                stats.cons_from_fresh_block(),
             ],
         }
     }
@@ -120,13 +120,13 @@ fn sim(shape: &str, n: usize) {
                 "Sim marker uses the sole allocator"
             );
             let initial = heap.allocated_count();
-            let fresh_before = heap.region_stats_for_test().cons_from_fresh_block;
+            let fresh_before = heap.region_stats_for_test().cons_from_fresh_block();
             let mut head = Value::NIL;
             let mut warm = 0;
             for _ in 0..MAX_WARM {
                 head = heap.alloc_cons(Value::fixnum(CAR), head);
                 warm += 1;
-                if heap.region_stats_for_test().cons_from_fresh_block > fresh_before {
+                if heap.region_stats_for_test().cons_from_fresh_block() > fresh_before {
                     break;
                 }
             }
@@ -202,7 +202,7 @@ fn local(shape: &str, n: usize) {
                 let mut run = owner.run_access().unwrap();
                 let car = run.root_slot(&car_root).unwrap();
                 let head = run.root_slot(&nil_root).unwrap();
-                assert_eq!(run.region_stats_for_test().cons_from_fresh_block, 0);
+                assert_eq!(run.region_stats_for_test().cons_from_fresh_block(), 0);
                 let bank_len = run.root_bank_for_test().0;
                 let bank_capacity = run.root_bank_for_test().1;
                 // Entry validation, cold binding and one alias clone precede
@@ -217,7 +217,7 @@ fn local(shape: &str, n: usize) {
                         for _ in 0..MAX_WARM {
                             slice.cons_into(&car, &cdr, &mut head).unwrap();
                             warm += 1;
-                            if slice.stats_for_test().cons_from_fresh_block != 0 {
+                            if slice.stats_for_test().cons_from_fresh_block() != 0 {
                                 break;
                             }
                         }

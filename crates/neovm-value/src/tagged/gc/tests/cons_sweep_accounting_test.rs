@@ -122,7 +122,7 @@ fn cons_sweep_accounting_keeps_reused_empty_candidate_and_then_releases_it() {
         assert_eq!(heap.sweep_cons_cursor, 1);
         let newborn = heap.alloc_cons(TaggedValue::fixnum(277), TaggedValue::NIL);
         assert_eq!(base(newborn), first_base);
-        assert!(heap.region_stats.cons_from_free_list > 0);
+        assert!(heap.region_stats.cons_from_free_list() > 0);
         // One cell was handed out; the rest of its prepaid region must be
         // refunded before the final freed-cell delta corrects the live count.
         assert!(heap.cons_live_count > heap.cons_live_count_exact());
@@ -159,7 +159,7 @@ fn cons_sweep_accounting_includes_new_sweep_window_blocks_and_refunds_unused_tai
         // of the newest one, so this production carve must create a block.
         let newborn = heap.alloc_cons(TaggedValue::fixnum(281), TaggedValue::NIL);
         assert_eq!(heap.cons_blocks.len(), 3);
-        assert!(heap.region_stats.cons_from_fresh_block > 0);
+        assert!(heap.region_stats.cons_from_fresh_block() > 0);
         assert!(heap.cons_live_count > heap.cons_live_count_exact());
         finish(&mut heap, 3);
         assert!(heap.owns_heap_value_for_test(newborn));

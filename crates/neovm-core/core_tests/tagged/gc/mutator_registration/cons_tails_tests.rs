@@ -127,8 +127,8 @@ fn tail_batches_amortize_catalog_grants_across_regions() {
         let stats = with_run(&mut owner, |run| run.cons_stats_for_test());
         // Region pace is unchanged: one refill per <=128 cells, one charge
         // per carved cell. Bootstrap free fragments may only add regions.
-        assert!(stats.cons_refills as usize >= (CELLS + 127) / 128);
-        assert!(stats.cons_cells_granted as usize >= CELLS);
+        assert!(stats.cons_refills() as usize >= (CELLS + 127) / 128);
+        assert!(stats.cons_cells_granted() as usize >= CELLS);
         // Lent tails stay charged until this owner ACKs.
         let snapshot = era.cons_catalog_snapshot_for_test().unwrap();
         assert!(snapshot.installed);
