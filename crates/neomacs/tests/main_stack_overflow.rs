@@ -479,6 +479,11 @@ fn recorded_answer(label: &str) -> (String, String, u64) {
         "apply" => 4_885,
         "mapcar" => 4_884,
         "watcher" => 4_884,
+        // The dynamic let watcher evaluates the watcher inside
+        // `specbind`'s let arm (Op::VarBind) and the specpdl let-unbind
+        // arm (Op::Unbind), the two opcodes that inline a Lisp evaluation.
+        "watcher-let" => 4_884,
+        "watcher-unlet" => 4_884,
         "handler" => 4_886,
         "unwind-protect" => 4_885,
         "save-window-excursion" => 4_885,
@@ -752,7 +757,7 @@ fn assert_reentry_matches_gnu(event: &str, label: &str) {
 #[test]
 #[cfg(feature = "release-pdump-tests")]
 fn batch_bytecode_stack_depth_matches_gnu_through_reentry_boundaries() {
-    let events: [(&str, &str); 7] = [
+    let events: [(&str, &str); 9] = [
         (
             "funcall",
             "(funcall (byte-compile (lambda (n) (neovm--sg-deep n))) 100000000)",
@@ -771,6 +776,26 @@ fn batch_bytecode_stack_depth_matches_gnu_through_reentry_boundaries() {
                (add-variable-watcher 'neovm--sg-watched
                  (byte-compile (lambda (&rest _) (neovm--sg-deep 100000000))))
                (setq neovm--sg-watched 1))",
+        ),
+        // The dynamic-binding watcher arms: `specbind`'s let path
+        // (Op::VarBind) and the let's normal unbind (Op::Unbind), arbitrary
+        // Lisp inside one opcode. The *nonlocal-exit* unbind of the same
+        // binding is a separate row with the accounting fix it needs.
+        (
+            "watcher-let",
+            "(progn
+               (add-variable-watcher 'neovm--sg-watched
+                 (byte-compile (lambda (_sym _val op _where)
+                   (when (eq op 'let) (neovm--sg-deep 100000000)))))
+               (let ((neovm--sg-watched 1)) (neovm--sg-watched)))",
+        ),
+        (
+            "watcher-unlet",
+            "(progn
+               (add-variable-watcher 'neovm--sg-watched
+                 (byte-compile (lambda (_sym _val op _where)
+                   (when (eq op 'unlet) (neovm--sg-deep 100000000)))))
+               (progn (let ((neovm--sg-watched 1)) (neovm--sg-deep 0)) nil))",
         ),
         (
             "handler",
