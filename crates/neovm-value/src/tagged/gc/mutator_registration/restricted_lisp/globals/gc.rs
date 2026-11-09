@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! Actual canonical/answer roots, after birth logs drain, then reclamation.
 use super::tests::{case_many, drive, words};
 use super::*;

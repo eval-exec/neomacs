@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! Ordered real-owner calls, concurrent writers, and stopped definition lifetime.
 use super::*;
 use crate::tagged::gc::PlainSymbolBacking;

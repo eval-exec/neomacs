@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! B6: only shared tables retain the owner-created graphs at a rendezvous.
 use super::*;
 use crate::tagged::gc::ProofEra as ParallelHeapEra;

@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! B7: made/copied shells, their payload roots, and refreshed birth parity.
 use super::*;
 use crate::tagged::gc::ProofEra as ParallelHeapEra;

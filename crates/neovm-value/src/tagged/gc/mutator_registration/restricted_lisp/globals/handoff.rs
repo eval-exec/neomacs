@@ -1,15 +1,18 @@
 //! Ordered native histories on one real World, with all owners stopped at GC.
+#[cfg(test)]
 use super::tests::source;
 use super::*;
 use crate::tagged::gc::PlainSymbolBacking;
 use crate::tagged::gc::ProofEra as ParallelHeapEra;
 
-mod worker;
+pub(crate) mod worker;
+#[cfg(test)]
 use worker::{Actor, Command, Event, Snapshot};
 
 const NSLOTS: usize = 4;
 const PHASES: usize = 5;
 
+#[cfg(test)]
 fn publish() -> Vec<Op> {
     vec![
         Op::ConstFixnum { dst: 0, value: 42 },
@@ -34,6 +37,7 @@ fn publish() -> Vec<Op> {
     ]
 }
 
+#[cfg(test)]
 fn erase() -> Vec<Op> {
     vec![
         Op::Global(GlobalOp::Makunbound { symbol: 0, dst: 2 }),
@@ -41,6 +45,7 @@ fn erase() -> Vec<Op> {
     ]
 }
 
+#[cfg(test)]
 fn program(index: usize) -> Source {
     let mut ops = Vec::new();
     for phase in 0..PHASES {
@@ -59,6 +64,7 @@ fn program(index: usize) -> Source {
     source(ops, NSLOTS)
 }
 
+#[cfg(test)]
 struct Cycle {
     before: Vec<Snapshot>,
     after: Vec<Snapshot>,
@@ -70,6 +76,7 @@ struct Cycle {
     frozen: usize,
 }
 
+#[cfg(test)]
 fn collect<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     era: &ParallelHeapEra<'_, K>,
     before: Vec<Snapshot>,
@@ -120,6 +127,7 @@ fn collect<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     }
 }
 
+#[cfg(test)]
 fn scenario(kind: PlainSymbolBacking, owners: usize) {
     let _probes = crate::tagged::gc::mutator_registration::a8_probes::suppress();
     let (cycles, finished) = Context::with_test_symbol_backing_era(kind, |era, id| {

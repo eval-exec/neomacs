@@ -2,7 +2,7 @@
 use super::*;
 
 #[cfg(not(miri))]
-mod contention_tests;
+pub(crate) mod contention_tests;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Snapshot {

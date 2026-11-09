@@ -53,6 +53,7 @@ pub(super) fn drive<'era>(
 
 /// The assertion body may unwind or the executor may refuse. Clear every
 /// census root and retire before finishing the era in either case.
+#[cfg(test)]
 fn case<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     kind: PlainSymbolBacking,
     ops: Vec<Op>,
@@ -70,6 +71,7 @@ fn case<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     });
 }
 
+#[cfg(test)]
 pub(super) fn case_many<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     kinds: &[PlainSymbolBacking],
     ops: Vec<Op>,

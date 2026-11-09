@@ -1,13 +1,15 @@
-//! Test-only restricted Lisp overlap. Production has no call into this module.
-//! `#[cfg(test)]` on the parent module keeps it out of the test-support
-//! dependency build: this file names the evaluator, an upper layer.
+//! Restricted Lisp overlap for tests and `test-support`. Production has no
+//! call into this module. Items that name the evaluator stay `cfg(test)`.
 //!
 //! Owners allocate conses through `RunSlice::cons_into` inside `with_slice`,
 //! and tables through the rooted `RunAccess` make/copy operations.
 //! Hot operands live in branded `SliceRoot` slots. `SharedRoot` is cold setup.
 //! A program that uses anything outside the closed subset is rejected before
 //! any owner is activated.
-#![cfg(not(feature = "gc-memory-telemetry"))]
+#![cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
 
 use super::a8_probes;
 use super::symbol_functions::FunctionOp;
@@ -21,8 +23,9 @@ use super::{
 
 mod combined;
 mod functions;
-mod globals;
+pub(crate) mod globals;
 mod intern;
+#[cfg(test)]
 use crate::emacs_core::eval::Context;
 use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::transport::SharedRoot;
@@ -2060,7 +2063,12 @@ fn user_put<'era>(
         }
         lease.edit(|ht| {
             let storage_key = match matched {
-                Some(bits) => TaggedValue::from_bits(bits).to_hash_key(&HashTableTest::Eq),
+                Some(bits) => {
+                    // SAFETY: `bits` is a key word `user_scan` just read from
+                    // this table's candidate list. Rehydrating it only builds
+                    // the hash key for this edit; it is not published as a root.
+                    unsafe { TaggedValue::from_bits(bits) }.to_hash_key(&HashTableTest::Eq)
+                }
                 None => key_tv.to_hash_key(&HashTableTest::Eq),
             };
             if let Some(stored) = ht.data.get_mut(&storage_key) {
@@ -2424,6 +2432,7 @@ fn open_collection<'a, K: crate::tagged::gc::mutator_registration::EraKeeper>(
     stopped
 }
 
+#[cfg(test)]
 fn collect_major<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     era: &ParallelHeapEra<'_, K>,
     stopped: &mut AllStopped<'_>,
@@ -2649,6 +2658,7 @@ fn run_program<'era>(
     }
 }
 
+#[cfg(test)]
 fn with_admitted<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     body: impl FnOnce(&ParallelHeapEra<'_, K>, bool, &SharedRoot, &SharedRoot),
 ) {
@@ -2773,6 +2783,7 @@ impl<'body, 'heap, K: crate::tagged::gc::mutator_registration::EraKeeper> Sessio
         gather(&self.pause_rx, self.go_txs.len(), |snap| snap.index)
     }
 
+    #[cfg(test)]
     fn round(
         &mut self,
         kind: Go,
@@ -2785,6 +2796,7 @@ impl<'body, 'heap, K: crate::tagged::gc::mutator_registration::EraKeeper> Sessio
         release_cycle(self.era, stopped, resume);
     }
 
+    #[cfg(test)]
     fn round_with_before(
         &mut self,
         kind: Go,
@@ -2799,6 +2811,7 @@ impl<'body, 'heap, K: crate::tagged::gc::mutator_registration::EraKeeper> Sessio
         release_cycle(self.era, stopped, resume);
     }
 
+    #[cfg(test)]
     fn finish_owners(
         &mut self,
         after: impl FnOnce(&ParallelHeapEra<'heap, K>, &AllStopped<'_>),
@@ -2875,6 +2888,7 @@ const LIST_ROUNDS: [(usize, Go); 5] = [
     (9, Go::Forced),
 ];
 
+#[cfg(test)]
 fn overlap_lists(owners: usize) {
     let started = AtomicUsize::new(0);
     let programs: Vec<_> = (0..owners)
@@ -3630,6 +3644,7 @@ fn ht_p8s() -> Vec<Op> {
 /// the era, then eval the dump forms once the serial world is back. The
 /// caller owns the [`HtEnv`] so its observation counters survive the run.
 /// Returns the program lines followed by the dump lines.
+#[cfg(test)]
 fn run_ht_session(
     setup: &HtSetup,
     programs: Vec<Vec<Op>>,
@@ -4341,6 +4356,7 @@ fn read_tp_catalog_waits() -> (u64, u64, u64, u64, u64, u64) {
 
 /// One timed round: every owner is parked at its threshold safepoint before
 /// the window opens, and the window closes when `complete` returns.
+#[cfg(test)]
 fn tp_round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     session: &mut Session<'_, '_, K>,
 ) -> (usize, u64) {
@@ -4440,6 +4456,7 @@ where
 /// Drive one row: `owners` executors, each running `reps` programs of
 /// `cells` cons builds with a Safepoint every `spacing` conses. Returns the
 /// measured row.
+#[cfg(test)]
 fn tp_drive(
     label: &str,
     owners: usize,
@@ -4627,7 +4644,7 @@ fn tp_row_print(row: &TpRow, generational: bool, tsv: &mut Option<&mut String>) 
 /// NOT arbitrary-Lisp performance: the same restricted executor, one fixed
 /// list-building program per owner.
 #[test]
-#[cfg(feature = "perf-probes")]
+#[cfg(all(test, feature = "perf-probes"))]
 fn a8_throughput_rows() {
     let cells: usize = std::env::var("A8_TP_CELLS")
         .ok()
@@ -4740,6 +4757,7 @@ fn a8_throughput_rows() {
 /// collection, so lease windows really overlap), and the coordinator drives
 /// the one collection round after every owner reported. Returns each owner's
 /// program lines, one list per owner.
+#[cfg(test)]
 fn run_ht_overlap_session(
     setup: &HtSetup,
     programs: &[Vec<Op>],
@@ -4865,6 +4883,7 @@ fn run_ht_overlap_session(
 /// readers observe after the barrier is the design §6 witness, and the
 /// disjoint puts/gets check the concurrent answers and the exact final
 /// state (only owner `i` ever writes key `50+i`).
+#[cfg(test)]
 fn overlap_ht_readers(owners: usize) {
     // slots: 0 witnessed reader table, 1 disjoint-key table, 14 line.
     const TW: u16 = 0;

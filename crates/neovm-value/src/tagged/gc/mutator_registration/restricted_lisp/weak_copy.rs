@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! A finite weak sweep permission cannot authorize new weak shells.
 use super::*;
 

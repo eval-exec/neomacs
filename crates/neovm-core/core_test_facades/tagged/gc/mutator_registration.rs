@@ -81,6 +81,12 @@ mod a8_latency;
 #[path = "../../../core_tests/tagged/gc/mutator_registration/restricted_oracle.rs"]
 mod restricted_oracle;
 
+/// Handoff contention resume re-homed out of value. The Context shell is the
+/// eval symbol-backing fence; the assertions stay in the value owner body.
+#[cfg(all(test, not(feature = "gc-memory-telemetry"), not(miri)))]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/handoff_contention_tests.rs"]
+mod handoff_contention_tests;
+
 /// MEMQ-TAIL-SHAPES (b)+(i)+(ii), peer 22:30Z approvals: the keeper-table
 /// scope test re-homed out of value. It uses the closure-scoped
 /// stopped-tables install, the scope's nested-install probe, the &self

@@ -1,8 +1,9 @@
 //! Cold canonical registration, rooted rendezvous and scoped stopped collection.
 //! Running authority admits rooted cons and sealed hash-table allocation.
 //! The serial inline iterator remains the Sim representation. The overlap executor
-//! is the `restricted_lisp` test module. It stays `cfg(test)` because it
-//! names the evaluator, which this crate must not name in any cfg.
+//! is `restricted_lisp`, compiled for tests and `test-support`. Items that
+//! name the evaluator stay `cfg(test)`; this crate must not name that upper
+//! layer in the dependency build.
 //! Production still has no public Lisp overlap entry.
 //!
 //! An era owns the actual World Baton and the quiescent heap loan. Only a
@@ -1016,8 +1017,7 @@ mod a8_probes;
 #[cfg(feature = "test-support")]
 pub mod a8_probes;
 pub(crate) mod name_ops;
-#[cfg(test)]
-mod restricted_lisp;
+pub(crate) mod restricted_lisp;
 
 // Shared dormant production-entry contention vocabulary.
 pub(crate) mod retry;

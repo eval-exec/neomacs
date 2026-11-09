@@ -281,6 +281,6 @@ enum Step {
 }
 
 mod gc;
-mod handoff;
+pub(crate) mod handoff;
 mod tests;
 mod void;

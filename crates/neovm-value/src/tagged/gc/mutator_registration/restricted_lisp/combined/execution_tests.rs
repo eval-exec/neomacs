@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! Actual single-owner mixed tapes. Source holders remain live in this item;
 //! no cross-owner, sole-root, sweep or minor receipt is inferred from them.
 //! The collection child supplies independent cross-owner full-GC receipts.

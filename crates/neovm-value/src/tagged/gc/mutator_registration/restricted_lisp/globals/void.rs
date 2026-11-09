@@ -1,4 +1,5 @@
 //! Reserved descriptor reuse, then real page growth, on distinct VOID cells.
+#[cfg(test)]
 use super::tests::{case_many, words};
 use super::*;
 use crate::tagged::gc::PlainSymbolBacking;

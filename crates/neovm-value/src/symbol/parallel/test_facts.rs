@@ -195,3 +195,27 @@ pub fn sym_name_call_begin_for_test<'era>(
         run, symbol, cache, activation,
     )
 }
+
+/// Handoff resume with the control gate uncontended. The caller supplies the
+/// era from eval's symbol-backing fence. Assertions stay in the value body.
+#[cfg(all(not(feature = "gc-memory-telemetry"), not(miri)))]
+#[doc(hidden)]
+pub fn handoff_resume_uncontended_for_test<
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+>(
+    era: crate::tagged::gc::ProofEra<'_, K>,
+) {
+    crate::tagged::gc::mutator_registration::restricted_lisp::globals::handoff::worker::contention_tests::handoff_resume_uncontended(era);
+}
+
+/// Handoff resume when the control gate is held past the yield budget.
+/// The caller supplies the era from eval's symbol-backing fence.
+#[cfg(all(not(feature = "gc-memory-telemetry"), not(miri)))]
+#[doc(hidden)]
+pub fn handoff_resume_outlasts_yield_budget_for_test<
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+>(
+    era: crate::tagged::gc::ProofEra<'_, K>,
+) {
+    crate::tagged::gc::mutator_registration::restricted_lisp::globals::handoff::worker::contention_tests::handoff_resume_outlasts_yield_budget(era);
+}

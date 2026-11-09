@@ -1,3 +1,4 @@
+#![cfg(test)]
 use super::*;
 use crate::tagged::gc::{GlobalError, PlainSymbolBacking};
 use std::cell::RefCell;

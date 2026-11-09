@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! B8: shared weak entries are resolved only by the stopped keeper.
 use super::super::KeeperTableMut;
 use super::*;
