@@ -78,6 +78,16 @@
 ;;   - W32 (w32fns.c:8255-8542): MUSTMATCH becomes OFN_FILEMUSTEXIST and
 ;;     OFN_PATHMUSTEXIST (8431-8438); a cancelled dialog ends in quit()
 ;;     (8537-8539).
+;; All three backends also return an ABSOLUTE, decoded name.  The GTK chooser
+;; is local-only (gtkutil.c:2667) and its getter is
+;; gtk_file_chooser_get_filename (2584-2588), an absolute path; the NS getter
+;; takes [panel URL] -> [url path] (nsfns.m:177-186); W32 uses the
+;; fully-qualified GetOpenFileName buffer (w32fns.c:8495-8507).  GNU's C layer
+;; only decodes that name (DECODE_FILE: xfns.c:9725, nsfns.m:1876,
+;; w32fns.c:8506) -- it never expands.  The minibuffer stand-in can return a
+;; relative or ~-abbreviated name, so every success arm expands the choice
+;; against the dialog's directory context, `dir' (the folder the GTK chooser
+;; is seeded with when it is a directory: xfns.c:9704-9707).
 ;; GNU chooses the backend when it is built, so the choice is captured at
 ;; dump time here: a run-time `system-type' read would follow a let-binding of
 ;; that variable, which GNU's C bodies never consult.
@@ -99,9 +109,10 @@ call cannot re-enter this function.  The return contract follows the
 dialog backend GNU builds for this surface: the GTK arm treats MUSTMATCH
 as cosmetic and turns an empty or cancelled choice into a `quit' signal,
 the NS arm returns nil when the panel is cancelled, and the W32 arm
-enforces MUSTMATCH and quits on cancel.  On a non-graphical frame (batch
-or -nw) this signals the same error GNU's backend for this surface
-signals."
+enforces MUSTMATCH and quits on cancel.  A successful name is absolute,
+as every GNU backend's dialog returns it: the chosen name is expanded
+against DIR.  On a non-graphical frame (batch or -nw) this signals the
+same error GNU's backend for this surface signals."
   (unless (display-graphic-p)
     ;; GNU's C bodies check the window system before any argument work, but
     ;; the message is backend-specific: the X DEFUN checks the selected frame
@@ -118,22 +129,29 @@ signals."
      ((eq neomacs--x-file-dialog-surface 'ns)
       ;; ns-read-file-name returns nil for a cancelled panel, and the
       ;; minibuffer stand-in's cancel (C-g) is a `quit' signal; map it.
-      (condition-case nil
-          (read-file-name prompt dir default-filename mustmatch nil
-                          (and only-dir-p #'file-directory-p))
-        (quit nil)))
+      (let ((file (condition-case nil
+                      (read-file-name prompt dir default-filename mustmatch nil
+                                      (and only-dir-p #'file-directory-p))
+                    (quit nil))))
+        ;; [panel URL] -> [url path] is absolute (nsfns.m:177-186).
+        (and file (expand-file-name file dir))))
      ((eq neomacs--x-file-dialog-surface 'w32)
-      (read-file-name prompt dir default-filename mustmatch nil
-                      (and only-dir-p #'file-directory-p)))
+      ;; The GetOpenFileName buffer is fully qualified (w32fns.c:8495-8507).
+      (expand-file-name
+       (read-file-name prompt dir default-filename mustmatch nil
+                       (and only-dir-p #'file-directory-p))
+       dir))
      (t
       ;; GTK: MUSTMATCH is cosmetic (gtkutil.c:2634-2637), so it is not
       ;; forwarded as a validation requirement; an empty accepted name is the
       ;; NULL the C layer turns into a quit (xfns.c:9721-9723).  A `quit'
-      ;; from C-g is already GNU's answer and passes through untouched.
+      ;; from C-g is already GNU's answer and passes through untouched.  The
+      ;; local-only chooser's getter yields an absolute path
+      ;; (gtkutil.c:2584-2588).
       (let ((file (read-file-name prompt dir default-filename nil nil
                                   (and only-dir-p #'file-directory-p))))
         (if (equal file "")
             (signal 'quit nil)
-          file))))))
+          (expand-file-name file dir)))))))
 
 ;;; neo-preload.el ends here

@@ -256,6 +256,51 @@ fn x_file_dialog_ns_arm_returns_nil_for_a_cancelled_panel() {
     );
 }
 
+/// MX-4b: every GNU backend returns an ABSOLUTE, decoded file name.  The GTK
+/// chooser is local-only (gtkutil.c:2667) and its getter is
+/// `gtk_file_chooser_get_filename` (2584-2588), an absolute path; the NS
+/// getter takes `[panel URL]` -> `[url path]` (nsfns.m:177-186); W32 uses the
+/// fully-qualified GetOpenFileName buffer (w32fns.c:8495-8507).  The C layer
+/// only DECODEs that name (xfns.c:9725, nsfns.m:1876, w32fns.c:8506); it never
+/// expands.  The minibuffer stand-in can hand back a relative or
+/// ~-abbreviated name, so each success arm must expand the choice against the
+/// dialog's directory context, as the GTK chooser's seeded folder is DIR when
+/// it is a directory (xfns.c:9704-9707).
+#[test]
+fn x_file_dialog_returns_an_absolute_name_on_every_arm() {
+    let form = r#"(progn
+  (require 'cl-lib)
+  (let (rows)
+    (dolist (case '((gtk "relative-name.txt") (gtk "~/picked.txt")
+                    (ns "relative-name.txt") (ns "~/picked.txt")
+                    (w32 "relative-name.txt") (w32 "~/picked.txt")))
+      (let* ((surface (car case))
+             (choice (cadr case))
+             (neomacs--x-file-dialog-surface surface)
+             (result (cl-letf (((symbol-function 'display-graphic-p)
+                                (lambda (&optional _) t))
+                               ((symbol-function 'read-file-name)
+                                (lambda (&rest _) choice)))
+                       (x-file-dialog "p" "/tmp"))))
+        (push (list surface choice
+                    (file-name-absolute-p result)
+                    (equal result (expand-file-name choice "/tmp")))
+              rows)))
+    (nreverse rows)))"#;
+    let outcome =
+        crate::common::run_neovm_eval(form).expect("Neomacs evaluates the mocked dialogs");
+    assert!(
+        outcome.contains(
+            "OK ((gtk \"relative-name.txt\" t t) (gtk \"~/picked.txt\" t t) \
+             (ns \"relative-name.txt\" t t) (ns \"~/picked.txt\" t t) \
+             (w32 \"relative-name.txt\" t t) (w32 \"~/picked.txt\" t t))"
+        ),
+        "every arm must return the choice expanded against DIR, like GNU's \
+         absolute dialog result (gtkutil.c:2584-2588, nsfns.m:177-186, \
+         w32fns.c:8495-8507): {outcome}"
+    );
+}
+
 #[test]
 fn divergence_menu_bar() {
     return_if_neovm_enable_oracle_proptest_not_set!();
