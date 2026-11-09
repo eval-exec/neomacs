@@ -7753,10 +7753,6 @@ impl CommandLoopDiagnostic {
 }
 
 #[cfg(test)]
-#[path = "tests/positioned_control_test.rs"]
-mod positioned_control_tests;
-
-#[cfg(test)]
 #[path = "tests/issue554_function_policy.rs"]
 mod issue554_function_policy;
 

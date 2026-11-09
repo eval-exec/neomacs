@@ -1,16 +1,24 @@
-use super::*;
+//! Command-symbol tests whose frame and command-loop entry points live in
+//! display and core. Assertions are unchanged.
+use crate::emacs_core::eval::Context;
+use crate::emacs_core::eval::command_loop::CommandLoopSymbol;
+use crate::emacs_core::keyboard::CommandLoopHost;
+use crate::window::DisplayFrameManagerExt;
 use neovm_value::intern::{intern_calls, reset_intern_calls};
+use neovm_value::value::Value;
 use strum::IntoEnumIterator;
 
 fn context() -> Context {
-    let mut ctx = Context::new(crate::test_utils::unit_runtime());
+    let mut ctx = crate::test_utils::new_context();
     let buffer = ctx
         .edit
         .buffers
         .create_buffer("*ttykey-k4-command-symbols*");
     ctx.edit.buffers.set_current(buffer);
-    let frame = ctx.frames.create_frame("ttykey-k4", 80, 24, buffer);
-    assert!(ctx.frames.select_frame(frame));
+    let frame = ctx
+        .frame_manager_mut()
+        .create_frame("ttykey-k4", 80, 24, buffer);
+    assert!(ctx.frame_manager_mut().select_frame(frame));
     ctx
 }
 
@@ -79,7 +87,7 @@ fn fixed_command_assignment_stays_in_dynamic_binding() {
     );
     let symbol = CommandLoopSymbol::ThisCommand.id();
     ctx.assign_by_id(symbol, Value::fixnum(1));
-    let depth = ctx.specpdl.len();
+    let depth = ctx.specpdl_len_for_test();
     ctx.try_specbind(symbol, Value::fixnum(2))
         .expect("dynamic command binding");
     ctx.assign_by_id(CommandLoopSymbol::ThisCommand.id(), Value::fixnum(3));

@@ -2682,7 +2682,3 @@ impl Context {
 #[cfg(debug_assertions)]
 #[path = "tests/gc_heap_mut_closure_test.rs"]
 mod gc_heap_mut_closure_tests;
-
-#[cfg(test)]
-#[path = "tests/command_symbols_test.rs"]
-mod command_symbols_tests;

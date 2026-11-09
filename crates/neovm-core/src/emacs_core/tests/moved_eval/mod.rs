@@ -475,3 +475,12 @@ mod emacs_core_runtime_value_reader_tests_runtime_startup_escapes_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/print/tests/print_terminal_test.rs"]
 mod emacs_core_lisp_print_tests_print_terminal_test_rs;
+
+// Command-loop methods are core's CommandLoopHost. Frame creation is
+// display's DisplayFrameManagerExt. Assertions are unchanged.
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/command_symbols_test.rs"]
+mod emacs_core_runtime_eval_tests_command_symbols_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/positioned_control_test.rs"]
+mod emacs_core_runtime_eval_tests_positioned_control_test_rs;
