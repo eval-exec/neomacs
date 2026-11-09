@@ -36,7 +36,7 @@ fn context() -> Context {
     let mut context = crate::test_utils::new_context();
     // This fixture observes manual deferred minors. Automatic synchronous
     // stress routing is covered separately by gc_generational_pacing.
-    context.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut context, false);
     context.with_gc_inhibited(|context| {
         context
             .eval_str("(setq gc-cons-threshold most-positive-fixnum gc-cons-percentage 1000)")

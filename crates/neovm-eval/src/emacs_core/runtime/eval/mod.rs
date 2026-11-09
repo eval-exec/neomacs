@@ -3855,12 +3855,10 @@ pub struct Context {
     #[doc(hidden)]
     pub gc_driver_active: bool,
     /// Stress-test mode: force GC at every safe point regardless of threshold.
-    #[cfg(not(feature = "test-support"))]
+    /// Private in EVERY arm (peer #982/#1005): consumers read it through
+    /// `gc_stress_for_test` and set it through the AUTHORITY setter fence, so
+    /// a cross-crate write is a compile error, not a ledger audit.
     pub(crate) gc_stress: bool,
-    /// Stress-test mode: force GC at every safe point regardless of threshold.
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub gc_stress: bool,
 
     compiler_function_overrides_active: bool,
     /// When true, collect detailed timing counters for macro/eager-load paths.
@@ -7677,12 +7675,18 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
 }
 
 /// A1 test-surface row (post-split option A): the gc_stress test flag was a
-/// crate-visible field; moved tests set it through this additive accessor.
+/// crate-visible field; moved tests read and set it through these additive
+/// accessors. The field itself is private in every arm (peer #982/#1005).
 #[cfg(any(test, feature = "test-support"))]
 impl Context {
     #[doc(hidden)]
     pub fn set_gc_stress_for_test(&mut self, enabled: bool) {
         self.gc_stress = enabled;
+    }
+
+    #[doc(hidden)]
+    pub fn gc_stress_for_test(&self) -> bool {
+        self.gc_stress
     }
 }
 

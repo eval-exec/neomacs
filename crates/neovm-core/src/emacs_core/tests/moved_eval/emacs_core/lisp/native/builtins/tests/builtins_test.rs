@@ -17976,7 +17976,7 @@ fn put_promotes_symbol_properties_to_live_raw_plists() {
 fn put_string_property_survives_exact_gc() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    eval.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, true);
 
     let result = eval.eval_str(
         "(progn

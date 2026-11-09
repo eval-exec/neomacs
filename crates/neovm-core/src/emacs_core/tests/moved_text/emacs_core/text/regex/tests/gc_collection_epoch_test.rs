@@ -180,9 +180,9 @@ fn non_generational_context() -> Context {
     // Context construction and every runtime worker or environment reader.
     unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
     let mut ctx = crate::test_utils::new_context();
-    ctx.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ctx, false);
     assert!(!ctx.tagged_heap().tagged_heap_generational_enabled());
-    assert!(!ctx.gc_stress);
+    assert!(!ctx.gc_stress_for_test());
     ctx
 }
 

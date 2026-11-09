@@ -98,9 +98,9 @@ fn generational_context() -> Context {
     }
     crate::test_utils::init_test_tracing();
     let mut context = crate::test_utils::new_context();
-    context.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut context, false);
     assert!(context.tagged_heap().tagged_heap_generational_enabled());
-    assert!(!context.gc_stress);
+    assert!(!context.gc_stress_for_test());
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { context.tagged_heap_mut() }.set_gc_threshold(usize::MAX);
     context.gc_collect_exact();
@@ -122,7 +122,7 @@ fn cache_young_string(context: &mut Context) -> Value {
 
 fn start_minor(context: &mut Context) -> usize {
     assert!(context.tagged_heap().tagged_heap_generational_enabled());
-    assert!(!context.gc_stress);
+    assert!(!context.gc_stress_for_test());
     assert!(context.tagged_heap().should_run_minor(false, false));
     assert!(!context.tagged_heap().mark_in_progress());
     assert!(!context.tagged_heap().sweep_in_progress());

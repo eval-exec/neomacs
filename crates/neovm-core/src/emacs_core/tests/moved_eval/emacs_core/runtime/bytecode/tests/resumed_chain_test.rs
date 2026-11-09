@@ -411,8 +411,8 @@ fn chain_resume_equals_tier0_at_the_mapc_callback_depth_limit() {
 #[test]
 fn chain_resume_keeps_outer_stacks_alive_across_collections() {
     let mut ev = context_with(GC);
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     let verdict = falsify(&mut ev, "(neovm--ch-grun)", true, |_, levels| levels >= 2);
-    ev.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, false);
     assert_two_and_three_levels(&verdict);
 }

@@ -282,10 +282,13 @@ enum CollectionPressure {
 impl CollectionPressure {
     #[doc(hidden)]
     pub fn apply(self, context: &mut Context) {
-        context.gc_stress = match self {
-            Self::Idle => false,
-            Self::Stress => true,
-        };
+        neovm_eval::test_support::authority::set_gc_stress_for_test(
+            context,
+            match self {
+                Self::Idle => false,
+                Self::Stress => true,
+            },
+        );
     }
 }
 

@@ -619,6 +619,13 @@ pub mod authority {
         context.gc_driver_active = active;
     }
 
+    /// Setter fence for `Context::gc_stress` (peer #982/#1005): the field is
+    /// private in every arm now, so a cross-crate write is a compile error and
+    /// every legitimate writer goes through this fence.
+    pub fn set_gc_stress_for_test(context: &mut Context, enabled: bool) {
+        context.set_gc_stress_for_test(enabled);
+    }
+
     /// Reset fence for `Context::abbrevs`: the moved root-retention test
     /// replaces the manager, a write to the world slot.
     pub fn reset_abbrevs_for_test(context: &mut Context) {

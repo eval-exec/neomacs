@@ -8,7 +8,7 @@ use neovm_value::error::{FlowKind, FlowResultExt};
 fn gc_mode_line_rehomed_predecessor_plist_survives_eval() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    eval.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, false);
     eval.set_gc_threshold(usize::MAX);
     eval.set_variable("noninteractive", Value::NIL);
     let before_roots = save_scratch_gc_roots();
@@ -45,7 +45,7 @@ fn gc_mode_line_rehomed_predecessor_plist_survives_eval() {
 fn gc_mode_line_split_accumulator_roots_restore_on_throw() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    eval.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, false);
     let format = eval
         .eval_str(
             "'((:propertize \"A\" review-property 73)

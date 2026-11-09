@@ -63,9 +63,9 @@ fn native_vector_sort_roots_temporaries_at_gc_boundaries() {
             .map(|i| Value::string(format!("{:04}", (i * 17 + 13) % 50)))
             .collect(),
     );
-    eval.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, true);
     let result = builtin_sort_slice(&mut eval, &[vector, Value::symbol("string<")]);
-    eval.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, false);
     assert_eq!(result.unwrap(), vector);
     for (index, value) in vector.as_vector_data().unwrap().iter().enumerate() {
         assert_eq!(value.as_utf8_str(), Some(format!("{index:04}").as_str()));

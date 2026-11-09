@@ -167,7 +167,7 @@ fn generational_context() -> Context {
     }
     crate::test_utils::init_test_tracing();
     let mut ctx = crate::test_utils::new_context();
-    ctx.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ctx, false);
     ctx.with_gc_inhibited(|ctx| {
         ctx.eval_str(
             "(setq gc-cons-threshold most-positive-fixnum
@@ -186,7 +186,7 @@ fn generational_context() -> Context {
 
 fn start_public_minor(ctx: &mut Context) -> MinorCounts {
     assert!(ctx.tagged_heap().tagged_heap_generational_enabled());
-    assert!(!ctx.gc_stress);
+    assert!(!ctx.gc_stress_for_test());
     assert!(ctx.tagged_heap().should_run_minor(false, false));
     assert!(!ctx.tagged_heap().mark_in_progress());
     assert!(!ctx.tagged_heap().sweep_in_progress());

@@ -8,7 +8,7 @@ use neovm_eval::emacs_core::eval::save_scratch_gc_roots;
 fn mode_line_split_callback_follows_replaced_live_tail() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    eval.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, false);
     let format = eval
         .eval_str("'(\"A\" (:eval nil) \"B\")")
         .expect("callback format");
@@ -112,7 +112,7 @@ fn checkpoint_survives_detaching_eval(generational: bool, display: bool) {
     }
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    eval.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, false);
     eval.set_gc_threshold(usize::MAX);
     eval.set_variable("noninteractive", Value::NIL);
     eval.gc_collect_exact();
@@ -161,7 +161,7 @@ fn split_checkpoint_survives_collection(generational: bool) {
     }
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    eval.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, false);
     eval.set_gc_threshold(usize::MAX);
     eval.gc_collect_exact();
     let (format, checkpoint_bits, car_bits) = collecting_checkpoint_format(&mut eval);

@@ -90,7 +90,7 @@ fn prepared_regexp_scoped_gc_preserves_compiled_and_callback_paths() {
     // Load syntax support and exercise autoloads before stress: collecting
     // at every allocation during charprop.el loading tests bootstrap cost,
     // not the lifetime of a pattern passed through search preparation.
-    eval.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, false);
     let warm = eval.eval_str(
         r#"(progn
   (require 'syntax)
@@ -120,7 +120,7 @@ fn prepared_regexp_scoped_gc_preserves_compiled_and_callback_paths() {
         neovm_eval::emacs_core::print::format_eval_result(&warm),
         expected
     );
-    eval.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, true);
     let before = eval.gc_count;
     let result = eval.eval_str("(prepared-regexp-scoped-gc)");
     let collections = eval.gc_count - before;
@@ -1887,7 +1887,7 @@ fn bounded_bol_search_preserves_gnu_point_and_match_data() {
 fn search_entries_preserve_fresh_arguments_across_callback_gc() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::runtime_startup_context();
-    eval.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, false);
     let warm = eval.eval_str(
         r#"(progn
   (require 'syntax)
@@ -1936,7 +1936,7 @@ fn search_entries_preserve_fresh_arguments_across_callback_gc() {
         neovm_eval::emacs_core::print::format_eval_result(&warm),
         expected
     );
-    eval.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, true);
     let before = eval.gc_count;
     let result = eval.eval_str("(fixed-search-scoped-gc)");
     let collections = eval.gc_count - before;

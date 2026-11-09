@@ -80,7 +80,7 @@ fn repro_baseline_residual_cons_generic() {
     crate::test_utils::init_test_tracing();
     neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     let mut ev = crate::test_utils::new_context();
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     let caller = Value::make_bytecode(bc(
         1,
         vec![
@@ -121,7 +121,7 @@ fn repro_baseline_heap_arg_generic() {
     crate::test_utils::init_test_tracing();
     neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     let mut ev = crate::test_utils::new_context();
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     let caller = Value::make_bytecode(bc(
         1,
         vec![
@@ -165,7 +165,7 @@ fn repro_baseline_op_list_residual() {
     crate::test_utils::init_test_tracing();
     neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     let mut ev = crate::test_utils::new_context();
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     let caller = Value::make_bytecode(bc(
         1,
         vec![
@@ -203,7 +203,7 @@ fn repro_mir_inlined_plus_residual_generic() {
     crate::test_utils::init_test_tracing();
     neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     let mut ev = crate::test_utils::new_context();
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     // Pure, required-only, inlinable callee: (lambda (x) (1+ x)).
     bind_fn(
         &mut ev,
@@ -274,7 +274,7 @@ fn repro_mir_any_typed_heap_residual_generic() {
     crate::test_utils::init_test_tracing();
     neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     let mut ev = crate::test_utils::new_context();
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     // Pure, required-only, inlinable callee: (lambda (x) (1+ x)) — earns MIR tier.
     bind_fn(
         &mut ev,
@@ -380,7 +380,7 @@ fn repro_baseline_heap_residual_survives_exact_gc() {
     crate::test_utils::init_test_tracing();
     neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     let mut ev = crate::test_utils::new_context();
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     bind_fn(
         &mut ev,
         "gcchurn2",
@@ -460,7 +460,7 @@ fn repro_baseline_bignum_residual_generic() {
     crate::test_utils::init_test_tracing();
     neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     let mut ev = crate::test_utils::new_context();
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     // Expected print string (a Rust String, not a heap Value — artifact-free).
     let expected_str = {
         let b = ev
@@ -520,7 +520,7 @@ fn repro_jit_to_jit_residual_generic() {
     crate::test_utils::init_test_tracing();
     neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     let mut ev = crate::test_utils::new_context();
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     // Hot callee that allocates: (lambda (n) (make-list n 7)).
     bind_fn(
         &mut ev,
@@ -575,7 +575,7 @@ fn repro_loop_carried_cons_across_call() {
     crate::test_utils::init_test_tracing();
     neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     let mut ev = crate::test_utils::new_context();
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     let caller = Value::make_bytecode(bc(
         2,
         vec![
@@ -626,7 +626,7 @@ fn repro_deep_residual_three_conses() {
     crate::test_utils::init_test_tracing();
     neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     let mut ev = crate::test_utils::new_context();
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     let caller = Value::make_bytecode(bc(
         1,
         vec![
@@ -789,7 +789,7 @@ fn repro_warmctx_parse_partial_sexp_generic() {
     // gc_stress only AROUND the parse-partial-sexp funcall (the JIT call path
     // under test); the warm heap is huge so a full collection per allocation is
     // slow — keep setup/goto out of the stressed window.
-    ev.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, false);
     ev.eval_str("(insert \"(foo (bar baz) (qux (a b c) d) e)\")")
         .expect("buffer");
     // caller (rooted by funcall during each call):
@@ -818,11 +818,11 @@ fn repro_warmctx_parse_partial_sexp_generic() {
     let ppss = Value::symbol("parse-partial-sexp");
     for _ in 0..6 {
         ev.eval_str("(goto-char (point-min))").unwrap();
-        ev.gc_stress = true; // stress GC only across the JIT call
+        neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true); // stress GC only across the JIT call
         let r = ev
             .funcall_general_untraced(caller, vec![ppss])
             .expect("warm-context parse-partial-sexp generic call");
-        ev.gc_stress = false;
+        neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, false);
         assert_cons_1_2(r);
     }
 }
@@ -839,7 +839,7 @@ fn repro_redherring_parse_partial_sexp_bare_context() {
     crate::test_utils::init_test_tracing();
     neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     let mut ev = crate::test_utils::new_context();
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     ev.eval_str("(insert \"(foo (bar baz) (qux (a b c) d) e)\")")
         .unwrap();
     let caller = Value::make_bytecode(bc(

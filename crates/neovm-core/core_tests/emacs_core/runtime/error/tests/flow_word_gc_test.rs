@@ -7,7 +7,7 @@ use crate::emacs_core::value::Value;
 fn check_lisp_invariant(source: &str) {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    eval.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, true);
     let result = eval.eval_str(source).expect("unwind invariant evaluates");
     assert_eq!(result, Value::T, "the Lisp invariant must remain true");
 }

@@ -2206,7 +2206,7 @@ fn font_shape_gstring_caches_by_header_and_returns_the_cached_gstring() {
 fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    eval.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, false);
     // Establish the old generation before creating the cache-only young graph.
     eval.gc_collect_exact();
     eval.set_gc_threshold(usize::MAX);

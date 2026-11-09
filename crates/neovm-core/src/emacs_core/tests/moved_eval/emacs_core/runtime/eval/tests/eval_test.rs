@@ -15859,7 +15859,7 @@ fn let_init_values_survive_gc_stress_until_bindings_own_them() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
 
     let result = ev.eval_str(
         "(let ((x (cons 51 52))
@@ -15973,7 +15973,7 @@ fn vm_root_frames_are_traced_across_exact_gc() {
 fn make_symbol_name_value_survives_exact_gc() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
 
     let result = ev.eval_str(
         r#"(let* ((name (copy-sequence "vm-exact-symbol-name"))
@@ -16101,7 +16101,7 @@ fn lexical_binding_rooting_uses_specpdl() {
 fn lexical_binding_fallback_uses_specpdl_when_no_frame_is_available() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     let payload = Value::vector(vec![Value::fixnum(48)]);
     let sym = intern("specpdl-lexical-fallback");
 
@@ -16126,7 +16126,7 @@ fn direct_closure_call_uses_specpdl_for_rooting() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
 
     let callable = ev
         .eval_str(
@@ -16174,7 +16174,7 @@ fn direct_closure_call_uses_specpdl_for_rooting() {
 fn direct_closure_call_rest_args_preserve_heap_values_under_gc() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
 
     let callable = ev
         .eval_str("(lambda (&rest rest) (car (cdr (cdr rest))))")
@@ -22430,7 +22430,7 @@ fn macro_expansion_scope_uses_lexenv_dynvars() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     ev.bind_lexical_value_rooted(intern("macro-scope-a"), Value::fixnum(1));
     ev.bind_lexical_value_rooted(intern("macro-scope-b"), Value::fixnum(2));
     ev.lexenv = Value::cons(Value::from_sym_id(intern("macro-scope-special")), ev.lexenv);
@@ -23055,7 +23055,7 @@ fn dropping_a_displaced_evaluator_leaves_the_live_installation() {
 fn gc_stress_collects_after_allocation_not_at_unchanged_safe_points() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     ev.gc_collect_exact();
     ev.gc_count = 0;
 
@@ -23171,7 +23171,7 @@ fn eval_stress(src: &str) -> Vec<String> {
         VariableView::canonical(CanonicalAccess::TEST, &test_ob()),
     )
     .expect("parse");
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     // Force very low threshold so gc_safe_point triggers on every call
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
@@ -23261,7 +23261,7 @@ fn gc_stress_lambda_argument_closure_survives_binding_installation() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     let result = format_eval_result(&ev.eval_str(
@@ -23278,7 +23278,7 @@ fn gc_stress_direct_lambda_head_roots_fresh_closure_during_arg_eval() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     let result = format_eval_result(&ev.eval_str(
@@ -23297,7 +23297,7 @@ fn gc_stress_builtin_apply_roots_closure_function_argument() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     let result = format_eval_result(&ev.eval_str(
@@ -23312,7 +23312,7 @@ fn gc_stress_builtin_apply_roots_closure_function_argument() {
 fn gc_stress_macro_expansion_result_stays_rooted_for_eval() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     let result = format_eval_result(&ev.eval_str(
@@ -23332,7 +23332,7 @@ fn gc_stress_closure_call_restores_outer_lexenv_after_exact_gc() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     let result = format_eval_result(&ev.eval_str(
@@ -23350,7 +23350,7 @@ fn gc_stress_let_star_lexical_binding_roots_evaluated_values() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     let result = format_eval_result(&ev.eval_str(
@@ -23375,7 +23375,7 @@ fn gc_stress_apply_env_expander_closure_capturing_uninterned_symbol() {
     let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     ev.lexenv = Value::list(vec![Value::T]);
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     let result = format_eval_result(&ev.eval_str(
@@ -23475,7 +23475,7 @@ fn gc_stress_aref_on_closure_survives_closure_vector_conversion() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     let result = format_eval_result(&ev.eval_str(
@@ -23491,7 +23491,7 @@ fn gc_stress_cdr_rejects_closure_without_losing_capture() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
-    ev.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     let result = format_eval_result(&ev.eval_str(

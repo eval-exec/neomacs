@@ -10,7 +10,7 @@ fn generational_context() -> Context {
     let mut context = crate::test_utils::new_context();
     // This fixture observes manual deferred minors. Automatic synchronous
     // stress routing is covered separately by gc_generational_pacing.
-    context.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut context, false);
     assert!(context.tagged_heap().tagged_heap_generational_enabled());
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { context.tagged_heap_mut() }.set_gc_threshold(usize::MAX);

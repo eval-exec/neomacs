@@ -112,7 +112,7 @@ fn bytecode_slot_objects_round_trip_with_their_identity() {
         // From here the function is their only holder.
         crate::emacs_core::eval::restore_scratch_gc_roots(before_slot_objects);
         for gc_stress in [false, true] {
-            loaded.gc_stress = gc_stress;
+            neovm_eval::test_support::authority::set_gc_stress_for_test(&mut loaded, gc_stress);
             for _ in 0..3 {
                 loaded.gc_collect_exact();
                 eval(
@@ -124,7 +124,7 @@ fn bytecode_slot_objects_round_trip_with_their_identity() {
                        nil)",
                 );
             }
-            loaded.gc_stress = false;
+            neovm_eval::test_support::authority::set_gc_stress_for_test(&mut loaded, false);
             assert_eq!(
                 eval(&mut loaded, &format!("(aref {owner} 2)")),
                 vector,

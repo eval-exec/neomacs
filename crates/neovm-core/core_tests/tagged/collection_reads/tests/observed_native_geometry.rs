@@ -177,7 +177,7 @@ fn observed_string_keeps_exact_mark_and_compiled_invalidation_without_window_geo
     crate::test_utils::init_test_tracing();
     let _mode = ObservedMode::begin();
     let mut context = crate::test_utils::new_context();
-    context.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut context, false);
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { context.tagged_heap_mut() }.set_gc_threshold(usize::MAX);
     context.setup_thread_locals();

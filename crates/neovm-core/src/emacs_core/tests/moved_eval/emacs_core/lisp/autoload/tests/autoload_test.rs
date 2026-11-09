@@ -35,7 +35,7 @@ fn autoload_copied_properties_have_only_manager_roots() {
 
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    eval.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, false);
     eval.gc_collect_exact();
     unsafe { eval.tagged_heap_mut() }.set_gc_threshold(usize::MAX);
     let key = Value::symbol("autoload-owned-property");

@@ -1897,7 +1897,7 @@ pub mod mode_line_gc_roots_test_upper_layer_helpers {
         }
         crate::test_utils::init_test_tracing();
         let mut eval = make_context();
-        eval.gc_stress = false;
+        neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, false);
         eval.set_gc_threshold(usize::MAX);
         eval.set_variable("noninteractive", Value::NIL);
         eval.gc_collect_exact();
@@ -2082,7 +2082,7 @@ pub mod mode_line_incremental_lifetimes_test_upper_layer_helpers {
         make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
     ) -> Context {
         let mut eval = interactive_context(make_context);
-        eval.gc_stress = false;
+        neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, false);
         eval.set_gc_threshold(usize::MAX);
         eval
     }
@@ -2100,7 +2100,7 @@ pub mod mode_line_element_attribution_test_upper_layer_helpers {
     ) -> Context {
         crate::test_utils::init_test_tracing();
         let mut eval = make_context();
-        eval.gc_stress = false;
+        neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, false);
         eval.set_gc_threshold(usize::MAX);
         eval.set_variable("noninteractive", Value::NIL);
         let buffer = eval
@@ -2554,7 +2554,7 @@ pub mod mode_line_dynamic_symbols_test_upper_layer_helpers {
         make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
     ) -> Context {
         let mut ctx = make_context();
-        ctx.gc_stress = false;
+        neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ctx, false);
         ctx.set_gc_threshold(usize::MAX);
         let buffer = ctx
             .edit

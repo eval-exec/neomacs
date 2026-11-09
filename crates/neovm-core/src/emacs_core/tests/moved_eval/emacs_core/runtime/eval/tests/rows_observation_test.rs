@@ -7,7 +7,7 @@ use neovm_value::value::Value;
 
 fn ready() -> (Context, FrameId) {
     let mut context = crate::test_utils::new_context();
-    context.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut context, false);
     // These receipts require GEN1, independently of the test runner's policy.
     // SAFETY: serial fixture heap; no collector or compiled leaf runs across
     // the GEN1 policy change.

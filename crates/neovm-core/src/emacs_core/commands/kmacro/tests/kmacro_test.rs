@@ -36,7 +36,7 @@ fn kmacro_copied_properties_have_only_manager_roots() {
         LispString::from_unibyte(vec![0x80, b' ', b'%', b'd']),
     ] {
         let mut eval = crate::test_utils::new_context();
-        eval.gc_stress = false;
+        neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, false);
         eval.gc_collect_exact();
         // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
         unsafe { eval.tagged_heap_mut() }.set_gc_threshold(usize::MAX);

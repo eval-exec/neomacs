@@ -49,7 +49,7 @@ fn context() -> Context {
     let _restore = RestoreGeneration(std::env::var_os("NEOVM_GC_GENERATIONAL"));
     unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
     let mut context = crate::test_utils::new_context();
-    context.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut context, false);
     // SAFETY: serial test setup; the WorldView is used in place and never swapped.
     unsafe { context.tagged_heap_mut() }.set_gc_threshold(usize::MAX);
     assert!(!context.tagged_heap().tagged_heap_generational_enabled());

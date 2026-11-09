@@ -12,7 +12,7 @@ use neovm_value::value::Value;
 #[test]
 fn mode_line_nested_collecting_throw_restores_all_root_scopes() {
     let mut eval = context(crate::test_utils::new_context);
-    eval.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, false);
     eval.set_gc_threshold(usize::MAX);
     let roots = save_scratch_gc_roots();
     let specpdl = eval.specpdl().len();
@@ -40,7 +40,7 @@ fn mode_line_nested_collecting_throw_restores_all_root_scopes() {
 #[test]
 fn mode_line_display_restored_match_string_survives_collecting_eval() {
     let mut eval = context(crate::test_utils::new_context);
-    eval.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, false);
     eval.set_gc_threshold(usize::MAX);
     eval.eval_str(r#"(string-match "ab" (concat "ab" "cd"))"#)
         .expect("saved match");
@@ -82,7 +82,7 @@ fn mode_line_display_restored_match_string_survives_collecting_eval() {
 #[test]
 fn mode_line_frame_title_throw_restores_edit_adjusted_point() {
     let mut eval = context(crate::test_utils::new_context);
-    eval.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, false);
     let bid = eval
         .edit
         .buffers

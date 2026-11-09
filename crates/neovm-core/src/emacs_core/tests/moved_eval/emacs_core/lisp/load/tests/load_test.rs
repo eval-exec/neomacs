@@ -1209,7 +1209,7 @@ fn load_bindings_source_survives_gc_stress_after_custom_runtime() {
         "load-path",
         Value::list(bootstrap_load_path_entries(&lisp_dir)),
     );
-    eval.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, true);
     unsafe { eval.tagged_heap_mut() }.set_gc_threshold(1);
 
     let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
@@ -1256,7 +1256,7 @@ fn obsolete_function_alias_metadata_survives_gc_stress_after_help_runtime() {
 
     let mut eval = crate::test_utils::new_context();
     crate::test_utils::load_minimal_gnu_help_runtime(&mut eval);
-    eval.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, true);
     unsafe { eval.tagged_heap_mut() }.set_gc_threshold(1);
 
     let result = eval
@@ -1285,7 +1285,7 @@ fn bindings_split_source_survives_gc_stress_after_help_runtime() {
 
     let mut eval = crate::test_utils::new_context();
     crate::test_utils::load_minimal_gnu_help_runtime(&mut eval);
-    eval.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, true);
     unsafe { eval.tagged_heap_mut() }.set_gc_threshold(1);
 
     let path = source_bootstrap_path("bindings.el");
@@ -7265,7 +7265,7 @@ fn bootstrap_runtime_autoload_do_load_survives_exact_gc() {
     crate::test_utils::init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    eval.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, true);
     let rendered = eval_rendered(
         &mut eval,
         r#"(progn
@@ -10850,7 +10850,7 @@ fn nested_load_exact_gc_preserves_reader_load_file_name() {
     .expect("write child fixture");
 
     let mut eval = crate::test_utils::new_context();
-    eval.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, true);
 
     let loaded = load_file(&mut eval, &parent).expect("load nested fixture under exact gc");
     assert_eq!(loaded, Value::T);

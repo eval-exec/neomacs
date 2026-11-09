@@ -56,7 +56,7 @@ fn context(max_minors: usize, stress_every: usize) -> Context {
     let mut context = crate::test_utils::new_context();
     // The stress-specific test enables it at the real automatic entry after
     // bounded, rooted fixture setup. Other tests control automatic selection.
-    context.gc_stress = false;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut context, false);
     context.with_gc_inhibited(|context| {
         context
             .eval_str(
@@ -214,7 +214,7 @@ fn generational_memory_full_uses_live_lisp_setting_to_select_major() {
 fn generational_automatic_stress_is_synchronous_seven_minors_then_eighth_major() {
     let mut context = context(usize::MAX, 8);
     make_old_unreachable_sentinel(&mut context);
-    context.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut context, true);
     for cycle in 1..=8 {
         run_stress_cycle(&mut context);
         assert_eq!(
@@ -258,7 +258,7 @@ fn generational_automatic_stress_is_synchronous_seven_minors_then_eighth_major()
 fn generational_explicit_collection_is_full_and_resets_automatic_stress_stride() {
     let mut context = context(usize::MAX, 8);
     make_old_unreachable_sentinel(&mut context);
-    context.gc_stress = true;
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut context, true);
     for _ in 0..3 {
         run_stress_cycle(&mut context);
         assert_eq!(weak_entries(&context), 1);

@@ -21,7 +21,7 @@ fn garbage_collect_during_the_concurrent_first_cycle_keeps_what_only_the_image_h
     let dump_path = dir.path().join("forced-first-cycle.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
-    if loaded.gc_stress {
+    if loaded.gc_stress_for_test() {
         // Stress mode collects synchronously at every safe point and never
         // arms the concurrent first cycle.
         return;
