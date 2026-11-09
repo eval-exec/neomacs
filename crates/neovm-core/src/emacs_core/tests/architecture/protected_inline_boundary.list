@@ -124,7 +124,8 @@ always	emacs_core/runtime/bytecode/vm.rs	BytecodeTierPolicy::records_call_feedba
 always	emacs_core/runtime/bytecode/vm.rs	ConsumedCallOperandRootSlot::from_args_start	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	ConsumedCallOperandRootSlot::install_exact_callee	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	FrameArgumentCopy::for_count	run_loop,inline
-always	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerReturn::with_saved_budget	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerReturn::with_position	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerReturn::entry_at	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerStack::active	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerStack::active_mut	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerStack::enter_callee	run_loop,inline
@@ -157,6 +158,7 @@ always	emacs_core/runtime/bytecode/vm.rs	Vm::uses_interpreter_only_tier	run_loop
 always	emacs_core/runtime/bytecode/vm.rs	Vm::with_dynamic_vm_roots	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	bytecode_frame_bytes	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	charge_bytecode_frame	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	charge_frame_position	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	fixnum_ge	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	fixnum_gt	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	fixnum_le	run_loop,inline
