@@ -2698,7 +2698,7 @@ fn collect_exact_retains_rooted_graph_and_frees_garbage() {
 
 #[test]
 fn native_font_object_traces_properties_and_capability() {
-    use neomacs_display_protocol::font::{FontBackendKind, ResolvedFontIdentity};
+    use neovm_display_identity::font::{FontBackendKind, ResolvedFontIdentity};
 
     crate::test_utils::init_test_tracing();
     let mut heap = TaggedHeap::new();
