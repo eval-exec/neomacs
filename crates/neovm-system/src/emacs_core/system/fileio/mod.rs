@@ -7721,7 +7721,9 @@ pub fn builtin_do_auto_save(
     let mut auto_saved = false;
     let mut auto_save_error_occurred = false;
     let current_only = args.get(1).is_some_and(|v| v.is_truthy());
-    // GNU's `old`: the buffer current on entry, before `auto-save-hook`.
+    // GNU `old` (`fileio.c:6333`) is the buffer current at entry, before
+    // the hook. A shrink `continue` does not restore it. A real save does
+    // (`:6482`). There is no `record_unwind_current_buffer`.
     let old_buffer = eval.edit.buffers.current_buffer_id();
 
     // GNU `Fdo_auto_save` runs this before inspecting or snapshotting any
@@ -7846,20 +7848,15 @@ pub fn builtin_do_auto_save(
         // with `growth_factor = 4` and `Z - BEG` in characters. A non-nil
         // NO-MESSAGE skips the whole conjunction, so the save proceeds and
         // `save_length` is not -1.
-        // GNU reads `auto-save-include-big-deletions` after
-        // `set_buffer_internal (b)` (`fileio.c:6453-6455`), so b's
-        // buffer-local value governs. Restore the caller's buffer before
-        // the rest of the attempt.
-        let caller = eval.edit.buffers.current_buffer_id();
+        // GNU `set_buffer_internal (b)` (`fileio.c:6453`) happens before
+        // the shrink test and stays in effect through that arm. The
+        // shrink `continue` does not restore `old`. `old` is restored
+        // only after a real save (`:6482`). The variable read therefore
+        // sees b's buffer-local value (`:6454`).
         eval.set_current_buffer_unrecorded(buf_id)?;
         let include_big_deletions = eval
             .builtin_var_value_by_name("auto-save-include-big-deletions")
             .is_some_and(|value| value.is_truthy());
-        if let Some(id) = caller
-            && id != buf_id
-        {
-            eval.set_current_buffer_unrecorded(id)?;
-        }
         let shrunk = !include_big_deletions
             && saved_size.is_some_and(|saved| saved > 5000)
             && saved_size.is_some_and(|saved| (content_len as i128) * 4 < (saved as i128) * 3)
@@ -7907,6 +7904,9 @@ pub fn builtin_do_auto_save(
                 buf.set_buffer_local("buffer-saved-size", Value::fixnum(saved_size));
             }
         }
+        // GNU restores `old` after the attempt (`fileio.c:6482`), including
+        // an attempt whose error was reported. The shrink arm never gets
+        // here.
         if let Some(old_buffer) = old_buffer {
             eval.restore_current_buffer_if_live(old_buffer);
         }

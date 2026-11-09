@@ -265,3 +265,65 @@ fn do_auto_save_buffer_local_include_big_deletions_does_not_disable() {
         expect_test::expect![[r#""Auto-saving...\nAuto-saving...done\nVALUE OK 100""#]],
     );
 }
+
+#[test]
+fn do_auto_save_shrink_leaves_that_buffer_current() {
+    // GNU `fileio.c:6333` records `old` before the hook. `set_buffer_internal`
+    // (`:6453`) stays in effect through the shrink arm, and that arm
+    // `continue`s without restoring `old` (`:6464-6474`). There is no
+    // `record_unwind_current_buffer`. Pinned GNU 31.1 returns `(t -1)` and
+    // prints only the shrink line.
+    let form = r##"(let ((other (generate-new-buffer "as-other"))
+      (buf (generate-new-buffer "f.txt")))
+  (with-current-buffer buf
+    (setq buffer-file-name (expand-file-name "f.txt" temporary-file-directory))
+    (insert (make-string 1000 ?x))
+    (setq buffer-saved-size 6000)
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#f.txt#" temporary-file-directory)))
+  (set-buffer other)
+  (do-auto-save)
+  (list (equal (buffer-name) "f.txt")
+        (with-current-buffer "f.txt" buffer-saved-size)))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        form,
+        expect_test::expect![[
+            r#""Buffer f.txt has shrunk a lot; auto save disabled in that buffer until next real save\nVALUE OK (t -1)""#
+        ]],
+    );
+}
+
+#[test]
+fn do_auto_save_later_save_restores_the_entry_buffer() {
+    // A later buffer that actually saves restores `old` (`fileio.c:6482`).
+    // Shrink is created first, so both engines walk it before the save:
+    // GNU appends to `Vbuffer_alist` and `set-buffer` does not reorder it,
+    // and Neomacs `set-buffer` is unrecorded. Pinned GNU 31.1 returns
+    // `(t -1 2)` after the shrink line and the two progress lines.
+    let form = r##"(let ((old (generate-new-buffer "as-old"))
+      (shrink (generate-new-buffer "as-shrink-first"))
+      (save (generate-new-buffer "as-save-later")))
+  (with-current-buffer shrink
+    (insert (make-string 1000 ?x))
+    (setq buffer-file-name (expand-file-name "as-shrink-first.txt" temporary-file-directory))
+    (setq buffer-saved-size 6000)
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#as-shrink-first#" temporary-file-directory)))
+  (with-current-buffer save
+    (insert "xy")
+    (setq buffer-file-name (expand-file-name "as-save-later.txt" temporary-file-directory))
+    (setq buffer-saved-size 2)
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#as-save-later#" temporary-file-directory)))
+  (set-buffer old)
+  (do-auto-save)
+  (list (equal (buffer-name) "as-old")
+        (with-current-buffer "as-shrink-first" buffer-saved-size)
+        (with-current-buffer "as-save-later" buffer-saved-size)))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        form,
+        expect_test::expect![[
+            r#""Buffer as-shrink-first has shrunk a lot; auto save disabled in that buffer until next real save\nAuto-saving...\nAuto-saving...done\nVALUE OK (t -1 2)""#
+        ]],
+    );
+}
