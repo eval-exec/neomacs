@@ -2616,38 +2616,38 @@ pub(crate) struct DfaStats {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DfaStats {
     /// Searches that used a lease.
-    pub searches: u64,
+    pub(crate) searches: u64,
     /// Searches of a pattern that reads syntax under a lookup where
     /// `syntax-table` properties may apply (the DFA splits its scan at
     /// property runs).
-    pub positional: u64,
+    pub(crate) positional: u64,
     /// Searches whose lazy `syntax-propertize` frontier lies within the
     /// positions they can read (candidates reaching it go to the matcher).
-    pub frontier: u64,
+    pub(crate) frontier: u64,
     /// Searches in an adaptive-bypass holiday.
-    pub holiday_off: u64,
-    pub builds: u64,
+    pub(crate) holiday_off: u64,
+    pub(crate) builds: u64,
     pub(crate) ineligible: u64,
     pub(crate) gave_up: u64,
-    pub yes: u64,
-    pub no: u64,
+    pub(crate) yes: u64,
+    pub(crate) no: u64,
     pub(crate) unknown: u64,
     /// Rejections the fail-stack bound refused to act on.
-    pub overflow_guarded: u64,
+    pub(crate) overflow_guarded: u64,
     /// Candidates skipped: matcher entries saved.
-    pub skipped: u64,
-    pub context_resets: u64,
+    pub(crate) skipped: u64,
+    pub(crate) context_resets: u64,
     pub(crate) states: u64,
     pub(crate) clears: u64,
     pub(crate) slow_transitions: u64,
     pub(crate) bytes: u64,
-    pub positional_chars: u64,
-    pub plain_runs: u64,
-    pub frontier_unknown: u64,
+    pub(crate) positional_chars: u64,
+    pub(crate) plain_runs: u64,
+    pub(crate) frontier_unknown: u64,
     /// Verify mode: a rejection the matcher contradicted (a missed match).
-    pub verify_bad_no: u64,
+    pub(crate) verify_bad_no: u64,
     /// Verify mode: an acceptance the matcher contradicted.
-    pub verify_bad_yes: u64,
+    pub(crate) verify_bad_yes: u64,
 }
 
 thread_local! {
@@ -3361,3 +3361,68 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
 #[cfg(test)]
 #[path = "tests/dfa_test.rs"]
 mod tests;
+
+/// VIS read rows (lead #1052): copy getters for the DFA counters.
+#[cfg(any(test, feature = "test-support"))]
+impl DfaStats {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn searches(&self) -> u64 {
+        self.searches
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn positional(&self) -> u64 {
+        self.positional
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn frontier(&self) -> u64 {
+        self.frontier
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn holiday_off(&self) -> u64 {
+        self.holiday_off
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn builds(&self) -> u64 {
+        self.builds
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn yes(&self) -> u64 {
+        self.yes
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn no(&self) -> u64 {
+        self.no
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn overflow_guarded(&self) -> u64 {
+        self.overflow_guarded
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn skipped(&self) -> u64 {
+        self.skipped
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn context_resets(&self) -> u64 {
+        self.context_resets
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn positional_chars(&self) -> u64 {
+        self.positional_chars
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn plain_runs(&self) -> u64 {
+        self.plain_runs
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn frontier_unknown(&self) -> u64 {
+        self.frontier_unknown
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn verify_bad_no(&self) -> u64 {
+        self.verify_bad_no
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn verify_bad_yes(&self) -> u64 {
+        self.verify_bad_yes
+    }
+}

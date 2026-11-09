@@ -497,8 +497,8 @@ fn cold_successful_searches_take_no_dfa_lease() {
     assert!(!compiled.dfa.initialized());
     assert!(matches!(*compiled.dfa.slot(), DfaSlot::Cold { failed: 0 }));
     let stats = dfa_stats();
-    assert_eq!(stats.searches, 0, "{stats:?}");
-    assert_eq!(stats.builds, 0, "{stats:?}");
+    assert_eq!(stats.searches(), 0, "{stats:?}");
+    assert_eq!(stats.builds(), 0, "{stats:?}");
 }
 
 /// The threshold failure publishes the slot and leases it for the remaining
@@ -521,7 +521,7 @@ fn cold_failure_threshold_filters_the_rest_of_the_same_search() {
             }
             assert!(!compiled.dfa.initialized());
             assert!(matches!(*compiled.dfa.slot(), DfaSlot::Cold { failed: 0 }));
-            assert_eq!(dfa_stats().searches, 0);
+            assert_eq!(dfa_stats().searches(), 0);
             let before = matcher_entry_count();
             assert_eq!(
                 search(&compiled, &dense, 0, dense.len() as isize, &syntax, 0),
@@ -533,9 +533,9 @@ fn cold_failure_threshold_filters_the_rest_of_the_same_search() {
     assert!(compiled.dfa.initialized());
     assert!(matches!(*compiled.dfa.slot(), DfaSlot::Live(_)));
     let stats = dfa_stats();
-    assert_eq!(stats.builds, 1, "{stats:?}");
-    assert_eq!(stats.searches, 1, "{stats:?}");
-    assert!(stats.skipped > 100, "{stats:?}");
+    assert_eq!(stats.builds(), 1, "{stats:?}");
+    assert_eq!(stats.searches(), 1, "{stats:?}");
+    assert!(stats.skipped() > 100, "{stats:?}");
 }
 
 /// Off: the slot is never touched.  On: after 16 failed entries the DFA is
@@ -593,8 +593,8 @@ fn searches_skip_rejected_candidates_once_the_dfa_is_built() {
     let entries = matcher_entry_count() - entries_before;
     assert!(matches!(*compiled.dfa.slot(), DfaSlot::Live(_)));
     let stats = dfa_stats();
-    assert_eq!(stats.builds, 1);
-    assert!(stats.skipped > 100, "{stats:?}");
+    assert_eq!(stats.builds(), 1);
+    assert!(stats.skipped() > 100, "{stats:?}");
     assert!(entries < 3 * reference.len() as u64 * 4, "{entries}");
 }
 
@@ -646,10 +646,10 @@ fn verify_mode_finds_no_mismatch_on_random_searches() {
     }
     let stats = dfa_stats();
     tracing::info!(?stats, "verify-mode soak");
-    assert_eq!(stats.verify_bad_no, 0, "{stats:?}");
-    assert_eq!(stats.verify_bad_yes, 0, "{stats:?}");
+    assert_eq!(stats.verify_bad_no(), 0, "{stats:?}");
+    assert_eq!(stats.verify_bad_yes(), 0, "{stats:?}");
     assert!(
-        stats.builds > 100 && stats.no > 1_000 && stats.skipped > 1_000,
+        stats.builds() > 100 && stats.no() > 1_000 && stats.skipped() > 1_000,
         "{stats:?}"
     );
 }
@@ -851,10 +851,10 @@ fn searches_inside_property_runs_equal_the_matcher_alone() {
     }
     let stats = dfa_stats();
     tracing::info!(?stats, "property-run soak");
-    assert_eq!(stats.verify_bad_no, 0, "{stats:?}");
-    assert_eq!(stats.verify_bad_yes, 0, "{stats:?}");
+    assert_eq!(stats.verify_bad_no(), 0, "{stats:?}");
+    assert_eq!(stats.verify_bad_yes(), 0, "{stats:?}");
     assert!(
-        stats.positional > 1_000 && stats.skipped > 1_000 && stats.positional_chars > 1_000,
+        stats.positional() > 1_000 && stats.skipped() > 1_000 && stats.positional_chars() > 1_000,
         "{stats:?}"
     );
 }
@@ -914,10 +914,14 @@ fn the_frontier_records_what_the_matcher_alone_records() {
     tracing::info!(?stats, crossed_cases, "frontier soak");
     assert!(crossed_cases > 100, "{crossed_cases}");
     assert!(
-        stats.frontier > 100 && stats.frontier_unknown > 100 && stats.skipped > 1_000,
+        stats.frontier() > 100 && stats.frontier_unknown() > 100 && stats.skipped() > 1_000,
         "{stats:?}"
     );
-    assert_eq!(stats.verify_bad_no + stats.verify_bad_yes, 0, "{stats:?}");
+    assert_eq!(
+        stats.verify_bad_no() + stats.verify_bad_yes(),
+        0,
+        "{stats:?}"
+    );
 }
 
 /// A candidate at or past the frontier is left undecided before any syntax
@@ -1013,9 +1017,9 @@ fn inline_first_step_rejects_and_success_fallback_agree_with_verify() {
                 expected.0
             );
         });
-        assert_eq!(dfa_stats().skipped, 1);
-        assert_eq!(dfa_stats().no, 1);
-        assert_eq!(dfa_stats().yes, 1);
+        assert_eq!(dfa_stats().skipped(), 1);
+        assert_eq!(dfa_stats().no(), 1);
+        assert_eq!(dfa_stats().yes(), 1);
         // Exercise the actual re_search macro, then the verify-only path.
         reset_dfa_stats();
         let entries = matcher_entry_count();
@@ -1024,7 +1028,7 @@ fn inline_first_step_rejects_and_success_fallback_agree_with_verify() {
         });
         assert_eq!(on, expected);
         assert_eq!(matcher_entry_count() - entries, 1);
-        assert_eq!(dfa_stats().skipped, 1);
+        assert_eq!(dfa_stats().skipped(), 1);
         let entries = matcher_entry_count();
         let verified = with_dfa_mode(DfaMode::Verify, || {
             let lease = DfaLease::acquire(&compiled, &syntax, text.len()).unwrap();
@@ -1035,7 +1039,11 @@ fn inline_first_step_rejects_and_success_fallback_agree_with_verify() {
         assert_eq!(verified, expected);
         assert_eq!(matcher_entry_count() - entries, 2);
         let stats = dfa_stats();
-        assert_eq!(stats.verify_bad_no + stats.verify_bad_yes, 0, "{stats:?}");
+        assert_eq!(
+            stats.verify_bad_no() + stats.verify_bad_yes(),
+            0,
+            "{stats:?}"
+        );
     });
 }
 
@@ -1350,7 +1358,7 @@ fn a_rejection_that_could_overflow_runs_the_matcher() {
         assert_eq!(found, None);
         assert!(overflow, "GNU's fail-stack overflow");
     });
-    assert!(dfa_stats().overflow_guarded >= 1);
+    assert!(dfa_stats().overflow_guarded() >= 1);
 }
 
 /// A pattern whose candidates mostly match goes on holiday.
@@ -1420,7 +1428,7 @@ fn mostly_matching_candidates_send_the_pattern_on_holiday() {
             }
         }
     });
-    assert!(dfa_stats().holiday_off > 0, "{:?}", dfa_stats());
+    assert!(dfa_stats().holiday_off() > 0, "{:?}", dfa_stats());
 }
 
 /// A pending quit leaves the candidate to the matcher, which quits.
@@ -1564,8 +1572,8 @@ fn lisp_searches_follow_syntax_table_changes_with_the_filter_on() {
     assert_eq!(on, off);
     assert_eq!(verify, off);
     let stats = dfa_stats();
-    assert!(stats.builds > 0 && stats.skipped > 0, "{stats:?}");
-    assert!(stats.context_resets > 0, "{stats:?}");
+    assert!(stats.builds() > 0 && stats.skipped() > 0, "{stats:?}");
+    assert!(stats.context_resets() > 0, "{stats:?}");
 }
 
 /// Lisp-level searches in a buffer and over a string whose `syntax-table`
@@ -1633,13 +1641,17 @@ fn lisp_searches_over_syntax_table_properties_with_the_filter_on() {
     assert_eq!(on, off);
     assert_eq!(verify, off);
     assert!(
-        stats.positional > 0
-            && stats.skipped > 0
-            && stats.positional_chars > 0
-            && stats.plain_runs > 0,
+        stats.positional() > 0
+            && stats.skipped() > 0
+            && stats.positional_chars() > 0
+            && stats.plain_runs() > 0,
         "{stats:?}"
     );
-    assert_eq!(stats.verify_bad_no + stats.verify_bad_yes, 0, "{stats:?}");
+    assert_eq!(
+        stats.verify_bad_no() + stats.verify_bad_yes(),
+        0,
+        "{stats:?}"
+    );
 }
 
 /// The sparse scan still runs its classic EOF attempt, but repeated
@@ -1676,8 +1688,8 @@ fn cold_successful_passes_with_eof_failures_never_build() {
     assert!(!compiled.dfa.initialized());
     assert!(matches!(*compiled.dfa.slot(), DfaSlot::Cold { failed: 0 }));
     let stats = dfa_stats();
-    assert_eq!(stats.searches, 0, "{stats:?}");
-    assert_eq!(stats.builds, 0, "{stats:?}");
+    assert_eq!(stats.searches(), 0, "{stats:?}");
+    assert_eq!(stats.builds(), 0, "{stats:?}");
 }
 
 /// The board's backquoted `(defun . ,f)` is a real isolated miss before
@@ -1736,11 +1748,14 @@ fn cold_isolated_literal_failures_never_build() {
         assert!(!compiled.dfa.initialized());
         assert!(matches!(*compiled.dfa.slot(), DfaSlot::Cold { failed: 0 }));
         let stats = dfa_stats();
-        assert_eq!(stats.searches, 0, "{stats:?}");
-        assert_eq!(stats.builds, 0, "{stats:?}");
+        assert_eq!(stats.searches(), 0, "{stats:?}");
+        assert_eq!(stats.builds(), 0, "{stats:?}");
         let verify = with_cold_path(true, || with_dfa_mode(DfaMode::Verify, pass));
         assert_eq!(verify, expected);
-        assert_eq!(dfa_stats().verify_bad_no + dfa_stats().verify_bad_yes, 0);
+        assert_eq!(
+            dfa_stats().verify_bad_no() + dfa_stats().verify_bad_yes(),
+            0
+        );
     }
 }
 
@@ -1916,7 +1931,11 @@ fn inline_cached_prefix_keeps_consumed_accounting_and_captures() {
         assert_eq!(verified, expected);
         assert_eq!(matcher_entry_count() - entries, 4);
         let stats = dfa_stats();
-        assert_eq!(stats.verify_bad_no + stats.verify_bad_yes, 0, "{stats:?}");
+        assert_eq!(
+            stats.verify_bad_no() + stats.verify_bad_yes(),
+            0,
+            "{stats:?}"
+        );
     });
 }
 
@@ -1957,7 +1976,7 @@ fn cold_isolated_whole_search_failures_admit_at_threshold() {
                         DfaSlot::Cold { failed } if failed == failed_searches
                     ));
                 }
-                assert_eq!(dfa_stats().searches, 0);
+                assert_eq!(dfa_stats().searches(), 0);
                 let before = matcher_entry_count();
                 assert_eq!(
                     search(&compiled, b"z", start, range, &syntax, start),
@@ -1966,8 +1985,8 @@ fn cold_isolated_whole_search_failures_admit_at_threshold() {
                 assert_eq!(matcher_entry_count() - before, classic_entries);
                 assert!(compiled.dfa.initialized());
                 assert!(matches!(*compiled.dfa.slot(), DfaSlot::Live(_)));
-                assert_eq!(dfa_stats().builds, 1);
-                assert_eq!(dfa_stats().searches, 1);
+                assert_eq!(dfa_stats().builds(), 1);
+                assert_eq!(dfa_stats().searches(), 1);
 
                 // The completed threshold search ran only classic; the next
                 // search uses its published DFA and skips the same failure.
@@ -1977,7 +1996,7 @@ fn cold_isolated_whole_search_failures_admit_at_threshold() {
                     expected
                 );
                 assert_eq!(matcher_entry_count() - before, 0);
-                assert!(dfa_stats().skipped > 0);
+                assert!(dfa_stats().skipped() > 0);
             });
             let match_start = if range < 0 { 2 } else { 0 };
             let match_range = if range < 0 { -2 } else { 2 };
@@ -2013,7 +2032,10 @@ fn cold_isolated_whole_search_failures_admit_at_threshold() {
                 expected
             );
             assert_eq!(matcher_entry_count() - before, classic_entries);
-            assert_eq!(dfa_stats().verify_bad_no + dfa_stats().verify_bad_yes, 0);
+            assert_eq!(
+                dfa_stats().verify_bad_no() + dfa_stats().verify_bad_yes(),
+                0
+            );
         });
     }
 

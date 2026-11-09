@@ -348,8 +348,8 @@ fn compare_existence_dfa(
     let (verified, verified_overflow) = observe(DfaMode::Verify);
     let after = regex_emacs::dfa::dfa_stats();
     let (filtered, filtered_overflow) = observe(DfaMode::On);
-    let contradicted =
-        after.verify_bad_no + after.verify_bad_yes > before.verify_bad_no + before.verify_bad_yes;
+    let contradicted = after.verify_bad_no() + after.verify_bad_yes()
+        > before.verify_bad_no() + before.verify_bad_yes();
     // Fold the overflow flag and the verify verdicts into the compared
     // value: any difference is a divergence.
     let mark = |found: MatchResult, overflow: bool, contradicted: bool| {
