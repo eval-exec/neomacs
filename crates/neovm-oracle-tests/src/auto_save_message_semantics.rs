@@ -10,6 +10,8 @@
 //! flag, and the `...done` line is then absent. Batch `message1` writes these
 //! lines to stderr (`xdisp.c:12591`).
 
+#[cfg(test)]
+use crate::common::assert_oracle_batch_exit_and_stderr_expect;
 use crate::common::{
     assert_oracle_batch_stderr_and_value_expect, assert_oracle_batch_stderr_parity_expect,
     assert_oracle_batch_stdout_has_no_bel,
@@ -325,5 +327,413 @@ fn do_auto_save_later_save_restores_the_entry_buffer() {
         expect_test::expect![[
             r#""Buffer as-shrink-first has shrunk a lot; auto save disabled in that buffer until next real save\nAuto-saving...\nAuto-saving...done\nVALUE OK (t -1 2)""#
         ]],
+    );
+}
+
+#[test]
+fn do_auto_save_bell_error_leaves_the_saved_buffer_current() {
+    // GNU `internal_condition_case` (`fileio.c:6478`) runs `auto_save_error`.
+    // A signal from that handler (`ring_bell` at `terminal.c:73`, or
+    // `display-warning`) leaves `Fdo_auto_save` before `:6479-6482`, so GNU
+    // does not mark the buffer auto-saved, does not update `save_length`,
+    // and does not `set_buffer_internal (old)`. The caller's `condition-case`
+    // therefore sees the saved buffer still current. `ring_bell` clears
+    // `ring-bell-function` with no specbind, so a signaling function stays
+    // nil (`terminal.c:70-73`).
+    let form = r#"(let* ((dir (make-temp-file "asprobe" t))
+       (f (expand-file-name "f.txt" dir))
+       (b (find-file-noselect f)))
+  (with-current-buffer b
+    (insert "x")
+    (setq buffer-auto-save-file-name "/nonexistent-neomacs-probe-dir/x/#f.txt#"))
+  (setq ring-bell-function (lambda () (error "bell-boom")))
+  (with-current-buffer (get-buffer-create "other")
+    (message "before=%s" (buffer-name))
+    (message "caught=%S" (condition-case e (do-auto-save t) (error e)))
+    (message "after=%s" (buffer-name))
+    (message "rbf=%S" ring-bell-function)
+    (message "saved-size=%S autosaved=%S" (buffer-local-value 'buffer-saved-size b)
+             (with-current-buffer b (recent-auto-save-p))))
+  (delete-directory dir t))"#;
+    assert_oracle_batch_stderr_and_value_expect(
+        form,
+        expect_test::expect![[
+            r#""before=other\ncaught=(error \"bell-boom\")\nafter=f.txt\nrbf=nil\nsaved-size=0 autosaved=nil\nError (auto-save): Auto-saving f.txt: Opening output file: No such file or directory, /nonexistent-neomacs-probe-dir/x/#f.txt#\nVALUE OK nil""#
+        ]],
+    );
+}
+
+/// GNU `Fkill_emacs` runs `kill-emacs-hook` before `shut_down_emacs`, which
+/// permanently sets `Vrun_hooks = Qnil` before `Fdo_auto_save (Qt, Qnil)`
+/// (`src/emacs.c:3010-3028,3107-3110,3157`). The final auto-save must include
+/// edits made by the kill hook without calling `auto-save-hook` again.
+///
+/// This probe exits the editor deliberately, so it must bypass the usual
+/// evaluation/result normalizer and compare the real filesystem artifacts.
+#[test]
+fn shutdown_auto_save_writes_without_running_auto_save_hook() {
+    let form = r##"(progn
+  (setq auto-save-list-file-name nil)
+  (with-current-buffer (generate-new-buffer "shutdown-save")
+    (insert "before\n")
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#shutdown-save#"
+                            (getenv "NEOVM_ORACLE_TEST_TMPDIR"))))
+  (setq kill-emacs-hook
+        (list (lambda ()
+                (with-current-buffer "shutdown-save"
+                  (goto-char (point-max))
+                  (insert "from-kill-hook\n"))
+                (write-region "kill\n" nil
+                              (expand-file-name "kill-hook.marker"
+                                                (getenv "NEOVM_ORACLE_TEST_TMPDIR"))
+                              t 'silent))))
+  (setq auto-save-hook
+        (list (lambda ()
+                (write-region "auto-save\n" nil
+                              (expand-file-name "auto-save-hook.marker"
+                                                (getenv "NEOVM_ORACLE_TEST_TMPDIR"))
+                              t 'silent))))
+  (kill-emacs 0))"##;
+    assert_shutdown_probe_artifacts(
+        form,
+        &[
+            ("#shutdown-save#", Some(b"before\nfrom-kill-hook\n")),
+            ("kill-hook.marker", Some(b"kill\n")),
+            ("auto-save-hook.marker", None),
+        ],
+    );
+}
+
+// Same file-artifact probe for exit-time and explicit auto-save. The probe's
+// directory comes from the canonical child environment, rather than the host.
+#[cfg(test)]
+fn shutdown_auto_save_file_probe(explicit: bool) -> String {
+    let save = if explicit { "(do-auto-save t)" } else { "" };
+    format!(
+        r##"(progn
+  (setq auto-save-list-file-name nil)
+  (setq hookfile (expand-file-name "hook.log" (getenv "NEOVM_ORACLE_TEST_TMPDIR")))
+  (add-hook 'auto-save-hook (lambda () (write-region "HOOK\n" nil hookfile t)))
+  (with-current-buffer (get-buffer-create "x")
+    (setq buffer-file-name (expand-file-name "x.txt" (getenv "NEOVM_ORACLE_TEST_TMPDIR")))
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#x.txt#" (getenv "NEOVM_ORACLE_TEST_TMPDIR")))
+    (insert "data data data")
+    (set-buffer-modified-p t))
+  {save}
+  (kill-emacs 0))"##,
+    )
+}
+
+#[test]
+fn kill_emacs_auto_save_has_no_hook_artifact() {
+    assert_shutdown_probe_artifacts(
+        &shutdown_auto_save_file_probe(false),
+        &[("#x.txt#", Some(b"data data data")), ("hook.log", None)],
+    );
+}
+
+#[test]
+fn explicit_auto_save_runs_hook_once_before_kill_emacs() {
+    assert_shutdown_probe_artifacts(
+        &shutdown_auto_save_file_probe(true),
+        &[
+            ("#x.txt#", Some(b"data data data")),
+            ("hook.log", Some(b"HOOK\n")),
+        ],
+    );
+}
+
+#[test]
+fn dying_lisp_walker_returns_while_display_warning_runs() {
+    // GNU 31.1 runs Lisp from auto_save_error -> display-warning while
+    // Vrun_hooks is nil. run-hooks returns nil and does not run the hook
+    // function. run-hook-with-args-until-failure returns t (eval.c:2966).
+    // fileio.c:6370 is the other direct Vrun_hooks check in that save.
+    let form = r#"(progn
+  (setenv "ASPROBE" (getenv "NEOVM_ORACLE_TEST_TMPDIR"))
+  (setq logf (expand-file-name "log.txt" (getenv "ASPROBE")))
+  (defun probe-log (s) (write-region (concat s "\n") nil logf t))
+  (setq probe-hook (list (lambda () (probe-log "HOOK-RAN"))))
+  (fset 'display-warning
+        (lambda (&rest args)
+          (probe-log (format "DISPLAY-WARNING %S" (car args)))
+          (probe-log (format "run-hooks-> %S" (run-hooks 'probe-hook)))
+          (probe-log (format "until-failure-> %S"
+                             (run-hook-with-args-until-failure 'probe-hook)))))
+  (with-current-buffer (get-buffer-create "x")
+    (setq buffer-file-name (expand-file-name "x.txt" (getenv "ASPROBE")))
+    (setq buffer-auto-save-file-name "/nonexistent-neomacs-probe-dir/q/#x.txt#")
+    (insert "data") (set-buffer-modified-p t))
+  (kill-emacs 0))"#;
+    assert_shutdown_probe_artifacts(
+        form,
+        &[(
+            "log.txt",
+            Some(b"DISPLAY-WARNING auto-save\nrun-hooks-> nil\nuntil-failure-> t\n"),
+        )],
+    );
+}
+
+#[cfg(test)]
+fn assert_shutdown_probe_artifacts(form: &str, expected: &[(&str, Option<&[u8]>)]) {
+    assert_shutdown_probe_exit_artifacts(form, 0, expected);
+}
+
+#[cfg(test)]
+fn assert_shutdown_probe_exit_artifacts(
+    form: &str,
+    expected_exit_code: i32,
+    expected: &[(&str, Option<&[u8]>)],
+) {
+    use crate::common::oracle_sandbox::{OracleSandbox, project_root};
+    use neomacs_melpa_test_support::output_with_timeout_pinned;
+    use std::path::{Path, PathBuf};
+    use std::process::Stdio;
+    use std::time::Duration;
+
+    let load_root = project_root().join("lisp");
+    let observe = |engine: &str, binary: &Path| {
+        let sandbox = OracleSandbox::new(form, &[], &load_root)
+            .expect("create shutdown oracle sandbox")
+            .with_case_working_directory_and_tmpdir();
+        let mut command = sandbox.pinned_command(binary);
+        sandbox.configure(&mut command);
+        let directory = command
+            .get_current_dir()
+            .expect("shutdown case working directory")
+            .to_path_buf();
+        command
+            .args(["--batch", "-Q", "--eval", form])
+            .stdin(Stdio::null())
+            .env("EMACSNATIVELOADPATH", "/dev/null");
+        // Drain both pipes concurrently; kill and reap a timed-out editor.
+        let output = output_with_timeout_pinned(&mut command, Duration::from_secs(30))
+            .unwrap_or_else(|error| panic!("{engine}: shutdown child failed: {error:?}"));
+        assert_eq!(
+            output.status.code(),
+            Some(expected_exit_code),
+            "{engine}: kill-emacs must preserve the requested exit code\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        let mut artifacts = Vec::with_capacity(expected.len());
+        for (name, expected_bytes) in expected {
+            let bytes = match std::fs::read(directory.join(name)) {
+                Ok(bytes) => Some(bytes),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => panic!("{engine}: cannot read {name}: {error}"),
+            };
+            assert_eq!(
+                bytes.as_deref(),
+                *expected_bytes,
+                "{engine}: wrong shutdown artifact {name}\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            artifacts.push(bytes);
+        }
+        artifacts
+    };
+
+    // Always run the live, attested GNU reference first. Exit artifacts are
+    // not representable by the usual evaluation/value snapshot.
+    let gnu = crate::common::oracle_emacs_path();
+    let neomacs = PathBuf::from(crate::common::neomacs_binary_path());
+    let reference = observe("GNU", &gnu);
+    let ours = observe("Neomacs", &neomacs);
+    assert_eq!(
+        ours, reference,
+        "shutdown filesystem artifacts must match GNU"
+    );
+}
+
+#[test]
+fn kill_emacs_retries_after_an_exit_auto_save_signal() {
+    // GNU `Fkill_emacs` (`emacs.c:3015-3028`) runs the hook, then
+    // `shut_down_emacs` nils `Vrun_hooks`, sets `Vinhibit_redisplay`
+    // (`:3107-3110`), and calls `Fdo_auto_save (Qt, Qnil)` (`:3157`).
+    // A signal from `ring_bell` (`fileio.c:6239`) leaves before `exit`.
+    // Those two assignments are not specbound, so the retry exits 3 and
+    // does not run hook bodies (`eval.c:3006-3007`). Pinned GNU 31.1:
+    // the marker prints once, `probe` and `until` are nil, `inhibit` is t.
+    let form = r#"(let* ((dir (make-temp-file "asprobe" t))
+       (f (expand-file-name "f.txt" dir))
+       (b (find-file-noselect f))
+       (n 0))
+  (with-current-buffer b
+    (insert "x")
+    (setq buffer-auto-save-file-name "/nonexistent-neomacs-probe-dir/x/#f.txt#"))
+  (setq ring-bell-function (lambda () (error "bell-boom")))
+  (add-hook 'kill-emacs-hook (lambda () (setq n (1+ n)) (message "KILL-EMACS-HOOK-RAN")))
+  (setq probe-hook (lambda () (message "PROBE-HOOK-RAN")))
+  (message "first=%S" (condition-case e (kill-emacs 0) (error e)))
+  (message "after=%s" (buffer-name))
+  (message "rbf=%S" ring-bell-function)
+  (message "kill-probe=%S" (run-hooks 'kill-emacs-hook))
+  (message "hooks=%S" n)
+  (message "probe=%S" (run-hooks 'probe-hook))
+  (message "until=%S" (run-hook-with-args-until-success 'probe-hook))
+  (message "inhibit=%S" inhibit-redisplay)
+  (kill-emacs 3)
+  (message "NOT-REACHED"))"#;
+    assert_oracle_batch_exit_and_stderr_expect(
+        form,
+        expect_test::expect![[
+            r#""EXIT 3\nKILL-EMACS-HOOK-RAN\nfirst=(error \"bell-boom\")\nafter=f.txt\nrbf=nil\nkill-probe=nil\nhooks=1\nprobe=nil\nuntil=nil\ninhibit=t\nError (auto-save): Auto-saving f.txt: Opening output file: No such file or directory, /nonexistent-neomacs-probe-dir/x/#f.txt#""#
+        ]],
+    );
+}
+
+#[test]
+fn in_flight_hook_walk_resumes_after_caught_exit_auto_save_error() {
+    // GNU tests Vrun_hooks once at walker entry (eval.c:3004-3006).
+    // Catching ring_bell's exit-time signal returns into the entered walk:
+    // its remaining callback runs, but a newly entered hook is suppressed.
+    let form = r##"(progn
+(setq auto-save-list-file-name nil kill-emacs-hook nil neo-count 0)
+(with-current-buffer (get-buffer-create "in-flight-save")
+  (insert "payload")
+  (setq buffer-auto-save-file-name "/nonexistent-neomacs-probe-dir/inflight/#x#"))
+(setq ring-bell-function (lambda () (error "exit-save-failed")))
+(setq neo-probe-hook
+      (list (lambda () (condition-case e (kill-emacs 0)
+                         (error (message "CAUGHT=%S" e))))
+            (lambda () (setq neo-count (1+ neo-count)) (message "SECOND-RAN"))))
+(run-hooks 'neo-probe-hook)
+(message "COUNT=%S DYING-UNTIL-FAILURE=%S" neo-count
+         (run-hook-with-args-until-failure 'neo-probe-hook))
+(with-current-buffer "in-flight-save" (setq buffer-auto-save-file-name nil))
+(kill-emacs 0))"##;
+    assert_oracle_batch_exit_and_stderr_expect(
+        form,
+        expect_test::expect![[
+            r#""EXIT 0\nCAUGHT=(error \"exit-save-failed\")\nSECOND-RAN\nCOUNT=1 DYING-UNTIL-FAILURE=t""#
+        ]],
+    );
+}
+
+#[cfg(test)]
+fn shutdown_native_auto_save_probe(change: &str) -> String {
+    format!(
+        r##"(progn
+  (setq auto-save-list-file-name nil)
+  (with-current-buffer (get-buffer-create "native-save")
+    (insert "native payload\n")
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#native-save#" (getenv "NEOVM_ORACLE_TEST_TMPDIR"))))
+  {change}
+  (kill-emacs 0))"##,
+    )
+}
+
+#[test]
+fn shutdown_auto_save_ignores_lisp_function_redefinition() {
+    // `Fdo_auto_save (Qt, Qnil)` is a direct C call (emacs.c:3157).
+    // An explicit Lisp call must still see the replacement function.
+    let form = shutdown_native_auto_save_probe(
+        r#"(fset 'do-auto-save
+        (lambda (&rest _args)
+          (write-region "override\n" nil
+                        (expand-file-name "override.log"
+                                          (getenv "NEOVM_ORACLE_TEST_TMPDIR"))
+                        t 'silent)))
+  (do-auto-save t)"#,
+    );
+    assert_shutdown_probe_artifacts(
+        &form,
+        &[
+            ("#native-save#", Some(b"native payload\n")),
+            ("override.log", Some(b"override\n")),
+        ],
+    );
+}
+
+#[test]
+fn shutdown_auto_save_ignores_unbound_lisp_function() {
+    let form = shutdown_native_auto_save_probe(r#"(fmakunbound 'do-auto-save)"#);
+    assert_shutdown_probe_artifacts(
+        &form,
+        &[
+            ("#native-save#", Some(b"native payload\n")),
+            ("override.log", None),
+        ],
+    );
+}
+
+#[test]
+fn shutdown_auto_save_propagates_a_handler_throw() {
+    // A throw from auto_save_error leaves Fdo_auto_save and shut_down_emacs;
+    // it does not publish an exit request (fileio.c:6478, emacs.c:3157).
+    let form = r#"(progn
+  (setq auto-save-list-file-name nil neo-throw-kills 0)
+  (setq kill-emacs-hook
+        (list (lambda () (setq neo-throw-kills (1+ neo-throw-kills)))))
+  (with-current-buffer (get-buffer-create "throw-save")
+    (insert "payload")
+    (setq buffer-auto-save-file-name "/nonexistent-neomacs-probe-dir/throw/x"))
+  (setq ring-bell-function (lambda () (throw 'save-escape 'escaped)))
+  (message "THROW=%S" (catch 'save-escape (kill-emacs 0) 'not-thrown))
+  (message "HOOKS=%S DEAD=%S" neo-throw-kills
+           (run-hook-with-args-until-failure 'kill-emacs-hook))
+  (with-current-buffer "throw-save" (setq buffer-auto-save-file-name nil))
+  (kill-emacs 3))"#;
+    assert_oracle_batch_exit_and_stderr_expect(
+        form,
+        expect_test::expect![[r#""EXIT 3\nTHROW=escaped\nHOOKS=1 DEAD=t""#]],
+    );
+}
+
+#[test]
+fn shutdown_auto_save_preserves_a_nested_exit_code() {
+    // Peer GNU probe: the inner exit wins, hooks stay dead, and the failing
+    // buffer is retried, calling display-warning a second time.
+    let form = r##"(progn
+  (setenv "ASPROBE" (getenv "NEOVM_ORACLE_TEST_TMPDIR"))
+(setq logf (expand-file-name "log.txt" (getenv "ASPROBE")))
+(defun probe-log (s) (write-region (concat s "\n") nil logf t))
+(setq kh 0)
+(add-hook 'kill-emacs-hook (lambda () (setq kh (1+ kh)) (probe-log (format "KILL-EMACS-HOOK %d" kh))))
+(setq dw-calls 0)
+(fset 'display-warning
+      (lambda (&rest _args)
+        (setq dw-calls (1+ dw-calls))
+        (probe-log (format "DISPLAY-WARNING call %d" dw-calls))
+        (when (= dw-calls 1) (kill-emacs 7))))
+(with-current-buffer (get-buffer-create "x")
+  (setq buffer-file-name (expand-file-name "x.txt" (getenv "ASPROBE")))
+  (setq buffer-auto-save-file-name "/nonexistent-neomacs-probe-dir/q/#x.txt#")
+  (insert "data") (set-buffer-modified-p t))
+(kill-emacs 0)
+(probe-log "AFTER (never)"))"##;
+    assert_shutdown_probe_exit_artifacts(
+        form,
+        7,
+        &[(
+            "log.txt",
+            Some(b"KILL-EMACS-HOOK 1\nDISPLAY-WARNING call 1\nDISPLAY-WARNING call 2\n"),
+        )],
+    );
+}
+
+#[test]
+fn nested_kill_emacs_hook_reenters_with_the_inner_exit_code() {
+    // GNU Fkill_emacs runs the hook list again on nested entry, with no
+    // InProgress recursion guard (emacs.c:2954,3015-3028). The inner exit
+    // never returns to the outer hook walk, so the second hook runs once.
+    let form = r##"(progn
+  (setenv "ASPROBE" (getenv "NEOVM_ORACLE_TEST_TMPDIR"))
+(setq logf (expand-file-name "log.txt" (getenv "ASPROBE")))
+(defun probe-log (s) (write-region (concat s "\n") nil logf t))
+(setq n 0)
+(add-hook 'kill-emacs-hook (lambda () (setq n (1+ n)) (probe-log (format "HOOK %d" n)) (when (= n 1) (kill-emacs 5))))
+(add-hook 'kill-emacs-hook (lambda () (probe-log "SECOND-HOOK")) t)
+(kill-emacs 0)
+(probe-log "AFTER (never)"))"##;
+    assert_shutdown_probe_exit_artifacts(
+        form,
+        5,
+        &[("log.txt", Some(b"HOOK 1\nHOOK 2\nSECOND-HOOK\n"))],
     );
 }

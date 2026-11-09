@@ -260,6 +260,22 @@ impl Context {
         if let Some(published) = self.shutdown_request {
             return Err(Flow::shutdown(published));
         }
+        // GNU calls `Fdo_auto_save (Qt, Qnil)` directly after disabling
+        // hooks (`emacs.c:3107-3110`, `:3157`). Resolve the canonical subr,
+        // independently of a redefined or unbound Lisp function cell.
+        // A handler's nonlocal exit leaves before publishing this request,
+        // including a throw or a nested shutdown with its own exit code.
+        crate::emacs_core::builtins::dispatch_builtin_by_id(
+            self,
+            DO_AUTO_SAVE.id(),
+            vec![Value::T, Value::NIL],
+        )
+        .ok_or_else(|| {
+            signal(
+                LispCondition::VoidFunction,
+                vec![Value::symbol(&DO_AUTO_SAVE)],
+            )
+        })??;
         self.log_cconv_memo_report();
         self.log_tier_i_report();
         self.shutdown_request = Some(request);

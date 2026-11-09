@@ -27276,6 +27276,59 @@ fn command_loop_exit_classifies_thrown_value_by_type_like_gnu() {
     );
 }
 
+/// GNU enters `shut_down_emacs` after the kill hook, disables hooks at
+/// emacs.c:3107, and still writes auto-save files at :3157.
+#[test]
+fn kill_emacs_writes_auto_save_without_running_auto_save_hook() {
+    let dir = tempfile::tempdir().expect("shutdown auto-save directory");
+    let saved = dir.path().join("#shutdown-buffer#");
+    let mut eval = runtime_startup_context();
+    eval.set_variable(
+        "neo-shutdown-auto-save-file",
+        Value::string(saved.to_string_lossy().into_owned()),
+    );
+    let flow = eval
+        .eval_str(
+            r#"(progn
+                 (setq neo-shutdown-auto-save-hook-count 0
+                       neo-shutdown-kill-hook-count 0
+                       auto-save-list-file-name nil
+                       auto-save-hook
+                       (list (lambda ()
+                               (setq neo-shutdown-auto-save-hook-count
+                                     (1+ neo-shutdown-auto-save-hook-count))))
+                       kill-emacs-hook
+                       (list (lambda ()
+                               (setq neo-shutdown-kill-hook-count
+                                     (1+ neo-shutdown-kill-hook-count)))))
+                 (with-current-buffer (get-buffer-create "shutdown-auto-save")
+                   (insert "shutdown payload\n")
+                   (setq buffer-auto-save-file-name neo-shutdown-auto-save-file))
+                 (kill-emacs 0))"#,
+        )
+        .expect_err("kill-emacs must exit through shutdown control flow");
+    assert!(matches!(
+        flow,
+        neovm_value::error::EvalError::Shutdown(request) if request.exit_code == 0
+    ));
+    assert_eq!(
+        std::fs::read_to_string(saved).expect("shutdown must write the auto-save"),
+        "shutdown payload\n"
+    );
+    assert_eq!(
+        eval.obarray()
+            .symbol_value_copied("neo-shutdown-kill-hook-count"),
+        Some(Value::fixnum(1)),
+        "kill-emacs-hook runs exactly once before hook suppression"
+    );
+    assert_eq!(
+        eval.obarray()
+            .symbol_value_copied("neo-shutdown-auto-save-hook-count"),
+        Some(Value::fixnum(0)),
+        "shutdown auto-save writes the file with hooks disabled"
+    );
+}
+
 /// GNU's `Fkill_emacs` (`src/emacs.c:2954-3088`) is declared
 /// `attributes: noreturn` and its body ends in `exit (exit_code)`, with only
 /// `safe_run_hooks (Qkill_emacs_hook)` and `shut_down_emacs` in between.  It

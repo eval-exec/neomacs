@@ -7971,16 +7971,20 @@ pub fn builtin_do_auto_save(
             }
             other => other,
         };
-        if result.is_ok() {
-            let _ = eval.edit.buffers.set_buffer_auto_saved(buf_id);
-            if let Some(buf) = eval.edit.buffers.get_mut(buf_id) {
-                let saved_size = buf.total_char_len().get() as i64;
-                buf.set_buffer_local("buffer-saved-size", Value::fixnum(saved_size));
-            }
+        // GNU `internal_condition_case` (`fileio.c:6478`) returns only when
+        // `auto_save_1` or `auto_save_error` returns. A signal from the
+        // handler (`ring_bell`, `display-warning`) leaves `Fdo_auto_save`
+        // before the mark, the `save_length` store, and `set_buffer_internal
+        // (old)` (`:6479-6482`). The failure-time store at `:6488` is in
+        // that same tail.
+        result?;
+        let _ = eval.edit.buffers.set_buffer_auto_saved(buf_id);
+        if let Some(buf) = eval.edit.buffers.get_mut(buf_id) {
+            let saved_size = buf.total_char_len().get() as i64;
+            buf.set_buffer_local("buffer-saved-size", Value::fixnum(saved_size));
         }
-        // GNU restores `old` after the attempt (`fileio.c:6482`), including
-        // an attempt whose error was reported. The shrink arm never gets
-        // here.
+        // GNU restores `old` after a handler that returned (`fileio.c:6482`).
+        // The shrink arm never gets here.
         if let Some(old_buffer) = old_buffer {
             eval.restore_current_buffer_if_live(old_buffer);
         }
@@ -7995,7 +7999,6 @@ pub fn builtin_do_auto_save(
             }
         }
         auto_saved = true;
-        result?;
     }
 
     // GNU `Fdo_auto_save` ends with `record_auto_save`, regardless of whether

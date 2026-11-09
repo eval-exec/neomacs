@@ -1633,6 +1633,50 @@ pub(crate) fn assert_oracle_batch_stderr_and_value_expect(
     }
 }
 
+/// Batch exit status plus the product stderr, for a form that calls `kill-emacs`.
+///
+/// The payload is `EXIT <code>` and then the filtered stderr. A successful
+/// wrapper exit and any product diagnostics are checked against the oracle.
+#[cfg(test)]
+pub(crate) fn assert_oracle_batch_exit_and_stderr_expect(
+    form: &str,
+    expected: expect_test::Expect,
+) {
+    ensure_nonempty_form(form).expect("form should not be empty");
+    let eval_program = EvalProgram::Normalized;
+    let observe = |engine: OracleEngine| {
+        let sandbox = oracle_sandbox(form, &[], &project_lisp_dir());
+        let roots = sandbox.stderr_path_roots();
+        let output = spawn_batch_editor_any_status(&sandbox, eval_program, engine)
+            .expect("editor should run");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let code = output.status.code().unwrap_or(-1);
+        let stderr_text = product_batch_stderr(&stderr, &roots);
+        inline_debug_text(&format!("EXIT {code}\n{stderr_text}"))
+    };
+    match OracleMode::from_env() {
+        OracleMode::Snapshot => expected.assert_eq(&observe(OracleEngine::Neomacs)),
+        OracleMode::Verify => {
+            let oracle = observe(OracleEngine::Gnu);
+            expected.assert_eq(&oracle);
+            let neovm = observe(OracleEngine::Neomacs);
+            assert_eq!(
+                neovm, oracle,
+                "oracle exit/stderr mismatch for form: {form}"
+            );
+        }
+        OracleMode::Refresh => expected.assert_eq(&observe(OracleEngine::Gnu)),
+        OracleMode::Live => {
+            let oracle = observe(OracleEngine::Gnu);
+            let neovm = observe(OracleEngine::Neomacs);
+            assert_eq!(
+                neovm, oracle,
+                "oracle exit/stderr mismatch for form: {form}"
+            );
+        }
+    }
+}
+
 /// A write-error auto-save must not print BEL on batch stdout.
 ///
 /// GNU `auto_save_error` calls `ring_bell` directly (`fileio.c:6239`,
@@ -1692,6 +1736,46 @@ fn spawn_batch_editor(
     eval_program: EvalProgram,
     engine: OracleEngine,
 ) -> Result<std::process::Output, String> {
+    let mut cmd = batch_editor_command(sandbox, eval_program, engine);
+    let output = cmd
+        .output()
+        .map_err(|error| format!("failed to run batch editor: {error}"))?;
+    if output.status.success() {
+        Ok(output)
+    } else {
+        Err(format!(
+            "batch editor failed: status={}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        ))
+    }
+}
+
+/// Spawn a batch editor and keep a non-zero status.
+///
+/// `kill-emacs` with a fixnum argument calls `exit` with that status
+/// (`emacs.c:3082-3088`). The harness wrapper never prints its outcome marker.
+/// A timed-out editor is killed and reaped before returning an error.
+#[cfg(test)]
+fn spawn_batch_editor_any_status(
+    sandbox: &OracleSandbox,
+    eval_program: EvalProgram,
+    engine: OracleEngine,
+) -> Result<std::process::Output, String> {
+    let mut cmd = batch_editor_command(sandbox, eval_program, engine);
+    neomacs_melpa_test_support::output_with_timeout_pinned(
+        &mut cmd,
+        std::time::Duration::from_secs(30),
+    )
+    .map_err(|error| format!("failed to run batch editor: {error:?}"))
+}
+
+fn batch_editor_command(
+    sandbox: &OracleSandbox,
+    eval_program: EvalProgram,
+    engine: OracleEngine,
+) -> PinnedCommand {
     let (program, identity) = match engine {
         OracleEngine::Gnu => {
             let oracle = attested_oracle_emacs();
@@ -1720,20 +1804,7 @@ fn spawn_batch_editor(
         }
     }
     eval_program.configure_command(&mut cmd, identity);
-    cmd.output()
-        .map_err(|error| format!("failed to run batch editor: {error}"))
-        .and_then(|output| {
-            if output.status.success() {
-                Ok(output)
-            } else {
-                Err(format!(
-                    "batch editor failed: status={}\nstdout:\n{}\nstderr:\n{}",
-                    output.status,
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr),
-                ))
-            }
-        })
+    cmd
 }
 
 fn product_batch_stderr(stderr: &str, roots: &[String]) -> String {
