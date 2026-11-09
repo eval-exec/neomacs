@@ -1967,10 +1967,10 @@ pub(super) fn call_spec_finish(
         // handed to the interpreter (that resume continues THIS frame, so
         // its charge was still held). An interpreter RERUN below is a
         // fresh entry through `execute_from_stack_args`, which charges the
-        // frame itself. Zero means this call never charged (its budget
-        // check failed and the frame was rejected); a real restore value is
-        // always at least the smallest frame cost, so it is never zero.
-        if budget_restore != 0 {
+        // frame itself. `BC_STACK_POSITION_UNCHARGED` means this call never
+        // charged (its budget check failed and the frame was rejected); a
+        // real saved position can be 0 (the first frame of a chain).
+        if budget_restore != crate::emacs_core::bytecode::vm::BC_STACK_POSITION_UNCHARGED {
             crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx, budget_restore);
         }
         let outcome = match outcome {

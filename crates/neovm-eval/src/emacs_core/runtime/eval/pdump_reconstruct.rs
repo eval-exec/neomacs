@@ -308,7 +308,7 @@ impl Context {
             jit_root_stack_cap: 0,
             jit_stack_limit: 0,
             native_stack_probe: Default::default(),
-            bytecode_stack_remaining: crate::emacs_core::bytecode::vm::BC_STACK_INITIAL_REMAINING,
+            bytecode_stack_position: crate::emacs_core::bytecode::vm::BC_STACK_POSITION_INITIAL,
             jit_stack_scratch: [0; super::native_stack::JIT_STACK_SCRATCH_WORDS],
             bc_frames: Vec::new(),
             condition_stack: Vec::new(),

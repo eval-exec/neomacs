@@ -309,3 +309,111 @@ fn dynamic_l_file_deep_recursion_ends_in_a_clean_lisp_error() {
     );
     assert_eq!(line(&text, "after: "), "500", "{text}");
 }
+
+/// A boundary event followed by the T11 count.  If the event leaks any
+/// bytecode-stack position (its frames' charges never restored), the count
+/// stops below GNU's depth and the test fails; the exact GNU depth is the
+/// assertion.
+fn boundary_tier_form(event: &str) -> String {
+    format!(
+        "(progn
+           (defvar neovm--sg-reached 0)
+           (defun neovm--sg-deep (n)
+             (setq neovm--sg-reached n)
+             (if (= n 0) 0 (1+ (neovm--sg-deep (1- n)))))
+           (byte-compile 'neovm--sg-deep)
+           (dotimes (_ 40) (neovm--sg-deep 100))
+           {event}
+           (message \"overflow: %S\"
+                    (let ((max-lisp-eval-depth most-positive-fixnum))
+                      (condition-case err (neovm--sg-deep 100000000) (error err))))
+           (message \"reached: %d\" (- 100000000 neovm--sg-reached))
+           (message \"after: %S\" (neovm--sg-deep 500)))"
+    )
+}
+
+fn assert_gnu_depth_after(event: &str, label: &str) {
+    let Some(output) = run_unrandomized(&boundary_tier_form(event)) else {
+        return;
+    };
+    let text = messages(&output);
+    assert_eq!(
+        line(&text, "overflow: "),
+        "(error \"Bytecode stack overflow\")",
+        "{label}: {text}"
+    );
+    assert_eq!(line(&text, "after: "), "500", "{label}: {text}");
+    let reached: u64 = line(&text, "reached: ").parse().expect("a count");
+    assert_eq!(
+        reached, GNU_BYTECODE_STACK_DEPTH,
+        "{label}: the bytecode-stack position was not restored by the boundary: {text}"
+    );
+}
+
+/// A non-local exit (`throw`) unwinds through several bytecode frames; the
+/// catch must restore the frame position, so the following recursion still
+/// reaches GNU's exact depth.
+#[test]
+#[cfg(feature = "release-pdump-tests")]
+fn batch_bytecode_stack_position_restores_across_a_throw() {
+    let event = "(progn
+       (defun neovm--bb-throw (n)
+         (if (= n 0) (throw 'neovm--bb-out 7) (neovm--bb-throw (1- n))))
+       (byte-compile 'neovm--bb-throw)
+       (catch 'neovm--bb-out (neovm--bb-throw 300)))";
+    assert_gnu_depth_after(event, "throw across bytecode frames");
+}
+
+/// A builtin (mapcar) re-enters bytecode through a subr, and a forced GC
+/// runs a safepoint inside bytecode; both must leave the mirror exact.
+#[test]
+#[cfg(feature = "release-pdump-tests")]
+fn batch_bytecode_stack_position_survives_subr_reentry_and_gc() {
+    let event = "(progn
+       (defun neovm--bb-cb (x) (if (= x 0) 0 (1+ (neovm--bb-cb (1- x)))))
+       (byte-compile 'neovm--bb-cb)
+       (mapcar #'neovm--bb-cb '(100 200 300))
+       (let (garbage)
+         (dotimes (_ 2000)
+           (setq garbage (cons (make-list 8 0) garbage)))
+         (setq garbage nil)
+         (garbage-collect)))";
+    assert_gnu_depth_after(event, "subr reentry and GC");
+}
+
+/// A Lisp thread runs its own deep bytecode recursion to the budget's error
+/// and joins; the main thread's position must be untouched, and the thread's
+/// own error must be GNU's.
+#[test]
+#[cfg(feature = "release-pdump-tests")]
+fn batch_bytecode_stack_position_is_per_thread() {
+    let event = "(progn
+       (defun neovm--bb-tw (n) (if (= n 0) 0 (1+ (neovm--bb-tw (1- n)))))
+       (byte-compile 'neovm--bb-tw)
+       (message \"thread: %S\"
+                (thread-join
+                 (make-thread
+                  (lambda ()
+                    (let ((max-lisp-eval-depth most-positive-fixnum))
+                      (condition-case err (neovm--bb-tw 100000000) (error err))))))))";
+    let Some(output) = run_unrandomized(&boundary_tier_form(event)) else {
+        return;
+    };
+    let text = messages(&output);
+    assert_eq!(
+        line(&text, "thread: "),
+        "(error \"Bytecode stack overflow\")",
+        "the Lisp thread's own bytecode budget must signal GNU's error: {text}"
+    );
+    assert_eq!(
+        line(&text, "overflow: "),
+        "(error \"Bytecode stack overflow\")",
+        "{text}"
+    );
+    assert_eq!(line(&text, "after: "), "500", "{text}");
+    let reached: u64 = line(&text, "reached: ").parse().expect("a count");
+    assert_eq!(
+        reached, GNU_BYTECODE_STACK_DEPTH,
+        "the thread switch corrupted the main thread's bytecode-stack position: {text}"
+    );
+}

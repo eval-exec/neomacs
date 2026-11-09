@@ -44,7 +44,7 @@
 
 use super::jit_layout::{
     BYTECODE_MAX_STACK_OFFSET, BacktraceLayout, CONTEXT_ATTENTION_OFFSET,
-    CONTEXT_BYTECODE_STACK_REMAINING_OFFSET, CONTEXT_DEPTH_OFFSET, CONTEXT_MAX_DEPTH_OFFSET,
+    CONTEXT_BYTECODE_STACK_POSITION_OFFSET, CONTEXT_DEPTH_OFFSET, CONTEXT_MAX_DEPTH_OFFSET,
     CONTEXT_SPECPDL_OFFSET, DISPATCH_DEBUG_FWD_OFFSET, DISPATCH_FUNCTION_EPOCH_OFFSET,
     EntryTemplate, VecOffsets,
 };
@@ -57,7 +57,7 @@ use super::spec_slot::{
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
-use crate::emacs_core::bytecode::vm::BC_FRAME_HEADER_BYTES;
+use crate::emacs_core::bytecode::vm::{BC_FRAME_HEADER_BYTES, BC_STACK_POSITION_LIMIT};
 use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use std::sync::atomic::AtomicU64;
 
@@ -750,9 +750,11 @@ pub(crate) fn emit_direct_bytecode_call(
         // raises GNU's `Bytecode stack overflow` there.
         // The frame's cost: an immediate for a named site (the callee's
         // declared depth is a compile-time fact), a load for a closure
-        // source (the object varies). The budget is held as REMAINING bytes,
-        // so the charge is one subtraction and the overflow test is its
-        // unsigned borrow -- no separate compare.
+        // source (the object varies).  The budget is the GNU frame POSITION
+        // (`setup_frame`'s `frame_base + max_stack`, src/bytecode.c:509-515):
+        // the charge is one add and the overflow test is one compare against
+        // the constant limit.
+        let max_declared = (BC_STACK_POSITION_LIMIT - BC_FRAME_HEADER_BYTES) / 8;
         let frame_bytes = match callee {
             DirectCallee::Symbol { .. } => fb.ins().iconst(types::I64, site.frame_bytes as i64),
             DirectCallee::Source { callee } => {
@@ -760,26 +762,42 @@ pub(crate) fn emit_direct_bytecode_call(
                 let declared =
                     fb.ins()
                         .load(types::I64, flags, object, BYTECODE_MAX_STACK_OFFSET as i32);
-                let data = ishl_imm_p(fb, declared, 3);
+                // Saturate like `bytecode_frame_bytes`: a hostile declared
+                // depth must not wrap the shift into a small frame cost.
+                // One past `max_declared` is enough to make the frame too
+                // big, and keeps the add below the wrap point.
+                let cap = fb.ins().iconst(types::I64, (max_declared + 1) as i64);
+                let capped = fb.ins().umin(declared, cap);
+                let data = ishl_imm_p(fb, capped, 3);
                 iadd_imm_p(fb, data, BC_FRAME_HEADER_BYTES as i64)
             }
         };
-        let remaining = fb.ins().load(
+        let saved_position = fb.ins().load(
             types::I64,
             flags,
             vmctx,
-            CONTEXT_BYTECODE_STACK_REMAINING_OFFSET as i32,
+            CONTEXT_BYTECODE_STACK_POSITION_OFFSET as i32,
         );
-        let after = fb.ins().isub(remaining, frame_bytes);
-        // `after > remaining` is the subtraction's borrow: the frame does
-        // not fit. The shim's slow half raises GNU's error on entry.
-        let over_budget = fb.ins().icmp(IntCC::UnsignedGreaterThan, after, remaining);
+        let limit = fb.ins().iconst(types::I64, BC_STACK_POSITION_LIMIT as i64);
+        // A cost over the limit can never fit even from position 0; catch it
+        // before the add.  For the surviving costs (`<= limit`) the sum with
+        // a valid position is at most `2 * limit` and cannot wrap, so the
+        // unsigned compare against the constant is exact.  `after > limit`
+        // is GNU's `(char *)fp->next_stack > bc->stack_end`: the frame does
+        // not fit, and the shim's slow half raises GNU's error on entry.
+        let frame_too_big = fb
+            .ins()
+            .icmp(IntCC::UnsignedGreaterThan, frame_bytes, limit);
+        let frame_capped = fb.ins().umin(frame_bytes, limit);
+        let after = fb.ins().iadd(saved_position, frame_capped);
+        let over_limit = fb.ins().icmp(IntCC::UnsignedGreaterThan, after, limit);
+        let over_budget = fb.ins().bor(frame_too_big, over_limit);
         next(fb, over_budget);
         fb.ins().store(
             flags,
             after,
             vmctx,
-            CONTEXT_BYTECODE_STACK_REMAINING_OFFSET as i32,
+            CONTEXT_BYTECODE_STACK_POSITION_OFFSET as i32,
         );
         let (value, status) = if matches!(
             site.entry,
@@ -866,15 +884,15 @@ pub(crate) fn emit_direct_bytecode_call(
         let depth3 = iadd_imm_p(fb, depth2, -1);
         fb.ins()
             .store(flags, depth3, vmctx, CONTEXT_DEPTH_OFFSET as i32);
-        // The callee has returned: LIFO-restore the remaining budget the
-        // call found (one store; the value is this site's live SSA word).
-        // Non-OK exits restore it inside the finish, after any precise-deopt
-        // resume of this same frame.
+        // The callee has returned: LIFO-restore the position the call found
+        // (one store; the value is this site's live SSA word).  Non-OK exits
+        // restore it inside the finish, after any precise-deopt resume of
+        // this same frame.
         fb.ins().store(
             flags,
-            remaining,
+            saved_position,
             vmctx,
-            CONTEXT_BYTECODE_STACK_REMAINING_OFFSET as i32,
+            CONTEXT_BYTECODE_STACK_POSITION_OFFSET as i32,
         );
         fb.def_var(result, value);
         match hot_done {
@@ -924,7 +942,7 @@ pub(crate) fn emit_direct_bytecode_call(
                 args_c,
                 nargs_c,
                 out_c,
-                remaining,
+                saved_position,
             ],
         );
         let finished = fb.inst_results(finish)[0];
@@ -1050,7 +1068,9 @@ fn finish_signature(call_conv: cranelift_codegen::isa::CallConv, ptr_ty: types::
         ptr_ty,     // args (null: read them from the frame)
         types::I64, // nargs
         ptr_ty,     // out
-        types::I64, // remaining bytecode-stack budget the call found (0: none charged)
+        // saved bytecode-stack frame position the call found
+        // (BC_STACK_POSITION_UNCHARGED when the call never charged)
+        types::I64,
     ] {
         sig.params.push(AbiParam::new(ty));
     }

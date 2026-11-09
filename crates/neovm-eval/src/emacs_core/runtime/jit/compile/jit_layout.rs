@@ -165,12 +165,12 @@ pub(crate) fn emit_dispatch_cells_base(fb: &mut FunctionBuilder, vmctx: ClifValu
 }
 /// `Context::jit_stack_limit`, the native stack guard's floor.
 pub(crate) const CONTEXT_JIT_STACK_LIMIT_OFFSET: usize = offset_of!(Context, jit_stack_limit);
-/// `Context::bytecode_stack_remaining`: GNU's `BC_STACK_SIZE` accounting,
-/// held as the remaining bytes so a charge is one subtraction whose sign is
-/// the overflow test. Generated direct calls charge and release it in place
-/// like `depth`.
-pub(crate) const CONTEXT_BYTECODE_STACK_REMAINING_OFFSET: usize =
-    offset_of!(Context, bytecode_stack_remaining);
+/// `Context::bytecode_stack_position`: GNU's `BC_STACK_SIZE` accounting,
+/// held as the absolute frame position so a charge is one add whose compare
+/// against the constant limit is setup_frame's overflow test.  Generated
+/// direct calls charge and release it in place like `depth`.
+pub(crate) const CONTEXT_BYTECODE_STACK_POSITION_OFFSET: usize =
+    offset_of!(Context, bytecode_stack_position);
 /// `Context::owner`: the owner's slab of dynamic bindings of projected
 /// variables (Phase 0 step 2), the former reserved opcode-epoch word. No
 /// generated code reads it yet; the AOT tag pins its offset.

@@ -92,13 +92,14 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_framed(
                             out,
                             bt_count,
                             FastRun::Framed(NativeRun::Signal),
-                            0,
+                            crate::emacs_core::bytecode::vm::BC_STACK_POSITION_UNCHARGED,
                         );
                     }
                 }
             }
-            // A stub is never armed as a framed direct leaf.
-            None => 0,
+            // A stub is never armed as a framed direct leaf; it never
+            // charged, so a release must be a no-op.
+            None => crate::emacs_core::bytecode::vm::BC_STACK_POSITION_UNCHARGED,
         };
         let outcome = call_spec_framed_run(ctx, leaf, const_base as u64, args_ptr);
         // No mutable Context reference spans the native/Lisp execution
@@ -111,14 +112,22 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_framed(
         if shim_panic_pending() {
             // SAFETY: the caller's argument slot is still live here.
             unsafe { ctx_ref.detach_native_frames_into(args_ptr) };
-            crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, saved_budget);
+            if saved_budget != crate::emacs_core::bytecode::vm::BC_STACK_POSITION_UNCHARGED {
+                crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, saved_budget);
+            }
             return STATUS_SIGNAL;
         }
         let run = match outcome {
             NativeRun::Ok(bits) => {
                 if ctx_ref.pop_native_backtrace_frame(bt_count) {
                     ctx_ref.depth -= 1;
-                    crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, saved_budget);
+                    if saved_budget != crate::emacs_core::bytecode::vm::BC_STACK_POSITION_UNCHARGED
+                    {
+                        crate::emacs_core::bytecode::vm::release_bytecode_frame(
+                            ctx_ref,
+                            saved_budget,
+                        );
+                    }
                     // SAFETY: the generated code's result stack slot.
                     unsafe { *out = bits as i64 };
                     return STATUS_OK;

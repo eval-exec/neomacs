@@ -144,7 +144,12 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 // base (HEAP_JIT_CARD_TABLE) instead of testing the cons unlogged bitmap; the
 // cons-block trailer drops the unlogged and old bitmaps for one age byte per
 // cell (fewer cells per block), which those stores test.
-const ABI_TAG_VERSION: u32 = 52;
+// v52: the bytecode-stack field is the GNU frame POSITION
+// (`Context::bytecode_stack_position`) instead of the remaining budget; an
+// AOT leaf's emitted direct-call charge adds the frame cost and compares
+// against the constant limit, so stale sidecars with the subtract/borrow
+// shape must be refused.
+const ABI_TAG_VERSION: u32 = 53;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).
