@@ -4005,6 +4005,7 @@ crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBookmarkManage
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBoxBorder field color
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBoxBorder field style
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBoxBorder field width
+crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field auto_save_failure_time
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field auto_save_file_name
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field auto_save_file_name_lisp
 crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpBuffer field autosave_modified_tick

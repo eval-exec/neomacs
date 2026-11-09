@@ -156,3 +156,47 @@ fn do_auto_save_save_length_at_most_5000_does_not_disable() {
         expect_test::expect![[r#""Auto-saving...\nAuto-saving...done\nVALUE OK 100""#]],
     );
 }
+
+#[test]
+fn clear_buffer_auto_save_failure_returns_nil_and_leaves_save_length() {
+    // Live GNU 31.1: the C field is not Lisp-visible. The call returns nil
+    // and does not change `buffer-saved-size`, `buffer-modified-p`, or
+    // `recent-auto-save-p`.
+    let form = r##"(let ((buf (generate-new-buffer "as-clear")))
+  (with-current-buffer buf
+    (insert (make-string 100 ?x))
+    (setq buffer-file-name (expand-file-name "as-clear.txt" temporary-file-directory))
+    (setq buffer-saved-size 8000)
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#as-clear#" temporary-file-directory))
+    (list (clear-buffer-auto-save-failure)
+          buffer-saved-size
+          (buffer-modified-p)
+          (recent-auto-save-p))))"##;
+    assert_oracle_batch_stderr_and_value_expect(
+        form,
+        expect_test::expect![[r#""VALUE OK (nil 8000 t nil)""#]],
+    );
+}
+
+#[test]
+fn set_buffer_auto_saved_sets_save_length_to_z_beg() {
+    // Live GNU 31.1 `Fset_buffer_auto_saved` (`fileio.c:6526-6528`):
+    // return nil, `save_length` becomes Z-BEG (2 for "hi"), modified state
+    // is `autosaved`, `recent-auto-save-p` is t. The following clear returns
+    // nil and leaves `save_length` at 2.
+    let form = r#"(let ((buf (generate-new-buffer "as-set")))
+  (with-current-buffer buf
+    (insert "hi")
+    (setq buffer-saved-size 9)
+    (list (set-buffer-auto-saved)
+          buffer-saved-size
+          (buffer-modified-p)
+          (recent-auto-save-p)
+          (clear-buffer-auto-save-failure)
+          buffer-saved-size)))"#;
+    assert_oracle_batch_stderr_and_value_expect(
+        form,
+        expect_test::expect![[r#""VALUE OK (nil 2 autosaved t nil 2)""#]],
+    );
+}

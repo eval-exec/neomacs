@@ -4084,9 +4084,21 @@ pub fn builtin_set_buffer_auto_saved(
     let current_id = edit_buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    // GNU `fileio.c:6526-6528`: autosave tick, `save_length = Z - BEG`, then
+    // clear `auto_save_failure_time`. The tick update is shared with
+    // `do-auto-save`, which must NOT clear the time, so the clear stays here.
+    let saved_bytes = edit_buffers
+        .get(current_id)
+        .map(|buf| i64::try_from(buf.total_emacs_byte_len().get()).unwrap_or(i64::MAX))
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     edit_buffers
         .set_buffer_auto_saved(current_id)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let buf = edit_buffers
+        .get_mut(current_id)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    buf.set_buffer_local("buffer-saved-size", Value::fixnum(saved_bytes));
+    buf.set_auto_save_failure_time(0);
     Ok(Value::NIL)
 }
 

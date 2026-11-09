@@ -7514,6 +7514,29 @@ fn auto_save_say(eval: &mut neovm_eval::emacs_core::eval::Context, text: &str) {
     let _ = eval.funcall_general(Value::symbol("message"), vec![Value::string(text)]);
 }
 
+/// GNU `fileio.c:6446-6447`: skip while a positive failure time is less than
+/// 1200 s old. The comparison is strict. `recorded <= 0` never skips.
+pub(crate) fn auto_save_failure_blocks(recorded: i64, now: i64) -> bool {
+    recorded > 0 && now.saturating_sub(recorded) < 1200
+}
+
+/// GNU `fileio.c:6488-6489`: record `after` when the attempt took more than
+/// 60 s. Equality at 60 does not record.
+pub(crate) fn auto_save_failure_time_after_attempt(before: i64, after: i64) -> Option<i64> {
+    if after.saturating_sub(before) > 60 {
+        Some(after)
+    } else {
+        None
+    }
+}
+
+fn auto_save_unix_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}
+
 fn read_minibuffer_auto_raise(eval: &mut Context) -> Value {
     eval.visible_runtime_variable_value_by_id(intern("minibuffer-auto-raise"))
         .ok()
@@ -7801,6 +7824,20 @@ pub fn builtin_do_auto_save(
             continue;
         };
 
+        // GNU `fileio.c:6446-6448`: a recent failure (recorded when the
+        // attempt itself took more than 60 s) skips this buffer for 1200 s.
+        // The time lives on the buffer (`buffer.h`), not in a process map.
+        let now = auto_save_unix_secs();
+        let failure = eval
+            .edit
+            .buffers
+            .get(buf_id)
+            .map(|buf| buf.auto_save_failure_time())
+            .unwrap_or(0);
+        if auto_save_failure_blocks(failure, now) {
+            continue;
+        }
+
         // Shrink-a-lot (`fileio.c:6450-6474`) runs before the progress
         // line and does not count as a save. `4*(Z-BEG) < 3*save_length`
         // is `(growth_factor) * size < (growth_factor - 1) * save_length`
@@ -7841,6 +7878,7 @@ pub fn builtin_do_auto_save(
         if !auto_saved && !no_message {
             auto_save_say(eval, "Auto-saving...");
         }
+        let before_secs = auto_save_unix_secs();
         let result = match auto_save_1(eval, buf_id, file_name.as_ref(), &target_path) {
             Err(flow) if flow.is_signal() => {
                 auto_save_error_occurred = true;
@@ -7857,6 +7895,16 @@ pub fn builtin_do_auto_save(
         }
         if let Some(old_buffer) = old_buffer {
             eval.restore_current_buffer_if_live(old_buffer);
+        }
+        // GNU `fileio.c:6488-6489`: an attempt that spans more than 60 s
+        // is treated as an NFS timeout and suppresses retries for 1200 s.
+        // A fast success does not clear a previous timestamp. Lisp
+        // `set-buffer-auto-saved` and `clear-buffer-auto-save-failure` do.
+        let after_secs = auto_save_unix_secs();
+        if let Some(recorded) = auto_save_failure_time_after_attempt(before_secs, after_secs) {
+            if let Some(buf) = eval.edit.buffers.get_mut(buf_id) {
+                buf.set_auto_save_failure_time(recorded);
+            }
         }
         auto_saved = true;
         result?;
@@ -7947,3 +7995,27 @@ pub fn register_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
 // ===========================================================================
 // Tests
 // ===========================================================================
+
+#[cfg(test)]
+mod auto_save_failure_time_tests {
+    use super::{auto_save_failure_blocks, auto_save_failure_time_after_attempt};
+
+    #[test]
+    fn auto_save_failure_time_skip_is_strictly_under_1200s() {
+        assert!(!auto_save_failure_blocks(0, 5_000));
+        assert!(!auto_save_failure_blocks(-4, 5_000));
+        assert!(auto_save_failure_blocks(1_000, 1_000));
+        assert!(auto_save_failure_blocks(1_000, 2_199));
+        assert!(!auto_save_failure_blocks(1_000, 2_200));
+    }
+
+    #[test]
+    fn auto_save_failure_time_set_is_strictly_over_60s() {
+        assert_eq!(auto_save_failure_time_after_attempt(1_000, 1_060), None);
+        assert_eq!(
+            auto_save_failure_time_after_attempt(1_000, 1_061),
+            Some(1_061)
+        );
+        assert_eq!(auto_save_failure_time_after_attempt(50, 10), None);
+    }
+}

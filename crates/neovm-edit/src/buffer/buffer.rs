@@ -2325,6 +2325,9 @@ pub struct BufferDumpParts {
     pub accessible_start: TextPositionAnchor,
     pub accessible_end: TextPositionAnchor,
     pub autosave_modified_tick: i64,
+    /// GNU `struct buffer.auto_save_failure_time`. Seconds since the epoch,
+    /// or 0 when unset. The pdump image copies it (`pdumper.c:2855`).
+    pub auto_save_failure_time: i64,
     pub last_window_start: LispCharPos1,
     pub last_selected_window: Option<WindowId>,
     pub inhibit_buffer_hooks: bool,
@@ -2385,6 +2388,10 @@ pub struct Buffer {
     /// GNU `BUF_AUTOSAVE_MODIFF`: recent auto-save state is
     /// `save_modiff < autosave_modified_tick`.
     pub(crate) autosave_modified_tick: i64,
+    /// GNU `struct buffer.auto_save_failure_time` (`buffer.h`). Seconds since
+    /// the epoch, or 0 when unset. `reset_buffer` (`buffer.c:1104`) stores 0.
+    /// Not a Lisp variable. The pdump image copies it (`pdumper.c:2855`).
+    auto_save_failure_time: i64,
     /// GNU `last_window_start`: start position of the most recently
     /// disconnected window that showed this buffer.
     pub(crate) last_window_start: LispCharPos1,
@@ -2518,6 +2525,10 @@ pub struct Buffer {
     /// GNU `BUF_AUTOSAVE_MODIFF`: recent auto-save state is
     /// `save_modiff < autosave_modified_tick`.
     pub(crate) autosave_modified_tick: i64,
+    /// GNU `struct buffer.auto_save_failure_time` (`buffer.h`). Seconds since
+    /// the epoch, or 0 when unset. `reset_buffer` (`buffer.c:1104`) stores 0.
+    /// Not a Lisp variable. The pdump image copies it (`pdumper.c:2855`).
+    auto_save_failure_time: i64,
     /// GNU `last_window_start`: start position of the most recently
     /// disconnected window that showed this buffer.
     pub(crate) last_window_start: LispCharPos1,
@@ -2829,6 +2840,7 @@ impl Buffer {
             accessible_start: TextPositionAnchor::new(CharPos0::ZERO, EmacsBytePos::ZERO),
             accessible_end: TextPositionAnchor::new(CharPos0::ZERO, EmacsBytePos::ZERO),
             autosave_modified_tick: 1,
+            auto_save_failure_time: 0,
             last_window_start: LispCharPos1::ONE,
             last_selected_window: None,
             inhibit_buffer_hooks: false,
@@ -2881,6 +2893,7 @@ impl Buffer {
             accessible_start: parts.accessible_start,
             accessible_end: parts.accessible_end,
             autosave_modified_tick: parts.autosave_modified_tick,
+            auto_save_failure_time: parts.auto_save_failure_time,
             last_window_start: parts.last_window_start,
             last_selected_window: parts.last_selected_window,
             inhibit_buffer_hooks: parts.inhibit_buffer_hooks,
@@ -5129,6 +5142,18 @@ impl Buffer {
         self.autosave_modified_tick = self.modified_tick();
     }
 
+    /// GNU `b->auto_save_failure_time` (`fileio.c:6446`). `0` means none.
+    pub fn auto_save_failure_time(&self) -> i64 {
+        self.auto_save_failure_time
+    }
+
+    /// Record or clear GNU `auto_save_failure_time`. `0` is the clear used by
+    /// `Fset_buffer_auto_saved`, `Fclear_buffer_auto_save_failure`, and
+    /// `reset_buffer` (`fileio.c:6528`, `:6537`, `buffer.c:1104`).
+    pub fn set_auto_save_failure_time(&mut self, secs: i64) {
+        self.auto_save_failure_time = secs;
+    }
+
     // -- Buffer-local variables ----------------------------------------------
 
     /// Write a per-buffer binding. Mirrors GNU `set_internal`
@@ -6909,6 +6934,10 @@ impl BufferManager {
         indirect.goto_emacs_byte_pos(root.point_emacs_byte_pos());
         indirect.set_multibyte_value(root.get_multibyte());
         indirect.autosave_modified_tick = root.autosave_modified_tick;
+        // GNU `Fmake_indirect_buffer` runs `reset_buffer`, which zeros
+        // `auto_save_failure_time` (`buffer.c:1104`) even when CLONE copied
+        // the base buffer.
+        indirect.auto_save_failure_time = 0;
         indirect.slots[BUFFER_SLOT_FILE_NAME.index()] = Value::NIL;
         if !clone {
             indirect.overlays = OverlayList::new();

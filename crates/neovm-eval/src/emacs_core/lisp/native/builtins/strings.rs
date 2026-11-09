@@ -3381,8 +3381,23 @@ pub fn builtin_clear_face_cache(ctx: &mut super::eval::Context, args: Vec<Value>
 }
 
 #[doc(hidden)]
-pub fn builtin_clear_buffer_auto_save_failure(args: Vec<Value>) -> EvalResult {
+pub fn builtin_clear_buffer_auto_save_failure(
+    ctx: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("clear-buffer-auto-save-failure", &args, 0)?;
+    // GNU `fileio.c:6537`: `current_buffer->auto_save_failure_time = 0`.
+    // Nothing else changes. The time is not a Lisp variable.
+    let id = ctx
+        .edit
+        .buffers
+        .current_buffer_id()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    ctx.edit
+        .buffers
+        .get_mut(id)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
+        .set_auto_save_failure_time(0);
     Ok(Value::NIL)
 }
 

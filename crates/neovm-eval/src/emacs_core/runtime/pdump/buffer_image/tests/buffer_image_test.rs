@@ -42,6 +42,7 @@ fn buffer_section_round_trips_manager_state() {
         chars_modified_tick: 4,
         save_modified_tick: Some(5),
         autosave_modified_tick: Some(6),
+        auto_save_failure_time: 1_700_000_000,
         modtime_sec: Some(1234567890),
         modtime_nsec: Some(500000000),
         modtime_size: Some(1024),

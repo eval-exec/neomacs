@@ -752,6 +752,10 @@ pub struct DumpBuffer {
     pub save_modified_tick: Option<i64>,
     #[serde(default)]
     pub autosave_modified_tick: Option<i64>,
+    /// GNU `struct buffer.auto_save_failure_time` (`buffer.h`). Seconds since
+    /// the epoch, or 0 when unset. Copied into the image (`pdumper.c:2855`).
+    #[serde(default)]
+    pub auto_save_failure_time: i64,
     #[serde(default)]
     pub modtime_sec: Option<i64>,
     #[serde(default)]

@@ -73,6 +73,7 @@ crates/neovm-edit/src/buffer/buffer.rs	enum	enum SlotDefault
 crates/neovm-edit/src/buffer/buffer.rs	enum	enum UndoBoundaryOutcome
 crates/neovm-edit/src/buffer/buffer.rs	field	BufferDumpParts field accessible_end
 crates/neovm-edit/src/buffer/buffer.rs	field	BufferDumpParts field accessible_start
+crates/neovm-edit/src/buffer/buffer.rs	field	BufferDumpParts field auto_save_failure_time
 crates/neovm-edit/src/buffer/buffer.rs	field	BufferDumpParts field autosave_modified_tick
 crates/neovm-edit/src/buffer/buffer.rs	field	BufferDumpParts field base_buffer
 crates/neovm-edit/src/buffer/buffer.rs	field	BufferDumpParts field id
@@ -121,6 +122,7 @@ crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::accessible_char_region
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::accessible_emacs_byte_range
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::accessible_emacs_byte_region
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::accessible_region_snapshot
+crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::auto_save_failure_time
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::auto_save_file_name_lisp_string
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::auto_save_file_name_runtime_string_owned
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::auto_save_file_name_value
@@ -261,6 +263,7 @@ crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::restore_accessible_reg
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::restore_modified_state
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::save_modified_tick
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_accessible_region_and_point_from_emacs_bytes
+crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_auto_save_failure_time
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_auto_save_file_name_value
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_buffer_local
 crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl Buffer::set_buffer_local_by_sym_id

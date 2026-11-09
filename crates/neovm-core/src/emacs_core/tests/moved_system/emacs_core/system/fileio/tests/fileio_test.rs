@@ -295,6 +295,163 @@ fn do_auto_save_preserves_a_raw_unibyte_visited_filename_in_the_auto_save_name()
     );
 }
 
+/// GNU keeps `auto_save_failure_time` on the buffer (`fileio.c:6446-6448`,
+/// `:6488-6489`, `:6528`, `:6537`). A positive time younger than 1200 s
+/// skips the save. `set-buffer-auto-saved` and
+/// `clear-buffer-auto-save-failure` store 0. A fast `do-auto-save` does not.
+/// The 60 s record itself is unit-tested with an injected clock; this test
+/// does not wait.
+#[test]
+fn auto_save_failure_time_on_the_buffer_skips_and_lisp_clears() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let auto_path = std::env::temp_dir().join(format!(
+        "neomacs-as-fail-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    let _ = fs::remove_file(&auto_path);
+    let now = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_secs() as i64;
+    let auto_name = Value::string(auto_path.to_string_lossy().to_string());
+    {
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
+        buf.set_file_name_value(Value::string("/tmp/as-fail-visited.txt"));
+        buf.set_auto_save_file_name_value(auto_name.clone());
+        buf.set_buffer_local("buffer-auto-save-file-name", auto_name);
+        buf.set_buffer_local("buffer-saved-size", Value::fixnum(0));
+        buf.insert_lisp_string(&neovm_value::heap_types::LispString::from_utf8("payload"));
+        buf.set_auto_save_failure_time(now);
+    }
+
+    builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save runs");
+    assert!(
+        !auto_path.exists(),
+        "a failure time inside 1200 s must skip the write"
+    );
+    assert_eq!(
+        eval.edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .auto_save_failure_time(),
+        now
+    );
+    assert!(
+        eval.edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .is_modified()
+    );
+
+    let stale = now - 1300;
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .set_auto_save_failure_time(stale);
+    builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save retries");
+    assert!(
+        auto_path.exists(),
+        "a failure time older than 1200 s must allow the save"
+    );
+    assert_eq!(
+        eval.edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .auto_save_failure_time(),
+        stale,
+        "a fast save must not clear or rewrite the timestamp"
+    );
+    let _ = fs::remove_file(&auto_path);
+
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .set_auto_save_failure_time(99);
+    crate::emacs_core::buffer::builtin_set_buffer_auto_saved(&mut eval.edit.buffers, vec![])
+        .expect("set-buffer-auto-saved");
+    assert_eq!(
+        eval.edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .auto_save_failure_time(),
+        0
+    );
+    assert_eq!(
+        eval.edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .get_buffer_local("buffer-saved-size")
+            .and_then(|value| value.as_fixnum()),
+        Some(7),
+        "set-buffer-auto-saved stores Z-BEG"
+    );
+
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .set_auto_save_failure_time(77);
+    crate::emacs_core::builtins::builtin_clear_buffer_auto_save_failure(&mut eval, vec![])
+        .expect("clear-buffer-auto-save-failure");
+    assert_eq!(
+        eval.edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .auto_save_failure_time(),
+        0
+    );
+
+    let base_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .set_auto_save_failure_time(42);
+    let indirect = eval
+        .edit
+        .buffers
+        .create_indirect_buffer(base_id, "as-indirect-fail", true)
+        .expect("indirect buffer");
+    assert_eq!(
+        eval.edit
+            .buffers
+            .get(indirect)
+            .expect("indirect")
+            .auto_save_failure_time(),
+        0,
+        "reset_buffer zeros the time on a cloned indirect buffer"
+    );
+    assert_eq!(
+        eval.edit
+            .buffers
+            .get(base_id)
+            .expect("base")
+            .auto_save_failure_time(),
+        42
+    );
+}
+
 // -----------------------------------------------------------------------
 // Path operations
 // -----------------------------------------------------------------------

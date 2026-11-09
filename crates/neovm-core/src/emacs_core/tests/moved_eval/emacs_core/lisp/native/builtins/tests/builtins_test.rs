@@ -5049,12 +5049,29 @@ fn byte_position_and_clear_bitmap_semantics() {
         other => panic!("unexpected flow: {other:?}"),
     }
 
+    face_cache_ctx
+        .edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .set_auto_save_failure_time(50);
     assert_eq!(
-        builtin_clear_buffer_auto_save_failure(vec![]).unwrap(),
+        builtin_clear_buffer_auto_save_failure(&mut face_cache_ctx, vec![]).unwrap(),
         Value::NIL
     );
-    let clear_auto_save_arity = builtin_clear_buffer_auto_save_failure(vec![Value::NIL])
-        .expect_err("clear-buffer-auto-save-failure should reject args");
+    assert_eq!(
+        face_cache_ctx
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .auto_save_failure_time(),
+        0,
+        "clear-buffer-auto-save-failure zeros the per-buffer failure time"
+    );
+    let clear_auto_save_arity =
+        builtin_clear_buffer_auto_save_failure(&mut face_cache_ctx, vec![Value::NIL])
+            .expect_err("clear-buffer-auto-save-failure should reject args");
     match clear_auto_save_arity.into_kind() {
         FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
