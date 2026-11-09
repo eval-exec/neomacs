@@ -43,39 +43,47 @@
 (unless (eq system-type 'darwin)
   (defvaralias 'x-gtk-use-system-tooltips 'use-system-tooltips))
 
-;; GNU binds `x-file-dialog' in every window-system build: a C DEFUN in the X
-;; (xfns.c:9451/9665, defsubr xfns.c:10633), PGTK (pgtkfns.c:3610) and w32
-;; (w32fns.c:8252) backends, and a Lisp wrapper over the backend's file panel
-;; where the C layer has no dialog (`term/ns-win.el:464' over
-;; ns-read-file-name, `term/haiku-win.el:329' over haiku-read-file-name; the
-;; latter ends `(error "x-file-dialog on a tty frame")').  Every such GNU
-;; build therefore answers `fboundp' t in the dump, batch sessions included,
-;; and `minibuffer.el:4108' calls it unguarded when the reading command asks
-;; for a dialog.  Neomacs's backend has no native file-panel primitive, so
+;; GNU binds `x-file-dialog' in its toolkit builds and, where the C layer has
+;; no dialog, from Lisp: the X DEFUN is registered only under USE_MOTIF ||
+;; USE_GTK (xfns.c:10632-10634; the pinned reference is a GTK build),
+;; w32fns.c defines it for W32 (8252), and the NS and Haiku builds bind it
+;; from Lisp (`term/ns-win.el:464' over ns-read-file-name,
+;; `term/haiku-win.el:329' over haiku-read-file-name; the latter ends
+;; `(error "x-file-dialog on a tty frame")').  Every such build therefore
+;; answers `fboundp' t in the dump, batch sessions included.
+;; `minibuffer.el:4051' calls it only when `next-read-file-uses-dialog-p'
+;; (guarded at :3886) says a dialog is wanted, and GNU's C predicate answers
+;; t on a toolkit GUI frame (fileio.c:6556-6572, via use-dialog-box and
+;; use-file-dialog).  Neomacs's backend has no native file-panel primitive, so
 ;; this is GNU's own Lisp arm for that case: the same name, signature and
 ;; return value, with minibuffer completion performing the prompt.  It lives
 ;; here, the dump-safe preload (loadup.el:267), not in the GUI-runtime-only
 ;; term/neo-win.el, so batch and TTY sessions expose the same surface GNU's
-;; dump does.
+;; dump does.  Because the caller may itself have been reached from
+;; `read-file-name', the inner call binds `use-file-dialog' to nil: once
+;; `next-read-file-uses-dialog-p' follows GNU on GUI frames, the chooser must
+;; not re-enter `x-file-dialog' through `read-file-name-default'.
 (defun x-file-dialog (prompt dir &optional default-filename
                              mustmatch only-dir-p)
   "Read a file name; the Neomacs backend has no native file panel.
 PROMPT, DIR, DEFAULT-FILENAME, MUSTMATCH and ONLY-DIR-P have the same
 meaning as in GNU's `x-file-dialog'; minibuffer completion stands in for
-the toolkit dialog.  On a non-graphical frame (batch or -nw) this signals
-the same error GNU's backend for this surface signals."
+the toolkit dialog, with `use-file-dialog' bound to nil around it so the
+call cannot re-enter this function.  On a non-graphical frame (batch or
+-nw) this signals the same error GNU's backend for this surface signals."
   (unless (display-graphic-p)
-    ;; GNU's C bodies check the window system before any dialog work, but the
-    ;; message is backend-specific: the X DEFUN checks the selected frame
-    ;; (src/frame.c:134-141) and says "Window system frame should be used";
-    ;; the NS arm ends in ns-read-file-name's check_window_system(NULL) and
-    ;; says "Window system is not in use or not initialized".  Neo's surface
-    ;; gives the matching answer.
+    ;; GNU's C bodies check the window system before any argument work, but
+    ;; the message is backend-specific: the X DEFUN checks the selected frame
+    ;; (src/frame.c:134-141, xfns.c:9688) and says "Window system frame should
+    ;; be used"; the NS arm ends in ns-read-file-name's
+    ;; check_window_system(NULL) (nsfns.m:1784) and says "Window system is not
+    ;; in use or not initialized".  Neo's surface gives the matching answer.
     (error "%s"
            (if (eq system-type 'darwin)
                "Window system is not in use or not initialized"
              "Window system frame should be used")))
-  (read-file-name prompt dir default-filename mustmatch nil
-                  (and only-dir-p #'file-directory-p)))
+  (let ((use-file-dialog nil))
+    (read-file-name prompt dir default-filename mustmatch nil
+                    (and only-dir-p #'file-directory-p))))
 
 ;;; neo-preload.el ends here
