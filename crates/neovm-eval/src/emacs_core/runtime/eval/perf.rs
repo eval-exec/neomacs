@@ -100,14 +100,7 @@ pub(crate) fn install_perf_hooks(
     enabled: bool,
     hooks: &'static PerfHooks,
 ) -> Result<HookInstallStatus, HookInstallError> {
-    let selected = PERF_HOOKS_IDENTITY.get_or_init(|| hooks);
-    if !std::ptr::eq(*selected, hooks) {
-        return Err(HookInstallError::DifferentTable);
-    }
-    let published = match PERF_HOOKS.set(**selected) {
-        Ok(()) => HookInstallStatus::Installed,
-        Err(_same_descriptor) => HookInstallStatus::AlreadyInstalled,
-    };
+    let published = neovm_value::publish_hook_table(&PERF_HOOKS, &PERF_HOOKS_IDENTITY, hooks)?;
     match PERF_ENABLED.set(enabled) {
         Ok(()) => Ok(published),
         Err(_same_answer) if *PERF_ENABLED.get().unwrap_or(&false) == enabled => Ok(published),

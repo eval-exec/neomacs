@@ -903,14 +903,7 @@ static LIFECYCLE_HOOKS_IDENTITY: OnceLock<&'static LifecycleHooks> = OnceLock::n
 pub(crate) fn install_lifecycle_hooks(
     hooks: &'static LifecycleHooks,
 ) -> Result<HookInstallStatus, HookInstallError> {
-    let selected = LIFECYCLE_HOOKS_IDENTITY.get_or_init(|| hooks);
-    if !std::ptr::eq(*selected, hooks) {
-        return Err(HookInstallError::DifferentTable);
-    }
-    match LIFECYCLE_HOOKS.set(**selected) {
-        Ok(()) => Ok(HookInstallStatus::Installed),
-        Err(_same_descriptor) => Ok(HookInstallStatus::AlreadyInstalled),
-    }
+    neovm_value::publish_hook_table(&LIFECYCLE_HOOKS, &LIFECYCLE_HOOKS_IDENTITY, hooks)
 }
 
 /// The installed descriptor.

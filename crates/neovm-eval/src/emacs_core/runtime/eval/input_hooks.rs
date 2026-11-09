@@ -84,14 +84,7 @@ static INPUT_HOOKS_IDENTITY: OnceLock<&'static InputHooks> = OnceLock::new();
 pub(crate) fn install_input_hooks(
     hooks: &'static InputHooks,
 ) -> Result<HookInstallStatus, HookInstallError> {
-    let selected = INPUT_HOOKS_IDENTITY.get_or_init(|| hooks);
-    if !std::ptr::eq(*selected, hooks) {
-        return Err(HookInstallError::DifferentTable);
-    }
-    match INPUT_HOOKS.set(**selected) {
-        Ok(()) => Ok(HookInstallStatus::Installed),
-        Err(_same_descriptor) => Ok(HookInstallStatus::AlreadyInstalled),
-    }
+    neovm_value::publish_hook_table(&INPUT_HOOKS, &INPUT_HOOKS_IDENTITY, hooks)
 }
 
 /// The installed descriptor.

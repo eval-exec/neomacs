@@ -59,14 +59,7 @@ static BUFFER_KILL_HOOKS_IDENTITY: OnceLock<&'static BufferKillHooks> = OnceLock
 pub(crate) fn install_buffer_kill_hooks(
     hooks: &'static BufferKillHooks,
 ) -> Result<HookInstallStatus, HookInstallError> {
-    let selected = BUFFER_KILL_HOOKS_IDENTITY.get_or_init(|| hooks);
-    if !std::ptr::eq(*selected, hooks) {
-        return Err(HookInstallError::DifferentTable);
-    }
-    match BUFFER_KILL_HOOKS.set(**selected) {
-        Ok(()) => Ok(HookInstallStatus::Installed),
-        Err(_same_descriptor) => Ok(HookInstallStatus::AlreadyInstalled),
-    }
+    neovm_value::publish_hook_table(&BUFFER_KILL_HOOKS, &BUFFER_KILL_HOOKS_IDENTITY, hooks)
 }
 
 /// The installed table, if core has run one of the two pinned install seams.

@@ -247,6 +247,14 @@ mod concurrent_boot_tests {
 
     /// Build the canonical eval hook set with WAIT as the wait-service table.
     fn set_with_wait(wait: &'static WaitServiceHooks) -> EvalHookSet {
+        set_with_wait_and_perf(
+            wait,
+            crate::emacs_core::perf_trace::canonical_perf_enabled(),
+        )
+    }
+
+    /// The same set with an explicit PERF_ENABLED answer.
+    fn set_with_wait_and_perf(wait: &'static WaitServiceHooks, perf_enabled: bool) -> EvalHookSet {
         EvalHookSet::new(
             crate::emacs_core::lifecycle_hooks::canonical_lifecycle_hooks(),
             crate::emacs_core::process_hooks::canonical_process_hooks(),
@@ -256,7 +264,7 @@ mod concurrent_boot_tests {
             crate::emacs_core::buffer_ops::canonical_buffer_kill_hooks(),
             crate::emacs_core::kmacro::canonical_kmacro_hooks(),
             crate::emacs_core::xdisp::canonical_display_query_hooks(),
-            crate::emacs_core::perf_trace::canonical_perf_enabled(),
+            perf_enabled,
             crate::emacs_core::perf_trace::canonical_perf_hooks(),
             crate::emacs_core::builtins::init_builtins,
             install_sqlite_finalizer_hook_for_eval_hooks,
@@ -349,6 +357,42 @@ mod concurrent_boot_tests {
                 .all(|result| *result == Err(HookInstallError::DifferentTable)),
             "a caller offering the losing {loser_name} table was not refused \
              (masked conflict): {results:?}"
+        );
+    }
+
+    /// PERF_ENABLED pins both outcomes: the same answer re-publishes
+    /// idempotently, a different answer is the typed refusal (hook installers
+    /// unification condition 3).
+    ///
+    /// PERF_ENABLED is a process-lifetime OnceLock beside the PerfHooks
+    /// table, so the first boot fixes the answer and a later boot that
+    /// disagrees must not mint a proof.  Nextest runs each test in its own
+    /// process, so the cell starts empty here.
+    #[test]
+    fn perf_enabled_same_answer_is_idempotent_and_different_answer_is_refused() {
+        use crate::emacs_core::eval::hooks_proof::install_eval_hooks as install_with_set;
+
+        let first = crate::emacs_core::perf_trace::canonical_perf_enabled();
+        let same: &'static EvalHookSet = Box::leak(Box::new(set_with_wait_and_perf(
+            &CANONICAL_WAIT_SERVICE,
+            first,
+        )));
+        let different: &'static EvalHookSet = Box::leak(Box::new(set_with_wait_and_perf(
+            &CANONICAL_WAIT_SERVICE,
+            !first,
+        )));
+        assert!(
+            install_with_set(same).is_ok(),
+            "the first publication of the canonical set must install"
+        );
+        assert!(
+            install_with_set(same).is_ok(),
+            "re-publishing the same PERF_ENABLED answer must stay idempotent"
+        );
+        assert_eq!(
+            install_with_set(different).map(|_proof| ()),
+            Err(HookInstallError::DifferentTable),
+            "a different PERF_ENABLED answer must be refused, not overwritten"
         );
     }
 }

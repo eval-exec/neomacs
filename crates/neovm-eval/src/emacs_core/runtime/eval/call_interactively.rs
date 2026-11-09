@@ -635,14 +635,11 @@ static CALL_INTERACTIVELY_HOOKS_IDENTITY: OnceLock<&'static CallInteractivelyHoo
 pub(crate) fn install_call_interactively_hooks(
     hooks: &'static CallInteractivelyHooks,
 ) -> Result<HookInstallStatus, HookInstallError> {
-    let selected = CALL_INTERACTIVELY_HOOKS_IDENTITY.get_or_init(|| hooks);
-    if !std::ptr::eq(*selected, hooks) {
-        return Err(HookInstallError::DifferentTable);
-    }
-    match CALL_INTERACTIVELY_HOOKS.set(**selected) {
-        Ok(()) => Ok(HookInstallStatus::Installed),
-        Err(_same_descriptor) => Ok(HookInstallStatus::AlreadyInstalled),
-    }
+    neovm_value::publish_hook_table(
+        &CALL_INTERACTIVELY_HOOKS,
+        &CALL_INTERACTIVELY_HOOKS_IDENTITY,
+        hooks,
+    )
 }
 
 /// The installed table, if core has run one of the two pinned install seams.

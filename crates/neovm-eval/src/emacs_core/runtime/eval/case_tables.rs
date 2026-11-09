@@ -112,14 +112,7 @@ static CASE_TABLE_HOOKS_IDENTITY: OnceLock<&'static CaseTableHooks> = OnceLock::
 pub(crate) fn install_case_table_hooks(
     hooks: &'static CaseTableHooks,
 ) -> Result<HookInstallStatus, HookInstallError> {
-    let selected = CASE_TABLE_HOOKS_IDENTITY.get_or_init(|| hooks);
-    if !std::ptr::eq(*selected, hooks) {
-        return Err(HookInstallError::DifferentTable);
-    }
-    match CASE_TABLE_HOOKS.set(**selected) {
-        Ok(()) => Ok(HookInstallStatus::Installed),
-        Err(_same_descriptor) => Ok(HookInstallStatus::AlreadyInstalled),
-    }
+    neovm_value::publish_hook_table(&CASE_TABLE_HOOKS, &CASE_TABLE_HOOKS_IDENTITY, hooks)
 }
 
 /// The installed table, if core has run one of the two pinned install seams.
