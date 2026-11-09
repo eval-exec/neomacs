@@ -268,8 +268,9 @@ pub fn live_dfa_overflow_free_span_for_test(lease: &DfaLease<'_>) -> Option<usiz
 /// FENCE (peer #816 write-arm): set the live lease's
 /// `LiveDfa::overflow_free_span`; the consumer never borrows `slot`.
 pub fn set_live_dfa_overflow_free_span_for_test(lease: &mut DfaLease<'_>, value: usize) {
-    if let DfaSlot::Live(live) = &mut *lease.slot {
-        live.overflow_free_span = value;
+    match &mut *lease.slot {
+        DfaSlot::Live(live) => live.overflow_free_span = value,
+        _ => panic!("compiled DFA slot is not live"),
     }
 }
 
