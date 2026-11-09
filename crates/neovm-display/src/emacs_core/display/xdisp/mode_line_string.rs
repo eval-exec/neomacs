@@ -291,8 +291,7 @@ impl StringEmissionControls {
 }
 
 #[derive(Clone, Copy)]
-#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
-pub(super) struct ElementDepth(usize);
+pub(crate) struct ElementDepth(usize);
 
 impl From<usize> for ElementDepth {
     fn from(depth: usize) -> Self {

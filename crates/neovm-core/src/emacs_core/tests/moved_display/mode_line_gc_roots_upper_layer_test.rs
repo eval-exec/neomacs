@@ -2,7 +2,7 @@
 //!
 //! Re-homed from neovm-display (display upper-layer re-home).
 use crate::emacs_core::xdisp::*;
-use neovm_display::test_utils::mode_line_gc_roots_test_upper_layer_helpers::assert_accumulated_property_survives;
+use neovm_display::test_support::authority::mode_line_gc_assert_accumulated_property_survives_for_test as assert_accumulated_property_survives;
 use neovm_display::test_utils::mode_line_gc_roots_test_upper_layer_helpers::{
     FormatEntry, PropertySource,
 };

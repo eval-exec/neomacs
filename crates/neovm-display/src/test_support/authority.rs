@@ -100,13 +100,6 @@ pub fn set_attempt_source_buffer_from_live_for_test(
     token.source_buffer = token.live_buffer.clone();
 }
 
-/// Force the numeric mode-line padding policy for the re-homed min-width
-/// tests. The original knob stays pub(crate) behind the xdisp re-export;
-/// this fence is the signed cross-crate path.
-pub fn force_mode_line_numeric_padding_for_test(value: Option<bool>) -> Option<bool> {
-    crate::emacs_core::xdisp::force_for_test(value)
-}
-
 /// Scope a GC-root frame around a mode-line walk (moved prop-borrow tests).
 pub fn with_root_scope<R>(
     eval: &mut neovm_eval::emacs_core::eval::Context,
@@ -271,4 +264,224 @@ pub fn recording_terminal_host_for_test(
     log: std::rc::Rc<std::cell::RefCell<Vec<&'static str>>>,
 ) -> crate::test_utils::terminal_test_upper_layer_helpers::RecordingTerminalHost {
     crate::test_utils::terminal_test_upper_layer_helpers::RecordingTerminalHost { log }
+}
+
+// ---------------------------------------------------------------------------
+// Peer #981 R1: the display upper-layer helper writers. Every cross-crate
+// route below delegates to a pub(crate) original; the VIS class keeps only
+// pure observers and plain data. The min-width comparison and the plain-field
+// comparison install display TLS overrides through their pub(crate) guards;
+// the rest configure or drive a Context the caller owns, so the write
+// capability is the fence, not a direct cross-crate item.
+// ---------------------------------------------------------------------------
+
+/// FENCE (peer #981 R1): numeric-padding TLS override + fresh GNU row compare.
+pub fn mode_line_min_width_compare_fresh_gnu_row_for_test(
+    make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+    kind: &str,
+) {
+    crate::test_utils::mode_line_min_width_boundary_test_upper_layer_helpers::compare_fresh_gnu_row(
+        make_context,
+        kind,
+    )
+}
+
+/// FENCE (peer #981 R1): plain-field TLS guard + trace comparison.
+pub fn mode_line_plain_field_compare_for_test(
+    make_context: impl FnMut() -> neovm_eval::emacs_core::eval::Context,
+    setup: &str,
+) {
+    crate::test_utils::mode_line_plain_field_test_upper_layer_helpers::compare(make_context, setup)
+}
+
+/// FENCE (peer #981 R1): GC-generational process knob + accumulated-property assert.
+pub fn mode_line_gc_assert_accumulated_property_survives_for_test(
+    make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+    generational: bool,
+    source: crate::test_utils::mode_line_gc_roots_test_upper_layer_helpers::PropertySource,
+    entry: crate::test_utils::mode_line_gc_roots_test_upper_layer_helpers::FormatEntry,
+) {
+    crate::test_utils::mode_line_gc_roots_test_upper_layer_helpers::assert_accumulated_property_survives(
+        make_context,
+        generational,
+        source,
+        entry,
+    )
+}
+
+/// FENCE (peer #981 R1): element-attribution evaluator driver.
+pub fn mode_line_element_attribution_strict_for_test(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    expression: &str,
+    gnu: &str,
+) {
+    crate::test_utils::mode_line_element_attribution_test_upper_layer_helpers::strict(
+        eval, expression, gnu,
+    )
+}
+
+/// FENCE (peer #981 R1): dynamic-symbol walker driver.
+pub fn mode_line_dynamic_symbols_render_for_test(
+    ctx: &mut neovm_eval::emacs_core::eval::Context,
+    pctx: &crate::emacs_core::xdisp::ModeLinePercentContext,
+    format: neovm_value::value::Value,
+    walker: crate::test_utils::mode_line_dynamic_symbols_test_upper_layer_helpers::Walker,
+) -> String {
+    crate::test_utils::mode_line_dynamic_symbols_test_upper_layer_helpers::render(
+        ctx, pctx, format, walker,
+    )
+}
+
+/// FENCE (peer #981 R1): dynamic-symbol walker driver into a rendered accumulator.
+pub fn mode_line_dynamic_symbols_render_into_for_test(
+    ctx: &mut neovm_eval::emacs_core::eval::Context,
+    pctx: &crate::emacs_core::xdisp::ModeLinePercentContext,
+    format: neovm_value::value::Value,
+    walker: crate::test_utils::mode_line_dynamic_symbols_test_upper_layer_helpers::Walker,
+    rendered: &mut crate::emacs_core::xdisp::ModeLineRendered,
+) {
+    crate::test_utils::mode_line_dynamic_symbols_test_upper_layer_helpers::render_into(
+        ctx, pctx, format, walker, rendered,
+    )
+}
+
+/// FENCE (peer #981 R1): dynamic-symbol Context constructor.
+pub fn mode_line_dynamic_symbols_context_for_test(
+    make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+) -> neovm_eval::emacs_core::eval::Context {
+    crate::test_utils::mode_line_dynamic_symbols_test_upper_layer_helpers::context(make_context)
+}
+
+/// FENCE (peer #981 R1): element-attribution Context constructor.
+pub fn mode_line_element_attribution_context_for_test(
+    make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+) -> neovm_eval::emacs_core::eval::Context {
+    crate::test_utils::mode_line_element_attribution_test_upper_layer_helpers::context(make_context)
+}
+
+/// FENCE (peer #981 R1): incremental-lifetimes Context constructor.
+pub fn mode_line_incremental_lifetimes_context_for_test(
+    make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+) -> neovm_eval::emacs_core::eval::Context {
+    crate::test_utils::mode_line_incremental_lifetimes_test_upper_layer_helpers::context(
+        make_context,
+    )
+}
+
+/// FENCE (peer #981 R1): flow-policy Context constructor (process env knob).
+pub fn mode_line_flow_context_for_test(
+    make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+) -> neovm_eval::emacs_core::eval::Context {
+    crate::test_utils::mode_line_flow_test_upper_layer_helpers::context(make_context)
+}
+
+/// FENCE (peer #981 R1): interactive Context constructor.
+pub fn xdisp_interactive_context_for_test(
+    make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+) -> neovm_eval::emacs_core::eval::Context {
+    crate::test_utils::xdisp_test_upper_layer_helpers::interactive_context(make_context)
+}
+
+/// FENCE (peer #981 R1): single-cell TTY Context constructor.
+pub fn xdisp_pixel_size_tty_context_for_test(
+    make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+) -> (neovm_eval::emacs_core::eval::Context, i64) {
+    crate::test_utils::xdisp_test_upper_layer_helpers::pixel_size_tty_context(make_context)
+}
+
+/// FENCE (peer #981 R1): desktop font host Context constructor.
+pub fn system_font_desktop_context_for_test(
+    make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+) -> neovm_eval::emacs_core::eval::Context {
+    crate::test_utils::system_font_test_upper_layer_helpers::desktop_context(make_context)
+}
+
+/// FENCE (peer #981 R1): face-remapping Context constructor.
+pub fn xfaces_font_remapping_context_for_test(
+    make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+) -> neovm_eval::emacs_core::eval::Context {
+    crate::test_utils::xfaces_upper_layer_helpers::font_remapping_context(make_context)
+}
+
+/// FENCE (peer #981 R1): select-or-create the GUI frame on a caller-owned Context.
+pub fn xfaces_ensure_selected_gui_frame_for_test(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+) -> crate::window::FrameId {
+    crate::test_utils::xfaces_upper_layer_helpers::ensure_selected_gui_frame(eval)
+}
+
+/// FENCE (peer #981 R1): frame-creating evaluator driver.
+pub fn window_cmds_eval_with_frame_for_test(
+    make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+    src: &str,
+) -> Vec<String> {
+    crate::test_utils::window_cmds_upper_layer_helpers::eval_with_frame(make_context, src)
+}
+
+/// FENCE (peer #981 R1): single-result frame-creating evaluator driver.
+pub fn window_cmds_eval_one_with_frame_for_test(
+    make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+    src: &str,
+) -> String {
+    crate::test_utils::window_cmds_upper_layer_helpers::eval_one_with_frame(make_context, src)
+}
+
+/// FENCE (peer #981 R1): GUI-frame evaluator driver.
+pub fn window_cmds_eval_with_gui_frame_for_test(
+    make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
+    src: &str,
+) -> Vec<String> {
+    crate::test_utils::window_cmds_upper_layer_helpers::eval_with_gui_frame(make_context, src)
+}
+
+/// FENCE (peer #981 R1): attempt-freshness projection setup.
+pub fn attempt_freshness_projections_for_test(
+    eval: neovm_eval::emacs_core::eval::Context,
+) -> (
+    neovm_eval::emacs_core::eval::Context,
+    neovm_edit::buffer::BufferId,
+    crate::window::FrameId,
+    crate::window::WindowId,
+) {
+    crate::test_utils::upper_layer_helpers::attempt_freshness_projections(eval)
+}
+
+/// FENCE (peer #981 R1): buffer-layout projection setup.
+pub fn buffer_layout_projection_setup_for_test(
+    eval: neovm_eval::emacs_core::eval::Context,
+) -> (
+    neovm_eval::emacs_core::eval::Context,
+    neovm_edit::buffer::BufferId,
+) {
+    crate::test_utils::upper_layer_helpers::buffer_layout_projection_setup(eval)
+}
+
+/// FENCE (peer #981 R1): next fontified-property boundary (Context cache walk).
+pub fn next_fontified_property_change_for_test(
+    ctx: &mut neovm_eval::emacs_core::eval::Context,
+    pos: i64,
+    limit: i64,
+    mode: neovm_edit::emacs_core::textprop::FontificationBoundaryMode,
+) -> neovm_value::error::EvalResult {
+    crate::emacs_core::xdisp::next_fontified_property_change_for_test(ctx, pos, limit, mode)
+}
+
+/// FENCE (peer #981 R1): next unfontified position (Context cache walk).
+pub fn next_unfontified_position_for_test(
+    ctx: &mut neovm_eval::emacs_core::eval::Context,
+    pos: i64,
+    end: i64,
+    mode: neovm_edit::emacs_core::textprop::FontificationBoundaryMode,
+) -> Result<i64, neovm_value::error::Flow> {
+    crate::emacs_core::xdisp::next_unfontified_position_for_test(ctx, pos, end, mode)
+}
+
+/// FENCE (peer #981 R1): line projection of the private line/column scan
+/// (the scan re-seats the buffer's per-buffer line-number anchor).
+pub fn prefix_line_and_column_for_test(
+    buf: &neovm_edit::buffer::Buffer,
+    accessible: neovm_edit::buffer::AccessibleEmacsByteRange,
+    end_byte: neovm_edit::buffer::EmacsBytePos,
+) -> usize {
+    crate::emacs_core::xdisp::prefix_line_and_column_for_test(buf, accessible, end_byte)
 }

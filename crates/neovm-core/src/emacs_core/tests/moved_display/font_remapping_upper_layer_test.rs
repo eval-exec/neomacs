@@ -3,9 +3,7 @@
 //! Re-homed from neovm-display (display upper-layer re-home).
 use crate::emacs_core::display_host::FontResolveRequest;
 use crate::face::{FaceHeight, FontSlant, FontWeight, FontWidth};
-use neovm_display::test_utils::xfaces_upper_layer_helpers::{
-    PointSizeFontHost, font_remapping_context,
-};
+use neovm_display::test_support::authority::xfaces_font_remapping_context_for_test as font_remapping_context;
 use neovm_eval::emacs_core::eval::{
     Context, DisplayHost, FontPxProbeResult, GuiFrameHostRequest, ResolvedFontMatch,
 };

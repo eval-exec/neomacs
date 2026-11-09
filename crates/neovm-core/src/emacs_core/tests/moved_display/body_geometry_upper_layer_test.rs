@@ -1,7 +1,7 @@
 //! Body-geometry tests that need the core upper layers.
 //!
 //! Re-homed from neovm-display (display upper-layer re-home).
-use neovm_display::test_utils::window_cmds_upper_layer_helpers::eval_with_gui_frame;
+use neovm_display::test_support::authority::window_cmds_eval_with_gui_frame_for_test as eval_with_gui_frame;
 
 #[test]
 fn body_queries_use_live_chrome_presence_before_first_redisplay() {

@@ -8,9 +8,8 @@ use crate::face::{Color, FaceAttrValue, FaceHeight};
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayWindowExt;
 use crate::window::{FRAME_ID_BASE, FrameId, FrameParam};
-use neovm_display::test_utils::xfaces_upper_layer_helpers::{
-    ensure_selected_gui_frame, resolved_frame_font,
-};
+use neovm_display::test_support::authority::xfaces_ensure_selected_gui_frame_for_test as ensure_selected_gui_frame;
+use neovm_display::test_utils::xfaces_upper_layer_helpers::resolved_frame_font;
 use neovm_edit::buffer::{Buffer, CharPos0, CharRange};
 use neovm_eval::emacs_core::eval::data::face_registry::FIRST_DYNAMIC_FACE_ID;
 use neovm_eval::emacs_core::eval::{

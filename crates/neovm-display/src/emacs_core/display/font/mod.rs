@@ -2271,7 +2271,6 @@ pub(crate) fn fontp(args: Vec<Value>) -> EvalResult {
 /// Usage: `(font-spec :family "Monospace" :weight 'normal :size 12)`
 ///
 /// Returns a vector `[:font-spec :family "Monospace" :weight normal :size 12]`.
-#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn font_spec(args: Vec<Value>) -> EvalResult {
     let mut elems: Vec<Value> = Vec::with_capacity(1 + args.len());
     elems.push(Value::keyword(FONT_SPEC_TAG));
@@ -2939,15 +2938,14 @@ fn font_weight_symbol(weight: FontWeight) -> &'static str {
     weight.symbol_name()
 }
 
-#[cfg(any(test, feature = "test-support"))]
-#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+#[cfg(test)]
 pub(crate) fn build_font_object(face: &RuntimeFace) -> Value {
     build_font_object_with_pixel_size(face, None)
 }
 
 /// GNU font objects carry the OPENED pixel size in FONT_SIZE (the XLFD's
 /// pixel field prints it); pass `pixel_size` when the resolver knows it.
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 fn build_font_object_with_pixel_size(face: &RuntimeFace, pixel_size: Option<i64>) -> Value {
     let fields = font_object_property_fields(face, pixel_size);
     let stable_name = font_name_for_face(face)

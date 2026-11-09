@@ -47,7 +47,7 @@ fn point_context() -> Context {
 #[test]
 fn mode_line_nested_point_counter_matches_observed_gnu() {
     assert!(
-        mode_line_flow_policy::enabled(),
+        mode_line_flow_enabled(),
         "requires the normal Context entry"
     );
     for (name, nested, expected) in [

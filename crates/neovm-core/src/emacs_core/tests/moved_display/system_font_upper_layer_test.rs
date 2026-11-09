@@ -5,7 +5,7 @@ use crate::emacs_core::display_host::{
     FrameFontRequest, SystemFontName, SystemFontRole, SystemFonts,
 };
 use crate::emacs_core::font::*;
-use neovm_display::test_utils::system_font_test_upper_layer_helpers::desktop_context;
+use neovm_display::test_support::authority::system_font_desktop_context_for_test as desktop_context;
 use neovm_eval::emacs_core::eval::ResolvedFrameFont;
 use neovm_value::value::Value;
 

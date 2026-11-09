@@ -3,7 +3,7 @@
 //! Re-homed from neovm-display (display upper-layer re-home).
 use crate::emacs_core::xdisp::*;
 use crate::window::DisplayFrameManagerExt;
-use neovm_display::test_utils::xdisp_test_upper_layer_helpers::interactive_context;
+use neovm_display::test_support::authority::xdisp_interactive_context_for_test as interactive_context;
 use neovm_edit::buffer::CharLen;
 use neovm_edit::buffer::CharPos0;
 use neovm_edit::buffer::CharRange;

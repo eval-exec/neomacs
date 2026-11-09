@@ -2,10 +2,11 @@
 //!
 //! Re-homed from neovm-display (display upper-layer re-home).
 use crate::emacs_core::xdisp::*;
-use neovm_display::test_utils::mode_line_plain_field_test_upper_layer_helpers::{
-    PropertyRead, compare, string_trace,
+use neovm_display::test_support::authority::{
+    mode_line_plain_field_compare_for_test as compare,
+    xdisp_interactive_context_for_test as interactive_context,
 };
-use neovm_display::test_utils::xdisp_test_upper_layer_helpers::interactive_context;
+use neovm_display::test_utils::mode_line_plain_field_test_upper_layer_helpers::PropertyRead;
 use neovm_edit::buffer::CharPos0;
 use neovm_value::value::Value;
 #[derive(Debug, PartialEq, Eq)]

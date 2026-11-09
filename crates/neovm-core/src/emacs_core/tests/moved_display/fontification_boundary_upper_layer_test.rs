@@ -2,7 +2,10 @@
 //!
 //! Re-homed from neovm-display (display upper-layer re-home).
 use crate::emacs_core::xdisp::*;
-use crate::emacs_core::xdisp::{next_fontified_property_change, next_unfontified_position};
+use neovm_display::test_support::authority::{
+    next_fontified_property_change_for_test as next_fontified_property_change,
+    next_unfontified_position_for_test as next_unfontified_position,
+};
 use neovm_edit::emacs_core::textprop::{FontificationBoundaryAdmission, FontificationBoundaryMode};
 use neovm_eval::emacs_core::eval::Context;
 use neovm_value::error::EvalResult;
@@ -284,9 +287,9 @@ fn fontification_boundary_real_ensure_keeps_nonmarking_and_error_hook_observatio
 
 #[test]
 fn fontification_scan_stops_at_effective_overlay_nil_islands() {
-    // GNU 31.1: taskset -c 0-3,14-31 bash
-    // tmp/vmcall/fontadm-oracle/run-gnu.sh --out
-    // tmp/vmcall/fontadm-oracle/capture-r1 --release (main sandbox).
+    // GNU 31.1 oracle: a taskset-pinned batch run of the pinned reference
+    // under the fontification-admission capture harness (release build)
+    // produced the literals below.
     // Captured stdout SHA256 f120875cc51de9fda48cf75aa025475d6cf0d8677743694428204093f2db5171:
     // truthy-overlay-prefix-nil-text-tail first nil=5; a nil overlay over
     // truthy text has no nil stop. These are literals, never refreshed here.

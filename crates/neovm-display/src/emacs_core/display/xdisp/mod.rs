@@ -32,22 +32,15 @@ use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
 use crate::window::geometry::DisplayGeometryExt;
 use mode_line_coding::CodingAccess;
-#[cfg(any(test, feature = "test-support"))]
 #[path = "mode_line_flow.rs"]
-pub mod mode_line_flow_policy;
-#[cfg(not(any(test, feature = "test-support")))]
-#[path = "mode_line_flow.rs"]
-mod mode_line_flow_policy;
+pub(crate) mod mode_line_flow_policy;
 mod mode_line_output;
 mod mode_line_point;
-#[cfg(any(test, feature = "test-support"))]
-pub mod mode_line_string;
-#[cfg(not(any(test, feature = "test-support")))]
 pub(crate) mod mode_line_string;
 #[cfg(any(test, feature = "test-support"))]
 pub mod mode_line_target;
 #[cfg(not(any(test, feature = "test-support")))]
-mod mode_line_target;
+pub(crate) mod mode_line_target;
 pub(crate) mod mode_line_walk;
 use mode_line_append::{
     AppendAdmission, DecimalDigit, PercentAppendDriver, PercentWidth, TrailingPercent,
@@ -81,6 +74,37 @@ pub(crate) use mode_line_numeric_padding::force_for_test;
 mod mode_line_symbols;
 use fontification_boundary::{FontificationBoundaryAdmission, FontificationBoundaryMode};
 pub(crate) mod motion;
+
+/// Write-capability delegates for the moved upper-layer tests. The originals
+/// stay private; the public route is the ownership-crate AUTHORITY fence.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn prefix_line_and_column_for_test(
+    buf: &Buffer,
+    accessible: AccessibleEmacsByteRange,
+    end_byte: EmacsBytePos,
+) -> usize {
+    prefix_line_and_column(buf, accessible, end_byte).line
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn next_fontified_property_change_for_test(
+    ctx: &mut neovm_eval::emacs_core::eval::Context,
+    pos: i64,
+    limit: i64,
+    mode: FontificationBoundaryMode,
+) -> EvalResult {
+    next_fontified_property_change(ctx, pos, limit, mode)
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn next_unfontified_position_for_test(
+    ctx: &mut neovm_eval::emacs_core::eval::Context,
+    pos: i64,
+    end: i64,
+    mode: FontificationBoundaryMode,
+) -> Result<i64, Flow> {
+    next_unfontified_position(ctx, pos, end, mode)
+}
 
 pub(crate) use super::invisibility::{Invisibility, text_prop_means_invisible};
 use crate::window::display::WindowDisplayContextExt;
@@ -483,11 +507,7 @@ fn emacs_char_count(bytes: &[u8], multibyte: bool) -> usize {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 struct LineColumn {
-    #[cfg(any(test, feature = "test-support"))]
-    pub line: usize,
-    #[cfg(not(any(test, feature = "test-support")))]
     line: usize,
     column: usize,
 }
@@ -644,7 +664,6 @@ impl LineAdvance {
 // same-screen-row precondition does NOT pin: moving point left or right within
 // a row changes `%c` while the row is unchanged.
 //
-#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 fn prefix_line_and_column(
     buf: &Buffer,
     accessible: AccessibleEmacsByteRange,
@@ -9233,7 +9252,6 @@ fn get_fontified_property(ctx: &mut neovm_eval::emacs_core::eval::Context, pos: 
     )
 }
 
-#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 fn next_fontified_property_change(
     ctx: &mut neovm_eval::emacs_core::eval::Context,
     pos: i64,
@@ -9293,7 +9311,6 @@ fn next_fontified_property_change(
 /// Find the next effective nil position without retaining a cursor across
 /// Lisp. The common proof seats one bounded interval walk; the fallback
 /// resolves values at text/overlay stops, including aliases and categories.
-#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 fn next_unfontified_position(
     ctx: &mut neovm_eval::emacs_core::eval::Context,
     mut pos: i64,

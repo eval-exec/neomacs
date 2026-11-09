@@ -2,8 +2,9 @@
 //!
 //! Re-homed from neovm-display (display upper-layer re-home).
 use crate::emacs_core::xdisp::*;
-use neovm_display::test_utils::mode_line_element_attribution_test_upper_layer_helpers::{
-    context, strict,
+use neovm_display::test_support::authority::{
+    mode_line_element_attribution_context_for_test as context,
+    mode_line_element_attribution_strict_for_test as strict,
 };
 use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::emacs_core::eval::save_scratch_gc_roots;

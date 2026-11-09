@@ -27,8 +27,10 @@ use std::fs;
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use neovm_display::test_utils::window_cmds_upper_layer_helpers::{
-    eval_one_with_frame, eval_with_frame, eval_with_gui_frame,
+use neovm_display::test_support::authority::{
+    window_cmds_eval_one_with_frame_for_test as eval_one_with_frame,
+    window_cmds_eval_with_frame_for_test as eval_with_frame,
+    window_cmds_eval_with_gui_frame_for_test as eval_with_gui_frame,
 };
 
 fn graphical_recenter_context(

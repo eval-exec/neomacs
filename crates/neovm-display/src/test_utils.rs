@@ -1504,7 +1504,7 @@ pub mod upper_layer_helpers {
     use neovm_edit::buffer::BufferId;
     use neovm_eval::emacs_core::eval::Context;
 
-    pub fn attempt_freshness_projections(
+    pub(crate) fn attempt_freshness_projections(
         mut eval: Context,
     ) -> (Context, BufferId, FrameId, WindowId) {
         let live = eval.buffer_manager().current_buffer().unwrap().id();
@@ -1515,7 +1515,7 @@ pub mod upper_layer_helpers {
         (eval, live, frame, window)
     }
 
-    pub fn buffer_layout_projection_setup(mut eval: Context) -> (Context, BufferId) {
+    pub(crate) fn buffer_layout_projection_setup(mut eval: Context) -> (Context, BufferId) {
         eval.eval_str("(setq fontification-functions nil)").unwrap();
         let buffer = eval.buffer_manager().current_buffer().unwrap().id();
         (eval, buffer)
@@ -1532,7 +1532,10 @@ pub mod window_cmds_upper_layer_helpers {
     use neovm_eval::emacs_core::print::format_eval_result;
     use neovm_value::value::Value;
 
-    pub fn eval_with_frame(make_context: impl FnOnce() -> Context, src: &str) -> Vec<String> {
+    pub(crate) fn eval_with_frame(
+        make_context: impl FnOnce() -> Context,
+        src: &str,
+    ) -> Vec<String> {
         let mut ev = make_context();
         // Create a buffer for the initial window.
         let buf = ev.edit.buffers.create_buffer("*scratch*");
@@ -1548,14 +1551,17 @@ pub mod window_cmds_upper_layer_helpers {
             .collect()
     }
 
-    pub fn eval_one_with_frame(make_context: impl FnOnce() -> Context, src: &str) -> String {
+    pub(crate) fn eval_one_with_frame(make_context: impl FnOnce() -> Context, src: &str) -> String {
         eval_with_frame(make_context, src)
             .into_iter()
             .next()
             .unwrap()
     }
 
-    pub fn eval_with_gui_frame(make_context: impl FnOnce() -> Context, src: &str) -> Vec<String> {
+    pub(crate) fn eval_with_gui_frame(
+        make_context: impl FnOnce() -> Context,
+        src: &str,
+    ) -> Vec<String> {
         let mut ev = make_context();
         let buf = ev.edit.buffers.create_buffer("*scratch*");
         ev.edit.buffers.set_current(buf);
@@ -1575,7 +1581,7 @@ pub mod window_cmds_upper_layer_helpers {
 /// live here once; the caller supplies the harness-booted Context where one
 /// is constructed.
 pub mod xfaces_upper_layer_helpers {
-    pub struct PointSizeFontHost;
+    pub(crate) struct PointSizeFontHost;
 
     impl DisplayHost for PointSizeFontHost {
         fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
@@ -1765,7 +1771,7 @@ pub mod xfaces_upper_layer_helpers {
         ])
         .expect("create font spec")
     }
-    pub fn ensure_selected_gui_frame(eval: &mut Context) -> FrameId {
+    pub(crate) fn ensure_selected_gui_frame(eval: &mut Context) -> FrameId {
         let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(eval);
         let frame = eval
             .frame_manager_mut()
@@ -1795,7 +1801,7 @@ pub mod xfaces_upper_layer_helpers {
             height_tenths,
         }
     }
-    pub fn font_remapping_context(make_context: impl FnOnce() -> Context) -> Context {
+    pub(crate) fn font_remapping_context(make_context: impl FnOnce() -> Context) -> Context {
         let mut eval = make_context();
         let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
         eval.frame_manager_mut()
@@ -1817,7 +1823,7 @@ pub mod mode_line_gc_roots_test_upper_layer_helpers {
     // Inspect every retained cons before following it; an added formatter-owned
     // property may precede the fixture key. Property order is not an ownership
     // contract, and the new ordinal's spine must survive collection too.
-    pub fn assert_owned_property(
+    pub(crate) fn assert_owned_property(
         eval: &Context,
         mut plist: Value,
         property: Value,
@@ -1875,7 +1881,7 @@ pub mod mode_line_gc_roots_test_upper_layer_helpers {
         Display,
     }
     use neovm_eval::emacs_core::eval::Context;
-    pub fn assert_accumulated_property_survives(
+    pub(crate) fn assert_accumulated_property_survives(
         make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
         generational: bool,
         source: PropertySource,
@@ -2016,7 +2022,7 @@ pub mod mode_line_flow_test_upper_layer_helpers {
     use neovm_eval::emacs_core::eval::Context;
     use neovm_eval::emacs_core::eval::save_scratch_gc_roots;
     use neovm_value::value::Value;
-    pub fn context(
+    pub(crate) fn context(
         make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
     ) -> Context {
         // nextest runs each test in its own process. This process knob contains
@@ -2072,7 +2078,7 @@ pub mod mode_line_incremental_lifetimes_test_upper_layer_helpers {
             }
         }
     }
-    pub fn context(
+    pub(crate) fn context(
         make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
     ) -> Context {
         let mut eval = interactive_context(make_context);
@@ -2089,7 +2095,7 @@ pub mod mode_line_element_attribution_test_upper_layer_helpers {
     use neovm_eval::emacs_core::eval::Context;
     use neovm_eval::emacs_core::eval::save_scratch_gc_roots;
     use neovm_value::value::Value;
-    pub fn context(
+    pub(crate) fn context(
         make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
     ) -> Context {
         crate::test_utils::init_test_tracing();
@@ -2149,7 +2155,7 @@ pub mod mode_line_element_attribution_test_upper_layer_helpers {
         .expect("GNU callback fixture");
         eval
     }
-    pub fn strict(eval: &mut Context, expression: &str, gnu: &str) {
+    pub(crate) fn strict(eval: &mut Context, expression: &str, gnu: &str) {
         let roots = save_scratch_gc_roots();
         eval.eval_str(&format!("(setq ep30-actual {expression})"))
             .expect("format-mode-line returns");
@@ -2220,7 +2226,7 @@ pub mod mode_line_plain_field_test_upper_layer_helpers {
     }
 
     #[derive(Debug, PartialEq, Eq)]
-    pub struct StringTrace {
+    pub(crate) struct StringTrace {
         bytes: Vec<u8>,
         multibyte: bool,
         char_len: usize,
@@ -2228,7 +2234,7 @@ pub mod mode_line_plain_field_test_upper_layer_helpers {
     }
 
     #[derive(Debug, PartialEq, Eq)]
-    pub struct SourceTrace {
+    pub(crate) struct SourceTrace {
         output_start: usize,
         output_end: usize,
         source_start: usize,
@@ -2239,7 +2245,7 @@ pub mod mode_line_plain_field_test_upper_layer_helpers {
     }
 
     #[derive(Debug, PartialEq, Eq)]
-    pub struct OutputTrace {
+    pub(crate) struct OutputTrace {
         text: StringTrace,
         sources: Vec<SourceTrace>,
         eval_count: i64,
@@ -2247,11 +2253,11 @@ pub mod mode_line_plain_field_test_upper_layer_helpers {
     }
 
     #[derive(Clone, Copy)]
-    pub enum PropertyOrder {
+    pub(crate) enum PropertyOrder {
         Exact,
         Canonical,
     }
-    pub fn compare(
+    pub(crate) fn compare(
         mut make_context: impl FnMut() -> neovm_eval::emacs_core::eval::Context,
         setup: &str,
     ) {
@@ -2276,7 +2282,7 @@ pub mod mode_line_plain_field_test_upper_layer_helpers {
             );
         }
     }
-    pub fn output_trace(
+    pub(crate) fn output_trace(
         make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
         setup: &str,
         path: ModeLinePlainFieldPath,
@@ -2375,7 +2381,11 @@ pub mod mode_line_plain_field_test_upper_layer_helpers {
             point,
         }
     }
-    pub fn string_trace(eval: &mut Context, value: Value, order: PropertyOrder) -> StringTrace {
+    pub(crate) fn string_trace(
+        eval: &mut Context,
+        value: Value,
+        order: PropertyOrder,
+    ) -> StringTrace {
         let string = value.as_lisp_string().expect("mode-line string");
         let bytes = string.as_bytes().to_vec();
         let multibyte = string.is_multibyte();
@@ -2427,7 +2437,7 @@ pub mod mode_line_min_width_boundary_test_upper_layer_helpers {
     use crate::test_utils::xdisp_test_upper_layer_helpers::utf8_locale_terminal;
     use crate::window::DisplayFrameManagerExt;
     use neovm_eval::emacs_core::eval::Context;
-    pub const GNU_ROWS: &str = include_str!(concat!(
+    pub(crate) const GNU_ROWS: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/src/emacs_core/display/xdisp/tests/mode_line_min_width_boundary_gnu_rows.tsv"
     ));
@@ -2439,7 +2449,7 @@ pub mod mode_line_min_width_boundary_test_upper_layer_helpers {
     use crate::test_utils::mode_line_numeric_padding_shared_helpers::PaddingPolicyGuard;
     use crate::test_utils::xdisp_test_upper_layer_helpers::interactive_context;
     use neovm_value::value::Value;
-    pub fn compare_fresh_gnu_row(
+    pub(crate) fn compare_fresh_gnu_row(
         make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
         kind: &str,
     ) {
@@ -2483,14 +2493,14 @@ pub mod mode_line_min_width_boundary_test_upper_layer_helpers {
         assert_eq!(closing.source().as_utf8_str(), Some("|"));
         assert_eq!(closing.output_start(), expected(kind).chars().count() - 1);
     }
-    pub fn expected(kind: &str) -> &str {
+    pub(crate) fn expected(kind: &str) -> &str {
         GNU_ROWS
             .lines()
             .filter_map(|line| line.split_once('\t'))
             .find_map(|(name, row)| (name == kind).then_some(row))
             .expect("fresh GNU case exists")
     }
-    pub fn format_for(kind: &str) -> &'static str {
+    pub(crate) fn format_for(kind: &str) -> &'static str {
         match kind {
             "mode-name" => r#"'((:propertize "AB" display (min-width (10.0))) "%m" "|")"#,
             "frame-name" => r#"'((:propertize "AB" display (min-width (10.0))) "%F" "|")"#,
@@ -2540,7 +2550,7 @@ pub mod mode_line_dynamic_symbols_test_upper_layer_helpers {
         intern_call_names, intern_uninterned, reset_intern_calls, restore_runtime_interner,
         unintern_canonical_id,
     };
-    pub fn context(
+    pub(crate) fn context(
         make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
     ) -> Context {
         let mut ctx = make_context();
@@ -2553,7 +2563,7 @@ pub mod mode_line_dynamic_symbols_test_upper_layer_helpers {
         ctx.edit.buffers.set_current(buffer);
         ctx
     }
-    pub fn render(
+    pub(crate) fn render(
         ctx: &mut Context,
         pctx: &ModeLinePercentContext,
         format: Value,
@@ -2568,7 +2578,7 @@ pub mod mode_line_dynamic_symbols_test_upper_layer_helpers {
             .map(|code| char::from_u32(code).expect("Unicode test text"))
             .collect()
     }
-    pub fn render_into(
+    pub(crate) fn render_into(
         ctx: &mut Context,
         pctx: &ModeLinePercentContext,
         format: Value,
@@ -2650,7 +2660,7 @@ pub mod xdisp_test_upper_layer_helpers {
         StringTextPropertyRun, ValueKind, get_string_text_properties_table_for_value,
         set_string_text_properties_for_value,
     };
-    pub fn interactive_context(
+    pub(crate) fn interactive_context(
         make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
     ) -> Context {
         let mut eval = make_context();
@@ -2660,7 +2670,7 @@ pub mod xdisp_test_upper_layer_helpers {
     /// Build a context with a single TTY frame (char cell 1x1) whose selected
     /// window shows the current buffer, used by the `display`-spec measurement
     /// tests below.  Returns the selected-window id as a fixnum-able integer.
-    pub fn pixel_size_tty_context(
+    pub(crate) fn pixel_size_tty_context(
         make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
     ) -> (Context, i64) {
         let mut eval = interactive_context(make_context);
@@ -2754,7 +2764,7 @@ pub mod system_font_test_upper_layer_helpers {
     use neovm_eval::emacs_core::eval::{
         Context, DisplayHost, FontPxProbeResult, GuiFrameHostRequest,
     };
-    pub fn desktop_context(
+    pub(crate) fn desktop_context(
         make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
     ) -> Context {
         let mut eval = make_context();
@@ -2825,9 +2835,9 @@ pub mod system_font_test_upper_layer_helpers {
 /// Shared numeric-padding policy guard for the re-homed mode-line tests.
 /// One home; the display unit tests and the core destinations share it.
 pub mod mode_line_numeric_padding_shared_helpers {
-    pub struct PaddingPolicyGuard(Option<bool>);
+    pub(crate) struct PaddingPolicyGuard(Option<bool>);
     impl PaddingPolicyGuard {
-        pub fn set(value: bool) -> Self {
+        pub(crate) fn set(value: bool) -> Self {
             Self(crate::emacs_core::xdisp::force_for_test(Some(value)))
         }
     }

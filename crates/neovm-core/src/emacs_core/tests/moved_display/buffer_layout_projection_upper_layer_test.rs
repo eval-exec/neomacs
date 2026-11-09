@@ -4,7 +4,7 @@
 //! the core upper layers that the display unit runtime refuses.
 use crate::window::BufferLayoutInputState;
 use crate::window::display::WindowDisplayContextExt;
-use neovm_display::test_utils::upper_layer_helpers::buffer_layout_projection_setup;
+use neovm_display::test_support::authority::buffer_layout_projection_setup_for_test as buffer_layout_projection_setup;
 use neovm_edit::buffer::BufferId;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::emacs_core::eval::data::layout_input::FontificationHookIdentity;

@@ -3,7 +3,7 @@
 //! Re-homed from neovm-display (display upper-layer re-home).
 use crate::emacs_core::xdisp::*;
 use crate::window::DisplayFrameManagerExt;
-use neovm_display::test_utils::mode_line_flow_test_upper_layer_helpers::context;
+use neovm_display::test_support::authority::mode_line_flow_context_for_test as context;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::emacs_core::eval::save_scratch_gc_roots;
 use neovm_value::error::Flow;

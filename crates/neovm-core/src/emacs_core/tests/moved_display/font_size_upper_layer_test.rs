@@ -2,7 +2,6 @@
 //!
 //! Re-homed from neovm-display (display upper-layer re-home).
 use crate::emacs_core::display_host::{FrameFontRequest, FrameFontSize};
-use crate::emacs_core::font::font_spec;
 use crate::emacs_core::xfaces::*;
 use crate::face::{FontSlant, FontWeight, FontWidth};
 use crate::window::DisplayFrameExt;

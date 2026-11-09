@@ -3,10 +3,12 @@
 //! Re-homed from neovm-display (display upper-layer re-home).
 use crate::emacs_core::xdisp::*;
 use crate::emacs_core::xdisp::{ModeLinePercentContext, ModeLineRendered};
-use neovm_display::test_utils::mode_line_dynamic_symbols_test_upper_layer_helpers::Walker;
-use neovm_display::test_utils::mode_line_dynamic_symbols_test_upper_layer_helpers::{
-    context, render, render_into,
+use neovm_display::test_support::authority::{
+    mode_line_dynamic_symbols_context_for_test as context,
+    mode_line_dynamic_symbols_render_for_test as render,
+    mode_line_dynamic_symbols_render_into_for_test as render_into,
 };
+use neovm_display::test_utils::mode_line_dynamic_symbols_test_upper_layer_helpers::Walker;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_value::heap_types::{GnuDeclaredCharacterCount, LispString};
 use neovm_value::intern::intern;

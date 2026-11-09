@@ -1907,7 +1907,6 @@ fn window_body_horizontal_offsets_pixels(
 /// fringes, margins, and the right divider or terminal separator).  Shared
 /// with auto-hscroll (`super::hscroll`) so the column geometry it follows
 /// matches what `window-body-width` reports and what the layout engine renders.
-#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn window_body_width_pixels(frames: &FrameManager, fid: FrameId, w: &Window) -> i64 {
     let total = window_width_pixels(w);
     let (left, right) = window_body_horizontal_offsets_pixels(frames, fid, w);

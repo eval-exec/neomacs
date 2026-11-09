@@ -10,8 +10,10 @@ use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
 use crate::window::display::WindowDisplayContextExt;
 use malachite::Integer;
-use neovm_display::test_utils::xdisp_test_upper_layer_helpers::{
-    interactive_context, pixel_size_tty_context,
+use neovm_display::test_support::authority::{
+    prefix_line_and_column_for_test as prefix_line_and_column,
+    xdisp_interactive_context_for_test as interactive_context,
+    xdisp_pixel_size_tty_context_for_test as pixel_size_tty_context,
 };
 use neovm_edit::buffer::buffer::BUFFER_SLOT_BUFFER_FILE_CODING_SYSTEM;
 use neovm_edit::buffer::{BufferTextBackendKind, CharPos0, LispCharPos1};
@@ -1519,7 +1521,7 @@ fn line_number_anchor_counts_from_recent_line_and_survives_edits_below() {
     // First computation seeds the anchor at point's line (5000 chars / 5 = 1000 newlines).
     let p = point_at(&eval, 5000);
     assert_eq!(
-        prefix_line_and_column(buf, buf.accessible_emacs_byte_region(), p).line,
+        prefix_line_and_column(buf, buf.accessible_emacs_byte_region(), p),
         1001
     );
     assert!(buf.line_number_anchor().get().is_some(), "anchor seeded");
@@ -1531,7 +1533,7 @@ fn line_number_anchor_counts_from_recent_line_and_survives_edits_below() {
     let buf = eval.edit.buffers.current_buffer().expect("buffer");
     let p = point_at(&eval, 5000);
     assert_eq!(
-        prefix_line_and_column(buf, buf.accessible_emacs_byte_region(), p).line,
+        prefix_line_and_column(buf, buf.accessible_emacs_byte_region(), p),
         1001
     );
     // An edit ABOVE the anchor invalidates it: a newline inserted at the
@@ -1541,7 +1543,7 @@ fn line_number_anchor_counts_from_recent_line_and_survives_edits_below() {
     let buf = eval.edit.buffers.current_buffer().expect("buffer");
     let p = point_at(&eval, 5001);
     assert_eq!(
-        prefix_line_and_column(buf, buf.accessible_emacs_byte_region(), p).line,
+        prefix_line_and_column(buf, buf.accessible_emacs_byte_region(), p),
         1002
     );
 }

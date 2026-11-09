@@ -5,7 +5,7 @@ use crate::emacs_core::xdisp::*;
 use crate::window::DisplayFrameManagerExt;
 use crate::window::display::WindowDisplayContextExt;
 use crate::window::{Window, WindowLayoutQuery, WindowLayoutQueryOutcome, WindowLayoutQueryScope};
-use neovm_display::test_utils::xdisp_test_upper_layer_helpers::interactive_context;
+use neovm_display::test_support::authority::xdisp_interactive_context_for_test as interactive_context;
 use neovm_edit::buffer::LispCharPos1;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_value::value::Value;
