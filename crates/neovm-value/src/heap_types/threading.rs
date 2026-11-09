@@ -11,6 +11,7 @@ use crate::tagged::transport::{SharedRoot, SharedRootError};
 use crate::tagged::value::TaggedValue;
 use crate::value::buffer_vocab::BufferId;
 use std::num::{NonZeroU32, NonZeroU64};
+use std::time::Instant;
 
 macro_rules! native_id {
     ($name:ident) => {
@@ -317,6 +318,10 @@ pub enum BlockedWait {
     /// Reacquire the mutex associated with the object in `event_object` at
     /// this recursion count, then continue.
     ConditionWait(RecursionDepth),
+    /// A `thread_select` wait (`sleep-for`, `accept-process-output`,
+    /// `sit-for`). GNU does not broadcast this wait from `thread-signal`
+    /// (`src/thread.c:974-982`); it ends at `deadline`.
+    Select { deadline: Instant },
 }
 
 /// Whether `run_thread` has installed its top-level handler.

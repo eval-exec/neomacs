@@ -628,6 +628,12 @@ pub(crate) fn finish_make_thread_result(
         }
         Err(FlowKind::ThreadBlocked(blocked)) => {
             threads.block_thread(thread_id, blocked.blocker, blocked.remaining_forms);
+            // A select-class wait publishes its deadline here, after the
+            // worker has parked. `thread-signal` does not wake it.
+            if let Some(duration) = sleep_duration_from_blocker(blocked.blocker) {
+                let deadline = std::time::Instant::now() + duration;
+                threads.set_blocked_wait(thread_id, Some(BlockedWait::Select { deadline }));
+            }
         }
         // kill-emacs is process-wide in GNU (Fkill_emacs exits, whichever
         // thread runs it), so it is not recorded as this thread's error — it
@@ -770,8 +776,10 @@ pub(crate) fn resume_blocked_thread(
         }
         // A pending signal skips the mutex retry (`lisp_mutex_lock_for_thread`
         // returns before taking the lock when `error_symbol` is set,
-        // src/thread.c:232-238).
-        Some(BlockedWait::MutexLock) | None => Ok(true),
+        // src/thread.c:232-238). A select deadline has already elapsed: the
+        // joiner slept until then, so raise or continue and do not re-enter
+        // the select (src/thread.c:974-982).
+        Some(BlockedWait::Select { .. } | BlockedWait::MutexLock) | None => Ok(true),
     };
     let retry_error = match retry {
         Ok(true) => None,

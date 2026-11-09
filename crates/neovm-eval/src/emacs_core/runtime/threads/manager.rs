@@ -518,12 +518,15 @@ impl ThreadManager {
 
     pub fn blocked_sleep_duration(&self, native: u64) -> Option<Duration> {
         let thread = self.get_thread(native)?;
-        if thread.native().phase() != ThreadPhase::Active(RunState::Blocked)
-            || thread.children().event_object().is_nil()
-        {
+        if thread.native().phase() != ThreadPhase::Active(RunState::Blocked) {
             return None;
         }
-        sleep_duration_from_blocker(thread.children().event_object())
+        match thread.native().blocked_wait() {
+            Some(BlockedWait::Select { deadline }) => {
+                Some(deadline.saturating_duration_since(std::time::Instant::now()))
+            }
+            Some(BlockedWait::MutexLock | BlockedWait::ConditionWait(_)) | None => None,
+        }
     }
 
     pub fn wake_thread(&mut self, native: u64) {
@@ -978,7 +981,8 @@ fn signal_wakes_blocked_wait(wait: Option<BlockedWait>) -> bool {
     // GNU broadcasts only `wait_condvar` (src/thread.c:974-982, :1029-1030).
     match wait {
         Some(BlockedWait::MutexLock | BlockedWait::ConditionWait(_)) => true,
-        None => false,
+        // `thread_select` is not `wait_condvar` (src/thread.c:974-982).
+        Some(BlockedWait::Select { .. }) | None => false,
     }
 }
 

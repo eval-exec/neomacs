@@ -1788,6 +1788,23 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
             }
             neovm_eval::emacs_core::eval::SelectTurn::Block(wait_time) => wait_time,
         };
+        // A simulated worker's finite select (`accept-process-output`,
+        // `sit-for`, and any other `wait_reading_process_output` timeout)
+        // must not occupy the one OS thread. The caller that released the
+        // global lock continues. `thread-signal` does not wake the park
+        // (src/thread.c:974-982). A poll or a forever wait stays here.
+        if self.threads().current_thread_id() != 0 && !self.green_threads_running() {
+            if let Some(remaining) = request.deadline.remaining(Instant::now()) {
+                if !remaining.is_zero() {
+                    return Err(neovm_value::error::Flow::thread_blocked(
+                        neovm_eval::emacs_core::threads::make_sleep_blocker(
+                            remaining.as_secs_f64(),
+                        ),
+                        neovm_value::value::Value::NIL,
+                    ));
+                }
+            }
+        }
         // The simulated backend has one OS thread, so the release
         // `thread_select` performs (src/thread.c:613-643) is its only
         // chance to run created workers and resume unblocked waiters.

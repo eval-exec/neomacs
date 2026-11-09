@@ -472,6 +472,34 @@ const SIGNAL_BEFORE_RUN_CAUGHT_FORM: &str = r#"
         gnu-ts-log))
 "#;
 
+/// Signal after the worker is inside `sleep-for`. GNU does not wake select,
+/// so the join waits out the rest of the sleep (lower bound only) and the
+/// handler still runs at reacquire. GNU:
+/// `(t nil (join-err arith-error ("bad")) nil nil ((caught arith-error ("bad"))) t)`.
+const SIGNAL_DURING_SLEEP_CAUGHT_FORM: &str = r#"
+(progn
+  (setq gnu-ts-log nil)
+  (setq gnu-ts-w
+        (make-thread
+         (lambda ()
+           (condition-case err
+               (progn (sleep-for 0.35) 'done)
+             (arith-error
+              (setq gnu-ts-log (cons (list 'caught (car err) (cdr err)) gnu-ts-log))
+              'caught)))))
+  (sleep-for 0.05)
+  (setq gnu-ts-live (thread-live-p gnu-ts-w))
+  (setq gnu-ts-sig (thread-signal gnu-ts-w 'arith-error '("bad")))
+  (let ((start (float-time)))
+    (setq gnu-ts-join
+          (condition-case err
+              (thread-join gnu-ts-w)
+            (error (list 'join-err (car err) (cdr err)))))
+    (setq gnu-ts-elapsed (- (float-time) start)))
+  (list gnu-ts-live gnu-ts-sig gnu-ts-join (thread-live-p gnu-ts-w)
+        (thread-last-error) gnu-ts-log (>= gnu-ts-elapsed 0.20)))
+"#;
+
 /// No handler in the worker. The top-level catcher records the error and
 /// join still signals its pre-wait snapshot. GNU:
 /// `(nil (join-err arith-error ("bad")) nil (arith-error "bad"))`.
@@ -516,6 +544,8 @@ const SIGNAL_MUTEX_CAUGHT_FORM: &str = r#"
 
 const SIGNAL_BEFORE_RUN_EXPECT: &str =
     "(nil (join-err arith-error (\"bad\")) nil nil ((caught arith-error (\"bad\"))))";
+const SIGNAL_DURING_SLEEP_EXPECT: &str =
+    "(t nil (join-err arith-error (\"bad\")) nil nil ((caught arith-error (\"bad\"))) t)";
 const SIGNAL_NO_HANDLER_EXPECT: &str =
     "(nil (join-err arith-error (\"bad\")) nil (arith-error \"bad\"))";
 const SIGNAL_MUTEX_CAUGHT_EXPECT: &str =
@@ -534,6 +564,14 @@ fn green_thread_signal_before_run_runs_condition_handler() {
     assert_eq!(
         green_printed(SIGNAL_BEFORE_RUN_CAUGHT_FORM),
         SIGNAL_BEFORE_RUN_EXPECT
+    );
+}
+
+#[test]
+fn gnu_thread_signal_during_sleep_for_is_caught_at_reacquire() {
+    assert_eq!(
+        sim_printed(SIGNAL_DURING_SLEEP_CAUGHT_FORM),
+        SIGNAL_DURING_SLEEP_EXPECT
     );
 }
 
