@@ -139,19 +139,31 @@ fn divergence_mac_x11_only_subrs_are_void_on_ns() {
 /// use or not initialized".  Neo's chooser reproduces the matching answer for
 /// its surface; the (x-file-dialog 1 2) arm pins that the window-system check
 /// precedes the argument checks.
+///
+/// MX-4: which message a build answers is a build-time fact in GNU -- the
+/// backend is chosen when Emacs is configured, and the C bodies never consult
+/// the `system-type' variable.  The last two arms bind `system-type' to the
+/// other reference's value and require the answer to stay the build's own, so
+/// a stand-in that dispatches on the run-time variable is caught.  (The GUI
+/// return contract itself cannot be driven on the GTK reference in batch: the
+/// C DEFUN's check_window_system rejects a term frame before any panel opens.
+/// The Neo-only tests below pin the stand-in's per-arm contract against the
+/// GNU sources cited there.)
 #[test]
 fn divergence_x_file_dialog_is_bound_on_every_surface() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = crate::common::host_expect!(
-        LinuxGnu => r#""OK (t (prompt dir &optional default-filename mustmatch only-dir-p) (error \"Window system frame should be used\") (error \"Window system frame should be used\"))""#,
-        MacosDarwin => r#""OK (t (prompt dir &optional default-filename mustmatch only-dir-p) (error \"Window system is not in use or not initialized\") (error \"Window system is not in use or not initialized\"))""#,
+        LinuxGnu => r#""OK (t (prompt dir &optional default-filename mustmatch only-dir-p) (error \"Window system frame should be used\") (error \"Window system frame should be used\") (error \"Window system frame should be used\") (error \"Window system frame should be used\"))""#,
+        MacosDarwin => r#""OK (t (prompt dir &optional default-filename mustmatch only-dir-p) (error \"Window system is not in use or not initialized\") (error \"Window system is not in use or not initialized\") (error \"Window system is not in use or not initialized\") (error \"Window system is not in use or not initialized\"))""#,
     );
     crate::common::assert_oracle_parity_expect(
         r#"(list (fboundp 'x-file-dialog)
   (help-function-arglist 'x-file-dialog t)
   (condition-case e (x-file-dialog "p" "/tmp") (error e))
-  (condition-case e (x-file-dialog 1 2) (error e)))"#,
+  (condition-case e (x-file-dialog 1 2) (error e))
+  (condition-case e (let ((system-type 'darwin)) (x-file-dialog "p" "/tmp")) (error e))
+  (condition-case e (let ((system-type 'gnu/linux)) (x-file-dialog "p" "/tmp")) (error e)))"#,
         expect,
     );
 }
@@ -181,6 +193,66 @@ fn x_file_dialog_gui_arm_does_not_recurse_through_read_file_name() {
         outcome.contains("/tmp/picked"),
         "the inner read-file-name must reach completing-read instead of \
          recursing into x-file-dialog: {outcome}"
+    );
+}
+
+/// MX-4: the GTK arm of the stand-in must follow the GTK C DEFUN's return
+/// contract, not `read-file-name`'s.  `xg_get_file_with_chooser` says
+/// MUSTMATCH only picks the OPEN vs SAVE chooser and the accept-button label
+/// (gtkutil.c:2634-2637) -- the user can still enter a non-existing name -- so
+/// the arm must not forward it as a validation requirement.  A cancelled,
+/// closed, or empty-OK dialog returns NULL from `gtk_file_chooser_get_filename`
+/// (gtkutil.c:2584-2588) and the DEFUN turns that into quit() (xfns.c:9721-9723,
+/// "Make Cancel equivalent to C-g").  The mocked read-file-name returns ""
+/// (the minibuffer stand-in's empty accepted name); C-g already signals quit
+/// and passes through.
+#[test]
+fn x_file_dialog_gtk_arm_follows_the_gtk_return_contract() {
+    let form = r#"(progn
+  (require 'cl-lib)
+  (let (calls)
+    (let ((neomacs--x-file-dialog-surface 'gtk))
+      (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+                ((symbol-function 'read-file-name)
+                 (lambda (&rest args) (push args calls) "")))
+        (list (condition-case e (x-file-dialog "p" "/tmp" "def" t nil)
+                (quit 'quit) (error e))
+              (nth 3 (car calls))
+              (nth 5 (car calls)))))))"#;
+    let outcome =
+        crate::common::run_neovm_eval(form).expect("Neomacs evaluates the mocked GTK dialog");
+    assert!(
+        outcome.contains("OK (quit nil nil)"),
+        "the GTK arm must suppress MUSTMATCH and turn an empty choice into \
+         quit, like xfns.c:9721-9723: {outcome}"
+    );
+}
+
+/// MX-4: the NS arm must follow ns-read-file-name's cancel contract: a
+/// cancelled panel returns nil (nsfns.m:1882), not the `quit' that the
+/// minibuffer stand-in signals on C-g.  MUSTMATCH selects the Save vs Open
+/// panel there (nsfns.m:1769) and is forwarded unchanged.  (When this nil
+/// reaches `read-file-name-default`, GNU turns it into "No file name
+/// specified", minibuffer.el:4126 -- the same as here.)
+#[test]
+fn x_file_dialog_ns_arm_returns_nil_for_a_cancelled_panel() {
+    let form = r#"(progn
+  (require 'cl-lib)
+  (let (calls)
+    (let ((neomacs--x-file-dialog-surface 'ns))
+      (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+                ((symbol-function 'read-file-name)
+                 (lambda (&rest args) (push args calls) (signal 'quit nil))))
+        (list (condition-case e (x-file-dialog "p" "/tmp" "def" t nil)
+                (quit 'quit) (error e))
+              (nth 3 (car calls))
+              (nth 5 (car calls)))))))"#;
+    let outcome =
+        crate::common::run_neovm_eval(form).expect("Neomacs evaluates the mocked NS dialog");
+    assert!(
+        outcome.contains("OK (nil t nil)"),
+        "the NS arm must return nil on cancel (nsfns.m:1882) and keep \
+         MUSTMATCH: {outcome}"
     );
 }
 
