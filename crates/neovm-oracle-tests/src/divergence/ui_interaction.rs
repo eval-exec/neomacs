@@ -121,6 +121,39 @@ fn divergence_mac_x11_only_subrs_are_void_on_ns() {
     );
 }
 
+/// MX-2: GNU binds `x-file-dialog` in every window-system build: a C DEFUN in
+/// the X (xfns.c:9451/9665), PGTK (pgtkfns.c:3610) and w32 (w32fns.c:8252)
+/// backends, and a Lisp wrapper in the NS dump (term/ns-win.el:464).  Live
+/// pinned references: both the X11 build and the macOS NS build answer
+/// `fboundp` t with the same arglist:
+///   (prompt dir &optional default-filename mustmatch only-dir-p)
+/// Neo had the name unbound on every surface; its dump-safe window-system
+/// preload binds the Lisp arm (lisp/term/neo-preload.el), the shape GNU uses
+/// where the C layer provides no dialog (ns-win.el / haiku-win.el).
+///
+/// Non-GUI semantics, live on both references: both GNU builds check the
+/// window system before any dialog work, but the answer is backend-specific
+/// -- the X DEFUN checks the selected frame (src/frame.c:134-141) and says
+/// "Window system frame should be used", while the NS arm ends in
+/// ns-read-file-name's check_window_system(NULL) and says "Window system is
+/// not in use or not initialized".  Neo's chooser reproduces the matching
+/// answer for its surface, so the batch/-nw path is pinned per host below.
+#[test]
+fn divergence_x_file_dialog_is_bound_on_every_surface() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = crate::common::host_expect!(
+        LinuxGnu => r#""OK (t (prompt dir &optional default-filename mustmatch only-dir-p) (error "Window system frame should be used"))""#,
+        MacosDarwin => r#""OK (t (prompt dir &optional default-filename mustmatch only-dir-p) (error "Window system is not in use or not initialized"))""#,
+    );
+    crate::common::assert_oracle_parity_expect(
+        r#"(list (fboundp 'x-file-dialog)
+  (help-function-arglist 'x-file-dialog t)
+  (condition-case e (x-file-dialog "p" "/tmp") (error e)))"#,
+        expect,
+    );
+}
+
 #[test]
 fn divergence_menu_bar() {
     return_if_neovm_enable_oracle_proptest_not_set!();
