@@ -1465,7 +1465,6 @@ fn commandp_true_for_additional_registered_rust_commands() {
         "top-level",
         "unix-sync",
         "write-region",
-        "x-menu-bar-open-internal",
     ] {
         assert!(
             ev.obarray()
@@ -1476,6 +1475,30 @@ fn commandp_true_for_additional_registered_rust_commands() {
         let result =
             builtin_commandp_interactive(&mut ev, &[Value::symbol(name)]).expect("commandp call");
         assert!(result.is_truthy(), "expected commandp true for {name}");
+    }
+    // Same gate as `subrs.rs` (`#[cfg(not(any(windows, target_os = "macos")))]`).
+    // GNU NS leaves `x-menu-bar-open-internal` void (`mac_x11_subrs_ratchet_test.rs`).
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let name = "x-menu-bar-open-internal";
+        assert!(
+            ev.obarray()
+                .symbol_function(name)
+                .is_some_and(|function| function.is_subr()),
+            "{name} must be a registered Rust subr"
+        );
+        let result =
+            builtin_commandp_interactive(&mut ev, &[Value::symbol(name)]).expect("commandp call");
+        assert!(result.is_truthy(), "expected commandp true for {name}");
+    }
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        assert!(
+            ev.obarray()
+                .symbol_function("x-menu-bar-open-internal")
+                .is_none(),
+            "x-menu-bar-open-internal must be void on macOS and Windows, matching GNU NS (mac_x11_subrs_ratchet_test.rs)"
+        );
     }
 }
 

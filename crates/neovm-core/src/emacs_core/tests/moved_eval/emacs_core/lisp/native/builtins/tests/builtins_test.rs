@@ -125,6 +125,27 @@ thread_local! {
     > = const { std::cell::RefCell::new(None) };
 }
 
+/// X11 keeps the subr and it evaluates to nil. macOS and Windows leave it
+/// void. The cfg is the registration gate
+/// `not(any(windows, target_os = "macos"))`. GNU NS is the contract in
+/// `mac_x11_subrs_ratchet_test.rs`.
+fn assert_x11_nil_subr_or_ns_void(name: &str, got: Option<EvalResult>) {
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let value = got
+            .unwrap_or_else(|| panic!("{name} must be a registered Rust subr"))
+            .unwrap_or_else(|err| panic!("{name} should evaluate, got {err:?}"));
+        assert!(value.is_nil(), "{name}");
+    }
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        assert!(
+            got.is_none(),
+            "{name} must be void on macOS and Windows, matching GNU NS (mac_x11_subrs_ratchet_test.rs)"
+        );
+    }
+}
+
 fn dispatch_builtin_pure(name: &str, args: Vec<Value>) -> Option<EvalResult> {
     PURE_DISPATCH_TEST_CTX.with(|slot| {
         let mut slot = slot.borrow_mut();
@@ -7799,10 +7820,10 @@ fn pure_dispatch_tty_tool_bar_placeholder_cluster_matches_compat_contracts() {
         .expect("builtin thread--blocker should evaluate");
     assert!(thread_blocker.is_nil());
 
-    let tool_bar_style = dispatch_builtin_pure("tool-bar-get-system-style", vec![])
-        .expect("builtin tool-bar-get-system-style should resolve")
-        .expect("builtin tool-bar-get-system-style should evaluate");
-    assert!(tool_bar_style.is_nil());
+    assert_x11_nil_subr_or_ns_void(
+        "tool-bar-get-system-style",
+        dispatch_builtin_pure("tool-bar-get-system-style", vec![]),
+    );
 
     let tool_bar_width = dispatch_builtin_pure("tool-bar-pixel-width", vec![])
         .expect("builtin tool-bar-pixel-width should resolve")
@@ -7978,15 +7999,14 @@ fn pure_dispatch_x_display_placeholder_cluster_matches_compat_contracts() {
         .expect("builtin x-begin-drag should evaluate");
     assert!(x_begin_drag.is_nil());
 
-    let x_double_buffered = dispatch_builtin_pure("x-double-buffered-p", vec![])
-        .expect("builtin x-double-buffered-p should resolve")
-        .expect("builtin x-double-buffered-p should evaluate");
-    assert!(x_double_buffered.is_nil());
-
-    let x_menu_open = dispatch_builtin_pure("x-menu-bar-open-internal", vec![])
-        .expect("builtin x-menu-bar-open-internal should resolve")
-        .expect("builtin x-menu-bar-open-internal should evaluate");
-    assert!(x_menu_open.is_nil());
+    assert_x11_nil_subr_or_ns_void(
+        "x-double-buffered-p",
+        dispatch_builtin_pure("x-double-buffered-p", vec![]),
+    );
+    assert_x11_nil_subr_or_ns_void(
+        "x-menu-bar-open-internal",
+        dispatch_builtin_pure("x-menu-bar-open-internal", vec![]),
+    );
 
     let xw_defined = dispatch_builtin_pure(
         "xw-color-defined-p",
@@ -12532,10 +12552,10 @@ fn internal_labeled_narrow_to_region_clamps_within_current_restriction() {
 #[test]
 fn dispatch_builtin_pure_handles_window_placeholders_but_defers_frame_selection() {
     crate::test_utils::init_test_tracing();
-    let save = dispatch_builtin_pure("handle-save-session", vec![Value::symbol("event")])
-        .expect("handle-save-session should resolve")
-        .expect("handle-save-session should evaluate");
-    assert_eq!(save, Value::NIL);
+    assert_x11_nil_subr_or_ns_void(
+        "handle-save-session",
+        dispatch_builtin_pure("handle-save-session", vec![Value::symbol("event")]),
+    );
 
     assert!(dispatch_builtin_pure("handle-switch-frame", vec![Value::make_frame(1)]).is_none());
 
@@ -13183,23 +13203,22 @@ fn dispatch_builtin_pure_handles_fontset_placeholders() {
     crate::test_utils::init_test_tracing();
     let mut ctx = crate::test_utils::new_context();
     neovm_eval::test_support::authority::reset_symbols_thread_locals_for_test();
-    let system = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
-        &mut ctx,
+    assert_x11_nil_subr_or_ns_void(
         "font-get-system-font",
-        vec![],
-    )
-    .expect("font-get-system-font should resolve")
-    .expect("font-get-system-font should evaluate");
-    assert_eq!(system, Value::NIL);
-
-    let normal = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
-        &mut ctx,
+        crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+            &mut ctx,
+            "font-get-system-font",
+            vec![],
+        ),
+    );
+    assert_x11_nil_subr_or_ns_void(
         "font-get-system-normal-font",
-        vec![],
-    )
-    .expect("font-get-system-normal-font should resolve")
-    .expect("font-get-system-normal-font should evaluate");
-    assert_eq!(normal, Value::NIL);
+        crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
+            &mut ctx,
+            "font-get-system-normal-font",
+            vec![],
+        ),
+    );
 
     let fontset = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
         &mut ctx,
