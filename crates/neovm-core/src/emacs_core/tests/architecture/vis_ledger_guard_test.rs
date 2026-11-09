@@ -4569,13 +4569,22 @@ fn expanded_mod_rows_violation(
 // A `pub(crate)`/private item with no such route is red: it is not
 // test-support surface and cannot be named cross-crate at all.
 //
-// Scope: this arm is enabled for the display ledger (VIS_ROW_VISIBILITY_CRATES)
-// because other provider ledgers still carry signed mod-row blanket widenings
-// and owned-instance seam rows whose classes are owned by their lanes' re-cuts.
-// The checker itself is generic; widening the enabled set is a per-lane step.
+// Scope: this arm is enabled for all six provider ledgers
+// (VIS_ROW_VISIBILITY_CRATES).  The resolver rules cover the declaration
+// shapes those ledgers need: impl consts (both the top-level item visitor and
+// the impl-item visitor run for kind const), macro bodies for static/use/type
+// rows (a visibility marker plus the kind's leaf inside the flattened token
+// stream), self-file module rows, and use-tree routes for any kind.
 // ---------------------------------------------------------------------------
 
-const VIS_ROW_VISIBILITY_CRATES: &[&str] = &["neovm-display"];
+const VIS_ROW_VISIBILITY_CRATES: &[&str] = &[
+    "neovm-value",
+    "neovm-edit",
+    "neovm-text",
+    "neovm-eval",
+    "neovm-display",
+    "neovm-system",
+];
 
 fn meta_makes_pub(meta: &syn::Meta) -> bool {
     match meta {
@@ -4640,6 +4649,56 @@ fn fields_visible_in_item(item: &syn::Item, leaf: &str) -> Option<bool> {
 /// the declaration is cross-crate visible in the test-support build.
 /// `Ok(None)` means no matching declaration was found (other checks own that
 /// case); `Ok(Some(false))` is the stale-row condition this arm rejects.
+/// Flatten a macro token stream (recursing into groups) into identifier,
+/// literal and punctuation texts.
+fn token_texts(tokens: proc_macro2::TokenStream, out: &mut Vec<String>) {
+    for token in tokens {
+        match token {
+            proc_macro2::TokenTree::Group(group) => token_texts(group.stream(), out),
+            proc_macro2::TokenTree::Ident(ident) => out.push(ident.to_string()),
+            proc_macro2::TokenTree::Literal(literal) => out.push(literal.to_string()),
+            proc_macro2::TokenTree::Punct(punct) => out.push(punct.to_string()),
+        }
+    }
+}
+
+/// A macro-generated item is a cross-crate route when the macro body both
+/// carries an explicit visibility marker (`pub`, or `visibility`+`make`) and
+/// declares the kind's leaf.  `thread_local!` statics carry
+/// `#[cfg_attr(..., visibility::make(pub))] static NAME` inside the body;
+/// glob imports (`use m::*`) never name a leaf and stay fail-closed.
+fn macro_body_decl_visible(tokens: &[String], leaf: &str, kind: &str) -> bool {
+    let has_visibility = tokens.iter().any(|token| token == "pub")
+        || (tokens.iter().any(|token| token == "visibility")
+            && tokens.iter().any(|token| token == "make"));
+    if !has_visibility {
+        return false;
+    }
+    let declaration_keywords: &[&str] = match kind {
+        "static" => &["static"],
+        "type" => &["type", "struct", "enum", "union"],
+        "use" => &["use"],
+        _ => return false,
+    };
+    for i in 0..tokens.len() {
+        if !declaration_keywords.contains(&tokens[i].as_str()) {
+            continue;
+        }
+        if kind == "use" {
+            let mut j = i + 1;
+            while j < tokens.len() && tokens[j] != ";" {
+                if tokens[j] == leaf {
+                    return true;
+                }
+                j += 1;
+            }
+        } else if tokens.get(i + 1).map(String::as_str) == Some(leaf) {
+            return true;
+        }
+    }
+    false
+}
+
 fn visible_decl_in_source(source: &str, item: &str, kind: &str) -> Result<Option<bool>, String> {
     let parsed = syn::parse_file(source).map_err(|error| format!("row defining file: {error}"))?;
     let segments: Vec<&str> = item.split("::").collect();
@@ -4651,7 +4710,10 @@ fn visible_decl_in_source(source: &str, item: &str, kind: &str) -> Result<Option
 
     fn visit_use_tree(tree: &syn::UseTree, leaf: &str) -> bool {
         match tree {
-            syn::UseTree::Path(path) => visit_use_tree(&path.tree, leaf),
+            // A path segment names its module: `pub use helpers::*` makes the
+            // `helpers` module's items reachable and names `helpers` itself.
+            // The glob still names no item (only the path segment matches).
+            syn::UseTree::Path(path) => path.ident == leaf || visit_use_tree(&path.tree, leaf),
             syn::UseTree::Name(name) => name.ident == leaf,
             syn::UseTree::Rename(rename) => rename.rename == leaf || rename.ident == leaf,
             syn::UseTree::Glob(_) => false,
@@ -4786,13 +4848,18 @@ fn visible_decl_in_source(source: &str, item: &str, kind: &str) -> Result<Option
                         found.unwrap_or(false) || decl_cross_crate_visible(&data.vis, &data.attrs),
                     );
                 }
-                syn::Item::Use(item_use)
-                    if kind == "use" && visit_use_tree(&item_use.tree, leaf) =>
-                {
+                syn::Item::Use(item_use) if visit_use_tree(&item_use.tree, leaf) => {
                     *found = Some(
                         found.unwrap_or(false)
                             || decl_cross_crate_visible(&item_use.vis, &item_use.attrs),
                     );
+                }
+                syn::Item::Macro(item_macro) if matches!(kind, "static" | "use" | "type") => {
+                    let mut tokens = Vec::new();
+                    token_texts(item_macro.mac.tokens.clone(), &mut tokens);
+                    if macro_body_decl_visible(&tokens, leaf, kind) {
+                        *found = Some(true);
+                    }
                 }
                 syn::Item::Macro(item_macro)
                     if kind == "macro"
@@ -4841,6 +4908,11 @@ fn visible_decl_in_source(source: &str, item: &str, kind: &str) -> Result<Option
         visit_field_structs(&parsed.items, parent, leaf, &mut found);
     } else if kind == "method" {
         visit_impl_methods(&parsed.items, leaf, parent, kind, &mut found);
+    } else if kind == "const" {
+        // An associated const may be reached through its impl block, not only
+        // as a top-level item; both visitors must run for kind const.
+        visit_items(&parsed.items, leaf, parent, kind, &mut found);
+        visit_impl_methods(&parsed.items, leaf, parent, kind, &mut found);
     } else {
         visit_items(&parsed.items, leaf, parent, kind, &mut found);
     }
@@ -4848,6 +4920,17 @@ fn visible_decl_in_source(source: &str, item: &str, kind: &str) -> Result<Option
 }
 
 fn vis_row_visibility_violation(row: &VisRow, source: &str) -> Result<(), String> {
+    // A self-file module row names its own source file (`<leaf>.rs` or
+    // `<leaf>/mod.rs`); the module's visibility lives in its parent
+    // declaration, not in this file's items.
+    if row.kind == "mod" {
+        let leaf = row.item.rsplit("::").next().unwrap_or(&row.item);
+        if row.file.ends_with(&format!("/{leaf}.rs"))
+            || row.file.ends_with(&format!("/{leaf}/mod.rs"))
+        {
+            return Ok(());
+        }
+    }
     let what = format!("{} {} {}", row.crate_dir, row.kind, row.item);
     match visible_decl_in_source(source, &row.item, &row.kind)? {
         Some(false) => Err(format!(
@@ -5976,6 +6059,198 @@ fn vis_free_fn_reset_violation(workspace: &Path, rows: &[VisRow]) -> Result<(), 
 fn test_support_vis_ledgers_obey_the_signed_class() {
     let workspace = workspace_root();
     validate(&workspace).unwrap_or_else(|error| panic!("TEST-SUPPORT-VIS: {error}"));
+}
+
+/// Peer #1005 structural guard, part 1: no VIS ledger row may name a field.
+/// A field row means the field was widened for the test-support build; the
+/// field-privacy rule makes every provider field `pub(crate)` in every arm,
+/// with reads through getters (VIS METHOD rows) and writes through AUTHORITY
+/// fences.  Zero is the ratchet: any new field row is red.
+#[test]
+fn vis_ledgers_have_no_field_rows() {
+    let workspace = workspace_root();
+    let architecture = workspace.join(ARCHITECTURE_DIR);
+    let mut offenders = Vec::new();
+    for path in read_dir_sorted(&architecture).expect("read architecture dir") {
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !name.starts_with(VIS_PREFIX) || !name.ends_with(".tsv") {
+            continue;
+        }
+        let text = read(&path).expect("read VIS ledger");
+        for (index, line) in text.lines().enumerate() {
+            let fields: Vec<&str> = line.split('\t').collect();
+            if fields.len() > 2 && fields[2] == "field" {
+                offenders.push(format!("{name}:{}: {}", index + 1, fields[1]));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "TEST-SUPPORT-VIS field rows are retired: fields stay pub(crate) in \
+         every arm, reads use getters (VIS METHOD rows) and writes use \
+         AUTHORITY fences.  Field rows found:\n{}",
+        offenders.join("\n")
+    );
+}
+
+/// The visibility a test-support cfg arm gives one named field.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct FieldVisibilityArm {
+    /// Inline-module path inside the file, so same-named structs in different
+    /// inline modules never collide.
+    module: Vec<String>,
+    struct_name: String,
+    field: String,
+    public: bool,
+    /// `true` for the test-support arm, `false` for its complement.
+    positive: bool,
+}
+
+struct FieldVisibilityCollector {
+    module: Vec<String>,
+    arms: Vec<FieldVisibilityArm>,
+}
+
+/// The polarity of the test-support cfg on these attributes, if any: `Some(true)`
+/// for `cfg(...feature = "test-support"...)`, `Some(false)` for the `not(...)`
+/// complement.  A plain `cfg(test)` arm is not a cross-crate widening and is
+/// ignored (the feature, not cfg(test), is what a consumer build enables).
+fn test_support_cfg_polarity(attrs: &[syn::Attribute]) -> Option<bool> {
+    fn mentions(stream: proc_macro2::TokenStream) -> bool {
+        stream.into_iter().any(|token| match token {
+            proc_macro2::TokenTree::Ident(ident) => ident.to_string() == "test_support",
+            proc_macro2::TokenTree::Literal(literal) => {
+                literal.to_string().contains("test-support")
+            }
+            proc_macro2::TokenTree::Group(group) => mentions(group.stream()),
+            proc_macro2::TokenTree::Punct(_) => false,
+        })
+    }
+    fn negated(stream: &proc_macro2::TokenStream) -> bool {
+        matches!(
+            stream.clone().into_iter().next(),
+            Some(proc_macro2::TokenTree::Ident(ident)) if ident == "not"
+        )
+    }
+    for attr in attrs {
+        if !attr.path().is_ident("cfg") {
+            continue;
+        }
+        let syn::Meta::List(list) = &attr.meta else {
+            continue;
+        };
+        if mentions(list.tokens.clone()) {
+            return Some(!negated(&list.tokens));
+        }
+    }
+    None
+}
+
+impl<'ast> Visit<'ast> for FieldVisibilityCollector {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        self.module.push(item.ident.to_string());
+        visit::visit_item_mod(self, item);
+        self.module.pop();
+    }
+
+    fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
+        let struct_polarity = test_support_cfg_polarity(&item.attrs);
+        for field in &item.fields {
+            let Some(ident) = &field.ident else {
+                continue;
+            };
+            let Some(positive) = test_support_cfg_polarity(&field.attrs).or(struct_polarity) else {
+                continue;
+            };
+            self.arms.push(FieldVisibilityArm {
+                module: self.module.clone(),
+                struct_name: item.ident.to_string(),
+                field: ident.to_string(),
+                public: matches!(field.vis, syn::Visibility::Public(_)),
+                positive,
+            });
+        }
+        visit::visit_item_struct(self, item);
+    }
+}
+
+/// Peer #1005 structural guard, part 2: a field's visibility may not change
+/// between the test-support arm and its production complement.  Covers both
+/// field-level cfg pairs and whole-struct cfg arms; ignores cfg(test)-only
+/// arms, which no cross-crate build enables.
+fn field_visibility_bifurcations(source: &str) -> Result<Vec<String>, String> {
+    let file = syn::parse_file(source).map_err(|error| format!("does not parse: {error}"))?;
+    let mut collector = FieldVisibilityCollector {
+        module: Vec::new(),
+        arms: Vec::new(),
+    };
+    collector.visit_file(&file);
+    let mut groups: BTreeMap<(Vec<String>, String, String), BTreeSet<(bool, bool)>> =
+        BTreeMap::new();
+    for arm in collector.arms {
+        groups
+            .entry((arm.module, arm.struct_name, arm.field))
+            .or_default()
+            .insert((arm.public, arm.positive));
+    }
+    let mut violations = Vec::new();
+    for ((module, struct_name, field), arms) in groups {
+        let positive: BTreeSet<bool> = arms.iter().filter(|(_, p)| *p).map(|(v, _)| *v).collect();
+        let negative: BTreeSet<bool> = arms.iter().filter(|(_, p)| !*p).map(|(v, _)| *v).collect();
+        if positive.is_empty() || negative.is_empty() {
+            continue;
+        }
+        if positive != negative {
+            let module = if module.is_empty() {
+                String::new()
+            } else {
+                format!("{}::", module.join("::"))
+            };
+            violations.push(format!(
+                "{module}{struct_name}::{field}: test-support arm visibility \
+                 {positive:?} differs from the production arm {negative:?}"
+            ));
+        }
+    }
+    Ok(violations)
+}
+
+/// Peer #1005 structural guard over the provider crates: every field is
+/// `pub(crate)` in every arm, so the test-support build never widens one.
+#[test]
+fn test_support_field_visibility_never_bifurcates() {
+    let workspace = workspace_root();
+    let mut violations = Vec::new();
+    for crate_dir in VIS_CRATES {
+        let src = workspace.join("crates").join(crate_dir).join("src");
+        let mut files = Vec::new();
+        walk_files(&src, &mut files).expect("walk provider sources");
+        for path in files {
+            if path.extension().is_none_or(|extension| extension != "rs") || is_test_path(&path) {
+                continue;
+            }
+            let source = read(&path).expect("read provider source");
+            let relative = path
+                .strip_prefix(&workspace)
+                .expect("provider source under the workspace")
+                .to_string_lossy()
+                .replace('\\', "/");
+            for violation in field_visibility_bifurcations(&source)
+                .unwrap_or_else(|error| panic!("{relative}: {error}"))
+            {
+                violations.push(format!("{relative}: {violation}"));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "test-support field visibility must match the production arm; \
+         narrow the field to pub(crate) and route reads through a getter / \
+         writes through an AUTHORITY fence:\n{}",
+        violations.join("\n")
+    );
 }
 
 #[cfg(test)]
@@ -10313,4 +10588,72 @@ fn auth_file_pub_field(file: &Path, owner: &str, field: &str) -> Result<bool, St
         })
     }
     Ok(declares(&ast.items, owner, field))
+}
+#[cfg(test)]
+mod structural_field_guard_tests {
+    use super::*;
+
+    #[test]
+    fn field_visibility_bifurcation_plant_reds_then_narrows_green() {
+        // Whole-struct arms: the test-support field is pub, production
+        // pub(crate); only `f` differs, so exactly one violation.
+        let split = r#"
+            #[cfg(feature = "test-support")]
+            pub(crate) struct S { pub f: u8, pub(crate) g: u8 }
+            #[cfg(not(feature = "test-support"))]
+            pub(crate) struct S { pub(crate) f: u8, pub(crate) g: u8 }
+        "#;
+        let found = field_visibility_bifurcations(split).expect("synthetic parses");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("S::f"), "{found:?}");
+
+        // Narrowing the test-support arm to pub(crate) is green.
+        let narrowed = r#"
+            #[cfg(any(test, feature = "test-support"))]
+            pub(crate) struct S { pub(crate) f: u8 }
+            #[cfg(not(any(test, feature = "test-support")))]
+            pub(crate) struct S { pub(crate) f: u8 }
+        "#;
+        assert!(
+            field_visibility_bifurcations(narrowed)
+                .expect("synthetic parses")
+                .is_empty()
+        );
+
+        // Field-level arms are the same rule.
+        let field_split = r#"
+            pub(crate) struct S {
+                #[cfg(feature = "test-support")] pub f: u8,
+                #[cfg(not(feature = "test-support"))] pub(crate) f: u8,
+            }
+        "#;
+        assert_eq!(
+            field_visibility_bifurcations(field_split)
+                .expect("synthetic parses")
+                .len(),
+            1
+        );
+
+        // cfg(test)-only arms are not cross-crate widenings.
+        let test_only = r#"
+            #[cfg(test)] pub(crate) struct S { pub f: u8 }
+            #[cfg(not(test))] pub(crate) struct S { pub(crate) f: u8 }
+        "#;
+        assert!(
+            field_visibility_bifurcations(test_only)
+                .expect("synthetic parses")
+                .is_empty()
+        );
+
+        // Same-named structs in different inline modules never collide.
+        let modules = r#"
+            mod a { #[cfg(feature = "test-support")] pub(crate) struct S { pub f: u8 } }
+            mod b { #[cfg(not(feature = "test-support"))] pub(crate) struct S { pub(crate) f: u8 } }
+        "#;
+        assert!(
+            field_visibility_bifurcations(modules)
+                .expect("synthetic parses")
+                .is_empty()
+        );
+    }
 }

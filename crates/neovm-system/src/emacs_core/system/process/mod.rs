@@ -486,7 +486,9 @@ pub use helpers::*;
 
 #[doc(hidden)]
 pub mod types;
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+// The glob is already plain `pub`; a `visibility::make(pub)` attribute here
+// was a no-op that the VIS coverage scan still attributed to the next named
+// re-export, keeping a false ledger row alive (lead #1052 retirement).
 pub use types::*;
 pub(crate) use types::{swap_world_state, world_state_placeholder};
 

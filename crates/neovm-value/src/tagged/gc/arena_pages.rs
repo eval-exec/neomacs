@@ -399,9 +399,6 @@ pub(super) struct ObjectPage<T: PagedObject> {
     /// (it has no free slots and never gains any), freed at heap teardown —
     /// but it STAYS in the page-base registry so the ownership oracle keeps
     /// answering "owned" for its slots (see the C1 note in the module doc).
-    #[cfg(feature = "test-support")]
-    pub retired: bool,
-    #[cfg(not(feature = "test-support"))]
     pub(super) retired: bool,
     pub(super) _class: std::marker::PhantomData<*mut T>,
 }
@@ -705,9 +702,6 @@ pub(super) struct ObjectArena<T: PagedObject> {
     /// Every retained page of this class, retired pages included. Completely
     /// empty young pages are removed after a full sweep; all remaining pages
     /// are freed by this vector's drop at heap teardown (`ObjectPage: Drop`).
-    #[cfg(feature = "test-support")]
-    pub pages: Vec<ObjectPage<T>>,
-    #[cfg(not(feature = "test-support"))]
     pub(super) pages: Vec<ObjectPage<T>>,
     /// Storage of removed empty pages, handed to the next new pages before
     /// the allocator is asked. A page-sized ALIGNED request cannot reuse a
