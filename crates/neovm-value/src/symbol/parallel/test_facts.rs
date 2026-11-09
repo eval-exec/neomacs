@@ -159,7 +159,7 @@ pub fn with_symbol_registry_writer_for_test(body: impl FnOnce()) {
 #[cfg(not(feature = "gc-memory-telemetry"))]
 #[doc(hidden)]
 pub fn prepare_name_symbol_for_test<K: crate::tagged::gc::mutator_registration::EraKeeper>(
-    era: &crate::test_support::authority::ProofEra<'_, K>,
+    era: &crate::tagged::gc::ProofEra<'_, K>,
     key: &crate::tagged::gc::mutator_registration::SymbolHandle,
 ) -> Result<
     crate::tagged::gc::mutator_registration::SymbolHandle,
