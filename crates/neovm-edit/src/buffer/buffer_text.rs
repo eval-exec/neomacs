@@ -361,6 +361,12 @@ struct BufferTextStorage {
     /// buffers share this storage, so they share the slot, and
     /// `buffer-swap-text` moves it with the text.
     syntax_parse_body: RefCell<Option<Box<dyn std::any::Any>>>,
+    /// Debug witness that a take of `syntax_parse_body` is in progress on this
+    /// storage. Takes never span Lisp, so a nested take is a bug. Compiled out
+    /// of release builds: not a thread-local, and not present in the release
+    /// layout.
+    #[cfg(debug_assertions)]
+    syntax_parse_body_taken: Cell<bool>,
     /// Per-buffer GNU clip_changed witness. Indirect buffers share this heap
     /// allocation but retain distinct restrictions. No Buffer/JIT layout change.
     /// Kept after existing fields to avoid intentionally displacing hot fields.
@@ -462,6 +468,12 @@ pub struct BufferTextStorage {
     /// buffers share this storage, so they share the slot, and
     /// `buffer-swap-text` moves it with the text.
     syntax_parse_body: RefCell<Option<Box<dyn std::any::Any>>>,
+    /// Debug witness that a take of `syntax_parse_body` is in progress on this
+    /// storage. Takes never span Lisp, so a nested take is a bug. Compiled out
+    /// of release builds: not a thread-local, and not present in the release
+    /// layout.
+    #[cfg(debug_assertions)]
+    syntax_parse_body_taken: Cell<bool>,
     /// Per-buffer GNU clip_changed witness. Indirect buffers share this heap
     /// allocation but retain distinct restrictions. No Buffer/JIT layout change.
     /// Kept after existing fields to avoid intentionally displacing hot fields.
@@ -638,6 +650,8 @@ impl Clone for BufferTextStorage {
             line_index_role: LineIndexRole::Snapshot,
             syntax_cache: SyntaxCacheState::fresh(),
             syntax_parse_body: RefCell::new(None),
+            #[cfg(debug_assertions)]
+            syntax_parse_body_taken: Cell::new(false),
             mode_line_clipped: self.mode_line_clipped.clone(),
         }
     }
@@ -702,6 +716,26 @@ impl Default for BufferText {
     }
 }
 
+/// Clears the per-storage taken witness when a syntax-parse body take
+/// returns or unwinds. The guard does not hold the storage borrow, so the
+/// callback can re-borrow. Debug-only, same as the flag.
+#[cfg(debug_assertions)]
+struct SyntaxParseBodyTakenGuard<'a> {
+    storage: &'a RefCell<BufferTextStorage>,
+    /// Set only after this take has claimed the flag. A nested take panics
+    /// before claiming, so its guard must not clear the outer take's flag.
+    armed: bool,
+}
+
+#[cfg(debug_assertions)]
+impl Drop for SyntaxParseBodyTakenGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.storage.borrow().syntax_parse_body_taken.set(false);
+        }
+    }
+}
+
 impl BufferText {
     fn gap_compat_at_text_end(metrics: TextMetrics, byte_len: EmacsByteLen) -> GapCompatState {
         GapCompatState::new(metrics.char_end(), byte_len)
@@ -756,6 +790,8 @@ impl BufferText {
                 line_index_role: LineIndexRole::Live,
                 syntax_cache: SyntaxCacheState::fresh(),
                 syntax_parse_body: RefCell::new(None),
+                #[cfg(debug_assertions)]
+                syntax_parse_body_taken: Cell::new(false),
                 mode_line_clipped: HashSet::new(),
             })),
         }
@@ -1844,17 +1880,32 @@ impl BufferText {
     /// Hand the text crate its syntax-parse cache and the notes since the last
     /// use.
     ///
-    /// The body is taken out for the callback, so a re-entrant call sees an
-    /// empty slot and this call's store replaces it afterwards. A panic drops
-    /// the body: the next lookup misses, and does not answer from a cache that
-    /// never saw this invalidation. Moving the box does not copy the runs.
+    /// The body is taken out for the callback and stored back when it returns.
+    /// Takes never span Lisp, so a nested take cannot happen: a debug build
+    /// asserts that. A panic drops the body: the next lookup misses, and does
+    /// not answer from a cache that never saw this invalidation. Moving the
+    /// box does not copy the runs.
     #[doc(hidden)]
     pub fn with_syntax_parse_body<R>(
         &self,
         f: impl FnOnce(&mut Option<Box<dyn std::any::Any>>, Invalidation) -> R,
     ) -> R {
+        #[cfg(debug_assertions)]
+        let mut taken = SyntaxParseBodyTakenGuard {
+            storage: &self.storage,
+            armed: false,
+        };
         let (mut body, invalidation) = {
             let storage = self.storage.borrow();
+            #[cfg(debug_assertions)]
+            {
+                debug_assert!(
+                    !storage.syntax_parse_body_taken.get(),
+                    "syntax parse body take must not nest; takes never span Lisp"
+                );
+                storage.syntax_parse_body_taken.set(true);
+                taken.armed = true;
+            }
             let invalidation = storage
                 .syntax_cache
                 .take_invalidation(storage.content_epoch, storage.text_props.syntax_prop_tick());

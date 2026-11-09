@@ -81,9 +81,9 @@
 //! # Mutator ownership
 //!
 //! Runs live in the buffer text's opaque slot. The slot is taken out for a
-//! query, so the storage borrow is not held across the scan, and a re-entrant
-//! lookup sees an empty slot. The outer call stores its body back afterwards.
-//! A storage drop drops the slot with it. Indirect buffers share the storage,
+//! query and stored back when the query returns, so the storage borrow is not
+//! held across the scan. Takes never span Lisp, so a nested take cannot
+//! happen. A storage drop drops the slot with it. Indirect buffers share the storage,
 //! so they share the runs, and `buffer-swap-text` moves the slot with the
 //! text. Future mutators sharing one text storage must serialize text,
 //! property, syntax-table and descriptor access across validation, scanning
@@ -261,10 +261,9 @@ impl SyntaxParseCache {
 ///
 /// The runs sit in an opaque slot on the buffer text. The slot is taken out
 /// while a caller holds the cache, so no storage borrow is held across the
-/// scan. A re-entrant lookup sees an empty slot and the outer call stores its
-/// body back afterwards. Losing the body to a panic only costs the next
-/// lookups their hits: the cache never answers from a state it did not
-/// validate after the substrate's invalidation.
+/// scan. Takes never span Lisp, so a nested take cannot happen. Losing the
+/// body to a panic only costs the next lookups their hits: the cache never
+/// answers from a state it did not validate after the substrate's invalidation.
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) trait BufferSyntaxParseCache {
     /// Run `f` with the cache and what changed since its last use.

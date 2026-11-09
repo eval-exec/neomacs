@@ -1367,25 +1367,16 @@ fn a_text_clone_starts_without_the_syntax_parse_cache() {
     assert!(!text.syntax_parse_body_is_empty());
 }
 
-/// A re-entrant body callback sees the empty slot. The outer store is what
-/// remains afterwards, matching the old registry's take/put.
+/// A nested take is a bug: takes never span Lisp. Debug builds assert, so a
+/// future change that runs Lisp inside a take fails here instead of dropping
+/// invalidation notes. Release builds omit the flag and this test.
+#[cfg(debug_assertions)]
 #[test]
-fn a_reentrant_syntax_parse_body_sees_empty_and_the_outer_body_returns() {
+#[should_panic(expected = "syntax parse body take must not nest; takes never span Lisp")]
+fn a_nested_syntax_parse_body_take_panics() {
     crate::test_utils::init_test_tracing();
     let text = BufferText::from_str("x");
-    let _ = text.take_syntax_invalidation();
-    text.with_syntax_parse_body(|slot, _| {
-        *slot = Some(Box::new(7u8));
-        text.with_syntax_parse_body(|inner, _| {
-            assert!(inner.is_none());
-            *inner = Some(Box::new(9u8));
-        });
-        assert_eq!(
-            slot.as_ref().unwrap().downcast_ref::<u8>().copied(),
-            Some(7)
-        );
-    });
-    text.with_syntax_parse_body_ref(|body| {
-        assert_eq!(body.and_then(|b| b.downcast_ref::<u8>().copied()), Some(7));
+    text.with_syntax_parse_body(|_slot, _| {
+        text.with_syntax_parse_body(|_inner, _| {});
     });
 }
