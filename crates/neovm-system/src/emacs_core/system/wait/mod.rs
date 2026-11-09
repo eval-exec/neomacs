@@ -143,7 +143,12 @@ impl WaitStatusNotifySite {
     /// `Context::record_and_notify_status_changes` demand.  A unit test that drives
     /// a bare `ProcessManager` has no wait to be inside, and saying so here is
     /// better than letting it reach for `pub(crate)`.
-    #[cfg(any(test, feature = "test-support"))]
+    ///
+    /// Only a lower crate's test-support build drives a bare ProcessManager
+    /// through this site (core's moved process tests); this crate's own tests
+    /// do not, so the constructor is narrowed to the feature that actually
+    /// consumes it rather than every cfg(test) build.
+    #[cfg(feature = "test-support")]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn for_a_unit_test_of_the_walk_itself() -> Self {
         Self {

@@ -134,7 +134,6 @@
 
 use super::{Value, process_status_exit_value};
 use crate::emacs_core::callproc::{SpawnedChild, SpawnedChildIo};
-use crate::emacs_core::process::SystemProcessExt;
 use neovm_eval::emacs_core::eval::data::process_state::{
     ChildHandle, ChildOwnership, ReapableChild,
 };
@@ -594,6 +593,21 @@ fn collect_deferred_children(sweep: DeferredReapSweep) {
         }
     });
     registry.refresh_fallback_flag();
+}
+
+/// Test-support route for the option-A re-homed mock/native-deferred tests:
+/// publish an owned child on the native-exit driver without starting the
+/// shared reaper. The re-homed tests force the completion state themselves.
+#[cfg(any(test, feature = "test-support"))]
+pub(super) fn publish_native_deferred_child_for_test(child: ReapableChild) -> Arc<AtomicBool> {
+    publish_deferred_child(child, DeferredReapDriver::NativeExit)
+}
+
+/// Test-support route: the native-exit sweep that the re-homed tests drive
+/// explicitly instead of waiting for a real native source.
+#[cfg(any(test, feature = "test-support"))]
+pub(super) fn collect_native_deferred_children_for_test() {
+    collect_deferred_children(DeferredReapSweep::NativeExit);
 }
 
 static_assertions::assert_impl_all!(ReapableChild: Send);

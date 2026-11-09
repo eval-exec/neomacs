@@ -512,6 +512,36 @@ pub mod test_support {
         }
     }
 
+    /// Test-support facade for the option-A re-homed deferred-reap unit tests
+    /// (mock ownership transfer, interrupted probe, ordinary-wait non-probe,
+    /// and the native deleted/dropped-PTY paths).
+    ///
+    /// The registry's native publication source, the native-exit sweep and the
+    /// deferred-ownership probe stay private to `process::reap`; this facade is
+    /// their only cross-crate route. The type row covers the three associated
+    /// functions (fam-15 precedent).
+    pub struct DeferredReapFixtureForTest;
+
+    impl DeferredReapFixtureForTest {
+        /// Publish an owned child on the native-exit driver without a real
+        /// native watcher; the re-homed test forces the completion state.
+        pub fn publish_native(
+            child: neovm_eval::emacs_core::eval::data::process_state::ReapableChild,
+        ) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+            super::reap::publish_native_deferred_child_for_test(child)
+        }
+
+        /// Run the native-exit sweep once.
+        pub fn collect_native() {
+            super::reap::collect_native_deferred_children_for_test();
+        }
+
+        /// Whether the deferred registry still owns PID.
+        pub fn is_owned(pid: u32) -> bool {
+            super::reap::deferred_child_is_owned_for_test(pid)
+        }
+    }
+
     pub fn order_pending_status_notifications_newest_first_for_test(
         processes: &ProcessManager,
         proc_ids: &mut [ProcessId],
