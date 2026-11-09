@@ -1982,7 +1982,7 @@ impl TaggedHeap {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "tests/parallel_young_test.rs"]
 mod parallel_young_tests;
 #[cfg(test)]

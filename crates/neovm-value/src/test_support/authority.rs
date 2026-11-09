@@ -1148,6 +1148,37 @@ pub fn run_function_handoff_test_for_test<K, W>(
     );
 }
 
+/// FENCE: the peer-young collection body. The core shell admits the era and
+/// passes the serial cons graph. The original dispatcher stays `pub(crate)`.
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[doc(hidden)]
+pub fn run_peer_young_collection_test_for_test<K, W>(
+    name: &str,
+    era: crate::tagged::gc::ProofEra<'_, K>,
+    root: crate::tagged::transport::SharedRoot,
+    words: [usize; 2],
+    world_roots: W,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut crate::tagged::gc::mutator_registration::AllStopped<'e>,
+            &'o mut Vec<crate::tagged::value::TaggedValue>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            crate::tagged::gc::mutator_registration::RendezvousError,
+        >,
+{
+    crate::tagged::gc::mutator_registration::run_peer_young_collection_test(
+        name,
+        era,
+        root,
+        words,
+        world_roots,
+    );
+}
+
 /// FENCE (lead #768): the only cross-crate construction of
 /// [`FreshRegistryFacts`](crate::symbol::parallel::test_facts::FreshRegistryFacts).
 /// Copies the snapshot and replaces `bytes`. The fields stay

@@ -95,6 +95,12 @@ mod handoff_contention_tests;
 #[path = "../../../core_tests/tagged/gc/mutator_registration/functions_executor_tests.rs"]
 mod functions_executor_tests;
 
+/// Peer-young collection re-homed out of value. The shell admits the era and
+/// builds the serial cons graph. The owner body stays in value.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/peer_young_collection_tests.rs"]
+mod peer_young_collection_tests;
+
 /// MEMQ-TAIL-SHAPES (b)+(i)+(ii), peer 22:30Z approvals: the keeper-table
 /// scope test re-homed out of value. It uses the closure-scoped
 /// stopped-tables install, the scope's nested-install probe, the &self

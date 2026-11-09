@@ -1001,8 +1001,10 @@ static_assertions::assert_impl_all!(MutatorKey: Send, Sync, Copy);
 mod collection_tests;
 #[cfg(test)]
 mod image_tests;
-#[cfg(test)]
+#[cfg(all(feature = "test-support", not(feature = "gc-memory-telemetry")))]
 mod peer_young_collection_tests;
+#[cfg(all(feature = "test-support", not(feature = "gc-memory-telemetry")))]
+pub(crate) use peer_young_collection_tests::run_peer_young_collection_test;
 #[cfg(test)]
 mod tests;
 
