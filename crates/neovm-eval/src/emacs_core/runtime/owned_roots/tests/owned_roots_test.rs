@@ -4,7 +4,7 @@ use super::*;
 /// linear with both a growing live set and long-lived plus transient owners.
 #[test]
 fn root_registration_pruning_work_is_amortized_linear() {
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     context.gc_collect_exact();
     let baseline = context.tagged_heap.allocated_count();
     let value = Value::string("registration workload");
@@ -85,7 +85,7 @@ fn cloned_lease_survives_exact_gc_and_retires_with_last_owner() {
 
 #[test]
 fn weak_retainer_registers_live_graphs_without_extending_context_lifetime() {
-    let mut context = Context::new();
+    let mut context = Context::new(crate::test_utils::unit_runtime());
     context.gc_collect_exact();
     let baseline = context.tagged_heap.allocated_count();
     let factory = context.owned_root_retainer();
