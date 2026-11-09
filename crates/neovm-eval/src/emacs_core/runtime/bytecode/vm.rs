@@ -2563,6 +2563,28 @@ pub(crate) const BC_STACK_POSITION_INITIAL: usize = 0;
 /// the position, that is `position + header <= BC_STACK_SIZE`.
 pub(crate) const BC_STACK_POSITION_LIMIT: usize = BC_STACK_SIZE - BC_FRAME_HEADER_BYTES;
 
+// Compile-time width contract for the continuation word's packed position
+// and for the 64-bit word its shift assumes.  These are type-level
+// guarantees, not debug-build masks: a configuration where the GNU stack
+// limit no longer fits the 24 packed bits, where the word is not 64 bits,
+// or where the packed field would overlap the owned-args flag must fail to
+// compile.
+const _: () = {
+    assert!(
+        BC_STACK_POSITION_LIMIT <= InterpreterCallerReturn::POSITION_LIMIT_MASK,
+        "the bytecode-stack frame position must fit its 24 packed bits"
+    );
+    assert!(
+        usize::BITS == 64,
+        "the continuation word packs the bytecode position above bit 32"
+    );
+    assert!(
+        InterpreterCallerReturn::POSITION_SHIFT + InterpreterCallerReturn::POSITION_BITS
+            < usize::BITS,
+        "the packed position must not overlap the owned-args flag"
+    );
+};
+
 /// The shim finish's "this entry never charged" marker.  A real saved
 /// position is always `<= BC_STACK_POSITION_LIMIT`, so this is unambiguous;
 /// position 0 is a real saved position (the first frame charged from an
