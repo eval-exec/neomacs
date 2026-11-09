@@ -89,10 +89,17 @@ impl OverlayPositionHandle {
 #[doc(hidden)]
 pub struct IntervalKey {
     pub(crate) start: EmacsBytePos,
-    #[cfg(not(any(test, feature = "test-support")))]
     pub(crate) attachment_order: u64,
+}
+
+impl IntervalKey {
     #[cfg(any(test, feature = "test-support"))]
-    pub attachment_order: u64,
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied attachment order for the local-move oracle.  The field is
+    /// `pub(crate)`; this read-only getter is the only cross-crate route.
+    pub(crate) fn attachment_order_for_test(&self) -> u64 {
+        self.attachment_order
+    }
 }
 
 impl Ord for IntervalKey {
@@ -112,13 +119,20 @@ impl PartialOrd for IntervalKey {
 #[derive(Clone, Copy, Debug)]
 #[doc(hidden)]
 pub struct IntervalRecord {
-    #[cfg(not(any(test, feature = "test-support")))]
     pub(crate) key: IntervalKey,
-    #[cfg(any(test, feature = "test-support"))]
-    pub key: IntervalKey,
     pub(crate) identity: OverlayIdentity,
     pub(crate) range: EmacsByteRange,
     pub(crate) overlay: Value,
+}
+
+impl IntervalRecord {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    /// Copied sort key for the local-move oracle.  The field is `pub(crate)`;
+    /// this read-only getter is the only cross-crate route.
+    pub(crate) fn key_for_test(&self) -> IntervalKey {
+        self.key
+    }
 }
 
 impl OrderedShiftRecord for IntervalRecord {

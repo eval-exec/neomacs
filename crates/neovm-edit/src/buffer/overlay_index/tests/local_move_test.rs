@@ -265,7 +265,10 @@ fn cl2_local_move_attempts_consume_one_attachment_order_and_keep_equal_start_ord
             .record(OverlayIdentity::of(moving))
             .unwrap();
         if previous.start() != next.start() {
-            assert_eq!(record.key.attachment_order, next_attachment);
+            assert_eq!(
+                record.key_for_test().attachment_order_for_test(),
+                next_attachment
+            );
             assert_eq!(
                 index.intervals.read().next_attachment_order_for_test(),
                 next_attachment + 1,
@@ -288,7 +291,7 @@ fn cl2_local_move_attempts_consume_one_attachment_order_and_keep_equal_start_ord
                     .is_ok()
             );
         } else {
-            assert_eq!(record.key, previous_record.key);
+            assert_eq!(record.key_for_test(), previous_record.key_for_test());
             assert_eq!(
                 index.intervals.read().next_attachment_order_for_test(),
                 next_attachment
