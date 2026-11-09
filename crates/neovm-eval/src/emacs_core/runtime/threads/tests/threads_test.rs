@@ -2283,13 +2283,23 @@ fn p15_gc_thread_payload_fields_have_only_object_edges() {
             // copies prepared words, without allocating, collecting or yielding.
             unsafe {
                 heap.with_thread_payload_mut(thread, |payload| {
-                    payload.function = probes[0];
-                    *payload.result_mut() = probes[1];
-                    *payload.last_error_mut() = Some(probes[2]);
-                    *payload.buffer_disposition_mut() = probes[3];
-                    *payload.event_object_mut() = probes[4];
-                    *payload.blocked_remaining_forms_mut() = probes[5];
-                    *payload.error_data_mut() = probes[6];
+                    // `function` has a reader and no setter. Rebuild through
+                    // the public constructor so the untouched words stay put.
+                    let name = payload.name();
+                    let error_symbol = payload.error_symbol();
+                    let stored_events = payload.stored_events().to_vec();
+                    *payload = neovm_value::heap_types::threading::ThreadChildren::new(
+                        name,
+                        probes[0],
+                        probes[1],
+                        Some(probes[2]),
+                        probes[3],
+                        probes[4],
+                        error_symbol,
+                        probes[6],
+                        probes[5],
+                        stored_events,
+                    );
                 })
             }
             .expect("same-World thread payload")

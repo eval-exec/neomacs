@@ -86,14 +86,23 @@ fn graph(context: &mut Context) -> Graph {
             // without allocating, collecting, invoking Lisp or yielding.
             unsafe {
                 heap.with_thread_payload_mut(thread, |payload| {
-                    payload.name = thread_name;
-                    payload.function = children[0];
-                    *payload.result_mut() = children[1];
-                    *payload.last_error_mut() = Some(children[2]);
-                    *payload.buffer_disposition_mut() = children[3];
-                    *payload.event_object_mut() = children[4];
-                    *payload.blocked_remaining_forms_mut() = children[5];
-                    *payload.error_data_mut() = children[6];
+                    // `name` and `function` have readers and no setters.
+                    // Rebuild through the public constructor so the untouched
+                    // words (error symbol, stored events) stay put.
+                    let error_symbol = payload.error_symbol();
+                    let stored_events = payload.stored_events().to_vec();
+                    *payload = neovm_value::heap_types::threading::ThreadChildren::new(
+                        thread_name,
+                        children[0],
+                        children[1],
+                        Some(children[2]),
+                        children[3],
+                        children[4],
+                        error_symbol,
+                        children[6],
+                        children[5],
+                        stored_events,
+                    );
                 })
             }
             .expect("same-World thread mutation")
