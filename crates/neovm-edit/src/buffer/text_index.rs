@@ -207,7 +207,7 @@ pub(crate) fn with_text_line_index_config<R>(
 /// The index settings, read once per process.
 #[inline]
 pub(crate) fn text_line_index_config() -> TextLineIndexConfig {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(config) = CONFIG_OVERRIDE.with(|slot| slot.get()) {
         return config;
     }
