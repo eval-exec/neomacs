@@ -519,6 +519,9 @@ pub struct CharsetRegistry {
     /// non-preferred subset charsets (`unicode-bmp`, `latin-iso8859-1`, ...).
     /// `None` means the boundary is the end of the list (GNU's `Qnil`).
     non_preferred_head: Option<usize>,
+    /// The preferred charsets by canonical identity (test read surface; the
+    /// production struct keeps this private). See the production definition.
+    pub preferred_identities: Vec<SymId>,
     /// Next auto-assigned charset ID.
     next_id: i64,
 }
@@ -1422,7 +1425,9 @@ pub fn warm_carrier_charset_registry() {
 /// set.
 fn publish_charset_preference() {
     let preferred = CHARSET_REGISTRY.with(|slot| slot.borrow().preferred_identities.clone());
-    crate::emacs_core::fontset::publish_charset_preference(preferred);
+    // The fontset lives above this crate after the split (display); the hook is
+    // installed at fontset reset and is a no-op until then.
+    crate::emacs_core::substrate_hooks::publish_charset_preference(preferred);
 }
 
 /// Reset charset registry to default state (called from Context::new).

@@ -16,6 +16,39 @@
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use neovm_value::intern::SymId;
+
+/// Fontset charset-preference publisher, installed once by the display layer.
+///
+/// GNU keeps the charset order in C (`Vcharset_ordered_list`) and every fontset
+/// lookup walks it directly. The split put the charset registry in this crate
+/// and the fontset in the display crate above it, so the charset layer publishes
+/// the preferred identities through this one static hook instead of calling
+/// upward. Uninstalled means no fontset exists yet: the note is a no-op.
+static CHARSET_PREFERENCE: OnceLock<fn(Vec<SymId>)> = OnceLock::new();
+
+/// Install the fontset's charset-preference publisher.
+///
+/// Idempotent for the same function pointer, like the layout note; a second,
+/// different hook is refused because the fontset ordering would otherwise
+/// silently split between two publishers.
+#[doc(hidden)]
+pub fn install_charset_preference(hook: fn(Vec<SymId>)) {
+    let _ = CHARSET_PREFERENCE.set(hook);
+    match CHARSET_PREFERENCE.get() {
+        Some(installed) if *installed as usize == hook as usize => {}
+        Some(_) => panic!("a different charset-preference hook is already installed"),
+        None => unreachable!("the charset-preference hook was just installed"),
+    }
+}
+
+/// Publish the preferred charset identities to the installed fontset hook.
+pub(crate) fn publish_charset_preference(preferred: Vec<SymId>) {
+    if let Some(hook) = CHARSET_PREFERENCE.get() {
+        hook(preferred);
+    }
+}
+
 /// One measured text operation: the text layer's slice of
 /// `emacs_core::perf_trace::HotpathOp`.
 ///

@@ -107,15 +107,15 @@ fn monitor_attributes_report_scale_factor_only_for_wayland_frames() {
         height_mm: 0,
         name: None,
     }]);
-    let printed = |eval: &mut neovm_eval::emacs_core::eval::Context, args: Vec<Value>| {
-        let list = crate::emacs_core::builtins::builtin_neomacs_display_monitor_attributes_list(
-            eval, args,
-        )
-        .expect("monitor attributes");
+    // The harness is an integration test, so reach the subr through its public
+    // Lisp entry (the direct builtin is crate-private after the split).
+    let printed = |eval: &mut neovm_eval::emacs_core::eval::Context, args: &str| {
+        let src = format!("(neomacs-display-monitor-attributes-list{args})");
+        let list = eval.eval_str(&src).expect("monitor attributes");
         neovm_eval::emacs_core::print::print_value(&list)
     };
     // GNU's NS and X builds omit it; only PGTK reports it.
-    let without = printed(&mut eval, vec![]);
+    let without = printed(&mut eval, "");
     // The selected frame stays non-graphical (an emacsclient -t frame); a
     // Wayland frame elsewhere still makes the frontend's monitors PGTK-shaped.
     let scratch = eval.edit.buffers.create_buffer("*scratch*");
@@ -127,8 +127,8 @@ fn monitor_attributes_report_scale_factor_only_for_wayland_frames() {
         .expect("Wayland frame")
         .set_display_identity(crate::window::FrameDisplayIdentity::wayland("wayland-0"));
     eval.frame_manager_mut().select_frame(selected);
-    let with = printed(&mut eval, vec![]);
-    let with_frame_arg = printed(&mut eval, vec![Value::make_frame(wayland.0)]);
+    let with = printed(&mut eval, "");
+    let with_frame_arg = printed(&mut eval, " (selected-frame)");
     set_neomacs_monitor_info(vec![]);
     assert!(!without.contains("scale-factor"), "{without}");
     for printed in [&with, &with_frame_arg] {
