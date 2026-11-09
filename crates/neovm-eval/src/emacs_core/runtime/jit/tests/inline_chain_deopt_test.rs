@@ -394,7 +394,10 @@ fn inline_chain_deopt_rejects_unsupported_and_malformed_metadata() {
     };
     check(&chain, ChainReadError::InvalidCallee);
     let mut unboxed = spill;
-    unboxed[2] = Value::from_bits(compile::UNBOXED_FLOAT_TAG_WORD as usize);
+    // SAFETY: this word is `UNBOXED_FLOAT_TAG_WORD` (`TAG_FLOAT`), the float
+    // tag sentinel. It is not `Value::bits()` from a live value. The readback
+    // below must reject that spill slot as `UnboxedFloat`.
+    unboxed[2] = unsafe { Value::from_bits(compile::UNBOXED_FLOAT_TAG_WORD as usize) };
     assert_eq!(
         two_frames().readback(&unboxed, &[], &[f], &ctx, 0, 2).err(),
         Some(ChainReadError::UnboxedFloat)
