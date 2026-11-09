@@ -31,6 +31,8 @@ mod functions;
 #[cfg(feature = "test-support")]
 pub(crate) use functions::{run_function_handoff_test, run_functions_executor_test};
 pub(crate) mod globals;
+#[cfg(feature = "test-support")]
+pub(crate) use globals::run_globals_executor_test;
 mod intern;
 #[cfg(test)]
 use crate::emacs_core::eval::Context;

@@ -1,6 +1,5 @@
 //! Reserved descriptor reuse, then real page growth, on distinct VOID cells.
-#[cfg(test)]
-use super::tests::{case_many, words};
+use super::tests::{GlobalParts, case_many, words};
 use super::*;
 use crate::tagged::gc::PlainSymbolBacking;
 
@@ -8,8 +7,9 @@ fn debt(owner: &mut Mutator<'_>) -> usize {
     must(with_run(owner, |run| Ok(run.state().hot.bytes_since_gc)))
 }
 
-#[test]
-fn p3sym_c3_void_siblings_are_independent_and_page_growth_is_charged() {
+pub(super) fn p3sym_c3_void_siblings_are_independent_and_page_growth_is_charged<H: GlobalParts>(
+    host: &mut H,
+) {
     // The first VOID reserves 256 descriptors, one consumed by VOID itself.
     // 257 first writes exceed that page; the final sibling is never written.
     const WRITES: u16 = 257;
@@ -31,7 +31,7 @@ fn p3sym_c3_void_siblings_are_independent_and_page_growth_is_charged() {
             }),
         ]);
     }
-    case_many(&kinds, ops, 2, |_era, session, owner, frame, ids| {
+    case_many(host, &kinds, ops, 2, |_era, session, owner, frame, ids| {
         let mut baseline = None;
         for symbol in 0..WRITES {
             let before_unbind = debt(owner);

@@ -1,6 +1,6 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "test-support"))]
 //! Actual canonical/answer roots, after birth logs drain, then reclamation.
-use super::tests::{case_many, drive, words};
+use super::tests::{GlobalParts, WorldRoots, case_many, drive, words};
 use super::*;
 use crate::tagged::gc::PlainSymbolBacking;
 use crate::tagged::gc::ProofEra as ParallelHeapEra;
@@ -14,18 +14,41 @@ pub(super) struct Ledger {
     pub(super) extra_work: usize,
 }
 
-pub(super) fn ledger<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+pub(super) fn ledger<K, W>(
     era: &ParallelHeapEra<'_, K>,
     stopped: &mut AllStopped<'_>,
-) -> Ledger {
+    world_roots: W,
+) -> Ledger
+where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: WorldRoots<K>,
+{
     let mut result = Ledger::default();
     let keeper = era.core.keeper.as_ref().unwrap();
     let mut world = Vec::new();
-    keeper
-        .collect_parallel_world_roots(stopped, &mut world)
-        .unwrap();
+    world_roots(keeper, stopped, &mut world).unwrap();
     result.world = world.into_iter().map(TaggedValue::bits).collect();
-    (result.symbols, result.projections) = keeper.symbol_root_ledger_for_test(stopped).unwrap();
+    // Same observation as Baton::symbol_root_ledger_for_test. keeper_designator
+    // refuses a keeper that is not held on this thread before the world-root
+    // check, which is that method's error order. Value does not name Baton.
+    let designator = keeper.keeper_designator().unwrap();
+    stopped
+        .check_world_roots(keeper.parallel_heap_identity())
+        .unwrap();
+    let authority = stopped.symbols().unwrap();
+    let mut projection_words = Vec::new();
+    authority
+        .append_current_projection_roots(&designator, &mut projection_words)
+        .unwrap();
+    let mut symbol_words = Vec::new();
+    authority
+        .append_current_symbol_roots(&designator, &mut symbol_words)
+        .unwrap();
+    result.symbols = symbol_words.into_iter().map(TaggedValue::bits).collect();
+    result.projections = projection_words
+        .into_iter()
+        .map(TaggedValue::bits)
+        .collect();
     let mut external = Vec::new();
     era.core
         .legacy_roots
@@ -63,21 +86,31 @@ pub(super) fn ledger<K: crate::tagged::gc::mutator_registration::EraKeeper>(
 
 /// Capture all assertions as facts, and resume the owner before checking them.
 /// A failing witness must not strand its otherwise healthy fixture in Native.
-fn round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+fn round<K, W>(
     era: &ParallelHeapEra<'_, K>,
     owner: &mut Mutator<'_>,
     graph: &[usize],
-) -> (Ledger, Vec<bool>, u64) {
+    world_roots: W,
+) -> (Ledger, Vec<bool>, u64)
+where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: WorldRoots<K>,
+{
     owner.enter_native(&[]).unwrap();
     let mut stopped = era.stop().unwrap();
     era.return_cons_storage(&stopped).unwrap();
-    let before = ledger(era, &mut stopped);
-    let report = era.collect_stopped(&mut stopped).unwrap();
+    let before = ledger(era, &mut stopped, world_roots);
+    let report = era.collect_stopped(&mut stopped, world_roots).unwrap();
     let live = era
         .with_stopped_heap_for_test(&stopped, |heap| {
             graph
                 .iter()
-                .map(|&bits| heap.owns_heap_value_for_test(TaggedValue::from_bits(bits)))
+                .map(|&bits| {
+                    heap.owns_heap_value_for_test(unsafe {
+                        // SAFETY: these words were read from this stopped heap's owner slots.
+                        TaggedValue::from_bits(bits)
+                    })
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap();
@@ -107,7 +140,8 @@ fn pause<'era>(session: &GlobalSession, owner: &mut Mutator<'era>, frame: &mut F
     }
 }
 
-fn global_graph(kind: PlainSymbolBacking) {
+fn global_graph<H: GlobalParts>(host: &mut H, kind: PlainSymbolBacking) {
+    let world_roots = host.roots();
     let ops = vec![
         Op::ConstFixnum { dst: 0, value: 42 },
         Op::Cons {
@@ -140,6 +174,7 @@ fn global_graph(kind: PlainSymbolBacking) {
         Op::Safepoint, // Both nodes must now be reclaimed.
     ];
     case_many(
+        host,
         &[kind, PlainSymbolBacking::VoidProjection],
         ops,
         4,
@@ -148,14 +183,14 @@ fn global_graph(kind: PlainSymbolBacking) {
             let graph: Vec<_> = frame.machine.owned.iter().copied().collect();
             assert_eq!(graph.len(), 2);
             assert_eq!(words(owner, frame)[1..], [TaggedValue::NIL.bits(); 3]);
-            let (_, live, epoch1) = round(era, owner, &graph);
+            let (_, live, epoch1) = round(era, owner, &graph, world_roots);
             assert!(
                 live.iter().all(|&v| v),
                 "new canonical graph survived birth drain"
             );
 
             pause(session, owner, frame);
-            let (roots, live, epoch2) = round(era, owner, &graph);
+            let (roots, live, epoch2) = round(era, owner, &graph, world_roots);
             assert!(epoch2 > epoch1);
             assert!(
                 live.iter().all(|&v| v),
@@ -208,7 +243,7 @@ fn global_graph(kind: PlainSymbolBacking) {
             }
 
             pause(session, owner, frame);
-            let (roots, live, epoch3) = round(era, owner, &graph);
+            let (roots, live, epoch3) = round(era, owner, &graph, world_roots);
             assert!(epoch3 > epoch2);
             assert!(
                 live.iter().all(|&v| v),
@@ -224,7 +259,7 @@ fn global_graph(kind: PlainSymbolBacking) {
             assert_eq!(printed, oracle[12], "GNU rooted answer after makunbound/GC");
 
             pause(session, owner, frame);
-            let (roots, live, epoch4) = round(era, owner, &graph);
+            let (roots, live, epoch4) = round(era, owner, &graph, world_roots);
             assert!(epoch4 > epoch3);
             assert!(
                 roots
@@ -243,17 +278,14 @@ fn global_graph(kind: PlainSymbolBacking) {
     );
 }
 
-#[test]
-fn p3sym_c3_plain_global_graph_four_stops() {
-    global_graph(PlainSymbolBacking::Unprojected);
+pub(super) fn p3sym_c3_plain_global_graph_four_stops<H: GlobalParts>(host: &mut H) {
+    global_graph(host, PlainSymbolBacking::Unprojected);
 }
 
-#[test]
-fn p3sym_c3_projected_global_graph_four_stops() {
-    global_graph(PlainSymbolBacking::Projected);
+pub(super) fn p3sym_c3_projected_global_graph_four_stops<H: GlobalParts>(host: &mut H) {
+    global_graph(host, PlainSymbolBacking::Projected);
 }
 
-#[test]
-fn p3sym_c3_void_global_graph_four_stops() {
-    global_graph(PlainSymbolBacking::VoidProjection);
+pub(super) fn p3sym_c3_void_global_graph_four_stops<H: GlobalParts>(host: &mut H) {
+    global_graph(host, PlainSymbolBacking::VoidProjection);
 }

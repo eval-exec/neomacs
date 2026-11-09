@@ -1342,6 +1342,51 @@ pub fn set_hash_table_switch_epoch_for_test(
     storage.switch_epoch = value;
 }
 
+/// FENCE: one re-homed global-executor test. The core shell opens the symbol
+/// era and passes the baton World walk. The original dispatcher stays
+/// `pub(crate)`.
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[doc(hidden)]
+pub fn run_globals_executor_test_for_test<K, W>(
+    name: &str,
+    symbol_era: &mut dyn FnMut(
+        &mut dyn for<'e> FnMut(crate::tagged::gc::ProofEra<'e, K>, crate::intern::SymId),
+    ),
+    symbol_backing: &mut dyn FnMut(
+        crate::tagged::gc::PlainSymbolBacking,
+        &mut dyn for<'e> FnMut(crate::tagged::gc::ProofEra<'e, K>, crate::intern::SymId),
+    ),
+    symbol_backings: &mut dyn FnMut(
+        &[crate::tagged::gc::PlainSymbolBacking],
+        &mut dyn for<'e> FnMut(crate::tagged::gc::ProofEra<'e, K>, Vec<crate::intern::SymId>),
+    ),
+    eval_then_admit: &mut dyn FnMut(
+        &str,
+        &mut dyn for<'e> FnMut(&crate::tagged::gc::ProofEra<'e, K>),
+    ),
+    world_roots: W,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut crate::tagged::gc::mutator_registration::AllStopped<'e>,
+            &'o mut Vec<crate::tagged::value::TaggedValue>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            crate::tagged::gc::mutator_registration::RendezvousError,
+        >,
+{
+    crate::tagged::gc::mutator_registration::restricted_lisp::run_globals_executor_test(
+        name,
+        symbol_era,
+        symbol_backing,
+        symbol_backings,
+        eval_then_admit,
+        world_roots,
+    );
+}
+
 /// FENCE: process collection-read configuration. The original stays
 /// `pub(crate)`. This is the only public path; it writes the process gate.
 #[cfg(any(test, feature = "test-support"))]

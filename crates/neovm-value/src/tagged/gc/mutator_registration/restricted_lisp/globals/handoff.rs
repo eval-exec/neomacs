@@ -1,18 +1,15 @@
 //! Ordered native histories on one real World, with all owners stopped at GC.
-#[cfg(test)]
-use super::tests::source;
+use super::tests::{GlobalParts, WorldRoots, source};
 use super::*;
 use crate::tagged::gc::PlainSymbolBacking;
 use crate::tagged::gc::ProofEra as ParallelHeapEra;
 
 pub(crate) mod worker;
-#[cfg(test)]
 use worker::{Actor, Command, Event, Snapshot};
 
 const NSLOTS: usize = 4;
 const PHASES: usize = 5;
 
-#[cfg(test)]
 fn publish() -> Vec<Op> {
     vec![
         Op::ConstFixnum { dst: 0, value: 42 },
@@ -37,7 +34,6 @@ fn publish() -> Vec<Op> {
     ]
 }
 
-#[cfg(test)]
 fn erase() -> Vec<Op> {
     vec![
         Op::Global(GlobalOp::Makunbound { symbol: 0, dst: 2 }),
@@ -45,7 +41,6 @@ fn erase() -> Vec<Op> {
     ]
 }
 
-#[cfg(test)]
 fn program(index: usize) -> Source {
     let mut ops = Vec::new();
     for phase in 0..PHASES {
@@ -64,7 +59,6 @@ fn program(index: usize) -> Source {
     source(ops, NSLOTS)
 }
 
-#[cfg(test)]
 struct Cycle {
     before: Vec<Snapshot>,
     after: Vec<Snapshot>,
@@ -76,16 +70,20 @@ struct Cycle {
     frozen: usize,
 }
 
-#[cfg(test)]
-fn collect<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+fn collect<K, W>(
     era: &ParallelHeapEra<'_, K>,
     before: Vec<Snapshot>,
     phase: usize,
-) -> Cycle {
+    world_roots: W,
+) -> Cycle
+where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: WorldRoots<K>,
+{
     let mut stopped = era.stop().unwrap();
     era.return_cons_storage(&stopped).unwrap();
-    let roots = gc::ledger(era, &mut stopped);
-    let report = era.collect_stopped(&mut stopped).unwrap();
+    let roots = gc::ledger(era, &mut stopped, world_roots);
+    let report = era.collect_stopped(&mut stopped, world_roots).unwrap();
     let (live, printed) = era
         .with_stopped_heap_for_test(&stopped, |heap| {
             let live = before
@@ -94,7 +92,10 @@ fn collect<K: crate::tagged::gc::mutator_registration::EraKeeper>(
                 .map(|&bits| {
                     (
                         bits,
-                        heap.owns_heap_value_for_test(TaggedValue::from_bits(bits)),
+                        heap.owns_heap_value_for_test(unsafe {
+                            // SAFETY: these words were read from this stopped heap's owner slots.
+                            TaggedValue::from_bits(bits)
+                        }),
                     )
                 })
                 .collect();
@@ -105,7 +106,8 @@ fn collect<K: crate::tagged::gc::mutator_registration::EraKeeper>(
             };
             let printed = reader.and_then(|index| {
                 let words = &before[index].words;
-                let value = TaggedValue::from_bits(words[1]);
+                // SAFETY: this word was read from this stopped heap's owner slots.
+                let value = unsafe { TaggedValue::from_bits(words[1]) };
                 // Decode only a still-live copied answer under the matching stop.
                 (value.is_cons() && heap.owns_heap_value_for_test(value))
                     .then(|| format!("({} {})", prin1(words[1]), prin1(words[3])))
@@ -127,10 +129,10 @@ fn collect<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     }
 }
 
-#[cfg(test)]
-fn scenario(kind: PlainSymbolBacking, owners: usize) {
+fn scenario<H: GlobalParts>(host: &mut H, kind: PlainSymbolBacking, owners: usize) {
     let _probes = crate::tagged::gc::mutator_registration::a8_probes::suppress();
-    let (cycles, finished) = Context::with_test_symbol_backing_era(kind, |era, id| {
+    let world_roots = host.roots();
+    let (cycles, finished) = host.symbol_backing(kind, |era, id| {
         let sources: Vec<_> = (0..owners).map(program).collect();
         let session = GlobalSession::admit(&era, &[id], &sources).unwrap();
         let mut stopped = era.stop().unwrap();
@@ -193,6 +195,7 @@ fn scenario(kind: PlainSymbolBacking, owners: usize) {
                     &era,
                     before.into_iter().map(Option::unwrap).collect(),
                     phase,
+                    world_roots,
                 );
                 for actor in &actors {
                     actor.commands.send(Command::Resume).unwrap();
@@ -229,7 +232,7 @@ fn scenario(kind: PlainSymbolBacking, owners: usize) {
         // before returning the actual World to serial/drop.
         let mut stopped = era.stop().unwrap();
         era.return_cons_storage(&stopped).unwrap();
-        era.collect_stopped(&mut stopped).unwrap();
+        era.collect_stopped(&mut stopped, world_roots).unwrap();
         stopped.complete().unwrap();
         let (collector, keeper) = era.finish().unwrap();
         drop(collector);
@@ -329,31 +332,24 @@ fn scenario(kind: PlainSymbolBacking, owners: usize) {
     );
 }
 
-#[cfg(not(miri))]
-#[test]
-fn p3sym_c3_plain_multi_owner_handoff_gc() {
+pub(super) fn p3sym_c3_plain_multi_owner_handoff_gc<H: GlobalParts>(host: &mut H) {
     for owners in 2..=4 {
-        scenario(PlainSymbolBacking::Unprojected, owners);
+        scenario(host, PlainSymbolBacking::Unprojected, owners);
     }
 }
 
-#[cfg(not(miri))]
-#[test]
-fn p3sym_c3_projected_multi_owner_handoff_gc() {
+pub(super) fn p3sym_c3_projected_multi_owner_handoff_gc<H: GlobalParts>(host: &mut H) {
     for owners in 2..=4 {
-        scenario(PlainSymbolBacking::Projected, owners);
+        scenario(host, PlainSymbolBacking::Projected, owners);
     }
 }
 
-#[cfg(not(miri))]
-#[test]
-fn p3sym_c3_void_multi_owner_handoff_gc() {
+pub(super) fn p3sym_c3_void_multi_owner_handoff_gc<H: GlobalParts>(host: &mut H) {
     for owners in 2..=4 {
-        scenario(PlainSymbolBacking::VoidProjection, owners);
+        scenario(host, PlainSymbolBacking::VoidProjection, owners);
     }
 }
 
-#[test]
-fn p3sym_c3_two_owner_handoff_gc_small() {
-    scenario(PlainSymbolBacking::Projected, 2);
+pub(super) fn p3sym_c3_two_owner_handoff_gc_small<H: GlobalParts>(host: &mut H) {
+    scenario(host, PlainSymbolBacking::Projected, 2);
 }

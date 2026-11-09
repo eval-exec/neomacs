@@ -284,3 +284,5 @@ mod gc;
 pub(crate) mod handoff;
 mod tests;
 mod void;
+#[cfg(feature = "test-support")]
+pub(crate) use tests::run_globals_executor_test;

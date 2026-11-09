@@ -2,9 +2,119 @@ use super::*;
 use crate::tagged::gc::PlainSymbolBacking;
 use crate::tagged::gc::ProofEra as ParallelHeapEra;
 
-#[test]
-fn p3sym_c5_global_executor_cannot_admit_intern_even_if_unreachable() {
-    Context::with_test_symbol_era(|era, id| {
+pub(super) use super::super::WorldRoots;
+
+/// Era openers supplied by the core shell. This module does not name the
+/// evaluator. `Roots` is the World walk passed to stopped collection.
+pub(super) trait GlobalParts {
+    type Keeper: crate::tagged::gc::mutator_registration::EraKeeper;
+    type Roots: WorldRoots<Self::Keeper>;
+    fn symbol_era<R>(
+        &mut self,
+        body: impl for<'e> FnOnce(ParallelHeapEra<'e, Self::Keeper>, SymId) -> R,
+    ) -> R;
+    fn symbol_backing<R>(
+        &mut self,
+        kind: PlainSymbolBacking,
+        body: impl for<'e> FnOnce(ParallelHeapEra<'e, Self::Keeper>, SymId) -> R,
+    ) -> R;
+    fn symbol_backings<R>(
+        &mut self,
+        kinds: &[PlainSymbolBacking],
+        body: impl for<'e> FnOnce(ParallelHeapEra<'e, Self::Keeper>, Vec<SymId>) -> R,
+    ) -> R;
+    fn eval_then_admit<R>(
+        &mut self,
+        source: &str,
+        body: impl for<'e> FnOnce(&ParallelHeapEra<'e, Self::Keeper>) -> R,
+    ) -> R;
+    fn roots(&self) -> Self::Roots;
+}
+
+struct GlobalsHost<'a, K: crate::tagged::gc::mutator_registration::EraKeeper, W> {
+    symbol_era: &'a mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, SymId)),
+    symbol_backing: &'a mut dyn FnMut(
+        PlainSymbolBacking,
+        &mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, SymId),
+    ),
+    symbol_backings: &'a mut dyn FnMut(
+        &[PlainSymbolBacking],
+        &mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, Vec<SymId>),
+    ),
+    eval_then_admit: &'a mut dyn FnMut(&str, &mut dyn for<'e> FnMut(&ParallelHeapEra<'e, K>)),
+    world_roots: W,
+}
+
+impl<'a, K, W> GlobalParts for GlobalsHost<'a, K, W>
+where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: WorldRoots<K>,
+{
+    type Keeper = K;
+    type Roots = W;
+
+    fn symbol_era<R>(
+        &mut self,
+        body: impl for<'e> FnOnce(ParallelHeapEra<'e, K>, SymId) -> R,
+    ) -> R {
+        let mut body = Some(body);
+        let mut slot = None;
+        (self.symbol_era)(&mut |era, id| {
+            let body = body.take().expect("symbol era body runs once");
+            slot = Some(body(era, id));
+        });
+        slot.expect("symbol era body runs once")
+    }
+
+    fn symbol_backing<R>(
+        &mut self,
+        kind: PlainSymbolBacking,
+        body: impl for<'e> FnOnce(ParallelHeapEra<'e, K>, SymId) -> R,
+    ) -> R {
+        let mut body = Some(body);
+        let mut slot = None;
+        (self.symbol_backing)(kind, &mut |era, id| {
+            let body = body.take().expect("symbol backing body runs once");
+            slot = Some(body(era, id));
+        });
+        slot.expect("symbol backing body runs once")
+    }
+
+    fn symbol_backings<R>(
+        &mut self,
+        kinds: &[PlainSymbolBacking],
+        body: impl for<'e> FnOnce(ParallelHeapEra<'e, K>, Vec<SymId>) -> R,
+    ) -> R {
+        let mut body = Some(body);
+        let mut slot = None;
+        (self.symbol_backings)(kinds, &mut |era, ids| {
+            let body = body.take().expect("symbol backings body runs once");
+            slot = Some(body(era, ids));
+        });
+        slot.expect("symbol backings body runs once")
+    }
+
+    fn eval_then_admit<R>(
+        &mut self,
+        source: &str,
+        body: impl for<'e> FnOnce(&ParallelHeapEra<'e, K>) -> R,
+    ) -> R {
+        let mut body = Some(body);
+        let mut slot = None;
+        (self.eval_then_admit)(source, &mut |era| {
+            let body = body.take().expect("eval then admit body runs once");
+            slot = Some(body(era));
+        });
+        slot.expect("eval then admit body runs once")
+    }
+
+    fn roots(&self) -> W {
+        self.world_roots
+    }
+}
+
+fn p3sym_c5_global_executor_cannot_admit_intern_even_if_unreachable<H: GlobalParts>(host: &mut H) {
+    host.symbol_era(|era, id| {
         let tape = source(
             vec![
                 Op::Jump { target: 2 },
@@ -53,38 +163,45 @@ pub(super) fn drive<'era>(
 
 /// The assertion body may unwind or the executor may refuse. Clear every
 /// census root and retire before finishing the era in either case.
-#[cfg(test)]
-fn case<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+fn case<H: GlobalParts>(
+    host: &mut H,
     kind: PlainSymbolBacking,
     ops: Vec<Op>,
     nslots: usize,
     body: impl for<'era> FnOnce(
-        &ParallelHeapEra<'_, K>,
+        &ParallelHeapEra<'_, H::Keeper>,
         &GlobalSession,
         &mut Mutator<'era>,
         &mut Frame<'era>,
         SymId,
     ),
 ) {
-    case_many(&[kind], ops, nslots, |era, session, owner, frame, ids| {
-        body(era, session, owner, frame, ids[0]);
-    });
+    case_many(
+        host,
+        &[kind],
+        ops,
+        nslots,
+        |era, session, owner, frame, ids| {
+            body(era, session, owner, frame, ids[0]);
+        },
+    );
 }
 
-#[cfg(test)]
-pub(super) fn case_many<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+pub(super) fn case_many<H: GlobalParts>(
+    host: &mut H,
     kinds: &[PlainSymbolBacking],
     ops: Vec<Op>,
     nslots: usize,
     body: impl for<'era> FnOnce(
-        &ParallelHeapEra<'_, K>,
+        &ParallelHeapEra<'_, H::Keeper>,
         &GlobalSession,
         &mut Mutator<'era>,
         &mut Frame<'era>,
         &[SymId],
     ),
 ) {
-    Context::with_test_symbol_backings_era(kinds, |era, ids| {
+    let world_roots = host.roots();
+    host.symbol_backings(kinds, |era, ids| {
         let session = GlobalSession::admit(&era, &ids, &[source(ops, nslots)]).unwrap();
         let mut stopped = era.stop().unwrap();
         let nil = era
@@ -118,7 +235,7 @@ pub(super) fn case_many<K: crate::tagged::gc::mutator_registration::EraKeeper>(
         if allocated {
             // Published young births require a stopped collection before the
             // era can return to serial. This is teardown, never setup GC.
-            era.collect_stopped(&mut stopped).unwrap();
+            era.collect_stopped(&mut stopped, world_roots).unwrap();
         } else {
             stopped.trace(|_, _| Ok(())).unwrap();
         }
@@ -143,8 +260,7 @@ pub(super) fn words<'era>(owner: &mut Mutator<'era>, frame: &Frame<'era>) -> Vec
     }))
 }
 
-#[test]
-fn p3sym_c3_executor_primitives_match_gnu() {
+fn p3sym_c3_executor_primitives_match_gnu<H: GlobalParts>(host: &mut H) {
     let oracle: Vec<_> = include_str!("../../symbol_globals_oracle.expected")
         .lines()
         .collect();
@@ -166,6 +282,7 @@ fn p3sym_c3_executor_primitives_match_gnu() {
         .enumerate()
         {
             case(
+                host,
                 kind,
                 vec![Op::ConstFixnum { dst: 0, value: 97 }, Op::Global(op)],
                 2,
@@ -185,8 +302,7 @@ fn p3sym_c3_executor_primitives_match_gnu() {
     }
 }
 
-#[test]
-fn p3sym_c3_executor_nil_void_and_graph_reads() {
+fn p3sym_c3_executor_nil_void_and_graph_reads<H: GlobalParts>(host: &mut H) {
     for kind in [
         PlainSymbolBacking::Unprojected,
         PlainSymbolBacking::Projected,
@@ -220,7 +336,7 @@ fn p3sym_c3_executor_nil_void_and_graph_reads() {
             Op::Global(GlobalOp::Boundp { symbol: 0, dst: 2 }),
             Op::Global(GlobalOp::Value { symbol: 0, dst: 2 }),
         ];
-        case(kind, ops, 5, |_era, session, owner, frame, _id| {
+        case(host, kind, ops, 5, |_era, session, owner, frame, _id| {
             assert_eq!(drive(session, owner, frame), Err(ExecError::VoidVariable));
             let result = words(owner, frame);
             assert_eq!(result[0], TaggedValue::fixnum(41).bits());
@@ -236,9 +352,8 @@ fn p3sym_c3_executor_nil_void_and_graph_reads() {
     }
 }
 
-#[test]
-fn p3sym_c3_executor_gate_checks_all_participants_and_handles() {
-    Context::with_test_symbol_era(|era, id| {
+fn p3sym_c3_executor_gate_checks_all_participants_and_handles<H: GlobalParts>(host: &mut H) {
+    host.symbol_era(|era, id| {
         let global = source(vec![Op::Global(GlobalOp::Value { symbol: 0, dst: 0 })], 1);
         for mutation in [
             Op::SetCar { cell: 0, value: 0 },
@@ -310,29 +425,22 @@ fn p3sym_c3_executor_gate_checks_all_participants_and_handles() {
     });
 }
 
-#[test]
-fn p3sym_c3_executor_rejects_transitive_mutable_global_before_activation() {
-    let mut context = Context::new();
-    context
-        .eval_str("(setq p3sym-c3-bad-import '(1 . [2]))")
-        .unwrap();
-    let id = crate::intern::intern("p3sym-c3-bad-import");
-    context
-        .admit_owned_proof_parallel(|projection| {
-            let source = source(vec![Op::Global(GlobalOp::Value { symbol: 0, dst: 0 })], 1);
-            assert!(matches!(
-                GlobalSession::admit(projection.era(), &[id], &[source]),
-                Err(AdmissionError::Program(Reject::RejectedType))
-            ));
-            let (collector, keeper) = projection.finish().unwrap();
-            (collector, keeper, ())
-        })
-        .unwrap();
+fn p3sym_c3_executor_rejects_transitive_mutable_global_before_activation<H: GlobalParts>(
+    host: &mut H,
+) {
+    host.eval_then_admit("(setq p3sym-c3-bad-import '(1 . [2]))", |era| {
+        let id = crate::intern::intern("p3sym-c3-bad-import");
+        let source = source(vec![Op::Global(GlobalOp::Value { symbol: 0, dst: 0 })], 1);
+        assert!(matches!(
+            GlobalSession::admit(era, &[id], &[source]),
+            Err(AdmissionError::Program(Reject::RejectedType))
+        ));
+    });
 }
 
-#[test]
-fn p3sym_c3_executor_refusal_preserves_pc_and_retries() {
+fn p3sym_c3_executor_refusal_preserves_pc_and_retries<H: GlobalParts>(host: &mut H) {
     case(
+        host,
         PlainSymbolBacking::Unprojected,
         vec![Op::Global(GlobalOp::Value { symbol: 0, dst: 0 })],
         1,
@@ -396,5 +504,80 @@ fn p3sym_c3_executor_uses_only_the_rooted_global_surface() {
         "sym_makunbound_into(",
     ] {
         assert!(driver.contains(operation));
+    }
+}
+
+/// One moved global-executor test. The core shell opens the symbol era and
+/// passes the baton World walk. The source-text test stays `#[test]` here.
+pub(crate) fn run_globals_executor_test<K, W>(
+    name: &str,
+    symbol_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, SymId)),
+    symbol_backing: &mut dyn FnMut(
+        PlainSymbolBacking,
+        &mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, SymId),
+    ),
+    symbol_backings: &mut dyn FnMut(
+        &[PlainSymbolBacking],
+        &mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, Vec<SymId>),
+    ),
+    eval_then_admit: &mut dyn FnMut(&str, &mut dyn for<'e> FnMut(&ParallelHeapEra<'e, K>)),
+    world_roots: W,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: WorldRoots<K>,
+{
+    let mut host = GlobalsHost {
+        symbol_era,
+        symbol_backing,
+        symbol_backings,
+        eval_then_admit,
+        world_roots,
+    };
+    match name {
+        "p3sym_c5_global_executor_cannot_admit_intern_even_if_unreachable" => {
+            p3sym_c5_global_executor_cannot_admit_intern_even_if_unreachable(&mut host)
+        }
+        "p3sym_c3_executor_primitives_match_gnu" => {
+            p3sym_c3_executor_primitives_match_gnu(&mut host)
+        }
+        "p3sym_c3_executor_nil_void_and_graph_reads" => {
+            p3sym_c3_executor_nil_void_and_graph_reads(&mut host)
+        }
+        "p3sym_c3_executor_gate_checks_all_participants_and_handles" => {
+            p3sym_c3_executor_gate_checks_all_participants_and_handles(&mut host)
+        }
+        "p3sym_c3_executor_rejects_transitive_mutable_global_before_activation" => {
+            p3sym_c3_executor_rejects_transitive_mutable_global_before_activation(&mut host)
+        }
+        "p3sym_c3_executor_refusal_preserves_pc_and_retries" => {
+            p3sym_c3_executor_refusal_preserves_pc_and_retries(&mut host)
+        }
+        "p3sym_c3_plain_global_graph_four_stops" => {
+            super::gc::p3sym_c3_plain_global_graph_four_stops(&mut host)
+        }
+        "p3sym_c3_projected_global_graph_four_stops" => {
+            super::gc::p3sym_c3_projected_global_graph_four_stops(&mut host)
+        }
+        "p3sym_c3_void_global_graph_four_stops" => {
+            super::gc::p3sym_c3_void_global_graph_four_stops(&mut host)
+        }
+        "p3sym_c3_void_siblings_are_independent_and_page_growth_is_charged" => {
+            super::void::p3sym_c3_void_siblings_are_independent_and_page_growth_is_charged(
+                &mut host,
+            )
+        }
+        "p3sym_c3_plain_multi_owner_handoff_gc" => {
+            super::handoff::p3sym_c3_plain_multi_owner_handoff_gc(&mut host)
+        }
+        "p3sym_c3_projected_multi_owner_handoff_gc" => {
+            super::handoff::p3sym_c3_projected_multi_owner_handoff_gc(&mut host)
+        }
+        "p3sym_c3_void_multi_owner_handoff_gc" => {
+            super::handoff::p3sym_c3_void_multi_owner_handoff_gc(&mut host)
+        }
+        "p3sym_c3_two_owner_handoff_gc_small" => {
+            super::handoff::p3sym_c3_two_owner_handoff_gc_small(&mut host)
+        }
+        other => panic!("unknown global executor test {other}"),
     }
 }
