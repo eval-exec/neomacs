@@ -408,7 +408,7 @@ impl InteractiveRegistry {
 
     pub fn install_where_is_reverse_index(&mut self, index: WhereIsReverseIndex) {
         self.where_is_reverse_index = Some(index);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.note_where_is_reverse_index_build();
     }
 
