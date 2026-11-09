@@ -236,6 +236,7 @@ impl HashTableScanSnapshot {
 
     /// Every unwound/incomplete guard release-publishes into this single flag,
     /// making the coordinator's failure check O(1), independent of table count.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn is_poisoned(&self) -> bool {
         self.poisoned.load(Ordering::Acquire)
     }
