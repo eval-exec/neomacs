@@ -1848,11 +1848,17 @@ impl Context {
         // (eval.c `unbind_to`). The inline fast path above is unchanged: a
         // single trivial frame may still pop. Main-thread `ThreadBlocked`
         // (a deadlock report) still unwinds.
-        if self.threads.current_thread_id() != 0
-            && !self.green_threads_running()
-            && matches!(result.as_ref(), Err(flow) if flow.is_thread_blocked())
-        {
-            return result;
+        //
+        // Every non-trivial `let` reaches this out-of-line function. The Ok
+        // path pays only the `Result` discriminant. The thread-id read and
+        // the green-mode read stay on the cold `ThreadBlocked` arm.
+        if let Err(flow) = result.as_ref() {
+            if flow.is_thread_blocked()
+                && self.threads.current_thread_id() != 0
+                && !self.green_threads_running()
+            {
+                return result;
+            }
         }
         // GNU's six `if (backtrace_debug_on_exit (...)) val = call_debugger
         // (list2 (Qexit, val));` sites, as one.  Reaching here means the suffix
