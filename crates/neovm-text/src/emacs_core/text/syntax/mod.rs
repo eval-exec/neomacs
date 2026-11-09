@@ -95,9 +95,9 @@ struct BufferSyntaxChar {
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy)]
 pub struct BufferSyntaxChar {
-    pub ch: char,
-    pub start: EmacsBytePos,
-    pub end: EmacsBytePos,
+    pub(crate) ch: char,
+    pub(crate) start: EmacsBytePos,
+    pub(crate) end: EmacsBytePos,
 }
 
 #[inline]
@@ -3289,7 +3289,7 @@ struct ParseSyntaxEntry {
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct ParseSyntaxEntry {
-    pub class: SyntaxClass,
+    pub(crate) class: SyntaxClass,
     flags: SyntaxFlags,
 }
 
@@ -3697,7 +3697,7 @@ pub struct SyntaxPropByteRun<'a> {
     /// [`SyntaxPropRange::ascii`]: the byte-addressed scanners (regexp
     /// syntax classes, `forward-comment`) previously paid the full
     /// chartable walk for EVERY character examined.
-    pub ascii: [Cell<Option<SyntaxEntry>>; 128],
+    pub(crate) ascii: [Cell<Option<SyntaxEntry>>; 128],
     ascii_table: Cell<usize>,
     props: SyntaxProperties<'a>,
 }
@@ -4583,7 +4583,7 @@ pub struct SyntaxPropRange<'a> {
     /// invariant the property-run cache above already relies on, so no
     /// mutation-epoch check is needed -- and none would be sound, since `aset`
     /// on a syntax char-table bypasses `note_syntax_table_mutation`.
-    pub ascii: [Cell<Option<SyntaxEntry>>; 128],
+    pub(crate) ascii: [Cell<Option<SyntaxEntry>>; 128],
     /// Identity of the chartable `ascii` was filled against, so a cache reused
     /// across tables cannot serve entries from the wrong one.
     ascii_table: Cell<usize>,
@@ -8343,3 +8343,45 @@ mod skip_syntax_classes_tests;
 mod tests;
 #[cfg(feature = "test-support")]
 pub use parse_cache::BufferSyntaxParseCache;
+
+/// VIS read rows (lead #1052): copy/reference getters for the syntax scan
+/// caches; the fields stay pub(crate) in this crate.
+#[cfg(any(test, feature = "test-support"))]
+impl BufferSyntaxChar {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn ch(&self) -> char {
+        self.ch
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn start(&self) -> EmacsBytePos {
+        self.start
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn end(&self) -> EmacsBytePos {
+        self.end
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl ParseSyntaxEntry {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn class(&self) -> SyntaxClass {
+        self.class
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl<'a> SyntaxPropByteRun<'a> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn ascii(&self) -> [Option<SyntaxEntry>; 128] {
+        std::array::from_fn(|i| self.ascii[i].get())
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl<'a> SyntaxPropRange<'a> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn ascii(&self) -> [Option<SyntaxEntry>; 128] {
+        std::array::from_fn(|i| self.ascii[i].get())
+    }
+}

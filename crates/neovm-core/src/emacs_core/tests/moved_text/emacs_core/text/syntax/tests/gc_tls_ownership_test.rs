@@ -80,7 +80,7 @@ fn gc_tls_ownership_syntax_weak_ascii_keys_invalidate_before_heap_reuse() {
             SyntaxClass::Punctuation
         );
         assert_eq!(
-            flat_ascii_entries_for_table(&table)[b'a' as usize].class,
+            flat_ascii_entries_for_table(&table)[b'a' as usize].class(),
             SyntaxClass::Punctuation
         );
         first.gc_collect_exact();
@@ -98,7 +98,7 @@ fn gc_tls_ownership_syntax_weak_ascii_keys_invalidate_before_heap_reuse() {
         SyntaxClass::Word
     );
     assert_eq!(
-        flat_ascii_entries_for_table(&table)[b'a' as usize].class,
+        flat_ascii_entries_for_table(&table)[b'a' as usize].class(),
         SyntaxClass::Word
     );
     next.gc_collect_exact();

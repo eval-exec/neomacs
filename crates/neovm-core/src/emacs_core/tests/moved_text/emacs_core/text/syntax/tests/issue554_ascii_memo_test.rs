@@ -102,8 +102,8 @@ fn issue554_ascii_memo_shares_entries_across_symbol_policies() {
                     effective_syntax_entry_for_abs_char(buffer, &table, ch, code, &chars),
                     *expected,
                 );
-                assert!(bytes.ascii[code].get().is_some());
-                assert!(chars.ascii[code].get().is_some());
+                assert!(bytes.ascii()[code].is_some());
+                assert!(chars.ascii()[code].is_some());
             }
         }
     }

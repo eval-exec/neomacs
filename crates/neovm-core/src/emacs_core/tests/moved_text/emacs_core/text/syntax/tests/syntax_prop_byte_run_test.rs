@@ -111,8 +111,8 @@ fn the_ascii_char_before_is_the_general_answer() {
         let end = buf.total_emacs_byte_end_pos().get();
         for byte in 0..=end + 1 {
             let pos = EmacsBytePos::new(byte);
-            let got =
-                buffer_syntax_char_before(buf, pos).map(|u| (u.ch, u.start.get(), u.end.get()));
+            let got = buffer_syntax_char_before(buf, pos)
+                .map(|u| (u.ch(), u.start().get(), u.end().get()));
             let want = buf.char_before_emacs_byte_pos(pos).map(|ch| {
                 let len = buf
                     .char_before_emacs_byte_len(pos)
