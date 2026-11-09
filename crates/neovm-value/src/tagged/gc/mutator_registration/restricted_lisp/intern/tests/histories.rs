@@ -328,6 +328,7 @@ fn exercise<K: crate::tagged::gc::mutator_registration::EraKeeper>(
 }
 
 fn cohort(
+    host: &mut impl super::InternParts,
     kind: PlainSymbolBacking,
     scenario: Scenario,
     count: usize,
@@ -353,7 +354,7 @@ fn cohort(
     for spelling in &spellings {
         assert!(crate::intern::lookup_interned(spelling).is_none());
     }
-    Context::with_test_symbol_intern_race_era(
+    host.intern_race(
         kind,
         &spellings,
         |era, ids: Vec<crate::intern::SymId>| {
@@ -370,7 +371,7 @@ fn cohort(
         },
     )
 }
-fn histories(scenario: Scenario) {
+fn histories(host: &mut impl super::InternParts, scenario: Scenario) {
     let oracle: Vec<_> = include_str!("../../../symbol_intern_oracle.expected")
         .lines()
         .collect();
@@ -379,8 +380,8 @@ fn histories(scenario: Scenario) {
         PlainSymbolBacking::VoidProjection,
     ] {
         for count in 2..=4 {
-            let receipt =
-                cohort(kind, scenario, count, false).expect("C5 executor after clean era finish");
+            let receipt = cohort(host, kind, scenario, count, false)
+                .expect("C5 executor after clean era finish");
             let ids: BTreeSet<_> = receipt.rows.iter().map(|row| row.id.0).collect();
             let inputs: BTreeSet<_> = receipt.rows.iter().map(|row| row.input).collect();
             let expected = if scenario == Scenario::DifferentNames {
@@ -466,25 +467,23 @@ fn histories(scenario: Scenario) {
     }
 }
 
-#[test]
-fn p3sym_c5_executor_cohort_same_object_winner() {
-    histories(Scenario::SameObject);
+pub(super) fn p3sym_c5_executor_cohort_same_object_winner(host: &mut impl super::InternParts) {
+    histories(host, Scenario::SameObject);
 }
-#[test]
-fn p3sym_c5_executor_cohort_equal_name_winner() {
-    histories(Scenario::SameName);
+pub(super) fn p3sym_c5_executor_cohort_equal_name_winner(host: &mut impl super::InternParts) {
+    histories(host, Scenario::SameName);
 }
-#[test]
-fn p3sym_c5_executor_cohort_distinct_name_growth() {
-    histories(Scenario::DifferentNames);
+pub(super) fn p3sym_c5_executor_cohort_distinct_name_growth(host: &mut impl super::InternParts) {
+    histories(host, Scenario::DifferentNames);
 }
-#[test]
-fn p3sym_c5_executor_cohort_partial_seed_still_joins_and_cleans_all_owners() {
+pub(super) fn p3sym_c5_executor_cohort_partial_seed_still_joins_and_cleans_all_owners(
+    host: &mut impl super::InternParts,
+) {
     for kind in [
         PlainSymbolBacking::Unprojected,
         PlainSymbolBacking::VoidProjection,
     ] {
-        let error = match cohort(kind, Scenario::SameName, 4, true) {
+        let error = match cohort(host, kind, Scenario::SameName, 4, true) {
             Err(error) => error,
             Ok(_) => panic!("undersized cohort root bank unexpectedly seeded"),
         };

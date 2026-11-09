@@ -23,10 +23,15 @@ impl Ledger {
     }
 }
 
-fn ledger<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+fn ledger<K, W>(
     era: &ParallelHeapEra<'_, K>,
     stopped: &mut AllStopped<'_>,
-) -> Ledger {
+    world_roots: W,
+) -> Ledger
+where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: super::WorldRoots<K>,
+{
     let mut result = Ledger::default();
     let mut names = Vec::new();
     stopped
@@ -36,12 +41,7 @@ fn ledger<K: crate::tagged::gc::mutator_registration::EraKeeper>(
         .unwrap();
     result.names = names.into_iter().map(TaggedValue::bits).collect();
     let mut world = Vec::new();
-    era.core
-        .keeper
-        .as_ref()
-        .unwrap()
-        .collect_parallel_world_roots(stopped, &mut world)
-        .unwrap();
+    world_roots(era.core.keeper.as_ref().unwrap(), stopped, &mut world).unwrap();
     result.world = world.into_iter().map(TaggedValue::bits).collect();
     let mut external = Vec::new();
     era.core
@@ -80,20 +80,30 @@ fn ledger<K: crate::tagged::gc::mutator_registration::EraKeeper>(
 
 /// Return the actual slice catalog around collection. Recover the catalog,
 /// stop and owner before checking observations or propagating a test assertion.
-fn round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+fn round<K, W>(
     era: &ParallelHeapEra<'_, K>,
     owner: &mut Mutator<'_>,
     names: [usize; 2],
-) -> (Ledger, [bool; 2], Option<Vec<u8>>, u64) {
-    round_with_preflight(era, owner, names, || {})
+    world_roots: W,
+) -> (Ledger, [bool; 2], Option<Vec<u8>>, u64)
+where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: super::WorldRoots<K>,
+{
+    round_with_preflight(era, owner, names, world_roots, || {})
 }
 
-fn round_with_preflight<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+fn round_with_preflight<K, W>(
     era: &ParallelHeapEra<'_, K>,
     owner: &mut Mutator<'_>,
     names: [usize; 2],
+    world_roots: W,
     before_collection: impl FnOnce(),
-) -> (Ledger, [bool; 2], Option<Vec<u8>>, u64) {
+) -> (Ledger, [bool; 2], Option<Vec<u8>>, u64)
+where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: super::WorldRoots<K>,
+{
     let _probes = crate::tagged::gc::mutator_registration::a8_probes::suppress();
     // This synchronous keeper performs stopped heap work itself; the native
     // blocking-call wrapper excludes keeper callers and heap access in its body.
@@ -111,18 +121,20 @@ fn round_with_preflight<K: crate::tagged::gc::mutator_registration::EraKeeper>(
         era.return_cons_storage(&stopped).unwrap();
         returned_catalog = true;
         before_collection();
-        let before = ledger(era, &mut stopped);
-        let report = era.collect_stopped(&mut stopped);
+        let before = ledger(era, &mut stopped, world_roots);
+        let report = era.collect_stopped(&mut stopped, world_roots);
         collected = report.is_ok();
         let observed = report.as_ref().ok().map(|_| {
             era.with_stopped_heap_for_test(&stopped, |heap| {
-                let live =
-                    names.map(|word| heap.owns_heap_value_for_test(TaggedValue::from_bits(word)));
+                // SAFETY: these words were read from this stopped heap's owner slots.
+                let live = names.map(|word| {
+                    heap.owns_heap_value_for_test(unsafe { TaggedValue::from_bits(word) })
+                });
                 // A reclaimed object's word remains inert. Test allocation
                 // membership before reading the surviving winner's payload.
                 let text = live[0]
                     .then(|| {
-                        TaggedValue::from_bits(names[0])
+                        unsafe { TaggedValue::from_bits(names[0]) }
                             .as_lisp_string()
                             .map(|name| name.as_bytes().to_vec())
                     })
@@ -174,7 +186,8 @@ fn pause<'era>(session: &Session, owner: &mut Mutator<'era>, frame: &mut Frame<'
     }
 }
 
-fn sole_name_root(kind: PlainSymbolBacking) {
+fn sole_name_root(host: &mut impl super::InternParts, kind: PlainSymbolBacking) {
+    let world_roots = host.roots();
     let mut ops = vec![
         load(0, 0),
         load(1, 1),
@@ -190,13 +203,14 @@ fn sole_name_root(kind: PlainSymbolBacking) {
     ];
     ops.extend((0..8).map(|dst| Op::ConstNil { dst }));
     ops.extend([Op::Safepoint, Op::Safepoint]);
-    case(kind, ops, 8, |era, session, owner, frame| {
+    case(host, kind, ops, 8, |era, session, owner, frame| {
         pause(session, owner, frame);
         // Only inert words and independent Rust bytes cross the collections.
         let w = words(owner, frame);
         let names = [w[0], w[1]];
         assert_ne!(names[0], names[1], "distinct equal-name inputs");
-        let spelling = TaggedValue::from_bits(names[0])
+        // SAFETY: the operand word was read from this owner's rooted slots.
+        let spelling = unsafe { TaggedValue::from_bits(names[0]) }
             .as_lisp_string()
             .unwrap()
             .as_bytes()
@@ -208,11 +222,13 @@ fn sole_name_root(kind: PlainSymbolBacking) {
             .collect();
         assert_eq!(prin1(w[5]), oracle[2]);
         assert_eq!(prin1(w[6]), oracle[3]);
-        let id = TaggedValue::from_bits(w[2]).as_bare_symbol_id().unwrap();
+        let id = unsafe { TaggedValue::from_bits(w[2]) }
+            .as_bare_symbol_id()
+            .unwrap();
         pause(session, owner, frame);
         assert_eq!(words(owner, frame), [TaggedValue::NIL.bits(); 8]);
         assert_eq!(frame.machine.cons_count, 0);
-        let (roots, live, text, first_epoch) = round(era, owner, names);
+        let (roots, live, text, first_epoch) = round(era, owner, names, world_roots);
         assert_eq!(
             live,
             [true, false],
@@ -224,7 +240,7 @@ fn sole_name_root(kind: PlainSymbolBacking) {
             "tape cleared every ordinary name root: {roots:?}"
         );
         pause(session, owner, frame);
-        let (roots, live, text, epoch) = round(era, owner, names);
+        let (roots, live, text, epoch) = round(era, owner, names, world_roots);
         assert!(epoch > first_epoch);
         assert_eq!(live, [true, false]);
         assert_eq!(text, Some(spelling));
@@ -256,27 +272,36 @@ fn sole_name_root(kind: PlainSymbolBacking) {
     });
 }
 
-#[test]
-fn p3sym_c5_executor_plain_name_survives_two_stops() {
-    sole_name_root(PlainSymbolBacking::Unprojected);
+pub(super) fn p3sym_c5_executor_plain_name_survives_two_stops(host: &mut impl super::InternParts) {
+    sole_name_root(host, PlainSymbolBacking::Unprojected);
 }
 
-#[test]
-fn p3sym_c5_executor_projected_name_survives_two_stops() {
-    sole_name_root(PlainSymbolBacking::VoidProjection);
+pub(super) fn p3sym_c5_executor_projected_name_survives_two_stops(
+    host: &mut impl super::InternParts,
+) {
+    sole_name_root(host, PlainSymbolBacking::VoidProjection);
 }
 
-#[test]
-fn p3sym_c5_executor_name_gc_pretrace_unwind_recovers() {
+pub(super) fn p3sym_c5_executor_name_gc_pretrace_unwind_recovers(
+    host: &mut impl super::InternParts,
+) {
+    let world_roots = host.roots();
     case(
+        host,
         PlainSymbolBacking::VoidProjection,
         vec![],
         1,
         |era, session, owner, frame: &mut Frame<'_>| {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                round_with_preflight(era, owner, [TaggedValue::NIL.bits(); 2], || {
-                    panic!("C5 executor name-GC pretrace control");
-                });
+                round_with_preflight(
+                    era,
+                    owner,
+                    [TaggedValue::NIL.bits(); 2],
+                    world_roots,
+                    || {
+                        panic!("C5 executor name-GC pretrace control");
+                    },
+                );
             }));
             let panic = result.expect_err("deliberate pretrace witness");
             let message = panic.downcast_ref::<&str>().copied().unwrap_or("");

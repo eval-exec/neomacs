@@ -1236,6 +1236,51 @@ pub fn run_restricted_lisp_test_for_test<K, W>(
     );
 }
 
+/// FENCE: one re-homed intern-executor test. The core shell opens the symbol
+/// era and passes the baton World walk. The original dispatcher stays
+/// `pub(crate)`.
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[doc(hidden)]
+pub fn run_intern_executor_test_for_test<K, W>(
+    name: &str,
+    name_inputs: &mut dyn FnMut(
+        crate::tagged::gc::PlainSymbolBacking,
+        &str,
+        &mut dyn for<'e> FnMut(crate::tagged::gc::ProofEra<'e, K>, Vec<crate::intern::SymId>),
+    ),
+    name_inputs_init: &mut dyn FnMut(
+        crate::tagged::gc::PlainSymbolBacking,
+        &str,
+        &mut dyn FnMut(&mut crate::symbol::Obarray, &[crate::intern::SymId]),
+        &mut dyn for<'e> FnMut(crate::tagged::gc::ProofEra<'e, K>, Vec<crate::intern::SymId>),
+    ),
+    intern_race: &mut dyn FnMut(
+        crate::tagged::gc::PlainSymbolBacking,
+        &[String],
+        &mut dyn for<'e> FnMut(crate::tagged::gc::ProofEra<'e, K>, Vec<crate::intern::SymId>),
+    ),
+    world_roots: W,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut crate::tagged::gc::mutator_registration::AllStopped<'e>,
+            &'o mut Vec<crate::tagged::value::TaggedValue>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            crate::tagged::gc::mutator_registration::RendezvousError,
+        >,
+{
+    crate::tagged::gc::mutator_registration::restricted_lisp::run_intern_executor_test(
+        name,
+        name_inputs,
+        name_inputs_init,
+        intern_race,
+        world_roots,
+    );
+}
+
 /// FENCE (lead #768): the only cross-crate construction of
 /// [`FreshRegistryFacts`](crate::symbol::parallel::test_facts::FreshRegistryFacts).
 /// Copies the snapshot and replaces `bytes`. The fields stay

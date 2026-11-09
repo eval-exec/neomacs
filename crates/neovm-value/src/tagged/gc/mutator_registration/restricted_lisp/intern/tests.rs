@@ -1,10 +1,129 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "test-support"))]
 use super::*;
+use crate::intern::SymId;
+use crate::symbol::Obarray;
 use crate::tagged::gc::PlainSymbolBacking;
 use crate::tagged::gc::ProofEra as ParallelHeapEra;
 
 mod gc;
 mod histories;
+
+pub(super) use super::super::WorldRoots;
+
+/// Era openers supplied by the core shell. This module does not name the
+/// evaluator. `Roots` is the World walk passed to stopped collection.
+pub(super) trait InternParts {
+    type Keeper: crate::tagged::gc::mutator_registration::EraKeeper;
+    type Roots: WorldRoots<Self::Keeper>;
+    fn name_inputs<R>(
+        &mut self,
+        kind: PlainSymbolBacking,
+        spelling: &str,
+        body: impl for<'e> FnOnce(ParallelHeapEra<'e, Self::Keeper>, Vec<SymId>) -> R,
+    ) -> R;
+    fn name_inputs_init<R>(
+        &mut self,
+        kind: PlainSymbolBacking,
+        spelling: &str,
+        init: impl FnOnce(&mut Obarray, &[SymId]),
+        body: impl for<'e> FnOnce(ParallelHeapEra<'e, Self::Keeper>, Vec<SymId>) -> R,
+    ) -> R;
+    fn intern_race<R>(
+        &mut self,
+        kind: PlainSymbolBacking,
+        spellings: &[String],
+        body: impl for<'e> FnOnce(ParallelHeapEra<'e, Self::Keeper>, Vec<SymId>) -> R,
+    ) -> R;
+    fn roots(&self) -> Self::Roots;
+}
+
+struct InternHost<'a, K: crate::tagged::gc::mutator_registration::EraKeeper, W> {
+    name_inputs: &'a mut dyn FnMut(
+        PlainSymbolBacking,
+        &str,
+        &mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, Vec<SymId>),
+    ),
+    name_inputs_init: &'a mut dyn FnMut(
+        PlainSymbolBacking,
+        &str,
+        &mut dyn FnMut(&mut Obarray, &[SymId]),
+        &mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, Vec<SymId>),
+    ),
+    intern_race: &'a mut dyn FnMut(
+        PlainSymbolBacking,
+        &[String],
+        &mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, Vec<SymId>),
+    ),
+    world_roots: W,
+}
+
+impl<'a, K, W> InternParts for InternHost<'a, K, W>
+where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: WorldRoots<K>,
+{
+    type Keeper = K;
+    type Roots = W;
+
+    fn name_inputs<R>(
+        &mut self,
+        kind: PlainSymbolBacking,
+        spelling: &str,
+        body: impl for<'e> FnOnce(ParallelHeapEra<'e, K>, Vec<SymId>) -> R,
+    ) -> R {
+        let mut body = Some(body);
+        let mut slot = None;
+        (self.name_inputs)(kind, spelling, &mut |era, ids| {
+            let body = body.take().expect("name inputs body runs once");
+            slot = Some(body(era, ids));
+        });
+        slot.expect("name inputs body runs once")
+    }
+
+    fn name_inputs_init<R>(
+        &mut self,
+        kind: PlainSymbolBacking,
+        spelling: &str,
+        init: impl FnOnce(&mut Obarray, &[SymId]),
+        body: impl for<'e> FnOnce(ParallelHeapEra<'e, K>, Vec<SymId>) -> R,
+    ) -> R {
+        let mut init = Some(init);
+        let mut body = Some(body);
+        let mut slot = None;
+        (self.name_inputs_init)(
+            kind,
+            spelling,
+            &mut |obarray, ids| {
+                let init = init.take().expect("name inputs init runs once");
+                init(obarray, ids);
+            },
+            &mut |era, ids| {
+                let body = body.take().expect("name inputs body runs once");
+                slot = Some(body(era, ids));
+            },
+        );
+        slot.expect("name inputs body runs once")
+    }
+
+    fn intern_race<R>(
+        &mut self,
+        kind: PlainSymbolBacking,
+        spellings: &[String],
+        body: impl for<'e> FnOnce(ParallelHeapEra<'e, K>, Vec<SymId>) -> R,
+    ) -> R {
+        let mut body = Some(body);
+        let mut slot = None;
+        (self.intern_race)(kind, spellings, &mut |era, ids| {
+            let body = body.take().expect("intern race body runs once");
+            slot = Some(body(era, ids));
+        });
+        slot.expect("intern race body runs once")
+    }
+
+    fn roots(&self) -> W {
+        self.world_roots
+    }
+}
 
 fn source(ops: Vec<Op>, nslots: usize) -> Source {
     Source {
@@ -72,25 +191,37 @@ fn words<'era>(owner: &mut Mutator<'era>, frame: &Frame<'era>) -> Vec<usize> {
 
 /// Seed failure, typed execution errors and assertion unwind all erase the
 /// actual owner root bank before retirement and ordinary era finish.
-fn case<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+fn case<H: InternParts>(
+    host: &mut H,
     kind: PlainSymbolBacking,
     ops: Vec<Op>,
     nslots: usize,
-    body: impl for<'era> FnOnce(&ParallelHeapEra<'_, K>, &Session, &mut Mutator<'era>, &mut Frame<'era>),
+    body: impl for<'era> FnOnce(
+        &ParallelHeapEra<'_, H::Keeper>,
+        &Session,
+        &mut Mutator<'era>,
+        &mut Frame<'era>,
+    ),
 ) {
-    case_capacity(kind, ops, nslots, nslots, body).unwrap();
+    case_capacity(host, kind, ops, nslots, nslots, body).unwrap();
 }
-fn case_capacity<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+fn case_capacity<H: InternParts>(
+    host: &mut H,
     kind: PlainSymbolBacking,
     ops: Vec<Op>,
     nslots: usize,
     capacity: usize,
-    body: impl for<'era> FnOnce(&ParallelHeapEra<'_, K>, &Session, &mut Mutator<'era>, &mut Frame<'era>),
+    body: impl for<'era> FnOnce(
+        &ParallelHeapEra<'_, H::Keeper>,
+        &Session,
+        &mut Mutator<'era>,
+        &mut Frame<'era>,
+    ),
 ) -> std::thread::Result<()> {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let spelling = format!("p3sym-c5-executor-{}", NEXT.fetch_add(1, Ordering::Relaxed));
     assert!(crate::intern::lookup_interned(&spelling).is_none());
-    Context::with_test_symbol_name_inputs_era(kind, &spelling, |era, ids| {
+    host.name_inputs(kind, &spelling, |era, ids| {
         let session = Session::admit(&era, &ids[1..], &[source(ops, nslots)]).unwrap();
         let mut stopped = era.stop().unwrap();
         let nil = era
@@ -139,9 +270,9 @@ fn case_capacity<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     })
 }
 
-#[test]
-fn p3sym_c5_executor_partial_seed_refusal_has_total_teardown() {
+fn p3sym_c5_executor_partial_seed_refusal_has_total_teardown<H: InternParts>(host: &mut H) {
     let result = case_capacity(
+        host,
         PlainSymbolBacking::VoidProjection,
         vec![],
         2,
@@ -162,20 +293,18 @@ fn p3sym_c5_executor_partial_seed_refusal_has_total_teardown() {
     eprintln!("P3SYM_C5_EXECUTOR_PARTIAL_SEED_REFUSAL cleaned=1");
 }
 
-#[test]
-fn p3sym_c5_executor_noop_control_finishes() {
+fn p3sym_c5_executor_noop_control_finishes<H: InternParts>(host: &mut H) {
     for kind in [
         PlainSymbolBacking::Unprojected,
         PlainSymbolBacking::VoidProjection,
     ] {
-        case(kind, vec![], 1, |_, session, owner, frame| {
+        case(host, kind, vec![], 1, |_, session, owner, frame| {
             drive(session, owner, frame).unwrap()
         });
     }
 }
 
-#[test]
-fn p3sym_c5_executor_intern_and_soft_match_gnu() {
+fn p3sym_c5_executor_intern_and_soft_match_gnu<H: InternParts>(host: &mut H) {
     let oracle: Vec<_> = include_str!("../../symbol_intern_oracle.expected")
         .lines()
         .collect();
@@ -184,6 +313,7 @@ fn p3sym_c5_executor_intern_and_soft_match_gnu() {
         PlainSymbolBacking::VoidProjection,
     ] {
         case(
+            host,
             kind,
             vec![
                 load(0, 0),
@@ -218,13 +348,13 @@ fn p3sym_c5_executor_intern_and_soft_match_gnu() {
     }
 }
 
-#[test]
-fn p3sym_c5_executor_aliased_name_and_destination() {
+fn p3sym_c5_executor_aliased_name_and_destination<H: InternParts>(host: &mut H) {
     for kind in [
         PlainSymbolBacking::Unprojected,
         PlainSymbolBacking::VoidProjection,
     ] {
         case(
+            host,
             kind,
             vec![
                 load(0, 0),
@@ -243,8 +373,7 @@ fn p3sym_c5_executor_aliased_name_and_destination() {
     }
 }
 
-#[test]
-fn p3sym_c5_executor_wrong_type_preserves_destination_and_pc() {
+fn p3sym_c5_executor_wrong_type_preserves_destination_and_pc<H: InternParts>(host: &mut H) {
     for op in [intern(0, 1), soft(0, 1)] {
         for name in [
             Op::ConstNil { dst: 0 },
@@ -252,6 +381,7 @@ fn p3sym_c5_executor_wrong_type_preserves_destination_and_pc() {
             Op::ConstFixnum { dst: 0, value: 97 },
         ] {
             case(
+                host,
                 PlainSymbolBacking::Unprojected,
                 vec![name, Op::ConstFixnum { dst: 1, value: 23 }, op],
                 2,
@@ -268,11 +398,11 @@ fn p3sym_c5_executor_wrong_type_preserves_destination_and_pc() {
     }
 }
 
-#[test]
-fn p3sym_c5_executor_busy_has_elapsed_deadline_and_retries_same_pc() {
+fn p3sym_c5_executor_busy_has_elapsed_deadline_and_retries_same_pc<H: InternParts>(host: &mut H) {
     for op in [intern(0, 1), soft(0, 1)] {
         let creates = matches!(op, Op::Intern(InternOp::InitialIntern { .. }));
         case(
+            host,
             PlainSymbolBacking::VoidProjection,
             vec![load(0, 0), op],
             2,
@@ -337,9 +467,10 @@ fn p3sym_c5_executor_busy_has_elapsed_deadline_and_retries_same_pc() {
     }
 }
 
-#[test]
-fn p3sym_c5_executor_gate_checks_unreachable_ops_and_all_participants() {
-    Context::with_test_symbol_name_inputs_era(
+fn p3sym_c5_executor_gate_checks_unreachable_ops_and_all_participants<H: InternParts>(
+    host: &mut H,
+) {
+    host.name_inputs(
         PlainSymbolBacking::Unprojected,
         "p3sym-c5-gate-input",
         |era, ids| {
@@ -404,10 +535,9 @@ fn p3sym_c5_executor_gate_checks_unreachable_ops_and_all_participants() {
     );
 }
 
-#[test]
-fn p3sym_c5_executor_separate_input_gate_rejects_non_names() {
+fn p3sym_c5_executor_separate_input_gate_rejects_non_names<H: InternParts>(host: &mut H) {
     for wrong_type in [false, true] {
-        Context::with_test_symbol_name_inputs_init_era(
+        host.name_inputs_init(
             PlainSymbolBacking::VoidProjection,
             ":p3sym-c5-excluded-keyword",
             |obarray, ids| {
@@ -504,4 +634,87 @@ fn p3sym_c5_executor_typed_capabilities_preserve_session_boundaries() {
         ExecError::from(InitialInternError::Authority(RegistrationError::Busy)),
         ExecError::Registration(RegistrationError::Busy)
     );
+}
+
+/// One moved intern-executor test. The core shell opens the symbol era and
+/// passes the baton World walk. Two source-text tests stay `#[test]` here.
+pub(crate) fn run_intern_executor_test<K, W>(
+    name: &str,
+    name_inputs: &mut dyn FnMut(
+        PlainSymbolBacking,
+        &str,
+        &mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, Vec<SymId>),
+    ),
+    name_inputs_init: &mut dyn FnMut(
+        PlainSymbolBacking,
+        &str,
+        &mut dyn FnMut(&mut Obarray, &[SymId]),
+        &mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, Vec<SymId>),
+    ),
+    intern_race: &mut dyn FnMut(
+        PlainSymbolBacking,
+        &[String],
+        &mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, Vec<SymId>),
+    ),
+    world_roots: W,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: WorldRoots<K>,
+{
+    let mut host = InternHost {
+        name_inputs,
+        name_inputs_init,
+        intern_race,
+        world_roots,
+    };
+    match name {
+        "p3sym_c5_executor_partial_seed_refusal_has_total_teardown" => {
+            p3sym_c5_executor_partial_seed_refusal_has_total_teardown(&mut host)
+        }
+        "p3sym_c5_executor_noop_control_finishes" => {
+            p3sym_c5_executor_noop_control_finishes(&mut host)
+        }
+        "p3sym_c5_executor_intern_and_soft_match_gnu" => {
+            p3sym_c5_executor_intern_and_soft_match_gnu(&mut host)
+        }
+        "p3sym_c5_executor_aliased_name_and_destination" => {
+            p3sym_c5_executor_aliased_name_and_destination(&mut host)
+        }
+        "p3sym_c5_executor_wrong_type_preserves_destination_and_pc" => {
+            p3sym_c5_executor_wrong_type_preserves_destination_and_pc(&mut host)
+        }
+        "p3sym_c5_executor_busy_has_elapsed_deadline_and_retries_same_pc" => {
+            p3sym_c5_executor_busy_has_elapsed_deadline_and_retries_same_pc(&mut host)
+        }
+        "p3sym_c5_executor_gate_checks_unreachable_ops_and_all_participants" => {
+            p3sym_c5_executor_gate_checks_unreachable_ops_and_all_participants(&mut host)
+        }
+        "p3sym_c5_executor_separate_input_gate_rejects_non_names" => {
+            p3sym_c5_executor_separate_input_gate_rejects_non_names(&mut host)
+        }
+        "p3sym_c5_executor_plain_name_survives_two_stops" => {
+            gc::p3sym_c5_executor_plain_name_survives_two_stops(&mut host)
+        }
+        "p3sym_c5_executor_projected_name_survives_two_stops" => {
+            gc::p3sym_c5_executor_projected_name_survives_two_stops(&mut host)
+        }
+        "p3sym_c5_executor_name_gc_pretrace_unwind_recovers" => {
+            gc::p3sym_c5_executor_name_gc_pretrace_unwind_recovers(&mut host)
+        }
+        "p3sym_c5_executor_cohort_same_object_winner" => {
+            histories::p3sym_c5_executor_cohort_same_object_winner(&mut host)
+        }
+        "p3sym_c5_executor_cohort_equal_name_winner" => {
+            histories::p3sym_c5_executor_cohort_equal_name_winner(&mut host)
+        }
+        "p3sym_c5_executor_cohort_distinct_name_growth" => {
+            histories::p3sym_c5_executor_cohort_distinct_name_growth(&mut host)
+        }
+        "p3sym_c5_executor_cohort_partial_seed_still_joins_and_cleans_all_owners" => {
+            histories::p3sym_c5_executor_cohort_partial_seed_still_joins_and_cleans_all_owners(
+                &mut host,
+            )
+        }
+        other => panic!("unknown intern executor test {other}"),
+    }
 }

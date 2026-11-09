@@ -404,3 +404,5 @@ impl Session {
 }
 
 mod tests;
+#[cfg(feature = "test-support")]
+pub(crate) use tests::run_intern_executor_test;

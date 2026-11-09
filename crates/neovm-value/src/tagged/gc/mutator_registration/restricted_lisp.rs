@@ -38,6 +38,8 @@ use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::{Fixnum, TaggedValue};
 use crate::value::{HashProbe, HashTableEntry, HashTableTest};
+#[cfg(feature = "test-support")]
+pub(crate) use intern::run_intern_executor_test;
 use rustc_hash::FxHashSet;
 use std::collections::HashSet;
 use std::ops::ControlFlow;
