@@ -5855,40 +5855,6 @@ pub fn lexenv_prepend(lexenv: Value, sym_id: SymId, val: Value) -> Value {
 // Test assertion helpers
 // ---------------------------------------------------------------------------
 
-/// Structural equality assertion for Values.
-///
-/// `PartialEq` on `TaggedValue` is bitwise (pointer identity for heap types),
-/// matching GNU Emacs `eq` semantics. Tests that compare VALUES structurally
-/// (like `assert_eq!(eval("(cons 1 2)"), Value::cons(...))`) must use this
-/// macro instead of `assert_eq!`.
-#[cfg(any(test, feature = "test-support"))]
-#[macro_export]
-macro_rules! assert_val_eq {
-    ($left:expr, $right:expr) => {{
-        let left_val = &$left;
-        let right_val = &$right;
-        if !$crate::value::equal_value(left_val, right_val, 0) {
-            panic!(
-                "assertion `left == right` failed (structural)\n  left: {}\n right: {}",
-                $crate::emacs_core::print::print_value(left_val),
-                $crate::emacs_core::print::print_value(right_val),
-            );
-        }
-    }};
-    ($left:expr, $right:expr, $($msg:tt)+) => {{
-        let left_val = &$left;
-        let right_val = &$right;
-        if !$crate::value::equal_value(left_val, right_val, 0) {
-            panic!(
-                "assertion `left == right` failed (structural): {}\n  left: {}\n right: {}",
-                format_args!($($msg)+),
-                $crate::emacs_core::print::print_value(left_val),
-                $crate::emacs_core::print::print_value(right_val),
-            );
-        }
-    }};
-}
-
 mod hash_index;
 #[doc(hidden)]
 pub mod switch_plan;
