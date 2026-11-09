@@ -60,3 +60,27 @@ pub fn reset_syntax_table_decodes_for_test() {
 pub fn enable_dfa_stats_for_test() {
     crate::emacs_core::regex_emacs::dfa::enable_dfa_stats_for_test();
 }
+
+/// FENCE (global charset-state write): reorder the process charset registry,
+/// as `set-charset-priority` does.  The fontset ordering tests in display need
+/// this write to prove the charset-preference substrate hook republishes the
+/// rendering order.  Lisp is unreachable there: the subr is registered by the
+/// upper core layer, which display's unit runtime replaces with the signed
+/// absent-layer stand-in, so the global write routes through this fence.  The
+/// original builtin stays `pub(crate)`; its pre-existing test-support widening
+/// is the signed TEST-SUPPORT-VIS-TEXT row used by the moved core tests.
+pub fn set_charset_priority_for_test(
+    args: Vec<neovm_value::value::Value>,
+) -> neovm_value::error::EvalResult {
+    crate::emacs_core::charset::builtin_set_charset_priority(args)
+}
+
+/// FENCE (global charset-state write): define or re-point a charset alias, as
+/// `define-charset-alias` does.  Same reachability argument as
+/// [`set_charset_priority_for_test`]: the alias mutation is global charset
+/// state and the original builtin stays `pub(crate)`.
+pub fn define_charset_alias_for_test(
+    args: Vec<neovm_value::value::Value>,
+) -> neovm_value::error::EvalResult {
+    crate::emacs_core::charset::builtin_define_charset_alias(args)
+}

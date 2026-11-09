@@ -848,8 +848,10 @@ fn rendering_tries_fontset_entries_in_charset_priority_order() {
         .expect("install a registry entry");
     }
     let set_priority = |charset: &str| {
-        neovm_text::emacs_core::charset::builtin_set_charset_priority(vec![Value::symbol(charset)])
-            .expect("set-charset-priority");
+        neovm_text::test_support::authority::set_charset_priority_for_test(vec![Value::symbol(
+            charset,
+        )])
+        .expect("set-charset-priority");
     };
     let rendering = || registry_names(&matching_entries_for_char('é'));
 
@@ -881,7 +883,7 @@ fn an_encoding_spelled_as_a_charset_alias_ranks_like_its_charset() {
     crate::test_utils::init_test_tracing();
     reset_fontset_registry();
     reset_charset_registry();
-    neovm_text::emacs_core::charset::builtin_define_charset_alias(vec![
+    neovm_text::test_support::authority::define_charset_alias_for_test(vec![
         Value::symbol("neomacs-test-bmp"),
         Value::symbol("unicode-bmp"),
     ])
@@ -905,7 +907,7 @@ fn an_encoding_spelled_as_a_charset_alias_ranks_like_its_charset() {
         )
         .expect("install a registry entry");
     }
-    neovm_text::emacs_core::charset::builtin_set_charset_priority(vec![Value::symbol(
+    neovm_text::test_support::authority::set_charset_priority_for_test(vec![Value::symbol(
         "unicode-bmp",
     )])
     .expect("set-charset-priority");
@@ -915,14 +917,14 @@ fn an_encoding_spelled_as_a_charset_alias_ranks_like_its_charset() {
     );
 
     // Re-pointing the alias later does not change the defined entry.
-    neovm_text::emacs_core::charset::builtin_define_charset_alias(vec![
+    neovm_text::test_support::authority::define_charset_alias_for_test(vec![
         Value::symbol("neomacs-test-bmp"),
         Value::symbol("iso-8859-1"),
     ])
     .expect("re-point the alias");
     // With the alias resolved at lookup time, the entry would now be
     // `iso-8859-1`, as non-preferred as the other, and keep definition order.
-    neovm_text::emacs_core::charset::builtin_set_charset_priority(vec![Value::symbol(
+    neovm_text::test_support::authority::set_charset_priority_for_test(vec![Value::symbol(
         "unicode-bmp",
     )])
     .expect("set-charset-priority");
@@ -955,7 +957,7 @@ fn resetting_a_charset_registry_keeps_the_published_order() {
         )
         .expect("install a registry entry");
     }
-    neovm_text::emacs_core::charset::builtin_set_charset_priority(vec![Value::symbol(
+    neovm_text::test_support::authority::set_charset_priority_for_test(vec![Value::symbol(
         "unicode-bmp",
     )])
     .expect("set-charset-priority");
