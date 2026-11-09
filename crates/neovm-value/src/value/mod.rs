@@ -1041,6 +1041,14 @@ impl std::ops::Index<&HashKey> for HashTableStorage {
 }
 
 impl HashTableStorage {
+    /// Relaxed load of the sealed authority word. The atomic stays private
+    /// so a caller cannot store through this route.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn authority_word(&self) -> u64 {
+        self.authority.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     fn try_with_capacity(
         capacity: crate::alloc::HashTableSize,
     ) -> Result<Self, crate::error::Flow> {
