@@ -644,7 +644,13 @@ impl TaggedHeap {
     }
 
     /// Test hook: the open cons region, `(cursor, limit)` (zeros when closed).
+    ///
+    /// Copied cursors only. The live region catalog stays internal.
+    /// TEST-SUPPORT-VIS: eval's admission allocator oracle reads this pair.
+    /// No public path returns it. `RunAccess::cons_region_for_test` is a
+    /// different owner and a 3-tuple.
     #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn cons_region_for_test(&self) -> (usize, usize) {
         (self.jit.cons_cur.get(), self.jit.cons_lim.get())
     }
