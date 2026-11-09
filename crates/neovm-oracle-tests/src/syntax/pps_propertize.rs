@@ -206,3 +206,51 @@ fn oracle_prop_parse_partial_sexp_propertize_error_policy() {
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+/// A `syntax-propertize-function` that applies comment-fence `syntax-table`
+/// properties and then calls `syntax-ppss` must leave the same state as the
+/// same properties with no re-entry. GNU flushes the Lisp ppss cache after
+/// the callback (`syntax.el` `syntax-propertize`). The scan is longer than
+/// the parse-cache minimum span, and the later questions start earlier than
+/// the warming scan. Both arms: depth, in-comment, comment start.
+#[test]
+fn oracle_prop_syntax_ppss_reenter_inside_propertize() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"
+(let ((arm (lambda (reenter)
+             (with-temp-buffer
+               (insert (make-string 180 ?x))
+               (insert "(bar)")
+               (insert (make-string 180 ?y))
+               (setq-local parse-sexp-lookup-properties t)
+               (setq-local syntax-propertize-function
+                           (lambda (start end)
+                             (goto-char start)
+                             (while (re-search-forward "(" end t)
+                               (put-text-property (match-beginning 0) (match-end 0)
+                                                  'syntax-table (string-to-syntax "<")))
+                             (goto-char start)
+                             (while (re-search-forward ")" end t)
+                               (put-text-property (match-beginning 0) (match-end 0)
+                                                  'syntax-table (string-to-syntax ">")))
+                             (when reenter
+                               (syntax-ppss (point-max)))))
+               (let ((inside (1+ (save-excursion
+                                   (goto-char (point-min))
+                                   (search-forward "("))))
+                     (eob (point-max)))
+                 (list
+                  (let ((s (syntax-ppss eob))) (list (nth 0 s) (nth 4 s)))
+                  (let ((s (syntax-ppss inside))) (list (nth 0 s) (nth 4 s) (nth 8 s)))
+                  (let ((s (syntax-ppss 2))) (list (nth 0 s) (nth 4 s)))
+                  (let ((s (parse-partial-sexp (point-min) inside)))
+                    (list (nth 0 s) (nth 4 s) (nth 8 s)))
+                  (let ((s (parse-partial-sexp (point-min) eob)))
+                    (list (nth 0 s) (nth 4 s)))))))))
+  (list (funcall arm nil) (funcall arm t)))
+"#;
+    let expect = expect_test::expect![[
+        r#""OK (((0 nil) (0 t 181) (0 nil) (0 t 181) (0 nil)) ((0 nil) (0 t 181) (0 nil) (0 t 181) (0 nil)))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
