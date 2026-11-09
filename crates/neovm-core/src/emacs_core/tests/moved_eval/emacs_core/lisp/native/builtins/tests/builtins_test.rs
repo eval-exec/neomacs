@@ -141,7 +141,12 @@ fn assert_x11_nil_subr_or_ns_void(name: &str, got: Option<EvalResult>) {
     {
         assert!(
             got.is_none(),
-            "{name} must be void on macOS and Windows, matching GNU NS (mac_x11_subrs_ratchet_test.rs)"
+            "{name} must be void on macOS and Windows, matching GNU {} (mac_x11_subrs_ratchet_test.rs)",
+            if cfg!(target_os = "macos") {
+                "NS"
+            } else {
+                "W32"
+            }
         );
     }
 }
