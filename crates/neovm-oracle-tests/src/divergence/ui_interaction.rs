@@ -121,36 +121,67 @@ fn divergence_mac_x11_only_subrs_are_void_on_ns() {
     );
 }
 
-/// MX-2: GNU binds `x-file-dialog` in every window-system build: a C DEFUN in
-/// the X (xfns.c:9451/9665), PGTK (pgtkfns.c:3610) and w32 (w32fns.c:8252)
-/// backends, and a Lisp wrapper in the NS dump (term/ns-win.el:464).  Live
-/// pinned references: both the X11 build and the macOS NS build answer
-/// `fboundp` t with the same arglist:
+/// MX-2: GNU binds `x-file-dialog` in every toolkit build and, where the C
+/// layer has no dialog, from Lisp: the X DEFUN is registered only under
+/// USE_MOTIF || USE_GTK (xfns.c:10632-10634), w32fns.c defines it for W32
+/// (8252), and the NS and Haiku builds bind it from Lisp (term/ns-win.el:464
+/// over ns-read-file-name, term/haiku-win.el:329).  The pinned references are
+/// a GTK X build and an NS build; both answer fboundp t with the same
+/// arglist:
 ///   (prompt dir &optional default-filename mustmatch only-dir-p)
-/// Neo had the name unbound on every surface; its dump-safe window-system
-/// preload binds the Lisp arm (lisp/term/neo-preload.el), the shape GNU uses
-/// where the C layer provides no dialog (ns-win.el / haiku-win.el).
 ///
 /// Non-GUI semantics, live on both references: both GNU builds check the
-/// window system before any dialog work, but the answer is backend-specific
-/// -- the X DEFUN checks the selected frame (src/frame.c:134-141) and says
-/// "Window system frame should be used", while the NS arm ends in
-/// ns-read-file-name's check_window_system(NULL) and says "Window system is
-/// not in use or not initialized".  Neo's chooser reproduces the matching
-/// answer for its surface, so the batch/-nw path is pinned per host below.
+/// window system before any argument work, but the message is
+/// backend-specific -- the X DEFUN checks the selected frame
+/// (src/frame.c:134-141, xfns.c:9688) and says "Window system frame should be
+/// used", while the NS arm ends in ns-read-file-name's
+/// check_window_system(NULL) (nsfns.m:1784) and says "Window system is not in
+/// use or not initialized".  Neo's chooser reproduces the matching answer for
+/// its surface; the (x-file-dialog 1 2) arm pins that the window-system check
+/// precedes the argument checks.
 #[test]
 fn divergence_x_file_dialog_is_bound_on_every_surface() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = crate::common::host_expect!(
-        LinuxGnu => r#""OK (t (prompt dir &optional default-filename mustmatch only-dir-p) (error "Window system frame should be used"))""#,
-        MacosDarwin => r#""OK (t (prompt dir &optional default-filename mustmatch only-dir-p) (error "Window system is not in use or not initialized"))""#,
+        LinuxGnu => r#""OK (t (prompt dir &optional default-filename mustmatch only-dir-p) (error \"Window system frame should be used\") (error \"Window system frame should be used\"))""#,
+        MacosDarwin => r#""OK (t (prompt dir &optional default-filename mustmatch only-dir-p) (error \"Window system is not in use or not initialized\") (error \"Window system is not in use or not initialized\"))""#,
     );
     crate::common::assert_oracle_parity_expect(
         r#"(list (fboundp 'x-file-dialog)
   (help-function-arglist 'x-file-dialog t)
-  (condition-case e (x-file-dialog "p" "/tmp") (error e)))"#,
+  (condition-case e (x-file-dialog "p" "/tmp") (error e))
+  (condition-case e (x-file-dialog 1 2) (error e)))"#,
         expect,
+    );
+}
+
+/// MX-2a: the GUI arm must not re-enter itself.  `read-file-name-default`
+/// calls `x-file-dialog` when `next-read-file-uses-dialog-p` is non-nil
+/// (minibuffer.el:3886, :4051), and GNU's C predicate answers t on a toolkit
+/// GUI frame (fileio.c:6556-6572, via use-dialog-box / use-file-dialog).  The
+/// GUI arm therefore let-binds `use-file-dialog` to nil around its inner
+/// `read-file-name`; without that binding this mocked call recurses into
+/// x-file-dialog until excessive-lisp-nesting.
+#[test]
+fn x_file_dialog_gui_arm_does_not_recurse_through_read_file_name() {
+    let form = r#"(progn
+  (require 'cl-lib)
+  (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+            ((symbol-function 'next-read-file-uses-dialog-p)
+             (lambda ()
+               (and (or (null last-nonmenu-event) (consp last-nonmenu-event))
+                    use-dialog-box
+                    use-file-dialog
+                    (display-graphic-p))))
+            ((symbol-function 'completing-read) (lambda (&rest _) "/tmp/picked")))
+    (x-file-dialog "p" "/tmp")))"#;
+    let outcome =
+        crate::common::run_neovm_eval(form).expect("Neomacs evaluates the mocked dialog");
+    assert!(
+        outcome.contains("/tmp/picked"),
+        "the inner read-file-name must reach completing-read instead of \
+         recursing into x-file-dialog: {outcome}"
     );
 }
 
