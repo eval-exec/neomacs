@@ -90,9 +90,10 @@ pub(crate) mod test_override {
     use std::cell::Cell;
 
     thread_local! {
-        // The carrier-TLS class table is keyed by bare NAME: keep this
-        // test-support-only override unique so it cannot inherit an
-        // unrelated production `CURRENT` record's class.
+        // The carrier-TLS class table is keyed by (module, name): this
+        // test-support-only override is a SourceOnly record at
+        // neovm-eval/src/platform_surface.rs, RAII-restored and holding no
+        // Lisp Values.
         static PLATFORM_SURFACE_TEST_OVERRIDE: Cell<Option<PlatformSurface>> =
             const { Cell::new(None) };
     }
