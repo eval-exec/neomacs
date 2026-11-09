@@ -37,7 +37,7 @@ fn same_buffer_attempt_owns_mutable_prefix_table_and_fontifier_inputs() {
     let before = eval
         .window_layout_attempt_freshness(frame, window, live)
         .unwrap();
-    assert_eq!(before.live_buffer, before.source_buffer);
+    assert_eq!(before.live_buffer(), before.source_buffer());
     let old_debug = format!("{:?}", before);
     eval.eval_str(
         r#"(progn
@@ -49,34 +49,34 @@ fn same_buffer_attempt_owns_mutable_prefix_table_and_fontifier_inputs() {
     let after = eval
         .window_layout_attempt_freshness(frame, window, live)
         .unwrap();
-    assert_eq!(after.live_buffer, after.source_buffer);
+    assert_eq!(after.live_buffer(), after.source_buffer());
     // Both clone members are immutable owned snapshots; mutating the original
     // Lisp objects must not retroactively change either captured member.
     assert_eq!(format!("{:?}", before), old_debug);
-    assert_ne!(before.live_buffer.prefixes, after.live_buffer.prefixes);
+    assert_ne!(before.live_buffer().prefixes, after.live_buffer().prefixes);
     assert_ne!(
-        before.live_buffer.display_table,
-        after.live_buffer.display_table
+        before.live_buffer().display_table,
+        after.live_buffer().display_table
     );
     assert_ne!(
-        before.live_buffer.fontification_functions,
-        after.live_buffer.fontification_functions
+        before.live_buffer().fontification_functions,
+        after.live_buffer().fontification_functions
     );
     assert_eq!(
-        before.live_buffer.modified_tick,
-        after.live_buffer.modified_tick
+        before.live_buffer().modified_tick,
+        after.live_buffer().modified_tick
     );
     assert_eq!(
-        before.live_buffer.chars_modified_tick,
-        after.live_buffer.chars_modified_tick
+        before.live_buffer().chars_modified_tick,
+        after.live_buffer().chars_modified_tick
     );
     assert_eq!(
-        before.live_buffer.props_modified_tick,
-        after.live_buffer.props_modified_tick
+        before.live_buffer().props_modified_tick,
+        after.live_buffer().props_modified_tick
     );
     assert_eq!(
-        before.live_buffer.overlay_modified_tick,
-        after.live_buffer.overlay_modified_tick
+        before.live_buffer().overlay_modified_tick,
+        after.live_buffer().overlay_modified_tick
     );
     // Metadata capture must not evaluate the embedded display condition.
     assert_eq!(
@@ -115,23 +115,23 @@ fn distinct_buffer_attempt_keeps_two_independent_projections() {
         0,
         "per-buffer captures resolved the hook by name"
     );
-    assert_eq!(captured.live_buffer.id, live);
-    assert_eq!(captured.source_buffer.id, source);
+    assert_eq!(captured.live_buffer().id, live);
+    assert_eq!(captured.source_buffer().id, source);
     assert_ne!(
-        captured.live_buffer.prefixes,
-        captured.source_buffer.prefixes
+        captured.live_buffer().prefixes,
+        captured.source_buffer().prefixes
     );
     assert_ne!(
-        captured.live_buffer.fontification_functions,
-        captured.source_buffer.fontification_functions
+        captured.live_buffer().fontification_functions,
+        captured.source_buffer().fontification_functions
     );
     assert_eq!(
-        captured.live_buffer,
-        eval.buffer_layout_inputs(live).unwrap()
+        captured.live_buffer(),
+        &eval.buffer_layout_inputs(live).unwrap()
     );
     assert_eq!(
-        captured.source_buffer,
-        eval.buffer_layout_inputs(source).unwrap()
+        captured.source_buffer(),
+        &eval.buffer_layout_inputs(source).unwrap()
     );
 }
 #[test]
@@ -244,8 +244,8 @@ fn same_buffer_fontifier_name_unintern_child() {
     // the Lisp name mapping, so the second capture still reads the ORIGINAL
     // symbol's cell. (The retired epoch cache re-resolved by name and would
     // have seen the fresh unbound symbol here.)
-    assert_eq!(before.live_buffer, original_inputs);
-    assert_eq!(before.source_buffer, original_inputs);
+    assert_eq!(before.live_buffer(), &original_inputs);
+    assert_eq!(before.source_buffer(), &original_inputs);
     let fresh_key = intern("fontification-functions");
     assert_ne!(fresh_key, old_key);
     assert_eq!(eval.obarray().function_epoch(), function_epoch);
@@ -261,10 +261,10 @@ fn same_buffer_fontifier_name_unintern_child() {
     let after = eval
         .window_layout_attempt_freshness(frame, window, live)
         .unwrap();
-    assert_eq!(after.live_buffer, original_inputs);
-    assert_eq!(after.source_buffer, original_inputs);
-    assert_eq!(after.function_epoch, function_epoch);
-    assert_eq!(before.body_redisplay, after.body_redisplay);
+    assert_eq!(after.live_buffer(), &original_inputs);
+    assert_eq!(after.source_buffer(), &original_inputs);
+    assert_eq!(after.function_epoch(), function_epoch);
+    assert_eq!(before.body_redisplay(), after.body_redisplay());
     assert!(
         before.remains_valid_across(&after, WindowLayoutLispBoundary::BufferBody),
         "a Lisp-name unintern is invisible to GNU's static fontification variable"

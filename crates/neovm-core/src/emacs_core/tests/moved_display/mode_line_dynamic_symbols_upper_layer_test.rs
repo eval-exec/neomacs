@@ -46,11 +46,11 @@ fn mode_line_symbol_object_risk_property_matches_gnu() {
         &mut rendered,
     );
     assert_eq!(
-        rendered.text,
+        rendered.text().to_vec(),
         "RISK-EVAL".chars().map(u32::from).collect::<Vec<_>>()
     );
     assert_eq!(
-        rendered.text_props.get_property_at_char_pos(
+        rendered.text_props().get_property_at_char_pos(
             neovm_edit::buffer::CharPos0::new(0),
             Value::symbol("ep33-symbol-probe-property"),
         ),

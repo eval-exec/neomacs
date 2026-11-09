@@ -97,7 +97,7 @@ pub fn builtin_selected_terminal_for_test(
 pub fn set_attempt_source_buffer_from_live_for_test(
     token: &mut crate::window::WindowLayoutAttemptFreshness,
 ) {
-    token.source_buffer = token.live_buffer.clone();
+    token.set_source_buffer_from_live();
 }
 
 /// Scope a GC-root frame around a mode-line walk (moved prop-borrow tests).

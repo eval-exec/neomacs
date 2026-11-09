@@ -2573,9 +2573,9 @@ pub mod mode_line_dynamic_symbols_test_upper_layer_helpers {
         render_into(ctx, pctx, format, walker, &mut rendered);
         // Literal strings in these cases are property-free and contain no padding.
         rendered
-            .text
-            .into_iter()
-            .map(|code| char::from_u32(code).expect("Unicode test text"))
+            .text()
+            .iter()
+            .map(|code| char::from_u32(*code).expect("Unicode test text"))
             .collect()
     }
     pub(crate) fn render_into(

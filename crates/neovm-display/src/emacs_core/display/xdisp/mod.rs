@@ -3363,9 +3363,6 @@ struct ModeLineRendered {
     /// non-Unicode characters byte-faithfully — a Rust `String` cannot hold
     /// them, and the legacy storage-String round-trip that used to bridge the
     /// gap has been retired (issue #131).
-    #[cfg(any(test, feature = "test-support"))]
-    pub text: Vec<u32>,
-    #[cfg(not(any(test, feature = "test-support")))]
     text: Vec<u32>,
     /// GNU string identity: multibyte iff any FORMAT INPUT was multibyte (the
     /// `concat' rule), never derived from the accumulated content.  Deriving
@@ -3373,17 +3370,8 @@ struct ModeLineRendered {
     /// whose code fits in a byte as a unibyte raw byte, which then displays
     /// as the octal escape `\NNN` -- issue #470's "dot turns into `\267`".
     multibyte: bool,
-    #[cfg(any(test, feature = "test-support"))]
-    pub text_props: TextPropertyTable,
-    #[cfg(not(any(test, feature = "test-support")))]
     text_props: TextPropertyTable,
-    #[cfg(any(test, feature = "test-support"))]
-    pub source_spans: Vec<ModeLineDisplaySourceSpan>,
-    #[cfg(not(any(test, feature = "test-support")))]
     source_spans: Vec<ModeLineDisplaySourceSpan>,
-    #[cfg(any(test, feature = "test-support"))]
-    pub min_width_transitions: Vec<ModeLineMinWidthTransition>,
-    #[cfg(not(any(test, feature = "test-support")))]
     min_width_transitions: Vec<ModeLineMinWidthTransition>,
     /// The enclosing walk owns the scratch-root scope. Mutations publish new
     /// Lisp values there before any later element can evaluate Lisp.
@@ -3397,32 +3385,51 @@ struct ModeLineRendered {
 #[derive(Clone, Debug)]
 #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 struct ModeLineMinWidthRun {
-    #[cfg(any(test, feature = "test-support"))]
-    pub width_spec: Value,
-    #[cfg(not(any(test, feature = "test-support")))]
     width_spec: Value,
-    #[cfg(any(test, feature = "test-support"))]
-    pub columns: usize,
-    #[cfg(not(any(test, feature = "test-support")))]
     columns: usize,
     /// Source interval plist in insertion order (GNU's observable order).
-    #[cfg(any(test, feature = "test-support"))]
-    pub padding_properties: Vec<(Value, Value)>,
-    #[cfg(not(any(test, feature = "test-support")))]
     padding_properties: Vec<(Value, Value)>,
 }
 
 #[derive(Clone, Debug)]
 #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 struct ModeLineMinWidthTransition {
-    #[cfg(any(test, feature = "test-support"))]
-    pub output_start: usize,
-    #[cfg(not(any(test, feature = "test-support")))]
     output_start: usize,
-    #[cfg(any(test, feature = "test-support"))]
-    pub run: ModeLineMinWidthRun,
-    #[cfg(not(any(test, feature = "test-support")))]
     run: ModeLineMinWidthRun,
+}
+
+impl ModeLineMinWidthRun {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn width_spec(&self) -> Value {
+        self.width_spec
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn columns(&self) -> usize {
+        self.columns
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn padding_properties(&self) -> &[(Value, Value)] {
+        &self.padding_properties
+    }
+}
+
+impl ModeLineMinWidthTransition {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn output_start(&self) -> usize {
+        self.output_start
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn run(&self) -> &ModeLineMinWidthRun {
+        &self.run
+    }
 }
 
 /// Temporary iterator events owned by the current formatter call, not a cache
@@ -3723,6 +3730,30 @@ impl ModeLineRendered {
     #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
     fn char_len(&self) -> usize {
         self.text.len()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn text(&self) -> &[u32] {
+        &self.text
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn text_props(&self) -> &TextPropertyTable {
+        &self.text_props
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn source_spans(&self) -> &[ModeLineDisplaySourceSpan] {
+        &self.source_spans
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn min_width_transitions(&self) -> &[ModeLineMinWidthTransition] {
+        &self.min_width_transitions
     }
 
     fn slice_chars(&self, precision: usize) -> Self {

@@ -17,6 +17,31 @@ fn nil_and_t_are_taken_literally_without_evaluation() {
     );
 }
 
+/// GNU takes FORM as true without evaluating it only when it is `t' itself
+/// (`EQ (form, Qt)', src/xdisp.c:6143-6145).  An uninterned symbol named `t'
+/// is an ordinary variable: it is evaluated, and its value decides.
+#[test]
+fn an_uninterned_symbol_named_t_is_evaluated_not_taken_as_t() {
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let buffer = Value::make_buffer(eval.edit.buffers.current_buffer_id().expect("buffer"));
+    let unbound = eval.eval_str("(make-symbol \"t\")").expect("make-symbol");
+    assert!(
+        !eval
+            .display_when_form_holds(unbound, buffer, 1, 1)
+            .expect("no flow"),
+        "an unbound #:t signals void-variable, which counts as nil"
+    );
+    let bound_to_nil = eval
+        .eval_str("(let ((s (make-symbol \"t\"))) (set s nil) s)")
+        .expect("bound #:t");
+    assert!(
+        !eval
+            .display_when_form_holds(bound_to_nil, buffer, 1, 1)
+            .expect("no flow"),
+        "a #:t whose value is nil does not hold"
+    );
+}
+
 #[test]
 fn an_error_in_form_counts_as_nil_like_dsafe_eval() {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
@@ -70,7 +95,6 @@ fn with_display_buffer_current_selects_the_buffer_and_restores_the_callers() {
 /// apart.  (The port used to evaluate once per `equal` FORM with the first
 /// occurrence's bindings, so `(when (> buffer-position 30) . "LATE")` on two
 /// spans answered for both what it answered for the first.)
-
 #[test]
 fn a_form_cannot_collect_its_detached_replacement_before_classification() {
     use crate::emacs_core::display_when::DisplayWhenSite;

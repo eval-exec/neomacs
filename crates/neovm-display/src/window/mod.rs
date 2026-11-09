@@ -571,13 +571,7 @@ pub struct WindowLayoutAttemptFreshness {
     window_topology_generation: u64,
     frame: FrameLayoutInputState,
     window: WindowLayoutInputState,
-    #[cfg(any(test, feature = "test-support"))]
-    pub live_buffer: WindowBufferLayoutInputState,
-    #[cfg(not(any(test, feature = "test-support")))]
     live_buffer: WindowBufferLayoutInputState,
-    #[cfg(any(test, feature = "test-support"))]
-    pub source_buffer: WindowBufferLayoutInputState,
-    #[cfg(not(any(test, feature = "test-support")))]
     source_buffer: WindowBufferLayoutInputState,
     source_layout_variables: WindowLayoutVariableState,
     selection: WindowLayoutSelectionState,
@@ -588,14 +582,42 @@ pub struct WindowLayoutAttemptFreshness {
     /// Lisp is running must not let that attempt publish rows produced from
     /// the pre-invalidation inputs, and unlike `media_generation` it does not
     /// depend on `image-flush` having actually changed a catalog entry.
-    #[cfg(any(test, feature = "test-support"))]
-    pub body_redisplay: BodyRedisplayRevision,
-    #[cfg(not(any(test, feature = "test-support")))]
     body_redisplay: BodyRedisplayRevision,
-    #[cfg(any(test, feature = "test-support"))]
-    pub function_epoch: u64,
-    #[cfg(not(any(test, feature = "test-support")))]
     function_epoch: u64,
+}
+
+impl WindowLayoutAttemptFreshness {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn live_buffer(&self) -> &WindowBufferLayoutInputState {
+        &self.live_buffer
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn source_buffer(&self) -> &WindowBufferLayoutInputState {
+        &self.source_buffer
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn function_epoch(&self) -> u64 {
+        self.function_epoch
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn body_redisplay(&self) -> &BodyRedisplayRevision {
+        &self.body_redisplay
+    }
+
+    /// Write route for the moved attempt test: the source-buffer projection is
+    /// replaced by the live one after a re-capture. Private in production; the
+    /// cross-crate route is the AUTHORITY fence in test_support::authority.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn set_source_buffer_from_live(&mut self) {
+        self.source_buffer = self.live_buffer.clone();
+    }
 }
 
 /// Lisp-bearing boundary crossed by one speculative window layout.

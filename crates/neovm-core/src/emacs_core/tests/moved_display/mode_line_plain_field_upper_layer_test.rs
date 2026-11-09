@@ -30,42 +30,42 @@ struct RenderedTrace {
 
 fn rendered_trace(rendered: &ModeLineRendered) -> RenderedTrace {
     rendered
-        .text_props
+        .text_props()
         .debug_syntax_caches_consistent()
         .expect("syntax cache");
     let syntax_free_end = rendered
-        .text_props
+        .text_props()
         .syntax_prop_free_run_end(
             CharPos0::new(rendered.char_len().saturating_sub(1)),
             CharPos0::new(rendered.char_len()),
         )
         .get();
     let transitions = rendered
-        .min_width_transitions
+        .min_width_transitions()
         .iter()
         .map(|transition| {
             let mut padding_properties: Vec<_> = transition
-                .run
-                .padding_properties
+                .run()
+                .padding_properties()
                 .iter()
                 .map(|(name, value)| (*name, *value))
                 .collect();
             padding_properties.sort_unstable_by_key(|(name, _)| name.bits());
             TransitionTrace {
-                output_start: transition.output_start,
-                width_spec: transition.run.width_spec,
-                columns: transition.run.columns,
+                output_start: transition.output_start(),
+                width_spec: transition.run().width_spec(),
+                columns: transition.run().columns(),
                 padding_properties,
             }
         })
         .collect();
     RenderedTrace {
-        text: rendered.text.clone(),
-        intervals: rendered.text_props.interval_plist_runs_for_test(),
-        mutation_tick: rendered.text_props.mutation_tick(),
-        syntax_tick: rendered.text_props.syntax_prop_tick(),
+        text: rendered.text().to_vec(),
+        intervals: rendered.text_props().interval_plist_runs_for_test(),
+        mutation_tick: rendered.text_props().mutation_tick(),
+        syntax_tick: rendered.text_props().syntax_prop_tick(),
         syntax_free_end,
-        sources: rendered.source_spans.clone(),
+        sources: rendered.source_spans().to_vec(),
         transitions,
     }
 }
@@ -88,7 +88,7 @@ fn empty_fields_preserve_ticks_intervals_sources_and_min_width_transitions() {
     neovm_display::test_support::authority::mode_line_rendered_note_display_min_width_transition(
         &mut seed, min_width,
     );
-    seed.text_props
+    seed.text_props()
         .syntax_prop_free_run_end(CharPos0::ZERO, CharPos0::new(seed.char_len()));
     let properties: Vec<(Value, Value)> = Vec::new();
     let mut traces = Vec::new();
