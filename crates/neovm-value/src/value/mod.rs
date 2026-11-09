@@ -2448,6 +2448,39 @@ impl LispHashTable {
         Self::new_with_options(test, 0, None, 1.5, 0.8125)
     }
 
+    /// GNU logical growth for one new key. `size` is the visible allocation
+    /// size, not a Rust capacity. Zero grows to 6; sizes through 64 grow by
+    /// 4x; larger sizes grow by 2x. Backing maps grow with inserted entries.
+    ///
+    /// `pub(crate)` so the restricted Lisp overlap can grow a table without
+    /// naming the evaluator. neovm-eval keeps its own copy of this policy.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn maybe_resize_for_insert(&mut self, inserting_new_key: bool) {
+        if !inserting_new_key {
+            return;
+        }
+        let current_size = usize::try_from(self.size.max(0)).unwrap_or(usize::MAX);
+        if self.data.len() < current_size {
+            return;
+        }
+        // Zero-sized tables grow to 6 slots on first insertion; small tables
+        // then grow by 4x (up to size 64), larger tables grow by 2x.
+        // `size` is the GNU-visible logical allocation size, not a requirement
+        // to reserve every Rust-side index to the same capacity. A single Lisp
+        // entry is mirrored across several maps/vectors; eagerly reserving all
+        // of them at each logical growth boundary multiplies otherwise-unused
+        // capacity. Let each backing collection grow with the entries inserted.
+        let min_size = 6_i64;
+        let base = self.size.max(min_size).min(i64::MAX / 2);
+        self.size = if self.size == 0 {
+            min_size
+        } else if base <= 64 {
+            base.saturating_mul(4)
+        } else {
+            base.saturating_mul(2)
+        };
+    }
+
     #[doc(hidden)]
     pub fn new_unpopulated_with_options(
         test: HashTableTest,

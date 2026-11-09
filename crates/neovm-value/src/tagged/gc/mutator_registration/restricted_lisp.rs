@@ -22,7 +22,6 @@ mod combined;
 mod functions;
 mod globals;
 mod intern;
-use crate::emacs_core::builtins::maybe_resize_hash_table_for_insert;
 use crate::emacs_core::eval::Context;
 use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::transport::SharedRoot;
@@ -1937,7 +1936,7 @@ fn plain_put(
                     }
                 }
                 HashProbe::Absent(hash) => {
-                    maybe_resize_hash_table_for_insert(ht, true);
+                    ht.maybe_resize_for_insert(true);
                     let key = key_tv.to_hash_key_swp(&test, false);
                     ht.data.insert_absent(hash, key, key_tv, value_tv);
                 }
@@ -2066,7 +2065,7 @@ fn user_put<'era>(
             if let Some(stored) = ht.data.get_mut(&storage_key) {
                 *stored = value_tv;
             } else {
-                maybe_resize_hash_table_for_insert(ht, true);
+                ht.maybe_resize_for_insert(true);
                 ht.insert(storage_key.clone(), key_tv, value_tv);
             }
             ht.data.set_user_hash(storage_key, wanted);
@@ -4157,7 +4156,7 @@ fn a6_ht_lease_mints_from_a_live_run_access() {
                                 let HashProbe::Absent(hash) = probe else {
                                     panic!("fresh table has no matching entry");
                                 };
-                                maybe_resize_hash_table_for_insert(ht, true);
+                                ht.maybe_resize_for_insert(true);
                                 let hash_key = key.to_hash_key_swp(&HashTableTest::Eq, false);
                                 ht.data.insert_absent(hash, hash_key, key, value);
                             });
