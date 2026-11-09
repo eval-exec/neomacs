@@ -1,5 +1,6 @@
-//! Test-only restricted Lisp overlap. Production has no call into this module,
-//! and `#[cfg(test)]` keeps it out of every `NEOVM_THREADS` mode.
+//! Test-only restricted Lisp overlap. Production has no call into this module.
+//! `#[cfg(test)]` on the parent module keeps it out of the test-support
+//! dependency build: this file names the evaluator, an upper layer.
 //!
 //! Owners allocate conses through `RunSlice::cons_into` inside `with_slice`,
 //! and tables through the rooted `RunAccess` make/copy operations.

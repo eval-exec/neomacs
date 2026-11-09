@@ -1,4 +1,7 @@
-//! Test-only closed intern executor syntax; no legacy interner fallback.
+//! Closed intern executor syntax; no legacy interner fallback.
+//! Present for the crate's own tests and for `test-support`, so re-homed
+//! core tests can name `InternOp`. Absent from production builds.
+#![cfg(any(test, feature = "test-support"))]
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum InternOp {

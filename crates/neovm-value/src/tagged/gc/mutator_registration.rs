@@ -1,8 +1,9 @@
 //! Cold canonical registration, rooted rendezvous and scoped stopped collection.
 //! Running authority admits rooted cons and sealed hash-table allocation.
 //! The serial inline iterator remains the Sim representation. The overlap executor
-//! is the `restricted_lisp` test module and is absent from every
-//! `NEOVM_THREADS` mode. Production still has no public Lisp overlap entry.
+//! is the `restricted_lisp` test module. It stays `cfg(test)` because it
+//! names the evaluator, which this crate must not name in any cfg.
+//! Production still has no public Lisp overlap entry.
 //!
 //! An era owns the actual World Baton and the quiescent heap loan. Only a
 //! metadata permit crosses a thread boundary; owner buffers are built there.
@@ -82,7 +83,6 @@ pub mod symbol_functions;
 mod symbol_globals;
 #[cfg(feature = "test-support")]
 pub mod symbol_globals;
-#[cfg(test)]
 mod symbol_intern;
 #[cfg(any(test, feature = "test-support"))]
 pub use symbol_authority::FunctionOpKind;
