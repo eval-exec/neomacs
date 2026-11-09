@@ -318,7 +318,7 @@ fn p3sym_c5_soft_busy_is_a_refusal_and_releases_the_reader() {
         Query::Existing,
         |run, homes| {
             let before = homes.dst.word_for_test(run);
-            crate::symbol::parallel::test_facts::with_symbol_registry_writer_for_test(|| {
+            neovm_value::test_support::authority::with_symbol_registry_writer_for_test(|| {
                 assert_eq!(
                     run.initial_intern_soft_into(&homes.name, &mut homes.dst),
                     Err(InitialInternError::Authority(RegistrationError::Busy))
@@ -441,7 +441,7 @@ fn p3sym_c5_intern_busy_leaves_output_and_membership_unchanged() {
             let id = homes.target.unwrap();
             let before = run.initial_facts_copy_for_test(id).unwrap();
             let output = homes.dst.word_for_test(run);
-            crate::symbol::parallel::test_facts::with_symbol_registry_writer_for_test(|| {
+            neovm_value::test_support::authority::with_symbol_registry_writer_for_test(|| {
                 assert_eq!(
                     run.initial_intern_into(&homes.name, &mut homes.dst),
                     Err(InitialInternError::Authority(RegistrationError::Busy))

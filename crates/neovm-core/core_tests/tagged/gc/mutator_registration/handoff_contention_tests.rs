@@ -5,7 +5,7 @@
 
 use super::PlainSymbolBacking;
 use neovm_eval::test_support::authority::with_test_symbol_backing_era;
-use neovm_value::symbol::parallel::test_facts::{
+use neovm_value::test_support::authority::{
     handoff_resume_outlasts_yield_budget_for_test, handoff_resume_uncontended_for_test,
 };
 

@@ -61,7 +61,7 @@ fn p3sym_c5_native_retry_waits_for_a_held_registry_then_observes_one_winner() {
             let (result, held) = std::thread::scope(|scope| {
                 let guard = scope.spawn(move || {
                     let mut result = Ok(());
-                    crate::symbol::parallel::test_facts::with_symbol_registry_writer_for_test(
+                    neovm_value::test_support::authority::with_symbol_registry_writer_for_test(
                         || {
                             result = ready_tx
                                 .send(())

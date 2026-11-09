@@ -12,10 +12,10 @@ use crate::tagged::gc::{
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue as Value;
 use neovm_eval::test_support::authority::with_test_symbol_functions_init_era;
-use neovm_value::symbol::parallel::test_facts::{
-    prepare_name_symbol_for_test, sym_name_call_begin_for_test, sym_name_fset_into_for_test,
+use neovm_value::test_support::authority::{
+    self as contention, Deadline, Retry, prepare_name_symbol_for_test, retry_owned,
+    sym_name_call_begin_for_test, sym_name_fset_into_for_test,
 };
-use neovm_value::test_support::authority::{self as contention, Deadline, Retry, retry_owned};
 use std::cell::RefCell;
 use std::num::NonZeroU32;
 use std::ops::ControlFlow;

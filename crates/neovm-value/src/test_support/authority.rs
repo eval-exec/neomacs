@@ -1023,6 +1023,81 @@ pub fn suppress_for_test() -> impl Drop {
     crate::tagged::gc::mutator_registration::a8_probes::suppress_for_test()
 }
 
+/// FENCE (lead #694 L-b): hold the process symbol-registry write lock for
+/// `body`. The original `with_registry_writer_for_test` stays `pub(crate)`.
+#[doc(hidden)]
+pub fn with_symbol_registry_writer_for_test(body: impl FnOnce()) {
+    crate::intern::parallel::with_registry_writer_for_test(body);
+}
+
+/// FENCE (lead #694 L-b): prepare a C6 name capability and return its symbol
+/// handle. The original `prepare_name_symbol` stays `pub(crate)`.
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[doc(hidden)]
+pub fn prepare_name_symbol_for_test<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &crate::tagged::gc::ProofEra<'_, K>,
+    key: &crate::tagged::gc::mutator_registration::SymbolHandle,
+) -> Result<
+    crate::tagged::gc::mutator_registration::SymbolHandle,
+    crate::tagged::gc::mutator_registration::FunctionError,
+> {
+    crate::tagged::gc::mutator_registration::name_ops::prepare_name_symbol(era, key)
+}
+
+/// FENCE (lead #694 L-b): `RunAccess::sym_name_fset_into` for a handle from
+/// [`prepare_name_symbol_for_test`]. The original stays `pub(crate)`.
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[doc(hidden)]
+pub fn sym_name_fset_into_for_test<'era>(
+    run: &mut crate::tagged::gc::mutator_registration::RunAccess<'_, 'era>,
+    symbol: crate::tagged::gc::mutator_registration::SymbolHandle,
+    src: &crate::tagged::gc::mutator_registration::OwnerRootSlot<'era>,
+    dst: &mut crate::tagged::gc::mutator_registration::OwnerRootSlot<'era>,
+) -> Result<(), crate::tagged::gc::mutator_registration::FunctionError> {
+    crate::tagged::gc::mutator_registration::name_ops::sym_name_fset_into(run, symbol, src, dst)
+}
+
+/// FENCE (lead #694 L-b): `RunAccess::sym_name_call_begin` for a handle from
+/// [`prepare_name_symbol_for_test`]. The original stays `pub(crate)`.
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[doc(hidden)]
+pub fn sym_name_call_begin_for_test<'era>(
+    run: &mut crate::tagged::gc::mutator_registration::RunAccess<'_, 'era>,
+    symbol: crate::tagged::gc::mutator_registration::SymbolHandle,
+    cache: &mut crate::tagged::gc::mutator_registration::FunctionCallCache<'era>,
+    activation: &mut crate::tagged::gc::mutator_registration::FunctionActivation<'era>,
+) -> Result<(), crate::tagged::gc::mutator_registration::FunctionError> {
+    crate::tagged::gc::mutator_registration::name_ops::sym_name_call_begin(
+        run, symbol, cache, activation,
+    )
+}
+
+/// FENCE (lead #694 L-b): handoff resume with the control gate uncontended.
+/// The caller supplies the era. Assertions stay in the value body. The
+/// original `handoff_resume_uncontended` stays `pub(crate)`.
+#[cfg(all(not(feature = "gc-memory-telemetry"), not(miri)))]
+#[doc(hidden)]
+pub fn handoff_resume_uncontended_for_test<
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+>(
+    era: crate::tagged::gc::ProofEra<'_, K>,
+) {
+    crate::tagged::gc::mutator_registration::restricted_lisp::globals::handoff::worker::contention_tests::handoff_resume_uncontended(era);
+}
+
+/// FENCE (lead #694 L-b): handoff resume when the control gate is held past
+/// the yield budget. The original `handoff_resume_outlasts_yield_budget`
+/// stays `pub(crate)`.
+#[cfg(all(not(feature = "gc-memory-telemetry"), not(miri)))]
+#[doc(hidden)]
+pub fn handoff_resume_outlasts_yield_budget_for_test<
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+>(
+    era: crate::tagged::gc::ProofEra<'_, K>,
+) {
+    crate::tagged::gc::mutator_registration::restricted_lisp::globals::handoff::worker::contention_tests::handoff_resume_outlasts_yield_budget(era);
+}
+
 /// The fence's own behavioural tests are a DECLARED CHILD of the authority
 /// module, not a physical sibling: TA2's definition surface is this module
 /// tree, so the tests' `crate::test_support::authority` references stay
