@@ -850,3 +850,37 @@ fn green_thread_signal_unwind_protect_and_let_survive_the_wait() {
         SIGNAL_UNWIND_LET_EXPECT
     );
 }
+
+/// GNU `thread_live_p` is `(STATE)->m_specpdl != NULL` (src/thread.c:76).
+/// `run_thread` clears that pointer at :822-823, before join, and unlinks
+/// the thread at :853-859. A worker that has returned is dead and absent
+/// from `all-threads` while its result is still joinable.
+/// Pinned GNU 31.1 (`a360712c9d27`) batch print: `((t t) nil nil 42 nil)`.
+const RETURNED_UNJOINED_IS_DEAD_FORM: &str = r#"
+(let* ((w (make-thread (lambda () 42)))
+       (before (list (thread-live-p w) (and (memq w (all-threads)) t))))
+  (sleep-for 0.2)
+  (list before
+        (thread-live-p w)
+        (and (memq w (all-threads)) t)
+        (thread-join w)
+        (thread-live-p w)))
+"#;
+
+const RETURNED_UNJOINED_IS_DEAD_EXPECT: &str = "((t t) nil nil 42 nil)";
+
+#[test]
+fn gnu_returned_unjoined_worker_is_dead_and_unlisted() {
+    assert_eq!(
+        sim_printed(RETURNED_UNJOINED_IS_DEAD_FORM),
+        RETURNED_UNJOINED_IS_DEAD_EXPECT
+    );
+}
+
+#[test]
+fn green_returned_unjoined_worker_is_dead_and_unlisted() {
+    assert_eq!(
+        green_printed(RETURNED_UNJOINED_IS_DEAD_FORM),
+        RETURNED_UNJOINED_IS_DEAD_EXPECT
+    );
+}

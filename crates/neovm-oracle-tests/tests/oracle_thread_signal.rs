@@ -112,6 +112,28 @@ fn oracle_thread_signal_second_join_returns_the_result() {
 }
 
 #[test]
+fn oracle_returned_unjoined_worker_is_dead() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    // GNU 31.1 a360712c9d27:
+    // ((t t) nil nil 42 nil)
+    // thread.c:76 is m_specpdl != NULL; run_thread clears it at :822-823
+    // and unlinks at :853-859, both before join.
+    common::assert_oracle_parity_expect(
+        r##"
+(let* ((w (make-thread (lambda () 42)))
+       (before (list (thread-live-p w) (and (memq w (all-threads)) t))))
+  (sleep-for 0.2)
+  (list before
+        (thread-live-p w)
+        (and (memq w (all-threads)) t)
+        (thread-join w)
+        (thread-live-p w)))
+"##,
+        expect_test::expect![[r#""OK ((t t) nil nil 42 nil)""#]],
+    );
+}
+
+#[test]
 fn oracle_thread_signal_before_handler_escapes() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     // GNU: ((join-err arith-error ("bad")) nil (arith-error "bad") nil)
