@@ -1091,6 +1091,15 @@ impl LiveProcessIo {
     /// running", so `kill(-pid, SIGKILL)` went to a pid the kernel had handed
     /// back.  See `process/reap.rs`.
     pub fn terminate_and_defer_children(&mut self) {
+        // GNU process.c:1135: `if (p->alive) record_kill_process (p, Qnil);`.
+        // The `Unreaped` arm is this port's `p->alive`; the hook's own
+        // implementation starts with the same state gate, so taking it here is
+        // behaviour-identical and avoids an evaluator hook dispatch when this
+        // port no longer owns a live child (a lower-crate unit test can reach
+        // the drop path without any installed evaluator hook set).
+        if !matches!(self.child, ChildOwnership::Unreaped(_)) {
+            return;
+        }
         crate::emacs_core::eval::process_hooks::terminate_and_defer_reaping(
             &mut self.child,
             signal_kill_number(),
