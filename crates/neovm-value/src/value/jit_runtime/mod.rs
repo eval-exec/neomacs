@@ -502,6 +502,16 @@ impl RuntimeState {
         self.force_interpret
             .store(on, std::sync::atomic::Ordering::Relaxed);
     }
+
+    /// Test-support reader for the Tier-0 pin. Same `Relaxed` ordering as
+    /// [`Self::set_force_interpret_for_test`]. The `AtomicBool` stays private.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    #[inline]
+    pub(crate) fn force_interpret_loaded_for_test(&self) -> bool {
+        self.force_interpret
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     #[inline]
     #[doc(hidden)]

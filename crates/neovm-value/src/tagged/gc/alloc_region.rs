@@ -418,6 +418,7 @@ impl TaggedHeap {
     }
 
     /// Whether any allocation region is open.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn alloc_regions_open(&self) -> bool {
         self.region_book.cons != ConsRegionSource::Closed
             || self.region_book.float != FloatRegionSource::Closed

@@ -418,6 +418,7 @@ impl LispString {
 
 impl LispString {
     /// The character count bits of the encoded size word.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const CHARACTER_COUNT_MASK: usize = !StringCharacterCountFlags::all().bits();
 
     // -- Constructors --------------------------------------------------------

@@ -222,8 +222,9 @@ impl BarrierWindow {
     }
 
     /// The window's first address (what compiled code subtracts).
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[inline(always)]
-    pub(crate) fn lo(self) -> usize {
+    pub(crate) const fn lo(&self) -> usize {
         self.lo
     }
 
@@ -655,10 +656,15 @@ impl TaggedHeap {
     pub(crate) fn is_tenured_for_test(&self, value: TaggedValue) -> bool {
         self.value_is_tenured(value)
     }
+}
 
-    /// Test hook: the owner's remembered fact lives in the persistent set
+/// Copied remembered-set predicates. The sets stay private.
+#[cfg(any(test, feature = "test-support"))]
+impl TaggedHeap {
+    /// The owner's remembered fact lives in the persistent set
     /// (`mapped_remembered`, or its GEN1 mutator staging `r_mapped_seen`).
     /// Only a mapped address or a permanent (image-resident) owner enters it.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn is_persistently_remembered_for_test(&self, owner: TaggedValue) -> bool {
         self.mapped_remembered.contains(&owner.bits())
             || (self.generational.enabled
@@ -667,9 +673,10 @@ impl TaggedHeap {
                     .any(|mutator| mutator.r_mapped_seen.contains(&owner.bits())))
     }
 
-    /// Test hook: the owner was claimed into a mutator remembered log
-    /// (`remset`, drained into `r_seed` at a collection boundary). Ordinary
-    /// old owners are remembered only this way.
+    /// The owner was claimed into a mutator remembered log (`remset`, drained
+    /// into `r_seed` at a collection boundary). Ordinary old owners are
+    /// remembered only this way.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn is_claimed_remembered_for_test(&self, owner: TaggedValue) -> bool {
         self.generational.enabled
             && (self

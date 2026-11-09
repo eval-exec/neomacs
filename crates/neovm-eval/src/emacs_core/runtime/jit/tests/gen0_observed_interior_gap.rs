@@ -252,7 +252,7 @@ fn gen0_native_exact_cons_and_large_gap_both_survive_alternating_stores() {
         "the second publication retains the exact native word"
     );
     let gap = learned
-        .excluded
+        .excluded_for_test()
         .expect("the larger empty interval is retained");
     assert!(gap.covers(owners[5].bits() & !TAG_MASK));
     assert!(!gap.covers(old_address));

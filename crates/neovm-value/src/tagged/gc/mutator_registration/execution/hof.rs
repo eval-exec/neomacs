@@ -68,6 +68,7 @@ impl<'era> HofSingleton<'era> {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn word_for_test(&self, run: &RunAccess<'_, '_>) -> usize {
         self.list.word_for_test(run)
     }

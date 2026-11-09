@@ -576,6 +576,7 @@ impl ByteCodeFunction {
     }
 
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn resident_ops_capacity(&self) -> usize {
         match &self.lazy_gnu_code {
             Some(lazy) => lazy

@@ -59,6 +59,20 @@ impl StackProof {
     pub fn switch_depth(&self) -> Option<usize> {
         self.switch_depth
     }
+
+    /// Copy the per-instruction depth table. The `Vec` stays private.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn copy_depths_for_test(&self, out: &mut Vec<u32>) {
+        out.extend_from_slice(&self.depths);
+    }
+
+    /// Copy the pre-resolved jump-table pairs. The box stays private.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn copy_switch_targets_for_test(&self, out: &mut Vec<(i64, u32)>) {
+        out.extend_from_slice(&self.switch_targets);
+    }
 }
 
 impl StackProof {

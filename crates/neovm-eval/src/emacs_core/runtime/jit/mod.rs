@@ -1052,7 +1052,7 @@ pub(crate) trait RuntimeStateTieringExt {
     /// another probe of the same call do the advancing.
     #[cfg(feature = "jit")]
     fn peek_heat(&self) -> u32;
-    #[cfg(all(feature = "jit", test))]
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
     fn force_interpret_for_test(&self) -> bool;
     fn heat(&self) -> u32;
     /// Backward branches per loop-heat wrap — the interpreter's `branch_to!`
@@ -1380,8 +1380,8 @@ impl RuntimeStateTieringExt for RuntimeState {
         if !jit_runtime_enabled() {
             return Plan::Interpret;
         }
-        #[cfg(test)]
-        if self.force_interpret.load(Ordering::Relaxed) {
+        #[cfg(any(test, feature = "test-support"))]
+        if self.force_interpret_loaded_for_test() {
             return Plan::Interpret;
         }
         let prev = self.heat_ref().load(Ordering::Relaxed);
@@ -1440,8 +1440,8 @@ impl RuntimeStateTieringExt for RuntimeState {
             return Plan::Interpret;
         }
         // Test-only: a forced-cold function never tiers up (benchmark A/B).
-        #[cfg(test)]
-        if self.force_interpret.load(Ordering::Relaxed) {
+        #[cfg(any(test, feature = "test-support"))]
+        if self.force_interpret_loaded_for_test() {
             return Plan::Interpret;
         }
         // Saturating bump — a long-lived hot function must never wrap to cold.
@@ -1501,8 +1501,8 @@ impl RuntimeStateTieringExt for RuntimeState {
         // consults is_hot() directly, and OSR ignoring force_interpret is
         // how a benchmark's "interpreter" half silently ran ~99.99% native
         // (the Phase-0 big-body baseline was really the baseline-OSR leaf).
-        #[cfg(test)]
-        if self.force_interpret.load(Ordering::Relaxed) {
+        #[cfg(any(test, feature = "test-support"))]
+        if self.force_interpret_loaded_for_test() {
             return false;
         }
         self.heat_ref().load(Ordering::Relaxed) >= hot_threshold()
@@ -1528,9 +1528,9 @@ impl RuntimeStateTieringExt for RuntimeState {
         self.heat_ref().load(Ordering::Relaxed)
     }
 
-    #[cfg(all(feature = "jit", test))]
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
     fn force_interpret_for_test(&self) -> bool {
-        self.force_interpret.load(Ordering::Relaxed)
+        self.force_interpret_loaded_for_test()
     }
 
     #[inline]

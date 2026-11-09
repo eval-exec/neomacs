@@ -45,10 +45,13 @@ impl FrozenLegacyRoots {
     pub(crate) fn permits_function_writes(&self) -> bool {
         self.functions_quiescent
     }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn heap_identity(&self) -> HeapIdentity {
         self.heap
     }
-    /// Copies opaque words; decoding requires stopped authority for this heap.
+    /// Copies opaque words into `out`. Decoding still requires stopped
+    /// authority for this heap. The stored vec stays private.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn append_words(&self, out: &mut Vec<TaggedValue>) {
         out.extend_from_slice(&self.words);
     }

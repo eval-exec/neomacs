@@ -56,11 +56,13 @@ fn switch_with_instruction_start_targets_is_admitted() {
     // The per-instruction depths are kept for a switch-bearing stream: the
     // switch itself is entered at 2, its target and the fall-through at 0;
     // instruction 4 is reachable from nothing.
-    assert_eq!(proof.depths.len(), 8);
-    assert_eq!(proof.depths[2], 2);
-    assert_eq!(proof.depths[3], 0);
-    assert_eq!(proof.depths[4], StackProof::UNREACHABLE);
-    assert_eq!(proof.depths[6], 0);
+    let mut depths = Vec::new();
+    proof.copy_depths_for_test(&mut depths);
+    assert_eq!(depths.len(), 8);
+    assert_eq!(depths[2], 2);
+    assert_eq!(depths[3], 0);
+    assert_eq!(depths[4], StackProof::UNREACHABLE);
+    assert_eq!(depths[6], 0);
     assert!(proof.proves_depth(6, 0));
     assert!(!proof.proves_depth(6, 1));
     assert!(!proof.proves_depth(4, 0));
@@ -272,7 +274,9 @@ fn admitted_targets_are_pre_resolved_sorted_and_deduplicated() {
         ("vsw-baz", Value::fixnum(8)),
     ]));
     let proof = verify(&SWITCH_BYTES, &constants, 2).expect("admitted");
-    assert_eq!(&*proof.switch_targets, &[(6, 4), (8, 6)]);
+    let mut switch_targets = Vec::new();
+    proof.copy_switch_targets_for_test(&mut switch_targets);
+    assert_eq!(&*switch_targets, &[(6, 4), (8, 6)]);
     assert_eq!(proof.switch_target(6), Some(4));
     assert_eq!(proof.switch_target(8), Some(6));
     assert_eq!(proof.switch_target(7), None, "not a table value");
@@ -280,7 +284,9 @@ fn admitted_targets_are_pre_resolved_sorted_and_deduplicated() {
     let (plain_ops, _) =
         decode_gnu_bytecode_with_offset_map(&[192, 135], &mut vec![Value::NIL]).unwrap();
     let plain = verify_stack_effects_with_tables(&plain_ops, 0, 1, None).expect("proof");
-    assert!(plain.switch_targets.is_empty());
+    let mut plain_targets = Vec::new();
+    plain.copy_switch_targets_for_test(&mut plain_targets);
+    assert!(plain_targets.is_empty());
 }
 
 #[test]
@@ -292,7 +298,9 @@ fn switches_sharing_targets_share_one_pre_resolved_entry() {
     let bytes = [193, 192, 183, 193, 192, 183, 194, 135];
     let constants = pool(jump_table(&[("vsw-foo", Value::fixnum(6))]));
     let proof = verify(&bytes, &constants, 2).expect("admitted");
-    assert_eq!(&*proof.switch_targets, &[(6, 6)]);
+    let mut switch_targets = Vec::new();
+    proof.copy_switch_targets_for_test(&mut switch_targets);
+    assert_eq!(&*switch_targets, &[(6, 6)]);
 }
 
 #[test]
