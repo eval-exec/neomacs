@@ -493,7 +493,14 @@ jobs:
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build fresh release runtime
-        run: cargo xtask fresh-build --release
+        run: |
+          # The dump writer creates the image with GNU's open(..., 0666)
+          # (src/pdumper.c:4200), so its mode is 0666 masked by the umask.
+          # Pin the standard 022 build umask so the artifact this job
+          # packages, and the staged-release assertion below, are
+          # deterministic across runner images.
+          umask 022
+          cargo xtask fresh-build --release
 
       - name: Smoke the pdump relocating fallback (NEOVM_PDUMP_NO_FIXED_MAP)
         run: |
@@ -552,6 +559,11 @@ jobs:
       - name: Verify install.sh against a staged release tree
         run: |
           set -eux
+          # The staging below copies the build artifacts rather than
+          # re-installing them, so their modes reach the archive unchanged;
+          # pin the umask so cp cannot mask a permission regression (and so
+          # the archive-entry assertion is deterministic across runners).
+          umask 022
           triple=x86_64-unknown-linux-gnu
           crate_version="$(
             awk '/^\[workspace\.package\]/{s=1;next} /^\[/{s=0}
@@ -583,6 +595,24 @@ jobs:
             tar czf "$staged/neomacs-$version-$triple.tar.gz" \
               --owner=1001 --group=1001 --numeric-owner \
               -C "$pkg_parent" "neomacs-$version-$triple"
+            # The installed runtime is loaded by every user: a root install
+            # puts the dump in a system prefix, and the check below runs the
+            # editor as an unprivileged account.  The writer requests GNU's
+            # open(..., 0666) creation mode, so under this step's pinned 022
+            # umask the entry must be -rw-r--r--; the old tempfile default
+            # was a hard 0600 that plain cp carried into the archive and a
+            # root install then made unreadable.  Assert the archive entry
+            # before install.sh, so the packaging layer stays pinned even if
+            # install.sh later normalizes modes.
+            local dump_rel
+            if [ "$layout" = archlib ]; then
+              dump_rel="$archlib/neomacs.pdump"
+            else
+              dump_rel="bin/neomacs.pdump"
+            fi
+            tar tvzf "$staged/neomacs-$version-$triple.tar.gz" \
+              | grep -F "/$dump_rel" | grep -q '^-rw-r--r--' \
+              || { echo "packaged $dump_rel is not 0644 (world-readable)" >&2; exit 1; }
             ( cd "$staged" && sha256sum "neomacs-$version-$triple.tar.gz" > SHA256SUMS )
             local prefix="$stage_root/prefix"
             NEOMACS_DOWNLOAD_BASE="file://$stage_root" \

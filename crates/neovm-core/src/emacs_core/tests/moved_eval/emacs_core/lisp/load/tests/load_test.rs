@@ -16480,3 +16480,74 @@ fn build_details_include_preserves_explicit_hostname_override() {
         Some(Value::T)
     );
 }
+
+/// GNU's pdumper creates the dump with `emacs_open (filename, O_RDWR |
+/// O_TRUNC | O_CREAT, 0666)` (src/pdumper.c:4200), so the file's mode is
+/// 0666 masked by the caller's umask.  The umask cases live in separate
+/// tests on purpose: umask is process-global, and nextest runs each test in
+/// its own process.  A fixed writer mode is a compatibility bug in both
+/// directions: a hard 0644 hands a world-readable dump to a umask-077 user,
+/// and the old tempfile default 0600 leaves a root-installed runtime
+/// unreadable to every other user.
+#[test]
+#[cfg(unix)]
+fn dump_emacs_portable_under_umask_077_writes_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    let dir = tempdir().expect("dump tempdir");
+    let dump_path = dir.path().join("portable-umask-077.pdump");
+
+    // SAFETY: `umask` only changes this process's file-creation mask.  It is
+    // restored immediately after the dump, and nextest isolates each test in
+    // its own process, so no other test can observe the change.
+    let previous = unsafe { libc::umask(0o077) };
+    let dumped = crate::emacs_core::system_entries::builtin_dump_emacs_portable(
+        &mut eval,
+        vec![Value::string(dump_path.to_string_lossy().into_owned())],
+    );
+    unsafe { libc::umask(previous) };
+    dumped.expect("dump-emacs-portable should succeed");
+
+    let mode = std::fs::metadata(&dump_path)
+        .expect("dump metadata")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(
+        mode, 0o600,
+        "umask 077 must yield GNU's open(0666) mode 0600, not a fixed 0644"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn dump_emacs_portable_under_umask_022_writes_world_readable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    let dir = tempdir().expect("dump tempdir");
+    let dump_path = dir.path().join("portable-umask-022.pdump");
+
+    // SAFETY: see the umask-077 test: process-local, restored immediately,
+    // and isolated by nextest's process-per-test execution.
+    let previous = unsafe { libc::umask(0o022) };
+    let dumped = crate::emacs_core::system_entries::builtin_dump_emacs_portable(
+        &mut eval,
+        vec![Value::string(dump_path.to_string_lossy().into_owned())],
+    );
+    unsafe { libc::umask(previous) };
+    dumped.expect("dump-emacs-portable should succeed");
+
+    let mode = std::fs::metadata(&dump_path)
+        .expect("dump metadata")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(
+        mode, 0o644,
+        "umask 022 must yield GNU's open(0666) mode 0644 (world-readable, as a root install needs)"
+    );
+}
