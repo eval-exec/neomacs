@@ -58,7 +58,10 @@ fn gc_collection_epoch_string_pos_minor_activation_discards_swept_source_entry()
     assert_eq!(context.tagged_heap().gc_collections(), completed + 1);
     assert!(!context.tagged_heap().owns_heap_value_for_test(string));
     // Only compare identity bits after the destination reclaimed the string.
-    assert_eq!(CACHE.with(Cell::get).unwrap().string.bits(), string.bits());
+    assert_eq!(
+        CACHE.with(Cell::get).unwrap().string().bits(),
+        string.bits()
+    );
     context.setup_thread_locals();
     assert!(
         CACHE.with(Cell::get).is_none(),
@@ -76,7 +79,10 @@ fn gc_collection_epoch_string_pos_minor_sweep_foreign_activation_discards_entry(
     assert!(!context.tagged_heap().mark_in_progress());
     assert!(!context.tagged_heap().concurrent_mark_running());
     assert_eq!(context.tagged_heap().gc_collections(), completed);
-    assert_eq!(CACHE.with(Cell::get).unwrap().string.bits(), string.bits());
+    assert_eq!(
+        CACHE.with(Cell::get).unwrap().string().bits(),
+        string.bits()
+    );
     context.setup_thread_locals();
     assert!(
         CACHE.with(Cell::get).is_none(),

@@ -26,30 +26,42 @@ use crate::value::Value;
 #[derive(Clone, Copy, Debug)]
 #[doc(hidden)]
 pub struct Entry {
-    #[cfg(feature = "test-support")]
-    pub string: Value,
-    #[cfg(not(feature = "test-support"))]
     string: Value,
-    #[cfg(feature = "test-support")]
-    pub data: *const u8,
-    #[cfg(not(feature = "test-support"))]
     data: *const u8,
-    #[cfg(feature = "test-support")]
-    pub sbytes: usize,
-    #[cfg(not(feature = "test-support"))]
     sbytes: usize,
-    #[cfg(feature = "test-support")]
-    pub epoch: u64,
-    #[cfg(not(feature = "test-support"))]
     epoch: u64,
-    #[cfg(feature = "test-support")]
-    pub char_pos: GnuStringCharPos,
-    #[cfg(not(feature = "test-support"))]
     char_pos: GnuStringCharPos,
-    #[cfg(feature = "test-support")]
-    pub byte_pos: usize,
-    #[cfg(not(feature = "test-support"))]
     byte_pos: usize,
+}
+
+/// VIS read rows (lead #1052): the cached entry's metadata stays private in
+/// every arm; these copy-only getters are the cross-crate test route.
+#[cfg(any(test, feature = "test-support"))]
+impl Entry {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn string(&self) -> Value {
+        self.string
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn data(&self) -> *const u8 {
+        self.data
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn sbytes(&self) -> usize {
+        self.sbytes
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn epoch(&self) -> u64 {
+        self.epoch
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn char_pos(&self) -> GnuStringCharPos {
+        self.char_pos
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn byte_pos(&self) -> usize {
+        self.byte_pos
+    }
 }
 
 // This existing TLS entry remains owned by the activated mutator/heap.

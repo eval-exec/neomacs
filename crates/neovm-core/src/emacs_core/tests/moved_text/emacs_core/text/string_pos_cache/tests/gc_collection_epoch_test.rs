@@ -104,11 +104,14 @@ fn gc_collection_epoch_string_pos_same_thread_activation_keeps_warm_entry() {
     let after = CACHE
         .with(Cell::get)
         .expect("same-thread activation evicted a warm entry");
-    assert_eq!(CACHE.with(Cell::get).unwrap().string.bits(), string.bits());
-    assert_eq!(after.data, before.data);
-    assert_eq!(after.char_pos, before.char_pos);
-    assert_eq!(after.byte_pos, before.byte_pos);
-    assert_eq!(after.epoch, before.epoch);
+    assert_eq!(
+        CACHE.with(Cell::get).unwrap().string().bits(),
+        string.bits()
+    );
+    assert_eq!(after.data(), before.data());
+    assert_eq!(after.char_pos(), before.char_pos());
+    assert_eq!(after.byte_pos(), before.byte_pos());
+    assert_eq!(after.epoch(), before.epoch());
     assert_eq!(
         string_char_to_byte(string, string.as_lisp_string().unwrap(), 2),
         3
@@ -235,7 +238,10 @@ pub(super) fn populate_cache(context: &mut Context) -> Value {
         string_char_to_byte(string, string.as_lisp_string().unwrap(), 2),
         3
     );
-    assert_eq!(CACHE.with(Cell::get).unwrap().string.bits(), string.bits());
+    assert_eq!(
+        CACHE.with(Cell::get).unwrap().string().bits(),
+        string.bits()
+    );
     string
 }
 
@@ -271,7 +277,10 @@ fn partly_swept_cached_string() -> (Box<TaggedHeap>, Value, usize) {
     activate_cache_for_heap(&heap);
     let string = Value::string("aжλb");
     string_char_to_byte(string, string.as_lisp_string().unwrap(), 2);
-    assert_eq!(CACHE.with(Cell::get).unwrap().string.bits(), string.bits());
+    assert_eq!(
+        CACHE.with(Cell::get).unwrap().string().bits(),
+        string.bits()
+    );
     // Leave a second cons block to sweep after the first string page. These
     // allocations and the cache entry are intentionally absent from the mark
     // roots, as a source thread's TLS is absent from a destination scan.
@@ -301,12 +310,12 @@ pub(super) fn assert_warm_entry(string: Value, before: Entry) {
     let after = CACHE
         .with(Cell::get)
         .expect("owning-thread GC evicted the warm entry");
-    assert_eq!(after.string.bits(), before.string.bits());
-    assert_eq!(after.data, before.data);
-    assert_eq!(after.sbytes, before.sbytes);
-    assert_eq!(after.epoch, before.epoch);
-    assert_eq!(after.char_pos, before.char_pos);
-    assert_eq!(after.byte_pos, before.byte_pos);
+    assert_eq!(after.string().bits(), before.string().bits());
+    assert_eq!(after.data(), before.data());
+    assert_eq!(after.sbytes(), before.sbytes());
+    assert_eq!(after.epoch(), before.epoch());
+    assert_eq!(after.char_pos(), before.char_pos());
+    assert_eq!(after.byte_pos(), before.byte_pos());
     assert_eq!(
         cached_pair(string, string.as_lisp_string().unwrap()),
         Some((GnuStringCharPos::new(2), 3))
@@ -369,7 +378,10 @@ fn assert_foreign_cycle_discards_entry(phase: ForeignPhase) {
     }
     assert_eq!(context.tagged_heap().gc_collections(), completed);
     stale.restore();
-    assert_eq!(CACHE.with(Cell::get).unwrap().string.bits(), string.bits());
+    assert_eq!(
+        CACHE.with(Cell::get).unwrap().string().bits(),
+        string.bits()
+    );
     context.setup_thread_locals();
     assert!(
         CACHE.with(Cell::get).is_none(),
