@@ -504,3 +504,10 @@ mod emacs_core_runtime_eval_tests_specpdl_chrome_binding_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/tests/redisplay_mode_line_flow_test.rs"]
 mod emacs_core_runtime_eval_tests_redisplay_mode_line_flow_test_rs;
+// TTY row receipts need display's terminal, face, and frame traits.
+// replace_face_definitions_for_test, record_definitions_only_face_change_for_test,
+// and build_font_object_for_test are the new display authority routes for the
+// three seams that stay pub(crate). Assertions are unchanged.
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/tty_rows_observation_test.rs"]
+mod emacs_core_runtime_eval_tests_tty_rows_observation_test_rs;

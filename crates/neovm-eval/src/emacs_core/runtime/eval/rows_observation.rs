@@ -389,7 +389,3 @@ impl RowsDependencyMetadata<'_> {
             && self.reads.unchanged_and_observe()
     }
 }
-
-#[cfg(test)]
-#[path = "tests/tty_rows_observation_test.rs"]
-mod tty_tests;

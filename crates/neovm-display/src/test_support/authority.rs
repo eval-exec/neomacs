@@ -485,3 +485,35 @@ pub fn prefix_line_and_column_for_test(
 ) -> usize {
     crate::emacs_core::xdisp::prefix_line_and_column_for_test(buf, accessible, end_byte)
 }
+
+/// FENCE (tty-rows re-home): the cfg(test) raw definition-replacement fault.
+/// The trait method stays cfg(test). This delegate is the cross-crate route
+/// and it still installs an unrecorded table, which is the refusal the rows
+/// receipt asserts.
+pub fn replace_face_definitions_for_test(
+    cache: &mut crate::face::FrameFaceRealizationCache,
+    table: crate::face::FaceTable,
+) {
+    crate::emacs_core::xfaces::realization::replace_definitions_for_test_fault(cache, table);
+}
+
+/// FENCE (tty-rows re-home): record a definitions-only face change for the
+/// named frames. `FaceChangeScope` and `record_face_change_for` stay
+/// pub(crate). The scope is the same `DefinitionsOnly` arm the fixture passed.
+pub fn record_definitions_only_face_change_for_test(
+    context: &mut neovm_eval::emacs_core::eval::Context,
+    frames: &[crate::window::FrameId],
+    face: Option<&str>,
+) {
+    crate::emacs_core::xfaces::realization::record_face_change_for(
+        context,
+        crate::face::realization::FaceChangeScope::DefinitionsOnly(frames),
+        face,
+    );
+}
+
+/// FENCE (tty-rows re-home): build the opened font object the palette probe
+/// hands to `composition-get-gstring`. `build_font_object` stays pub(crate).
+pub fn build_font_object_for_test(face: &crate::face::Face) -> neovm_value::value::Value {
+    crate::emacs_core::font::build_font_object(face)
+}

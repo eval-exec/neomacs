@@ -3318,14 +3318,14 @@ fn font_weight_symbol(weight: FontWeight) -> &'static str {
     weight.symbol_name()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn build_font_object(face: &RuntimeFace) -> Value {
     build_font_object_with_pixel_size(face, None)
 }
 
 /// GNU font objects carry the OPENED pixel size in FONT_SIZE (the XLFD's
 /// pixel field prints it); pass `pixel_size` when the resolver knows it.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn build_font_object_with_pixel_size(face: &RuntimeFace, pixel_size: Option<i64>) -> Value {
     let fields = font_object_property_fields(face, pixel_size);
     let stable_name = font_name_for_face(face)

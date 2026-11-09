@@ -34,9 +34,9 @@ pub(crate) struct RecordedDefinitionsRefresh {
 }
 static_assertions::assert_eq_size!(RecordedDefinitionsRefresh, ());
 
-/// Constructor exclusively for cfg(test) raw lifecycle/fault fixtures.
+/// Constructor exclusively for test-support raw lifecycle/fault fixtures.
 /// It grants no production caller access to an unrecorded replacement.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn replace_definitions_for_test_fault(
     cache: &mut crate::face::realization::FrameFaceRealizationCache,
     table: crate::face::FaceTable,
