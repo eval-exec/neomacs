@@ -2401,7 +2401,3 @@ impl<'a> RestrictionScope<'a> {
         self.0.finish(result)
     }
 }
-
-#[cfg(test)]
-#[path = "tests/specpdl_chrome_binding_test.rs"]
-mod chrome_binding_tests;

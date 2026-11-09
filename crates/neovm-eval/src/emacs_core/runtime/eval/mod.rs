@@ -7654,11 +7654,6 @@ mod gc_atomic_slot_tests;
 #[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
 
-// The attention word: every writer of its inputs keeps it derived.
-#[cfg(test)]
-#[path = "tests/redisplay_mode_line_flow_test.rs"]
-mod redisplay_mode_line_flow_tests;
-
 // The debug leaf guard: GC safe points, Lisp entries and binding pushes
 // refuse to run under a leaf builtin, and leaves leave state untouched.
 #[cfg(all(test, debug_assertions))]

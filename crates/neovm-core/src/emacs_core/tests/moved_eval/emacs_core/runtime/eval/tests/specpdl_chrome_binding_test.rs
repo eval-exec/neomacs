@@ -1,19 +1,26 @@
 //! A local chrome binding must reach an ordinary redisplay within a command.
 //! The interactive TTY reproducer also verifies actual terminal output. This
 //! renderer spy exercises the redisplay skip gate and records its format.
+//!
+//! Frame creation is display's `DisplayFrameManagerExt`. Specpdl length and
+//! the display-variable counter are the existing copied observers. Assertions
+//! are unchanged.
 
-use super::*;
+use crate::emacs_core::eval::{Context, RedisplayHookPolicyGuard};
+use crate::window::DisplayFrameManagerExt;
+use neovm_value::intern::intern;
+use neovm_value::value::Value;
 use std::cell::RefCell;
 use std::rc::Rc;
 
 fn chrome_context(name: &'static str) -> (Context, Rc<RefCell<Vec<String>>>) {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let buffer = eval
         .edit
         .buffers
         .current_buffer_id()
         .expect("current buffer");
-    eval.frames
+    eval.frame_manager_mut()
         .create_frame("specpdl-chrome", 80 * 8, 24 * 16, buffer);
     eval.edit
         .buffers
@@ -66,7 +73,7 @@ fn local_chrome_unwind_repaints_the_restored_format_without_a_force() {
     let _policy = RedisplayHookPolicyGuard::legacy();
     for name in ["mode-line-format", "header-line-format", "tab-line-format"] {
         let (mut eval, rendered) = chrome_context(name);
-        let scope = eval.specpdl.len();
+        let scope = eval.specpdl_len_for_test();
         eval.try_specbind(intern(name), Value::string("BOUND"))
             .expect("local binding");
         // Present the bound format even before the bind publication fix, so
@@ -108,7 +115,7 @@ fn non_chrome_local_bindings_do_not_publish_chrome() {
         ("fill-column", false),
         ("ttykey-local-control", false),
     ] {
-        let mut eval = Context::new(crate::test_utils::unit_runtime());
+        let mut eval = crate::test_utils::new_context();
         eval.eval_str(&format!("(set (make-local-variable '{name}) 8)"))
             .expect("initial local value");
         let sym = intern(name);
@@ -122,8 +129,11 @@ fn non_chrome_local_bindings_do_not_publish_chrome() {
             .variable_value_in_buffer(eval.edit.buffers.get(buffer), sym)
             .expect("old local value");
         let bound = eval.eval_str("3").expect("bound value");
-        let before = (eval.redisplay_generation(), eval.display_var_change_count);
-        let scope = eval.specpdl.len();
+        let before = (
+            eval.redisplay_generation(),
+            eval.display_var_change_count_for_test(),
+        );
+        let scope = eval.specpdl_len_for_test();
         eval.specbind_uncached(sym, bound).expect("local binding");
         assert_eq!(
             eval.variable_value_in_buffer(eval.edit.buffers.get(buffer), sym),
@@ -131,7 +141,10 @@ fn non_chrome_local_bindings_do_not_publish_chrome() {
             "the actual {name} binding must be installed"
         );
         assert_eq!(
-            (eval.redisplay_generation(), eval.display_var_change_count),
+            (
+                eval.redisplay_generation(),
+                eval.display_var_change_count_for_test(),
+            ),
             before,
             "a conservative mask positive must still reject non-chrome {name}"
         );
@@ -142,7 +155,10 @@ fn non_chrome_local_bindings_do_not_publish_chrome() {
             "the actual {name} binding must be restored"
         );
         assert_eq!(
-            (eval.redisplay_generation(), eval.display_var_change_count),
+            (
+                eval.redisplay_generation(),
+                eval.display_var_change_count_for_test(),
+            ),
             before,
             "restoring non-chrome {name} must not publish chrome"
         );

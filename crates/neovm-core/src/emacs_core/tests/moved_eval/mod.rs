@@ -495,3 +495,12 @@ mod emacs_core_runtime_eval_tests_command_symbols_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/tests/positioned_control_test.rs"]
 mod emacs_core_runtime_eval_tests_positioned_control_test_rs;
+// create_frame is display's DisplayFrameManagerExt. Specpdl length, the
+// display-variable counter, and the redisplay-signature predicate are the
+// existing copied observers. Assertions are unchanged.
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/specpdl_chrome_binding_test.rs"]
+mod emacs_core_runtime_eval_tests_specpdl_chrome_binding_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/redisplay_mode_line_flow_test.rs"]
+mod emacs_core_runtime_eval_tests_redisplay_mode_line_flow_test_rs;

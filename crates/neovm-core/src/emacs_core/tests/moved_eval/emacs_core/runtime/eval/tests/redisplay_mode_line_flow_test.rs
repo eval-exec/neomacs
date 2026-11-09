@@ -1,7 +1,14 @@
 //! Mode-line exits cross the void frontend callback only after state restoration.
+//!
+//! Frame creation is display's `DisplayFrameManagerExt`. The redisplay
+//! signature predicate is the existing copied observer. Assertions are
+//! unchanged.
 
-use super::*;
+use crate::emacs_core::eval::Context;
+use crate::window::DisplayFrameManagerExt;
 use neovm_edit::buffer::EmacsByteRange;
+use neovm_value::error::Flow;
+use neovm_value::value::Value;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -9,16 +16,19 @@ fn context() -> Context {
     // nextest isolates tests in separate processes. This immutable process
     // knob contains no Lisp state and can be shared by independent mutators.
     if std::env::var_os("NEOVM_MODE_LINE_FLOW").is_none() {
+        // SAFETY: the knob is process-local, set once before any Context
+        // exists, and nextest runs this test in its own process.
         unsafe { std::env::set_var("NEOVM_MODE_LINE_FLOW", "1") };
     }
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let buffer = eval
         .edit
         .buffers
         .current_buffer_id()
         .expect("current buffer");
-    eval.frames.create_frame("mode-line-flow", 640, 384, buffer);
+    eval.frame_manager_mut()
+        .create_frame("mode-line-flow", 640, 384, buffer);
     eval
 }
 
@@ -78,7 +88,7 @@ fn redisplay_mode_line_exit_restores_restrictions_and_callback() {
     );
     assert!(!eval.has_mode_line_display_flow());
     assert!(eval.redisplay_fn.is_some());
-    assert!(eval.last_redisplay_signature.is_none());
+    assert!(eval.last_redisplay_signature_is_none_for_test());
     let buffer = eval
         .edit
         .buffers
