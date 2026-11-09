@@ -3380,7 +3380,7 @@ fn buffer_text_property_snapshot(buf: &Buffer) -> Vec<ObjectIntervalRun> {
         .into_iter()
         .map(|interval| {
             let properties = interval
-                .key_order
+                .key_order()
                 .iter()
                 .copied()
                 .map(|key| (key, interval.properties[&key]))

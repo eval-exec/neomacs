@@ -959,7 +959,7 @@ pub struct HashTableStorage {
     /// JIT code that answers a jump table inline guards on it
     /// ([`switch_plan::SWITCH_EPOCH_OFFSET`]).
     #[cfg(feature = "test-support")]
-    pub switch_epoch: u64,
+    pub(crate) switch_epoch: u64,
     #[cfg(not(feature = "test-support"))]
     pub(crate) switch_epoch: u64,
     /// Proof 2 sealed authority (design §2.1), appended AFTER `switch_epoch`
@@ -5926,5 +5926,16 @@ impl BytecodeInteractiveProbe {
             interactive,
             doc_form,
         }
+    }
+}
+
+/// VIS read row (lead #1052): the epoch field stays pub(crate) for the
+/// crate's own hash-table writers (tagged/mutate.rs) and its JIT offset
+/// constant; this copy getter is the cross-crate test route.
+#[cfg(any(test, feature = "test-support"))]
+impl HashTableStorage {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn switch_epoch(&self) -> u64 {
+        self.switch_epoch
     }
 }

@@ -1041,3 +1041,14 @@ pub fn set_signal_selected_resume_for_test(
 ) {
     signal.set_selected_resume_for_test(selected_resume);
 }
+
+/// Setter fence for `HashTableStorage::switch_epoch` (VIS read-arm series,
+/// lead #1052): the field stays pub(crate) for the crate's own writers
+/// (tagged/mutate.rs, the JIT offset) and the moved switch-plan oracle forces
+/// an epoch change through this fence instead of the field.
+pub fn set_hash_table_switch_epoch_for_test(
+    storage: &mut crate::value::HashTableStorage,
+    value: u64,
+) {
+    storage.switch_epoch = value;
+}

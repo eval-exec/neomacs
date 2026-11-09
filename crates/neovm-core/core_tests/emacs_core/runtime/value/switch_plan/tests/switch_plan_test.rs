@@ -632,7 +632,7 @@ fn every_table_mutation_raises_the_epoch() {
             .as_hash_table()
             .expect("a hash table")
             .data
-            .switch_epoch
+            .switch_epoch()
     };
     let last = std::cell::Cell::new(epoch());
     let raised = |what: &str| {
@@ -658,13 +658,16 @@ fn every_table_mutation_raises_the_epoch() {
     raised("a replacement by a fresh table");
     let mut copy = table.as_hash_table().expect("a hash table").clone();
     assert_eq!(
-        copy.data.switch_epoch,
+        copy.data.switch_epoch(),
         last.get(),
         "a copy carries the epoch"
     );
     assert!(table.replace_hash_table(copy.clone()));
     raised("a replacement by a copy of the same epoch");
-    copy.data.switch_epoch = last.get() + 1000;
+    neovm_value::test_support::authority::set_hash_table_switch_epoch_for_test(
+        &mut copy.data,
+        last.get() + 1000,
+    );
     assert!(table.replace_hash_table(copy));
     raised("a replacement by a copy of a higher epoch");
 
@@ -697,7 +700,7 @@ fn the_epoch_offset_reads_the_epoch() {
             .as_hash_table()
             .expect("a hash table")
             .data
-            .switch_epoch
+            .switch_epoch()
     );
     assert_eq!(read, 5);
 }

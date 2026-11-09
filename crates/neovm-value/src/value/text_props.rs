@@ -64,7 +64,7 @@ pub struct PropertyInterval {
     pub properties: HashMap<Value, Value>,
     /// Property keys in GNU plist order, newest first.
     #[cfg(feature = "test-support")]
-    pub key_order: Vec<Value>,
+    pub(crate) key_order: Vec<Value>,
     #[cfg(not(feature = "test-support"))]
     pub(crate) key_order: Vec<Value>,
 }
@@ -2663,7 +2663,7 @@ pub struct TextPropertyTable {
     /// Test-support spelling: same field, `pub` only in the test-support build
     /// (attribute macros cannot decorate struct fields; see B3 V1 note).
     #[cfg(any(test, feature = "test-support"))]
-    pub syntax_prop_ranges: std::sync::Mutex<(u64, Vec<(CharPos0, CharPos0)>)>,
+    syntax_prop_ranges: std::sync::Mutex<(u64, Vec<(CharPos0, CharPos0)>)>,
 }
 
 /// Absence of string text properties, with no Lisp values or table storage.
@@ -5771,5 +5771,20 @@ impl PropertyInterval {
             properties,
             key_order,
         }
+    }
+}
+
+/// VIS read row (lead #1052): the syntax-property cache tick, copied out so
+/// the consumer cannot take the Mutex guard and write through the table.  The
+/// test-support arm is private; the production arm keeps pub(crate) for this
+/// file's own code.
+#[cfg(any(test, feature = "test-support"))]
+impl TextPropertyTable {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn syntax_prop_ranges_tick(&self) -> u64 {
+        self.syntax_prop_ranges
+            .lock()
+            .map(|guard| guard.0)
+            .unwrap_or(0)
     }
 }

@@ -209,9 +209,9 @@ fn casing_insertion_preserves_interior_and_resolves_boundary_stickiness() {
         );
         let mut detached = cached.clone();
         detached.invalidate_casify_syntax_caches();
-        assert_eq!(detached.syntax_prop_ranges.lock().unwrap().0, 0);
+        assert_eq!(detached.syntax_prop_ranges_tick(), 0);
         insert(&mut detached, pos, &context);
-        assert_eq!(detached.syntax_prop_ranges.lock().unwrap().0, 0);
+        assert_eq!(detached.syntax_prop_ranges_tick(), 0);
         assert_eq!(
             detached.syntax_prop_free_run_end(CharPos0::ZERO, CharPos0::new(4)),
             CharPos0::new(syntax_start)

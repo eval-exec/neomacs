@@ -44,9 +44,9 @@ fn fixture() -> (Context, Value) {
 #[test]
 fn hash_user_guard_preserves_key_cache_epoch() {
     let (mut context, table) = fixture();
-    let epoch = table.as_hash_table().unwrap().data.switch_epoch;
+    let epoch = table.as_hash_table().unwrap().data.switch_epoch();
     with_user_test_guard(&mut context, table, |context| {
-        assert_eq!(table.as_hash_table().unwrap().data.switch_epoch, epoch);
+        assert_eq!(table.as_hash_table().unwrap().data.switch_epoch(), epoch);
         assert_eq!(
             context
                 .eval_str(r#"(gethash "stored" neovm-guard-table)"#)
@@ -55,7 +55,7 @@ fn hash_user_guard_preserves_key_cache_epoch() {
             Some(7)
         );
     });
-    assert_eq!(table.as_hash_table().unwrap().data.switch_epoch, epoch);
+    assert_eq!(table.as_hash_table().unwrap().data.switch_epoch(), epoch);
 }
 
 #[test]
