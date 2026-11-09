@@ -24,7 +24,7 @@ fn assert_owned_string(owner: TaggedValue) {
     let object = unsafe { &*owner.as_string_ptr().unwrap().cast::<StringObj>() };
     assert!(object.header.collection_observed());
     assert!(neovm_value::test_support::heap_types__LispString__has_owned_storage(&object.data));
-    assert_eq!(object.data.storage_capacity, object.data.owned_capacity());
+    assert_eq!(object.data.storage_capacity(), object.data.owned_capacity());
     assert!(object.data.owned_capacity() >= object.data.sbytes() + 1);
     assert!(object.data.has_trailing_nul());
 }
@@ -33,7 +33,7 @@ fn assert_owned_string(owner: TaggedValue) {
 fn string_owner_observation_preserves_plain_capacity_and_layout() {
     #[cfg(target_pointer_width = "64")]
     {
-        assert_eq!(std::mem::offset_of!(LispString, storage_capacity), 32);
+        assert_eq!(LispString::JIT_STORAGE_CAPACITY_OFFSET, 32);
         assert_eq!(std::mem::size_of::<LispString>(), 40);
     }
     let payload = LispString::from_unibyte(b"abc".to_vec());
@@ -41,7 +41,7 @@ fn string_owner_observation_preserves_plain_capacity_and_layout() {
     let (_heap, owner) = string_owner(payload);
     // SAFETY: the retained heap owns this live string, and no safepoint intervenes.
     let object = unsafe { &*owner.as_string_ptr().unwrap().cast::<StringObj>() };
-    assert_eq!(object.data.storage_capacity, capacity);
+    assert_eq!(object.data.storage_capacity(), capacity);
     assert!(!mark_collection_observed(owner.bits()));
     assert_owned_string(owner);
 }
@@ -94,7 +94,7 @@ fn borrowed_string_owner_observation_survives_materialization() {
     let alias = {
         // SAFETY: the heap owns this live string; borrowing does not run a safepoint.
         let object = unsafe { &*owner.as_string_ptr().unwrap().cast::<StringObj>() };
-        assert_eq!(object.data.storage_capacity, 0);
+        assert_eq!(object.data.storage_capacity(), 0);
         object
             .data
             .borrowed_alias()
@@ -140,7 +140,7 @@ fn string_shared_observers_publish_header_without_touching_capacity() {
         header: crate::tagged::header::GcHeader::new(crate::tagged::header::HeapObjectKind::String),
         data: LispString::from_unibyte(b"abc".to_vec()),
     });
-    let capacity = owner.data.storage_capacity;
+    let capacity = owner.data.storage_capacity();
     // Derive the published byte from the header's own state transition.
     // The real owner/metadata publisher is exercised by the mutator-local
     // tests above; scoped workers share only this header's atomic byte.
@@ -165,7 +165,7 @@ fn string_shared_observers_publish_header_without_touching_capacity() {
         }
     });
     assert!(owner.header.collection_observed());
-    assert_eq!(owner.data.storage_capacity, capacity);
+    assert_eq!(owner.data.storage_capacity(), capacity);
     assert_eq!(owner.data.as_bytes(), b"abc");
     clear_collection_observed_for_test(&owner.header);
 }

@@ -71,13 +71,13 @@ fn clear_string_retains_small_owned_payload_storage() {
         LispString::from_emacs_bytes("界".repeat(1000).into_bytes()),
     ] {
         let len = payload.sbytes();
-        let data = payload.data;
+        let data = payload.data();
         let capacity = payload.owned_capacity();
         let owner = heap.alloc_string(payload);
         for _ in 0..2 {
             assert!(builtin_clear_string(vec![owner]).unwrap().is_nil());
             let cleared = owner.as_lisp_string().unwrap();
-            assert_eq!(cleared.data, data);
+            assert_eq!(cleared.data(), data);
             assert_eq!(cleared.owned_capacity(), capacity);
             assert_eq!(cleared.schars(), len);
             assert_eq!(cleared.sbytes(), len);
@@ -117,7 +117,7 @@ fn clear_string_materializes_borrowed_bytes_without_changing_the_source() {
         LispString::from_rodata_unibyte(EMPTY),
     ] {
         let len = payload.sbytes();
-        let data = payload.data;
+        let data = payload.data();
         let alias = payload.borrowed_alias().unwrap();
         let owner = heap.alloc_string(payload);
 
@@ -128,7 +128,7 @@ fn clear_string_materializes_borrowed_bytes_without_changing_the_source() {
         assert_eq!(cleared.as_bytes(), vec![0; len]);
         assert_eq!(cleared.schars(), len);
         if len == 0 {
-            assert_eq!(cleared.data, data);
+            assert_eq!(cleared.data(), data);
             assert!(cleared.is_rodata());
         }
         assert!(!cleared.is_multibyte());
@@ -153,14 +153,14 @@ fn clear_string_keeps_immovable_owned_storage_and_demotes_shape() {
         let len = bytes.len();
         let mut payload = LispString::from_unibyte(bytes);
         payload.pin_immovable();
-        let before_data = payload.data;
+        let before_data = payload.data();
         let before_capacity = payload.owned_capacity();
         let owner = heap.alloc_string(payload);
         assert!(owner.as_lisp_string().unwrap().is_immovable());
         assert!(builtin_clear_string(vec![owner]).unwrap().is_nil());
         // SAFETY: this heap owns the live string, with no intervening safepoint.
         let object = unsafe { &*owner.as_string_ptr().unwrap().cast::<StringObj>() };
-        assert_eq!(object.data.data, before_data);
+        assert_eq!(object.data.data(), before_data);
         assert_eq!(object.data.owned_capacity(), before_capacity);
         assert_eq!(object.data.is_immovable(), len == 0);
         assert_eq!(object.data.as_bytes(), vec![0; len]);

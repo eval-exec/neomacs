@@ -97,9 +97,6 @@ fn note_string_bytes_changed() {
 pub struct LispString {
     /// Character count plus immutable count-proof metadata in the spare top bit.
     /// Counts fit isize::MAX; SCHARS and compiled consumers mask metadata.
-    #[cfg(feature = "test-support")]
-    pub size: usize,
-    #[cfg(not(feature = "test-support"))]
     size: usize,
     /// Byte count for multibyte strings, or GNU's negative unibyte marker.
     ///
@@ -126,17 +123,11 @@ pub struct LispString {
     intervals: AtomicPtr<TextPropertyTable>,
     /// Direct string byte pointer, like GNU's `Lisp_String.u.s.data`.
     ///
-    #[cfg(feature = "test-support")]
-    pub data: *const u8,
-    #[cfg(not(feature = "test-support"))]
     data: *const u8,
     /// Capacity of allocator-owned storage, including the trailing NUL. Zero
     /// denotes borrowed mapped/static bytes. The logical length comes from
     /// `size`/`size_byte`, so this one word is enough to reconstruct the Vec
     /// for mutation or drop without a separately allocated storage sidecar.
-    #[cfg(feature = "test-support")]
-    pub storage_capacity: usize,
-    #[cfg(not(feature = "test-support"))]
     storage_capacity: usize,
 }
 
@@ -2109,5 +2100,24 @@ pub(crate) mod __test_support {
         static_rodata: bool,
     ) -> LispString {
         unsafe { LispString::from_borrowed_bytes(ptr, len, size, size_byte, static_rodata) }
+    }
+}
+
+/// VIS read rows (lead #1052): the string layout fields stay private in
+/// every arm; these copy-only getters are the cross-crate test route.  The
+/// JIT layout constants remain the public offset surface.
+#[cfg(any(test, feature = "test-support"))]
+impl LispString {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn size(&self) -> usize {
+        self.size
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn data(&self) -> *const u8 {
+        self.data
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn storage_capacity(&self) -> usize {
+        self.storage_capacity
     }
 }

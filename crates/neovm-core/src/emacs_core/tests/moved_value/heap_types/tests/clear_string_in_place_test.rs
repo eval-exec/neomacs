@@ -9,13 +9,13 @@ fn clear_string_erases_owned_payload_before_release() {
         LispString::from_emacs_bytes("aé界".as_bytes().to_vec()),
         LispString::from_emacs_bytes("é".repeat(100_000).into_bytes()),
     ] {
-        let data = payload.data;
+        let data = payload.data();
         let capacity = payload.owned_capacity();
         let shape = (payload.schars(), payload.size_byte());
         payload.erase_owned_payload();
         // The payload remains owned and live while its erased preimage is
         // checked. Never inspect an allocation after the string releases it.
-        assert_eq!(payload.data, data);
+        assert_eq!(payload.data(), data);
         assert_eq!(payload.owned_capacity(), capacity);
         assert_eq!((payload.schars(), payload.size_byte()), shape);
         assert!(payload.as_bytes().iter().all(|byte| *byte == 0));
@@ -48,7 +48,7 @@ fn clear_string_replaces_supplied_count_proof_with_byte_count() {
             cleared.character_count_kind(),
             StringCharacterCountKind::Computed
         );
-        assert_eq!(cleared.size, len);
+        assert_eq!(cleared.size(), len);
         assert_eq!(cleared.schars(), len);
         assert_eq!(cleared.sbytes(), len);
         assert!(!cleared.is_multibyte());
