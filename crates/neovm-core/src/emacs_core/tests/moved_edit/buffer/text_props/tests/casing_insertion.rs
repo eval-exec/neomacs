@@ -1,5 +1,4 @@
 use super::*;
-use std::marker::PhantomData;
 
 use neovm_edit::emacs_core::textprop::{
     DirectCharProperties, StickinessProperty, TextPropertyControlVariable,
@@ -57,13 +56,17 @@ fn category_front_stickiness_respects_positioned_symbol_equality() {
                 category_front,
             )
             .unwrap();
-        let context = CasingPropertyContext {
-            obarray: ctx.obarray(),
-            controls: CasingPropertyControls {
+        let base_controls = controls(Value::NIL);
+        let context = neovm_edit::test_support::authority::casing_property_context_for_test(
+            ctx.obarray(),
+            neovm_edit::test_support::authority::casing_property_controls_for_test(
                 equality,
-                ..controls(Value::NIL)
-            },
-        };
+                base_controls.nonsticky,
+                base_controls.aliases,
+                base_controls.defaults,
+                base_controls.mutator,
+            ),
+        );
         let mut table = TextPropertyTable::new();
         set_run(
             &mut table,
@@ -118,13 +121,13 @@ fn category_front_stickiness_respects_positioned_symbol_equality() {
 }
 
 fn controls(nonsticky: Value) -> CasingPropertyControls {
-    CasingPropertyControls {
-        equality: CasingPropertyEquality::Exact,
+    neovm_edit::test_support::authority::casing_property_controls_for_test(
+        CasingPropertyEquality::Exact,
         nonsticky,
-        aliases: Value::NIL,
-        defaults: Value::NIL,
-        mutator: std::marker::PhantomData,
-    }
+        Value::NIL,
+        Value::NIL,
+        std::marker::PhantomData,
+    )
 }
 
 fn set_run(table: &mut TextPropertyTable, start: usize, end: usize, plist: Vec<(Value, Value)>) {

@@ -22,10 +22,10 @@ fn overlay_make_move_delete_matches_bruteforce_10000_operations() {
     let mut lists = [OverlayList::new(), OverlayList::new()];
     let mut model = vec![None; SLOTS];
     // Start multilevel with equal starts and empty records in both owners.
-    for (slot, entry) in model.iter_mut().enumerate() {
+    for (slot, slot_entry) in model.iter_mut().enumerate() {
         let start = slot % 16 * 4;
         let end = start + slot % 7;
-        *entry = Some(make_model_overlay(
+        *slot_entry = Some(make_model_overlay(
             &mut lists,
             slot,
             slot % 2,
@@ -41,12 +41,12 @@ fn overlay_make_move_delete_matches_bruteforce_10000_operations() {
         let occupied: Vec<_> = model
             .iter()
             .enumerate()
-            .filter_map(|(slot, entry)| entry.map(|_| slot))
+            .filter_map(|(slot, model_entry)| model_entry.map(|_| slot))
             .collect();
         let vacant: Vec<_> = model
             .iter()
             .enumerate()
-            .filter_map(|(slot, entry)| entry.is_none().then_some(slot))
+            .filter_map(|(slot, model_entry)| model_entry.is_none().then_some(slot))
             .collect();
         let mut operation = ((bits >> 32) % 4) as usize;
         // Periodic draining exercises empty/refill without counting a no-op
@@ -72,7 +72,7 @@ fn overlay_make_move_delete_matches_bruteforce_10000_operations() {
                 ));
             }
             1 => {
-                let mut entry = model[slot].unwrap();
+                let mut entry: ModelOverlay = model[slot].unwrap();
                 // Some true same-range moves, not just start-changing moves.
                 let (start, end) = if step % 7 == 0 {
                     (entry.start, entry.end)
@@ -86,7 +86,7 @@ fn overlay_make_move_delete_matches_bruteforce_10000_operations() {
                 model[slot] = Some(entry);
             }
             2 => {
-                let entry = model[slot].take().unwrap();
+                let entry: ModelOverlay = model[slot].take().unwrap();
                 assert!(
                     lists[entry.owner].delete_overlay(entry.value),
                     "delete: step {step}"
@@ -95,7 +95,7 @@ fn overlay_make_move_delete_matches_bruteforce_10000_operations() {
                 assert_eq!(overlay_start(&lists[entry.owner], entry.value), None);
             }
             3 => {
-                let mut entry = model[slot].unwrap();
+                let mut entry: ModelOverlay = model[slot].unwrap();
                 assert!(
                     lists[entry.owner].detach_overlay(entry.value),
                     "detach: step {step}"

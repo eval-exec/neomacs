@@ -60,3 +60,42 @@ pub fn reset_char_pos_to_emacs_byte_pos_call_count() {
 pub fn reset_local_var_alist_entry_probes() {
     crate::buffer::buffer::reset_local_var_alist_entry_probes();
 }
+
+/// Setter fence for `Buffer::undo_state` (peer #816 write arm): the moved
+/// indirect-buffer dump/restore test replaces the whole undo state. The
+/// field stays a read surface; the write routes through this fence.
+pub fn set_buffer_undo_state_for_test(
+    buffer: &mut crate::buffer::buffer::Buffer,
+    state: crate::buffer::SharedUndoState,
+) {
+    buffer.undo_state = state;
+}
+
+/// Constructor fence for `CasingPropertyControls` (peer #816 write arm):
+/// every field explicit, including the private `mutator` marker. The moved
+/// casing tests build the controls with literals; this fence is the only test
+/// construction path.
+pub fn casing_property_controls_for_test(
+    equality: crate::buffer::text_props::casing_insertion::CasingPropertyEquality,
+    nonsticky: neovm_value::value::Value,
+    aliases: neovm_value::value::Value,
+    defaults: neovm_value::value::Value,
+    mutator: std::marker::PhantomData<*const ()>,
+) -> crate::buffer::text_props::CasingPropertyControls {
+    crate::buffer::text_props::CasingPropertyControls {
+        equality,
+        nonsticky,
+        aliases,
+        defaults,
+        mutator,
+    }
+}
+
+/// Constructor fence for `CasingPropertyContext` (peer #816 write arm):
+/// every field explicit; the moved casing tests' literals switch to it.
+pub fn casing_property_context_for_test<'a>(
+    obarray: &'a neovm_value::symbol::Obarray,
+    controls: crate::buffer::text_props::CasingPropertyControls,
+) -> crate::buffer::text_props::casing_insertion::CasingPropertyContext<'a> {
+    crate::buffer::text_props::casing_insertion::CasingPropertyContext { obarray, controls }
+}

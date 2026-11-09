@@ -456,8 +456,10 @@ fn from_dump_restores_indirect_buffer_shared_text_state() {
             independent_indirect.dump_text_backend_kind(),
         );
         indirect.replace_text_props_for_test(independent_indirect.text_props_snapshot());
-        indirect.undo_state =
-            SharedUndoState::from_parts(independent_indirect.get_undo_list(), false, false);
+        neovm_edit::test_support::authority::set_buffer_undo_state_for_test(
+            indirect,
+            SharedUndoState::from_parts(independent_indirect.get_undo_list(), false, false),
+        );
 
         let restored = BufferManager::from_dump(
             dumped,
@@ -631,7 +633,7 @@ fn cloned_indirect_buffers_copy_overlay_objects_and_indexes() {
     });
     mgr.get_mut(base_id)
         .expect("base buffer")
-        .overlays
+        .overlays_mut()
         .insert_overlay(original);
 
     let indirect_id = mgr
@@ -661,7 +663,7 @@ fn cloned_indirect_buffers_copy_overlay_objects_and_indexes() {
 
     mgr.get_mut(indirect_id)
         .unwrap()
-        .overlays
+        .overlays_mut()
         .move_overlay_to_emacs_byte_range(copied, EmacsByteRange::from_usize(2, 5));
     assert_eq!(
         overlay_start_for_test(mgr.get(base_id).unwrap(), original),
@@ -695,7 +697,7 @@ fn indirect_buffer_overlays_track_shared_edits() {
         });
         mgr.get_mut(indirect_id)
             .expect("indirect buffer")
-            .overlays
+            .overlays_mut()
             .insert_overlay(overlay);
 
         let _ = mgr.goto_buffer_emacs_byte_pos(base_id, neovm_edit::buffer::EmacsBytePos::new(0));
@@ -792,7 +794,7 @@ fn implemented_text_backends_match_buffer_swap_text_side_effects() {
             });
             mgr.get_mut(left_id)
                 .expect("left buffer")
-                .overlays
+                .overlays_mut()
                 .insert_overlay(left_overlay);
 
             let right_overlay_start = buffer_byte_pos_for_char(&mgr, right_id, 2);
@@ -808,7 +810,7 @@ fn implemented_text_backends_match_buffer_swap_text_side_effects() {
             });
             mgr.get_mut(right_id)
                 .expect("right buffer")
-                .overlays
+                .overlays_mut()
                 .insert_overlay(right_overlay);
 
             let left_point = buffer_byte_pos_for_char(&mgr, left_id, 3);
@@ -3123,7 +3125,7 @@ fn automatic_composition_memo_recomputes_when_any_input_it_reads_changes() {
 
     // Syntax table changed with no edit: the regexes consult it, so rescan.
     // Keying on the text ticks alone would go stale here.
-    buf.slots[BUFFER_SLOT_SYNTAX_TABLE.index()] = Value::string("a different table");
+    buf.slots_mut()[BUFFER_SLOT_SYNTAX_TABLE.index()] = Value::string("a different table");
     let _ = buf.automatic_composition_spans(table);
     assert!(
         scans() > after_edit,
@@ -3819,7 +3821,7 @@ fn run_shared_insert_policy_script(kind: BufferTextBackendKind) -> SharedInsertP
     });
     mgr.get_mut(indirect_id)
         .expect("indirect buffer")
-        .overlays
+        .overlays_mut()
         .insert_overlay(indirect_overlay);
 
     mgr.set_buffer_mark_emacs_byte_pos(
@@ -3924,7 +3926,7 @@ fn run_backend_migration_script(
         front_advance: false,
         rear_advance: true,
     });
-    buf.overlays.insert_overlay(overlay);
+    buf.overlays_mut().insert_overlay(overlay);
 
     let cached_byte = byte_pos_for_char(&buf, 4);
     assert_eq!(char_pos_for_byte(&buf, cached_byte), 4);
