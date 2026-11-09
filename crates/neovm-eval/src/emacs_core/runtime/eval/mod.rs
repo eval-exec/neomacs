@@ -7444,6 +7444,7 @@ mod pdump_reconstruct;
 mod macroexpand;
 
 mod admission;
+pub(crate) use admission::AdmissionError;
 mod global_state;
 mod green;
 

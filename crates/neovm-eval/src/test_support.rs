@@ -1596,6 +1596,217 @@ pub mod authority {
             Self(address)
         }
     }
+
+    /// Signed knob fences (peer V5, #274/#276/#278). Each delegates to the
+    /// `pub(crate)` original. `None` on an `Option` setter restores that
+    /// thread's process knob. A sticky setter (no `None`) relies on nextest's
+    /// process-per-test. Eval's own unit tests keep calling the originals.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[allow(private_interfaces)]
+    pub fn force_direct_call_for_test(on: Option<bool>) {
+        crate::emacs_core::jit::compile::force_direct_call_for_test(on);
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[allow(private_interfaces)]
+    pub fn force_direct_memory_for_test(on: Option<bool>) {
+        crate::emacs_core::jit::compile::force_direct_memory_for_test(on);
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[allow(private_interfaces)]
+    pub fn force_direct_sites_for_test(
+        mode: Option<crate::emacs_core::jit::compile::DirectSitesMode>,
+    ) {
+        crate::emacs_core::jit::compile::force_direct_sites_for_test(mode);
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[allow(private_interfaces)]
+    pub fn force_direct_shapes_for_test(
+        knob: Option<crate::emacs_core::jit::compile::DirectShapesKnob>,
+    ) {
+        crate::emacs_core::jit::compile::force_direct_shapes_for_test(knob);
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[allow(private_interfaces)]
+    pub fn force_direct_self_kernel_for_test(on: Option<bool>) {
+        crate::emacs_core::jit::compile::force_direct_self_kernel_for_test(on);
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[allow(private_interfaces)]
+    pub fn force_direct_self_heat_for_test(
+        mode: Option<crate::emacs_core::jit::compile::direct_call::DirectSelfHeat>,
+    ) {
+        crate::emacs_core::jit::compile::force_direct_self_heat_for_test(mode);
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[allow(private_interfaces)]
+    pub fn force_register_abi_for_test(on: Option<bool>) {
+        crate::emacs_core::jit::compile::force_register_abi_for_test(on);
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[allow(private_interfaces)]
+    pub fn force_call_census_for_test(on: Option<bool>) {
+        crate::emacs_core::jit::compile::force_call_census_for_test(on);
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[allow(private_interfaces)]
+    pub fn force_inline2_for_test(mode: Option<crate::emacs_core::jit::compile::Inline2Mode>) {
+        crate::emacs_core::jit::compile::force_inline2_for_test(mode);
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[allow(private_interfaces)]
+    pub fn force_inline_switch_for_test(on: Option<bool>) {
+        crate::emacs_core::jit::compile::force_inline_switch_for_test(on);
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[allow(private_interfaces)]
+    pub fn force_inline_vars_for_test(
+        knob: Option<crate::emacs_core::jit::compile::InlineVarsKnob>,
+    ) {
+        crate::emacs_core::jit::compile::force_inline_vars_for_test(knob);
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[allow(private_interfaces)]
+    pub fn force_switch_hoist_for_test(on: Option<bool>) {
+        crate::emacs_core::jit::compile::force_switch_hoist_for_test(on);
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[allow(private_interfaces)]
+    pub fn force_mir_reach_for_test(reach: Option<crate::emacs_core::jit::compile::MirReach>) {
+        crate::emacs_core::jit::compile::force_mir_reach_for_test(reach);
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[allow(private_interfaces)]
+    pub fn force_tail_unrooted_for_test(on: Option<bool>) {
+        crate::emacs_core::jit::compile::force_tail_unrooted_for_test(on);
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[allow(private_interfaces)]
+    pub fn force_opt_passes_for_test(passes: Option<crate::emacs_core::jit::compile::OptPasses>) {
+        crate::emacs_core::jit::compile::force_opt_passes_for_test(passes);
+    }
+
+    /// Sticky TLS store of the every-guard-fails harness. `None` is not a
+    /// value of this setter; isolation relies on nextest's process-per-test.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn force_deopt_for_test(on: bool) {
+        crate::emacs_core::jit::compile::force_deopt_for_test(on);
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[allow(private_interfaces)]
+    pub fn force_mode_for_test(mode: Option<crate::emacs_core::jit::BgMode>) {
+        crate::emacs_core::jit::bg::force_mode_for_test(mode);
+    }
+
+    /// Process-wide atomic stress knob. `None` restores the environment value.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn force_stress_for_test(on: Option<bool>) {
+        crate::emacs_core::jit::bg::force_stress_for_test(on);
+    }
+
+    /// Thread-local inline-instruction cap. `None` restores the production knob.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn force_inline_insts_for_test(limit: Option<u64>) {
+        crate::emacs_core::jit::bg::force_inline_insts_for_test(limit);
+    }
+
+    /// Effective background-compile mode name. Read only.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn bg_mode_name_for_test() -> &'static str {
+        crate::emacs_core::jit::bg::bg_mode_name_for_test()
+    }
+
+    /// Effective inline-instruction threshold. Read only.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn in_line_insts_for_test() -> u64 {
+        crate::emacs_core::jit::bg::in_line_insts_for_test()
+    }
+
+    /// Runtime-field write of this function's heat. Sticky. Isolation relies
+    /// on nextest's process-per-test.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn set_heat_for_test(function: &crate::emacs_core::bytecode::ByteCodeFunction, heat: u32) {
+        use crate::emacs_core::jit::RuntimeStateTieringExt as _;
+        crate::emacs_core::bytecode::ByteCodeFunctionExt::jit_runtime(function)
+            .set_heat_for_test(heat);
+    }
+
+    /// Runtime-field write that stores `HOT_THRESHOLD`. Sticky. Isolation
+    /// relies on nextest's process-per-test.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn set_hot_for_test(function: &crate::emacs_core::bytecode::ByteCodeFunction) {
+        use crate::emacs_core::jit::RuntimeStateTieringExt as _;
+        crate::emacs_core::bytecode::ByteCodeFunctionExt::jit_runtime(function).set_hot_for_test();
+    }
+
+    /// Drop-scope restore of the per-thread opt-mode override.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[allow(private_interfaces)]
+    #[must_use = "the backend override ends when the returned guard is dropped"]
+    pub fn opt_mode_scope_for_test(mode: crate::emacs_core::jit::compile::OptMode) -> impl Drop {
+        crate::emacs_core::jit::compile::opt_mode_scope_for_test(mode)
+    }
+
+    /// Thread lifecycle: wait until no background job is queued or running.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn quiesce_for_test(timeout: std::time::Duration) -> bool {
+        crate::emacs_core::jit::bg::quiesce_for_test(timeout)
+    }
+
+    /// Drop-scope restore: workers take no jobs until the guard drops.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[allow(private_interfaces)]
+    #[must_use = "workers stay held until the guard drops"]
+    pub fn hold_workers_for_test() -> crate::emacs_core::jit::bg::WorkerHold {
+        crate::emacs_core::jit::bg::hold_workers_for_test()
+    }
+
+    /// Process-wide static reset of the call-census counters. The leaf is
+    /// renamed so it does not collide with `aot_reset_for_test`.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn call_census_reset_for_test() {
+        crate::emacs_core::jit::compile::call_census::reset_for_test();
+    }
+
+    /// Sticky TLS store of the OSR override. Isolation relies on nextest's
+    /// process-per-test. The original in `jit` stays `pub(crate)`.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn force_osr_for_test(on: bool) {
+        crate::emacs_core::jit::force_osr_for_test(on);
+    }
+
+    /// Runtime-field write: fix a fresh Context to Green threading.
+    ///
+    /// Delegates to `Context::set_green_threading_mode_at_construction_for_test`.
+    /// `Context::new` is already Sim, and no named test asks for a Sim fence,
+    /// so this fence does not add one.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_threading_mode_at_construction(ctx: &mut Context) {
+        ctx.set_green_threading_mode_at_construction_for_test();
+    }
+
+    /// Thread admission. Delegates to `Context::admit_threads` and returns
+    /// that function's `Result`, including every refusal. No error path is
+    /// skipped.
+    #[cfg(any(test, feature = "test-support"))]
+    #[allow(private_interfaces)]
+    pub fn admit_threads(ctx: &mut Context) -> Result<(), crate::emacs_core::eval::AdmissionError> {
+        ctx.admit_threads()
+    }
 }
 
 /// Re-homed jit switch_dispatch BOOT-FULL batch: copied inline-switch census.

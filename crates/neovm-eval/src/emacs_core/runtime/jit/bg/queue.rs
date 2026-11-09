@@ -107,7 +107,7 @@ struct PoolState {
     /// A worker could not be started: every later compile runs in line.
     spawn_failed: bool,
     /// Test gate: workers take no job while it is set.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     held: bool,
 }
 
@@ -146,7 +146,7 @@ pub(crate) fn pool() -> &'static Pool {
             running: 0,
             workers: 0,
             spawn_failed: false,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             held: false,
         }),
         work: Condvar::new(),
@@ -219,9 +219,9 @@ impl Pool {
     pub fn pop(&self) -> BackendJob {
         let mut state = self.lock();
         loop {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             let held = state.held;
-            #[cfg(not(test))]
+            #[cfg(not(any(test, feature = "test-support")))]
             let held = false;
             if !held && let Some(job) = state.take_next(u64::MAX) {
                 return job;
@@ -245,7 +245,7 @@ impl Pool {
     #[doc(hidden)]
     pub fn try_pop_within(&self, insts: u64) -> Option<BackendJob> {
         let mut state = self.lock();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if state.held {
             return None;
         }
@@ -326,9 +326,9 @@ impl Pool {
         let deadline = Instant::now() + timeout;
         let mut state = self.lock();
         loop {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             let held = state.held;
-            #[cfg(not(test))]
+            #[cfg(not(any(test, feature = "test-support")))]
             let held = false;
             if state.running == 0 && (state.jobs.is_empty() || held) {
                 return state.jobs.is_empty();
@@ -346,7 +346,7 @@ impl Pool {
     }
 
     /// Stop or restart the workers taking jobs (tests).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn set_held(&self, held: bool) {
         self.lock().held = held;

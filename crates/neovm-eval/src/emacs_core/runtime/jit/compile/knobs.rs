@@ -150,7 +150,7 @@ impl Inline2Mode {
 /// Compile-time mode; the default preserves the original MIR-first front
 /// and all original generated CLIF. It never changes a running leaf.
 pub(crate) fn jit_inline2_mode() -> Inline2Mode {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(mode) = INLINE2_TEST_OVERRIDE.with(|mode| mode.get()) {
         return mode;
     }
@@ -158,13 +158,13 @@ pub(crate) fn jit_inline2_mode() -> Inline2Mode {
     *MODE.get_or_init(|| Inline2Mode::parse(std::env::var("NEOVM_JIT_INLINE2").ok().as_deref()))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Scalar configuration override, never mutator Lisp state.
     static INLINE2_TEST_OVERRIDE: std::cell::Cell<Option<Inline2Mode>> = const { std::cell::Cell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_inline2_for_test(mode: Option<Inline2Mode>) {
     INLINE2_TEST_OVERRIDE.with(|current| current.set(mode));
 }
@@ -482,14 +482,14 @@ pub(crate) fn jit_inline_alloc_on() -> bool {
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static INLINE_SWITCH_TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
 /// Force inline jump-table dispatch on/off for compiles on the current
 /// thread (tests only); `None` returns to the environment's.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_inline_switch_for_test(on: Option<bool>) {
     INLINE_SWITCH_TEST_OVERRIDE.with(|c| c.set(on));
 }
@@ -502,7 +502,7 @@ pub(crate) fn force_inline_switch_for_test(on: Option<bool>) {
 /// the single-build A/B. Read at compile time only.
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn jit_inline_switch_on() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(on) = INLINE_SWITCH_TEST_OVERRIDE.with(|c| c.get()) {
         return on;
     }
@@ -969,21 +969,21 @@ impl MirReach {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static MIR_REACH_TEST_OVERRIDE: std::cell::Cell<Option<MirReach>> = const { std::cell::Cell::new(None) };
 }
 
 /// Force the MIR reach bits for compiles on the current thread (tests
 /// only); `None` returns to the environment's.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_mir_reach_for_test(reach: Option<MirReach>) {
     MIR_REACH_TEST_OVERRIDE.with(|c| c.set(reach));
 }
 
 /// The `NEOVM_JIT_MIR_REACH` bits tier-up compiles use (read once).
 pub(crate) fn jit_mir_reach() -> MirReach {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(reach) = MIR_REACH_TEST_OVERRIDE.with(|c| c.get()) {
         return reach;
     }
@@ -992,14 +992,14 @@ pub(crate) fn jit_mir_reach() -> MirReach {
     *REACH.get_or_init(|| MirReach::parse(std::env::var("NEOVM_JIT_MIR_REACH").ok().as_deref()))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static TAIL_UNROOTED_TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
 /// Force tail-call residual elision on/off for compiles on the current
 /// thread (tests only); `None` returns to the environment's.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_tail_unrooted_for_test(on: Option<bool>) {
     TAIL_UNROOTED_TEST_OVERRIDE.with(|c| c.set(on));
 }
@@ -1010,7 +1010,7 @@ pub(crate) fn force_tail_unrooted_for_test(on: Option<bool>) {
 /// lowering without the elision: the single-build A/B. Read at compile time
 /// only.
 pub(crate) fn jit_tail_unrooted_on() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(on) = TAIL_UNROOTED_TEST_OVERRIDE.with(|c| c.get()) {
         return on;
     }
@@ -1105,7 +1105,7 @@ pub(crate) fn jit_cold_exits_on() -> bool {
     jit_cold_exits() != ColdExitsMode::Off
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static REG_ABI_TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
     static DIRECT_CALL_TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
@@ -1115,21 +1115,21 @@ std::thread_local! {
 
 /// Force the register leaf ABI on/off for compiles on the current thread
 /// (tests only); `None` returns to the environment's.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_register_abi_for_test(on: Option<bool>) {
     REG_ABI_TEST_OVERRIDE.with(|c| c.set(on));
 }
 
 /// Force direct calls on/off for compiles on the current thread (tests
 /// only); `None` returns to the environment's.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_direct_call_for_test(on: Option<bool>) {
     DIRECT_CALL_TEST_OVERRIDE.with(|c| c.set(on));
 }
 
 /// Force memory-ABI direct calls on/off on the current compiler thread
 /// (tests only); `None` returns to the environment's.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_direct_memory_for_test(on: Option<bool>) {
     DIRECT_MEMORY_TEST_OVERRIDE.with(|c| c.set(on));
 }
@@ -1141,7 +1141,7 @@ pub(crate) fn force_direct_memory_for_test(on: Option<bool>) {
 /// Threading: immutable process configuration, read at compile time and
 /// slot arming; the test override stores only a compiler-thread boolean.
 pub(crate) fn jit_direct_memory_on() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(on) = DIRECT_MEMORY_TEST_OVERRIDE.with(|c| c.get()) {
         return on;
     }
@@ -1168,7 +1168,7 @@ fn knob_on(name: &str) -> bool {
 /// CLIF-identical to the lowering before the register ABI existed: the
 /// single-build A/B. Read at compile time only.
 pub(crate) fn jit_register_abi_on() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(on) = REG_ABI_TEST_OVERRIDE.with(|c| c.get()) {
         return on
             || (jit_direct_call_on()
@@ -1194,7 +1194,7 @@ pub(crate) fn jit_register_abi_on() -> bool {
 /// before direct calls, for the single-build A/B. Read when a spec slot is
 /// armed (`Vm::call_armed_callee_native`) and at compile time (emission).
 pub(crate) fn jit_direct_call_on() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(on) = DIRECT_CALL_TEST_OVERRIDE.with(|c| c.get()) {
         return on;
     }
@@ -1216,14 +1216,14 @@ pub(crate) fn jit_direct_profile_on() -> bool {
     *ON.get_or_init(|| knob_on("NEOVM_JIT_DIRECT_PROFILE"))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     // Compiler configuration only; no Lisp values or mutator runtime state.
     static DIRECT_SELF_HEAT_TEST_OVERRIDE: std::cell::Cell<Option<super::direct_call::DirectSelfHeat>> = const { std::cell::Cell::new(None) };
     static DIRECT_SELF_KERNEL_TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_direct_self_kernel_for_test(on: Option<bool>) {
     DIRECT_SELF_KERNEL_TEST_OVERRIDE.with(|current| current.set(on));
 }
@@ -1234,7 +1234,7 @@ pub(crate) fn force_direct_self_kernel_for_test(on: Option<bool>) {
 /// self admission. Threading: immutable process configuration, compiler-only;
 /// the test override is a scalar and never holds Lisp or mutator state.
 pub(crate) fn jit_direct_self_kernel_on() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(on) = DIRECT_SELF_KERNEL_TEST_OVERRIDE.with(core::cell::Cell::get) {
         return on;
     }
@@ -1249,7 +1249,7 @@ pub(crate) fn jit_direct_self_kernel_on() -> bool {
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_direct_self_heat_for_test(mode: Option<super::direct_call::DirectSelfHeat>) {
     DIRECT_SELF_HEAT_TEST_OVERRIDE.with(|current| current.set(mode));
 }
@@ -1258,7 +1258,7 @@ pub(crate) fn force_direct_self_heat_for_test(mode: Option<super::direct_call::D
 /// an implicit register entry. Default off retains the original policy.
 /// Threading: immutable process configuration, read only by the compiler.
 pub(crate) fn jit_direct_self_heat() -> super::direct_call::DirectSelfHeat {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(mode) = DIRECT_SELF_HEAT_TEST_OVERRIDE.with(core::cell::Cell::get) {
         return mode;
     }
@@ -1343,7 +1343,7 @@ impl InlineVarsKnob {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static INLINE_VARS_TEST_OVERRIDE: std::cell::Cell<Option<InlineVarsKnob>> =
         const { std::cell::Cell::new(None) };
@@ -1351,14 +1351,14 @@ std::thread_local! {
 
 /// Force the inline-variables knob for compiles on the current thread (tests
 /// only); `None` returns to the environment's.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_inline_vars_for_test(knob: Option<InlineVarsKnob>) {
     INLINE_VARS_TEST_OVERRIDE.with(|c| c.set(knob));
 }
 
 /// The `NEOVM_JIT_INLINE_VARS` setting compiles use (read once).
 pub(crate) fn jit_inline_vars() -> InlineVarsKnob {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(knob) = INLINE_VARS_TEST_OVERRIDE.with(|c| c.get()) {
         return knob;
     }
@@ -1598,7 +1598,7 @@ pub(crate) enum DirectSitesMode {
     SelfOnly,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static DIRECT_SITES_TEST_OVERRIDE: std::cell::Cell<Option<DirectSitesMode>> =
         const { std::cell::Cell::new(None) };
@@ -1606,14 +1606,14 @@ std::thread_local! {
 
 /// Force the direct-sites mode for compiles on the current thread (tests
 /// only); `None` returns to the environment's.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_direct_sites_for_test(mode: Option<DirectSitesMode>) {
     DIRECT_SITES_TEST_OVERRIDE.with(|c| c.set(mode));
 }
 
 /// `NEOVM_JIT_DIRECT_SITES` (see [`DirectSitesMode`]). Read at compile time.
 pub(crate) fn jit_direct_sites() -> DirectSitesMode {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(mode) = DIRECT_SITES_TEST_OVERRIDE.with(|c| c.get()) {
         return mode;
     }
@@ -1697,7 +1697,7 @@ impl DirectShapesKnob {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static DIRECT_SHAPES_TEST_OVERRIDE: std::cell::Cell<Option<DirectShapesKnob>> =
         const { std::cell::Cell::new(None) };
@@ -1705,7 +1705,7 @@ std::thread_local! {
 
 /// Force the direct-shapes knob for compiles on the current thread (tests
 /// only); `None` returns to the environment's.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_direct_shapes_for_test(knob: Option<DirectShapesKnob>) {
     DIRECT_SHAPES_TEST_OVERRIDE.with(|c| c.set(knob));
 }
@@ -1717,7 +1717,7 @@ pub(crate) fn jit_direct_shapes() -> DirectShapesKnob {
     if !jit_direct_call_on() {
         return DirectShapesKnob::OFF;
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(knob) = DIRECT_SHAPES_TEST_OVERRIDE.with(|c| c.get()) {
         return knob;
     }
@@ -1728,7 +1728,7 @@ pub(crate) fn jit_direct_shapes() -> DirectShapesKnob {
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static CALL_CENSUS_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
         const { std::cell::Cell::new(None) };
@@ -1736,7 +1736,7 @@ std::thread_local! {
 
 /// Force the call census on/off for compiles on the current thread (tests
 /// only); `None` returns to the environment's.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_call_census_for_test(on: Option<bool>) {
     CALL_CENSUS_TEST_OVERRIDE.with(|c| c.set(on));
 }
@@ -1746,7 +1746,7 @@ pub(crate) fn force_call_census_for_test(on: Option<bool>) {
 /// shim. Default off; off, the lowering is CLIF-identical. Read at compile
 /// time only.
 pub(crate) fn jit_call_census_on() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(on) = CALL_CENSUS_TEST_OVERRIDE.with(|c| c.get()) {
         return on;
     }
@@ -1951,7 +1951,7 @@ impl OptPasses {
 }
 
 pub(crate) fn jit_opt_passes() -> OptPasses {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(passes) = OPT_PASSES_TEST_OVERRIDE.with(|v| v.get()) {
         return passes;
     }
@@ -1969,15 +1969,18 @@ pub(crate) fn jit_opt_passes() -> OptPasses {
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Compiler configuration only, never mutator or Lisp state.
     static OPT_PASSES_TEST_OVERRIDE: std::cell::Cell<Option<OptPasses>> = const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+thread_local! {
     /// Test-thread work schedule only, never Lisp or mutator state.
     static OPT_FAST_TEST_OVERRIDE: std::cell::Cell<Option<FastWorkSchedule>> = const { std::cell::Cell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_opt_passes_for_test(passes: Option<OptPasses>) {
     OPT_PASSES_TEST_OVERRIDE.with(|v| v.set(passes));
 }
@@ -2339,7 +2342,7 @@ pub(crate) fn force_opt_osr_entry_for_test(on: Option<bool>) {
 /// Lisp runtime state. Graduated on together with
 /// `NEOVM_JIT_CODE_PLACEMENT=switch64`.
 pub(crate) fn jit_switch_hoist_on() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(on) = SWITCH_HOIST_TEST_OVERRIDE.with(std::cell::Cell::get) {
         return on;
     }
@@ -2351,13 +2354,13 @@ pub(crate) fn jit_switch_hoist_on() -> bool {
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     // Scalar compiler configuration only; never Lisp state.
     static SWITCH_HOIST_TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_switch_hoist_for_test(on: Option<bool>) {
     SWITCH_HOIST_TEST_OVERRIDE.with(|v| v.set(on));
 }

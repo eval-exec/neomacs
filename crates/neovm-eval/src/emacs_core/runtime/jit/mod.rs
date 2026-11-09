@@ -867,7 +867,7 @@ pub fn call_feedback_collection_enabled() -> bool {
 /// Handler/save operations and nonlexical functions remain ineligible.
 /// Off ⇒ the back-edge stays a pure interpreter loop, zero added cost.
 pub fn jit_osr_on() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(o) = OSR_TEST_OVERRIDE.with(|c| c.get()) {
         return o;
     }
@@ -880,14 +880,18 @@ pub fn jit_osr_on() -> bool {
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static OSR_TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
-/// Force OSR on/off on the current thread (tests only), overriding the env gate.
-#[cfg(test)]
-pub fn force_osr_for_test(on: bool) {
+/// Force OSR on/off on the current thread, overriding the env gate.
+///
+/// Sticky thread-local store. A test that needs the process knob again passes
+/// the other boolean; there is no `None` restore. Cross-crate callers use the
+/// authority fence. Isolation relies on nextest's process-per-test.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn force_osr_for_test(on: bool) {
     OSR_TEST_OVERRIDE.with(|c| c.set(Some(on)));
 }
 
@@ -1098,7 +1102,7 @@ pub(crate) trait RuntimeStateTieringExt {
     #[cfg(any(test, feature = "test-support"))]
     fn set_hot_for_test(&self);
     /// Test-only: set the heat outright (re-tier tests).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn set_heat_for_test(&self, heat: u32);
     /// Test-only: pin this function to the Tier-0 interpreter forever (the
     /// forced-cold half of the benchmark A/B; see `force_interpret`).
@@ -1625,7 +1629,7 @@ impl RuntimeStateTieringExt for RuntimeState {
     }
 
     /// Test-only: set the heat outright (re-tier tests).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn set_heat_for_test(&self, heat: u32) {
         self.heat_ref().store(heat, Ordering::Relaxed);
     }

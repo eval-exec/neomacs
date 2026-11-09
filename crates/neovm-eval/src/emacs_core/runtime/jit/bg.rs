@@ -144,9 +144,13 @@ pub(crate) fn mode() -> BgMode {
     static MODE: OnceLock<BgMode> = OnceLock::new();
     *MODE.get_or_init(|| {
         let value = std::env::var("NEOVM_JIT_BG").ok();
-        // Unit tests assert what a tier-up installed by the call that
-        // triggered it, so unset they take the deterministic split
-        // (`sync`); `NEOVM_JIT_BG=on` runs them against the worker.
+        // Eval's own unit tests (`cfg(test)`) assert what a tier-up installed
+        // by the call that triggered it, so unset they take the deterministic
+        // split (`sync`); `NEOVM_JIT_BG=on` runs them against the worker.
+        // This injection stays `cfg(test)`. Core tests compile this crate with
+        // `test-support` and without `cfg(test)`, so an unarmed read there
+        // takes `parse_mode` (the production default). Widening the injection
+        // onto `test-support` would hide that default.
         #[cfg(test)]
         let value = value.or_else(|| Some("sync".to_owned()));
         let mode = parse_mode(value.as_deref());
@@ -1175,14 +1179,16 @@ fn backend_in_line(class: JobClass, insts: u64) -> bool {
 /// `NEOVM_JIT_BG_INLINE_INSTS`: the largest function (CLIF instructions)
 /// whose OSR, first-sight or entry backend runs in line under
 /// `NEOVM_JIT_BG=on` (default [`INLINE_INSTS`]; `0` defers every backend).
-/// Unit tests read it as `0` unless they pin it: a test that forces the
-/// worker exercises the deferred route whatever its function's size.
+/// An unarmed test read returns that production knob. A test that needs the
+/// deferred route pins `Some(0)`.
 fn in_line_insts() -> u64 {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     {
-        INLINE_INSTS_TEST.with(Cell::get).unwrap_or(0)
+        INLINE_INSTS_TEST
+            .with(Cell::get)
+            .unwrap_or_else(in_line_insts_knob)
     }
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "test-support")))]
     {
         in_line_insts_knob()
     }
@@ -1321,16 +1327,16 @@ pub(crate) fn quiesce_for_test(timeout: std::time::Duration) -> bool {
 
 /// Keep the workers from taking jobs until the guard drops (tests): jobs
 /// queue up, so a test can act while they are known not to have started.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn hold_workers_for_test() -> WorkerHold {
     queue::pool().set_held(true);
     WorkerHold(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) struct WorkerHold(());
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for WorkerHold {
     fn drop(&mut self) {
         queue::pool().set_held(false);
@@ -1466,7 +1472,7 @@ pub(crate) fn stress_enabled() -> bool {
 static STRESS_TEST: AtomicU8 = AtomicU8::new(0);
 
 /// Force the stress soak on or off for the whole process (tests).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_stress_for_test(on: Option<bool>) {
     STRESS_TEST.store(
         match on {
@@ -1532,10 +1538,23 @@ pub(crate) fn take_served_for_test() -> Vec<(JobClass, u64, bool)> {
 }
 
 /// Pin [`in_line_insts`] for this thread (tests only); `None` returns to
-/// the tests' `0`.
-#[cfg(test)]
+/// the production knob ([`in_line_insts_knob`], default [`INLINE_INSTS`]).
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_inline_insts_for_test(limit: Option<u64>) {
     INLINE_INSTS_TEST.with(|c| c.set(limit));
+}
+
+/// Effective [`mode`] name (`legacy`, `sync`, or `on`). Tests only.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn bg_mode_name_for_test() -> &'static str {
+    let name: &'static str = mode().into();
+    name
+}
+
+/// Effective [`in_line_insts`]. An unarmed thread reads the production knob.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn in_line_insts_for_test() -> u64 {
+    in_line_insts()
 }
 
 /// Cap the queue at `cap` jobs for pushes and admissions from this thread
@@ -1574,7 +1593,7 @@ pub(crate) fn publish_held_for_test() -> usize {
 /// to the environment's. A forced mode also pins `NEOVM_JIT_BG_STRESS` off
 /// (unless a test forced it itself), so a test's installs happen where it
 /// expects them whatever soak the environment runs.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_mode_for_test(mode: Option<BgMode>) {
     MODE_TEST_OVERRIDE.with(|c| c.set(mode));
     let (from, to) = if mode.is_some() { (0, 1) } else { (1, 0) };

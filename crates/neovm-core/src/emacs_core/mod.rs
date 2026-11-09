@@ -622,3 +622,7 @@ mod moved_text;
 #[cfg(test)]
 #[path = "tests/moved_edit/mod.rs"]
 mod moved_edit;
+
+#[cfg(all(test, feature = "jit"))]
+#[path = "tests/architecture/bg_startup_defaults_test.rs"]
+mod architecture_bg_startup_defaults_test;

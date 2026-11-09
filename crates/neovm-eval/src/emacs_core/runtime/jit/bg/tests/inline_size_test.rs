@@ -57,7 +57,11 @@ fn jit_bg_inline_size_policy_spares_upgrades_and_is_inclusive() {
     force_inline_insts_for_test(Some(0));
     assert!(!backend_in_line(JobClass::Entry, 1));
     force_inline_insts_for_test(None);
-    assert_eq!(in_line_insts(), 0, "unit tests defer unless they pin it");
+    assert_eq!(
+        in_line_insts(),
+        in_line_insts_knob(),
+        "an unarmed read returns the production knob"
+    );
     assert_eq!(in_line_insts_knob(), INLINE_INSTS);
 }
 

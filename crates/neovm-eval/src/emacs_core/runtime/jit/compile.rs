@@ -309,7 +309,7 @@ pub(crate) fn jit_profile_path() -> Option<&'static str> {
 /// of `NEOVM_GC_STRESS`/`gc_stress`. Catches deopt-frame-reconstruction bugs (the
 /// riskiest part of speculation) before the optimizing Tier-2 adds more guards.
 pub(crate) fn jit_force_deopt() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(on) = FORCE_DEOPT_TEST_OVERRIDE.with(|c| c.get()) {
         return on;
     }
@@ -318,7 +318,7 @@ pub(crate) fn jit_force_deopt() -> bool {
     *FORCE.get_or_init(|| std::env::var("NEOVM_JIT_FORCE_DEOPT").as_deref() == Ok("1"))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static FORCE_DEOPT_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
         const { std::cell::Cell::new(None) };
@@ -326,7 +326,7 @@ thread_local! {
 
 /// Force the J0 every-guard-fails harness on/off for compiles on the current
 /// thread (tests only) — without the process-global environment variable.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_deopt_for_test(on: bool) {
     FORCE_DEOPT_TEST_OVERRIDE.with(|c| c.set(Some(on)));
 }
