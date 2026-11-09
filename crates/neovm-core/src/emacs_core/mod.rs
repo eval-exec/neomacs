@@ -491,6 +491,10 @@ mod architecture_upper_subrs_generated_test;
 mod architecture_workspace_dependency_features_guard_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/test_profile_codegen_guard_test.rs"]
+mod architecture_test_profile_codegen_guard_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/host_cfg_agreement_guard_test.rs"]
 mod architecture_host_cfg_agreement_guard_test;
 

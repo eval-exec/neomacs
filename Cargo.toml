@@ -457,6 +457,28 @@ opt-level = 2
 [profile.test.package.neovm-value]
 opt-level = 2
 
+# The split carved the rest of that runtime out of neovm-core; each moved
+# crate must keep the same test-profile codegen it had inside core.  Without
+# these overrides the interpreter-heavy test families run at opt-level 0 in
+# every test build: measured on the macmini (test profile), the mapc
+# resumed-chain oracle's falsify body went 2.58 s -> 24.0 s, and the macOS CI
+# job crossed nextest's 600 s per-test timeout at 470f484c21.  A guard
+# (test_profile_codegen_guard_test.rs) keeps the set complete.
+[profile.test.package.neovm-eval]
+opt-level = 2
+
+[profile.test.package.neovm-text]
+opt-level = 2
+
+[profile.test.package.neovm-edit]
+opt-level = 2
+
+[profile.test.package.neovm-system]
+opt-level = 2
+
+[profile.test.package.neovm-display]
+opt-level = 2
+
 # Optimized build driven by a PGO profile. Same codegen settings as release,
 # but cargo gives it its own target/release-pgo directory, so a PGO build never
 # replaces an ordinary release binary (or invalidates its pdump fingerprint).
