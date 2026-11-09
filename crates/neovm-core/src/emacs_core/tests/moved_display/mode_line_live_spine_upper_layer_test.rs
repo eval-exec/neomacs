@@ -30,7 +30,7 @@ fn replacing_tail(generational: bool, display: bool) {
                      (concat \"B\")))",
     )
     .expect("install live mode-line format");
-    let before_gc = eval.gc_count;
+    let before_gc = eval.gc_count_for_test();
     let before_roots = save_scratch_gc_roots();
     let rendered = if display {
         let format = eval
@@ -44,7 +44,7 @@ fn replacing_tail(generational: bool, display: bool) {
             .expect("format changed live tail")
     };
     assert_eq!(rendered.as_utf8_str(), Some("AC"));
-    assert_eq!(eval.gc_count, before_gc + 1);
+    assert_eq!(eval.gc_count_for_test(), before_gc + 1);
     assert_eq!(save_scratch_gc_roots(), before_roots);
 }
 

@@ -31,9 +31,9 @@ fn validated_float_format_rejects_overflowing_or_malformed_domains() {
     assert!(FloatOutputFormat::try_from(Value::NIL).is_err());
     let omitted = FloatOutputFormat::try_from(Value::string("%.f")).expect("omitted precision");
     let zero = FloatOutputFormat::try_from(Value::string("%.0f")).expect("explicit zero");
-    assert_eq!(omitted.precision, FloatPrecision::Omitted);
-    assert_eq!(zero.precision, FloatPrecision::Explicit(0));
-    assert_eq!(omitted.notation, FloatNotation::Fixed);
+    assert_eq!(omitted.precision_for_test(), FloatPrecision::Omitted);
+    assert_eq!(zero.precision_for_test(), FloatPrecision::Explicit(0));
+    assert_eq!(omitted.notation_for_test(), FloatNotation::Fixed);
 }
 
 const PROGRAM: &str = r#"(mapcar

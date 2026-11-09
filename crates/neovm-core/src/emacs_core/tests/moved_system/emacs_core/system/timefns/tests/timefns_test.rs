@@ -264,13 +264,13 @@ fn leap_years() {
 fn decode_epoch_zero() {
     crate::test_utils::init_test_tracing();
     let dt = decode_epoch_secs(0).unwrap();
-    assert_eq!(dt.year, 1970);
-    assert_eq!(dt.month, 1);
-    assert_eq!(dt.day, 1);
-    assert_eq!(dt.hour, 0);
-    assert_eq!(dt.min, 0);
-    assert_eq!(dt.sec, 0);
-    assert_eq!(dt.dow, 4); // Thursday
+    assert_eq!(dt.year_for_test(), 1970);
+    assert_eq!(dt.month_for_test(), 1);
+    assert_eq!(dt.day_for_test(), 1);
+    assert_eq!(dt.hour_for_test(), 0);
+    assert_eq!(dt.min_for_test(), 0);
+    assert_eq!(dt.sec_for_test(), 0);
+    assert_eq!(dt.dow_for_test(), 4); // Thursday
 }
 
 #[test]
@@ -279,12 +279,12 @@ fn decode_known_date() {
     // 2024-01-15 12:30:45 UTC -> epoch = 1705318245
     let epoch = encode_to_epoch_secs(45, 30, 12, 15, 1, 2024);
     let dt = decode_epoch_secs(epoch).unwrap();
-    assert_eq!(dt.year, 2024);
-    assert_eq!(dt.month, 1);
-    assert_eq!(dt.day, 15);
-    assert_eq!(dt.hour, 12);
-    assert_eq!(dt.min, 30);
-    assert_eq!(dt.sec, 45);
+    assert_eq!(dt.year_for_test(), 2024);
+    assert_eq!(dt.month_for_test(), 1);
+    assert_eq!(dt.day_for_test(), 15);
+    assert_eq!(dt.hour_for_test(), 12);
+    assert_eq!(dt.min_for_test(), 30);
+    assert_eq!(dt.sec_for_test(), 45);
 }
 
 #[test]
@@ -292,12 +292,12 @@ fn encode_decode_roundtrip() {
     crate::test_utils::init_test_tracing();
     let epoch = encode_to_epoch_secs(30, 15, 10, 25, 6, 2023);
     let dt = decode_epoch_secs(epoch).unwrap();
-    assert_eq!(dt.sec, 30);
-    assert_eq!(dt.min, 15);
-    assert_eq!(dt.hour, 10);
-    assert_eq!(dt.day, 25);
-    assert_eq!(dt.month, 6);
-    assert_eq!(dt.year, 2023);
+    assert_eq!(dt.sec_for_test(), 30);
+    assert_eq!(dt.min_for_test(), 15);
+    assert_eq!(dt.hour_for_test(), 10);
+    assert_eq!(dt.day_for_test(), 25);
+    assert_eq!(dt.month_for_test(), 6);
+    assert_eq!(dt.year_for_test(), 2023);
 }
 
 #[test]
@@ -305,9 +305,9 @@ fn encode_decode_roundtrip_leap_day() {
     crate::test_utils::init_test_tracing();
     let epoch = encode_to_epoch_secs(0, 0, 0, 29, 2, 2024);
     let dt = decode_epoch_secs(epoch).unwrap();
-    assert_eq!(dt.day, 29);
-    assert_eq!(dt.month, 2);
-    assert_eq!(dt.year, 2024);
+    assert_eq!(dt.day_for_test(), 29);
+    assert_eq!(dt.month_for_test(), 2);
+    assert_eq!(dt.year_for_test(), 2024);
 }
 
 #[test]
@@ -315,13 +315,13 @@ fn decode_y2k() {
     crate::test_utils::init_test_tracing();
     // 2000-01-01 00:00:00 UTC = 946684800
     let dt = decode_epoch_secs(946_684_800).unwrap();
-    assert_eq!(dt.year, 2000);
-    assert_eq!(dt.month, 1);
-    assert_eq!(dt.day, 1);
-    assert_eq!(dt.hour, 0);
-    assert_eq!(dt.min, 0);
-    assert_eq!(dt.sec, 0);
-    assert_eq!(dt.dow, 6); // Saturday
+    assert_eq!(dt.year_for_test(), 2000);
+    assert_eq!(dt.month_for_test(), 1);
+    assert_eq!(dt.day_for_test(), 1);
+    assert_eq!(dt.hour_for_test(), 0);
+    assert_eq!(dt.min_for_test(), 0);
+    assert_eq!(dt.sec_for_test(), 0);
+    assert_eq!(dt.dow_for_test(), 6); // Saturday
 }
 
 // -----------------------------------------------------------------------

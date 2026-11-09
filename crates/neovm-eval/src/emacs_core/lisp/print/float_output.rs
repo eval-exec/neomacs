@@ -56,14 +56,8 @@ impl FloatPrecision {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct FloatOutputFormat {
-    #[cfg(not(feature = "test-support"))]
     pub(crate) notation: FloatNotation,
-    #[cfg(feature = "test-support")]
-    pub notation: FloatNotation,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) precision: FloatPrecision,
-    #[cfg(feature = "test-support")]
-    pub precision: FloatPrecision,
 }
 
 static_assertions::assert_impl_all!(FloatOutputFormat: Send, Sync);
@@ -160,6 +154,24 @@ impl FloatOutputFormat {
                 String::from_utf8(bytes).ok()
             }
         }
+    }
+}
+
+/// Read surfaces for the moved float-format oracle (peer #1005 field
+/// remediation): every field is `pub(crate)` in every arm; the oracle reads
+/// the parsed notation and precision through these getters.
+#[cfg(any(test, feature = "test-support"))]
+impl FloatOutputFormat {
+    /// Copied parsed notation.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn notation_for_test(&self) -> FloatNotation {
+        self.notation
+    }
+
+    /// Copied parsed precision.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn precision_for_test(&self) -> FloatPrecision {
+        self.precision
     }
 }
 

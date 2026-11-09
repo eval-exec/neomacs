@@ -127,7 +127,7 @@ fn start_minor(context: &mut Context) -> usize {
     assert!(!context.tagged_heap().mark_in_progress());
     assert!(!context.tagged_heap().sweep_in_progress());
     let completed = context.tagged_heap().gc_collections();
-    let runtime_completed = context.gc_count;
+    let runtime_completed = context.gc_count_for_test();
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { context.tagged_heap_mut() }.set_gc_threshold(1);
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
@@ -140,13 +140,13 @@ fn start_minor(context: &mut Context) -> usize {
     assert!(!context.tagged_heap().mark_in_progress());
     assert!(!context.tagged_heap().concurrent_mark_running());
     assert_eq!(context.tagged_heap().gc_collections(), completed);
-    assert_eq!(context.gc_count, runtime_completed);
+    assert_eq!(context.gc_count_for_test(), runtime_completed);
     completed
 }
 
 fn finish_minor(context: &mut Context, completed: usize) {
     assert!(context.tagged_heap().sweep_in_progress());
-    let runtime_completed = context.gc_count;
+    let runtime_completed = context.gc_count_for_test();
     // Completion refreshes runtime pacing; reset this threshold at every
     // cycle so polling cannot start another collection after the sweep drains.
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
@@ -157,7 +157,7 @@ fn finish_minor(context: &mut Context, completed: usize) {
             assert!(!context.tagged_heap().mark_in_progress());
             assert!(!context.tagged_heap().concurrent_mark_running());
             assert_eq!(context.tagged_heap().gc_collections(), completed + 1);
-            assert_eq!(context.gc_count, runtime_completed + 1);
+            assert_eq!(context.gc_count_for_test(), runtime_completed + 1);
             return;
         }
     }

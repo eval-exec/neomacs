@@ -59,7 +59,7 @@ fn post_image_init_enumerates_every_gnu_call_site() {
     let mut build_option = 0;
     let mut platform = 0;
     for site in PostImageInit::ALL {
-        match site.site().guard {
+        match site.site().guard_for_test() {
             CallGuard::Unconditional => unconditional += 1,
             CallGuard::BuildOption(_) => build_option += 1,
             CallGuard::Platform(_) => platform += 1,
@@ -78,37 +78,37 @@ fn post_image_init_is_in_gnu_main_order_and_below_load_pdump() {
     for site in PostImageInit::ALL {
         let s = site.site();
         assert!(
-            s.call_line > GNU_LOAD_PDUMP_LINE,
+            s.call_line_for_test() > GNU_LOAD_PDUMP_LINE,
             "{} is at src/emacs.c:{} which is ABOVE load_pdump at :{}: it runs \
              before the image exists and cannot be carrying dumped state",
-            s.c_name,
-            s.call_line,
+            s.c_name_for_test(),
+            s.call_line_for_test(),
             GNU_LOAD_PDUMP_LINE
         );
         assert!(
-            s.call_line > previous,
+            s.call_line_for_test() > previous,
             "{} (src/emacs.c:{}) is out of `main' order after :{}. The table's \
              order IS the dependency order -- init_charset needs the \
              data-directory init_callproc derives.",
-            s.c_name,
-            s.call_line,
+            s.c_name_for_test(),
+            s.call_line_for_test(),
             previous
         );
-        previous = s.call_line;
-        assert!(!s.c_name.is_empty() && s.c_name.starts_with("init_"));
+        previous = s.call_line_for_test();
+        assert!(!s.c_name_for_test().is_empty() && s.c_name_for_test().starts_with("init_"));
         assert!(
-            s.body.starts_with("src/"),
+            s.body_for_test().starts_with("src/"),
             "{} must cite the GNU file its body lives in",
-            s.c_name
+            s.c_name_for_test()
         );
     }
     assert_eq!(
-        PostImageInit::StandardFds.site().call_line,
+        PostImageInit::StandardFds.site().call_line_for_test(),
         1460,
         "the first post-image init_* call is init_standard_fds"
     );
     assert_eq!(
-        PostImageInit::SfntfontAndroid.site().call_line,
+        PostImageInit::SfntfontAndroid.site().call_line_for_test(),
         2567,
         "the last init_* call in `main' is init_sfntfont_android"
     );
@@ -124,12 +124,12 @@ fn post_image_init_screened_sites_carry_their_evidence() {
     let mut not_in_build = 0;
     let mut os_dispositions = 0;
     for site in PostImageInit::ALL {
-        match site.site().establishes {
+        match site.site().establishes_for_test() {
             Establishes::NoLispVisibleState(why) => {
                 assert!(
                     why.len() > 40,
                     "{} claims no Lisp-visible state without evidence",
-                    site.site().c_name
+                    site.site().c_name_for_test()
                 );
                 screened_empty += 1;
             }
@@ -148,19 +148,19 @@ fn post_image_init_screened_sites_carry_their_evidence() {
                 assert!(
                     no_lisp_state.len() > 40,
                     "{} claims no Lisp-visible state without evidence",
-                    site.site().c_name
+                    site.site().c_name_for_test()
                 );
                 if cfg!(unix) {
                     assert!(
                         !installs.is_empty(),
                         "{} claims to install dispositions but names none",
-                        site.site().c_name
+                        site.site().c_name_for_test()
                     );
                 } else {
                     assert!(
                         installs.is_empty(),
                         "{} has no supported signal dispositions on this platform",
-                        site.site().c_name
+                        site.site().c_name_for_test()
                     );
                 }
                 os_dispositions += 1;
@@ -169,13 +169,13 @@ fn post_image_init_screened_sites_carry_their_evidence() {
                 assert!(
                     !constants.is_empty() || !derived.is_empty(),
                     "{} claims to establish facts but names none",
-                    site.site().c_name
+                    site.site().c_name_for_test()
                 );
                 for row in constants {
                     assert!(
                         row.gnu.starts_with("src/"),
                         "{}: row `{}' must cite the GNU line that assigns it",
-                        site.site().c_name,
+                        site.site().c_name_for_test(),
                         row.name
                     );
                 }
@@ -215,14 +215,14 @@ fn post_image_init_derivations_are_classified_and_cited() {
 
     let (mut ported, mut elsewhere, mut not_applicable) = (0, 0, 0);
     for site in PostImageInit::ALL {
-        let Establishes::Facts { derived, .. } = site.site().establishes else {
+        let Establishes::Facts { derived, .. } = site.site().establishes_for_test() else {
             continue;
         };
         for fact in derived {
             assert!(
                 fact.gnu().starts_with("src/"),
                 "{}: derived fact `{}' must cite the GNU lines that establish it",
-                site.site().c_name,
+                site.site().c_name_for_test(),
                 fact.what()
             );
             assert!(fact.what().len() > 20);

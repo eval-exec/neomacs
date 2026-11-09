@@ -121,34 +121,61 @@ fn is_leap_year(year: i64) -> bool {
 /// Decoded time in UTC: (sec min hour day month year dow dst utcoff).
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct DecodedTime {
-    #[cfg(not(feature = "test-support"))]
     sec: i64,
-    #[cfg(feature = "test-support")]
-    pub sec: i64,
-    #[cfg(not(feature = "test-support"))]
     min: i64,
-    #[cfg(feature = "test-support")]
-    pub min: i64,
-    #[cfg(not(feature = "test-support"))]
     hour: i64,
-    #[cfg(feature = "test-support")]
-    pub hour: i64,
-    #[cfg(not(feature = "test-support"))]
-    day: i64, // 1-based
-    #[cfg(feature = "test-support")]
-    pub day: i64, // 1-based
-    #[cfg(not(feature = "test-support"))]
+    day: i64,   // 1-based
     month: i64, // 1-based
-    #[cfg(feature = "test-support")]
-    pub month: i64, // 1-based
-    #[cfg(not(feature = "test-support"))]
     year: i64,
-    #[cfg(feature = "test-support")]
-    pub year: i64,
-    #[cfg(not(feature = "test-support"))]
     dow: i64, // 0=Sunday, 1=Monday, ..., 6=Saturday
-    #[cfg(feature = "test-support")]
-    pub dow: i64, // 0=Sunday, 1=Monday, ..., 6=Saturday
+}
+
+/// Read surfaces for the moved timefns oracle (peer #1005 field
+/// remediation): every field is private in every arm; the oracle reads the
+/// decoded UTC tuple through these getters.
+#[cfg(any(test, feature = "test-support"))]
+impl DecodedTime {
+    /// Copied seconds component.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn sec_for_test(&self) -> i64 {
+        self.sec
+    }
+
+    /// Copied minutes component.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn min_for_test(&self) -> i64 {
+        self.min
+    }
+
+    /// Copied hours component.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn hour_for_test(&self) -> i64 {
+        self.hour
+    }
+
+    /// Copied day-of-month component.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn day_for_test(&self) -> i64 {
+        self.day
+    }
+
+    /// Copied month component.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn month_for_test(&self) -> i64 {
+        self.month
+    }
+
+    /// Copied year component.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn year_for_test(&self) -> i64 {
+        self.year
+    }
+
+    /// Copied day-of-week component.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn dow_for_test(&self) -> i64 {
+        self.dow
+    }
 }
 struct ZonedDecodedTime {
     time: DecodedTime,

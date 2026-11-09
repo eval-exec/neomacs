@@ -49,17 +49,18 @@ fn context() -> Context {
 }
 
 fn minor(context: &mut Context) {
-    let before = context.gc_count;
+    let before = context.gc_count_for_test();
     context.gc_collect_from_current_roots_impl(false);
     assert!(context.tagged_heap().sweep_in_progress());
     assert!(!context.tagged_heap().concurrent_mark_running());
     assert_eq!(
-        context.gc_count, before,
+        context.gc_count_for_test(),
+        before,
         "mark termination is not completion"
     );
     for _ in 0..10_000 {
         if !context.tagged_heap().sweep_in_progress() {
-            assert_eq!(context.gc_count, before + 1);
+            assert_eq!(context.gc_count_for_test(), before + 1);
             return;
         }
         context.gc_collect_from_current_roots_impl(false);
@@ -113,7 +114,7 @@ fn explicit_major_reclaims_old_graph_and_runs_old_finalizer_before_hook() {
             )
             .expect("release owner frames before collection");
     });
-    let completed = context.gc_count;
+    let completed = context.gc_count_for_test();
     let gcs_done = integer(&context, "gcs-done");
 
     minor(&mut context);
@@ -129,7 +130,7 @@ fn explicit_major_reclaims_old_graph_and_runs_old_finalizer_before_hook() {
     assert_eq!(integer(&context, "u34b-finalizer-count"), 1);
     assert_eq!(integer(&context, "u34b-hook-count"), 2);
     assert_eq!(integer(&context, "u34b-hook-saw-finalizers"), 1);
-    assert_eq!(context.gc_count, completed + 2);
+    assert_eq!(context.gc_count_for_test(), completed + 2);
     assert_eq!(integer(&context, "gcs-done"), gcs_done + 2);
     assert!(!context.tagged_heap().mark_in_progress());
     assert!(!context.tagged_heap().sweep_in_progress());
@@ -137,7 +138,7 @@ fn explicit_major_reclaims_old_graph_and_runs_old_finalizer_before_hook() {
     context.gc_collect_exact();
     assert_eq!(integer(&context, "u34b-finalizer-count"), 1);
     assert_eq!(integer(&context, "u34b-hook-count"), 3);
-    assert_eq!(context.gc_count, completed + 3);
+    assert_eq!(context.gc_count_for_test(), completed + 3);
     assert_eq!(integer(&context, "gcs-done"), gcs_done + 3);
 }
 

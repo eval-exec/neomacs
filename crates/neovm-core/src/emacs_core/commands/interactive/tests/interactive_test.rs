@@ -7268,7 +7268,7 @@ fn interactive_heap_specs_track_the_heap_valued_specs() {
     crate::test_utils::init_test_tracing();
     let expected = |registry: &InteractiveRegistry| {
         registry
-            .specs
+            .dump_specs()
             .iter()
             .filter(|(_, spec)| spec.spec.is_heap_object())
             .map(|(symbol, spec)| (*symbol, spec.spec))
@@ -7286,25 +7286,25 @@ fn interactive_heap_specs_track_the_heap_valued_specs() {
     registry.register_interactive(heap, InteractiveSpec::new("p"));
     registry.register_interactive(plain, InteractiveSpec { spec: Value::NIL });
     registry.register_interactive(flipped, InteractiveSpec::new("r"));
-    assert_eq!(registry.heap_specs, expected(&registry));
-    assert_eq!(registry.heap_specs.len(), 2);
+    assert_eq!(registry.heap_specs_for_test(), &expected(&registry));
+    assert_eq!(registry.heap_specs_for_test().len(), 2);
 
     // Re-registration that drops the heap value must drop the root with it.
     registry.register_interactive(flipped, InteractiveSpec { spec: Value::NIL });
-    assert_eq!(registry.heap_specs, expected(&registry));
-    assert_eq!(registry.heap_specs.len(), 1);
+    assert_eq!(registry.heap_specs_for_test(), &expected(&registry));
+    assert_eq!(registry.heap_specs_for_test().len(), 1);
 
     registry.unregister_interactive(heap);
-    assert_eq!(registry.heap_specs, expected(&registry));
-    assert!(registry.heap_specs.is_empty());
+    assert_eq!(registry.heap_specs_for_test(), &expected(&registry));
+    assert!(registry.heap_specs_for_test().is_empty());
 
     // The dump restores `specs` in bulk, bypassing `register_interactive`.
     let mut dumped = HashMap::new();
     dumped.insert(heap, InteractiveSpec::new("p"));
     dumped.insert(plain, InteractiveSpec { spec: Value::NIL });
     let restored = InteractiveRegistry::from_dump(dumped);
-    assert_eq!(restored.heap_specs, expected(&restored));
-    assert_eq!(restored.heap_specs.len(), 1);
+    assert_eq!(restored.heap_specs_for_test(), &expected(&restored));
+    assert_eq!(restored.heap_specs_for_test().len(), 1);
 }
 
 #[test]

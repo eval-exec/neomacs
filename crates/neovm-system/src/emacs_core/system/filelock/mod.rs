@@ -70,22 +70,10 @@ fn current_lock_info_string(user: &str, host: &str) -> String {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct ParsedLockInfo {
-    #[cfg(not(feature = "test-support"))]
     user: String,
-    #[cfg(feature = "test-support")]
-    pub user: String,
-    #[cfg(not(feature = "test-support"))]
     host: String,
-    #[cfg(feature = "test-support")]
-    pub host: String,
-    #[cfg(not(feature = "test-support"))]
     pid: u32,
-    #[cfg(feature = "test-support")]
-    pub pid: u32,
-    #[cfg(not(feature = "test-support"))]
     boot_time: i64,
-    #[cfg(feature = "test-support")]
-    pub boot_time: i64,
 }
 
 /// Parse USER@HOST.PID:BOOT.  GNU (current_lock_owner) takes the LAST `@`
@@ -120,15 +108,9 @@ fn parse_lock_info(contents: &str) -> Option<ParsedLockInfo> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct LockClasher {
-    #[cfg(not(feature = "test-support"))]
     user: String,
-    #[cfg(feature = "test-support")]
-    pub user: String,
     host: String,
-    #[cfg(not(feature = "test-support"))]
     pid: u32,
-    #[cfg(feature = "test-support")]
-    pub pid: u32,
 }
 
 impl LockClasher {
@@ -137,6 +119,51 @@ impl LockClasher {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn opponent(&self) -> String {
         format!("{}@{} (pid {})", self.user, self.host, self.pid)
+    }
+
+    /// Borrowed lock owner's user (peer #1005 field remediation): the field
+    /// is private in every arm; the moved filelock oracle reads this getter.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn user_for_test(&self) -> &String {
+        &self.user
+    }
+
+    /// Copied lock owner's pid (peer #1005 field remediation).
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn pid_for_test(&self) -> u32 {
+        self.pid
+    }
+}
+
+/// Read surfaces for the moved filelock oracle (peer #1005 field
+/// remediation): every field is private in every arm; the oracle reads the
+/// parsed lock tuple through these getters.
+#[cfg(any(test, feature = "test-support"))]
+impl ParsedLockInfo {
+    /// Borrowed lock owner's user.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn user_for_test(&self) -> &String {
+        &self.user
+    }
+
+    /// Borrowed lock owner's host.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn host_for_test(&self) -> &String {
+        &self.host
+    }
+
+    /// Copied lock owner's pid.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn pid_for_test(&self) -> u32 {
+        self.pid
+    }
+
+    /// Copied lock owner's boot time.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn boot_time_for_test(&self) -> i64 {
+        self.boot_time
     }
 }
 

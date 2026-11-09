@@ -258,24 +258,7 @@ impl WhereIsReverseIndex {
 /// Tracks which function symbols are interactive (i.e., can be called via
 /// `M-x` or key bindings) and their argument specs.
 pub struct InteractiveRegistry {
-    /// Map from function symbol to its interactive spec.
-    #[cfg(feature = "test-support")]
-    pub specs: HashMap<SymId, InteractiveSpec>,
-    #[cfg(not(feature = "test-support"))]
     specs: HashMap<SymId, InteractiveSpec>,
-    /// The subset of `specs` whose spec is a heap object, i.e. the only
-    /// entries that are GC roots.
-    ///
-    /// `specs` holds an entry for every interactive command, thousands of
-    /// them restored in bulk from the dump, and almost none of their specs
-    /// are heap objects.  Root seeding runs twice per collection cycle, so
-    /// filtering the whole map each time walks tens of thousands of entries
-    /// to find single digits.  Maintaining the answer at the four points that
-    /// can change it costs nothing measurable and makes seeding proportional
-    /// to the root count rather than the command count.
-    #[cfg(feature = "test-support")]
-    pub heap_specs: HashMap<SymId, Value>,
-    #[cfg(not(feature = "test-support"))]
     heap_specs: HashMap<SymId, Value>,
     /// Stack tracking whether the current function was called interactively.
     interactive_call_stack: Vec<bool>,
@@ -353,6 +336,15 @@ impl InteractiveRegistry {
     #[doc(hidden)]
     pub fn dump_specs(&self) -> &HashMap<SymId, InteractiveSpec> {
         &self.specs
+    }
+
+    /// Borrowed heap-root subset of the spec map (peer #1005 field
+    /// remediation): the field is `pub(crate)` in every arm and this is the
+    /// read surface for the moved interactive-registry oracle.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn heap_specs_for_test(&self) -> &HashMap<SymId, Value> {
+        &self.heap_specs
     }
     #[doc(hidden)]
     pub fn from_dump(specs: HashMap<SymId, InteractiveSpec>) -> Self {

@@ -117,7 +117,7 @@ fn checkpoint_survives_detaching_eval(generational: bool, display: bool) {
     eval.set_variable("noninteractive", Value::NIL);
     eval.gc_collect_exact();
     let (format, checkpoint_bits, car_bits) = collecting_checkpoint_format(&mut eval);
-    let before_gc = eval.gc_count;
+    let before_gc = eval.gc_count_for_test();
     let before_roots = save_scratch_gc_roots();
     let rendered = if display {
         format_mode_line_for_display_with_sources(&mut eval, format, Value::NIL, Value::NIL, 80)
@@ -127,7 +127,7 @@ fn checkpoint_survives_detaching_eval(generational: bool, display: bool) {
             .expect("format with a detaching :eval")
     };
     assert_eq!(rendered.as_utf8_str(), Some("ABCE"));
-    assert_eq!(eval.gc_count, before_gc + 1);
+    assert_eq!(eval.gc_count_for_test(), before_gc + 1);
     assert_eq!(save_scratch_gc_roots(), before_roots);
     assert_checkpoint_retained(&eval, checkpoint_bits, car_bits);
 }
@@ -172,7 +172,7 @@ fn split_checkpoint_survives_collection(generational: bool) {
     let processes = neovm_eval::emacs_core::eval::data::process_state::ProcessManager::new();
     let pctx = ModeLinePercentContext::default();
     let before_roots = save_scratch_gc_roots();
-    let before_gc = eval.gc_count;
+    let before_gc = eval.gc_count_for_test();
     let mut callbacks = 0;
     let rendered = {
         let roots = mode_line_gc::ScratchRoots::new();
@@ -207,7 +207,7 @@ fn split_checkpoint_survives_collection(generational: bool) {
     };
     assert_eq!(rendered.as_utf8_str(), Some("ABCE"));
     assert_eq!(callbacks, 1);
-    assert_eq!(eval.gc_count, before_gc + 1);
+    assert_eq!(eval.gc_count_for_test(), before_gc + 1);
     assert_eq!(save_scratch_gc_roots(), before_roots);
     assert_checkpoint_retained(&eval, checkpoint_bits, car_bits);
 }

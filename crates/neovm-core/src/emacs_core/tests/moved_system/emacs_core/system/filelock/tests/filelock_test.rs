@@ -86,10 +86,10 @@ fn lock_and_unlock_file_dispatch_matching_file_name_handlers_like_gnu() {
 fn new_lock_info_contains_gnu_boot_time_suffix_when_available() {
     let lock_info = current_lock_info_string("me", "testhost");
     let parsed = parse_lock_info(&lock_info).expect("parse current lock info");
-    assert_eq!(parsed.user, "me");
-    assert_eq!(parsed.host, "testhost");
-    assert_eq!(parsed.pid, std::process::id());
-    assert_eq!(parsed.boot_time, system_boot_time_sec());
+    assert_eq!(parsed.user_for_test(), "me");
+    assert_eq!(parsed.host_for_test(), "testhost");
+    assert_eq!(parsed.pid_for_test(), std::process::id());
+    assert_eq!(parsed.boot_time_for_test(), system_boot_time_sec());
 }
 
 /// Read a Lisp string expression from a context, "" when absent.
@@ -177,8 +177,8 @@ fn live_pid_lock_on_this_host_names_the_other_owner() {
     std::os::unix::fs::symlink(contents, &lock_path).expect("symlink lock");
     match current_lock_owner(&lock_path, "testhost").expect("owner check") {
         LockOwner::Other(clasher) => {
-            assert_eq!(clasher.user, "someone");
-            assert_eq!(clasher.pid, 1);
+            assert_eq!(clasher.user_for_test(), "someone");
+            assert_eq!(clasher.pid_for_test(), 1);
             assert_eq!(clasher.opponent(), "someone@testhost (pid 1)");
         }
         _ => panic!("live-pid lock must report the other owner"),

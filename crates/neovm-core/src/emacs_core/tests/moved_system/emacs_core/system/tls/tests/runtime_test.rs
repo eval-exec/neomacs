@@ -4,11 +4,10 @@ use crate::emacs_core::gnutls_entries::{
 };
 use crate::emacs_core::value::Value;
 use neovm_system::emacs_core::tls::{
-    GnutlsCredentialType, TlsBackendError, TlsCloseNotifyResult, TlsPeerStatus, TlsStreamIo,
-    TlsTrustRoots, certificate_details_value_pem, der_certificate_to_pem,
-    format_x509_certificate_pem, gnutls_available_capabilities, gnutls_close_notify_result_value,
-    gnutls_peer_status_to_value, parse_gnutls_boot_parameters, read_rustls_process_output,
-    rustls_root_store,
+    GnutlsCredentialType, TlsBackendError, TlsCloseNotifyResult, TlsStreamIo, TlsTrustRoots,
+    certificate_details_value_pem, der_certificate_to_pem, format_x509_certificate_pem,
+    gnutls_available_capabilities, gnutls_close_notify_result_value, gnutls_peer_status_to_value,
+    parse_gnutls_boot_parameters, read_rustls_process_output, rustls_root_store,
 };
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::{
@@ -306,9 +305,18 @@ fn gnutls_boot_parameters_parse_x509_hostname() {
         neovm_value::tagged::value::SymbolMode::Bare,
     )
     .expect("valid parameters");
-    assert_eq!(parameters.credential_type, GnutlsCredentialType::X509Pki);
-    assert_eq!(parameters.client.hostname, "example.org");
-    assert_eq!(parameters.client.trust_roots, TlsTrustRoots::Default);
+    assert_eq!(
+        parameters.credential_type_for_test(),
+        GnutlsCredentialType::X509Pki
+    );
+    assert_eq!(
+        parameters.client_for_test().hostname_for_test(),
+        "example.org"
+    );
+    assert_eq!(
+        parameters.client_for_test().trust_roots_for_test(),
+        &TlsTrustRoots::Default
+    );
 }
 
 #[test]
@@ -330,8 +338,8 @@ fn gnutls_boot_parameters_preserve_trust_files_as_additional_roots() {
     .expect("valid trust files");
 
     assert_eq!(
-        parameters.client.trust_roots,
-        TlsTrustRoots::DefaultPlusFiles(vec![
+        parameters.client_for_test().trust_roots_for_test(),
+        &TlsTrustRoots::DefaultPlusFiles(vec![
             PathBuf::from("/first.pem"),
             PathBuf::from("/second.pem"),
         ])
@@ -488,17 +496,15 @@ fn gnutls_close_notify_results_use_gnu_error_symbols() {
 #[test]
 fn gnutls_peer_status_plist_matches_gnu_certificate_shape() {
     crate::test_utils::init_test_tracing();
-    let status = TlsPeerStatus {
-        warnings: vec![":unknown-ca"],
-        certificates: vec![
-            certificate_details_value_pem(TEST_CERTIFICATE_PEM).expect("valid cert"),
-        ],
-        key_exchange: Some("ECDHE-RSA".to_owned()),
-        protocol: Some("TLS1.3".to_owned()),
-        cipher: Some("AES-256-GCM".to_owned()),
-        mac: Some("AEAD".to_owned()),
-        encrypt_then_mac: Some(false),
-    };
+    let status = neovm_system::test_support::authority::tls_peer_status_for_test(
+        vec![":unknown-ca"],
+        vec![certificate_details_value_pem(TEST_CERTIFICATE_PEM).expect("valid cert")],
+        Some("ECDHE-RSA".to_owned()),
+        Some("TLS1.3".to_owned()),
+        Some("AES-256-GCM".to_owned()),
+        Some("AEAD".to_owned()),
+        Some(false),
+    );
 
     let plist = gnutls_peer_status_to_value(&status);
     let items = neovm_value::value::list_to_vec(&plist).expect("plist");
@@ -820,7 +826,10 @@ fn positioned_tls_credentials_and_plist_keys_follow_symbol_policy() {
     );
     let parameters =
         parse_gnutls_boot_parameters(credential, proplist, SymbolMode::Positioned).unwrap();
-    assert_eq!(parameters.client.hostname, "example.org");
+    assert_eq!(
+        parameters.client_for_test().hostname_for_test(),
+        "example.org"
+    );
 }
 
 #[test]

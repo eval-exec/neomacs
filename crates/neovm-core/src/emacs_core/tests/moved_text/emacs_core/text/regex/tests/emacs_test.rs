@@ -121,9 +121,9 @@ fn prepared_regexp_scoped_gc_preserves_compiled_and_callback_paths() {
         expected
     );
     neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, true);
-    let before = eval.gc_count;
+    let before = eval.gc_count_for_test();
     let result = eval.eval_str("(prepared-regexp-scoped-gc)");
-    let collections = eval.gc_count - before;
+    let collections = eval.gc_count_for_test() - before;
     assert_eq!(
         neovm_eval::emacs_core::print::format_eval_result(&result),
         expected
@@ -1937,9 +1937,9 @@ fn search_entries_preserve_fresh_arguments_across_callback_gc() {
         expected
     );
     neovm_eval::test_support::authority::set_gc_stress_for_test(&mut eval, true);
-    let before = eval.gc_count;
+    let before = eval.gc_count_for_test();
     let result = eval.eval_str("(fixed-search-scoped-gc)");
-    let collections = eval.gc_count - before;
+    let collections = eval.gc_count_for_test() - before;
     assert_eq!(
         neovm_eval::emacs_core::print::format_eval_result(&result),
         expected

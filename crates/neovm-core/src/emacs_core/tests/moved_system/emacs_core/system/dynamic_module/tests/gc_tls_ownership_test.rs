@@ -1,5 +1,4 @@
 use neovm_eval::emacs_core::eval::Context;
-use neovm_eval::emacs_core::eval::data::dynamic_module_registry::collect_dynamic_module_registry_gc_roots;
 use neovm_eval::emacs_core::eval::data::dynamic_module_registry::emacs_value;
 use neovm_system::emacs_core::dynamic_module::*;
 use neovm_value::value::Value;
@@ -46,7 +45,7 @@ impl Drop for GlobalReference {
 
 fn roots_for(ctx: &Context) -> Vec<Value> {
     let mut roots = Vec::new();
-    collect_dynamic_module_registry_gc_roots(&ctx.dynamic_module_registry, &mut roots);
+    neovm_eval::test_support::authority::dynamic_module_registry_gc_roots_for_test(ctx, &mut roots);
     collect_dynamic_module_gc_roots(&mut roots, ctx.tagged_heap().tagged_heap_identity());
     roots
 }

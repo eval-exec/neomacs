@@ -346,8 +346,8 @@ fn module_guard_re_raises_on_poisoned_gc_locks_without_ctx() {
 fn contain_lisp_panics_restores_boundary_state() {
     let mut ev = crate::emacs_core::eval_hook_installers::new_context();
     let spec0 = ev.specpdl().len();
-    let cond0 = ev.condition_stack.len();
-    let bc0 = ev.bc_buf.len();
+    let cond0 = ev.condition_stack_for_test().len();
+    let bc0 = ev.bc_buf_for_test().len();
     let depth0 = ev.depth_for_test();
     let roots0 = neovm_eval::emacs_core::eval::save_scratch_gc_roots();
 
@@ -358,7 +358,9 @@ fn contain_lisp_panics_restores_boundary_state() {
             tag: Value::symbol("neovm-test-tag"),
             resume: ResumeTarget::InterpreterCatch,
         });
-        ctx.bc_buf.push(Value::NIL);
+        neovm_eval::test_support::authority::with_bc_buf_mut_for_test(ctx, |buf| {
+            buf.push(Value::NIL)
+        });
         // Skipped scratch-root pops of the panicked extent: the
         // boundary restore must truncate them (they would pin their
         // objects forever otherwise).
@@ -379,8 +381,8 @@ fn contain_lisp_panics_restores_boundary_state() {
         "unexpected message: {message}"
     );
     assert_eq!(ev.specpdl().len(), spec0);
-    assert_eq!(ev.condition_stack.len(), cond0);
-    assert_eq!(ev.bc_buf.len(), bc0);
+    assert_eq!(ev.condition_stack_for_test().len(), cond0);
+    assert_eq!(ev.bc_buf_for_test().len(), bc0);
     assert_eq!(ev.depth_for_test(), depth0);
     assert_eq!(
         neovm_eval::emacs_core::eval::save_scratch_gc_roots(),
@@ -447,7 +449,11 @@ fn module_function_panic_is_condition_case_error_and_evaluator_survives() {
     );
 
     assert_eq!(ev.specpdl().len(), spec0, "specpdl must be balanced");
-    assert_eq!(ev.gc_inhibit_depth, 0, "GC inhibition must be balanced");
+    assert_eq!(
+        ev.gc_inhibit_depth_for_test(),
+        0,
+        "GC inhibition must be balanced"
+    );
     let sum = ev.eval_str("(+ 1 2)").expect("evaluator must still work");
     assert_eq!(sum, Value::fixnum(3));
     ev.eval_str("(garbage-collect)")
@@ -483,7 +489,7 @@ fn panic_in_module_invoked_elisp_is_contained_at_module_funcall() {
         let sum = ev.eval_str("(+ 20 22)").expect("evaluator must still work");
         assert_eq!(sum, Value::fixnum(42));
     }
-    assert_eq!(ev.gc_inhibit_depth, 0);
+    assert_eq!(ev.gc_inhibit_depth_for_test(), 0);
     ev.eval_str("(garbage-collect)")
         .expect("a full GC must still run after a contained panic");
 }

@@ -97,12 +97,12 @@ fn rows_observation_gc_rejects_before_any_stale_dependency_replay() {
 fn rows_observation_driver_and_partial_collection_refuse_before_replay() {
     let (mut context, frame) = ready();
     let epoch = context.begin_static_rows_observation(frame).unwrap();
-    context.gc_driver_active = true;
+    neovm_eval::test_support::authority::set_gc_driver_active_for_test(&mut context, true);
     assert_eq!(
         context.static_rows_observation_current(&epoch),
         Err(RowsObservationRefusal::DriverActive)
     );
-    context.gc_driver_active = false;
+    neovm_eval::test_support::authority::set_gc_driver_active_for_test(&mut context, false);
     let count = context.tagged_heap().gc_collections();
     // SAFETY: serial fixture heap, quiescent; no concurrent marker runs.
     unsafe {

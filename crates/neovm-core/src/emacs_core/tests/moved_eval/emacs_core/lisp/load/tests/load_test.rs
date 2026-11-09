@@ -10470,7 +10470,10 @@ fn load_file_exact_gc_roots_load_history_and_after_load_filename() {
 
     let loaded = load_file(&mut eval, &file).expect("load file under exact gc");
     assert_eq!(loaded, Value::T);
-    assert!(eval.gc_count > 0, "exact GC should have run during load");
+    assert!(
+        eval.gc_count_for_test() > 0,
+        "exact GC should have run during load"
+    );
 
     let history = eval
         .obarray()
@@ -10855,7 +10858,7 @@ fn nested_load_exact_gc_preserves_reader_load_file_name() {
     let loaded = load_file(&mut eval, &parent).expect("load nested fixture under exact gc");
     assert_eq!(loaded, Value::T);
     assert!(
-        eval.gc_count > 0,
+        eval.gc_count_for_test() > 0,
         "exact GC should have run during nested load"
     );
 

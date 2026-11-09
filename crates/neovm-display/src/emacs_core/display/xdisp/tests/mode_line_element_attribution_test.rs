@@ -398,7 +398,7 @@ fn mode_line_element_attribution_live_mutations_survive_collection() {
     for collect in ["nil", "t"] {
         eval.eval_str(&format!("(setq ep30-collect {collect} ep30-tail \"OLD\")"))
             .unwrap();
-        let gc = eval.gc_count;
+        let gc = eval.gc_count_for_test();
         strict(
             &mut eval,
             r#"(format-mode-line '("A" (:eval (ep30-callback 'mutate-value)) ep30-tail "Z"))"#,
@@ -414,7 +414,11 @@ fn mode_line_element_attribution_live_mutations_survive_collection() {
             r#"#("AMNEWZ" 0 1 (mode-line-elt-no 2) 1 2 (mode-line-elt-no 4) 2 5 (mode-line-elt-no 5) 5 6 (mode-line-elt-no 6))"#,
         );
         if collect == "t" {
-            assert_eq!(eval.gc_count, gc + 2, "both callbacks must collect");
+            assert_eq!(
+                eval.gc_count_for_test(),
+                gc + 2,
+                "both callbacks must collect"
+            );
         }
     }
 }

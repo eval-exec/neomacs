@@ -214,8 +214,8 @@ fn assert_case_in(
     let _ = execution;
     let frontier = (
         ctx.specpdl().len(),
-        ctx.condition_stack.len(),
-        ctx.bc_buf.len(),
+        ctx.condition_stack_for_test().len(),
+        ctx.bc_buf_for_test().len(),
         ctx.depth_for_test(),
     );
     let value = ctx
@@ -233,8 +233,8 @@ fn assert_case_in(
     assert_eq!(
         (
             ctx.specpdl().len(),
-            ctx.condition_stack.len(),
-            ctx.bc_buf.len(),
+            ctx.condition_stack_for_test().len(),
+            ctx.bc_buf_for_test().len(),
             ctx.depth_for_test()
         ),
         frontier,
@@ -368,8 +368,8 @@ fn gnu_bytecode_error_condition_case_pops_frame() {
     ctx.eval_str(&setup).expect("compile and warm car");
     let frontier = (
         ctx.specpdl().len(),
-        ctx.condition_stack.len(),
-        ctx.bc_buf.len(),
+        ctx.condition_stack_for_test().len(),
+        ctx.bc_buf_for_test().len(),
         ctx.depth_for_test(),
     );
     for _ in 0..3 {
@@ -380,8 +380,8 @@ fn gnu_bytecode_error_condition_case_pops_frame() {
         assert_eq!(
             (
                 ctx.specpdl().len(),
-                ctx.condition_stack.len(),
-                ctx.bc_buf.len(),
+                ctx.condition_stack_for_test().len(),
+                ctx.bc_buf_for_test().len(),
                 ctx.depth_for_test()
             ),
             frontier,
@@ -413,8 +413,8 @@ fn gnu_bytecode_error_unwind_protect_pops_primitive_before_cleanup() {
         .expect("compile and warm unwind-protect");
     let frontier = (
         ctx.specpdl().len(),
-        ctx.condition_stack.len(),
-        ctx.bc_buf.len(),
+        ctx.condition_stack_for_test().len(),
+        ctx.bc_buf_for_test().len(),
         ctx.depth_for_test(),
     );
     let value = ctx.eval_str(&observe).expect("debugger throw runs cleanup");
@@ -422,8 +422,8 @@ fn gnu_bytecode_error_unwind_protect_pops_primitive_before_cleanup() {
     assert_eq!(
         (
             ctx.specpdl().len(),
-            ctx.condition_stack.len(),
-            ctx.bc_buf.len(),
+            ctx.condition_stack_for_test().len(),
+            ctx.bc_buf_for_test().len(),
             ctx.depth_for_test()
         ),
         frontier

@@ -629,7 +629,90 @@ pub mod authority {
     /// Reset fence for `Context::abbrevs`: the moved root-retention test
     /// replaces the manager, a write to the world slot.
     pub fn reset_abbrevs_for_test(context: &mut Context) {
-        *context.abbrevs = crate::emacs_core::eval::data::abbrev::AbbrevManager::new();
+        set_abbrevs_manager_for_test(
+            context,
+            crate::emacs_core::eval::data::abbrev::AbbrevManager::new(),
+        );
+    }
+
+    /// Setter fence for `Context::abbrevs` (peer #1005 field remediation):
+    /// the moved root-retention test installs a `from_dump` manager.
+    pub fn set_abbrevs_manager_for_test(
+        context: &mut Context,
+        manager: crate::emacs_core::eval::data::abbrev::AbbrevManager,
+    ) {
+        *context.abbrevs = manager;
+    }
+
+    /// Read fence for the dynamic-module registry (peer #1005 field
+    /// remediation): the registry handle is interior-mutable
+    /// (`HeapRegistryHandle::borrow_mut` takes `&self`), so handing
+    /// `&Handle` across the crate boundary would be an unfenced write
+    /// route.  This fence borrows the registry inside the defining crate
+    /// and copies only the GC root `Value`s.
+    pub fn dynamic_module_registry_gc_roots_for_test(
+        context: &Context,
+        roots: &mut Vec<neovm_value::value::Value>,
+    ) {
+        crate::emacs_core::eval::data::dynamic_module_registry::collect_dynamic_module_registry_gc_roots(
+            &context.dynamic_module_registry,
+            roots,
+        );
+    }
+
+    /// Constructor fence for `ModuleSuffixes` (peer #1005 field
+    /// remediation): every field explicit; the moved lread oracle's struct
+    /// literals switch to it and the fields stay `pub(crate)`.
+    pub fn module_suffixes_for_test(
+        primary: &'static str,
+        secondary: Option<&'static str>,
+    ) -> crate::emacs_core::lread::ModuleSuffixes {
+        crate::emacs_core::lread::ModuleSuffixes { primary, secondary }
+    }
+
+    /// Setter fence for `Context::gc_count` (peer #1005 field remediation):
+    /// the field is `pub(crate)` in every arm and this is the only
+    /// cross-crate test write route.
+    pub fn set_gc_count_for_test(context: &mut Context, count: u64) {
+        context.set_gc_count_for_test(count);
+    }
+
+    /// Setter fence for `Context::gc_inhibit_depth` (peer #1005 field
+    /// remediation).
+    pub fn set_gc_inhibit_depth_for_test(context: &mut Context, depth: usize) {
+        context.set_gc_inhibit_depth_for_test(depth);
+    }
+
+    /// Guard fence: enter a GC-inhibit bracket. The moved regex fixture
+    /// builders raise the inhibit depth while Rc/Value locals must not be
+    /// collected; `leave_gc_inhibit_depth_for_test` closes the bracket.
+    pub fn enter_gc_inhibit_depth_for_test(context: &mut Context) {
+        let depth = context.gc_inhibit_depth_for_test();
+        context.set_gc_inhibit_depth_for_test(depth + 1);
+    }
+
+    /// Guard fence: leave a GC-inhibit bracket opened by
+    /// `enter_gc_inhibit_depth_for_test`.
+    pub fn leave_gc_inhibit_depth_for_test(context: &mut Context) {
+        let depth = context.gc_inhibit_depth_for_test();
+        context.set_gc_inhibit_depth_for_test(depth - 1);
+    }
+
+    /// Setter fence for `Context::gc_pending` (peer #1005 field
+    /// remediation).
+    pub fn set_gc_pending_for_test(context: &mut Context, pending: bool) {
+        context.set_gc_pending_for_test(pending);
+    }
+
+    /// Borrow-scoped mutable access to `Context::bc_buf` (peer #1005 field
+    /// remediation): the moved bytecode-backtrace tests build and edit the
+    /// operand stack, so push/extend/truncate/index writes go through this
+    /// fence while plain reads use `Context::bc_buf_for_test`.
+    pub fn with_bc_buf_mut_for_test<R>(
+        context: &mut Context,
+        f: impl FnOnce(&mut Vec<neovm_value::value::Value>) -> R,
+    ) -> R {
+        f(&mut context.bc_buf)
     }
 
     /// Setter fence for `Context::lexenv`: the moved quit test installs a

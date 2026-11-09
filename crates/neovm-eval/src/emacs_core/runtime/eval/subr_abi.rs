@@ -281,26 +281,10 @@ mod tests;
 #[derive(Clone, Copy)]
 #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) struct SubrEntry {
-    #[cfg(feature = "test-support")]
-    pub function: Option<SubrFn>,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) function: Option<SubrFn>,
-    #[cfg(feature = "test-support")]
-    pub min_args: u16,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) min_args: u16,
-    #[cfg(feature = "test-support")]
-    pub max_args: Option<u16>,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) max_args: Option<u16>,
-    #[cfg(feature = "test-support")]
-    pub dispatch_kind: neovm_value::tagged::header::SubrDispatchKind,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) dispatch_kind: neovm_value::tagged::header::SubrDispatchKind,
-    #[cfg(feature = "test-support")]
-    pub interactive_spec:
-        Option<crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec>,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) interactive_spec:
         Option<crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec>,
 }

@@ -208,38 +208,59 @@ pub(crate) enum CallGuard {
 pub(crate) struct PostImageInitSite {
     /// The C function's name, exactly as `main` spells it.
     /// The C function's name, exactly as `main` spells it.
-    #[cfg(not(feature = "test-support"))]
     pub(crate) c_name: &'static str,
-    #[cfg(feature = "test-support")]
-    pub c_name: &'static str,
     /// Line of the CALL in `src/emacs.c`.  Strictly increasing across
     /// [`PostImageInit::ALL`]; the test pins that.
     #[allow(dead_code)] // GNU citation; read only by the cfg(test) screen in tests/mod.rs
     /// Line of the CALL in `src/emacs.c`.  Strictly increasing across
     /// [`PostImageInit::ALL`]; the test pins that.
     #[allow(dead_code)] // GNU citation; read only by the cfg(test) screen in tests/mod.rs
-    #[cfg(not(feature = "test-support"))]
     pub(crate) call_line: u32,
-    #[cfg(feature = "test-support")]
-    pub call_line: u32,
     /// `file:first-last` for the function BODY in the GNU tree.
     #[allow(dead_code)] // GNU citation; read only by the cfg(test) screen in tests/mod.rs
     /// `file:first-last` for the function BODY in the GNU tree.
     #[allow(dead_code)] // GNU citation; read only by the cfg(test) screen in tests/mod.rs
-    #[cfg(not(feature = "test-support"))]
     pub(crate) body: &'static str,
-    #[cfg(feature = "test-support")]
-    pub body: &'static str,
     #[allow(dead_code)] // classification; read only by the cfg(test) screen in tests/mod.rs
     #[allow(dead_code)] // classification; read only by the cfg(test) screen in tests/mod.rs
-    #[cfg(not(feature = "test-support"))]
     pub(crate) guard: CallGuard,
-    #[cfg(feature = "test-support")]
-    pub guard: CallGuard,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) establishes: Establishes,
-    #[cfg(feature = "test-support")]
-    pub establishes: Establishes,
+}
+
+/// Read surfaces for the moved post-image-init oracle (peer #1005 field
+/// remediation): every field is `pub(crate)` in every arm; the oracle reads
+/// the call-site row through these getters.
+#[cfg(any(test, feature = "test-support"))]
+impl PostImageInitSite {
+    /// Copied C function name.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn c_name_for_test(&self) -> &'static str {
+        self.c_name
+    }
+
+    /// Copied `src/emacs.c` call line.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn call_line_for_test(&self) -> u32 {
+        self.call_line
+    }
+
+    /// Copied `file:first-last` body citation.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn body_for_test(&self) -> &'static str {
+        self.body
+    }
+
+    /// Copied build guard.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn guard_for_test(&self) -> CallGuard {
+        self.guard
+    }
+
+    /// Copied Lisp-level effect classification.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn establishes_for_test(&self) -> Establishes {
+        self.establishes
+    }
 }
 
 /// Every `init_*` call GNU's `main` makes AFTER `load_pdump`

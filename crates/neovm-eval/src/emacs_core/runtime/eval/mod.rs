@@ -3305,11 +3305,7 @@ pub struct Context {
     sequence_temp_root_frames: Vec<SequenceTempRootFrame>,
     /// Contiguous bytecode stack buffer, matching GNU Emacs's bc_thread_state.
     /// All bytecode frames share this single buffer. GC scans it directly.
-    #[cfg(not(feature = "test-support"))]
     pub(crate) bc_buf: Vec<Value>,
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub bc_buf: Vec<Value>,
     /// JIT residual-root window stack: generated code stores the operand-stack
     /// values live across a GC-capable shim call into `[top..top+N)` slots of
     /// this stack and bumps `jit_root_stack_top` for the call's duration (see
@@ -3324,11 +3320,7 @@ pub struct Context {
     /// and the function object (so GC can trace its constants).
     pub(crate) bc_frames: Vec<BcFrame>,
     /// Shared condition runtime mirror for active catch/condition handlers.
-    #[cfg(not(feature = "test-support"))]
     pub(crate) condition_stack: Vec<ConditionFrame>,
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub condition_stack: Vec<ConditionFrame>,
     /// GNU `pending_funcalls` equivalent for internal no-Lisp teardown paths.
     pub(crate) pending_safe_funcalls: WorldSlot<Vec<PendingSafeFuncall>>,
     /// Thread-private backing stores for the interpreter's per-entry stacks
@@ -3358,10 +3350,6 @@ pub struct Context {
     pub(crate) daemon: WorldSlot<Option<DaemonState>>,
     /// Process manager — owns all tracked processes.
     pub(crate) processes: WorldSlot<ProcessManager>,
-    /// Abbreviation manager — text abbreviation expansion.
-    #[cfg(feature = "test-support")]
-    pub abbrevs: WorldSlot<AbbrevManager>,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) abbrevs: WorldSlot<AbbrevManager>,
     /// GNU-compatible CPU and managed-allocation profiler state.
     pub(crate) profiler: profiler::ProfilerState,
@@ -3455,11 +3443,7 @@ pub struct Context {
     pub(crate) hash_table_test_registry: super::builtins::HashTableTestRegistryHandle,
     pub(crate) file_notify_registry: super::builtins::FileNotifyRegistryHandle,
     pub(crate) window_configuration_registry: super::builtins::WindowConfigurationRegistryHandle,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) dynamic_module_registry: data::dynamic_module_registry::DynamicModuleRegistryHandle,
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub dynamic_module_registry: data::dynamic_module_registry::DynamicModuleRegistryHandle,
     /// Mmap-backed pdump image that owns any mapped heap payloads borrowed by
     /// this evaluator's Lisp objects.
     /// The loaded pdump mapping, LEAKED to 'static at install: process-global
@@ -3475,12 +3459,7 @@ pub struct Context {
     pub(crate) cached_system_name: WorldSlot<Value>,
     /// Lexical environment: flat cons alist mirroring GNU Emacs's
     /// `Vinternal_interpreter_environment`.
-    #[cfg(not(feature = "test-support"))]
     pub(crate) lexenv: Value,
-    /// TEST-SUPPORT-VIS row: moved tests save/restore the lexical environment.
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub lexenv: Value,
     pub(crate) quit_flag: Value,
     #[doc(hidden)]
     pub inhibit_quit: Value,
@@ -3653,22 +3632,12 @@ pub struct Context {
     /// Maximum recursion depth.
     pub(crate) max_depth: usize,
     /// Total number of GC collections performed.
-    #[cfg(not(feature = "test-support"))]
     pub(crate) gc_count: u64,
-    /// Total number of GC collections performed.
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub gc_count: u64,
 
     /// Last thread that activated this Context, for cold cache invalidation.
     last_activation_thread: Option<std::thread::ThreadId>,
     /// Nested depth of explicit GC inhibition scopes.
-    #[cfg(not(feature = "test-support"))]
     pub(crate) gc_inhibit_depth: usize,
-    /// Nested depth of explicit GC inhibition scopes.
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub gc_inhibit_depth: usize,
 
     /// Mirror of `jit_root_stack.as_mut_ptr()`, republished on growth; read by
     /// generated code via a compile-time field offset.
@@ -3827,12 +3796,7 @@ pub struct Context {
     /// True while the command loop is blocked waiting for external input.
     pub(crate) waiting_for_user_input: bool,
     /// Set when allocation crosses the GC threshold; cleared by `gc_collect`.
-    #[cfg(not(feature = "test-support"))]
     pub(crate) gc_pending: bool,
-    /// Set when allocation crosses the GC threshold; cleared by `gc_collect`.
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub gc_pending: bool,
 
     /// True while the mutator-side collection driver
     /// (`gc_collect_from_current_roots_impl`) is on the stack. Set and cleared
@@ -3848,11 +3812,7 @@ pub struct Context {
     /// can detect "this panic escaped GC machinery — heap invariants unknown"
     /// and re-raise instead of containing. A guard that cleared it on unwind
     /// would erase exactly the evidence the detector exists to preserve.
-    #[cfg(not(feature = "test-support"))]
     pub(crate) gc_driver_active: bool,
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub gc_driver_active: bool,
     /// Stress-test mode: force GC at every safe point regardless of threshold.
     /// Private in EVERY arm (peer #982/#1005): consumers read it through
     /// `gc_stress_for_test` and set it through the AUTHORITY setter fence, so
@@ -3862,10 +3822,6 @@ pub struct Context {
     compiler_function_overrides_active: bool,
     /// When true, collect detailed timing counters for macro/eager-load paths.
     macro_perf_enabled: bool,
-    /// Custom variable manager — defcustom/defgroup system.
-    #[cfg(feature = "test-support")]
-    pub custom: CustomManager,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) custom: CustomManager,
     /// Native construction state, never serialized. Unlike an ordinary
     /// runtime redump, loadup must omit build-only environment derivatives.
@@ -7685,6 +7641,11 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
 /// A1 test-surface row (post-split option A): the gc_stress test flag was a
 /// crate-visible field; moved tests read and set it through these additive
 /// accessors. The field itself is private in every arm (peer #982/#1005).
+///
+/// The observers below follow the same rule for the remaining `Context`
+/// fields whose moved tests inspect them: every field is `pub(crate)` in
+/// every arm, reads go through a read-only getter (VIS METHOD row), and
+/// writes go through an AUTHORITY setter fence.
 #[cfg(any(test, feature = "test-support"))]
 impl Context {
     #[doc(hidden)]
@@ -7695,6 +7656,70 @@ impl Context {
     #[doc(hidden)]
     pub fn gc_stress_for_test(&self) -> bool {
         self.gc_stress
+    }
+
+    /// Copied GC collection counter (peer #1005 field remediation).
+    #[doc(hidden)]
+    pub fn gc_count_for_test(&self) -> u64 {
+        self.gc_count
+    }
+
+    /// Copied GC inhibit-depth counter (peer #1005 field remediation).
+    #[doc(hidden)]
+    pub fn gc_inhibit_depth_for_test(&self) -> usize {
+        self.gc_inhibit_depth
+    }
+
+    /// Copied pending-GC flag (peer #1005 field remediation).
+    #[doc(hidden)]
+    pub fn gc_pending_for_test(&self) -> bool {
+        self.gc_pending
+    }
+
+    /// Borrowed bytecode operand stack (peer #1005 field remediation).
+    #[doc(hidden)]
+    pub fn bc_buf_for_test(&self) -> &Vec<Value> {
+        &self.bc_buf
+    }
+
+    /// Borrowed condition stack (peer #1005 field remediation).
+    #[doc(hidden)]
+    pub fn condition_stack_for_test(&self) -> &Vec<ConditionFrame> {
+        &self.condition_stack
+    }
+
+    /// Copied lexical environment (peer #1005 field remediation).
+    #[doc(hidden)]
+    pub fn lexenv_for_test(&self) -> Value {
+        self.lexenv
+    }
+
+    /// Borrowed pdump-compat abbrev manager (peer #1005 field
+    /// remediation).  The getter deliberately returns `&AbbrevManager`, not
+    /// `&WorldSlot`: the slot exposes a raw-pointer accessor and a
+    /// `DerefMut`, so the narrower type keeps every write route inside the
+    /// AUTHORITY fences.
+    #[doc(hidden)]
+    pub fn abbrevs_for_test(&self) -> &AbbrevManager {
+        &self.abbrevs
+    }
+
+    /// AUTHORITY setter fence for `Context::gc_count`.
+    #[doc(hidden)]
+    pub fn set_gc_count_for_test(&mut self, count: u64) {
+        self.gc_count = count;
+    }
+
+    /// AUTHORITY setter fence for `Context::gc_inhibit_depth`.
+    #[doc(hidden)]
+    pub fn set_gc_inhibit_depth_for_test(&mut self, depth: usize) {
+        self.gc_inhibit_depth = depth;
+    }
+
+    /// AUTHORITY setter fence for `Context::gc_pending`.
+    #[doc(hidden)]
+    pub fn set_gc_pending_for_test(&mut self, pending: bool) {
+        self.gc_pending = pending;
     }
 }
 

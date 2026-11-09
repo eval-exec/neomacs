@@ -33,7 +33,7 @@ fn display_setup(setup: &str) -> (Context, ModeLineDisplayOutput) {
         .selected_window;
     let format = eval.eval_str(setup).expect("format setup");
     let before = save_scratch_gc_roots();
-    let gc = eval.gc_count;
+    let gc = eval.gc_count_for_test();
     let output = format_mode_line_for_display_with_sources(
         &mut eval,
         format,
@@ -41,7 +41,7 @@ fn display_setup(setup: &str) -> (Context, ModeLineDisplayOutput) {
         Value::make_buffer(buffer_id),
         24,
     );
-    assert_eq!(eval.gc_count, gc + 1, "fixture must collect exactly once");
+    assert_eq!(eval.gc_count_for_test(), gc + 1, "fixture must collect exactly once");
     assert_eq!(
         save_scratch_gc_roots(),
         before,
@@ -207,7 +207,7 @@ fn mode_line_incremental_split_fresh_format_survives_nested_context_gc() {
     let frames = crate::window::FrameManager::new();
     let processes = neovm_eval::emacs_core::eval::data::process_state::ProcessManager::new();
     let before = save_scratch_gc_roots();
-    let gc = eval.gc_count;
+    let gc = eval.gc_count_for_test();
     let mut calls = Vec::new();
     let output = neovm_display::test_support::authority::finish_format_mode_line_in_state_with_eval_for_test(
         neovm_eval::emacs_core::eval::VariableView::canonical(
@@ -256,7 +256,7 @@ fn mode_line_incremental_split_fresh_format_survives_nested_context_gc() {
             Value::symbol("d5-state-second")
         ]
     );
-    assert_eq!(eval.gc_count, gc + 1);
+    assert_eq!(eval.gc_count_for_test(), gc + 1);
     assert_eq!(save_scratch_gc_roots(), before);
     assert_live_interval_plists(&eval, output);
     assert_eq!(output.as_utf8_str(), Some("ACB"));
@@ -296,9 +296,9 @@ fn mode_line_incremental_outputs_remain_owned_by_independent_heaps() {
         eval.setup_thread_locals();
         eval.eval_str("(setq d5-heap-source nil d5-heap-format nil)")
             .expect("detach inputs");
-        let gc = eval.gc_count;
+        let gc = eval.gc_count_for_test();
         eval.gc_collect_exact();
-        assert_eq!(eval.gc_count, gc + 1);
+        assert_eq!(eval.gc_count_for_test(), gc + 1);
         assert_live_interval_plists(eval, output);
         assert_eq!(rendering(output), reference);
     }

@@ -64,24 +64,24 @@ fn hash_user_guard_restores_success_and_nested_depth() {
     let other = Value::hash_table(HashTableTest::Eq);
     with_user_test_guard(&mut context, table, |context| {
         assert_eq!(depth(table), 1);
-        assert_eq!(context.gc_inhibit_depth, 1);
+        assert_eq!(context.gc_inhibit_depth_for_test(), 1);
         with_user_test_guard(context, table, |context| {
             // Nested on the SAME table: the count reaches 2 where the bool
             // could only stay false (Rev R2), and the nested activation
             // adds no GC-inhibit of its own.
             assert_eq!(depth(table), 2);
-            assert_eq!(context.gc_inhibit_depth, 1);
+            assert_eq!(context.gc_inhibit_depth_for_test(), 1);
             with_user_test_guard(context, other, |context| {
-                assert_eq!(context.gc_inhibit_depth, 2);
+                assert_eq!(context.gc_inhibit_depth_for_test(), 2);
                 assert_eq!(depth(other), 1);
             });
             assert_eq!(depth(other), 0);
-            assert_eq!(context.gc_inhibit_depth, 1);
+            assert_eq!(context.gc_inhibit_depth_for_test(), 1);
         });
         assert_eq!(depth(table), 1);
     });
     assert_eq!(depth(table), 0);
-    assert_eq!(context.gc_inhibit_depth, 0);
+    assert_eq!(context.gc_inhibit_depth_for_test(), 0);
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn hash_user_guard_rejects_mutations_before_lookup() {
         assert_eq!(data[1], table);
         assert_eq!(depth(table), 0);
         assert_eq!(table.as_hash_table().unwrap().data.len(), 1);
-        assert_eq!(context.gc_inhibit_depth, 0);
+        assert_eq!(context.gc_inhibit_depth_for_test(), 0);
     }
     context
         .eval_str("(clrhash neovm-guard-table)")
@@ -137,7 +137,7 @@ fn hash_user_guard_allows_reads_other_writes_and_caught_error() {
     .expect("read and independent write must succeed");
     assert_eq!(result.as_fixnum(), Some(106));
     assert_eq!(depth(table), 0);
-    assert_eq!(context.gc_inhibit_depth, 0);
+    assert_eq!(context.gc_inhibit_depth_for_test(), 0);
 }
 
 #[test]
@@ -147,7 +147,7 @@ fn hash_user_guard_restores_after_signal_and_throw() {
         let result = with_user_test_guard(&mut context, table, |context| context.eval_str(exit));
         assert!(result.is_err(), "non-local exit must escape the callback");
         assert_eq!(depth(table), 0);
-        assert_eq!(context.gc_inhibit_depth, 0);
+        assert_eq!(context.gc_inhibit_depth_for_test(), 0);
         context
             .eval_str(r#"(puthash "stored" 11 neovm-guard-table)"#)
             .expect("table is writable after exit");
@@ -159,14 +159,14 @@ fn hash_user_guard_restores_after_rust_unwind() {
     let (mut context, table) = fixture();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         with_user_test_guard(&mut context, table, |context| {
-            assert_eq!(context.gc_inhibit_depth, 1);
+            assert_eq!(context.gc_inhibit_depth_for_test(), 1);
             assert_eq!(depth(table), 1);
             panic!("user-test callback unwind");
         });
     }));
     assert!(result.is_err());
     assert_eq!(depth(table), 0);
-    assert_eq!(context.gc_inhibit_depth, 0);
+    assert_eq!(context.gc_inhibit_depth_for_test(), 0);
     assert!(context.user_test_gc_accounting_pointer().is_none());
     context
         .eval_str(r#"(puthash "stored" 13 neovm-guard-table)"#)
@@ -272,7 +272,7 @@ fn hash_user_guard_preserves_live_settings_fallback_after_nested_exit() {
     assert!(result.is_err());
     assert_eq!(depth(table), 0);
     assert_eq!(depth(other), 0);
-    assert_eq!(context.gc_inhibit_depth, 0);
+    assert_eq!(context.gc_inhibit_depth_for_test(), 0);
     assert!(context.user_test_gc_accounting_pointer().is_none());
     context
         .obarray_mut()
@@ -385,7 +385,7 @@ fn hash_user_guard_two_activations_signal_and_unwind_cleanly() {
         Some("hash table test modifies table")
     );
     assert_eq!(depth(table), 0);
-    assert_eq!(context.gc_inhibit_depth, 0);
+    assert_eq!(context.gc_inhibit_depth_for_test(), 0);
     context
         .eval_str(r#"(puthash "stored" 12 neovm-guard-table)"#)
         .expect("writable after both activations unwound");

@@ -75,7 +75,7 @@ fn p6_reader_accepts_negative_argument_descriptor() {
 fn p6_dynamic_formals_root_detached_cursor_through_watcher_gc() {
     crate::test_utils::init_test_tracing();
     let mut context = crate::test_utils::new_context();
-    let collections_before = context.gc_count;
+    let collections_before = context.gc_count_for_test();
     let result = context
         .eval_str(
             r#"(progn
@@ -114,5 +114,5 @@ fn p6_dynamic_formals_root_detached_cursor_through_watcher_gc() {
     // the mutated third name. Bvarref2/Breturn (bytecode.c:84,209,627-645,892)
     // return that argument through its new formal name.
     assert_eq!(print_value(&result), "(33 (p6-watcher-a))");
-    assert!(context.gc_count > collections_before);
+    assert!(context.gc_count_for_test() > collections_before);
 }

@@ -2287,7 +2287,7 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
         }
     };
 
-    let completed = eval.gc_count;
+    let completed = eval.gc_count_for_test();
     if eval.tagged_heap().tagged_heap_generational_enabled() {
         assert!(eval.tagged_heap().should_run_minor(false, false));
         assert!(
@@ -2295,7 +2295,7 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
                 .tagged_heap()
                 .value_is_old_for_test(unsafe { Value::from_bits(cached_bits) })
         );
-        eval.gc_pending = true;
+        neovm_eval::test_support::authority::set_gc_pending_for_test(&mut eval, true);
         eval.gc_safe_point_exact();
         assert!(
             eval.tagged_heap().sweep_in_progress(),
@@ -2317,7 +2317,7 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
         // GEN0 has no minor collector: exercise its real full entry instead.
         eval.gc_collect_exact();
     }
-    assert_eq!(eval.gc_count, completed + 1);
+    assert_eq!(eval.gc_count_for_test(), completed + 1);
     check_cached_graph(&eval);
     if eval.tagged_heap().tagged_heap_generational_enabled() {
         assert!(
@@ -2326,9 +2326,9 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
         );
     }
 
-    let completed = eval.gc_count;
+    let completed = eval.gc_count_for_test();
     eval.gc_collect_exact();
-    assert_eq!(eval.gc_count, completed + 1);
+    assert_eq!(eval.gc_count_for_test(), completed + 1);
     check_cached_graph(&eval);
 
     eval.with_gc_inhibited(|eval| {

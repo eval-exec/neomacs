@@ -927,9 +927,9 @@ pub fn builtin_get_load_suffixes(
 #[cfg(any(test, feature = "test-support"))]
 pub struct ModuleSuffixes {
     /// GNU `MODULES_SUFFIX`, also the value of `module-file-suffix`.
-    pub primary: &'static str,
+    pub(crate) primary: &'static str,
     /// GNU `MODULES_SECONDARY_SUFFIX`, absent on every platform but darwin.
-    pub secondary: Option<&'static str>,
+    pub(crate) secondary: Option<&'static str>,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg(not(any(test, feature = "test-support")))]
@@ -938,6 +938,24 @@ pub(crate) struct ModuleSuffixes {
     pub(crate) primary: &'static str,
     /// GNU `MODULES_SECONDARY_SUFFIX`, absent on every platform but darwin.
     pub(crate) secondary: Option<&'static str>,
+}
+
+/// Read surfaces for the moved lread oracle (peer #1005 field remediation):
+/// every field is `pub(crate)` in every arm; the oracle reads the suffixes
+/// through these getters instead of the fields.
+#[cfg(any(test, feature = "test-support"))]
+impl ModuleSuffixes {
+    /// Copied primary `MODULES_SUFFIX`.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn primary_for_test(&self) -> &'static str {
+        self.primary
+    }
+
+    /// Copied secondary `MODULES_SECONDARY_SUFFIX`.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn secondary_for_test(&self) -> Option<&'static str> {
+        self.secondary
+    }
 }
 
 /// GNU's configure-time `case $opsys`, as a function of the OS so every platform

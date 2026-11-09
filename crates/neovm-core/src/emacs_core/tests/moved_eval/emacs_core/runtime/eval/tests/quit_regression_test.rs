@@ -347,7 +347,7 @@ fn discard_specpdl_restores_bindings_without_lisp_callbacks() {
         vec![Value::from_sym_id(symbol), watcher],
     )
     .expect("register trapped watcher");
-    let lexenv = ctx.lexenv;
+    let lexenv = ctx.lexenv_for_test();
     // SAFETY: test-only owner-thread binding-stack writes; each push is matched by a recorded-depth discard/truncate on the same path (including the panic-recovery path under test), and the Vec is never replaced or moved.
     unsafe { ctx.specpdl_mut() }.push(SpecBinding::UnwindProtect {
         forms: Value::list(vec![cleanup]),

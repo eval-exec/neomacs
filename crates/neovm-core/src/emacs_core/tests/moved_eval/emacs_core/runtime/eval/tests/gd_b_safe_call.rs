@@ -48,7 +48,7 @@ fn gd_b_safe_call_barrier_stops_outer_handlers_after_inner_handlers() {
     let spec_depth = ctx.specpdl().len();
     assert_eq!(ctx.safe_funcall(callback, vec![]).unwrap(), Value::NIL);
     assert_eq!(ctx.specpdl().len(), spec_depth);
-    assert_eq!(ctx.condition_stack.len(), 1);
+    assert_eq!(ctx.condition_stack_for_test().len(), 1);
     assert_eq!(
         format_eval_result(&ctx.eval_str("(list gd-b-safe-events gd-b-safe-hooks gd-b-safe-debug inhibit-redisplay inhibit-debugger)")),
         "OK (((inner t nil)) ((error (\"safe failure\") t nil)) nil nil nil)"
@@ -79,7 +79,7 @@ fn gd_b_safe_call_debug_on_signal_overrides_the_qt_barrier() {
             ctx.eval_str("inhibit-debugger").unwrap(),
             Value::bool(inhibit_debugger)
         );
-        assert!(ctx.condition_stack.is_empty());
+        assert!(ctx.condition_stack_for_test().is_empty());
         assert!(ctx.specpdl().is_empty());
     }
 }
@@ -95,7 +95,7 @@ fn gd_b_safe_call_qt_handler_catches_quit_and_non_error_conditions() {
             .unwrap();
         let callback = ctx.eval_str(callback_source).unwrap();
         assert_eq!(ctx.safe_funcall(callback, vec![]).unwrap(), Value::NIL);
-        assert!(ctx.condition_stack.is_empty());
+        assert!(ctx.condition_stack_for_test().is_empty());
         assert!(ctx.specpdl().is_empty());
     }
 }
@@ -117,7 +117,7 @@ fn gd_b_safe_call_preserves_values_and_nonlocal_throws() {
         )),
         "OK (42 escaped)"
     );
-    assert!(ctx.condition_stack.is_empty());
+    assert!(ctx.condition_stack_for_test().is_empty());
     assert!(ctx.specpdl().is_empty());
 }
 
@@ -141,7 +141,7 @@ fn gd_b_safe_call_its_own_binding_is_outside_the_qt_handler() {
             crate::emacs_core::print::format_flow_with_eval(&ctx, &flow),
             "(error (\"safe binding\"))"
         );
-        assert!(ctx.condition_stack.is_empty());
+        assert!(ctx.condition_stack_for_test().is_empty());
         assert!(ctx.specpdl().is_empty());
     }
 }

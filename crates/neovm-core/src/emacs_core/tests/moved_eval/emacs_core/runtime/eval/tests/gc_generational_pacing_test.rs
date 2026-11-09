@@ -22,7 +22,7 @@ fn integer(context: &Context, name: &str) -> i64 {
 
 fn counts(context: &Context) -> CompletionCounts {
     CompletionCounts {
-        context: context.gc_count,
+        context: context.gc_count_for_test(),
         gcs_done: integer(context, "gcs-done"),
         hooks: integer(context, "u34p-hook-count"),
     }
@@ -326,7 +326,7 @@ fn generational_memory_full_waits_for_due_then_selects_major_at_real_safe_point(
     assert!(context.tagged_heap().concurrent_mark_running());
     assert_eq!(counts(&context), before, "start is not completion");
     let wait = std::time::Instant::now();
-    while context.gc_count == before.context {
+    while context.gc_count_for_test() == before.context {
         context.gc_safe_point_exact();
         assert!(
             wait.elapsed() < std::time::Duration::from_secs(30),

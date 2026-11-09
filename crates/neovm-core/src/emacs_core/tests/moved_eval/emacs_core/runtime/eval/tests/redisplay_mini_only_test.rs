@@ -147,14 +147,14 @@ fn mini_only_fallback_throw_restores_transaction_without_paint() {
     // Install the same handler as sf_catch_value before entering a safe
     // callback. Without it GNU throw signals no-catch, which safe_funcall
     // correctly demotes; the unit must observe a valid nonlocal transfer.
-    let handlers = eval.condition_stack.len();
+    let handlers = eval.condition_stack_for_test().len();
     eval.push_condition_frame(ConditionFrame::Catch {
         tag: Value::symbol("mini-core-transfer"),
         resume: ResumeTarget::InterpreterCatch,
     });
     let result = eval.eval_value(&form);
     eval.pop_condition_frame();
-    assert_eq!(eval.condition_stack.len(), handlers);
+    assert_eq!(eval.condition_stack_for_test().len(), handlers);
     let flow = result.expect_err("mini sizing throw escapes");
     let thrown = flow.as_throw().expect("ordinary nonlocal throw");
     assert_eq!(thrown.tag, Value::symbol("mini-core-transfer"));

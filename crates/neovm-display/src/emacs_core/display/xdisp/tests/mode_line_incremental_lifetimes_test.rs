@@ -27,10 +27,10 @@ fn mode_line_incremental_top_format_and_face_survive_replacement_during_gc() {
         .eval_str("(setq d5-root-face (list :foreground (copy-sequence \"red\")))")
         .expect("face");
     let before = save_scratch_gc_roots();
-    let gc = eval.gc_count;
+    let gc = eval.gc_count_for_test();
     let output =
         builtin_format_mode_line_ctx(&mut eval, &vec![format, face]).expect("format-mode-line");
-    assert_eq!(eval.gc_count, gc + 1);
+    assert_eq!(eval.gc_count_for_test(), gc + 1);
     assert_eq!(save_scratch_gc_roots(), before);
     assert_live_interval_plists(&eval, output);
     assert_eq!(output.as_utf8_str(), Some("XY"));
@@ -61,10 +61,10 @@ fn mode_line_incremental_resolved_symbol_survives_replacement_during_gc() {
         )
         .expect("resolved format setup");
     let before = save_scratch_gc_roots();
-    let gc = eval.gc_count;
+    let gc = eval.gc_count_for_test();
     let value = builtin_format_mode_line_ctx(&mut eval, &vec![format]).expect("resolved formatter");
     assert_eq!(value.as_utf8_str(), Some("XY"));
-    assert_eq!(eval.gc_count, gc + 1);
+    assert_eq!(eval.gc_count_for_test(), gc + 1);
     assert_eq!(
         eval.obarray_view().symbol_value_copied("d5-scalar-format"),
         Some(Value::NIL)

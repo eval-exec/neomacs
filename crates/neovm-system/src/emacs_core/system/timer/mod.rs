@@ -37,10 +37,19 @@ pub(crate) use neovm_value::system_vocab::time::WaitTimeout;
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct PendingGnuTimer {
-    #[cfg(not(feature = "test-support"))]
     when: GnuTimerTimestamp,
-    #[cfg(feature = "test-support")]
-    pub when: GnuTimerTimestamp,
+}
+
+/// Read surface for the moved timer oracle (peer #1005 field remediation):
+/// the field is private in every arm; the oracle reads the normalized
+/// timestamp through this getter.
+#[cfg(any(test, feature = "test-support"))]
+impl PendingGnuTimer {
+    /// Copied normalized timer timestamp.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    fn when_for_test(&self) -> GnuTimerTimestamp {
+        self.when
+    }
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]

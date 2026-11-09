@@ -87,6 +87,11 @@ neovm-eval = { path = "../neovm-eval", default-features = false, features = ["te
 # Feature unification: value/test-support adds CacheRootScan::Snapshot, so the
 # text consumer must compile with its matching test-support arm.
 neovm-text = { path = "../neovm-text", default-features = false, features = ["test-support"] }
+# The A' gate on fence-routed items is cfg(any(test, feature = "test-support"));
+# the optional `visibility` dependency is tied to the test-support feature, so
+# this dev-dependency makes the attribute macro resolvable in this crate's own
+# cfg(test) build too (same as neovm-eval and neovm-display).
+visibility = "0.1.1"
 
 [lints.rust]
 # Split-wave class guard (LEAD 11:5xZ): deny accidental self-recursion.

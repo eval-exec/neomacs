@@ -119,9 +119,6 @@ impl Default for MinibufferHistory {
 /// Owns all minibuffer state, including the recursive-edit stack.
 pub struct MinibufferManager {
     pub state_stack: Vec<MinibufferState>,
-    #[cfg(feature = "test-support")]
-    pub history: MinibufferHistory,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) history: MinibufferHistory,
     pub(crate) completion_style: CompletionStyle,
     #[cfg(test)]
@@ -245,6 +242,15 @@ impl MinibufferManager {
     /// Append one history entry from a Lisp string.
     pub fn add_to_history_lisp(&mut self, name: SymId, value: LispString, max_length: usize) {
         self.history.add(name, value, max_length);
+    }
+
+    /// Borrowed minibuffer history ring (peer #1005 field remediation): the
+    /// field is `pub(crate)` in every arm and this is the read surface for
+    /// the moved minibuffer oracle.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn history_for_test(&self) -> &MinibufferHistory {
+        &self.history
     }
 }
 

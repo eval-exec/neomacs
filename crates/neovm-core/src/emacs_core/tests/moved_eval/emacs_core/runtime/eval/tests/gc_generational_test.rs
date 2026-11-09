@@ -20,17 +20,18 @@ fn generational_context() -> Context {
 }
 
 fn run_minor(context: &mut Context) {
-    let completed = context.gc_count;
+    let completed = context.gc_count_for_test();
     context.gc_collect_from_current_roots_impl(false);
     assert!(context.tagged_heap().sweep_in_progress());
     assert!(!context.tagged_heap().concurrent_mark_running());
     assert_eq!(
-        context.gc_count, completed,
+        context.gc_count_for_test(),
+        completed,
         "mark termination is not completion"
     );
     for _ in 0..10_000 {
         if !context.tagged_heap().sweep_in_progress() {
-            assert_eq!(context.gc_count, completed + 1);
+            assert_eq!(context.gc_count_for_test(), completed + 1);
             return;
         }
         context.gc_collect_from_current_roots_impl(false);
@@ -140,11 +141,11 @@ fn explicit_collection_keeps_the_full_synchronous_entry() {
         let _ = Value::cons(Value::fixnum(61), Value::NIL);
     }
     let allocated = context.tagged_heap().allocated_count();
-    let completed = context.gc_count;
+    let completed = context.gc_count_for_test();
     context.gc_collect_exact();
     assert!(!context.tagged_heap().mark_in_progress());
     assert!(!context.tagged_heap().sweep_in_progress());
-    assert_eq!(context.gc_count, completed + 1);
+    assert_eq!(context.gc_count_for_test(), completed + 1);
     assert!(context.tagged_heap().allocated_count() < allocated);
     assert_eq!(reachable.cons_car(), Value::fixnum(53));
     assert!(

@@ -70,8 +70,10 @@ fn abbrev_copied_properties_have_only_manager_roots() {
         };
         // The pdump compatibility manager remains a real World owner even
         // though live Lisp abbrev builtins now use obarray-backed tables.
-        *eval.abbrevs =
-            AbbrevManager::from_dump(HashMap::from([(table_sym, table)]), table_sym, false);
+        neovm_eval::test_support::authority::set_abbrevs_manager_for_test(
+            eval,
+            AbbrevManager::from_dump(HashMap::from([(table_sym, table)]), table_sym, false),
+        );
         assert_eq!(probes.len(), 5);
         probes
     });
@@ -93,7 +95,7 @@ fn abbrev_copied_properties_have_only_manager_roots() {
             );
         }
         let table: &AbbrevTable = eval
-            .abbrevs
+            .abbrevs_for_test()
             .get_table("owned-abbrev-root-table")
             .expect("retained abbrev table");
         let entry = table
@@ -110,10 +112,10 @@ fn abbrev_copied_properties_have_only_manager_roots() {
             probes[3].0
         );
     };
-    let completed = eval.gc_count;
+    let completed = eval.gc_count_for_test();
     if eval.tagged_heap().tagged_heap_generational_enabled() {
         assert!(eval.tagged_heap().should_run_minor(false, false));
-        eval.gc_pending = true;
+        neovm_eval::test_support::authority::set_gc_pending_for_test(&mut eval, true);
         eval.gc_safe_point_exact();
         assert!(
             eval.tagged_heap().sweep_in_progress(),
@@ -131,11 +133,11 @@ fn abbrev_copied_properties_have_only_manager_roots() {
     } else {
         eval.gc_collect_exact();
     }
-    assert_eq!(eval.gc_count, completed + 1);
+    assert_eq!(eval.gc_count_for_test(), completed + 1);
     check_live(&eval);
-    let completed = eval.gc_count;
+    let completed = eval.gc_count_for_test();
     eval.gc_collect_exact();
-    assert_eq!(eval.gc_count, completed + 1);
+    assert_eq!(eval.gc_count_for_test(), completed + 1);
     check_live(&eval);
 
     neovm_eval::test_support::authority::reset_abbrevs_for_test(&mut eval);

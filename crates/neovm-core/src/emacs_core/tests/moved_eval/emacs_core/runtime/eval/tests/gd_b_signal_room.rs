@@ -295,8 +295,8 @@ fn compiled_no_borrow_signal_hook_reads_current_localized_reserve_without_watche
     let state = (
         ev.depth_for_test(),
         ev.specpdl().len(),
-        ev.condition_stack.len(),
-        ev.bc_buf.len(),
+        ev.condition_stack_for_test().len(),
+        ev.bc_buf_for_test().len(),
     );
     let result = ev.eval_str(
         r#"(let ((signal-hook-function #'gd-b-no-borrow-hook))
@@ -318,8 +318,8 @@ fn compiled_no_borrow_signal_hook_reads_current_localized_reserve_without_watche
         (
             ev.depth_for_test(),
             ev.specpdl().len(),
-            ev.condition_stack.len(),
-            ev.bc_buf.len(),
+            ev.condition_stack_for_test().len(),
+            ev.bc_buf_for_test().len(),
         ),
         state,
         "a no-borrow hook must not leave a depth, handler or root-stack extent"

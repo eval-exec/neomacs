@@ -33,3 +33,26 @@ pub fn tls_client_parameters_for_test(
         trust_roots,
     }
 }
+
+/// Constructor fence for `TlsPeerStatus` (peer #1005 field remediation):
+/// every field explicit; the moved TLS oracle's struct literal switches to
+/// it and the seven fields stay private in every arm.
+pub fn tls_peer_status_for_test(
+    warnings: Vec<&'static str>,
+    certificates: Vec<neovm_value::value::Value>,
+    key_exchange: Option<String>,
+    protocol: Option<String>,
+    cipher: Option<String>,
+    mac: Option<String>,
+    encrypt_then_mac: Option<bool>,
+) -> crate::emacs_core::tls::TlsPeerStatus {
+    crate::emacs_core::tls::TlsPeerStatus {
+        warnings,
+        certificates,
+        key_exchange,
+        protocol,
+        cipher,
+        mac,
+        encrypt_then_mac,
+    }
+}

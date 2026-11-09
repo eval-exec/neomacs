@@ -89,10 +89,10 @@ fn bookmark_lookup_key_cannot_retain_input_properties() {
             assert!(eval.bookmarks().get(&record.name).is_some());
         }
     };
-    let completed = eval.gc_count;
+    let completed = eval.gc_count_for_test();
     if eval.tagged_heap().tagged_heap_generational_enabled() {
         assert!(eval.tagged_heap().should_run_minor(false, false));
-        eval.gc_pending = true;
+        neovm_eval::test_support::authority::set_gc_pending_for_test(&mut eval, true);
         eval.gc_safe_point_exact();
         assert!(
             eval.tagged_heap().sweep_in_progress(),
@@ -110,11 +110,11 @@ fn bookmark_lookup_key_cannot_retain_input_properties() {
     } else {
         eval.gc_collect_exact();
     }
-    assert_eq!(eval.gc_count, completed + 1);
+    assert_eq!(eval.gc_count_for_test(), completed + 1);
     check_dropped(&eval);
-    let completed = eval.gc_count;
+    let completed = eval.gc_count_for_test();
     eval.gc_collect_exact();
-    assert_eq!(eval.gc_count, completed + 1);
+    assert_eq!(eval.gc_count_for_test(), completed + 1);
     check_dropped(&eval);
 }
 
@@ -269,10 +269,10 @@ fn bookmark_copied_properties_have_only_manager_roots() {
             probes[6].0
         );
     };
-    let completed = eval.gc_count;
+    let completed = eval.gc_count_for_test();
     if eval.tagged_heap().tagged_heap_generational_enabled() {
         assert!(eval.tagged_heap().should_run_minor(false, false));
-        eval.gc_pending = true;
+        neovm_eval::test_support::authority::set_gc_pending_for_test(&mut eval, true);
         eval.gc_safe_point_exact();
         assert!(
             eval.tagged_heap().sweep_in_progress(),
@@ -290,11 +290,11 @@ fn bookmark_copied_properties_have_only_manager_roots() {
     } else {
         eval.gc_collect_exact();
     }
-    assert_eq!(eval.gc_count, completed + 1);
+    assert_eq!(eval.gc_count_for_test(), completed + 1);
     check_live(&eval);
-    let completed = eval.gc_count;
+    let completed = eval.gc_count_for_test();
     eval.gc_collect_exact();
-    assert_eq!(eval.gc_count, completed + 1);
+    assert_eq!(eval.gc_count_for_test(), completed + 1);
     check_live(&eval);
 
     *eval.bookmarks_mut() = BookmarkManager::new();

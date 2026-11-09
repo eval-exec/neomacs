@@ -47,10 +47,7 @@ impl AbbrevTable {
 /// The tables HashMap is kept for pdump compatibility but no longer used by builtins.
 #[derive(Clone, Debug)]
 pub struct AbbrevManager {
-    #[cfg(feature = "test-support")]
-    pub tables: HashMap<SymId, AbbrevTable>,
-    #[cfg(not(feature = "test-support"))]
-    tables: HashMap<SymId, AbbrevTable>,
+    pub(crate) tables: HashMap<SymId, AbbrevTable>,
     global_table_sym: SymId,
     abbrev_mode: bool,
 }

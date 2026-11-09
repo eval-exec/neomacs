@@ -133,7 +133,7 @@ fn minibuffer_copied_properties_have_only_manager_roots() {
             );
         }
         assert_eq!(
-            eval.minibuffers().history.get(history)[0]
+            eval.minibuffers().history_for_test().get(history)[0]
                 .intervals()
                 .get_property_at_char_pos(CharPos0::ZERO, key)
                 .expect("history property")
@@ -142,10 +142,10 @@ fn minibuffer_copied_properties_have_only_manager_roots() {
         );
     };
 
-    let completed = eval.gc_count;
+    let completed = eval.gc_count_for_test();
     if eval.tagged_heap().tagged_heap_generational_enabled() {
         assert!(eval.tagged_heap().should_run_minor(false, false));
-        eval.gc_pending = true;
+        neovm_eval::test_support::authority::set_gc_pending_for_test(&mut eval, true);
         eval.gc_safe_point_exact();
         assert!(
             eval.tagged_heap().sweep_in_progress(),
@@ -163,11 +163,11 @@ fn minibuffer_copied_properties_have_only_manager_roots() {
     } else {
         eval.gc_collect_exact();
     }
-    assert_eq!(eval.gc_count, completed + 1);
+    assert_eq!(eval.gc_count_for_test(), completed + 1);
     check_live(&eval);
-    let completed = eval.gc_count;
+    let completed = eval.gc_count_for_test();
     eval.gc_collect_exact();
-    assert_eq!(eval.gc_count, completed + 1);
+    assert_eq!(eval.gc_count_for_test(), completed + 1);
     check_live(&eval);
 
     *eval.minibuffers_mut() = MinibufferManager::new();
@@ -570,18 +570,22 @@ fn history_dedup() {
     mgr.add_to_history(intern("h"), "same", 100);
     mgr.add_to_history(intern("h"), "same", 100);
     mgr.add_to_history(intern("h"), "same", 100);
-    assert_eq!(mgr.history.get(intern("h")).len(), 1);
+    assert_eq!(mgr.history_for_test().get(intern("h")).len(), 1);
 
     mgr.add_to_history(intern("h"), "different", 100);
-    assert_eq!(mgr.history.get(intern("h")).len(), 2);
+    assert_eq!(mgr.history_for_test().get(intern("h")).len(), 2);
     assert_eq!(
-        crate::emacs_core::emacs_char::to_utf8_lossy(mgr.history.get(intern("h"))[0].as_bytes())
-            .as_str(),
+        crate::emacs_core::emacs_char::to_utf8_lossy(
+            mgr.history_for_test().get(intern("h"))[0].as_bytes()
+        )
+        .as_str(),
         "different"
     );
     assert_eq!(
-        crate::emacs_core::emacs_char::to_utf8_lossy(mgr.history.get(intern("h"))[1].as_bytes())
-            .as_str(),
+        crate::emacs_core::emacs_char::to_utf8_lossy(
+            mgr.history_for_test().get(intern("h"))[1].as_bytes()
+        )
+        .as_str(),
         "same"
     );
 }

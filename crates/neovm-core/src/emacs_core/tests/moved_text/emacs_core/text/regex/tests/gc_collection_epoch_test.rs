@@ -191,10 +191,10 @@ fn assert_uncovered_cache_discards_swept_roots(owner: CacheOwner, synchronize_at
     // its stale coverage metadata without moving the Context across threads.
     let mut ctx = crate::test_utils::new_context();
     // Build the cache fixture without safe-point collections of Rust locals.
-    ctx.gc_inhibit_depth += 1;
+    neovm_eval::test_support::authority::enter_gc_inhibit_depth_for_test(&mut ctx);
     let identity = ctx.tagged_heap().tagged_heap_identity();
     let (table, payload) = populate_cache(&mut ctx, owner);
-    ctx.gc_inhibit_depth -= 1;
+    neovm_eval::test_support::authority::leave_gc_inhibit_depth_for_test(&mut ctx);
     let stale = UncoveredRegexCaches::take();
     ctx.gc_collect_exact();
     stale.restore();
@@ -242,7 +242,7 @@ pub(super) struct WarmRegexCaches {
 
 impl WarmRegexCaches {
     pub(super) fn new(ctx: &mut Context) -> Self {
-        ctx.gc_inhibit_depth += 1;
+        neovm_eval::test_support::authority::enter_gc_inhibit_depth_for_test(ctx);
         let syntax_table = ctx
             .eval_str(
                 "(progn (set-syntax-table (copy-syntax-table))
@@ -307,7 +307,7 @@ impl WarmRegexCaches {
         crate::emacs_core::casetab_entries::builtin_set_case_table(ctx, vec![custom]).unwrap();
         let literal_translation =
             buffer_search_translation(ctx.edit.buffers.current_buffer().unwrap(), true).unwrap();
-        ctx.gc_inhibit_depth -= 1;
+        neovm_eval::test_support::authority::leave_gc_inhibit_depth_for_test(ctx);
         Self {
             syntax,
             syntax_table,

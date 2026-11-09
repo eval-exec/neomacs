@@ -40,14 +40,8 @@ pub(crate) enum GnutlsCredentialType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct GnutlsBootParameters {
-    #[cfg(not(feature = "test-support"))]
     pub(crate) credential_type: GnutlsCredentialType,
-    #[cfg(feature = "test-support")]
-    pub credential_type: GnutlsCredentialType,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) client: TlsClientParameters,
-    #[cfg(feature = "test-support")]
-    pub client: TlsClientParameters,
 }
 
 /// Certificate roots a TLS client must use for peer verification.
@@ -65,14 +59,8 @@ pub(crate) enum TlsTrustRoots {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct TlsClientParameters {
-    #[cfg(not(feature = "test-support"))]
     pub(crate) hostname: String,
-    #[cfg(feature = "test-support")]
-    pub hostname: String,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) trust_roots: TlsTrustRoots,
-    #[cfg(feature = "test-support")]
-    pub trust_roots: TlsTrustRoots,
 }
 
 impl TlsClientParameters {
@@ -81,6 +69,39 @@ impl TlsClientParameters {
             hostname,
             trust_roots: TlsTrustRoots::Default,
         }
+    }
+
+    /// Borrowed client hostname (peer #1005 field remediation): the field is
+    /// `pub(crate)` in every arm; the moved TLS oracle reads this getter.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn hostname_for_test(&self) -> &String {
+        &self.hostname
+    }
+
+    /// Borrowed client trust roots (peer #1005 field remediation).
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn trust_roots_for_test(&self) -> &TlsTrustRoots {
+        &self.trust_roots
+    }
+}
+
+/// Read surfaces for the moved TLS oracle (peer #1005 field remediation):
+/// every field is `pub(crate)` in every arm; the oracle reads the parsed boot
+/// parameters through these getters.
+#[cfg(any(test, feature = "test-support"))]
+impl GnutlsBootParameters {
+    /// Copied negotiated credential type.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn credential_type_for_test(&self) -> GnutlsCredentialType {
+        self.credential_type
+    }
+
+    /// Borrowed client parameters.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn client_for_test(&self) -> &TlsClientParameters {
+        &self.client
     }
 }
 
@@ -174,33 +195,12 @@ pub(crate) fn parse_gnutls_boot_parameters(
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct TlsPeerStatus {
-    #[cfg(feature = "test-support")]
-    pub warnings: Vec<&'static str>,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) warnings: Vec<&'static str>,
-    #[cfg(feature = "test-support")]
-    pub certificates: Vec<Value>,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) certificates: Vec<Value>,
-    #[cfg(feature = "test-support")]
-    pub key_exchange: Option<String>,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) key_exchange: Option<String>,
-    #[cfg(feature = "test-support")]
-    pub protocol: Option<String>,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) protocol: Option<String>,
-    #[cfg(feature = "test-support")]
-    pub cipher: Option<String>,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) cipher: Option<String>,
-    #[cfg(feature = "test-support")]
-    pub mac: Option<String>,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) mac: Option<String>,
-    #[cfg(feature = "test-support")]
-    pub encrypt_then_mac: Option<bool>,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) encrypt_then_mac: Option<bool>,
 }
 

@@ -2606,26 +2606,34 @@ impl CompiledFreshness {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct StaleBytecode {
-    #[cfg(not(feature = "test-support"))]
     pub(crate) compiled: PathBuf,
-    /// TEST-SUPPORT-VIS row: moved stale-bytecode oracle reads the record.
-    #[cfg(feature = "test-support")]
-    pub compiled: PathBuf,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) source: PathBuf,
-    /// TEST-SUPPORT-VIS row: moved stale-bytecode oracle reads the record.
-    #[cfg(feature = "test-support")]
-    pub source: PathBuf,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) compiled_mtime: SystemTime,
-    /// TEST-SUPPORT-VIS row: moved stale-bytecode oracle reads the record.
-    #[cfg(feature = "test-support")]
-    pub compiled_mtime: SystemTime,
-    #[cfg(not(feature = "test-support"))]
     pub(crate) source_mtime: SystemTime,
-    /// TEST-SUPPORT-VIS row: moved stale-bytecode oracle reads the record.
-    #[cfg(feature = "test-support")]
-    pub source_mtime: SystemTime,
+}
+
+/// Read surfaces for the moved stale-bytecode oracle (peer #1005 field
+/// remediation): every field is `pub(crate)` in every arm; the oracle reads
+/// the `.elc`/`.el` paths and the two mtimes through these getters.
+#[cfg(any(test, feature = "test-support"))]
+impl StaleBytecode {
+    /// Copied Lisp-source path.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn source_for_test(&self) -> &PathBuf {
+        &self.source
+    }
+
+    /// Copied `.elc` modification time.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn compiled_mtime_for_test(&self) -> SystemTime {
+        self.compiled_mtime
+    }
+
+    /// Copied `.el` modification time.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn source_mtime_for_test(&self) -> SystemTime {
+        self.source_mtime
+    }
 }
 
 /// Every `.elc` under ROOT whose `.el` is strictly newer.

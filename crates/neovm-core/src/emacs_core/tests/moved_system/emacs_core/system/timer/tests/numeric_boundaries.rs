@@ -15,8 +15,8 @@ fn timer_vectors_normalize_lower_components_before_ordering() {
     // seconds. The audit's GNU timer probe remains pending instead of firing.
     let timer = pending_gnu_timer(Value::vector(slots)).unwrap();
     let now = GnuTimerTimestamp::now();
-    assert!(timer.when > now);
-    assert!(timer.when.duration_until(now).as_secs() > 1_000_000_000);
+    assert!(timer.when_for_test() > now);
+    assert!(timer.when_for_test().duration_until(now).as_secs() > 1_000_000_000);
 }
 
 #[test]
@@ -63,12 +63,14 @@ fn timer_duration_saturates_like_gnu_timespec_sub() {
     slots[8] = Value::fixnum(0);
     let earliest = pending_gnu_timer(Value::vector(slots.clone()))
         .unwrap()
-        .when;
+        .when_for_test();
     slots[1] = Value::fixnum((1_i64 << 47) - 1);
     slots[2] = Value::fixnum(65_535);
     slots[3] = Value::fixnum(999_999);
     slots[8] = Value::fixnum(999_000);
-    let latest = pending_gnu_timer(Value::vector(slots)).unwrap().when;
+    let latest = pending_gnu_timer(Value::vector(slots))
+        .unwrap()
+        .when_for_test();
     let saturated = Duration::new(i64::MAX as u64, 999_999_999);
     assert_eq!(latest.duration_until(earliest), saturated);
     assert_eq!(earliest.overdue_duration(latest), saturated);

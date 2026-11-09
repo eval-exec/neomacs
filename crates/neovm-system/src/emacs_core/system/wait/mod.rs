@@ -1053,18 +1053,9 @@ impl WaitBlockActivity {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct WaitTimeoutChoice {
-    #[cfg(not(feature = "test-support"))]
-    duration: Duration,
-    #[cfg(feature = "test-support")]
-    pub duration: Duration,
-    #[cfg(not(feature = "test-support"))]
-    finite_deadline_timeout: bool,
-    #[cfg(feature = "test-support")]
-    pub finite_deadline_timeout: bool,
-    #[cfg(not(feature = "test-support"))]
-    shortened_by_timer: bool,
-    #[cfg(feature = "test-support")]
-    pub shortened_by_timer: bool,
+    pub(crate) duration: Duration,
+    pub(crate) finite_deadline_timeout: bool,
+    pub(crate) shortened_by_timer: bool,
 }
 
 impl WaitTimeoutChoice {

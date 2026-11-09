@@ -192,7 +192,7 @@ fn start_public_minor(ctx: &mut Context) -> MinorCounts {
     assert!(!ctx.tagged_heap().sweep_in_progress());
     let before = MinorCounts {
         completed: ctx.tagged_heap().gc_collections(),
-        context: ctx.gc_count,
+        context: ctx.gc_count_for_test(),
     };
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { ctx.tagged_heap_mut() }.alloc_cons(Value::fixnum(313), Value::NIL);
@@ -204,7 +204,7 @@ fn start_public_minor(ctx: &mut Context) -> MinorCounts {
     assert!(!ctx.tagged_heap().mark_in_progress());
     assert!(!ctx.tagged_heap().concurrent_mark_running());
     assert_eq!(ctx.tagged_heap().gc_collections(), before.completed);
-    assert_eq!(ctx.gc_count, before.context);
+    assert_eq!(ctx.gc_count_for_test(), before.context);
     ctx.set_gc_threshold(usize::MAX);
     before
 }
@@ -217,7 +217,7 @@ fn finish_public_minor(ctx: &mut Context, before: MinorCounts) {
             assert!(!ctx.tagged_heap().mark_in_progress());
             assert!(!ctx.tagged_heap().concurrent_mark_running());
             assert_eq!(ctx.tagged_heap().gc_collections(), before.completed + 1);
-            assert_eq!(ctx.gc_count, before.context + 1);
+            assert_eq!(ctx.gc_count_for_test(), before.context + 1);
             return;
         }
     }

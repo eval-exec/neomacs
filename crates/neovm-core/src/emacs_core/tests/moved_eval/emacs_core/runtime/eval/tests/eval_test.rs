@@ -1487,18 +1487,18 @@ fn set_lexical_binding_syncs_top_level_lexenv_sentinel() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
 
-    assert!(ev.lexenv.is_nil());
+    assert!(ev.lexenv_for_test().is_nil());
     assert!(!ev.lexical_binding());
 
     ev.set_lexical_binding(true);
     assert!(ev.lexical_binding());
-    assert!(ev.lexenv.is_cons());
-    assert!(ev.lexenv.cons_car().is_t());
-    assert!(ev.lexenv.cons_cdr().is_nil());
+    assert!(ev.lexenv_for_test().is_cons());
+    assert!(ev.lexenv_for_test().cons_car().is_t());
+    assert!(ev.lexenv_for_test().cons_cdr().is_nil());
 
     ev.set_lexical_binding(false);
     assert!(!ev.lexical_binding());
-    assert!(ev.lexenv.is_nil());
+    assert!(ev.lexenv_for_test().is_nil());
 }
 
 #[test]
@@ -1541,14 +1541,17 @@ fn clear_top_level_eval_state_restores_top_level_lexenv_mode() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
-    ev.lexenv = Value::list(vec![Value::symbol("vm-temp"), Value::T]);
+    neovm_eval::test_support::authority::set_lexenv_for_test(
+        &mut ev,
+        Value::list(vec![Value::symbol("vm-temp"), Value::T]),
+    );
 
     ev.clear_top_level_eval_state();
 
     // lexical_binding is restored from obarray default (which is nil for
     // a bare Context), not preserved across clear_top_level_eval_state.
     assert!(!ev.lexical_binding());
-    assert!(ev.lexenv.is_nil());
+    assert!(ev.lexenv_for_test().is_nil());
     assert!(ev.top_level_eval_state_is_clean());
 }
 
@@ -7575,7 +7578,7 @@ fn simple_defvar_declares_local_dynamic_scope_in_lexical_environment() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
-    ev.lexenv = Value::list(vec![Value::T]);
+    neovm_eval::test_support::authority::set_lexenv_for_test(&mut ev, Value::list(vec![Value::T]));
 
     let result = ev.eval_str(
         r#"
@@ -10301,7 +10304,7 @@ fn fallible_cleanup_restores_a_pending_quit_flag() {
     let quoted_data = Value::list(vec![Value::symbol("quote"), error_data]);
     let cleanup_form = Value::list(vec![Value::symbol("signal"), quoted_error, quoted_data]);
     // SAFETY: test-only push on the owner thread; every push is matched by the test's own truncate/pop on the same path and the Vec is never replaced or moved across Contexts.
-    let lexenv = ctx.lexenv;
+    let lexenv = ctx.lexenv_for_test();
     unsafe { ctx.specpdl_mut() }.push(SpecBinding::UnwindProtect {
         forms: Value::list(vec![cleanup_form]),
         lexenv,
@@ -11398,7 +11401,10 @@ fn mapatoms_roots_anonymous_callback_across_exact_gc() {
                count))"#,
     ));
     assert_eq!(result, "OK 2");
-    assert!(ev.gc_count > 0, "callback-triggered GC should run");
+    assert!(
+        ev.gc_count_for_test() > 0,
+        "callback-triggered GC should run"
+    );
 }
 
 #[test]
@@ -11436,7 +11442,10 @@ fn maphash_roots_reconstructed_keys_across_exact_gc() {
              sum)"#,
     ));
     assert_eq!(result, "OK 3");
-    assert!(ev.gc_count > 0, "callback-triggered GC should run");
+    assert!(
+        ev.gc_count_for_test() > 0,
+        "callback-triggered GC should run"
+    );
 }
 
 #[test]
@@ -11840,7 +11849,7 @@ fn run_hook_with_args_roots_callbacks_and_args_across_exact_gc() {
 "#,
     ));
     assert_eq!(result, "OK ((x . y) (x . y) (x . y))");
-    assert!(ev.gc_count > 0, "hook callback GC should run");
+    assert!(ev.gc_count_for_test() > 0, "hook callback GC should run");
 }
 
 #[test]
@@ -16082,7 +16091,7 @@ fn lexical_binding_rooting_uses_specpdl() {
     ev.bind_lexical_value_rooted(sym, payload);
 
     assert_eq!(
-        ev.lexenv_lookup_cached_in(ev.lexenv, sym)
+        ev.lexenv_lookup_cached_in(ev.lexenv_for_test(), sym)
             .expect("lexical binding should exist")
             .as_vector_data()
             .unwrap()
@@ -16108,7 +16117,7 @@ fn lexical_binding_fallback_uses_specpdl_when_no_frame_is_available() {
     ev.bind_lexical_value_rooted(sym, payload);
 
     assert_eq!(
-        ev.lexenv_lookup_cached_in(ev.lexenv, sym)
+        ev.lexenv_lookup_cached_in(ev.lexenv_for_test(), sym)
             .expect("lexical binding should exist")
             .as_vector_data()
             .unwrap()
@@ -16537,7 +16546,11 @@ fn jit_handlers_through_funcall_seam() {
             .expect("interpreted catch/throw runs");
         assert_eq!(native, Value::make_int(want));
         assert_eq!(native, interp);
-        assert_eq!(ev.condition_stack.len(), 0, "handler frames balanced");
+        assert_eq!(
+            ev.condition_stack_for_test().len(),
+            0,
+            "handler frames balanced"
+        );
     }
 
     // 2. condition-case catching a signal raised by a CALLED function, plus the
@@ -16584,7 +16597,7 @@ fn jit_handlers_through_funcall_seam() {
         .expect("interpreted condition-case catches");
     assert_eq!(native, Value::make_int(99));
     assert_eq!(native, interp);
-    assert_eq!(ev.condition_stack.len(), 0);
+    assert_eq!(ev.condition_stack_for_test().len(), 0);
     // Redefine the callee to return normally: the same compiled body takes the
     // PopHandler path.
     let boom_ok = mk(
@@ -16599,7 +16612,7 @@ fn jit_handlers_through_funcall_seam() {
             .expect("native normal path runs"),
         Value::make_int(31)
     );
-    assert_eq!(ev.condition_stack.len(), 0);
+    assert_eq!(ev.condition_stack_for_test().len(), 0);
 
     // 3. Unmatched throw propagates out (no-catch), frames balanced:
     //    (lambda () (catch 'a (throw 'b 1))).
@@ -16624,7 +16637,11 @@ fn jit_handlers_through_funcall_seam() {
         ev.funcall_general_untraced(rethrow, vec![]).is_err(),
         "unmatched throw must propagate as no-catch"
     );
-    assert_eq!(ev.condition_stack.len(), 0, "frames unwound on propagation");
+    assert_eq!(
+        ev.condition_stack_for_test().len(),
+        0,
+        "frames unwound on propagation"
+    );
     assert!(ev.eval_str("(+ 1 2)").is_ok(), "context healthy after");
 
     // 4. Deopt INSIDE a protected extent (the non-poisoning Push* payoff): a
@@ -16659,7 +16676,7 @@ fn jit_handlers_through_funcall_seam() {
             .funcall_general_untraced(cold_arith, vec![arg])
             .expect("interpreter path runs");
         assert_eq!(native, interp, "deopt-in-extent must match the interpreter");
-        assert_eq!(ev.condition_stack.len(), 0);
+        assert_eq!(ev.condition_stack_for_test().len(), 0);
     }
     assert_eq!(
         ev.funcall_general_untraced(hot_arith, vec![Value::make_int(5)])
@@ -16701,7 +16718,7 @@ fn jit_handlers_through_funcall_seam() {
         Value::make_int(9),
         "caught throw must unwind the dynamic binding"
     );
-    assert_eq!(ev.condition_stack.len(), 0);
+    assert_eq!(ev.condition_stack_for_test().len(), 0);
 }
 
 /// End-to-end: `Op::Switch` (pcase/cl-case jump tables) compiles and runs
@@ -18716,7 +18733,8 @@ fn jit_cbsym_spec_inplace_rewrite_to_nonbuiltin_bounces_like_interp() {
     crate::test_utils::init_test_tracing();
     neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     use neovm_eval::test_support::authority::{
-        lookup_global_subr_entry, register_global_subr_entry, subr_entry_for_test,
+        SubrEntryChange, lookup_global_subr_entry, register_global_subr_entry,
+        with_subr_entry_change,
     };
     use neovm_value::intern::intern;
     use neovm_value::tagged::header::SubrDispatchKind;
@@ -18734,12 +18752,9 @@ fn jit_cbsym_spec_inplace_rewrite_to_nonbuiltin_bounces_like_interp() {
     // In-place rewrite the STATIC entry to a non-Builtin kind (VALUE bits stable).
     register_global_subr_entry(
         widen,
-        subr_entry_for_test(
-            orig.function,
-            orig.min_args,
-            orig.max_args,
-            SubrDispatchKind::SpecialForm,
-            orig.interactive_spec,
+        with_subr_entry_change(
+            orig,
+            SubrEntryChange::DispatchKind(SubrDispatchKind::SpecialForm),
         ),
     );
     let native = ev.funcall_general_untraced(hot, Vec::<Value>::new());
@@ -22433,7 +22448,14 @@ fn macro_expansion_scope_uses_lexenv_dynvars() {
     neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     ev.bind_lexical_value_rooted(intern("macro-scope-a"), Value::fixnum(1));
     ev.bind_lexical_value_rooted(intern("macro-scope-b"), Value::fixnum(2));
-    ev.lexenv = Value::cons(Value::from_sym_id(intern("macro-scope-special")), ev.lexenv);
+    let outer_lexenv = ev.lexenv_for_test();
+    neovm_eval::test_support::authority::set_lexenv_for_test(
+        &mut ev,
+        Value::cons(
+            Value::from_sym_id(intern("macro-scope-special")),
+            outer_lexenv,
+        ),
+    );
     let specpdl_count = ev.specpdl().len();
     let dyn_sym = intern("macro-scope-dyn");
     ev.try_specbind(dyn_sym, Value::fixnum(9))
@@ -22533,14 +22555,14 @@ fn gc_safe_point_collects_when_threshold_reached() {
     // Allocate enough conses to exceed threshold.
     ev.eval_str_each("(progn (cons 1 2) (cons 3 4) (cons 5 6) (cons 7 8) (cons 9 10) nil)");
     assert!(
-        ev.gc_count > 0 || ev.gc_pending || ev.tagged_heap().should_collect(),
+        ev.gc_count_for_test() > 0 || ev.gc_pending_for_test() || ev.tagged_heap().should_collect(),
         "incremental GC should be pending, active, or already finished"
     );
     // With incremental GC, safe point may need multiple calls to finish.
-    while ev.gc_count == 0 {
+    while ev.gc_count_for_test() == 0 {
         ev.gc_safe_point();
     }
-    assert!(ev.gc_count > 0);
+    assert!(ev.gc_count_for_test() > 0);
 }
 
 #[test]
@@ -22706,7 +22728,7 @@ fn gc_safe_point_uses_exact_root_tracing() {
            nil)",
     );
 
-    while ev.gc_count == 0 {
+    while ev.gc_count_for_test() == 0 {
         ev.gc_safe_point();
     }
 
@@ -22724,7 +22746,7 @@ fn gc_safe_point_runs_concurrent_cycles_without_a_dump() {
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1024);
     // Bootstrap: the first completed safe-point collection is stop-the-world.
-    while ev.gc_count == 0 {
+    while ev.gc_count_for_test() == 0 {
         ev.eval_str_each("(make-list 64 0)");
         ev.gc_safe_point();
     }
@@ -22737,22 +22759,22 @@ fn gc_safe_point_runs_concurrent_cycles_without_a_dump() {
     // `should_run_concurrent` true and no forced GC, the only completing
     // path is concurrent mark -> STW termination -> deferred sweep slices,
     // so `gc_count` advancing proves a full concurrent cycle ran.
-    let bootstrap_count = ev.gc_count;
+    let bootstrap_count = ev.gc_count_for_test();
     let mut saw_mark_overlap = false;
     for _ in 0..50_000 {
         ev.eval_str_each("(make-list 64 0)");
         ev.gc_safe_point();
         // Opportunistic: a mark observed in flight between safe points.
         saw_mark_overlap |= ev.tagged_heap().concurrent_mark_running();
-        if ev.gc_count > bootstrap_count {
+        if ev.gc_count_for_test() > bootstrap_count {
             break;
         }
     }
     assert!(
-        ev.gc_count > bootstrap_count,
+        ev.gc_count_for_test() > bootstrap_count,
         "a concurrent cycle must terminate and complete its deferred sweep \
          (gc_count={}, bootstrap_count={bootstrap_count}, overlap_seen={saw_mark_overlap})",
-        ev.gc_count,
+        ev.gc_count_for_test(),
     );
     // The rooted structure survived the concurrent cycles.
     let results = ev.eval_str_each("(car gc-concurrent-root)");
@@ -22774,21 +22796,21 @@ fn gc_concurrent_handshake_stats_populate_per_group() {
     // Bootstrap STW cycle first; then churn until a concurrent cycle
     // completes (same driver as `gc_safe_point_runs_concurrent_cycles_
     // without_a_dump`).
-    while ev.gc_count == 0 {
+    while ev.gc_count_for_test() == 0 {
         ev.eval_str_each("(make-list 64 0)");
         ev.gc_safe_point();
     }
     assert!(ev.tagged_heap().should_run_concurrent());
-    let bootstrap_count = ev.gc_count;
+    let bootstrap_count = ev.gc_count_for_test();
     for _ in 0..50_000 {
         ev.eval_str_each("(make-list 64 0)");
         ev.gc_safe_point();
-        if ev.gc_count > bootstrap_count {
+        if ev.gc_count_for_test() > bootstrap_count {
             break;
         }
     }
     assert!(
-        ev.gc_count > bootstrap_count,
+        ev.gc_count_for_test() > bootstrap_count,
         "no concurrent cycle completed"
     );
 
@@ -22843,7 +22865,7 @@ fn gc_safe_point_exact_inside_extra_root_scope_retains_explicit_slice() {
     let _unreachable = Value::cons(Value::fixnum(1), Value::fixnum(2));
     let before = ev.tagged_heap().allocated_count();
 
-    while ev.gc_count == 0 {
+    while ev.gc_count_for_test() == 0 {
         let scope = ev.save_specpdl_roots();
         ev.push_specpdl_root(rooted);
         ev.gc_safe_point_exact();
@@ -22868,7 +22890,7 @@ fn gc_safe_point_exact_frees_stack_only_values() {
     ev.gc_collect_exact();
     let baseline = ev.tagged_heap().allocated_count();
     let baseline_cons = ev.tagged_heap().cons_live_count_exact();
-    let gc_count_before = ev.gc_count;
+    let gc_count_before = ev.gc_count_for_test();
     let stack_only = Value::cons(Value::fixnum(41), Value::fixnum(42));
     let keep_visible = [stack_only];
     std::hint::black_box(&keep_visible);
@@ -22879,7 +22901,7 @@ fn gc_safe_point_exact_frees_stack_only_values() {
         "stack-only cons should have allocated exactly one object after the baseline collection: baseline={baseline}, after_alloc={after_alloc}"
     );
 
-    while ev.gc_count == gc_count_before {
+    while ev.gc_count_for_test() == gc_count_before {
         ev.gc_safe_point_exact();
     }
 
@@ -22933,8 +22955,8 @@ fn a_subr_argument_string_survives_a_collection_inside_the_subr() {
 
     // ...and then runs Lisp, i.e. crosses a safepoint. Force the collection
     // that a safepoint may perform.
-    let gc_before = ev.gc_count;
-    while ev.gc_count == gc_before {
+    let gc_before = ev.gc_count_for_test();
+    while ev.gc_count_for_test() == gc_before {
         ev.gc_safe_point_exact();
     }
 
@@ -22976,8 +22998,8 @@ fn a_string_with_no_backtrace_frame_is_reclaimed_at_the_same_safepoint() {
     ));
     let unrooted_ptr = unrooted.as_string_ptr().expect("string");
 
-    let gc_before = ev.gc_count;
-    while ev.gc_count == gc_before {
+    let gc_before = ev.gc_count_for_test();
+    while ev.gc_count_for_test() == gc_before {
         ev.gc_safe_point_exact();
     }
 
@@ -23007,8 +23029,8 @@ fn borrowing_a_reclaimed_string_aborts_at_the_scene() {
     ev.push_specpdl_root(anchor);
 
     let doomed = Value::heap_string(neovm_value::heap_types::LispString::from_utf8("doomed"));
-    let gc_before = ev.gc_count;
-    while ev.gc_count == gc_before {
+    let gc_before = ev.gc_count_for_test();
+    while ev.gc_count_for_test() == gc_before {
         ev.gc_safe_point_exact();
     }
     ev.restore_specpdl_roots(anchor_scope);
@@ -23057,12 +23079,13 @@ fn gc_stress_collects_after_allocation_not_at_unchanged_safe_points() {
     let mut ev = crate::test_utils::new_context();
     neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     ev.gc_collect_exact();
-    ev.gc_count = 0;
+    neovm_eval::test_support::authority::set_gc_count_for_test(&mut ev, 0);
 
     assert_eq!(ev.tagged_heap().bytes_since_gc(), 0);
     ev.gc_safe_point_exact();
     assert_eq!(
-        ev.gc_count, 0,
+        ev.gc_count_for_test(),
+        0,
         "gc_stress should not collect again before any new allocation"
     );
 
@@ -23072,12 +23095,13 @@ fn gc_stress_collects_after_allocation_not_at_unchanged_safe_points() {
     ev.push_specpdl_root(rooted);
     ev.gc_safe_point_exact();
     ev.restore_specpdl_roots(roots);
-    assert_eq!(ev.gc_count, 1);
+    assert_eq!(ev.gc_count_for_test(), 1);
     assert_eq!(rooted.cons_car(), Value::fixnum(21));
 
     ev.gc_safe_point_exact();
     assert_eq!(
-        ev.gc_count, 1,
+        ev.gc_count_for_test(),
+        1,
         "a second unchanged safe point should not repeat the collection"
     );
 }
@@ -23101,7 +23125,10 @@ fn eval_sub_exact_gc_retains_cons_form() {
         .map_err(crate::emacs_core::print::map_flow);
 
     assert_eq!(format_eval_result(&result), "OK 9");
-    assert!(ev.gc_count > 0, "exact eval_sub path should trigger GC");
+    assert!(
+        ev.gc_count_for_test() > 0,
+        "exact eval_sub path should trigger GC"
+    );
 }
 
 #[test]
@@ -23117,7 +23144,10 @@ fn apply_exact_gc_retains_rooted_args() {
         .map_err(crate::emacs_core::print::map_flow);
 
     assert_eq!(format_eval_result(&result), "OK 12");
-    assert!(ev.gc_count > 0, "exact apply path should trigger GC");
+    assert!(
+        ev.gc_count_for_test() > 0,
+        "exact apply path should trigger GC"
+    );
 }
 
 #[test]
@@ -23149,10 +23179,10 @@ fn gc_safe_point_runs_post_gc_hook_when_incremental_collection_finishes() {
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { ev.tagged_heap_mut() }.set_gc_threshold(5);
     ev.eval_str_each("(progn (cons 1 2) (cons 3 4) (cons 5 6) (cons 7 8) (cons 9 10) nil)");
-    while ev.gc_count == 0 {
+    while ev.gc_count_for_test() == 0 {
         ev.gc_safe_point();
     }
-    assert!(ev.gc_count > 0);
+    assert!(ev.gc_count_for_test() > 0);
     let hook_log = ev.obarray().symbol_value_copied("gc-hook-log");
     assert!(hook_log.is_some());
     let entries = list_to_vec(&hook_log.unwrap()).expect("gc-hook-log list");
@@ -23374,7 +23404,7 @@ fn gc_stress_apply_env_expander_closure_capturing_uninterned_symbol() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
-    ev.lexenv = Value::list(vec![Value::T]);
+    neovm_eval::test_support::authority::set_lexenv_for_test(&mut ev, Value::list(vec![Value::T]));
     neovm_eval::test_support::authority::set_gc_stress_for_test(&mut ev, true);
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
@@ -26269,16 +26299,16 @@ fn display_affecting_var_set_bumps_display_var_change_count() {
 #[test]
 fn gc_inhibit_depth_rebalances_when_inhibited_closure_panics() {
     let mut eval = crate::test_utils::new_context();
-    assert_eq!(eval.gc_inhibit_depth, 0);
+    assert_eq!(eval.gc_inhibit_depth_for_test(), 0);
 
     // Normal path: nesting is visible inside, fully unwound after.
     let observed = eval.with_gc_inhibited(|outer| {
-        let outer_depth = outer.gc_inhibit_depth;
-        let inner_depth = outer.with_gc_inhibited(|inner| inner.gc_inhibit_depth);
+        let outer_depth = outer.gc_inhibit_depth_for_test();
+        let inner_depth = outer.with_gc_inhibited(|inner| inner.gc_inhibit_depth_for_test());
         (outer_depth, inner_depth)
     });
     assert_eq!(observed, (1, 2));
-    assert_eq!(eval.gc_inhibit_depth, 0);
+    assert_eq!(eval.gc_inhibit_depth_for_test(), 0);
 
     // Panic path: the closure unwinds out of the inhibited scope.
     let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -26286,7 +26316,8 @@ fn gc_inhibit_depth_rebalances_when_inhibited_closure_panics() {
     }));
     assert!(panicked.is_err());
     assert_eq!(
-        eval.gc_inhibit_depth, 0,
+        eval.gc_inhibit_depth_for_test(),
+        0,
         "a panicking inhibited closure must not leave GC inhibited"
     );
 }
@@ -26380,9 +26411,10 @@ fn bytecode_backtraces_reference_the_live_caller_stack_for_every_arity() {
     let mut ev = crate::test_utils::new_context();
 
     for nargs in 0..=3 {
-        let args_start = ev.bc_buf.len();
-        ev.bc_buf
-            .extend((0..nargs).map(|arg| Value::fixnum(arg as i64 + 10)));
+        let args_start = ev.bc_buf_for_test().len();
+        neovm_eval::test_support::authority::with_bc_buf_mut_for_test(&mut ev, |buf| {
+            buf.extend((0..nargs).map(|arg| Value::fixnum(arg as i64 + 10)));
+        });
         let backtrace_base = ev.specpdl().len();
         let backtrace =
             ev.push_backtrace_frame_from_bc_stack(Value::symbol("callee"), args_start, nargs);
@@ -26416,7 +26448,9 @@ fn bytecode_backtraces_reference_the_live_caller_stack_for_every_arity() {
             ev.pop_fast_bytecode_backtrace_frame(backtrace),
             crate::emacs_core::eval::FastBytecodePop::Popped
         ));
-        ev.bc_buf.truncate(args_start);
+        neovm_eval::test_support::authority::with_bc_buf_mut_for_test(&mut ev, |buf| {
+            buf.truncate(args_start)
+        });
     }
 }
 
@@ -26432,10 +26466,14 @@ fn bytecode_backtrace_push_preserves_live_span_across_growth_and_gc() {
             *unsafe { ev.specpdl_mut() } = Vec::with_capacity(if grow { 1 } else { 2 });
             ev.push_specpdl_root(Value::T);
             assert_eq!(ev.specpdl().len() == ev.specpdl().capacity(), grow);
-            ev.bc_buf.extend([Value::fixnum(91), Value::fixnum(92)]);
-            let args_start = ev.bc_buf.len();
+            neovm_eval::test_support::authority::with_bc_buf_mut_for_test(&mut ev, |buf| {
+                buf.extend([Value::fixnum(91), Value::fixnum(92)]);
+            });
+            let args_start = ev.bc_buf_for_test().len();
             for i in 0..nargs {
-                ev.bc_buf.push(Value::string(&format!("bytecode arg {i}")));
+                neovm_eval::test_support::authority::with_bc_buf_mut_for_test(&mut ev, |buf| {
+                    buf.push(Value::string(&format!("bytecode arg {i}")));
+                });
             }
             let function = Value::string("bytecode frame function");
             let frame = ev.push_backtrace_frame_from_bc_stack(function, args_start, nargs);
@@ -26444,11 +26482,15 @@ fn bytecode_backtrace_push_preserves_live_span_across_growth_and_gc() {
 
             // The descriptor must keep live indices, even when a callee grows
             // the caller stack and replaces an argument before a collection.
-            let old_capacity = ev.bc_buf.capacity();
-            ev.bc_buf.reserve(old_capacity + 1);
-            assert!(ev.bc_buf.capacity() > old_capacity);
+            let old_capacity = ev.bc_buf_for_test().capacity();
+            neovm_eval::test_support::authority::with_bc_buf_mut_for_test(&mut ev, |buf| {
+                buf.reserve(old_capacity + 1)
+            });
+            assert!(ev.bc_buf_for_test().capacity() > old_capacity);
             if nargs > 0 {
-                ev.bc_buf[args_start] = Value::string("updated bytecode arg");
+                neovm_eval::test_support::authority::with_bc_buf_mut_for_test(&mut ev, |buf| {
+                    buf[args_start] = Value::string("updated bytecode arg");
+                });
             }
             ev.gc_collect_exact();
             let (actual_function, args, debug, unevalled) = ev
@@ -26459,7 +26501,7 @@ fn bytecode_backtrace_push_preserves_live_span_across_growth_and_gc() {
                 actual_function.as_utf8_str(),
                 Some("bytecode frame function")
             );
-            assert_eq!(args.as_slice(), &ev.bc_buf[args_start..]);
+            assert_eq!(args.as_slice(), &ev.bc_buf_for_test()[args_start..]);
             assert!(!debug && !unevalled);
             for value in std::iter::once(function).chain(args.iter().copied()) {
                 assert!(ev.tagged_heap().owns_heap_value_for_test(value));
@@ -28588,7 +28630,7 @@ fn let_roots_its_init_values_on_the_operand_stack_like_gnu() {
     let mut eval = crate::test_utils::new_context();
     eval.set_lexical_binding(true);
     eval.eval_str("(defvar me-d 0)").expect("defvar");
-    let before = eval.bc_buf.len();
+    let before = eval.bc_buf_for_test().len();
     let value = eval
         .eval_str(
             r#"(list (catch 'k (let ((a (list 1)) (b (throw 'k 2))) a))
@@ -28604,7 +28646,7 @@ fn let_roots_its_init_values_on_the_operand_stack_like_gnu() {
         "(2 ok ((1 2) 0) (1 2) (2 1) 5)"
     );
     assert_eq!(
-        eval.bc_buf.len(),
+        eval.bc_buf_for_test().len(),
         before,
         "every let exit must leave the operand stack as it found it"
     );

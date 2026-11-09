@@ -2199,25 +2199,16 @@ fn module_suffixes_match_gnu_configure_per_operating_system() {
     // vterm needs: its build writes `vterm-module.so` even there (#193).
     assert_eq!(
         module_suffixes_for_os("macos"),
-        ModuleSuffixes {
-            primary: ".dylib",
-            secondary: Some(".so"),
-        }
+        neovm_eval::test_support::authority::module_suffixes_for_test(".dylib", Some(".so"))
     );
     assert_eq!(
         module_suffixes_for_os("windows"),
-        ModuleSuffixes {
-            primary: ".dll",
-            secondary: None,
-        }
+        neovm_eval::test_support::authority::module_suffixes_for_test(".dll", None)
     );
     for os in ["linux", "freebsd", "openbsd", "netbsd", "android"] {
         assert_eq!(
             module_suffixes_for_os(os),
-            ModuleSuffixes {
-                primary: ".so",
-                secondary: None,
-            },
+            neovm_eval::test_support::authority::module_suffixes_for_test(".so", None),
             "{os} should use the default suffix"
         );
     }
@@ -2283,18 +2274,21 @@ fn the_running_platform_uses_its_own_suffixes() {
     // The compile-time answer must agree with the table above for THIS build,
     // which is what the macOS CI runner checks.
     let expected = module_suffixes_for_os(std::env::consts::OS);
-    assert_eq!(module_file_suffix(), expected.primary);
-    assert_eq!(module_suffixes().secondary, expected.secondary);
+    assert_eq!(module_file_suffix(), expected.primary_for_test());
+    assert_eq!(
+        module_suffixes().secondary_for_test(),
+        expected.secondary_for_test()
+    );
 
     #[cfg(target_os = "macos")]
     {
         assert_eq!(module_file_suffix(), ".dylib");
-        assert_eq!(module_suffixes().secondary, Some(".so"));
+        assert_eq!(module_suffixes().secondary_for_test(), Some(".so"));
     }
     #[cfg(target_os = "linux")]
     {
         assert_eq!(module_file_suffix(), ".so");
-        assert_eq!(module_suffixes().secondary, None);
+        assert_eq!(module_suffixes().secondary_for_test(), None);
     }
 }
 

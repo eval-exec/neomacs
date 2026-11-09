@@ -157,7 +157,7 @@ fn the_bootstrap_stat_table_names_every_stale_artifact_it_already_stats() {
         .iter()
         .map(|entry| {
             entry
-                .source
+                .source_for_test()
                 .file_name()
                 .expect("named source")
                 .to_string_lossy()
@@ -174,11 +174,11 @@ fn the_bootstrap_stat_table_names_every_stale_artifact_it_already_stats() {
     // diagnosis a reader needs and re-deriving it later is what nobody does.
     let entry = &stale[0];
     assert!(
-        entry.source_mtime > entry.compiled_mtime,
+        entry.source_mtime_for_test() > entry.compiled_mtime_for_test(),
         "a stale entry must carry the two mtimes that prove it stale, got \
          source={:?} compiled={:?}",
-        entry.source_mtime,
-        entry.compiled_mtime
+        entry.source_mtime_for_test(),
+        entry.compiled_mtime_for_test()
     );
 }
 

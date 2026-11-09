@@ -92,8 +92,8 @@ fn compiled_raw_signal_gc_keeps_wide_native_argument_frame() {
     let state = (
         ev.depth_for_test(),
         ev.specpdl().len(),
-        ev.condition_stack.len(),
-        ev.bc_buf.len(),
+        ev.condition_stack_for_test().len(),
+        ev.bc_buf_for_test().len(),
     );
     let result = ev.eval_str(
         r#"(let ((signal-hook-function
@@ -115,8 +115,8 @@ fn compiled_raw_signal_gc_keeps_wide_native_argument_frame() {
         (
             ev.depth_for_test(),
             ev.specpdl().len(),
-            ev.condition_stack.len(),
-            ev.bc_buf.len(),
+            ev.condition_stack_for_test().len(),
+            ev.bc_buf_for_test().len(),
         ),
         state,
         "raw signal dispatch must retire the call and its roots exactly once"
@@ -151,8 +151,8 @@ fn compiled_framed_signal_gc_keeps_wide_arguments_and_inner_binding() {
     let state = (
         ev.depth_for_test(),
         ev.specpdl().len(),
-        ev.condition_stack.len(),
-        ev.bc_buf.len(),
+        ev.condition_stack_for_test().len(),
+        ev.bc_buf_for_test().len(),
     );
     let result = ev.eval_str(
         r#"(let ((signal-hook-function
@@ -175,8 +175,8 @@ fn compiled_framed_signal_gc_keeps_wide_arguments_and_inner_binding() {
         (
             ev.depth_for_test(),
             ev.specpdl().len(),
-            ev.condition_stack.len(),
-            ev.bc_buf.len(),
+            ev.condition_stack_for_test().len(),
+            ev.bc_buf_for_test().len(),
         ),
         state,
         "framed signal dispatch must retire the call and its roots exactly once"
