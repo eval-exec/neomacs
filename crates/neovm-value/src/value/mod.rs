@@ -4179,7 +4179,7 @@ impl TaggedValue {
     /// production — see `mutate::with_bytecode_data_mut_for_test` for the
     /// invariant this gate enforces.
     #[cfg(any(test, feature = "test-support"))]
-    pub fn with_bytecode_data_mut_for_test<R>(
+    pub(crate) fn with_bytecode_data_mut_for_test<R>(
         self,
         f: impl FnOnce(&mut crate::tagged::bytecode::chunk::ByteCodeFunction) -> R,
     ) -> Option<R> {

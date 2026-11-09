@@ -2161,7 +2161,7 @@ impl Obarray {
 
     /// Restore the dump-carried per-symbol flags without handing out the
     /// symbol cell. This is the ONE cross-crate route for pdump restore
-    /// (`AUTHORITY-ITEMS.tsv`), and it can only set the three flags the image
+    /// (`PROMOTION-LEDGER.tsv`), and it can only set the three flags the image
     /// carries; the raw by-id accessor stays crate-private.
     #[doc(hidden)]
     pub fn restore_dumped_symbol_flags(
@@ -3705,7 +3705,7 @@ impl Obarray {
     /// the GNU name. Phase 5+ adds the LOCALIZED-aware logic and the
     /// `where`/`bindflag` parameters via [`Self::set_internal_localized`].
     #[cfg(any(test, feature = "test-support"))]
-    pub fn set_internal(&mut self, id: SymId, value: Value) {
+    pub(crate) fn set_internal(&mut self, id: SymId, value: Value) {
         self.set_canonical_value(CanonicalAccess::TEST, id, value);
     }
 

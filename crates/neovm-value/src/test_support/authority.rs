@@ -1138,6 +1138,16 @@ pub fn set_signal_selected_resume_for_test(
     signal.set_selected_resume_for_test(selected_resume);
 }
 
+/// Canonical symbol write for moved tests. `Obarray::set_internal` stays
+/// `pub(crate)` under test-support; this fence is the only public path.
+pub fn set_obarray_internal_for_test(
+    obarray: &mut crate::symbol::Obarray,
+    id: crate::intern::SymId,
+    value: crate::value::Value,
+) {
+    obarray.set_internal(id, value);
+}
+
 /// Setter fence for `HashTableStorage::switch_epoch` (VIS read-arm series,
 /// lead #1052): the field stays pub(crate) for the crate's own writers
 /// (tagged/mutate.rs, the JIT offset) and the moved switch-plan oracle forces
@@ -1224,4 +1234,15 @@ pub fn set_vector_slot_in_store_for_test(
     item: crate::tagged::value::TaggedValue,
 ) -> bool {
     crate::tagged::mutate::set_vector_slot_in_store_for_test(store, value, index, item)
+}
+
+/// FENCE: mutate bytecode data. The method stays `pub(crate)`. This is
+/// the only public path.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn with_bytecode_data_mut_for_test<R>(
+    value: crate::tagged::value::TaggedValue,
+    f: impl FnOnce(&mut crate::tagged::bytecode::chunk::ByteCodeFunction) -> R,
+) -> Option<R> {
+    value.with_bytecode_data_mut_for_test(f)
 }

@@ -561,7 +561,9 @@ fn print_default_handles_self_referential_bytecode_constants() {
         crate::emacs_core::bytecode::ByteCodeFunction::new(LambdaParams::simple(vec![]));
     function.constants.ensure_owned().push(Value::NIL);
     let bytecode = Value::make_bytecode(function);
-    bytecode.with_bytecode_data_mut_for_test(|data| data.constants[0] = bytecode);
+    neovm_value::test_support::authority::with_bytecode_data_mut_for_test(bytecode, |data| {
+        data.constants[0] = bytecode
+    });
 
     assert_eq!(print_value(&bytecode), "#[nil nil [#0] 0]");
     assert_eq!(print_value_bytes(&bytecode), b"#[nil nil [#0] 0]");
