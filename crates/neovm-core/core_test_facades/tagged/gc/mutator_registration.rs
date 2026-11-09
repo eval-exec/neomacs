@@ -101,6 +101,14 @@ mod functions_executor_tests;
 #[path = "../../../core_tests/tagged/gc/mutator_registration/peer_young_collection_tests.rs"]
 mod peer_young_collection_tests;
 
+/// Restricted-lisp overlap re-homed out of value. The shell boots the bare
+/// evaluator, shares planted words, admits each era, and passes the baton
+/// World walk. Assertions stay in the value bodies. The JIT row is cfg(jit);
+/// the throughput row is cfg(perf-probes).
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/restricted_lisp_tests.rs"]
+mod restricted_lisp_tests;
+
 /// MEMQ-TAIL-SHAPES (b)+(i)+(ii), peer 22:30Z approvals: the keeper-table
 /// scope test re-homed out of value. It uses the closure-scoped
 /// stopped-tables install, the scope's nested-install probe, the &self

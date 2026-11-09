@@ -1,5 +1,10 @@
 //! Restricted Lisp overlap for tests and `test-support`. Production has no
-//! call into this module. Items that name the evaluator stay `cfg(test)`.
+//! call into this module. Evaluator boot, eval, and admit for the re-homed
+//! shells come from the core shell through `HostParts`.
+//!
+//! `weak_copy` and `weak_tables` stay the `7a7d474cd8` `#[test]` bodies.
+//! They are mounted only under `cfg(test)`, which is also when this module
+//! imports `Context`. A `test-support` dependency build does not compile them.
 //!
 //! Owners allocate conses through `RunSlice::cons_into` inside `with_slice`,
 //! and tables through the rooted `RunAccess` make/copy operations.
@@ -40,6 +45,170 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 use std::time::{Duration, Instant};
+
+/// Caller-supplied World root walk. This module does not name `Baton`.
+/// Higher-ranked so the eval baton walker, a `Copy` fn item, satisfies it
+/// at the core call site.
+trait WorldRoots<K>:
+    Copy
+    + for<'k, 's, 'e, 'o> Fn(
+        &'k K,
+        &'s mut AllStopped<'e>,
+        &'o mut Vec<TaggedValue>,
+    ) -> Result<
+        Vec<*mut *mut crate::tagged::header::MarkerObj>,
+        RendezvousError,
+    >
+{
+}
+impl<K, F> WorldRoots<K> for F where
+    F: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<TaggedValue>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >
+{
+}
+
+/// Native switch answer. `Other` is the `Debug` text of the evaluator's
+/// native-run enum, so the refusal line stays the original.
+#[derive(Debug)]
+enum SwitchAnswer {
+    Ok(usize),
+    Signal,
+    Other(String),
+}
+
+/// Serial eval, share, and admit supplied by the core shell, plus the World
+/// walk passed into every `collect_stopped`.
+struct RestrictedHost<'a, K: crate::tagged::gc::mutator_registration::EraKeeper, W> {
+    eval: &'a mut dyn FnMut(&str) -> Result<TaggedValue, String>,
+    share: &'a mut dyn FnMut(TaggedValue) -> SharedRoot,
+    admit: &'a mut dyn FnMut(&str, &str, &mut dyn for<'e> FnMut(&ParallelHeapEra<'e, K>)),
+    bytes_since_gc: &'a mut dyn FnMut() -> usize,
+    generational: bool,
+    world_roots: W,
+    switch_on: bool,
+    switch_sites: &'a mut dyn FnMut() -> usize,
+    switch_compile: &'a mut dyn FnMut(
+        &[crate::tagged::bytecode::opcode::Op],
+        &[TaggedValue],
+        &[crate::tagged::bytecode::chunk::GnuByteOffsetMapEntry],
+    ),
+    switch_call: &'a mut dyn FnMut(&[TaggedValue]) -> (u8, usize, String),
+    switch_flow: &'a mut dyn FnMut() -> Option<crate::error::Flow>,
+    switch_print: &'a mut dyn FnMut(&TaggedValue) -> String,
+    _keeper: std::marker::PhantomData<fn(&K)>,
+}
+
+trait HostParts {
+    type Keeper: crate::tagged::gc::mutator_registration::EraKeeper;
+    type Roots: WorldRoots<Self::Keeper>;
+    fn eval_form(&mut self, source: &str) -> Result<TaggedValue, String>;
+    fn share_value(&mut self, value: TaggedValue) -> SharedRoot;
+    fn admit_era<F>(&mut self, admit_label: &str, finish_label: &str, body: F)
+    where
+        F: for<'e> FnOnce(&ParallelHeapEra<'e, Self::Keeper>);
+    fn charged_bytes(&mut self) -> usize;
+    fn generational_heap(&self) -> bool;
+    fn roots(&self) -> Self::Roots;
+    fn switch_inline_on(&self) -> bool;
+    fn switch_sites(&mut self) -> usize;
+    fn switch_compile(
+        &mut self,
+        ops: &[crate::tagged::bytecode::opcode::Op],
+        constants: &[TaggedValue],
+        map: &[crate::tagged::bytecode::chunk::GnuByteOffsetMapEntry],
+    );
+    fn switch_call(&mut self, args: &[TaggedValue]) -> SwitchAnswer;
+    fn switch_flow(&mut self) -> Option<crate::error::Flow>;
+    fn switch_print(&mut self, value: &TaggedValue) -> String;
+}
+
+impl<'a, K, W> HostParts for RestrictedHost<'a, K, W>
+where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: WorldRoots<K>,
+{
+    type Keeper = K;
+    type Roots = W;
+
+    fn eval_form(&mut self, source: &str) -> Result<TaggedValue, String> {
+        (self.eval)(source)
+    }
+
+    fn share_value(&mut self, value: TaggedValue) -> SharedRoot {
+        (self.share)(value)
+    }
+
+    fn admit_era<F>(&mut self, admit_label: &str, finish_label: &str, body: F)
+    where
+        F: for<'e> FnOnce(&ParallelHeapEra<'e, K>),
+    {
+        let mut body = Some(body);
+        (self.admit)(admit_label, finish_label, &mut |era| {
+            let body = body.take().expect("admit body runs once");
+            body(era);
+        });
+    }
+
+    fn charged_bytes(&mut self) -> usize {
+        (self.bytes_since_gc)()
+    }
+
+    fn generational_heap(&self) -> bool {
+        self.generational
+    }
+
+    fn roots(&self) -> W {
+        self.world_roots
+    }
+
+    fn switch_inline_on(&self) -> bool {
+        self.switch_on
+    }
+
+    fn switch_sites(&mut self) -> usize {
+        (self.switch_sites)()
+    }
+
+    fn switch_compile(
+        &mut self,
+        ops: &[crate::tagged::bytecode::opcode::Op],
+        constants: &[TaggedValue],
+        map: &[crate::tagged::bytecode::chunk::GnuByteOffsetMapEntry],
+    ) {
+        (self.switch_compile)(ops, constants, map);
+    }
+
+    fn switch_call(&mut self, args: &[TaggedValue]) -> SwitchAnswer {
+        match (self.switch_call)(args) {
+            (0, bits, _) => SwitchAnswer::Ok(bits),
+            (1, _, _) => SwitchAnswer::Signal,
+            (_, _, other) => SwitchAnswer::Other(other),
+        }
+    }
+
+    fn switch_flow(&mut self) -> Option<crate::error::Flow> {
+        (self.switch_flow)()
+    }
+
+    fn switch_print(&mut self, value: &TaggedValue) -> String {
+        (self.switch_print)(value)
+    }
+}
+
+fn switch_answer_text(answer: &SwitchAnswer) -> String {
+    match answer {
+        SwitchAnswer::Ok(bits) => format!("Ok({bits})"),
+        SwitchAnswer::Signal => "Signal".to_string(),
+        SwitchAnswer::Other(text) => text.clone(),
+    }
+}
 
 const STEP_CAP: u32 = 10_000;
 const CHANNEL_WAIT: Duration = Duration::from_secs(90);
@@ -2434,12 +2603,12 @@ fn open_collection<'a, K: crate::tagged::gc::mutator_registration::EraKeeper>(
     stopped
 }
 
-#[cfg(test)]
-fn collect_major<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+fn collect_major<K: crate::tagged::gc::mutator_registration::EraKeeper, W: WorldRoots<K>>(
     era: &ParallelHeapEra<'_, K>,
     stopped: &mut AllStopped<'_>,
+    roots: W,
 ) {
-    let report = retry_rv(|| era.collect_stopped(stopped));
+    let report = retry_rv(|| era.collect_stopped(stopped, roots));
     assert!(report.major, "restricted overlap collects a major cycle");
 }
 
@@ -2660,29 +2829,25 @@ fn run_program<'era>(
     }
 }
 
-#[cfg(test)]
-fn with_admitted<K: crate::tagged::gc::mutator_registration::EraKeeper>(
-    body: impl FnOnce(&ParallelHeapEra<'_, K>, bool, &SharedRoot, &SharedRoot),
+fn with_admitted<H: HostParts>(
+    host: &mut H,
+    body: impl for<'e> FnOnce(
+        &ParallelHeapEra<'e, H::Keeper>,
+        bool,
+        &SharedRoot,
+        &SharedRoot,
+        <H as HostParts>::Roots,
+    ),
 ) {
-    let mut context = Context::new();
-    let generational = context.tagged_heap.tagged_heap_generational_enabled();
-    // SAFETY: nil and a fixnum are immediates of this Context's heap.
-    let nil = unsafe { SharedRoot::new(&context.tagged_heap, TaggedValue::NIL) };
-    let one = unsafe { SharedRoot::new(&context.tagged_heap, TaggedValue::fixnum(1)) };
-    context
-        .admit_owned_proof_parallel(|projection| {
-            {
-                let era = projection.era();
-                era.start_cons_storage()
-                    .unwrap_or_else(|error| panic!("cons catalog: {error:?}"));
-                body(era, generational, &nil, &one);
-            }
-            let (collector, keeper) = projection
-                .finish()
-                .unwrap_or_else(|error| panic!("finish: {error:?}"));
-            (collector, keeper, ())
-        })
-        .unwrap_or_else(|error| panic!("admit: {error:?}"));
+    let generational = host.generational_heap();
+    let nil = host.share_value(TaggedValue::NIL);
+    let one = host.share_value(TaggedValue::fixnum(1));
+    let roots = host.roots();
+    host.admit_era("admit", "finish", |era| {
+        era.start_cons_storage()
+            .unwrap_or_else(|error| panic!("cons catalog: {error:?}"));
+        body(era, generational, &nil, &one, roots);
+    });
 }
 
 struct Session<'body, 'heap, K: crate::tagged::gc::mutator_registration::EraKeeper> {
@@ -2785,38 +2950,38 @@ impl<'body, 'heap, K: crate::tagged::gc::mutator_registration::EraKeeper> Sessio
         gather(&self.pause_rx, self.go_txs.len(), |snap| snap.index)
     }
 
-    #[cfg(test)]
-    fn round(
+    fn round<W: WorldRoots<K>>(
         &mut self,
         kind: Go,
         resume: bool,
         after: impl FnOnce(&ParallelHeapEra<'heap, K>, &AllStopped<'_>),
+        roots: W,
     ) {
         let mut stopped = open_collection(self.era, &self.go_txs, kind, &mut self.next_epoch);
-        collect_major(self.era, &mut stopped);
+        collect_major(self.era, &mut stopped, roots);
         after(self.era, &stopped);
         release_cycle(self.era, stopped, resume);
     }
 
-    #[cfg(test)]
-    fn round_with_before(
+    fn round_with_before<W: WorldRoots<K>>(
         &mut self,
         kind: Go,
         resume: bool,
         before: impl FnOnce(&ParallelHeapEra<'heap, K>, &AllStopped<'_>),
         after: impl FnOnce(&ParallelHeapEra<'heap, K>, &AllStopped<'_>),
+        roots: W,
     ) {
         let mut stopped = open_collection(self.era, &self.go_txs, kind, &mut self.next_epoch);
         before(self.era, &stopped);
-        collect_major(self.era, &mut stopped);
+        collect_major(self.era, &mut stopped, roots);
         after(self.era, &stopped);
         release_cycle(self.era, stopped, resume);
     }
 
-    #[cfg(test)]
-    fn finish_owners(
+    fn finish_owners<W: WorldRoots<K>>(
         &mut self,
         after: impl FnOnce(&ParallelHeapEra<'heap, K>, &AllStopped<'_>),
+        roots: W,
     ) -> Vec<EndState> {
         let ends = gather(&self.end_rx, self.go_txs.len(), |end| end.index);
         let mut seen = vec![false; self.go_txs.len()];
@@ -2830,7 +2995,7 @@ impl<'body, 'heap, K: crate::tagged::gc::mutator_registration::EraKeeper> Sessio
         assert_eq!(epoch, self.next_epoch, "reclaim epoch");
         self.next_epoch += 1;
         retry_reg(|| self.era.return_cons_storage(&stopped));
-        let report = retry_rv(|| self.era.collect_stopped(&mut stopped));
+        let report = retry_rv(|| self.era.collect_stopped(&mut stopped, roots));
         assert!(report.major);
         after(self.era, &stopped);
         // Catalog stays on the heap: `finish` refuses a suspended cons catalog.
@@ -2890,15 +3055,14 @@ const LIST_ROUNDS: [(usize, Go); 5] = [
     (9, Go::Forced),
 ];
 
-#[cfg(test)]
-fn overlap_lists(owners: usize) {
+fn overlap_lists<H: HostParts>(host: &mut H, owners: usize) {
     let started = AtomicUsize::new(0);
     let programs: Vec<_> = (0..owners)
         .map(|index| list_ops(index as i64 * 1_000_000))
         .collect();
     pass_gate(&programs, 11, 8, &started);
     let overlap = Overlap::new(owners, true);
-    with_admitted(|era, generational, nil, _one| {
+    with_admitted(host, |era, generational, nil, _one, roots| {
         thread::scope(|scope| {
             let _panic = PanicFlag {
                 registry: era.registry(),
@@ -2938,7 +3102,7 @@ fn overlap_lists(owners: usize) {
                         assert!(snap.cons_count < 8, "unfinished rooted list");
                     }
                     let head = snap.slots[4];
-                    assert!(TaggedValue::from_bits(head).is_cons());
+                    assert!(unsafe { TaggedValue::from_bits(head) }.is_cons());
                     if head_known[snap.index] {
                         assert_eq!(
                             heads[snap.index], head,
@@ -2952,7 +3116,7 @@ fn overlap_lists(owners: usize) {
                         let young = snap.slots[6];
                         assert_ne!(young, head, "old-to-young edge uses a fresh cons");
                         assert!(snap.conses.contains(&young));
-                        assert!(TaggedValue::from_bits(young).is_cons());
+                        assert!(unsafe { TaggedValue::from_bits(young) }.is_cons());
                         phase9[snap.index] = snap.conses.clone();
                     }
                 }
@@ -2964,9 +3128,9 @@ fn overlap_lists(owners: usize) {
                 let check = |heap: &crate::tagged::gc::TaggedHeap| {
                     for snap in &snaps {
                         assert_owned_conses(heap, &snap.conses);
-                        assert!(
-                            heap.owns_heap_value_for_test(TaggedValue::from_bits(snap.slots[4]))
-                        );
+                        assert!(heap.owns_heap_value_for_test(unsafe {
+                            TaggedValue::from_bits(snap.slots[4])
+                        }));
                     }
                 };
                 if count == 9 {
@@ -2976,7 +3140,7 @@ fn overlap_lists(owners: usize) {
                         |era, stopped| {
                             on_heap(era, stopped, |heap| {
                                 for snap in &snaps {
-                                    let head = TaggedValue::from_bits(snap.slots[4]);
+                                    let head = unsafe { TaggedValue::from_bits(snap.slots[4]) };
                                     assert!(heap.owns_heap_value_for_test(head));
                                     if generational {
                                         assert!(
@@ -2990,27 +3154,38 @@ fn overlap_lists(owners: usize) {
                             });
                         },
                         |era, stopped| on_heap(era, stopped, check),
+                        roots,
                     );
                 } else {
-                    session.round(kind, true, |era, stopped| on_heap(era, stopped, check));
+                    session.round(
+                        kind,
+                        true,
+                        |era, stopped| on_heap(era, stopped, check),
+                        roots,
+                    );
                 }
             }
-            let ends = session.finish_owners(|era, stopped| {
-                on_heap(era, stopped, |heap| {
-                    let mut cells = 0usize;
-                    for set in &phase9 {
-                        for bits in set {
-                            cells += 1;
-                            assert!(
-                                !heap.owns_heap_value_for_test(TaggedValue::from_bits(*bits)),
-                                "uncleared cons still owned {bits:#x}"
-                            );
+            let ends = session.finish_owners(
+                |era, stopped| {
+                    on_heap(era, stopped, |heap| {
+                        let mut cells = 0usize;
+                        for set in &phase9 {
+                            for bits in set {
+                                cells += 1;
+                                assert!(
+                                    !heap.owns_heap_value_for_test(unsafe {
+                                        TaggedValue::from_bits(*bits)
+                                    }),
+                                    "uncleared cons still owned {bits:#x}"
+                                );
+                            }
                         }
-                    }
-                    println!("A6_RECLAIM owners={owners} cells={cells}");
-                    assert_eq!(cells, owners * 9);
-                });
-            });
+                        println!("A6_RECLAIM owners={owners} cells={cells}");
+                        assert_eq!(cells, owners * 9);
+                    });
+                },
+                roots,
+            );
             dump_witness(&overlap, "done");
             let oracle = oracle_lines();
             for end in &ends {
@@ -3112,8 +3287,7 @@ fn a6_refuses_ambiguous_branch_before_run() {
     assert_eq!(started.load(Ordering::Relaxed), 0);
 }
 
-#[test]
-fn a6_runtime_refuses_foreign_cons_without_writing() {
+fn a6_runtime_refuses_foreign_cons_without_writing<H: HostParts>(host: &mut H) {
     let started = AtomicUsize::new(0);
     let program = vec![
         Op::ConstFixnum { dst: 1, value: 9 },
@@ -3126,7 +3300,7 @@ fn a6_runtime_refuses_foreign_cons_without_writing() {
     started.fetch_add(1, Ordering::Relaxed);
     assert_eq!(started.load(Ordering::Relaxed), 1);
     let abort = AtomicBool::new(false);
-    with_admitted(|era, _generational, nil, one| {
+    with_admitted(host, |era, _generational, nil, one, roots| {
         let (report_tx, report_rx) = channel();
         thread::scope(|scope| {
             let _panic = PanicFlag {
@@ -3157,8 +3331,8 @@ fn a6_runtime_refuses_foreign_cons_without_writing() {
                 let mut machine = Machine::new();
                 let outcome =
                     one_slice(&mut owner, &slots, &program, &mut machine, 0, None, 0, None);
-                let car =
-                    TaggedValue::from_bits(foreign.cons_word_for_test()).cons_car_unobserved();
+                let car = unsafe { TaggedValue::from_bits(foreign.cons_word_for_test()) }
+                    .cons_car_unobserved();
                 report_tx
                     .send((outcome.err(), car.as_fixnum()))
                     .unwrap_or_else(|_| panic!("report channel closed"));
@@ -3175,7 +3349,7 @@ fn a6_runtime_refuses_foreign_cons_without_writing() {
             next_epoch += 1;
             let _ = next_epoch;
             retry_reg(|| era.return_cons_storage(&stopped));
-            let report = retry_rv(|| era.collect_stopped(&mut stopped));
+            let report = retry_rv(|| era.collect_stopped(&mut stopped, roots));
             assert!(report.major);
             complete(stopped);
             done_tx.send(()).unwrap();
@@ -3185,14 +3359,13 @@ fn a6_runtime_refuses_foreign_cons_without_writing() {
     assert_eq!(started.load(Ordering::Relaxed), 1);
 }
 
-#[test]
-fn a6_arithmetic_matches_gnu_oracle() {
+fn a6_arithmetic_matches_gnu_oracle<H: HostParts>(host: &mut H) {
     let started = AtomicUsize::new(0);
     let programs = arithmetic_ops();
     pass_gate(&programs, 4, 0, &started);
     let abort = AtomicBool::new(false);
     let oracle = oracle_lines();
-    with_admitted(|era, _generational, nil, _one| {
+    with_admitted(host, |era, _generational, nil, _one, roots| {
         thread::scope(|scope| {
             let _panic = PanicFlag {
                 registry: era.registry(),
@@ -3243,7 +3416,7 @@ fn a6_arithmetic_matches_gnu_oracle() {
             let mut stopped = retry_rv(|| era.stop());
             assert_eq!(stopped.epoch().get(), 1);
             retry_reg(|| era.return_cons_storage(&stopped));
-            assert!(retry_rv(|| era.collect_stopped(&mut stopped)).major);
+            assert!(retry_rv(|| era.collect_stopped(&mut stopped, roots)).major);
             complete(stopped);
             done_tx.send(()).unwrap();
             assert_eq!(recv(&retired_rx), 0);
@@ -3646,29 +3819,27 @@ fn ht_p8s() -> Vec<Op> {
 /// the era, then eval the dump forms once the serial world is back. The
 /// caller owns the [`HtEnv`] so its observation counters survive the run.
 /// Returns the program lines followed by the dump lines.
-#[cfg(test)]
-fn run_ht_session(
+fn run_ht_session<H: HostParts>(
+    host: &mut H,
     setup: &HtSetup,
     programs: Vec<Vec<Op>>,
     bound: u32,
     env: &HtEnv<'_>,
     dump_forms: &[&str],
 ) -> (Vec<String>, Vec<String>) {
-    let mut context = Context::new();
-    let plant_values = context
-        .eval_str(setup.source)
-        .unwrap_or_else(|error| panic!("ht setup eval: {error:?}"));
+    let plant_values = host
+        .eval_form(setup.source)
+        .unwrap_or_else(|error| panic!("ht setup eval: {error}"));
     // SAFETY: every planted word belongs to this Context's heap; the roots
     // keep the tables and symbols alive for the whole era.
-    let nil = unsafe { SharedRoot::new(&context.tagged_heap, TaggedValue::NIL) };
+    let nil = host.share_value(TaggedValue::NIL);
     let mut planted: Vec<Option<SharedRoot>> = vec![None; setup.nslots];
     {
         let mut cursor = plant_values;
         for &(slot, _fact) in &setup.facts {
             assert!(cursor.is_cons(), "setup list shorter than its facts");
             // SAFETY: same heap as the context above.
-            let root =
-                unsafe { SharedRoot::new(&context.tagged_heap, cursor.cons_car_unobserved()) };
+            let root = host.share_value(cursor.cons_car_unobserved());
             planted[usize::from(slot)] = Some(root);
             cursor = cursor.cons_cdr_unobserved();
         }
@@ -3676,82 +3847,73 @@ fn run_ht_session(
     }
     let abort = AtomicBool::new(false);
     let mut lines: Vec<String> = Vec::new();
-    context
-        .admit_owned_proof_parallel(|projection| {
-            {
-                let era = projection.era();
-                era.start_cons_storage()
-                    .unwrap_or_else(|error| panic!("cons catalog: {error:?}"));
-                thread::scope(|scope| {
-                    let _panic = PanicFlag {
-                        registry: era.registry(),
-                        abort: &abort,
-                    };
-                    let heap = era.heap_identity();
-                    let registry = era.registry();
-                    let permit = retry_reg(|| era.register(6600, setup.nslots));
-                    let (end_tx, end_rx) = channel();
-                    let (ready_tx, ready_rx) = channel();
-                    let (done_tx, done_rx) = channel();
-                    let (retired_tx, retired_rx) = channel();
-                    let (pause_tx, _pause_rx) = channel();
-                    let (_go_tx, go_rx) = channel();
-                    let launch = OwnerLaunch {
-                        permit,
-                        heap,
-                        id: 6600,
-                        nil: &nil,
-                        programs,
-                        nslots: setup.nslots,
-                        bound,
-                        line_slot: usize::from(HT_LINE),
-                        stop_at: no_stop,
-                        overlap: None,
-                        index: 0,
-                        pause_tx,
-                        go_rx,
-                        end_tx,
-                        ready_tx,
-                        done_rx,
-                        retired_tx,
-                        registry,
-                        abort: &abort,
-                        planted: &planted,
-                        ht: Some(env),
-                    };
-                    scope.spawn(move || launch.run());
-                    let end = recv(&end_rx);
-                    assert_eq!(recv(&ready_rx), 0);
-                    let mut stopped = retry_rv(|| era.stop());
-                    assert_eq!(stopped.epoch().get(), 1);
-                    retry_reg(|| era.return_cons_storage(&stopped));
-                    assert!(retry_rv(|| era.collect_stopped(&mut stopped)).major);
-                    complete(stopped);
-                    done_tx.send(()).unwrap();
-                    assert_eq!(recv(&retired_rx), 0);
-                    lines = end.lines;
-                });
-            }
-            let (collector, keeper) = projection
-                .finish()
-                .unwrap_or_else(|error| panic!("finish: {error:?}"));
-            (collector, keeper, ())
-        })
-        .unwrap_or_else(|error| panic!("admit: {error:?}"));
+    let roots = host.roots();
+    host.admit_era("admit", "finish", |era| {
+        era.start_cons_storage()
+            .unwrap_or_else(|error| panic!("cons catalog: {error:?}"));
+        thread::scope(|scope| {
+            let _panic = PanicFlag {
+                registry: era.registry(),
+                abort: &abort,
+            };
+            let heap = era.heap_identity();
+            let registry = era.registry();
+            let permit = retry_reg(|| era.register(6600, setup.nslots));
+            let (end_tx, end_rx) = channel();
+            let (ready_tx, ready_rx) = channel();
+            let (done_tx, done_rx) = channel();
+            let (retired_tx, retired_rx) = channel();
+            let (pause_tx, _pause_rx) = channel();
+            let (_go_tx, go_rx) = channel();
+            let launch = OwnerLaunch {
+                permit,
+                heap,
+                id: 6600,
+                nil: &nil,
+                programs,
+                nslots: setup.nslots,
+                bound,
+                line_slot: usize::from(HT_LINE),
+                stop_at: no_stop,
+                overlap: None,
+                index: 0,
+                pause_tx,
+                go_rx,
+                end_tx,
+                ready_tx,
+                done_rx,
+                retired_tx,
+                registry,
+                abort: &abort,
+                planted: &planted,
+                ht: Some(env),
+            };
+            scope.spawn(move || launch.run());
+            let end = recv(&end_rx);
+            assert_eq!(recv(&ready_rx), 0);
+            let mut stopped = retry_rv(|| era.stop());
+            assert_eq!(stopped.epoch().get(), 1);
+            retry_reg(|| era.return_cons_storage(&stopped));
+            assert!(retry_rv(|| era.collect_stopped(&mut stopped, roots)).major);
+            complete(stopped);
+            done_tx.send(()).unwrap();
+            assert_eq!(recv(&retired_rx), 0);
+            lines = end.lines;
+        });
+    });
     let dumps = dump_forms
         .iter()
         .map(|form| {
-            let value = context
-                .eval_str(form)
-                .unwrap_or_else(|error| panic!("ht dump eval {form}: {error:?}"));
+            let value = host
+                .eval_form(form)
+                .unwrap_or_else(|error| panic!("ht dump eval {form}: {error}"));
             prin1(value.bits())
         })
         .collect();
     (lines, dumps)
 }
 
-#[test]
-fn a6_ht_ops_match_gnu_oracle() {
+fn a6_ht_ops_match_gnu_oracle<H: HostParts>(host: &mut H) {
     let started = AtomicUsize::new(0);
     let programs = vec![
         ht_p1(),
@@ -3851,7 +4013,7 @@ fn a6_ht_ops_match_gnu_oracle() {
         "(internal--hash-table-histogram a6-tG)",
         "(internal--hash-table-buckets a6-tU)",
     ];
-    let (lines, dumps) = run_ht_session(&setup, programs, 65, &env, &dump_forms);
+    let (lines, dumps) = run_ht_session(host, &setup, programs, 65, &env, &dump_forms);
     assert_eq!(lines.len(), 8);
     assert_eq!(dumps.len(), 6);
     let oracle = oracle_lines();
@@ -3876,8 +4038,7 @@ fn a6_ht_ops_match_gnu_oracle() {
 
 /// P7b: a comparison that edits the table under test must be refused with
 /// GNU's message, and the table must be untouched.
-#[test]
-fn a6_ht_user_test_refuses_mutation_inside_the_test() {
+fn a6_ht_user_test_refuses_mutation_inside_the_test<H: HostParts>(host: &mut H) {
     let started = AtomicUsize::new(0);
     // 0 tM, 1-3 callback scratch, 4-6 operands.
     const TM: u16 = 0;
@@ -3934,97 +4095,88 @@ fn a6_ht_user_test_refuses_mutation_inside_the_test() {
         hash_ops: &hash_prog,
         cmp_ops: &cmp_bad,
     }];
-    let mut context = Context::new();
-    let plant_values = context
-        .eval_str(setup.source)
-        .unwrap_or_else(|error| panic!("ht setup eval: {error:?}"));
+    let plant_values = host
+        .eval_form(setup.source)
+        .unwrap_or_else(|error| panic!("ht setup eval: {error}"));
     // The setup form returns its one table wrapped in a list; the planted
     // slot takes the table itself, exactly as `run_ht_session` unwraps its
     // setup lists (a cons in the slot would fail the lease mint's type check).
     let table_value = plant_values.cons_car_unobserved();
     // SAFETY: the planted table belongs to this Context's heap.
-    let nil = unsafe { SharedRoot::new(&context.tagged_heap, TaggedValue::NIL) };
-    let table_root = unsafe { SharedRoot::new(&context.tagged_heap, table_value) };
+    let nil = host.share_value(TaggedValue::NIL);
+    let table_root = host.share_value(table_value);
     let mut planted: Vec<Option<SharedRoot>> = vec![None; setup.nslots];
     planted[0] = Some(table_root);
     let env = HtEnv::new(&users, 1, 2, 3);
     let abort = AtomicBool::new(false);
     let (report_tx, report_rx) = channel();
-    context
-        .admit_owned_proof_parallel(|projection| {
-            {
-                let era = projection.era();
-                era.start_cons_storage()
-                    .unwrap_or_else(|error| panic!("cons catalog: {error:?}"));
-                thread::scope(|scope| {
-                    let _panic = PanicFlag {
-                        registry: era.registry(),
-                        abort: &abort,
-                    };
-                    let heap = era.heap_identity();
-                    let registry = era.registry();
-                    let permit = retry_reg(|| era.register(6601, setup.nslots));
-                    let abort_flag = &abort;
-                    let env_ref = &env;
-                    let planted_ref = &planted;
-                    let nil_ref = &nil;
-                    let program_ref = &program;
-                    let (ready_tx, ready_rx) = channel();
-                    let (done_tx, done_rx) = channel();
-                    let (retired_tx, retired_rx) = channel();
-                    scope.spawn(move || {
-                        let _panic = PanicFlag {
-                            registry,
-                            abort: abort_flag,
-                        };
-                        let mut owner = activate_owner(permit, heap, 6601);
-                        let slots = seed_planted(&mut owner, nil_ref, planted_ref);
-                        let mut machine = Machine::new();
-                        let outcome = one_slice(
-                            &mut owner,
-                            &slots,
-                            program_ref,
-                            &mut machine,
-                            0,
-                            None,
-                            0,
-                            Some(env_ref),
-                        );
-                        report_tx
-                            .send(outcome.err())
-                            .unwrap_or_else(|_| panic!("report channel closed"));
-                        shutdown_owner(owner, 0, &ready_tx, &done_rx, &retired_tx);
-                    });
-                    let error = recv(&report_rx);
-                    assert_eq!(error, Some(ExecError::UserTestMutation));
-                    assert_eq!(
-                        started.load(Ordering::Relaxed),
-                        1,
-                        "the refusal is a runtime guard, not a gate rejection"
-                    );
-                    assert_eq!(recv(&ready_rx), 0);
-                    let mut next_epoch = 1u64;
-                    let mut stopped = retry_rv(|| era.stop());
-                    assert_eq!(stopped.epoch().get(), next_epoch);
-                    next_epoch += 1;
-                    let _ = next_epoch;
-                    retry_reg(|| era.return_cons_storage(&stopped));
-                    assert!(retry_rv(|| era.collect_stopped(&mut stopped)).major);
-                    complete(stopped);
-                    done_tx.send(()).unwrap();
-                    assert_eq!(recv(&retired_rx), 0);
-                });
-            }
-            let (collector, keeper) = projection
-                .finish()
-                .unwrap_or_else(|error| panic!("finish: {error:?}"));
-            (collector, keeper, ())
-        })
-        .unwrap_or_else(|error| panic!("admit: {error:?}"));
+    let roots = host.roots();
+    host.admit_era("admit", "finish", |era| {
+        era.start_cons_storage()
+            .unwrap_or_else(|error| panic!("cons catalog: {error:?}"));
+        thread::scope(|scope| {
+            let _panic = PanicFlag {
+                registry: era.registry(),
+                abort: &abort,
+            };
+            let heap = era.heap_identity();
+            let registry = era.registry();
+            let permit = retry_reg(|| era.register(6601, setup.nslots));
+            let abort_flag = &abort;
+            let env_ref = &env;
+            let planted_ref = &planted;
+            let nil_ref = &nil;
+            let program_ref = &program;
+            let (ready_tx, ready_rx) = channel();
+            let (done_tx, done_rx) = channel();
+            let (retired_tx, retired_rx) = channel();
+            scope.spawn(move || {
+                let _panic = PanicFlag {
+                    registry,
+                    abort: abort_flag,
+                };
+                let mut owner = activate_owner(permit, heap, 6601);
+                let slots = seed_planted(&mut owner, nil_ref, planted_ref);
+                let mut machine = Machine::new();
+                let outcome = one_slice(
+                    &mut owner,
+                    &slots,
+                    program_ref,
+                    &mut machine,
+                    0,
+                    None,
+                    0,
+                    Some(env_ref),
+                );
+                report_tx
+                    .send(outcome.err())
+                    .unwrap_or_else(|_| panic!("report channel closed"));
+                shutdown_owner(owner, 0, &ready_tx, &done_rx, &retired_tx);
+            });
+            let error = recv(&report_rx);
+            assert_eq!(error, Some(ExecError::UserTestMutation));
+            assert_eq!(
+                started.load(Ordering::Relaxed),
+                1,
+                "the refusal is a runtime guard, not a gate rejection"
+            );
+            assert_eq!(recv(&ready_rx), 0);
+            let mut next_epoch = 1u64;
+            let mut stopped = retry_rv(|| era.stop());
+            assert_eq!(stopped.epoch().get(), next_epoch);
+            next_epoch += 1;
+            let _ = next_epoch;
+            retry_reg(|| era.return_cons_storage(&stopped));
+            assert!(retry_rv(|| era.collect_stopped(&mut stopped, roots)).major);
+            complete(stopped);
+            done_tx.send(()).unwrap();
+            assert_eq!(recv(&retired_rx), 0);
+        });
+    });
     // Serial world back: the refused put left the table exactly as seeded.
-    let count = context
-        .eval_str("(hash-table-count a6-tM)")
-        .unwrap_or_else(|error| panic!("count eval: {error:?}"));
+    let count = host
+        .eval_form("(hash-table-count a6-tM)")
+        .unwrap_or_else(|error| panic!("count eval: {error}"));
     assert_eq!(prin1(count.bits()), "1");
     let oracle = oracle_lines();
     assert_eq!(oracle[27], "\"hash table test modifies table\"");
@@ -4035,8 +4187,7 @@ fn a6_ht_user_test_refuses_mutation_inside_the_test() {
 /// second round answers — same line as the stable twin (the P8s oracle
 /// line). Only the tO comparison qualifies: the EQ fast path means the pure
 /// tU lookups never reach a comparator window at all.
-#[test]
-fn a6_ht_user_test_revalidates_after_callback_window() {
+fn a6_ht_user_test_revalidates_after_callback_window<H: HostParts>(host: &mut H) {
     let started = AtomicUsize::new(0);
     let program = ht_p8s();
     let setup = ht_main_setup();
@@ -4097,7 +4248,7 @@ fn a6_ht_user_test_revalidates_after_callback_window() {
     ];
     let env = HtEnv::new(&users, HT_CB_KEY, HT_CB_CAND, HT_CB_OUT);
     env.bump_before_cb.store(1, Ordering::SeqCst);
-    let (lines, _dumps) = run_ht_session(&setup, vec![program], 0, &env, &[]);
+    let (lines, _dumps) = run_ht_session(host, &setup, vec![program], 0, &env, &[]);
     assert_eq!(
         env.revalidations.load(Ordering::SeqCst),
         1,
@@ -4111,129 +4262,118 @@ fn a6_ht_user_test_revalidates_after_callback_window() {
 /// The lease-mint runtime tests B2 deferred: both lease kinds minted from a
 /// live run access on the owner's thread, the authority word's live
 /// transitions matching the B1 model, and one edit read back.
-#[test]
-fn a6_ht_lease_mints_from_a_live_run_access() {
+fn a6_ht_lease_mints_from_a_live_run_access<H: HostParts>(host: &mut H) {
     const WRITER: u64 = 1 << 63;
     let abort = AtomicBool::new(false);
-    let mut context = Context::new();
-    let table = context
-        .eval_str("(make-hash-table :test 'eq)")
-        .unwrap_or_else(|error| panic!("table eval: {error:?}"));
+    let table = host
+        .eval_form("(make-hash-table :test 'eq)")
+        .unwrap_or_else(|error| panic!("table eval: {error}"));
     // SAFETY: the table belongs to this Context's heap; the root keeps it
     // alive for the whole era.
-    let root = unsafe { SharedRoot::new(&context.tagged_heap, table) };
+    let root = host.share_value(table);
     let (report_tx, report_rx) = channel();
-    context
-        .admit_owned_proof_parallel(|projection| {
-            {
-                let era = projection.era();
-                era.start_cons_storage()
-                    .unwrap_or_else(|error| panic!("cons catalog: {error:?}"));
-                thread::scope(|scope| {
-                    let _panic = PanicFlag {
-                        registry: era.registry(),
-                        abort: &abort,
-                    };
-                    let heap = era.heap_identity();
-                    let registry = era.registry();
-                    let permit = retry_reg(|| era.register(6602, 1));
-                    let abort_flag = &abort;
-                    let root = root.clone();
-                    let (ready_tx, ready_rx) = channel();
-                    let (done_tx, done_rx) = channel();
-                    let (retired_tx, retired_rx) = channel();
-                    scope.spawn(move || {
-                        let _panic = PanicFlag {
-                            registry,
-                            abort: abort_flag,
+    let roots = host.roots();
+    host.admit_era("admit", "finish", |era| {
+        era.start_cons_storage()
+            .unwrap_or_else(|error| panic!("cons catalog: {error:?}"));
+        thread::scope(|scope| {
+            let _panic = PanicFlag {
+                registry: era.registry(),
+                abort: &abort,
+            };
+            let heap = era.heap_identity();
+            let registry = era.registry();
+            let permit = retry_reg(|| era.register(6602, 1));
+            let abort_flag = &abort;
+            let root = root.clone();
+            let (ready_tx, ready_rx) = channel();
+            let (done_tx, done_rx) = channel();
+            let (retired_tx, retired_rx) = channel();
+            scope.spawn(move || {
+                let _panic = PanicFlag {
+                    registry,
+                    abort: abort_flag,
+                };
+                let mut owner = activate_owner(permit, heap, 6602);
+                let report = must(with_run(&mut owner, |run| {
+                    let table = unsafe { TaggedValue::from_bits(root.cons_word_for_test()) };
+                    let key = TaggedValue::fixnum(5);
+                    let value = TaggedValue::fixnum(6);
+                    // Readers nest as a count and never set the bit;
+                    // both leases stay mintable from this one access.
+                    let r1 = TableRef::enter(run, table)?;
+                    let w1 = r1.authority_word().load(Ordering::Acquire);
+                    let r2 = TableRef::enter(run, table)?;
+                    let w2 = r2.authority_word().load(Ordering::Acquire);
+                    drop(r2);
+                    let w3 = r1.authority_word().load(Ordering::Acquire);
+                    drop(r1);
+                    // The writer drains the count and holds the whole
+                    // word; entering right after the last reader left
+                    // also proves the word returned to quiescent.
+                    let mut writer = TableMut::enter(run, table)?;
+                    let w4 = writer.authority_word().load(Ordering::Acquire);
+                    writer.edit(|ht| {
+                        let probe = ht
+                            .data
+                            .try_probe_for_insert(key, HashTableTest::Eq, false)
+                            .expect("an empty eq table probes cleanly");
+                        let HashProbe::Absent(hash) = probe else {
+                            panic!("fresh table has no matching entry");
                         };
-                        let mut owner = activate_owner(permit, heap, 6602);
-                        let report = must(with_run(&mut owner, |run| {
-                            let table = TaggedValue::from_bits(root.cons_word_for_test());
-                            let key = TaggedValue::fixnum(5);
-                            let value = TaggedValue::fixnum(6);
-                            // Readers nest as a count and never set the bit;
-                            // both leases stay mintable from this one access.
-                            let r1 = TableRef::enter(run, table)?;
-                            let w1 = r1.authority_word().load(Ordering::Acquire);
-                            let r2 = TableRef::enter(run, table)?;
-                            let w2 = r2.authority_word().load(Ordering::Acquire);
-                            drop(r2);
-                            let w3 = r1.authority_word().load(Ordering::Acquire);
-                            drop(r1);
-                            // The writer drains the count and holds the whole
-                            // word; entering right after the last reader left
-                            // also proves the word returned to quiescent.
-                            let mut writer = TableMut::enter(run, table)?;
-                            let w4 = writer.authority_word().load(Ordering::Acquire);
-                            writer.edit(|ht| {
-                                let probe = ht
-                                    .data
-                                    .try_probe_for_insert(key, HashTableTest::Eq, false)
-                                    .expect("an empty eq table probes cleanly");
-                                let HashProbe::Absent(hash) = probe else {
-                                    panic!("fresh table has no matching entry");
-                                };
-                                ht.maybe_resize_for_insert(true);
-                                let hash_key = key.to_hash_key_swp(&HashTableTest::Eq, false);
-                                ht.data.insert_absent(hash, hash_key, key, value);
-                            });
-                            drop(writer);
-                            let reader = TableRef::enter(run, table)?;
-                            let seen = reader.read(|s| {
-                                (
-                                    s.len(),
-                                    s.try_lookup(key, HashTableTest::Eq, false)
-                                        .ok()
-                                        .flatten()
-                                        .map(|found| found.bits()),
-                                )
-                            });
-                            drop(reader);
-                            Ok((w1, w2, w3, w4, seen))
-                        }));
-                        report_tx
-                            .send(report)
-                            .unwrap_or_else(|_| panic!("report channel closed"));
-                        shutdown_owner(owner, 0, &ready_tx, &done_rx, &retired_tx);
+                        ht.maybe_resize_for_insert(true);
+                        let hash_key = key.to_hash_key_swp(&HashTableTest::Eq, false);
+                        ht.data.insert_absent(hash, hash_key, key, value);
                     });
-                    let (w1, w2, w3, w4, (len, found)) = recv(&report_rx);
-                    assert_eq!(w1, 1, "the first reader takes count 1");
-                    assert_eq!(w2, 2, "readers nest as a count, never the bit");
-                    assert_eq!(w3, 1, "dropping a nested reader decrements");
-                    assert_eq!(w4, WRITER, "the writer holds the whole word");
-                    assert_eq!(len, 1, "the sealed edit inserted one entry");
-                    assert_eq!(
-                        found,
-                        Some(TaggedValue::fixnum(6).bits()),
-                        "the read-back sees the edit"
-                    );
-                    assert_eq!(recv(&ready_rx), 0);
-                    let mut stopped = retry_rv(|| era.stop());
-                    assert_eq!(stopped.epoch().get(), 1);
-                    retry_reg(|| era.return_cons_storage(&stopped));
-                    assert!(retry_rv(|| era.collect_stopped(&mut stopped)).major);
-                    complete(stopped);
-                    done_tx.send(()).unwrap();
-                    assert_eq!(recv(&retired_rx), 0);
-                });
-            }
-            let (collector, keeper) = projection
-                .finish()
-                .unwrap_or_else(|error| panic!("finish: {error:?}"));
-            (collector, keeper, ())
-        })
-        .unwrap_or_else(|error| panic!("admit: {error:?}"));
+                    drop(writer);
+                    let reader = TableRef::enter(run, table)?;
+                    let seen = reader.read(|s| {
+                        (
+                            s.len(),
+                            s.try_lookup(key, HashTableTest::Eq, false)
+                                .ok()
+                                .flatten()
+                                .map(|found| found.bits()),
+                        )
+                    });
+                    drop(reader);
+                    Ok((w1, w2, w3, w4, seen))
+                }));
+                report_tx
+                    .send(report)
+                    .unwrap_or_else(|_| panic!("report channel closed"));
+                shutdown_owner(owner, 0, &ready_tx, &done_rx, &retired_tx);
+            });
+            let (w1, w2, w3, w4, (len, found)) = recv(&report_rx);
+            assert_eq!(w1, 1, "the first reader takes count 1");
+            assert_eq!(w2, 2, "readers nest as a count, never the bit");
+            assert_eq!(w3, 1, "dropping a nested reader decrements");
+            assert_eq!(w4, WRITER, "the writer holds the whole word");
+            assert_eq!(len, 1, "the sealed edit inserted one entry");
+            assert_eq!(
+                found,
+                Some(TaggedValue::fixnum(6).bits()),
+                "the read-back sees the edit"
+            );
+            assert_eq!(recv(&ready_rx), 0);
+            let mut stopped = retry_rv(|| era.stop());
+            assert_eq!(stopped.epoch().get(), 1);
+            retry_reg(|| era.return_cons_storage(&stopped));
+            assert!(retry_rv(|| era.collect_stopped(&mut stopped, roots)).major);
+            complete(stopped);
+            done_tx.send(()).unwrap();
+            assert_eq!(recv(&retired_rx), 0);
+        });
+    });
 }
 
-#[test]
-fn a6_nonallocating_sum_loop() {
+fn a6_nonallocating_sum_loop<H: HostParts>(host: &mut H) {
     let started = AtomicUsize::new(0);
     let programs = vec![sum_ops(), sum_ops()];
     pass_gate(&programs, 4, 5, &started);
     let overlap = Overlap::new(2, false);
     let oracle = oracle_lines();
-    with_admitted(|era, _generational, nil, _one| {
+    with_admitted(host, |era, _generational, nil, _one, roots| {
         thread::scope(|scope| {
             let _panic = PanicFlag {
                 registry: era.registry(),
@@ -4263,18 +4403,18 @@ fn a6_nonallocating_sum_loop() {
                 assert_eq!(snap.cons_count, 0);
                 assert!(snap.conses.is_empty());
                 assert_eq!(
-                    TaggedValue::from_bits(snap.slots[0]).as_fixnum(),
+                    unsafe { TaggedValue::from_bits(snap.slots[0]) }.as_fixnum(),
                     Some(4),
                     "mid-loop n"
                 );
                 assert_eq!(
-                    TaggedValue::from_bits(snap.slots[1]).as_fixnum(),
+                    unsafe { TaggedValue::from_bits(snap.slots[1]) }.as_fixnum(),
                     Some(5),
                     "mid-loop s"
                 );
             }
-            session.round(Go::Forced, true, |_era, _stopped| {});
-            let ends = session.finish_owners(|_era, _stopped| {});
+            session.round(Go::Forced, true, |_era, _stopped| {}, roots);
+            let ends = session.finish_owners(|_era, _stopped| {}, roots);
             for end in &ends {
                 assert_eq!(end.safepoints, 5);
                 assert_eq!(end.cons_count, 0);
@@ -4285,14 +4425,12 @@ fn a6_nonallocating_sum_loop() {
     assert_eq!(started.load(Ordering::Relaxed), 1);
 }
 
-#[test]
-fn a6_overlap_lists_two_owners() {
-    overlap_lists(2);
+fn a6_overlap_lists_two_owners<H: HostParts>(host: &mut H) {
+    overlap_lists(host, 2);
 }
 
-#[test]
-fn a6_overlap_lists_four_owners() {
-    overlap_lists(4);
+fn a6_overlap_lists_four_owners<H: HostParts>(host: &mut H) {
+    overlap_lists(host, 4);
 }
 
 // ---------------------------------------------------------------------------
@@ -4358,9 +4496,9 @@ fn read_tp_catalog_waits() -> (u64, u64, u64, u64, u64, u64) {
 
 /// One timed round: every owner is parked at its threshold safepoint before
 /// the window opens, and the window closes when `complete` returns.
-#[cfg(test)]
-fn tp_round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+fn tp_round<K: crate::tagged::gc::mutator_registration::EraKeeper, W: WorldRoots<K>>(
     session: &mut Session<'_, '_, K>,
+    roots: W,
 ) -> (usize, u64) {
     let _ = session.pauses();
     let t0 = Instant::now();
@@ -4370,7 +4508,7 @@ fn tp_round<K: crate::tagged::gc::mutator_registration::EraKeeper>(
         Go::Threshold,
         &mut session.next_epoch,
     );
-    let report = retry_rv(|| session.era.collect_stopped(&mut stopped));
+    let report = retry_rv(|| session.era.collect_stopped(&mut stopped, roots));
     assert!(report.major, "throughput rounds collect a major cycle");
     retry_reg(|| session.era.resume_cons_storage(&stopped));
     complete(stopped);
@@ -4458,8 +4596,8 @@ where
 /// Drive one row: `owners` executors, each running `reps` programs of
 /// `cells` cons builds with a Safepoint every `spacing` conses. Returns the
 /// measured row.
-#[cfg(test)]
-fn tp_drive(
+fn tp_drive<H: HostParts>(
+    host: &mut H,
     label: &str,
     owners: usize,
     cells: usize,
@@ -4521,7 +4659,7 @@ fn tp_drive(
         close_ns: 0,
         close_max_ns: 0,
     };
-    with_admitted(|era, generational, nil, _one| {
+    with_admitted(host, |era, generational, nil, _one, roots| {
         assert_eq!(
             generational,
             std::env::var("NEOVM_GC_GENERATIONAL").as_deref() != Ok("0"),
@@ -4546,7 +4684,7 @@ fn tp_drive(
             );
             let t0 = Instant::now();
             for _ in 0..expected_rounds {
-                let (live, ns) = tp_round(&mut session);
+                let (live, ns) = tp_round(&mut session, roots);
                 row.pause_ns.push(ns);
                 row.live_bytes_last = live;
                 row.live_bytes_max = row.live_bytes_max.max(live);
@@ -4582,7 +4720,7 @@ fn tp_drive(
             assert_eq!(stopped.epoch().get(), session.next_epoch, "reclaim epoch");
             session.next_epoch += 1;
             retry_reg(|| session.era.return_cons_storage(&stopped));
-            let report = retry_rv(|| session.era.collect_stopped(&mut stopped));
+            let report = retry_rv(|| session.era.collect_stopped(&mut stopped, roots));
             assert!(report.major);
             complete(stopped);
             for tx in &session.done_txs {
@@ -4645,9 +4783,8 @@ fn tp_row_print(row: &TpRow, generational: bool, tsv: &mut Option<&mut String>) 
 /// The A8 throughput matrix on the proof executor (design section 7.2).
 /// NOT arbitrary-Lisp performance: the same restricted executor, one fixed
 /// list-building program per owner.
-#[test]
-#[cfg(all(test, feature = "perf-probes"))]
-fn a8_throughput_rows() {
+#[cfg(feature = "perf-probes")]
+fn a8_throughput_rows<H: HostParts>(host: &mut H) {
     let cells: usize = std::env::var("A8_TP_CELLS")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -4691,6 +4828,7 @@ fn a8_throughput_rows() {
     if want("pof") {
         for owners in [1usize, 2, 3, 4] {
             let row = tp_drive(
+                host,
                 &format!("per-owner-fixed-{owners}{tag_suffix}"),
                 owners,
                 cells,
@@ -4711,6 +4849,7 @@ fn a8_throughput_rows() {
             // Scale the per-owner threshold by 1/N so every fixed-total row runs
             // the same number of collection rounds, not total/N of them.
             let row = tp_drive(
+                host,
                 &format!("total-fixed-{owners}{tag_suffix}"),
                 owners,
                 cells,
@@ -4726,6 +4865,7 @@ fn a8_throughput_rows() {
     if want("ao") {
         for owners in [1usize, 4] {
             let row = tp_drive(
+                host,
                 &format!("alloc-only-{owners}{tag_suffix}"),
                 owners,
                 cells,
@@ -4759,8 +4899,8 @@ fn a8_throughput_rows() {
 /// collection, so lease windows really overlap), and the coordinator drives
 /// the one collection round after every owner reported. Returns each owner's
 /// program lines, one list per owner.
-#[cfg(test)]
-fn run_ht_overlap_session(
+fn run_ht_overlap_session<H: HostParts>(
+    host: &mut H,
     setup: &HtSetup,
     programs: &[Vec<Op>],
     reps: usize,
@@ -4769,21 +4909,19 @@ fn run_ht_overlap_session(
     id_base: u64,
     dump_forms: &[&str],
 ) -> (Vec<Vec<String>>, Vec<String>) {
-    let mut context = Context::new();
-    let plant_values = context
-        .eval_str(setup.source)
-        .unwrap_or_else(|error| panic!("ht setup eval: {error:?}"));
+    let plant_values = host
+        .eval_form(setup.source)
+        .unwrap_or_else(|error| panic!("ht setup eval: {error}"));
     // SAFETY: every planted word belongs to this Context's heap; the roots
     // keep the shared tables alive for the whole era, and `SharedRoot` is
     // `Sync`, so every owner seeds from the same roots.
-    let nil = unsafe { SharedRoot::new(&context.tagged_heap, TaggedValue::NIL) };
+    let nil = host.share_value(TaggedValue::NIL);
     let mut planted: Vec<Option<SharedRoot>> = vec![None; setup.nslots];
     {
         let mut cursor = plant_values;
         for &(slot, _fact) in &setup.facts {
             assert!(cursor.is_cons(), "setup list shorter than its facts");
-            let root =
-                unsafe { SharedRoot::new(&context.tagged_heap, cursor.cons_car_unobserved()) };
+            let root = host.share_value(cursor.cons_car_unobserved());
             planted[usize::from(slot)] = Some(root);
             cursor = cursor.cons_cdr_unobserved();
         }
@@ -4791,87 +4929,79 @@ fn run_ht_overlap_session(
     }
     let abort = AtomicBool::new(false);
     let mut lines: Vec<Vec<String>> = Vec::new();
-    context
-        .admit_owned_proof_parallel(|projection| {
-            {
-                let era = projection.era();
-                era.start_cons_storage()
-                    .unwrap_or_else(|error| panic!("cons catalog: {error:?}"));
-                thread::scope(|scope| {
-                    let _panic = PanicFlag {
-                        registry: era.registry(),
-                        abort: &abort,
-                    };
-                    let heap = era.heap_identity();
-                    let registry = era.registry();
-                    let n = programs.len();
-                    let (end_tx, end_rx) = channel();
-                    let (ready_tx, ready_rx) = channel();
-                    let (retired_tx, retired_rx) = channel();
-                    let mut done_txs = Vec::with_capacity(n);
-                    let mut permits = Vec::with_capacity(n);
-                    for index in 0..n {
-                        permits.push(retry_reg(|| {
-                            era.register(id_base + index as u64, setup.nslots)
-                        }));
-                    }
-                    for (index, permit) in permits.into_iter().enumerate() {
-                        let (done_tx, done_rx) = channel();
-                        done_txs.push(done_tx);
-                        let launch = OwnerLaunch {
-                            permit,
-                            heap,
-                            id: id_base + index as u64,
-                            nil: &nil,
-                            programs: vec![programs[index].clone(); reps],
-                            nslots: setup.nslots,
-                            bound,
-                            line_slot: usize::from(HT_LINE),
-                            stop_at: no_stop,
-                            overlap: None,
-                            index,
-                            pause_tx: channel().0,
-                            go_rx: channel().1,
-                            end_tx: end_tx.clone(),
-                            ready_tx: ready_tx.clone(),
-                            done_rx,
-                            retired_tx: retired_tx.clone(),
-                            registry,
-                            abort: &abort,
-                            planted: &planted,
-                            ht: Some(env),
-                        };
-                        scope.spawn(move || launch.run());
-                    }
-                    drop(end_tx);
-                    drop(ready_tx);
-                    drop(retired_tx);
-                    let ends = gather(&end_rx, n, |end| end.index);
-                    let _readies = gather(&ready_rx, n, |index| *index);
-                    let mut stopped = retry_rv(|| era.stop());
-                    assert_eq!(stopped.epoch().get(), 1);
-                    retry_reg(|| era.return_cons_storage(&stopped));
-                    assert!(retry_rv(|| era.collect_stopped(&mut stopped)).major);
-                    complete(stopped);
-                    for done in &done_txs {
-                        done.send(()).unwrap();
-                    }
-                    let _retired = gather(&retired_rx, n, |index| *index);
-                    lines = ends.into_iter().map(|end| end.lines).collect();
-                });
+    let roots = host.roots();
+    host.admit_era("admit", "finish", |era| {
+        era.start_cons_storage()
+            .unwrap_or_else(|error| panic!("cons catalog: {error:?}"));
+        thread::scope(|scope| {
+            let _panic = PanicFlag {
+                registry: era.registry(),
+                abort: &abort,
+            };
+            let heap = era.heap_identity();
+            let registry = era.registry();
+            let n = programs.len();
+            let (end_tx, end_rx) = channel();
+            let (ready_tx, ready_rx) = channel();
+            let (retired_tx, retired_rx) = channel();
+            let mut done_txs = Vec::with_capacity(n);
+            let mut permits = Vec::with_capacity(n);
+            for index in 0..n {
+                permits.push(retry_reg(|| {
+                    era.register(id_base + index as u64, setup.nslots)
+                }));
             }
-            let (collector, keeper) = projection
-                .finish()
-                .unwrap_or_else(|error| panic!("finish: {error:?}"));
-            (collector, keeper, ())
-        })
-        .unwrap_or_else(|error| panic!("admit: {error:?}"));
+            for (index, permit) in permits.into_iter().enumerate() {
+                let (done_tx, done_rx) = channel();
+                done_txs.push(done_tx);
+                let launch = OwnerLaunch {
+                    permit,
+                    heap,
+                    id: id_base + index as u64,
+                    nil: &nil,
+                    programs: vec![programs[index].clone(); reps],
+                    nslots: setup.nslots,
+                    bound,
+                    line_slot: usize::from(HT_LINE),
+                    stop_at: no_stop,
+                    overlap: None,
+                    index,
+                    pause_tx: channel().0,
+                    go_rx: channel().1,
+                    end_tx: end_tx.clone(),
+                    ready_tx: ready_tx.clone(),
+                    done_rx,
+                    retired_tx: retired_tx.clone(),
+                    registry,
+                    abort: &abort,
+                    planted: &planted,
+                    ht: Some(env),
+                };
+                scope.spawn(move || launch.run());
+            }
+            drop(end_tx);
+            drop(ready_tx);
+            drop(retired_tx);
+            let ends = gather(&end_rx, n, |end| end.index);
+            let _readies = gather(&ready_rx, n, |index| *index);
+            let mut stopped = retry_rv(|| era.stop());
+            assert_eq!(stopped.epoch().get(), 1);
+            retry_reg(|| era.return_cons_storage(&stopped));
+            assert!(retry_rv(|| era.collect_stopped(&mut stopped, roots)).major);
+            complete(stopped);
+            for done in &done_txs {
+                done.send(()).unwrap();
+            }
+            let _retired = gather(&retired_rx, n, |index| *index);
+            lines = ends.into_iter().map(|end| end.lines).collect();
+        });
+    });
     let dumps = dump_forms
         .iter()
         .map(|form| {
-            let value = context
-                .eval_str(form)
-                .unwrap_or_else(|error| panic!("ht dump eval {form}: {error:?}"));
+            let value = host
+                .eval_form(form)
+                .unwrap_or_else(|error| panic!("ht dump eval {form}: {error}"));
             prin1(value.bits())
         })
         .collect();
@@ -4885,8 +5015,7 @@ fn run_ht_overlap_session(
 /// readers observe after the barrier is the design §6 witness, and the
 /// disjoint puts/gets check the concurrent answers and the exact final
 /// state (only owner `i` ever writes key `50+i`).
-#[cfg(test)]
-fn overlap_ht_readers(owners: usize) {
+fn overlap_ht_readers<H: HostParts>(host: &mut H, owners: usize) {
     // slots: 0 witnessed reader table, 1 disjoint-key table, 14 line.
     const TW: u16 = 0;
     const TX: u16 = 1;
@@ -4942,6 +5071,7 @@ fn overlap_ht_readers(owners: usize) {
     env.witness = Some(&witness);
     env.progress = &progress;
     let (lines, dumps) = run_ht_overlap_session(
+        host,
         &setup,
         &programs,
         1,
@@ -4978,19 +5108,16 @@ fn overlap_ht_readers(owners: usize) {
     assert_eq!(dumps[1], "4", "the witnessed table kept its seeded entries");
 }
 
-#[test]
-fn a6_ht_overlap_shared_readers_two_owners() {
-    overlap_ht_readers(2);
+fn a6_ht_overlap_shared_readers_two_owners<H: HostParts>(host: &mut H) {
+    overlap_ht_readers(host, 2);
 }
 
-#[test]
-fn a6_ht_overlap_shared_readers_three_owners() {
-    overlap_ht_readers(3);
+fn a6_ht_overlap_shared_readers_three_owners<H: HostParts>(host: &mut H) {
+    overlap_ht_readers(host, 3);
 }
 
-#[test]
-fn a6_ht_overlap_shared_readers_four_owners() {
-    overlap_ht_readers(4);
+fn a6_ht_overlap_shared_readers_four_owners<H: HostParts>(host: &mut H) {
+    overlap_ht_readers(host, 4);
 }
 
 /// B4 writer drain: four readers hold their leases across the barrier while
@@ -4999,8 +5126,7 @@ fn a6_ht_overlap_shared_readers_four_owners() {
 /// leave, and only then does the writer's edit run on the whole word. The
 /// writer's put is a real sealed `HtPut`; the readers' counts are real
 /// sealed `HtCount`s.
-#[test]
-fn a6_ht_overlap_writer_drains_four_readers() {
+fn a6_ht_overlap_writer_drains_four_readers<H: HostParts>(host: &mut H) {
     const TW: u16 = 0;
     const NSLOTS: usize = 20;
     let readers = 4usize;
@@ -5041,6 +5167,7 @@ fn a6_ht_overlap_writer_drains_four_readers() {
     env.witness = Some(&witness);
     env.progress = &progress;
     let (lines, dumps) = run_ht_overlap_session(
+        host,
         &setup,
         &programs,
         1,
@@ -5081,8 +5208,7 @@ fn a6_ht_overlap_writer_drains_four_readers() {
 /// enumerates exhaustively. Op atomicity shows as the count never leaving
 /// one: four puts, one key, no torn duplicate ever observed (each owner
 /// counts after its own puts).
-#[test]
-fn a6_ht_overlap_final_state_in_legal_serial_interleavings() {
+fn a6_ht_overlap_final_state_in_legal_serial_interleavings<H: HostParts>(host: &mut H) {
     const TI: u16 = 0;
     const NSLOTS: usize = 20;
     let setup = HtSetup {
@@ -5151,6 +5277,7 @@ fn a6_ht_overlap_final_state_in_legal_serial_interleavings() {
     );
     let env = HtEnv::new(&[], HT_CB_KEY, HT_CB_CAND, HT_CB_OUT);
     let (lines, dumps) = run_ht_overlap_session(
+        host,
         &setup,
         &programs,
         1,
@@ -5193,8 +5320,7 @@ fn a6_ht_overlap_final_state_in_legal_serial_interleavings() {
 /// string is ever printed into a line: found flags and counts only, exactly
 /// the P5 convention (GNU's `remhash` says nil unconditionally, so the
 /// oracle twin derives found flags from sentinel presence checks).
-#[test]
-fn a6_ht_string_keys_match_gnu_oracle() {
+fn a6_ht_string_keys_match_gnu_oracle<H: HostParts>(host: &mut H) {
     // slots: 0 string table, 5/6/7 planted keys, 14 line.
     const TS: u16 = 0;
     const S1: u16 = 5;
@@ -5265,6 +5391,7 @@ fn a6_ht_string_keys_match_gnu_oracle() {
         .unwrap_or_else(|error| panic!("prevalidate: {error:?}"));
     let env = HtEnv::new(&[], HT_CB_KEY, HT_CB_CAND, HT_CB_OUT);
     let (lines, dumps) = run_ht_session(
+        host,
         &setup,
         vec![program],
         0,
@@ -5293,8 +5420,7 @@ fn a6_ht_string_keys_match_gnu_oracle() {
 /// exactly between the scan's candidate copy and its re-read, so the lookup
 /// revalidates — a real other-owner provocation, not the P8 lever. The
 /// answer is the stable twin's either way.
-#[test]
-fn a6_ht_user_test_revalidates_under_another_owner() {
+fn a6_ht_user_test_revalidates_under_another_owner<H: HostParts>(host: &mut H) {
     let started = AtomicUsize::new(0);
     let program = ht_p8s();
     let setup = ht_main_setup();
@@ -5359,19 +5485,17 @@ fn a6_ht_user_test_revalidates_under_another_owner() {
     // The P8 lever stays disarmed: this row's mutation is the editor's.
     env.editor = Some(&editor);
     env.progress = &progress;
-    let mut context = Context::new();
-    let plant_values = context
-        .eval_str(setup.source)
-        .unwrap_or_else(|error| panic!("ht setup eval: {error:?}"));
+    let plant_values = host
+        .eval_form(setup.source)
+        .unwrap_or_else(|error| panic!("ht setup eval: {error}"));
     // SAFETY: the planted tables belong to this Context's heap; the roots
     // keep them alive for the whole era and both owners seed from them.
-    let nil = unsafe { SharedRoot::new(&context.tagged_heap, TaggedValue::NIL) };
+    let nil = host.share_value(TaggedValue::NIL);
     let mut planted: Vec<Option<SharedRoot>> = vec![None; setup.nslots];
     {
         let mut cursor = plant_values;
         for &(slot, _fact) in &setup.facts {
-            let root =
-                unsafe { SharedRoot::new(&context.tagged_heap, cursor.cons_car_unobserved()) };
+            let root = host.share_value(cursor.cons_car_unobserved());
             planted[usize::from(slot)] = Some(root);
             cursor = cursor.cons_cdr_unobserved();
         }
@@ -5379,120 +5503,112 @@ fn a6_ht_user_test_revalidates_under_another_owner() {
     }
     let abort = AtomicBool::new(false);
     let mut lines: Vec<String> = Vec::new();
-    context
-        .admit_owned_proof_parallel(|projection| {
-            {
-                let era = projection.era();
-                era.start_cons_storage()
-                    .unwrap_or_else(|error| panic!("cons catalog: {error:?}"));
-                thread::scope(|scope| {
-                    let _panic = PanicFlag {
-                        registry: era.registry(),
-                        abort: &abort,
-                    };
-                    let heap = era.heap_identity();
-                    let registry = era.registry();
-                    let abort_flag = &abort;
-                    // Both permits exist before either owner thread (§3.3).
-                    let permit_r = retry_reg(|| era.register(6800, setup.nslots));
-                    let permit_e = retry_reg(|| era.register(6801, setup.nslots));
-                    let (end_tx, end_rx) = channel();
-                    let (ready_tx, ready_rx) = channel();
-                    let (done_tx_r, done_rx_r) = channel();
-                    let (done_tx_e, done_rx_e) = channel();
-                    let (retired_tx, retired_rx) = channel();
-                    let launch = OwnerLaunch {
-                        permit: permit_r,
-                        heap,
-                        id: 6800,
-                        nil: &nil,
-                        programs: vec![program],
-                        nslots: setup.nslots,
-                        bound: 0,
-                        line_slot: usize::from(HT_LINE),
-                        stop_at: no_stop,
-                        overlap: None,
-                        index: 0,
-                        pause_tx: channel().0,
-                        go_rx: channel().1,
-                        end_tx: end_tx.clone(),
-                        ready_tx: ready_tx.clone(),
-                        done_rx: done_rx_r,
-                        retired_tx: retired_tx.clone(),
-                        registry,
-                        abort: &abort,
-                        planted: &planted,
-                        ht: Some(&env),
-                    };
-                    scope.spawn(move || launch.run());
-                    // The editor owner: its two steps are the sealed
-                    // mutating ops' own — the §3.1 guard read exactly where
-                    // `plain_put` reads it, and the no-op WRITER edit that
-                    // bumps the epoch.
-                    let editor_ref = &editor;
-                    let planted_ref = &planted;
-                    let nil_ref = &nil;
-                    let ready_tx_e = ready_tx.clone();
-                    let retired_tx_e = retired_tx.clone();
-                    scope.spawn(move || {
-                        let _panic = PanicFlag {
-                            registry,
-                            abort: abort_flag,
-                        };
-                        let mut owner = activate_owner(permit_e, heap, 6801);
-                        let slots = seed_planted(&mut owner, nil_ref, planted_ref);
-                        let to_tv = must(with_run(&mut owner, |run| {
-                            Ok(TaggedValue::from_bits(
-                                slots[usize::from(HT_TO)].word_for_test(run),
-                            ))
-                        }));
-                        // Phases 1→2: while the reader's comparison hold is
-                        // live, the same-table edit must refuse — the word
-                        // is free (holds own no authority), so the writer
-                        // lease mints; only the depth check refuses.
-                        editor_ref.wait_then(1, 2, || {
-                            let refused = with_run(&mut owner, |run| {
-                                let lease = TableMut::enter(run, to_tv)?;
-                                Ok(lease.user_test_mutation_refused())
-                            });
-                            editor_ref
-                                .refusal_seen
-                                .store(matches!(refused, Ok(true)), Ordering::SeqCst);
-                        });
-                        // Phases 3→4: the hold is gone; the edit lands under
-                        // WRITER and bumps the epoch (the bump lever's edit).
-                        editor_ref.wait_then(3, 4, || {
-                            must(with_run(&mut owner, |run| {
-                                let mut lease = TableMut::enter(run, to_tv)?;
-                                lease.edit(|_| ());
-                                editor_ref.edit_landed.store(true, Ordering::SeqCst);
-                                Ok(())
-                            }));
-                        });
-                        shutdown_owner(owner, 1, &ready_tx_e, &done_rx_e, &retired_tx_e);
+    let roots = host.roots();
+    host.admit_era("admit", "finish", |era| {
+        era.start_cons_storage()
+            .unwrap_or_else(|error| panic!("cons catalog: {error:?}"));
+        thread::scope(|scope| {
+            let _panic = PanicFlag {
+                registry: era.registry(),
+                abort: &abort,
+            };
+            let heap = era.heap_identity();
+            let registry = era.registry();
+            let abort_flag = &abort;
+            // Both permits exist before either owner thread (§3.3).
+            let permit_r = retry_reg(|| era.register(6800, setup.nslots));
+            let permit_e = retry_reg(|| era.register(6801, setup.nslots));
+            let (end_tx, end_rx) = channel();
+            let (ready_tx, ready_rx) = channel();
+            let (done_tx_r, done_rx_r) = channel();
+            let (done_tx_e, done_rx_e) = channel();
+            let (retired_tx, retired_rx) = channel();
+            let launch = OwnerLaunch {
+                permit: permit_r,
+                heap,
+                id: 6800,
+                nil: &nil,
+                programs: vec![program],
+                nslots: setup.nslots,
+                bound: 0,
+                line_slot: usize::from(HT_LINE),
+                stop_at: no_stop,
+                overlap: None,
+                index: 0,
+                pause_tx: channel().0,
+                go_rx: channel().1,
+                end_tx: end_tx.clone(),
+                ready_tx: ready_tx.clone(),
+                done_rx: done_rx_r,
+                retired_tx: retired_tx.clone(),
+                registry,
+                abort: &abort,
+                planted: &planted,
+                ht: Some(&env),
+            };
+            scope.spawn(move || launch.run());
+            // The editor owner: its two steps are the sealed
+            // mutating ops' own — the §3.1 guard read exactly where
+            // `plain_put` reads it, and the no-op WRITER edit that
+            // bumps the epoch.
+            let editor_ref = &editor;
+            let planted_ref = &planted;
+            let nil_ref = &nil;
+            let ready_tx_e = ready_tx.clone();
+            let retired_tx_e = retired_tx.clone();
+            scope.spawn(move || {
+                let _panic = PanicFlag {
+                    registry,
+                    abort: abort_flag,
+                };
+                let mut owner = activate_owner(permit_e, heap, 6801);
+                let slots = seed_planted(&mut owner, nil_ref, planted_ref);
+                let to_tv = must(with_run(&mut owner, |run| {
+                    Ok(unsafe {
+                        TaggedValue::from_bits(slots[usize::from(HT_TO)].word_for_test(run))
+                    })
+                }));
+                // Phases 1→2: while the reader's comparison hold is
+                // live, the same-table edit must refuse — the word
+                // is free (holds own no authority), so the writer
+                // lease mints; only the depth check refuses.
+                editor_ref.wait_then(1, 2, || {
+                    let refused = with_run(&mut owner, |run| {
+                        let lease = TableMut::enter(run, to_tv)?;
+                        Ok(lease.user_test_mutation_refused())
                     });
-                    drop(end_tx);
-                    drop(ready_tx);
-                    drop(retired_tx);
-                    let ends = gather(&end_rx, 1, |end| end.index);
-                    let _readies = gather(&ready_rx, 2, |index| *index);
-                    let mut stopped = retry_rv(|| era.stop());
-                    assert_eq!(stopped.epoch().get(), 1);
-                    retry_reg(|| era.return_cons_storage(&stopped));
-                    assert!(retry_rv(|| era.collect_stopped(&mut stopped)).major);
-                    complete(stopped);
-                    done_tx_r.send(()).unwrap();
-                    done_tx_e.send(()).unwrap();
-                    let _retired = gather(&retired_rx, 2, |index| *index);
-                    lines = ends.into_iter().next().expect("reader end").lines;
+                    editor_ref
+                        .refusal_seen
+                        .store(matches!(refused, Ok(true)), Ordering::SeqCst);
                 });
-            }
-            let (collector, keeper) = projection
-                .finish()
-                .unwrap_or_else(|error| panic!("finish: {error:?}"));
-            (collector, keeper, ())
-        })
-        .unwrap_or_else(|error| panic!("admit: {error:?}"));
+                // Phases 3→4: the hold is gone; the edit lands under
+                // WRITER and bumps the epoch (the bump lever's edit).
+                editor_ref.wait_then(3, 4, || {
+                    must(with_run(&mut owner, |run| {
+                        let mut lease = TableMut::enter(run, to_tv)?;
+                        lease.edit(|_| ());
+                        editor_ref.edit_landed.store(true, Ordering::SeqCst);
+                        Ok(())
+                    }));
+                });
+                shutdown_owner(owner, 1, &ready_tx_e, &done_rx_e, &retired_tx_e);
+            });
+            drop(end_tx);
+            drop(ready_tx);
+            drop(retired_tx);
+            let ends = gather(&end_rx, 1, |end| end.index);
+            let _readies = gather(&ready_rx, 2, |index| *index);
+            let mut stopped = retry_rv(|| era.stop());
+            assert_eq!(stopped.epoch().get(), 1);
+            retry_reg(|| era.return_cons_storage(&stopped));
+            assert!(retry_rv(|| era.collect_stopped(&mut stopped, roots)).major);
+            complete(stopped);
+            done_tx_r.send(()).unwrap();
+            done_tx_e.send(()).unwrap();
+            let _retired = gather(&retired_rx, 2, |index| *index);
+            lines = ends.into_iter().next().expect("reader end").lines;
+        });
+    });
     assert!(
         editor.refusal_seen.load(Ordering::SeqCst),
         "the depth guard refused the editor's edit inside the test window"
@@ -5512,9 +5628,9 @@ fn a6_ht_user_test_revalidates_under_another_owner() {
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0], oracle[26], "same answer as the stable twin");
     // Serial world back: the no-op edit changed no content.
-    let count = context
-        .eval_str("(hash-table-count a6-tO)")
-        .unwrap_or_else(|error| panic!("count eval: {error:?}"));
+    let count = host
+        .eval_form("(hash-table-count a6-tO)")
+        .unwrap_or_else(|error| panic!("count eval: {error}"));
     assert_eq!(prin1(count.bits()), "1");
     assert_eq!(started.load(Ordering::Relaxed), 1);
 }
@@ -5526,8 +5642,7 @@ fn a6_ht_user_test_revalidates_under_another_owner() {
 /// prints `ns/op` only under `NEOVM_P2HT_SCALE`, so the gates stay silent;
 /// the structural asserts (every owner's every answer, and the exact final
 /// state) hold in every run.
-#[test]
-fn a6_ht_reader_scaling_row() {
+fn a6_ht_reader_scaling_row<H: HostParts>(host: &mut H) {
     const TW: u16 = 0;
     const NSLOTS: usize = 20;
     const REPS: usize = 1500;
@@ -5563,6 +5678,7 @@ fn a6_ht_reader_scaling_row() {
         let programs = vec![program.clone(); owners];
         let started = Instant::now();
         let (lines, dumps) = run_ht_overlap_session(
+            host,
             &setup,
             &programs,
             REPS,
@@ -5596,9 +5712,8 @@ fn a6_ht_reader_scaling_row() {
 /// path and raise the shim's loud signal instead of jumping through a
 /// word the compiler never produced.
 #[cfg(feature = "jit")]
-#[test]
-fn a6_ht_sealed_edit_triggers_jit_switch_stale_shim() {
-    if !crate::emacs_core::jit::compile::jit_inline_switch_on() {
+fn a6_ht_sealed_edit_triggers_jit_switch_stale_shim<H: HostParts>(host: &mut H) {
+    if !host.switch_inline_on() {
         // The inline dispatch is off (family config `jitoff`): no captured
         // epoch exists to go stale, and the shim row is vacuous.
         return;
@@ -5609,7 +5724,6 @@ fn a6_ht_sealed_edit_triggers_jit_switch_stale_shim() {
     // weak tables A5 refuses); the switch body is the JIT tests' own
     // `(lambda (x) (switch x TABLE))` lowering, and the jump table is
     // BUILT through the sealed path before the compile captures it.
-    let mut ev = Context::new();
     let keys = [
         TaggedValue::from_sym_id(crate::intern::intern("a6-sw-a")),
         TaggedValue::from_sym_id(crate::intern::intern("a6-sw-b")),
@@ -5618,19 +5732,19 @@ fn a6_ht_sealed_edit_triggers_jit_switch_stale_shim() {
     // Instruction index of arm j / its GNU byte offset in the body below.
     let arm = |j: usize| 5 + 2 * j;
     let offset = |j: usize| 8 + 4 * j as i64;
-    let table = ev
-        .eval_str("(make-hash-table :test 'eq)")
-        .unwrap_or_else(|error| panic!("jump table eval: {error:?}"));
+    let table = host
+        .eval_form("(make-hash-table :test 'eq)")
+        .unwrap_or_else(|error| panic!("jump table eval: {error}"));
     // SAFETY: the table belongs to this Context's heap; the root keeps it
     // alive across both eras.
-    let table_root = unsafe { SharedRoot::new(&ev.tagged_heap, table) };
+    let table_root = host.share_value(table);
     // SAFETY: same heap as the context above.
-    let nil = unsafe { SharedRoot::new(&ev.tagged_heap, TaggedValue::NIL) };
+    let nil = host.share_value(TaggedValue::NIL);
     // Era #1 — the sealed `put`s that build the jump table.
     let abort = AtomicBool::new(false);
     let planted_fill: Vec<Option<SharedRoot>> = vec![Some(table_root.clone())];
-    ev.admit_owned_proof_parallel(|projection| {
-        let era = projection.era();
+    let roots = host.roots();
+    host.admit_era("fill admit", "fill finish", |era| {
         era.start_cons_storage()
             .unwrap_or_else(|error| panic!("cons catalog: {error:?}"));
         thread::scope(|scope| {
@@ -5651,13 +5765,13 @@ fn a6_ht_sealed_edit_triggers_jit_switch_stale_shim() {
                 let mut owner = activate_owner(permit, heap, 6831);
                 let slots = seed_planted(&mut owner, nil_ref, planted_ref);
                 let table_tv = must(with_run(&mut owner, |run| {
-                    Ok(TaggedValue::from_bits(slots[0].word_for_test(run)))
+                    Ok(unsafe { TaggedValue::from_bits(slots[0].word_for_test(run)) })
                 }));
                 for (j, &bits) in key_bits.iter().enumerate() {
                     plain_put(
                         &mut owner,
                         table_tv,
-                        TaggedValue::from_bits(bits),
+                        unsafe { TaggedValue::from_bits(bits) },
                         TaggedValue::fixnum(offsets[j]),
                         HashTableTest::Eq,
                         None,
@@ -5689,17 +5803,12 @@ fn a6_ht_sealed_edit_triggers_jit_switch_stale_shim() {
             let mut stopped = retry_rv(|| era.stop());
             assert_eq!(stopped.epoch().get(), 1);
             retry_reg(|| era.return_cons_storage(&stopped));
-            assert!(retry_rv(|| era.collect_stopped(&mut stopped)).major);
+            assert!(retry_rv(|| era.collect_stopped(&mut stopped, roots)).major);
             complete(stopped);
             done_tx.send(()).unwrap();
             assert_eq!(recv(&retired_rx), 0);
         });
-        let (collector, keeper) = projection
-            .finish()
-            .unwrap_or_else(|error| panic!("fill finish: {error:?}"));
-        (collector, keeper, ())
-    })
-    .unwrap_or_else(|error| panic!("fill admit: {error:?}"));
+    });
     // The JIT compile: `(lambda (x) (switch x TABLE))`, miss answers -1,
     // arm j answers j — the jump table answered inline behind its epoch.
     let ops = vec![
@@ -5727,156 +5836,150 @@ fn a6_ht_sealed_edit_triggers_jit_switch_stale_shim() {
             crate::tagged::bytecode::chunk::GnuByteOffsetMapEntry::new(offset(j) as usize, arm(j))
         })
         .collect();
-    let before_sites =
-        crate::emacs_core::jit::compile::switch_dispatch::inline_switch_sites_for_test();
-    let leaf =
-        crate::emacs_core::jit::compile::lower_leaf_with_map(&ops, &constants, 1, Some(&map))
-            .expect("the switch body compiles");
+    let before_sites = host.switch_sites();
+    host.switch_compile(&ops, &constants, &map);
     assert!(
-        crate::emacs_core::jit::compile::switch_dispatch::inline_switch_sites_for_test()
-            > before_sites,
+        host.switch_sites() > before_sites,
         "the jump table is answered inline"
     );
-    let ctx_ptr = &mut ev as *mut Context as *mut u8;
     // Call #1: the fresh compile answers inline.
-    match leaf.call(ctx_ptr, &[keys[0]]) {
-        crate::emacs_core::jit::compile::NativeRun::Ok(bits) => {
-            assert_eq!(TaggedValue::from_bits(bits).as_fixnum(), Some(0));
+    match host.switch_call(&[keys[0]]) {
+        SwitchAnswer::Ok(bits) => {
+            assert_eq!(unsafe { TaggedValue::from_bits(bits) }.as_fixnum(), Some(0));
         }
-        other => panic!("fresh compile answered natively, got {other:?}"),
+        other => panic!(
+            "fresh compile answered natively, got {}",
+            switch_answer_text(&other)
+        ),
     }
     // The sealed edit, from a registered owner: retarget one existing key
     // to a byte offset the compile never saw.
     let (report_tx, report_rx) = channel();
     let planted: Vec<Option<SharedRoot>> = vec![Some(table_root.clone())];
-    ev.admit_owned_proof_parallel(|projection| {
-        {
-            let era = projection.era();
-            era.start_cons_storage()
-                .unwrap_or_else(|error| panic!("cons catalog: {error:?}"));
-            thread::scope(|scope| {
-                let _panic = PanicFlag {
-                    registry: era.registry(),
-                    abort: &abort,
-                };
-                let heap = era.heap_identity();
-                let permit = retry_reg(|| era.register(6830, 1));
-                let (ready_tx, ready_rx) = channel();
-                let (done_tx, done_rx) = channel();
-                let (retired_tx, retired_rx) = channel();
-                let nil_ref = &nil;
-                let planted_ref: &[Option<SharedRoot>] = &planted;
-                scope.spawn(move || {
-                    let mut owner = activate_owner(permit, heap, 6830);
-                    let slots = seed_planted(&mut owner, nil_ref, planted_ref);
-                    let table_tv = must(with_run(&mut owner, |run| {
-                        Ok(TaggedValue::from_bits(slots[0].word_for_test(run)))
-                    }));
-                    // Reader side: the epoch before, the table's test, one
-                    // victim entry, and every compiled target.
-                    let (epoch_before, test, victim_key, targets) =
-                        must(with_run(&mut owner, |run| {
-                            let lease = TableRef::enter(run, table_tv)?;
-                            let described = lease.describe();
-                            Ok(lease.read(|s| {
-                                let targets: Vec<i64> = s
-                                    .entries_in_slot_order()
-                                    .map(|entry| entry.value.as_fixnum().expect("byte offset"))
-                                    .collect();
-                                let victim = s
-                                    .entries_in_slot_order()
-                                    .next()
-                                    .expect("a jump-table entry");
-                                (s.switch_epoch, described.test, victim.key, targets)
-                            }))
-                        }));
-                    let stale_target = targets.iter().copied().max().expect("targets") + 1;
-                    assert!(
-                        !targets.contains(&stale_target),
-                        "the retarget is outside the compiled set"
-                    );
-                    // Writer side: one sealed edit — the same serial body
-                    // the builtins run, under the authority word.
-                    must(with_run(&mut owner, |run| {
-                        let mut lease = TableMut::enter(run, table_tv)?;
-                        lease.edit(|ht| {
-                            match ht
-                                .data
-                                .try_probe_for_insert(victim_key, test, false)
-                                .expect("the victim key probes")
-                            {
-                                HashProbe::Found(slot) => {
-                                    if let Some(stored) = ht.data.slot_value_mut(slot) {
-                                        *stored = TaggedValue::fixnum(stale_target);
-                                    }
-                                }
-                                HashProbe::Absent(_) => {
-                                    panic!("the victim key must already sit in the table")
+    let roots = host.roots();
+    host.admit_era("admit", "finish", |era| {
+        era.start_cons_storage()
+            .unwrap_or_else(|error| panic!("cons catalog: {error:?}"));
+        thread::scope(|scope| {
+            let _panic = PanicFlag {
+                registry: era.registry(),
+                abort: &abort,
+            };
+            let heap = era.heap_identity();
+            let permit = retry_reg(|| era.register(6830, 1));
+            let (ready_tx, ready_rx) = channel();
+            let (done_tx, done_rx) = channel();
+            let (retired_tx, retired_rx) = channel();
+            let nil_ref = &nil;
+            let planted_ref: &[Option<SharedRoot>] = &planted;
+            scope.spawn(move || {
+                let mut owner = activate_owner(permit, heap, 6830);
+                let slots = seed_planted(&mut owner, nil_ref, planted_ref);
+                let table_tv = must(with_run(&mut owner, |run| {
+                    Ok(unsafe { TaggedValue::from_bits(slots[0].word_for_test(run)) })
+                }));
+                // Reader side: the epoch before, the table's test, one
+                // victim entry, and every compiled target.
+                let (epoch_before, test, victim_key, targets) = must(with_run(&mut owner, |run| {
+                    let lease = TableRef::enter(run, table_tv)?;
+                    let described = lease.describe();
+                    Ok(lease.read(|s| {
+                        let targets: Vec<i64> = s
+                            .entries_in_slot_order()
+                            .map(|entry| entry.value.as_fixnum().expect("byte offset"))
+                            .collect();
+                        let victim = s
+                            .entries_in_slot_order()
+                            .next()
+                            .expect("a jump-table entry");
+                        (s.switch_epoch, described.test, victim.key, targets)
+                    }))
+                }));
+                let stale_target = targets.iter().copied().max().expect("targets") + 1;
+                assert!(
+                    !targets.contains(&stale_target),
+                    "the retarget is outside the compiled set"
+                );
+                // Writer side: one sealed edit — the same serial body
+                // the builtins run, under the authority word.
+                must(with_run(&mut owner, |run| {
+                    let mut lease = TableMut::enter(run, table_tv)?;
+                    lease.edit(|ht| {
+                        match ht
+                            .data
+                            .try_probe_for_insert(victim_key, test, false)
+                            .expect("the victim key probes")
+                        {
+                            HashProbe::Found(slot) => {
+                                if let Some(stored) = ht.data.slot_value_mut(slot) {
+                                    *stored = TaggedValue::fixnum(stale_target);
                                 }
                             }
-                        });
-                        Ok(())
-                    }));
-                    let epoch_after = must(with_run(&mut owner, |run| {
-                        let lease = TableRef::enter(run, table_tv)?;
-                        Ok(lease.read(|s| s.switch_epoch))
-                    }));
-                    report_tx
-                        .send((epoch_before, epoch_after, victim_key.bits()))
-                        .expect("report channel open");
-                    must(with_run(&mut owner, |run| {
-                        run.clear_root_slots()?;
-                        Ok(())
-                    }));
-                    retry_rv(|| owner.enter_native(&[]));
-                    // Same ready/done/retired handshake as the fill era:
-                    // the stop below waits for the freeze, the retire waits
-                    // for the completion.
-                    ready_tx
-                        .send(0)
-                        .unwrap_or_else(|_| panic!("ready channel closed"));
-                    recv(&done_rx);
-                    retire(owner);
-                    retired_tx
-                        .send(0)
-                        .unwrap_or_else(|_| panic!("retired channel closed"));
-                });
-                assert_eq!(recv(&ready_rx), 0, "corrupt owner frozen");
-                let mut stopped = retry_rv(|| era.stop());
-                assert_eq!(stopped.epoch().get(), 1);
-                retry_reg(|| era.return_cons_storage(&stopped));
-                assert!(retry_rv(|| era.collect_stopped(&mut stopped)).major);
-                complete(stopped);
-                done_tx.send(()).unwrap();
-                assert_eq!(recv(&retired_rx), 0);
+                            HashProbe::Absent(_) => {
+                                panic!("the victim key must already sit in the table")
+                            }
+                        }
+                    });
+                    Ok(())
+                }));
+                let epoch_after = must(with_run(&mut owner, |run| {
+                    let lease = TableRef::enter(run, table_tv)?;
+                    Ok(lease.read(|s| s.switch_epoch))
+                }));
+                report_tx
+                    .send((epoch_before, epoch_after, victim_key.bits()))
+                    .expect("report channel open");
+                must(with_run(&mut owner, |run| {
+                    run.clear_root_slots()?;
+                    Ok(())
+                }));
+                retry_rv(|| owner.enter_native(&[]));
+                // Same ready/done/retired handshake as the fill era:
+                // the stop below waits for the freeze, the retire waits
+                // for the completion.
+                ready_tx
+                    .send(0)
+                    .unwrap_or_else(|_| panic!("ready channel closed"));
+                recv(&done_rx);
+                retire(owner);
+                retired_tx
+                    .send(0)
+                    .unwrap_or_else(|_| panic!("retired channel closed"));
             });
-        }
-        let (collector, keeper) = projection
-            .finish()
-            .unwrap_or_else(|error| panic!("finish: {error:?}"));
-        (collector, keeper, ())
-    })
-    .unwrap_or_else(|error| panic!("admit: {error:?}"));
+            assert_eq!(recv(&ready_rx), 0, "corrupt owner frozen");
+            let mut stopped = retry_rv(|| era.stop());
+            assert_eq!(stopped.epoch().get(), 1);
+            retry_reg(|| era.return_cons_storage(&stopped));
+            assert!(retry_rv(|| era.collect_stopped(&mut stopped, roots)).major);
+            complete(stopped);
+            done_tx.send(()).unwrap();
+            assert_eq!(recv(&retired_rx), 0);
+        });
+    });
     let (epoch_before, epoch_after, victim_key_bits) = recv(&report_rx);
-    let victim_key = TaggedValue::from_bits(victim_key_bits);
+    let victim_key = unsafe { TaggedValue::from_bits(victim_key_bits) };
     assert!(
         epoch_after > epoch_before,
         "the sealed edit moved the switch epoch ({epoch_before} -> {epoch_after})"
     );
     // Call #2: the captured epoch is stale, the retargeted key's address is
     // not in the compiled set — the shim's loud signal, never a wild jump.
-    match leaf.call(ctx_ptr, &[victim_key]) {
-        crate::emacs_core::jit::compile::NativeRun::Signal => (),
-        other => panic!("the stale path must signal, got {other:?}"),
+    match host.switch_call(&[victim_key]) {
+        SwitchAnswer::Signal => (),
+        other => panic!(
+            "the stale path must signal, got {}",
+            switch_answer_text(&other)
+        ),
     }
-    match crate::emacs_core::jit::compile::take_pending_flow()
+    match host
+        .switch_flow()
         .expect("the stale-table signal is stashed")
         .into_kind()
     {
         crate::error::FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert!(
-                crate::emacs_core::print::print_value(&sig.data[0])
+                host.switch_print(&sig.data[0])
                     .contains("jump table mutated at runtime"),
                 "the shim's own message"
             );
@@ -5892,8 +5995,7 @@ fn a6_ht_sealed_edit_triggers_jit_switch_stale_shim() {
 /// after the drain. The growth charge lands on the writer's owner counters
 /// alone, agrees byte-for-byte with the storage the edit grew, and every
 /// answer stays the GNU answer.
-#[test]
-fn a6_ht_growth_races_readers() {
+fn a6_ht_growth_races_readers<H: HostParts>(host: &mut H) {
     // slots: 0 shared seeded table; 15/16 operands; 17 count; 18/19 get.
     const TR: u16 = 0;
     const NSLOTS: usize = 20;
@@ -5955,6 +6057,7 @@ fn a6_ht_growth_races_readers() {
     env.witness = Some(&witness);
     env.growth = Some(&growth);
     let (lines, dumps) = run_ht_overlap_session(
+        host,
         &setup,
         &programs,
         1,
@@ -5999,8 +6102,7 @@ fn a6_ht_growth_races_readers() {
 /// entries. Every put's charge must equal its own storage growth however
 /// the edits interleave, and the total charge stays within the amortized
 /// bound (≤ 8× the final entry footprint).
-#[test]
-fn a6_ht_bounded_growth_many_owners() {
+fn a6_ht_bounded_growth_many_owners<H: HostParts>(host: &mut H) {
     // slots: 0 shared table; 15 one; 16 count; 17 limit; 18 k; 19 cond;
     // 20 owner key base; 21 key.
     const TB: u16 = 0;
@@ -6074,6 +6176,7 @@ fn a6_ht_bounded_growth_many_owners() {
     let mut env = HtEnv::new(&[], HT_CB_KEY, HT_CB_CAND, HT_CB_OUT);
     env.growth = Some(&growth);
     let (lines, dumps) = run_ht_overlap_session(
+        host,
         &setup,
         &programs,
         1,
@@ -6121,8 +6224,7 @@ fn a6_ht_bounded_growth_many_owners() {
 /// Rev R3: the identical put loop on a fresh versus an already-grown
 /// table, in plain serial Sim, charges the heap identically — growth in
 /// Sim stays the current code path, byte for byte.
-#[test]
-fn a6_ht_growth_memory_overhead() {
+fn a6_ht_growth_memory_overhead<H: HostParts>(host: &mut H) {
     // slots: 0 table; 15 one; 16 value/count/found; 17 limit/key; 18 k;
     // 19 cond.
     const TM: u16 = 0;
@@ -6222,6 +6324,7 @@ fn a6_ht_growth_memory_overhead() {
     let mut env = HtEnv::new(&[], HT_CB_KEY, HT_CB_CAND, HT_CB_OUT);
     env.growth = Some(&growth);
     let (lines, _dumps) = run_ht_session(
+        host,
         &setup,
         vec![ops],
         (puts + rems) as u32,
@@ -6247,10 +6350,8 @@ fn a6_ht_growth_memory_overhead() {
 
     // Serial arm: the same closure putting 100 fresh keys (growing) versus
     // 100 overwrites (no growth) charges the serial heap identically.
-    let mut context = Context::new();
-    context
-        .eval_str(
-            r#"(progn
+    host.eval_form(
+        r#"(progn
   (setq a6-tZ1 (make-hash-table :test 'eq))
   (setq a6-tZ2 (make-hash-table :test 'eq))
   (fset 'a6-arm (lambda (tbl)
@@ -6259,18 +6360,16 @@ fn a6_ht_growth_memory_overhead() {
         (puthash k 0 tbl)
         (setq k (+ k 1))))))
   (a6-arm a6-tZ2))"#,
-        )
-        .unwrap_or_else(|error| panic!("serial arm setup: {error:?}"));
-    let before_growing = context.tagged_heap.bytes_since_gc();
-    context
-        .eval_str("(a6-arm a6-tZ1)")
-        .unwrap_or_else(|error| panic!("growing arm: {error:?}"));
-    let growing = context.tagged_heap.bytes_since_gc() - before_growing;
-    let before_steady = context.tagged_heap.bytes_since_gc();
-    context
-        .eval_str("(a6-arm a6-tZ2)")
-        .unwrap_or_else(|error| panic!("steady arm: {error:?}"));
-    let steady = context.tagged_heap.bytes_since_gc() - before_steady;
+    )
+    .unwrap_or_else(|error| panic!("serial arm setup: {error}"));
+    let before_growing = host.charged_bytes();
+    host.eval_form("(a6-arm a6-tZ1)")
+        .unwrap_or_else(|error| panic!("growing arm: {error}"));
+    let growing = host.charged_bytes() - before_growing;
+    let before_steady = host.charged_bytes();
+    host.eval_form("(a6-arm a6-tZ2)")
+        .unwrap_or_else(|error| panic!("steady arm: {error}"));
+    let steady = host.charged_bytes() - before_steady;
     assert_eq!(
         growing, steady,
         "serial growth stays uncharged: Sim is byte-for-byte the current path"
@@ -6281,8 +6380,7 @@ fn a6_ht_growth_memory_overhead() {
 /// oracle (§7 B5). One owner runs the twin's P11 exactly — 130 inserts,
 /// count, get, two rems, count — through sealed leases; the answers match
 /// the oracle line, and the growth accounting holds underneath.
-#[test]
-fn a6_ht_growth_serial_twin_matches_gnu_oracle() {
+fn a6_ht_growth_serial_twin_matches_gnu_oracle<H: HostParts>(host: &mut H) {
     // slots: 0 tK; 15 one; 16 value/count; 17 limit/key; 18 k/found; 19
     // cond/get-value.
     const TK: u16 = 0;
@@ -6374,6 +6472,7 @@ fn a6_ht_growth_serial_twin_matches_gnu_oracle() {
     let mut env = HtEnv::new(&[], HT_CB_KEY, HT_CB_CAND, HT_CB_OUT);
     env.growth = Some(&growth);
     let (lines, _dumps) = run_ht_session(
+        host,
         &setup,
         vec![ops],
         puts as u32,
@@ -6392,6 +6491,120 @@ fn a6_ht_growth_serial_twin_matches_gnu_oracle() {
     assert!(charged >= entry_bytes && charged <= 8 * entry_bytes);
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_restricted_lisp_test<K, W>(
+    name: &str,
+    eval: &mut dyn FnMut(&str) -> Result<TaggedValue, String>,
+    share: &mut dyn FnMut(TaggedValue) -> SharedRoot,
+    admit: &mut dyn FnMut(&str, &str, &mut dyn for<'e> FnMut(&ParallelHeapEra<'e, K>)),
+    bytes_since_gc: &mut dyn FnMut() -> usize,
+    generational: bool,
+    world_roots: W,
+    switch_on: bool,
+    switch_sites: &mut dyn FnMut() -> usize,
+    switch_compile: &mut dyn FnMut(
+        &[crate::tagged::bytecode::opcode::Op],
+        &[TaggedValue],
+        &[crate::tagged::bytecode::chunk::GnuByteOffsetMapEntry],
+    ),
+    switch_call: &mut dyn FnMut(&[TaggedValue]) -> (u8, usize, String),
+    switch_flow: &mut dyn FnMut() -> Option<crate::error::Flow>,
+    switch_print: &mut dyn FnMut(&TaggedValue) -> String,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: WorldRoots<K>,
+{
+    let mut host = RestrictedHost {
+        eval,
+        share,
+        admit,
+        bytes_since_gc,
+        generational,
+        world_roots,
+        switch_on,
+        switch_sites,
+        switch_compile,
+        switch_call,
+        switch_flow,
+        switch_print,
+        _keeper: std::marker::PhantomData,
+    };
+    match name {
+        "a6_runtime_refuses_foreign_cons_without_writing" => {
+            a6_runtime_refuses_foreign_cons_without_writing(&mut host)
+        }
+        "a6_arithmetic_matches_gnu_oracle" => a6_arithmetic_matches_gnu_oracle(&mut host),
+        "a6_ht_ops_match_gnu_oracle" => a6_ht_ops_match_gnu_oracle(&mut host),
+        "a6_ht_user_test_refuses_mutation_inside_the_test" => {
+            a6_ht_user_test_refuses_mutation_inside_the_test(&mut host)
+        }
+        "a6_ht_user_test_revalidates_after_callback_window" => {
+            a6_ht_user_test_revalidates_after_callback_window(&mut host)
+        }
+        "a6_ht_lease_mints_from_a_live_run_access" => {
+            a6_ht_lease_mints_from_a_live_run_access(&mut host)
+        }
+        "a6_nonallocating_sum_loop" => a6_nonallocating_sum_loop(&mut host),
+        "a6_overlap_lists_two_owners" => a6_overlap_lists_two_owners(&mut host),
+        "a6_overlap_lists_four_owners" => a6_overlap_lists_four_owners(&mut host),
+        "a6_ht_overlap_shared_readers_two_owners" => {
+            a6_ht_overlap_shared_readers_two_owners(&mut host)
+        }
+        "a6_ht_overlap_shared_readers_three_owners" => {
+            a6_ht_overlap_shared_readers_three_owners(&mut host)
+        }
+        "a6_ht_overlap_shared_readers_four_owners" => {
+            a6_ht_overlap_shared_readers_four_owners(&mut host)
+        }
+        "a6_ht_overlap_writer_drains_four_readers" => {
+            a6_ht_overlap_writer_drains_four_readers(&mut host)
+        }
+        "a6_ht_overlap_final_state_in_legal_serial_interleavings" => {
+            a6_ht_overlap_final_state_in_legal_serial_interleavings(&mut host)
+        }
+        "a6_ht_string_keys_match_gnu_oracle" => a6_ht_string_keys_match_gnu_oracle(&mut host),
+        "a6_ht_user_test_revalidates_under_another_owner" => {
+            a6_ht_user_test_revalidates_under_another_owner(&mut host)
+        }
+        "a6_ht_reader_scaling_row" => a6_ht_reader_scaling_row(&mut host),
+        "a6_ht_growth_races_readers" => a6_ht_growth_races_readers(&mut host),
+        "a6_ht_bounded_growth_many_owners" => a6_ht_bounded_growth_many_owners(&mut host),
+        "a6_ht_growth_memory_overhead" => a6_ht_growth_memory_overhead(&mut host),
+        "a6_ht_growth_serial_twin_matches_gnu_oracle" => {
+            a6_ht_growth_serial_twin_matches_gnu_oracle(&mut host)
+        }
+        #[cfg(feature = "perf-probes")]
+        "a8_throughput_rows" => a8_throughput_rows(&mut host),
+        #[cfg(feature = "jit")]
+        "a6_ht_sealed_edit_triggers_jit_switch_stale_shim" => {
+            a6_ht_sealed_edit_triggers_jit_switch_stale_shim(&mut host)
+        }
+        "a6_ht_make_copy_serial_twins_match_gnu_oracle" => {
+            copy_oracle::a6_ht_make_copy_serial_twins_match_gnu_oracle(&mut host)
+        }
+        "a6_ht_gc_shared_roots_survive_and_clrhash_reclaims" => {
+            gc_tables::a6_ht_gc_shared_roots_survive_and_clrhash_reclaims(&mut host)
+        }
+        "a6_ht_gc_old_tables_remember_young_values" => {
+            gc_tables::a6_ht_gc_old_tables_remember_young_values(&mut host)
+        }
+        "a6_ht_b7_make_copy_collect_resume_and_reclaim" => {
+            allocation_tables::a6_ht_b7_make_copy_collect_resume_and_reclaim(&mut host)
+        }
+        "a6_ht_b7_copy_while_another_owner_mutates" => {
+            allocation_tables::a6_ht_b7_copy_while_another_owner_mutates(&mut host)
+        }
+        "a6_ht_b7_copy_active_test_starts_quiescent_and_bad_home_is_atomic" => {
+            allocation_tables::a6_ht_b7_copy_active_test_starts_quiescent_and_bad_home_is_atomic(
+                &mut host,
+            )
+        }
+        // The four b8 weak tests stay #[test] in weak_copy and weak_tables,
+        // the 7a7d474cd8 bodies. They are not dispatcher arms.
+        other => panic!("unknown restricted lisp test {other}"),
+    }
+}
+
 #[path = "restricted_lisp/gc_tables.rs"]
 mod gc_tables;
 
@@ -6401,6 +6614,8 @@ mod allocation_tables;
 #[path = "restricted_lisp/copy_oracle.rs"]
 mod copy_oracle;
 
+#[cfg(test)]
 mod weak_copy;
 
+#[cfg(test)]
 mod weak_tables;

@@ -72,8 +72,7 @@ fn make_copy_program(test: HashTableTest) -> Vec<Op> {
     ops
 }
 
-#[test]
-fn a6_ht_make_copy_serial_twins_match_gnu_oracle() {
+pub(super) fn a6_ht_make_copy_serial_twins_match_gnu_oracle<H: HostParts>(host: &mut H) {
     let setup = HtSetup {
         source: "(list)",
         facts: vec![],
@@ -88,7 +87,7 @@ fn a6_ht_make_copy_serial_twins_match_gnu_oracle() {
             .unwrap_or_else(|error| panic!("B7 copy twin prevalidate: {error:?}"));
     }
     let env = HtEnv::new(&[], HT_CB_KEY, HT_CB_CAND, HT_CB_OUT);
-    let (lines, dumps) = run_ht_session(&setup, programs, 0, &env, &[]);
+    let (lines, dumps) = run_ht_session(host, &setup, programs, 0, &env, &[]);
     assert!(dumps.is_empty());
     let oracle = oracle_lines();
     assert_eq!(lines.len(), 3);

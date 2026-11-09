@@ -1,4 +1,3 @@
-#![cfg(test)]
 //! B8: shared weak entries are resolved only by the stopped keeper.
 use super::super::KeeperTableMut;
 use super::*;
@@ -19,11 +18,11 @@ fn every_stop(_: usize, _: usize) -> Option<Go> {
 
 /// Serial transport roots retain TABLES ONLY. All weak payloads are actual
 /// owner allocations; the snapshots below contain inert bits, not GC roots.
-fn session<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+fn session(
     setup: &str,
     programs: Vec<Vec<Op>>,
     env: &HtEnv<'_>,
-    body: impl FnOnce(&mut Session<'_, '_, K>, &Overlap, &[usize]),
+    body: impl FnOnce(&mut Session<'_, '_>, &Overlap, &[usize]),
 ) {
     let n = programs.len();
     let mut context = Context::new();
@@ -131,11 +130,7 @@ fn counts(stopped: &AllStopped<'_>, tables: &[usize]) -> Vec<usize> {
         .collect()
 }
 
-fn live_payloads<K: crate::tagged::gc::mutator_registration::EraKeeper>(
-    era: &ParallelHeapEra<'_, K>,
-    stopped: &AllStopped<'_>,
-    snaps: &[Snap],
-) -> usize {
+fn live_payloads(era: &ParallelHeapEra<'_>, stopped: &AllStopped<'_>, snaps: &[Snap]) -> usize {
     // Freed slots may be reused by the next allocation batch. Count current
     // addresses once rather than counting every historical birth at that slot.
     let words: HashSet<_> = snaps
@@ -145,8 +140,8 @@ fn live_payloads<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     live_words(era, stopped, words.iter().copied())
 }
 
-fn live_words<K: crate::tagged::gc::mutator_registration::EraKeeper>(
-    era: &ParallelHeapEra<'_, K>,
+fn live_words(
+    era: &ParallelHeapEra<'_>,
     stopped: &AllStopped<'_>,
     words: impl IntoIterator<Item = usize>,
 ) -> usize {
@@ -154,12 +149,7 @@ fn live_words<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     on_heap(era, stopped, |heap| {
         words
             .iter()
-            .filter(|&&bits| {
-                // SAFETY: `bits` is a cons word recorded from the owner
-                // snapshot. Rehydrating it only asks whether the stopped
-                // heap still owns that word.
-                heap.owns_heap_value_for_test(unsafe { TaggedValue::from_bits(bits) })
-            })
+            .filter(|&&bits| heap.owns_heap_value_for_test(TaggedValue::from_bits(bits)))
             .count()
     })
 }

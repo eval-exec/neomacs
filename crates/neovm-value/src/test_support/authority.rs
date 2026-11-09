@@ -1102,7 +1102,9 @@ pub fn handoff_resume_outlasts_yield_budget_for_test<
 /// admits the era. The original dispatcher stays `pub(crate)`.
 #[cfg(not(feature = "gc-memory-telemetry"))]
 #[doc(hidden)]
-pub fn run_functions_executor_test_for_test<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+pub fn run_functions_executor_test_for_test<
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+>(
     name: &str,
     era: crate::tagged::gc::ProofEra<'_, K>,
     ids: &[crate::intern::SymId],
@@ -1176,6 +1178,61 @@ pub fn run_peer_young_collection_test_for_test<K, W>(
         root,
         words,
         world_roots,
+    );
+}
+
+/// FENCE: one re-homed restricted-lisp test. The core shell boots the
+/// evaluator, shares planted words, admits the era, and walks World roots.
+/// The original dispatcher stays `pub(crate)`.
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub fn run_restricted_lisp_test_for_test<K, W>(
+    name: &str,
+    eval: &mut dyn FnMut(&str) -> Result<crate::tagged::value::TaggedValue, String>,
+    share: &mut dyn FnMut(
+        crate::tagged::value::TaggedValue,
+    ) -> crate::tagged::transport::SharedRoot,
+    admit: &mut dyn FnMut(&str, &str, &mut dyn for<'e> FnMut(&crate::tagged::gc::ProofEra<'e, K>)),
+    bytes_since_gc: &mut dyn FnMut() -> usize,
+    generational: bool,
+    world_roots: W,
+    switch_on: bool,
+    switch_sites: &mut dyn FnMut() -> usize,
+    switch_compile: &mut dyn FnMut(
+        &[crate::tagged::bytecode::opcode::Op],
+        &[crate::tagged::value::TaggedValue],
+        &[crate::tagged::bytecode::chunk::GnuByteOffsetMapEntry],
+    ),
+    switch_call: &mut dyn FnMut(&[crate::tagged::value::TaggedValue]) -> (u8, usize, String),
+    switch_flow: &mut dyn FnMut() -> Option<crate::error::Flow>,
+    switch_print: &mut dyn FnMut(&crate::tagged::value::TaggedValue) -> String,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut crate::tagged::gc::mutator_registration::AllStopped<'e>,
+            &'o mut Vec<crate::tagged::value::TaggedValue>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            crate::tagged::gc::mutator_registration::RendezvousError,
+        >,
+{
+    crate::tagged::gc::mutator_registration::restricted_lisp::run_restricted_lisp_test(
+        name,
+        eval,
+        share,
+        admit,
+        bytes_since_gc,
+        generational,
+        world_roots,
+        switch_on,
+        switch_sites,
+        switch_compile,
+        switch_call,
+        switch_flow,
+        switch_print,
     );
 }
 
