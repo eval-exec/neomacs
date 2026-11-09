@@ -4564,3 +4564,13 @@ crates/neovm-eval/src/host_cfg_active.rs	fn	fn impl HostCfgClass::is_active
 crates/neovm-eval/src/host_cfg.rs	fn	fn impl HostCfgClass::label
 crates/neovm-eval/src/host_cfg.rs	fn	fn impl HostCfgClass::vocabulary_round_trips
 crates/neovm-eval/src/lib.rs	mod	mod host_cfg
+crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	enum	enum DisplayEval
+crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	field	DisplayPropertySpecs field eval
+crates/neovm-eval/src/emacs_core/runtime/eval/data/layout_input/string_property_input.rs	field	DisplayRun field eval
+crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	LogicalCursorDimensions field height
+crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	LogicalCursorDimensions field width
+crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	WindowDisplaySnapshot field logical_cursor_dimensions
+crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	struct	struct LogicalCursorDimensions
+crates/neovm-eval/src/emacs_core/runtime/owned_roots/mod.rs	fn	fn impl Context::owned_root_retainer
+crates/neovm-eval/src/emacs_core/runtime/owned_roots/mod.rs	fn	fn impl OwnedRootRetainer::retain
+crates/neovm-eval/src/emacs_core/runtime/owned_roots/mod.rs	struct	struct OwnedRootRetainer

@@ -1293,3 +1293,4 @@ crates/neovm-edit/src/emacs_core/mod.rs	mod	mod word_wrap
 crates/neovm-edit/src/lib.rs	mod	mod buffer
 crates/neovm-edit/src/lib.rs	mod	mod emacs_core
 crates/neovm-edit/src/buffer/text_props.rs	use	use neovm_value::value::text_props::*
+crates/neovm-edit/src/buffer/buffer.rs	fn	fn impl BufferTextSnapshot::text_props_is_empty

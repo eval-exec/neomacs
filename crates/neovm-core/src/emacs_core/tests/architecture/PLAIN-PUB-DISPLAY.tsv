@@ -680,3 +680,4 @@ crates/neovm-display/src/window/word_wrap.rs	use	use word_wrap_policy_for_buffer
 crates/neovm-display/src/face.rs	use	use neovm_eval::emacs_core::eval::data::face::*
 crates/neovm-display/src/window/frame_alpha.rs	use	use neovm_eval::emacs_core::eval::data::frame_alpha::*
 crates/neovm-display/src/window/window_markers.rs	use	use neovm_eval::emacs_core::eval::data::window_markers::*
+crates/neovm-display/src/window/mod.rs	use	use LogicalCursorDimensions

@@ -2689,3 +2689,6 @@ crates/neovm-value/src/value/text_props.rs	struct	struct TextPropertiesRef
 crates/neovm-value/src/value/text_props.rs	struct	struct TextPropertyTable
 crates/neovm-value/src/value/text_props.rs	trait	trait CasingInsertionPolicy
 crates/neovm-value/src/tagged/gc.rs	use	use gc_thread::*
+crates/neovm-value/src/system_vocab/input.rs	enum	enum KeySequenceBufferSelection
+crates/neovm-value/src/system_vocab/input.rs	field	ReadKeySequenceOptions field buffer_selection
+crates/neovm-value/src/system_vocab/input.rs	fn	fn impl ReadKeySequenceOptions::for_command_loop
