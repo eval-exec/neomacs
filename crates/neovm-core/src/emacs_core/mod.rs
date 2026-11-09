@@ -569,6 +569,10 @@ mod heap_registry_cross_heap_test;
 #[path = "tests/plist_collection_capture_test.rs"]
 mod plist_collection_capture_test;
 
+#[cfg(test)]
+#[path = "tests/architecture/aot_abi_tag_history_guard_test.rs"]
+mod architecture_aot_abi_tag_history_guard_test;
+
 // Booted-Context tests re-homed from neovm-value (TEST-SUPPORT-DESIGN 1a,
 // lead ruling 01:1xZ option A). Bodies/test names/assertions unchanged.
 #[cfg(test)]
