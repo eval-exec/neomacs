@@ -22,14 +22,12 @@ fn populated_stacks(function: &ByteCodeFunction) -> InterpreterStacks {
         function: InterpreterFunction::new(function),
         code: ActiveCodeView::of(function),
         frame_base: 0,
+        bytecode_position: 0,
         #[cfg(feature = "jit")]
         resume: InterpreterResumePoint::new(0, false),
         #[cfg(not(feature = "jit"))]
         pc: 0,
-        cleanup: InterpreterFrameCleanup {
-            condition_stack_base: 0,
-            specpdl_base: 0,
-        },
+        cleanup: InterpreterFrameCleanup::new(0, 0),
         caller_return: InterpreterCallerReturn::ENTRY,
         #[cfg(debug_assertions)]
         entry_lexenv: Value::NIL,

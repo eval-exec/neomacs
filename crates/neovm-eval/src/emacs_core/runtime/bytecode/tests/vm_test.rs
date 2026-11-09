@@ -2822,12 +2822,32 @@ fn interpreter_driver_frame_layout_stays_compact() {
         "the caller continuation is one word: the value slot plus the \
          backtrace-ownership bit"
     );
+    assert_eq!(
+        std::mem::size_of::<InterpreterFrameCleanup>(),
+        std::mem::size_of::<usize>(),
+        "the two dynamic-state frontiers share one word, which is what pays for \
+         the frame's own bytecode-position word"
+    );
     assert!(
         std::mem::size_of::<InterpreterFrame>() <= 64 + INTERPRETER_FRAME_DEBUG_BYTES,
-        "an interpreter frame, caller continuation included, must stay one cache \
-         line in release; carrying the callee's instruction stream replaced its \
-         derived stack ceiling"
+        "an interpreter frame, caller continuation and position included, must \
+         stay one cache line in release; carrying the callee's instruction stream \
+         replaced its derived stack ceiling"
     );
+}
+
+/// The frame's position is a plain word and the cleanup frontiers pack into
+/// one, so the hot Bcall/Breturn path adds and stores without shift/mask work
+/// while the cold finish path still sees the exact bases.
+#[test]
+fn interpreter_frame_cleanup_packs_both_frontiers_in_one_word() {
+    let cleanup = InterpreterFrameCleanup::new(0x1234_5678, 0x9abc_def0);
+    assert_eq!(cleanup.condition_stack_base(), 0x1234_5678);
+    assert_eq!(cleanup.specpdl_base(), 0x9abc_def0);
+    let high = u32::MAX as usize;
+    let cleanup = InterpreterFrameCleanup::new(high, high - 1);
+    assert_eq!(cleanup.condition_stack_base(), high);
+    assert_eq!(cleanup.specpdl_base(), high - 1);
 }
 
 /// The parked backtrace token round-trips: the frame's specpdl base plus the

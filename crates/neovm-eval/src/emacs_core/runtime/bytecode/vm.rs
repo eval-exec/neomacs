@@ -953,10 +953,44 @@ enum ResolvedStackCallTarget {
     Generic,
 }
 
+/// The dynamic-state frontiers an iterative frame restores when it finishes.
+///
+/// Both are stack indices read only at frame finish/cleanup, never in the op
+/// loop, so packing them into one word costs no hot-path work and frees the
+/// word [`InterpreterFrame::bytecode_position`] needs: the release frame then
+/// stays one 64-byte cache line. A 32-bit base is unrepresentable in any real
+/// run (a specpdl entry alone is tens of bytes, so 2^32 entries would need
+/// more than the process can address); the debug assertion pins the invariant
+/// on every construction.
 #[derive(Clone, Copy)]
 struct InterpreterFrameCleanup {
-    condition_stack_base: usize,
-    specpdl_base: usize,
+    condition_stack_base: u32,
+    specpdl_base: u32,
+}
+
+impl InterpreterFrameCleanup {
+    #[inline(always)]
+    #[doc(hidden)]
+    fn new(condition_stack_base: usize, specpdl_base: usize) -> Self {
+        debug_assert!(condition_stack_base <= u32::MAX as usize);
+        debug_assert!(specpdl_base <= u32::MAX as usize);
+        Self {
+            condition_stack_base: condition_stack_base as u32,
+            specpdl_base: specpdl_base as u32,
+        }
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    fn condition_stack_base(self) -> usize {
+        self.condition_stack_base as usize
+    }
+
+    #[inline(always)]
+    #[doc(hidden)]
+    fn specpdl_base(self) -> usize {
+        self.specpdl_base as usize
+    }
 }
 
 /// Storage protocol for the Lisp value that keeps an executing bytecode
@@ -1157,10 +1191,11 @@ struct InterpreterFrame {
     frame_base: usize,
     /// The cumulative bytecode-stack position this frame's charge reached
     /// (GNU `bc->fp` / `frame_base + max_stack` in `setup_frame`,
-    /// src/bytecode.c:509-514) is packed in `caller_return` (bits 32..55),
-    /// so the frame stays one 64-byte cache line; the pop derives the
-    /// caller's position by subtracting this frame's own cost, and the
-    /// release is one store.
+    /// src/bytecode.c:509-514): a plain word, so the hot Bcall/Breturn path
+    /// adds, compares and stores it without the packed-word shifts. The
+    /// Context mirror is published from this field only at boundaries that
+    /// can run Lisp or native code (see [`release_bytecode_frame`]).
+    bytecode_position: usize,
     #[cfg(feature = "jit")]
     resume: InterpreterResumePoint,
     #[cfg(not(feature = "jit"))]
@@ -1188,7 +1223,7 @@ struct InterpreterFrame {
 /// The value slot is the consumed function operand, `args_start - 1`: GNU's
 /// `Breturn` stores the result exactly where `Bcall` found the function. The
 /// token's base needs no storage because a callee frame's
-/// `cleanup.specpdl_base` is the specpdl length right after its backtrace
+/// `cleanup.specpdl_base()` is the specpdl length right after its backtrace
 /// push, i.e. `base + 1` ([`BytecodeBacktraceFrame::park_in_frame`] checks
 /// that at every call in debug builds). Only the out-of-line-arguments bit is
 /// left, and a `bc_buf` index never uses usize's high bit (`Vec` allocations
@@ -1200,73 +1235,25 @@ struct InterpreterCallerReturn(usize);
 impl InterpreterCallerReturn {
     #[doc(hidden)]
     pub const OWNED_BACKTRACE_ARGS_FLAG: usize = 1usize << (usize::BITS - 1);
-    /// Shift of the saved bytecode-stack budget this word also carries: the
-    /// remaining budget the callee frame found when it was charged
-    /// (GNU `BC_STACK_SIZE` is 4 MiB, so 24 bits suffice). Restoring it on
-    /// return is one store -- the LIFO release.
-    #[doc(hidden)]
-    pub const POSITION_SHIFT: u32 = 32;
-    #[doc(hidden)]
-    pub const POSITION_BITS: u32 = 24;
-    #[doc(hidden)]
-    pub const POSITION_MASK: usize = ((1usize << Self::POSITION_BITS) - 1) << Self::POSITION_SHIFT;
-    /// The position's domain, before the shift.
-    #[doc(hidden)]
-    pub const POSITION_LIMIT_MASK: usize = (1usize << Self::POSITION_BITS) - 1;
     /// The low bits: the consumed call operand's `bc_buf` index.
     #[doc(hidden)]
-    pub const VALUE_SLOT_MASK: usize = (1usize << Self::POSITION_SHIFT) - 1;
+    pub const VALUE_SLOT_MASK: usize = (1usize << 32) - 1;
 
-    /// A dummy word with no caller and no position: the entry frame of a
-    /// unit-test fixture, and the placeholder `new` builds.  The driver's
-    /// entry frame uses [`Self::entry_at`] instead so its position is read.
+    /// A dummy word with no caller: the entry frame of the driver and of a
+    /// unit-test fixture. The entry frame carries its position in its own
+    /// `bytecode_position` field.
     #[doc(hidden)]
     pub const ENTRY: Self = Self(0);
 
     #[inline(always)]
     #[doc(hidden)]
     pub fn new(value_slot: ConsumedCallOperandRootSlot, owns_backtrace_args: bool) -> Self {
-        Self::with_position(value_slot, owns_backtrace_args, 0)
-    }
-
-    /// [`Self::new`] plus this frame's bytecode-stack position (GNU
-    /// `bc->fp`, src/bytecode.c:509-516); see [`Self::bytecode_position`].
-    #[inline(always)]
-    #[doc(hidden)]
-    pub fn with_position(
-        value_slot: ConsumedCallOperandRootSlot,
-        owns_backtrace_args: bool,
-        bytecode_position: usize,
-    ) -> Self {
         debug_assert_eq!(
             value_slot.0 & !Self::VALUE_SLOT_MASK,
             0,
             "a bc_buf index must fit the continuation's low 32 bits"
         );
-        debug_assert_eq!(
-            bytecode_position & !Self::POSITION_LIMIT_MASK,
-            0,
-            "the bytecode-stack frame position must fit its 24 bits"
-        );
-        Self(
-            value_slot.0
-                | (bytecode_position << Self::POSITION_SHIFT)
-                | (usize::from(owns_backtrace_args) * Self::OWNED_BACKTRACE_ARGS_FLAG),
-        )
-    }
-
-    /// The driver's entry frame: no caller inside the driver, but its
-    /// bytecode-stack position is the one `execute_from_stack_args` charged
-    /// (or the resume path charged).
-    #[inline(always)]
-    #[doc(hidden)]
-    pub fn entry_at(bytecode_position: usize) -> Self {
-        debug_assert_eq!(
-            bytecode_position & !Self::POSITION_LIMIT_MASK,
-            0,
-            "the bytecode-stack frame position must fit its 24 bits"
-        );
-        Self(bytecode_position << Self::POSITION_SHIFT)
+        Self(value_slot.0 | (usize::from(owns_backtrace_args) * Self::OWNED_BACKTRACE_ARGS_FLAG))
     }
 
     #[inline(always)]
@@ -1279,16 +1266,6 @@ impl InterpreterCallerReturn {
     #[doc(hidden)]
     pub fn owns_backtrace_args(self) -> bool {
         self.0 & Self::OWNED_BACKTRACE_ARGS_FLAG != 0
-    }
-
-    /// This frame's bytecode-stack position.  The pop derives its caller's
-    /// position by subtracting this frame's own cost (the declared stack
-    /// depth is immutable in the frame's function object), so the release
-    /// needs no separate saved word.
-    #[inline(always)]
-    #[doc(hidden)]
-    pub fn bytecode_position(self) -> usize {
-        (self.0 & Self::POSITION_MASK) >> Self::POSITION_SHIFT
     }
 }
 
@@ -1914,7 +1891,7 @@ impl InterpreterCallerStack {
             // one reclaim of its parked token.
             backtrace: unsafe {
                 BytecodeBacktraceFrame::reclaim_from_frame(
-                    callee.cleanup.specpdl_base,
+                    callee.cleanup.specpdl_base(),
                     caller_return.owns_backtrace_args(),
                 )
             },
@@ -2566,25 +2543,24 @@ pub(crate) const BC_STACK_POSITION_INITIAL: usize = 0;
 /// the position, that is `position + header <= BC_STACK_SIZE`.
 pub(crate) const BC_STACK_POSITION_LIMIT: usize = BC_STACK_SIZE - BC_FRAME_HEADER_BYTES;
 
-// Compile-time width contract for the continuation word's packed position
-// and for the 64-bit word its shift assumes.  These are type-level
-// guarantees, not debug-build masks: a configuration where the GNU stack
-// limit no longer fits the 24 packed bits, where the word is not 64 bits,
-// or where the packed field would overlap the owned-args flag must fail to
-// compile.
+// Compile-time width contract for the continuation word. The frame position
+// now has its own word, so the continuation keeps only the low-32 value slot
+// and the high owned-args bit. A configuration where the word is not 64 bits
+// or where those fields could overlap must fail to compile; the position's
+// domain is a runtime compare against BC_STACK_POSITION_LIMIT in the charge.
 const _: () = {
     assert!(
-        BC_STACK_POSITION_LIMIT <= InterpreterCallerReturn::POSITION_LIMIT_MASK,
-        "the bytecode-stack frame position must fit its 24 packed bits"
-    );
-    assert!(
         usize::BITS == 64,
-        "the continuation word packs the bytecode position above bit 32"
+        "the continuation word packs the value slot in its low 32 bits and the owned-args flag at bit 63"
     );
     assert!(
-        InterpreterCallerReturn::POSITION_SHIFT + InterpreterCallerReturn::POSITION_BITS
-            < usize::BITS,
-        "the packed position must not overlap the owned-args flag"
+        InterpreterCallerReturn::VALUE_SLOT_MASK
+            < InterpreterCallerReturn::OWNED_BACKTRACE_ARGS_FLAG,
+        "the value slot must not overlap the owned-args flag"
+    );
+    assert!(
+        BC_STACK_POSITION_LIMIT < BC_STACK_POSITION_UNCHARGED,
+        "a real position must stay distinct from the uncharged marker"
     );
 };
 
@@ -2656,8 +2632,8 @@ pub(crate) fn charge_bytecode_frame_bytes(
 /// (src/bytecode.c:509-515), without touching Context: `Some(next)` when the
 /// callee frame fits, `None` when it does not.  The interpreter driver
 /// supplies its frame-local position here, so the hot Bcall check needs no
-/// load from Context; the caller publishes the result with the frame push
-/// (the GNU `bc->fp = fp` store).
+/// load from Context; the callee frame carries the result in its own
+/// `bytecode_position` field (the GNU `bc->fp = fp` state).
 #[inline(always)]
 pub(crate) fn charge_frame_position(caller_position: usize, max_stack: usize) -> Option<usize> {
     let position = caller_position.checked_add(bytecode_frame_bytes(max_stack))?;
@@ -2710,9 +2686,17 @@ mod charge_frame_bytes_test {
     }
 }
 
-/// Release a charge taken by [`charge_bytecode_frame`]: restore the position
-/// the caller had before the frame was charged.  One store; the GNU frame
-/// pop (`bc->fp = fp->saved_fp`, src/bytecode.c:892-900) is the same update.
+/// Publish a bytecode-stack position into the Context mirror: one store.
+///
+/// Two callers use it. The JIT shims release a charge taken by
+/// [`charge_bytecode_frame`] by restoring the position the caller had (GNU's
+/// frame pop, `bc->fp = fp->saved_fp`, src/bytecode.c:892-900). The
+/// interpreter driver `run_loop` publishes the ACTIVE frame's
+/// `bytecode_position` field at every boundary that can run Lisp or native
+/// code (poll, GC/quit safepoint, non-iterative call, signal/unwind,
+/// watcher-driven store, debugger); between boundaries the field is
+/// authoritative and the mirror may be one or more returns behind, which is
+/// exactly GNU's `bc->fp` discipline (GNU updates `bc->fp` on entry/exit only).
 #[inline(always)]
 pub(crate) fn release_bytecode_frame(
     ctx: &mut crate::emacs_core::eval::Context,
@@ -4250,30 +4234,23 @@ impl<'a> Vm<'a> {
         // register, and handing the frame back by value lets the caller move it
         // into its own fresh slot. The old shape wrote into the caller's slot,
         // which is why entering a call first had to copy the caller out of it.
-        // GNU `setup_frame` publishes the new frame pointer (`bc->fp = fp`,
-        // src/bytecode.c:516) as part of the push.  The Context mirror is
-        // that publish: a native frame that re-enters bytecode (a subr, a
-        // JIT leaf, a signal handler) reads it.  No boundary runs between
-        // this store and the caller's `enter_callee`, so "mirror == active
-        // frame position" holds at every boundary.
-        self.ctx.bytecode_stack_position = bc_position;
+        // GNU `setup_frame` makes the new frame current (`bc->fp = fp`,
+        // src/bytecode.c:516); this frame's own `bytecode_position` field is
+        // that state. No Context store happens here: no Lisp or native code
+        // runs between the push and the callee's first op, and every boundary
+        // that can run one publishes the active frame's field first (see
+        // `release_bytecode_frame` and the `publish` sites in `run_loop`).
         InstalledCalleeFrame(InterpreterFrame {
             function: callee.function,
             code: callee.code,
             frame_base,
+            bytecode_position: bc_position,
             #[cfg(feature = "jit")]
             resume: InterpreterResumePoint::new(0, false),
             #[cfg(not(feature = "jit"))]
             pc: 0,
-            cleanup: InterpreterFrameCleanup {
-                condition_stack_base,
-                specpdl_base,
-            },
-            caller_return: InterpreterCallerReturn::with_position(
-                root_slot,
-                owns_backtrace_args,
-                bc_position,
-            ),
+            cleanup: InterpreterFrameCleanup::new(condition_stack_base, specpdl_base),
+            caller_return: InterpreterCallerReturn::new(root_slot, owns_backtrace_args),
             #[cfg(debug_assertions)]
             entry_lexenv: self.ctx.lexenv,
         })
@@ -4290,12 +4267,14 @@ impl<'a> Vm<'a> {
             return result;
         }
         let cleanup = frame.cleanup;
-        // Release this frame's charge by restoring the bytecode-stack frame
-        // position its caller had: the frame's own packed position minus its
-        // own immutable frame cost, one store, and a LIFO restore cannot
-        // drift.  The entry frame's charge belongs to the caller that
-        // entered the driver through execute_from_stack_args.
-        let own_position = frame.caller_return.bytecode_position();
+        // Publish the caller's position before the cleanup below can run Lisp
+        // (unwind forms and handlers re-enter bytecode through the mirror, and
+        // they charge from the state GNU's `Breturn` would have restored).
+        // The frame's own position minus its own immutable cost is exactly the
+        // caller's position; the subtraction cannot drift in a LIFO chain.
+        // The entry frame's charge belongs to the caller that entered the
+        // driver through execute_from_stack_args.
+        let own_position = frame.bytecode_position;
         let frame_cost = bytecode_frame_bytes(frame.function.code().max_stack.get());
         debug_assert!(own_position >= frame_cost);
         release_bytecode_frame(self.ctx, own_position - frame_cost);
@@ -4306,8 +4285,8 @@ impl<'a> Vm<'a> {
         );
         self.cleanup_iterative_bytecode_frame(
             result,
-            cleanup.condition_stack_base,
-            cleanup.specpdl_base,
+            cleanup.condition_stack_base(),
+            cleanup.specpdl_base(),
             frame.frame_base,
         )
     }
@@ -4419,8 +4398,9 @@ impl<'a> Vm<'a> {
 
         // Read everything needed from the ACTIVE frame before popping it: after
         // `leave_callee` the top of the stack is the caller, not this frame.
-        // The release below re-reads the CALLER's own position from its frame
-        // after the pop, so nothing here needs this frame's cost.
+        // Nothing here needs this frame's position: after the pop the caller's
+        // own field is authoritative, and no boundary needs publishing until
+        // it is read at the next driver header or boundary.
         let (cleanup, frame_base) = {
             let current = callers.active();
             (current.cleanup, current.frame_base)
@@ -4437,7 +4417,7 @@ impl<'a> Vm<'a> {
         // Do it before classifying the specpdl state so the slow fallback has
         // exactly the same observable unwind state as the generic path.
         self.ctx
-            .truncate_condition_stack(cleanup.condition_stack_base);
+            .truncate_condition_stack(cleanup.condition_stack_base());
         // GNU `Breturn` tests `backtrace_debug_on_exit` BEFORE its
         // `specpdl_ptr--` (`src/bytecode.c:825-828`) because the debugger's
         // return value replaces the call's.  This return has no way to carry a
@@ -4449,8 +4429,8 @@ impl<'a> Vm<'a> {
         // `Exit` above), and a callee frame's base sits exactly one above the
         // backtrace entry its Bcall pushed -- the invariant its parked token
         // already relies on -- so the subtraction cannot underflow.
-        let returning_frame = cleanup.specpdl_base - 1;
-        if self.ctx.specpdl.len() != cleanup.specpdl_base
+        let returning_frame = cleanup.specpdl_base() - 1;
+        if self.ctx.specpdl.len() != cleanup.specpdl_base()
             || self
                 .ctx
                 .backtrace_frame_wants_debug_on_exit(returning_frame)
@@ -4470,14 +4450,13 @@ impl<'a> Vm<'a> {
         let continuation = callers
             .leave_callee()
             .expect("a suspended caller was proven above");
-        // Release the callee's charge on the fast Breturn path: restore the
-        // mirror to the caller's position, which the caller's own frame packs.
-        // Reading it after the pop replaces the per-return derivation from
-        // this frame's cost (a max_stack load, shift, add and subtract); no
-        // Lisp or GC runs between the pop and this store. The slow path
-        // releases in finish_interpreter_frame before its cleanup can run
-        // Lisp.
-        release_bytecode_frame(self.ctx, callers.active().caller_return.bytecode_position());
+        // No Context release here: after the pop the caller's own
+        // `bytecode_position` field is authoritative, and the driver reloads
+        // it at the next loop header. Nothing between this pop and that
+        // reload can run Lisp or native code; every such boundary publishes
+        // the active frame's field itself (see the publish sites in
+        // `run_loop`). The slow path publishes the caller's position in
+        // finish_interpreter_frame before its cleanup can run Lisp.
         self.leave_bytecode_call_depth();
         // The eligibility gate above asked `backtrace_debug_on_exit` about
         // exactly this index, so the checking pop would ask a second time on
@@ -4895,15 +4874,15 @@ impl<'a> Vm<'a> {
             function: InterpreterFunction::new(entry_func),
             code: ActiveCodeView::of(entry_func),
             frame_base,
+            // The charge that entered the driver is already published in the
+            // Context mirror; the entry frame carries the same position.
+            bytecode_position: self.ctx.bytecode_stack_position,
             #[cfg(feature = "jit")]
             resume: InterpreterResumePoint::new(*pc, entry_osr_tried),
             #[cfg(not(feature = "jit"))]
             pc: *pc,
-            cleanup: InterpreterFrameCleanup {
-                condition_stack_base: 0,
-                specpdl_base: 0,
-            },
-            caller_return: InterpreterCallerReturn::entry_at(self.ctx.bytecode_stack_position),
+            cleanup: InterpreterFrameCleanup::new(0, 0),
+            caller_return: InterpreterCallerReturn::ENTRY,
             #[cfg(debug_assertions)]
             entry_lexenv: Value::NIL,
         };
@@ -4999,17 +4978,15 @@ impl<'a> Vm<'a> {
                     current.function,
                     current.frame_base,
                     current.code,
-                    current.caller_return.bytecode_position(),
+                    current.bytecode_position,
                 )
             };
-            // The frame's position is the GNU `bc->fp` of this frame.  The
-            // Context mirror was published when the frame was pushed; the
-            // debug invariant below is the boundary contract (subr/GC/signal/
-            // thread/deopt code reads the mirror, never the local).
-            debug_assert_eq!(
-                self.ctx.bytecode_stack_position, bc_position,
-                "bytecode-stack mirror out of step with the active frame"
-            );
+            // The frame's position is the GNU `bc->fp` of this frame. The
+            // Context mirror tracks it only at boundaries: every point below
+            // that can run Lisp or native code (poll, GC/quit safepoint,
+            // non-iterative call, signal/unwind, debugger) publishes this
+            // local first, so re-entrant code charges from exactly the state
+            // GNU's bc->fp would hold there.
             let func = function.code();
             // GNU reloads `bytestr_data` and `vectorp` from the frame at
             // `Breturn` rather than re-deriving them; the frame carries the
@@ -5257,13 +5234,11 @@ impl<'a> Vm<'a> {
             macro_rules! poll_quit {
                 ($position:expr) => {{
                     // A quit poll can run Lisp (timers, process filters,
-                    // profiler) that re-enters bytecode through the mirror;
-                    // the active frame's position must be the mirror here.
-                    debug_assert_eq!(
-                        self.ctx.bytecode_stack_position, $position,
-                        "bytecode-stack mirror out of step at a quit boundary"
-                    );
+                    // profiler) that re-enters bytecode through the mirror.
+                    // The fast path cannot run Lisp, so only the slow path
+                    // publishes the active frame's position.
                     if !self.ctx.maybe_quit_hot_ok() {
+                        release_bytecode_frame(self.ctx, $position);
                         publish_phase!();
                         match self.ctx.maybe_quit() {
                             Ok(()) => {
@@ -5305,11 +5280,9 @@ impl<'a> Vm<'a> {
                             #[cfg(feature = "jit")]
                             func.jit_runtime().note_loop_work();
                             // A GC/quit safepoint can run Lisp (and thus
-                            // re-enter bytecode through the mirror).
-                            debug_assert_eq!(
-                                self.ctx.bytecode_stack_position, bc_position,
-                                "bytecode-stack mirror out of step at a GC/quit safepoint"
-                            );
+                            // re-enter bytecode through the mirror): publish
+                            // the active frame's position first.
+                            release_bytecode_frame(self.ctx, bc_position);
                             vm_try!(self.ctx.bytecode_branch_maybe_gc_and_quit());
                             // OSR: the loop is hot and this is a backward branch (its
                             // target is the loop header). If the function is OSR-eligible
@@ -5631,6 +5604,11 @@ impl<'a> Vm<'a> {
                         if !self.ctx.try_set_plain_variable(name_id, val)
                             && !self.ctx.try_set_var_cached(name_id, val)
                         {
+                            // The general store notifies variable watchers,
+                            // which run arbitrary Lisp: publish the active
+                            // frame's position first. The plain and cached
+                            // stores above cannot reach a safe point.
+                            release_bytecode_frame(self.ctx, bc_position);
                             let extra = [val];
                             vm_try!(self.with_frame_roots(func, &extra, |vm| {
                                 vm.assign_var_id(name_id, val)
@@ -5660,7 +5638,10 @@ impl<'a> Vm<'a> {
                         let val = stk!().pop().unwrap_or(Value::NIL);
                         let bind_depth = self.ctx.specpdl.len();
                         // vm_try publishes the stack because specbind can run
-                        // variable watchers (arbitrary Lisp).
+                        // variable watchers (arbitrary Lisp); publish the
+                        // active frame's bytecode-stack position for the same
+                        // reason.
+                        release_bytecode_frame(self.ctx, bc_position);
                         vm_try!(self.ctx.try_specbind(name_id, val));
                         aux_stack.current_mut().bind_stack.push(bind_depth);
                     }
@@ -5779,6 +5760,10 @@ impl<'a> Vm<'a> {
                             self.ctx.depth += 1;
                             if self.ctx.depth > self.ctx.max_depth {
                                 if let Err(overflow) = self.check_live_bytecode_call_depth() {
+                                    // The rejected call dispatches its signal,
+                                    // which can run Lisp: publish the still-
+                                    // active caller's position first.
+                                    release_bytecode_frame(self.ctx, bc_position);
                                     let (flow, retired) = self.finish_live_bytecode_depth_overflow(
                                         RunLoopCursor {
                                             operands: cursor,
@@ -5815,6 +5800,10 @@ impl<'a> Vm<'a> {
                             let Some(bc_position_after) =
                                 charge_frame_position(bc_position, callee_code.max_stack.get())
                             else {
+                                // The reject signals: publish the still-active
+                                // caller's position before the signal can run
+                                // Lisp.
+                                release_bytecode_frame(self.ctx, bc_position);
                                 let flow = self.reject_bytecode_frame_for_budget(backtrace);
                                 publish_phase!();
                                 resume_flow!(flow)
@@ -5850,12 +5839,10 @@ impl<'a> Vm<'a> {
                             continue 'frame;
                         }
                         // A non-iterative call (subr, JIT leaf, tier
-                        // dispatcher) can re-enter bytecode through the
-                        // mirror.
-                        debug_assert_eq!(
-                            self.ctx.bytecode_stack_position, bc_position,
-                            "bytecode-stack mirror out of step at a call boundary"
-                        );
+                        // dispatcher, or the debugger) can re-enter bytecode
+                        // through the mirror: publish the active frame's
+                        // position before any of them runs.
+                        release_bytecode_frame(self.ctx, bc_position);
                         let result = if debug_armed {
                             let args: LispArgVec = stk!()[args_start..].iter().copied().collect();
                             vm_try!(self.with_bytecode_call_depth(|vm| {
@@ -5885,6 +5872,9 @@ impl<'a> Vm<'a> {
                                         bc_position,
                                         callee.code().max_stack.get(),
                                     ) else {
+                                        // The reject signals: publish the
+                                        // caller's position before it runs.
+                                        release_bytecode_frame(self.ctx, bc_position);
                                         let flow = self.reject_bytecode_frame_for_budget(backtrace);
                                         resume_flow!(flow)
                                     };
@@ -5934,6 +5924,10 @@ impl<'a> Vm<'a> {
                     Op::Apply(n) => {
                         let n = *n as usize;
                         poll_quit!(bc_position);
+                        // funcall/apply re-enter bytecode through the mirror;
+                        // publish the active frame's position first (the quit
+                        // poll above only publishes on its own slow path).
+                        release_bytecode_frame(self.ctx, bc_position);
                         if n == 0 {
                             let stack_after_call = stk!().len().saturating_sub(1);
                             let func_val = stk!().last().copied().unwrap_or(Value::NIL);
@@ -6991,6 +6985,11 @@ impl<'a> Vm<'a> {
                         let len = stk!().len();
                         let sym = stk!()[len - 2];
                         let val = stk!()[len - 1];
+                        // GNU `Bset` is `Fset` (`src/bytecode.c:1193-1198`),
+                        // which notifies variable watchers: publish the
+                        // active frame's position before the set can run
+                        // Lisp.
+                        release_bytecode_frame(self.ctx, bc_position);
                         let result = vm_try!(builtins::builtin_set_2(&mut *self.ctx, sym, val));
                         stk!()[len - 2] = result;
                         stk!().pop();
@@ -9889,6 +9888,12 @@ impl<'a> Vm<'a> {
         // All successful dispatch stays in run_loop unchanged. The operands of
         // failed pure/builtin opcodes remain on bc_buf; car/cdr popped their
         // operand, whose identity is retained by the wrong-type signal itself.
+        //
+        // Nonlocal flow can run Lisp (`unwind-protect` cleanups, condition
+        // handlers): publish the active frame's position first. Between
+        // boundaries the frame field is authoritative and the mirror may be
+        // a few returns behind, which is GNU's `bc->fp` discipline.
+        release_bytecode_frame(self.ctx, callers.active().bytecode_position);
         let func = callers.active().function.code();
         let flow = match func.executable_ops().get(pc_local.saturating_sub(1)) {
             Some(op @ (Op::Car | Op::Cdr)) => {

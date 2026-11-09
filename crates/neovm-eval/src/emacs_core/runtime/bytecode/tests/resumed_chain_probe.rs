@@ -414,7 +414,7 @@ impl<'a> Vm<'a> {
                 // The function slot holds the exact callee (Tier-0's
                 // install_exact_callee); deopt metadata carries the call's
                 // designator there, which the callee's frame records.
-                let entry = frames[i + 1].cleanup.specpdl_base - 1;
+                let entry = frames[i + 1].cleanup.specpdl_base() - 1;
                 let (designator, ..) = self
                     .ctx
                     .backtrace_entry_values(&self.ctx.specpdl[entry])
@@ -437,7 +437,7 @@ impl<'a> Vm<'a> {
                     Some(Op::Call(nargs)) => *nargs,
                     _ => unreachable!("checked for the caller above"),
                 };
-                (nargs, frame.cleanup.specpdl_base - 1)
+                (nargs, frame.cleanup.specpdl_base() - 1)
             });
             snapshot.push(SnapshotFrame {
                 function,
