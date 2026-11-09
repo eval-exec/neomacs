@@ -45,6 +45,15 @@ const BINARY_CENSUS: &str = "<binary-census-or-test-gated>";
 /// rejected by `duplicate_classification_keys` in
 /// `every_production_thread_local_has_a_carrier_tls_class`.
 const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
+    // CarrierIntrinsic: `Capture::begin` installs the observation and its Drop
+    // guard (and `pause`) restores the previous value on every exit path,
+    // including unwind, so the slot is empty between jobs and never carries
+    // retired Lisp values past its lexical producer scope.
+    (
+        "neomacs-layout-engine/src/cursor_source_dependencies.rs",
+        "ACTIVE",
+        TlsClass::CarrierIntrinsic,
+    ),
     (
         "neovm-eval/src/emacs_core/runtime/jit/stats/front_diag.rs",
         "ACTIVE",
