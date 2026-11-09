@@ -2278,8 +2278,7 @@ pub fn builtin_charset_priority_list(args: Vec<Value>) -> EvalResult {
 /// `(set-charset-priority &rest CHARSETS)` -- set charset detection priority.
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[doc(hidden)]
-pub fn builtin_set_charset_priority(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_set_charset_priority(args: Vec<Value>) -> EvalResult {
     builtin_set_charset_priority_with_symbols(args, SymbolMode::Bare)
 }
 
@@ -3053,8 +3052,7 @@ fn builtin_declare_equiv_charset_with_symbols(args: Vec<Value>, mode: SymbolMode
 /// `(define-charset-alias ALIAS CHARSET)` -- add ALIAS for CHARSET.
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[doc(hidden)]
-pub fn builtin_define_charset_alias(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_define_charset_alias(args: Vec<Value>) -> EvalResult {
     builtin_define_charset_alias_with_symbols(args, SymbolMode::Bare)
 }
 
