@@ -3208,6 +3208,30 @@ impl ParseSyntaxEntry {
 
 const _: () = assert!(std::mem::size_of::<ParseSyntaxEntry>() == 2);
 
+/// The 128 decoded ASCII entries of `table`, produced by one pass over the
+/// effective char-table's ASCII slots (GNU `CHAR_TABLE_REF_ASCII`,
+/// lisp.h:2133-2146) instead of one generic `ct_lookup` per character.
+///
+/// The raw values are exactly what `ct_lookup` resolves for each ASCII code,
+/// so every decoded entry is unchanged.  Falls back to the per-character
+/// path when the backing value is not a char-table.
+fn flat_ascii_syntax_entries(table: &SyntaxTable) -> [SyntaxEntry; 128] {
+    let effective = if table.chartable.is_nil() {
+        ensure_standard_syntax_table_object().unwrap_or(Value::NIL)
+    } else {
+        table.chartable
+    };
+    let mut raw = [Value::NIL; 128];
+    if effective.is_nil() || !super::chartable::ct_ascii_raw_values(&effective, &mut raw) {
+        return std::array::from_fn(|cp| syntax_entry_from_table(table, cp as u8 as char));
+    }
+    std::array::from_fn(|cp| {
+        record_syntax_table_decode();
+        syntax_entry_from_chartable_entry(&raw[cp])
+            .unwrap_or_else(|| SyntaxEntry::simple(table.char_syntax(cp as u8 as char)))
+    })
+}
+
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn flat_ascii_entries_for_table(table: &SyntaxTable) -> [ParseSyntaxEntry; 128] {
     let tick = crate::emacs_core::chartable::char_table_write_tick();
@@ -3215,12 +3239,10 @@ fn flat_ascii_entries_for_table(table: &SyntaxTable) -> [ParseSyntaxEntry; 128] 
     if SYNTAX_FLAT_ASCII_CACHE.with(|c| c.get()) == Some(key) {
         return SYNTAX_FLAT_ASCII_ENTRIES.with(|e| *e.borrow());
     }
-    let entries = std::array::from_fn(|cp| {
-        let entry = syntax_entry_from_table(table, cp as u8 as char);
-        ParseSyntaxEntry {
-            class: entry.class,
-            flags: entry.flags,
-        }
+    let decoded = flat_ascii_syntax_entries(table);
+    let entries = std::array::from_fn(|cp| ParseSyntaxEntry {
+        class: decoded[cp].class,
+        flags: decoded[cp].flags,
     });
     SYNTAX_FLAT_ASCII_ENTRIES.with(|e| *e.borrow_mut() = entries);
     SYNTAX_FLAT_ASCII_CACHE.with(|c| c.set(Some(key)));
@@ -3269,8 +3291,7 @@ fn flat_ascii_syntax_entry(table: &SyntaxTable, cp: u8) -> SyntaxEntry {
 #[cold]
 #[inline(never)]
 fn refill_flat_ascii_syntax_entry_cache(table: &SyntaxTable, key: (usize, u64)) {
-    let entries: [SyntaxEntry; 128] =
-        std::array::from_fn(|i| syntax_entry_from_table(table, i as u8 as char));
+    let entries = flat_ascii_syntax_entries(table);
     SYNTAX_FLAT_ASCII_ENTRY_ENTRIES.with(|e| *e.borrow_mut() = entries);
     SYNTAX_FLAT_ASCII_ENTRY_CACHE.with(|c| c.set(Some(key)));
 }

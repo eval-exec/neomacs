@@ -1080,6 +1080,7 @@ ct_set_single	fn	pub	crates/neovm-value/src/chartab.rs:618	chartab	stage-3 C7a: 
 ct_set_single_with_symbols	fn	pub	crates/neovm-value/src/chartab.rs:622	chartab	stage-3 C7a: single-char write with explicit symbol mode; unicode-property subrs share the container
 ct_lookup	fn	pub(crate)	crates/neovm-value/src/chartab.rs:683	chartab	stage-3 C7a: bare char-table lookup; core translate_char shim imports it back
 ct_lookup_with_symbols	fn	pub(crate)	crates/neovm-value/src/chartab.rs:687	chartab	stage-3 C7a: symbol-mode char-table lookup; core lookup subr imports it back
+ct_ascii_raw_values	fn	pub	crates/neovm-value/src/chartab.rs:764	chartab	smie-perf: CHAR_TABLE_REF_ASCII-style batch fill of the 128 raw ASCII slots under the parent chain
 translate_char_with_symbols	fn	pub(crate)	crates/neovm-value/src/chartab.rs:717	chartab	stage-3 C7a: translation with symbol mode; core translate_char shim imports it back
 ct_lookup_and_range	fn	private	crates/neovm-value/src/chartab.rs:800	chartab	stage-3 C7a: lookup with contiguous range; core range subrs import it back
 char_table_ref_and_range_with_symbols	fn	pub(crate)	crates/neovm-value/src/chartab.rs:920	chartab	stage-3 C7a: ref-and-range; core range subr imports it back

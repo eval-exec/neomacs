@@ -655,6 +655,73 @@ fn ct_lookup_ascii_cached(mut obj: &crate::tagged::header::CharTableObj, ch: i64
         }
     }
 }
+
+/// Batch form of [`ct_lookup_ascii_cached`] for the 128 ASCII codes: fill
+/// `out[cp]` with exactly the raw value `ct_lookup (table, cp)` resolves, in
+/// one walk of the ascii-slot/default/parent chain (GNU
+/// `CHAR_TABLE_REF_ASCII`, lisp.h:2133-2146).
+///
+/// Returns `false` and leaves `out` untouched when `table` is not a
+/// char-table; callers fall back to per-character lookup.
+#[doc(hidden)]
+pub fn ct_ascii_raw_values(table: &Value, out: &mut [Value; CT_ASCII_CACHE_LEN]) -> bool {
+    let Some(mut obj) = table.as_char_table_obj() else {
+        return false;
+    };
+    let mut resolved = [false; CT_ASCII_CACHE_LEN];
+    let mut remaining = CT_ASCII_CACHE_LEN;
+    loop {
+        // Same resolution order as `ct_lookup_ascii_cached`: this table's
+        // ASCII slot, then its default, then the parent chain.
+        let ascii = obj.ascii.get();
+        if let Some(sub) = ascii.as_sub_char_table_obj() {
+            for (cp, slot) in resolved.iter_mut().enumerate() {
+                if !*slot {
+                    let value = sub.contents.get(cp).copied().unwrap_or(Value::NIL);
+                    if !value.is_nil() {
+                        out[cp] = value;
+                        *slot = true;
+                        remaining -= 1;
+                    }
+                }
+            }
+        } else if !ascii.is_nil() {
+            for (cp, slot) in resolved.iter_mut().enumerate() {
+                if !*slot {
+                    out[cp] = ascii;
+                    *slot = true;
+                    remaining -= 1;
+                }
+            }
+        }
+        if remaining == 0 {
+            break;
+        }
+        let defalt = obj.defalt.get();
+        if !defalt.is_nil() {
+            for (cp, slot) in resolved.iter_mut().enumerate() {
+                if !*slot {
+                    out[cp] = defalt;
+                    *slot = true;
+                    remaining -= 1;
+                }
+            }
+        }
+        if remaining == 0 {
+            break;
+        }
+        match obj.parent.get().as_char_table_obj() {
+            Some(parent) => obj = parent,
+            None => break,
+        }
+    }
+    for (cp, slot) in resolved.iter().enumerate() {
+        if !*slot {
+            out[cp] = Value::NIL;
+        }
+    }
+    true
+}
 // Keep the existing explicit Bare lookup policy zero-sized at the shared
 // lookup seam, so it needs no runtime policy argument. Semantic callers still
 // pass their captured SymbolMode through the same lookup body.
