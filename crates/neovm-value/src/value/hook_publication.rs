@@ -31,7 +31,7 @@ pub enum HookInstallError {
 #[doc(hidden)]
 #[cold]
 #[inline(never)]
-pub fn select_published_identity<T: ?Sized + 'static>(
+pub fn select_published_identity<T: 'static>(
     identity: &OnceLock<&'static T>,
     offered: &'static T,
 ) -> Result<&'static T, HookInstallError> {
