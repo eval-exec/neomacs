@@ -65,7 +65,7 @@ fn fail_stack_depth_stays_within_the_overflow_bound() {
         let Ok(compiled) = regex_compile(&pattern, false, false) else {
             continue;
         };
-        if compiled.buffer.iter().any(|&b| {
+        if compiled.bytecode().iter().any(|&b| {
             matches!(
                 RegexOp::from_byte(b),
                 Some(RegexOp::SucceedN | RegexOp::JumpN | RegexOp::SetNumberAt)
@@ -74,7 +74,7 @@ fn fail_stack_depth_stays_within_the_overflow_bound() {
             continue;
         }
         let text = bound_text(&mut rng, 24);
-        let sites = fail_stack_push_sites(&compiled.buffer);
+        let sites = fail_stack_push_sites(&compiled.bytecode());
         for pos in 0..=text.len() {
             let _ = take_fail_stack_probe();
             let _ = take_matcher_overflow();
@@ -96,18 +96,19 @@ fn fail_stack_depth_stays_within_the_overflow_bound() {
             let _ = take_pike_fallback();
             assert!(!take_matcher_overflow());
             let probe = take_fail_stack_probe();
-            if probe.max_depth == 0 {
+            if probe.max_depth() == 0 {
                 continue;
             }
             measured += 1;
-            let consumed = probe.max_push_pos - pos;
+            let consumed = probe.max_push_pos() - pos;
             let bound = (consumed + 1) * 2 * sites;
-            worst_ratio = worst_ratio.max(probe.max_depth as f64 / ((consumed + 1) * sites) as f64);
+            worst_ratio =
+                worst_ratio.max(probe.max_depth() as f64 / ((consumed + 1) * sites) as f64);
             assert!(
-                probe.max_depth <= bound,
+                probe.max_depth() <= bound,
                 "case {case}: {pattern:?} at {pos} in {text:?}: depth {} > bound {bound} \
                  (consumed {consumed}, sites {sites})",
-                probe.max_depth
+                probe.max_depth()
             );
         }
     }

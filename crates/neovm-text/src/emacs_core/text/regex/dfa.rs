@@ -236,22 +236,22 @@ pub(crate) struct Nfa {
 pub struct Nfa {
     /// The rewind view (keep-string loops rewritten; same length and opcode
     /// positions as `CompiledPattern::buffer`, whose side tables it shares).
-    pub bytecode: Box<[u8]>,
-    pub positions: Vec<Position>,
-    pub predicates: Vec<Predicate>,
+    pub(crate) bytecode: Box<[u8]>,
+    pub(crate) positions: Vec<Position>,
+    pub(crate) predicates: Vec<Predicate>,
     /// `kernel_item(pc, lit_off)` of each position, to its index.
     position_of: FxHashMap<KernelItem, u16>,
     pub(crate) assertions: Assertions,
     /// Opcodes that push onto the backtracker's fail stack (the overflow
     /// bound, [`super::fail_stack_may_overflow`]).
-    pub push_sites: usize,
+    pub(crate) push_sites: usize,
     /// Whether the pattern tests categories (`\cC`), which the class tables
     /// then depend on.
     pub(crate) uses_categories: bool,
     /// Whether some predicate or assertion reads the syntax table: then a
     /// `syntax-table` property can change a character's class or an
     /// assertion's answer, and the DFA reads syntax where the matcher does.
-    pub reads_syntax: bool,
+    pub(crate) reads_syntax: bool,
 }
 
 /// Decide whether `pattern` can have an existence DFA.
@@ -839,7 +839,7 @@ pub(crate) struct ClassKey {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ClassKey {
     accepts: SmallVec<[u64; 2]>,
-    pub facts: Facts,
+    pub(crate) facts: Facts,
 }
 
 impl ClassKey {
@@ -1050,7 +1050,7 @@ pub struct ClassContext {
     /// `char_table_write_tick` when the classes read a char-table (the
     /// syntax or category table, or a case table's non-ASCII translations),
     /// else 0.  The tick moves with every char-table write and allocation.
-    pub tick: u64,
+    pub(crate) tick: u64,
     target_multibyte: bool,
 }
 
@@ -1178,7 +1178,7 @@ pub(crate) struct CharClasses {
 /// class id, stay valid.
 pub struct CharClasses {
     /// Class of each byte: every byte of unibyte text, ASCII of multibyte.
-    pub byte_class: [u8; 256],
+    pub(crate) byte_class: [u8; 256],
     /// Direct-mapped `(character code, class)` memo for the other characters.
     wide: Box<[(u32, u8)]>,
     /// Direct-mapped `(character code, syntax facts there, class)` memo for
@@ -1193,7 +1193,7 @@ pub struct CharClasses {
     context: Option<ClassContext>,
     mask: Facts,
     /// Context changes that emptied the maps.
-    pub resets: u64,
+    pub(crate) resets: u64,
 }
 
 impl CharClasses {
@@ -1565,28 +1565,28 @@ pub(crate) struct ExistenceDfa {
 /// The anchored existence DFA of one pattern (see the module docs).
 pub struct ExistenceDfa {
     nfa: Nfa,
-    pub classes: CharClasses,
+    pub(crate) classes: CharClasses,
     /// Facts a state keeps about the previous character: the class facts
     /// plus [`Facts::EDGE`] when some assertion tests the text start.
     prev_mask: Facts,
-    pub stride_shift: u32,
-    pub trans: Vec<u32>,
+    pub(crate) stride_shift: u32,
+    pub(crate) trans: Vec<u32>,
     states: Vec<StateKey>,
     state_ids: FxHashMap<StateKey, u32>,
     /// Start state index + 1 per previous-character facts (0: not built).
-    pub start: [u32; 32],
+    pub(crate) start: [u32; 32],
     scratch: ClosureScratch,
     positions: Vec<u16>,
     kernel: Vec<KernelItem>,
-    pub memory: usize,
+    pub(crate) memory: usize,
     clears_this_search: u32,
-    pub search: SearchSyntax,
+    pub(crate) search: SearchSyntax,
     /// A property-free input stretch this search has looked up.
-    pub plain: std::ops::Range<usize>,
+    pub(crate) plain: std::ops::Range<usize>,
     /// Whether the pattern tests point (`\=`).
     has_at_dot: bool,
-    pub counters: DfaCounters,
-    pub gave_up: Option<DfaGaveUp>,
+    pub(crate) counters: DfaCounters,
+    pub(crate) gave_up: Option<DfaGaveUp>,
 }
 
 impl ExistenceDfa {
@@ -2746,11 +2746,11 @@ pub(crate) struct LiveDfa {
 #[cfg(any(test, feature = "test-support"))]
 /// A pattern's DFA, with its adaptive-bypass window.
 pub struct LiveDfa {
-    pub dfa: ExistenceDfa,
+    pub(crate) dfa: ExistenceDfa,
     /// A rejection that consumed fewer bytes than this cannot hide a
     /// fail-stack overflow ([`fail_stack_overflow_free_span`]).
-    pub overflow_free_span: usize,
-    pub decisions: u32,
+    pub(crate) overflow_free_span: usize,
+    pub(crate) decisions: u32,
     yes: u32,
     holiday: u32,
 }
@@ -2805,7 +2805,7 @@ pub(crate) struct DfaCell {
 /// before trying the existing checked borrow. A false hint runs the matcher.
 /// Re-entrant searches still fall back when the slot is borrowed.
 pub struct DfaCell {
-    pub slot: RefCell<DfaSlot>,
+    slot: RefCell<DfaSlot>,
     initialized: std::sync::atomic::AtomicBool,
 }
 
@@ -2830,6 +2830,14 @@ impl DfaCell {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn slot(&self) -> std::cell::Ref<'_, DfaSlot> {
         self.slot.borrow()
+    }
+
+    /// Crate-internal mutable access for the test-support fences; cross-crate
+    /// test readers only get the read-only `slot()` Ref.  The `slot` field is
+    /// private in every arm, so no consumer can `borrow_mut()` through it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn slot_mut(&self) -> std::cell::RefMut<'_, DfaSlot> {
+        self.slot.borrow_mut()
     }
 
     /// Whether initialization has published a non-cold slot.
@@ -2897,12 +2905,12 @@ pub(crate) struct DfaLease<'p> {
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// One search's hold on its pattern's DFA slot.
 pub struct DfaLease<'p> {
-    pub slot: RefMut<'p, DfaSlot>,
+    pub(crate) slot: RefMut<'p, DfaSlot>,
     mode: DfaMode,
     /// The live DFA's counters when this search began using it; the delta is
     /// added to [`DfaStats`] when the lease is dropped.
     counters_before: Option<DfaCounters>,
-    pub skipped: u64,
+    pub(crate) skipped: u64,
     overflow_guarded: u64,
 }
 
@@ -3424,5 +3432,124 @@ impl DfaStats {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn verify_bad_yes(&self) -> u64 {
         self.verify_bad_yes
+    }
+}
+
+// VIS read rows (lead #1052): copy/reference getters for the regex DFA
+// state; the fields stay pub(crate) in this crate.  Writes go through the
+// `test_support::authority` fences.
+#[cfg(any(test, feature = "test-support"))]
+impl Nfa {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn bytecode(&self) -> &[u8] {
+        &self.bytecode
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn positions(&self) -> &[Position] {
+        &self.positions
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn predicates(&self) -> &[Predicate] {
+        &self.predicates
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn push_sites(&self) -> usize {
+        self.push_sites
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn reads_syntax(&self) -> bool {
+        self.reads_syntax
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl ClassKey {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn facts(&self) -> Facts {
+        self.facts
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl ClassContext {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn tick(&self) -> u64 {
+        self.tick
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl CharClasses {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn byte_class(&self) -> &[u8; 256] {
+        &self.byte_class
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn resets(&self) -> u64 {
+        self.resets
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl ExistenceDfa {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn classes(&self) -> &CharClasses {
+        &self.classes
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn stride_shift(&self) -> u32 {
+        self.stride_shift
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn trans(&self) -> &[u32] {
+        &self.trans
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn start(&self) -> &[u32; 32] {
+        &self.start
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn memory(&self) -> usize {
+        self.memory
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn search(&self) -> &SearchSyntax {
+        &self.search
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn plain(&self) -> std::ops::Range<usize> {
+        self.plain.clone()
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn counters(&self) -> DfaCounters {
+        self.counters
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl LiveDfa {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn dfa(&self) -> &ExistenceDfa {
+        &self.dfa
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn overflow_free_span(&self) -> usize {
+        self.overflow_free_span
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn decisions(&self) -> u32 {
+        self.decisions
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl DfaLease<'_> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn slot(&self) -> &DfaSlot {
+        &self.slot
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn skipped(&self) -> u64 {
+        self.skipped
     }
 }

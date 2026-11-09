@@ -521,7 +521,7 @@ pub struct CharsetRegistry {
     non_preferred_head: Option<usize>,
     /// The preferred charsets by canonical identity (test read surface; the
     /// production struct keeps this private). See the production definition.
-    pub preferred_identities: Vec<SymId>,
+    pub(crate) preferred_identities: Vec<SymId>,
     /// Next auto-assigned charset ID.
     next_id: i64,
 }
@@ -3369,5 +3369,9 @@ impl CharsetRegistry {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn charsets(&self) -> &rustc_hash::FxHashMap<SymId, CharsetInfo> {
         &self.charsets
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn preferred_identities_for_test(&self) -> &[SymId] {
+        &self.preferred_identities
     }
 }

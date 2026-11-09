@@ -418,7 +418,7 @@ pub struct CompiledPattern {
 #[doc(hidden)]
 pub struct CompiledPattern {
     /// Bytecode buffer.
-    pub buffer: Vec<u8>,
+    pub(crate) buffer: Vec<u8>,
 
     /// Number of subexpressions (groups).
     pub re_nsub: usize,
@@ -581,7 +581,7 @@ pub struct CompiledPattern {
 
     /// The existence DFA's slot (`NEOVM_REGEX_DFA`, [`dfa::DfaCell`]): built
     /// lazily by the searches that use it; a clone starts cold.
-    pub dfa: dfa::DfaCell,
+    pub(crate) dfa: dfa::DfaCell,
 }
 
 /// Bytes of text below which a forward search does not build a pattern's
@@ -1425,8 +1425,8 @@ thread_local! {
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FailStackProbe {
-    pub max_depth: usize,
-    pub max_push_pos: usize,
+    pub(crate) max_depth: usize,
+    pub(crate) max_push_pos: usize,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -10828,3 +10828,25 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/fail_stack_parity_test.rs"]
 mod fail_stack_parity_tests;
+
+// VIS read rows (lead #1052): the pattern keeps its bytecode and DFA slot
+// pub(crate); tests read them through these getters.
+#[cfg(any(test, feature = "test-support"))]
+impl CompiledPattern {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn dfa(&self) -> &dfa::DfaCell {
+        &self.dfa
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl FailStackProbe {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn max_depth(&self) -> usize {
+        self.max_depth
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn max_push_pos(&self) -> usize {
+        self.max_push_pos
+    }
+}

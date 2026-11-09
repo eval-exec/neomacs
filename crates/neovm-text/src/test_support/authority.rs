@@ -222,6 +222,24 @@ pub fn set_existence_dfa_trans_at(dfa: &mut ExistenceDfa, at: usize, value: u32)
     dfa.trans[at] = value;
 }
 
+/// FENCE (VIS read-arm series, lead #1052): set `ExistenceDfa::memory` in
+/// place; the field stays a read surface for the consumer.
+pub fn set_existence_dfa_memory(dfa: &mut ExistenceDfa, value: usize) {
+    dfa.memory = value;
+}
+
+/// FENCE (VIS read-arm series, lead #1052): set `ExistenceDfa::plain` in
+/// place; the field stays a read surface for the consumer.
+pub fn set_existence_dfa_plain(dfa: &mut ExistenceDfa, value: std::ops::Range<usize>) {
+    dfa.plain = value;
+}
+
+/// FENCE (VIS read-arm series, lead #1052): set `ClassContext::tick` in
+/// place; the field stays a read surface for the consumer.
+pub fn set_class_context_tick(context: &mut ClassContext, value: u64) {
+    context.tick = value;
+}
+
 /// FENCE (peer #816 write-arm): set `ExistenceDfa::gave_up` in place.
 pub fn set_existence_dfa_gave_up(dfa: &mut ExistenceDfa, value: Option<DfaGaveUp>) {
     dfa.gave_up = value;
@@ -319,7 +337,7 @@ pub fn compiled_pattern_anchored_exists_for_test(
     point: usize,
     syntax: &dyn crate::emacs_core::regex_emacs::SyntaxLookup,
 ) -> crate::emacs_core::regex_emacs::dfa::Exists {
-    let mut slot = pattern.dfa.slot.borrow_mut();
+    let mut slot = pattern.dfa.slot_mut();
     match &mut *slot {
         DfaSlot::Live(live) => live
             .dfa

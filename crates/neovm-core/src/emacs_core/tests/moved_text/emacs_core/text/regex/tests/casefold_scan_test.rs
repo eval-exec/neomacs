@@ -230,7 +230,7 @@ fn folded_scan_is_rebuilt_with_the_fastmap() {
     let original = compiled.clone();
     // Change the literal operand without changing bytecode boundaries, so a
     // stale scan would still skip to `A`/`a` and miss the new byte.
-    assert_eq!(&compiled.buffer[..3], &[RegexOp::Exactn as u8, 1, b'a']);
+    assert_eq!(&compiled.bytecode()[..3], &[RegexOp::Exactn as u8, 1, b'a']);
     neovm_text::test_support::authority::set_compiled_pattern_buffer_byte_for_test(
         &mut compiled,
         2,

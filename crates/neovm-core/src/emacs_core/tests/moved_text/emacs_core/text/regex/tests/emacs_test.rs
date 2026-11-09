@@ -275,8 +275,12 @@ fn sparse_fastmap_rebuild_does_not_reuse_an_old_skip_byte() {
     // Recompute is the compiler's public seam for rebuilding a fastmap.
     // Change the literal operand without changing bytecode boundaries or
     // match registers, so any stale skip decision would miss the new byte.
-    assert_eq!(&compiled.buffer[..3], &[RegexOp::Exactn as u8, 1, b'a']);
-    compiled.buffer[2] = b'b';
+    assert_eq!(&compiled.bytecode()[..3], &[RegexOp::Exactn as u8, 1, b'a']);
+    neovm_text::test_support::authority::set_compiled_pattern_buffer_byte_for_test(
+        &mut compiled,
+        2,
+        b'b',
+    );
     recompute_fastmap(&mut compiled, &syntax);
     assert_eq!(search(&compiled, b"xb"), Some((1, 2)));
     assert_eq!(search(&compiled, b"xa"), None);

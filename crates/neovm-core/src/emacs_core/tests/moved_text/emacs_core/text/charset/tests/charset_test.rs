@@ -207,10 +207,16 @@ fn preferred_charsets_keep_the_charset_an_alias_named() {
     let mut reg = CharsetRegistry::new();
     reg.define_alias(intern("neomacs-test-pref"), intern("unicode-bmp"));
     reg.set_priority(&[intern("neomacs-test-pref")]);
-    assert_eq!(reg.preferred_identities, vec![intern("unicode-bmp")]);
+    assert_eq!(
+        reg.preferred_identities_for_test(),
+        &[intern("unicode-bmp")]
+    );
 
     reg.define_alias(intern("neomacs-test-pref"), intern("iso-8859-1"));
-    assert_eq!(reg.preferred_identities, vec![intern("unicode-bmp")]);
+    assert_eq!(
+        reg.preferred_identities_for_test(),
+        &[intern("unicode-bmp")]
+    );
 }
 
 #[test]
