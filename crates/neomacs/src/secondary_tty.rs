@@ -80,6 +80,15 @@ impl SecondaryTtyRegistry {
         if session.device.is_active()
             && let Some((root, children)) = presentations
         {
+            // Track the terminal's live size like the primary TTY does; a grid
+            // left at the size seen at open clips every cell past it.
+            if let Some(size) = query_size(std::os::fd::AsRawFd::as_raw_fd(&session.device.file))
+            {
+                let (cols, rows) = (size.columns() as usize, size.rows() as usize);
+                if session.rif.width() != cols || session.rif.height() != rows {
+                    session.rif.resize(cols, rows);
+                }
+            }
             // This terminal's session mutex protects only its native renderer;
             // Lisp redraw obligations stay on the exclusively borrowed Context.
             let mut full_redraw = eval.gnu_take_tty_frame_redraw(neovm_core::window::FrameId(
