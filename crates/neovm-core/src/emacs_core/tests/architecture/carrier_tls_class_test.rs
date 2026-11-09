@@ -1045,17 +1045,7 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
     ),
     (
         "neovm-text/src/emacs_core/text/syntax/mod.rs",
-        "SYNTAX_FLAT_ASCII_ENTRIES",
-        TlsClass::MustReset,
-    ),
-    (
-        "neovm-text/src/emacs_core/text/syntax/mod.rs",
         "SYNTAX_FLAT_ASCII_ENTRY_CACHE",
-        TlsClass::MustReset,
-    ),
-    (
-        "neovm-text/src/emacs_core/text/syntax/mod.rs",
-        "SYNTAX_FLAT_ASCII_ENTRY_ENTRIES",
         TlsClass::MustReset,
     ),
     (

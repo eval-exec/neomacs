@@ -3161,19 +3161,113 @@ pub(crate) fn syntax_entry_at_char(table: &Value, c: char) -> Option<SyntaxEntry
     syntax_entry_at_char_code(table, c as u32)
 }
 
+/// Number of syntax tables whose decoded flat ASCII classifiers a thread keeps
+/// resident. One slot thrashed whenever a scan alternated between two tables —
+/// elb-smie runs a fifth of its `parse-partial-sexp` calls under a
+/// `with-syntax-table` CPP table, refilling all 128 entries on every switch.
+const SYNTAX_FLAT_ASCII_SLOTS: usize = 4;
+
+/// A tiny per-thread LRU of decoded flat ASCII classifiers.
+///
+/// Every slot is keyed on the backing char-table's value bits (identity) and
+/// the global char-table write tick, the same key the single-slot caches used:
+/// any char-table write or allocation bumps the tick, so a table whose address
+/// was reused can never be served from a stale slot. `order` lists the occupied
+/// slots most-recently-used first; hits and inserts only move those indices, so
+/// an eviction never copies a decoded array.
+struct FlatAsciiCache<E: Copy> {
+    tick: u64,
+    len: usize,
+    order: [usize; SYNTAX_FLAT_ASCII_SLOTS],
+    bits: [usize; SYNTAX_FLAT_ASCII_SLOTS],
+    entries: [[E; 128]; SYNTAX_FLAT_ASCII_SLOTS],
+}
+
+impl<E: Copy> FlatAsciiCache<E> {
+    const fn new(empty: E) -> Self {
+        Self {
+            tick: 0,
+            len: 0,
+            order: [0; SYNTAX_FLAT_ASCII_SLOTS],
+            bits: [0; SYNTAX_FLAT_ASCII_SLOTS],
+            entries: [[empty; 128]; SYNTAX_FLAT_ASCII_SLOTS],
+        }
+    }
+
+    /// Drop every entry when the global write tick moved: the tick is part of
+    /// the key, so entries minted under an older tick can never be valid again.
+    #[inline]
+    fn invalidate_stale(&mut self, tick: u64) {
+        if self.len != 0 && self.tick != tick {
+            self.len = 0;
+        }
+        self.tick = tick;
+    }
+
+    /// Move position `pos` of the LRU order to the front.
+    #[inline]
+    fn promote(&mut self, pos: usize) {
+        if pos == 0 {
+            return;
+        }
+        let slot = self.order[pos];
+        self.order.copy_within(0..pos, 1);
+        self.order[0] = slot;
+    }
+
+    /// Return the slot holding `bits` for `tick`, promoting it to the front.
+    #[inline]
+    fn lookup(&mut self, bits: usize, tick: u64) -> Option<usize> {
+        self.invalidate_stale(tick);
+        for pos in 0..self.len {
+            if self.bits[self.order[pos]] == bits {
+                self.promote(pos);
+                return Some(self.order[0]);
+            }
+        }
+        None
+    }
+
+    /// Store `entries` for `bits` at `tick`, evicting the least recently used
+    /// slot when full, and return the slot.
+    #[inline]
+    fn insert(&mut self, bits: usize, tick: u64, entries: [E; 128]) -> usize {
+        self.invalidate_stale(tick);
+        let (slot, pos) = if self.len < SYNTAX_FLAT_ASCII_SLOTS {
+            let slot = self.len;
+            self.len += 1;
+            self.order[slot] = slot;
+            (slot, slot)
+        } else {
+            (
+                self.order[SYNTAX_FLAT_ASCII_SLOTS - 1],
+                SYNTAX_FLAT_ASCII_SLOTS - 1,
+            )
+        };
+        self.bits[slot] = bits;
+        self.entries[slot] = entries;
+        self.promote(pos);
+        slot
+    }
+}
+
 thread_local! {
-    /// Per-syntax-table flat ASCII entry cache, keyed on (table identity,
-    /// global char-table write tick). GNU's SYNTAX(c) is 2-3 loads because
-    /// the char-table's ascii subtable IS the flat array; this port's parse
-    /// previously rebuilt a per-CALL memo, so font-lock's thousands of short
-    /// `parse-partial-sexp` deltas re-derived every ASCII entry through the
-    /// layered ct_lookup chain (~917K lookups / full fontify). The tick makes
-    /// any char-table write anywhere invalidate the cache (see
-    /// `char_table_write_tick`).
-    static SYNTAX_FLAT_ASCII_CACHE: std::cell::Cell<Option<(usize, u64)>> =
-        const { std::cell::Cell::new(None) };
-    static SYNTAX_FLAT_ASCII_ENTRIES: std::cell::RefCell<[ParseSyntaxEntry; 128]> =
-        const { std::cell::RefCell::new([ParseSyntaxEntry::WHITESPACE; 128]) };
+    /// Per-syntax-table flat ASCII parser classifiers, keyed on (table
+    /// identity, global char-table write tick). GNU's SYNTAX(c) is 2-3 loads
+    /// because the char-table's ascii subtable IS the flat array; this port's
+    /// parse previously rebuilt a per-CALL memo, so font-lock's thousands of
+    /// short `parse-partial-sexp` deltas re-derived every ASCII entry through
+    /// the layered ct_lookup chain (~917K lookups / full fontify). The tick
+    /// makes any char-table write anywhere invalidate the cache (see
+    /// `char_table_write_tick`); the LRU keeps the handful of tables a scan
+    /// alternates between resident instead of refilling on every switch.
+    ///
+    /// The decoded arrays live behind a fixed-size TLS handle and are boxed on
+    /// first use: a multi-slot cache inline in TLS would grow every thread's
+    /// TLS block, and every TLS byte shifts %fs offsets across the binary.
+    static SYNTAX_FLAT_ASCII_CACHE:
+        std::cell::RefCell<Option<Box<FlatAsciiCache<ParseSyntaxEntry>>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(not(any(test, feature = "test-support")))]
@@ -3234,19 +3328,33 @@ fn flat_ascii_syntax_entries(table: &SyntaxTable) -> [SyntaxEntry; 128] {
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn flat_ascii_entries_for_table(table: &SyntaxTable) -> [ParseSyntaxEntry; 128] {
+    let bits = table.chartable.bits();
     let tick = crate::emacs_core::chartable::char_table_write_tick();
-    let key = (table.chartable.bits(), tick);
-    if SYNTAX_FLAT_ASCII_CACHE.with(|c| c.get()) == Some(key) {
-        return SYNTAX_FLAT_ASCII_ENTRIES.with(|e| *e.borrow());
+    let cached = SYNTAX_FLAT_ASCII_CACHE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let cache =
+            slot.get_or_insert_with(|| Box::new(FlatAsciiCache::new(ParseSyntaxEntry::WHITESPACE)));
+        let hit = cache.lookup(bits, tick);
+        hit.map(|hit| cache.entries[hit])
+    });
+    if let Some(entries) = cached {
+        return entries;
     }
     let decoded = flat_ascii_syntax_entries(table);
     let entries = std::array::from_fn(|cp| ParseSyntaxEntry {
         class: decoded[cp].class,
         flags: decoded[cp].flags,
     });
-    SYNTAX_FLAT_ASCII_ENTRIES.with(|e| *e.borrow_mut() = entries);
-    SYNTAX_FLAT_ASCII_CACHE.with(|c| c.set(Some(key)));
-    entries
+    // The fill may have materialized the standard table (a char-table
+    // allocation, hence a tick bump); key the entry on the tick it is valid at.
+    let tick = crate::emacs_core::chartable::char_table_write_tick();
+    SYNTAX_FLAT_ASCII_CACHE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let cache =
+            slot.get_or_insert_with(|| Box::new(FlatAsciiCache::new(ParseSyntaxEntry::WHITESPACE)));
+        let hit = cache.insert(bits, tick, entries);
+        cache.entries[hit]
+    })
 }
 
 thread_local! {
@@ -3257,10 +3365,10 @@ thread_local! {
     /// write invalidates it. This is what stops `re-search-forward`'s per-call
     /// `SyntaxPropByteRun` from re-decoding every ASCII char through
     /// `ct_lookup` on each of the thousands of calls font-lock makes.
-    static SYNTAX_FLAT_ASCII_ENTRY_CACHE: std::cell::Cell<Option<(usize, u64)>> =
-        const { std::cell::Cell::new(None) };
-    static SYNTAX_FLAT_ASCII_ENTRY_ENTRIES: std::cell::RefCell<[SyntaxEntry; 128]> =
-        const { std::cell::RefCell::new([SYNTAX_ENTRY_WHITESPACE; 128]) };
+    /// Boxed for the same fixed-size TLS reason as `SYNTAX_FLAT_ASCII_CACHE`.
+    static SYNTAX_FLAT_ASCII_ENTRY_CACHE:
+        std::cell::RefCell<Option<Box<FlatAsciiCache<SyntaxEntry>>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 const SYNTAX_ENTRY_WHITESPACE: SyntaxEntry = SyntaxEntry {
@@ -3277,23 +3385,36 @@ const SYNTAX_ENTRY_WHITESPACE: SyntaxEntry = SyntaxEntry {
 /// one until a char-table write bumps the tick — are a single array index.
 fn flat_ascii_syntax_entry(table: &SyntaxTable, cp: u8) -> SyntaxEntry {
     debug_assert!(cp < 128);
-    let key = (
-        table.chartable.bits(),
-        crate::emacs_core::chartable::char_table_write_tick(),
-    );
-    if SYNTAX_FLAT_ASCII_ENTRY_CACHE.with(|c| c.get()) != Some(key) {
-        refill_flat_ascii_syntax_entry_cache(table, key);
+    let bits = table.chartable.bits();
+    let tick = crate::emacs_core::chartable::char_table_write_tick();
+    let cached = SYNTAX_FLAT_ASCII_ENTRY_CACHE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let cache =
+            slot.get_or_insert_with(|| Box::new(FlatAsciiCache::new(SYNTAX_ENTRY_WHITESPACE)));
+        let hit = cache.lookup(bits, tick);
+        hit.map(|hit| cache.entries[hit][cp as usize])
+    });
+    match cached {
+        Some(entry) => entry,
+        None => refill_flat_ascii_syntax_entry_cache(table, bits, cp),
     }
-    SYNTAX_FLAT_ASCII_ENTRY_ENTRIES.with(|e| e.borrow()[cp as usize])
 }
 
 // Keep a cache fill's array construction and error cleanup off cached reads.
 #[cold]
 #[inline(never)]
-fn refill_flat_ascii_syntax_entry_cache(table: &SyntaxTable, key: (usize, u64)) {
+fn refill_flat_ascii_syntax_entry_cache(table: &SyntaxTable, bits: usize, cp: u8) -> SyntaxEntry {
     let entries = flat_ascii_syntax_entries(table);
-    SYNTAX_FLAT_ASCII_ENTRY_ENTRIES.with(|e| *e.borrow_mut() = entries);
-    SYNTAX_FLAT_ASCII_ENTRY_CACHE.with(|c| c.set(Some(key)));
+    // The fill may have materialized the standard table (a char-table
+    // allocation, hence a tick bump); key the entry on the tick it is valid at.
+    let tick = crate::emacs_core::chartable::char_table_write_tick();
+    SYNTAX_FLAT_ASCII_ENTRY_CACHE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let cache =
+            slot.get_or_insert_with(|| Box::new(FlatAsciiCache::new(SYNTAX_ENTRY_WHITESPACE)));
+        let hit = cache.insert(bits, tick, entries);
+        cache.entries[hit][cp as usize]
+    })
 }
 
 // Keep cold standard-table initialization from outlining this scalar lookup
@@ -8148,12 +8269,8 @@ pub use symbol_policy::*;
 /// objects are reset by `reset_syntax_thread_locals`).
 #[doc(hidden)]
 pub fn reset_carrier_tls() {
-    SYNTAX_FLAT_ASCII_CACHE.with(|slot| slot.set(None));
-    SYNTAX_FLAT_ASCII_ENTRIES
-        .with(|entries| *entries.borrow_mut() = [ParseSyntaxEntry::WHITESPACE; 128]);
-    SYNTAX_FLAT_ASCII_ENTRY_CACHE.with(|slot| slot.set(None));
-    SYNTAX_FLAT_ASCII_ENTRY_ENTRIES
-        .with(|entries| *entries.borrow_mut() = [SYNTAX_ENTRY_WHITESPACE; 128]);
+    SYNTAX_FLAT_ASCII_CACHE.with(|slot| *slot.borrow_mut() = None);
+    SYNTAX_FLAT_ASCII_ENTRY_CACHE.with(|slot| *slot.borrow_mut() = None);
 }
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.
@@ -8170,34 +8287,39 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
         SYNTAX_CODE_OBJECTS.with(|slot| slot.borrow().is_some() as u64),
     );
     neovm_value::tls_fingerprint::mix(h, SYNTAX_CODE_OBJECTS_HEAP.with(|slot| slot.get() as u64));
+    // A cleared cache is `None`, exactly like a fresh thread's, so a parked
+    // carrier's fingerprint matches.
     neovm_value::tls_fingerprint::mix(
         h,
-        SYNTAX_FLAT_ASCII_CACHE.with(|slot| slot.get().is_some() as u64),
-    );
-    neovm_value::tls_fingerprint::mix(
-        h,
-        SYNTAX_FLAT_ASCII_ENTRIES.with(|slot| {
-            let entries = slot.borrow();
-            let mut x = 0u64;
-            for (i, e) in entries.iter().enumerate() {
-                x ^= ((e.class as u8 as u64) << (i % 8)) ^ ((e.flags.bits() as u64) << (8 + i % 8));
+        SYNTAX_FLAT_ASCII_CACHE.with(|slot| {
+            let slot = slot.borrow();
+            let Some(cache) = slot.as_ref() else {
+                return 0;
+            };
+            let mut x = cache.len as u64;
+            for pos in 0..cache.len {
+                for (i, e) in cache.entries[cache.order[pos]].iter().enumerate() {
+                    x ^= ((e.class as u8 as u64) << (i % 8))
+                        ^ ((e.flags.bits() as u64) << (8 + i % 8));
+                }
             }
             x
         }),
     );
     neovm_value::tls_fingerprint::mix(
         h,
-        SYNTAX_FLAT_ASCII_ENTRY_CACHE.with(|slot| slot.get().is_some() as u64),
-    );
-    neovm_value::tls_fingerprint::mix(
-        h,
-        SYNTAX_FLAT_ASCII_ENTRY_ENTRIES.with(|slot| {
-            let entries = slot.borrow();
-            let mut x = 0u64;
-            for (i, e) in entries.iter().enumerate() {
-                x ^= ((e.class as u8 as u64) << (i % 8))
-                    ^ ((e.matching_char.map(|c| c as u64).unwrap_or(0)) << (8 + i % 8))
-                    ^ ((e.flags.bits() as u64) << (16 + i % 8));
+        SYNTAX_FLAT_ASCII_ENTRY_CACHE.with(|slot| {
+            let slot = slot.borrow();
+            let Some(cache) = slot.as_ref() else {
+                return 0;
+            };
+            let mut x = cache.len as u64;
+            for pos in 0..cache.len {
+                for (i, e) in cache.entries[cache.order[pos]].iter().enumerate() {
+                    x ^= ((e.class as u8 as u64) << (i % 8))
+                        ^ ((e.matching_char.map(|c| c as u64).unwrap_or(0)) << (8 + i % 8))
+                        ^ ((e.flags.bits() as u64) << (16 + i % 8));
+                }
             }
             x
         }),
