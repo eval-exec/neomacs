@@ -25,11 +25,14 @@ impl Drop for ObservedMode {
 }
 
 fn cached_cell(context: &Context, name: &str, local: bool) -> Value {
-    let symbol = context.obarray().get_by_id(intern(name)).expect("symbol");
-    assert_eq!(symbol.redirect(), SymbolRedirect::Localized);
-    // SAFETY: the localized symbol retains its BLV and the fixture loaded
-    // this buffer's actual cache, without changing any production fields.
-    let blv = unsafe { &*symbol.localized_blv().expect("localized").as_ptr() };
+    let id = intern(name);
+    assert_eq!(
+        context.obarray().get_by_id(id).expect("symbol").redirect(),
+        SymbolRedirect::Localized
+    );
+    // Obarray::blv is the public reader of this symbol's BLV record. The
+    // fixture loaded this buffer's actual cache; nothing here writes it.
+    let blv = context.obarray().blv(id).expect("localized");
     assert_eq!(blv.found, local);
     if !local {
         assert_eq!(blv.valcell.get(), blv.defcell.get());

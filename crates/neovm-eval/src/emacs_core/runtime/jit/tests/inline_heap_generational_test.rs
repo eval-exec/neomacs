@@ -372,13 +372,19 @@ fn blv_fixture(local: bool) -> Context {
 }
 
 fn blv(context: &Context) -> *mut LispBufferLocalValue {
-    let symbol = context
-        .obarray()
-        .get_by_id(intern("u34-inline-blv"))
-        .expect("BLV symbol");
-    assert_eq!(symbol.redirect(), SymbolRedirect::Localized);
-    // SAFETY: the checked localized symbol owns this record for its life.
-    symbol.localized_blv().expect("localized").as_ptr()
+    let id = intern("u34-inline-blv");
+    assert_eq!(
+        context
+            .obarray()
+            .get_by_id(id)
+            .expect("BLV symbol")
+            .redirect(),
+        SymbolRedirect::Localized
+    );
+    // Obarray::blv names the same record. The obarray owns it for the
+    // context's life, so the pointer stays valid after this borrow ends.
+    let record = context.obarray().blv(id).expect("localized");
+    std::ptr::from_ref(record).cast_mut()
 }
 
 fn blv_cell(context: &Context, local: bool) -> Value {

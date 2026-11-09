@@ -21,14 +21,18 @@ impl Drop for ObservedMode {
 }
 
 fn loaded_local(context: &Context, name: &str) -> Value {
-    let symbol = context
-        .obarray()
-        .get_by_id(intern(name))
-        .expect("localized symbol");
-    assert_eq!(symbol.redirect(), SymbolRedirect::Localized);
-    // SAFETY: the checked symbol retains its BLV; fixture lookup loaded this
-    // buffer's actual local pair, without replacing any production fields.
-    let blv = unsafe { &*symbol.localized_blv().expect("localized").as_ptr() };
+    let id = intern(name);
+    assert_eq!(
+        context
+            .obarray()
+            .get_by_id(id)
+            .expect("localized symbol")
+            .redirect(),
+        SymbolRedirect::Localized
+    );
+    // Obarray::blv is the public reader of this symbol's BLV record. Fixture
+    // lookup loaded this buffer's actual local pair; nothing here writes it.
+    let blv = context.obarray().blv(id).expect("localized");
     assert!(blv.found);
     blv.valcell.get()
 }

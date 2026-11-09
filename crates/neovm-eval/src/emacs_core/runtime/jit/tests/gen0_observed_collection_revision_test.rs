@@ -270,25 +270,28 @@ fn check_mapped_blv_binding() {
         .obarray()
         .symbol_value_copied("fx1-mapped-default-owner")
         .expect("mapped owner root");
-    let symbol = context
-        .obarray()
-        .get_by_id(intern("u34-inline-blv"))
-        .expect("dumped BLV");
+    let id = intern("u34-inline-blv");
     assert_eq!(
-        symbol.redirect(),
+        context
+            .obarray()
+            .get_by_id(id)
+            .expect("dumped BLV")
+            .redirect(),
         neovm_value::symbol::SymbolRedirect::Localized
     );
     // The image reconstructs ordinary BLV records with fresh defcells. Install
     // the same coherent (SYMBOL . DEFAULT) pair retained explicitly in this
     // image, so the remembered mapped-cell proof is exercised rather than
     // silently testing a newly allocated owner outside the dump window.
-    // SAFETY: this exclusive Context owns the checked BLV record; both cells
-    // are live and have identical symbol/default contents.
-    let blv = unsafe { &mut *symbol.localized_blv().expect("localized").as_ptr() };
-    if blv.valcell.get() == blv.defcell.get() {
-        blv.valcell.store_atomic(owner);
+    // Obarray::blv is the public reader of that record. store_atomic takes a
+    // shared cell, so the install does not need a mutable borrow.
+    {
+        let blv = context.obarray().blv(id).expect("localized");
+        if blv.valcell.get() == blv.defcell.get() {
+            blv.valcell.store_atomic(owner);
+        }
+        blv.defcell.store_atomic(owner);
     }
-    blv.defcell.store_atomic(owner);
     assert!(
         context
             .tagged_heap
