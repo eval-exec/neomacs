@@ -1677,6 +1677,19 @@ impl CompiledLeaf {
         match status {
             STATUS_OK => NativeRun::Ok(out as usize),
             STATUS_SIGNAL => NativeRun::Signal,
+            // The entry stack guard fired before the body ran: no side effect
+            // and no frame of this body exists, so rerun-from-start is sound
+            // even for a side-effecting body -- the `_` arm's defensive assert
+            // below does not apply. The caller re-runs the callee on the
+            // Tier-0 interpreter, whose probes grow stacker segments; the
+            // bytecode-stack accounting then raises GNU's error at GNU's
+            // depth, whatever the OS stack limit. This is the guarded way into
+            // a framed (call_spec_framed_run / call_premarshaled) leaf; a raw
+            // direct entry handles the same status in `direct_call_cold`.
+            STATUS_STACK_FALLBACK => {
+                self.obs.note_deopt_rerun();
+                NativeRun::Deopt
+            }
             _ => {
                 self.obs.note_deopt_rerun();
                 // STATUS_DEOPT = rerun-from-start. A side-effecting body must never

@@ -15,9 +15,11 @@
 //! the stack pointer would add a move. A register-ABI body (`reg_abi`) has
 //! no `out` word and compares its stack pointer. The cold side calls
 //! `neovm_jit_stack_check`, which measures the real stack: exhausted, the
-//! error is stashed and the leaf returns `STATUS_SIGNAL`; otherwise the
-//! limit names another segment (or `out` is not on this stack), and the
-//! leaf runs.
+//! leaf returns `STATUS_STACK_FALLBACK` and its caller re-runs the call on
+//! the Tier-0 interpreter, whose stacker probes grow fresh segments -- the
+//! bytecode-stack accounting, not the OS stack limit, decides where GNU's
+//! error is raised. Otherwise the limit names another segment (or `out` is
+//! not on this stack), and the leaf runs.
 
 use super::lowering::RtCtx;
 use super::{LeafAbi, Shim};
@@ -72,13 +74,14 @@ pub(crate) fn ctx_stack_scratch_offset() -> i32 {
 ///
 /// The memory ABI compares its `out` pointer, a word of the calling frame;
 /// the register ABI has none and compares the stack pointer, a little lower
-/// (a slightly earlier signal, never a later one). Below the limit the cold
+/// (a slightly earlier fallback, never a later one). Below the limit the cold
 /// side parks the parameters after `vmctx` in the Context's scratch words,
 /// calls `neovm_jit_stack_check`, and on its go-ahead (the vmctx back)
 /// reloads them into the body, so no value lives across the call and the
-/// hot path keeps the entry registers; on null (the error stashed) it
-/// returns `STATUS_SIGNAL`. The shim runs no Lisp and no compiled code, so
-/// nothing else writes the scratch words meanwhile.
+/// hot path keeps the entry registers; on null it returns
+/// `STATUS_STACK_FALLBACK` (nothing is stashed: the call is re-run on the
+/// interpreter). The shim runs no Lisp and no compiled code, so nothing
+/// else writes the scratch words meanwhile.
 pub(crate) fn emit_entry_stack_guard(
     fb: &mut FunctionBuilder,
     rt: &RtCtx,
@@ -126,7 +129,7 @@ pub(crate) fn emit_entry_stack_guard(
     fb.ins().brif(resumed_ctx, resume, &[], fail, &[]);
     fb.switch_to_block(fail);
     fb.seal_block(fail);
-    super::reg_abi::emit_leaf_return(fb, abi, None, None, super::STATUS_SIGNAL);
+    super::reg_abi::emit_leaf_return(fb, abi, None, None, super::STATUS_STACK_FALLBACK);
     fb.switch_to_block(resume);
     fb.seal_block(resume);
     let mut cold: Vec<BlockArg> = vec![BlockArg::Value(resumed_ctx)];

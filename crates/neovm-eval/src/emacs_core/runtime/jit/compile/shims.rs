@@ -117,34 +117,29 @@ pub unsafe extern "C" fn neovm_jit_rootwin_grow(ctx: *mut u8, need: i64) {
 
 /// Cold side of a compiled leaf's entry stack guard (`compile::stack_guard`):
 /// the leaf's caller-owned result slot sits below `Context::jit_stack_limit`.
-/// Measure the real stack: exhausted, stash GNU's `setup_frame` error
-/// (src/bytecode.c:514-515, raised with the callee's frame already recorded,
-/// as here) and answer null, so the leaf returns [`STATUS_SIGNAL`];
-/// otherwise the limit names another stack segment than the one running (or
-/// the slot is not on this stack) and the answer is `ctx` itself, with which
-/// the leaf resumes (it parked its other entry parameters in the Context).
+/// Measure the real stack: exhausted, answer null so the leaf returns
+/// [`STATUS_STACK_FALLBACK`] and its caller re-runs the call on the Tier-0
+/// interpreter; GNU's `Bytecode stack overflow` is raised there, at the
+/// bytecode-stack budget's depth, not at this OS stack's depth (GNU keeps
+/// its frames on `bc->stack`, src/bytecode.c:337, and its native frames do
+/// not grow per Lisp level). Otherwise the limit names another stack segment
+/// than the one running (or the slot is not on this stack) and the answer is
+/// `ctx` itself, with which the leaf resumes (it parked its other entry
+/// parameters in the Context).
 ///
-/// Runs no Lisp and no compiled code: only a heap string and a signal are
-/// allocated, which cannot collect.
+/// Runs no Lisp and no compiled code: nothing is allocated, and it cannot
+/// collect.
 ///
 /// # Safety
 /// The vmctx contract (see `neovm_jit_call`).
 #[unsafe(no_mangle)]
 #[cold]
 pub unsafe extern "C" fn neovm_jit_stack_check(ctx: *mut u8) -> i64 {
-    if !crate::emacs_core::eval::native_stack::native_stack_exhausted() {
-        return ctx as i64;
+    if crate::emacs_core::eval::native_stack::native_stack_exhausted() {
+        0
+    } else {
+        ctx as i64
     }
-    // Construct the signal on a fresh stacker segment: this shim runs with
-    // less than the red zone left, and the error path's own frames must not
-    // turn the Lisp error into a second overflow (ruling 1, 2026-11-08).
-    let flow = stacker::maybe_grow(
-        crate::emacs_core::eval::native_stack::JIT_STACK_RED_ZONE,
-        crate::emacs_core::eval::native_stack::JIT_SLOW_PATH_SEGMENT,
-        || signal("error", vec![Value::string("Bytecode stack overflow")]),
-    );
-    stash_pending_flow(flow);
-    0
 }
 
 std::thread_local! {
@@ -170,6 +165,13 @@ pub const STATUS_SIGNAL: i64 = 2;
 /// resumes the Tier-0 interpreter mid-function via `Vm::run_resumed_frame`.
 /// Unlike [`STATUS_DEOPT`], this is sound even after side effects ran.
 pub const STATUS_DEOPT_AT: i64 = 3;
+/// Native return code: a compiled leaf's entry stack guard measured the
+/// native stack below its red zone. The callee did NOT run; the caller must
+/// re-run this call on the Tier-0 interpreter, whose probes grow stacker
+/// segments, so the bytecode-stack accounting -- not the OS stack limit --
+/// decides where GNU's `Bytecode stack overflow` is raised. Never crosses
+/// the leaf entry ABI as a signal: no `Flow` is stashed for it.
+pub(crate) const STATUS_STACK_FALLBACK: i64 = 5;
 
 /// Native return code (subr spec shims only, never crosses the leaf entry
 /// ABI): the speculated-SUBR site could not run its direct fast path (binding

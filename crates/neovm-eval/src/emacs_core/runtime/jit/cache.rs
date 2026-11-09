@@ -3604,7 +3604,18 @@ pub(crate) fn direct_call_cold(
     leaf: &CompiledLeaf,
     status: i64,
 ) -> NativeCallOutcome {
-    use super::compile::{STATUS_DEOPT_AT, STATUS_SIGNAL, shim_panic_pending};
+    use super::compile::{
+        STATUS_DEOPT_AT, STATUS_SIGNAL, STATUS_STACK_FALLBACK, shim_panic_pending,
+    };
+    // The leaf's entry stack guard fired before the body ran: the callee did
+    // nothing, so re-running the call on the interpreter is a fresh entry,
+    // not a rerun of side effects. The caller's Fallback arm runs
+    // `interp_fallback_native` on a stack whose probes grow segments; the
+    // bytecode-stack accounting then raises GNU's error at GNU's depth.
+    if status == STATUS_STACK_FALLBACK {
+        leaf.obs.note_deopt_rerun();
+        return NativeCallOutcome::Fallback;
+    }
     if status == STATUS_SIGNAL {
         leaf.obs.note_signal();
         // A panic one of the callee's shims contained: leave its marker for

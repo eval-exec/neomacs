@@ -268,11 +268,13 @@ pub(super) fn build_selected_leaf_fn<S: LeafSink>(
                 .expect("profiling refs");
             t2_profile::emit_entry_countdown(&mut fb, ptr_ty, refs, t2);
         }
-        // A function entry that can re-enter Lisp signals "Bytecode stack
-        // overflow" before the native stack runs out (`stack_guard`); the
-        // rest of the entry code then runs in the block after the guard, on
-        // its parameters. An OSR entry is not a recursion level: the
-        // interpreter frame it continues was entered through a probed path.
+        // A function entry that can re-enter Lisp hands the call to the
+        // interpreter (`STATUS_STACK_FALLBACK`) when the native stack runs
+        // out (`stack_guard`); the bytecode-stack accounting then raises
+        // GNU's error at GNU's depth. The rest of the entry code runs in
+        // the block after the guard, on its parameters. An OSR entry is not
+        // a recursion level: the interpreter frame it continues was entered
+        // through a probed path.
         let entry_params = match rt.as_ref() {
             Some(rt) if osr_pc.is_none() && stack_guard::body_may_reenter_lisp(ops) => {
                 stack_guard::emit_entry_stack_guard(&mut fb, rt, abi, &entry_params)

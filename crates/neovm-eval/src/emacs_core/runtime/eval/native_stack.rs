@@ -16,9 +16,15 @@
 //! against it in its entry block (`jit::compile::stack_guard`) -- one compare
 //! with a memory operand and a branch, since `out` is a word of the calling
 //! frame -- and below it calls `neovm_jit_stack_check`, which measures the
-//! real stack ([`native_stack_exhausted`]) and either signals GNU's error or
-//! lets the leaf run (a stale limit: the code runs on a stack segment below
-//! the one the limit names).
+//! real stack ([`native_stack_exhausted`]).  Running out of native stack
+//! answers `STATUS_STACK_FALLBACK`: the call is re-run on the Tier-0
+//! interpreter, whose probes grow fresh stacker segments, so the
+//! bytecode-stack accounting -- not the OS stack limit -- decides where
+//! GNU's error is raised.  (GNU's frames live on `bc->stack`,
+//! src/bytecode.c:337, and its native stack does not grow per Lisp level, so
+//! a small hard `RLIMIT_STACK` must not shorten the recursion.)  A limit
+//! naming another segment than the one running lets the leaf run (the code
+//! runs on a stack segment below the one the limit names).
 //!
 //! The limit follows the stack segment the thread runs on:
 //! [`Context::setup_thread_locals`] sets it for the thread's own stack, and
@@ -46,11 +52,6 @@ use super::Context;
 /// Tier-0 interpreter's and tree walker's own red zone, whose probes switch
 /// segments only below 128 KiB.
 pub(crate) const JIT_STACK_RED_ZONE: usize = 1024 * 1024;
-
-/// Stack segment for the guard's error path: the cold side runs the signal
-/// construction on a fresh segment so a thin remaining margin cannot turn
-/// the Lisp error into a native stack overflow.
-pub(crate) const JIT_SLOW_PATH_SEGMENT: usize = 2 * 1024 * 1024;
 
 /// Per-Context adaptation of the sampled native-stack probes.
 ///
