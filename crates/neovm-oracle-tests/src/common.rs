@@ -1576,6 +1576,63 @@ pub(crate) fn assert_oracle_batch_stderr_parity_expect(form: &str, expected: exp
     }
 }
 
+/// Batch stderr plus the printed return value, both pinned to GNU.
+///
+/// The payload is the filtered stderr, then a line `VALUE OK …` from the
+/// marked outcome. An empty stderr is only that value line.
+pub(crate) fn assert_oracle_batch_stderr_and_value_expect(
+    form: &str,
+    expected: expect_test::Expect,
+) {
+    ensure_nonempty_form(form).expect("form should not be empty");
+    let eval_program = EvalProgram::Normalized;
+    let observe = |engine: OracleEngine| {
+        let sandbox = oracle_sandbox(form, &[], &project_lisp_dir());
+        let roots = sandbox.stderr_path_roots();
+        let output = spawn_batch_editor(&sandbox, eval_program, engine).expect("editor should run");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let evaluation =
+            CapturedEvaluation::from_marked_streams(&stdout, &stderr, ORACLE_OUTCOME_MARKER)
+                .unwrap_or_else(|error| {
+                    panic!("invalid marked outcome: {error}\nstdout:\n{stdout}\nstderr:\n{stderr}")
+                });
+        assert!(
+            evaluation.outcome().is_value(),
+            "form signalled: {:?}\nstderr:\n{stderr}",
+            evaluation.outcome()
+        );
+        let stderr_text = product_batch_stderr(&stderr, &roots);
+        let payload = if stderr_text.is_empty() {
+            format!("VALUE {}", evaluation.outcome())
+        } else {
+            format!("{stderr_text}\nVALUE {}", evaluation.outcome())
+        };
+        inline_debug_text(&payload)
+    };
+    match OracleMode::from_env() {
+        OracleMode::Snapshot => expected.assert_eq(&observe(OracleEngine::Neomacs)),
+        OracleMode::Verify => {
+            let oracle = observe(OracleEngine::Gnu);
+            let neovm = observe(OracleEngine::Neomacs);
+            expected.assert_eq(&oracle);
+            assert_eq!(
+                neovm, oracle,
+                "oracle stderr/value mismatch for form: {form}"
+            );
+        }
+        OracleMode::Refresh => expected.assert_eq(&observe(OracleEngine::Gnu)),
+        OracleMode::Live => {
+            let oracle = observe(OracleEngine::Gnu);
+            let neovm = observe(OracleEngine::Neomacs);
+            assert_eq!(
+                neovm, oracle,
+                "oracle stderr/value mismatch for form: {form}"
+            );
+        }
+    }
+}
+
 /// A write-error auto-save must not print BEL on batch stdout.
 ///
 /// GNU `auto_save_error` calls `ring_bell` directly (`fileio.c:6239`,

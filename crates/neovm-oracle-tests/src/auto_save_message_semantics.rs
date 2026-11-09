@@ -11,7 +11,8 @@
 //! lines to stderr (`xdisp.c:12591`).
 
 use crate::common::{
-    assert_oracle_batch_stderr_parity_expect, assert_oracle_batch_stdout_has_no_bel,
+    assert_oracle_batch_stderr_and_value_expect, assert_oracle_batch_stderr_parity_expect,
+    assert_oracle_batch_stdout_has_no_bel,
 };
 
 fn saved_buffer(name: &str, file: &str) -> String {
@@ -86,4 +87,72 @@ fn do_auto_save_error_writes_no_bel_on_batch_stdout() {
     (setq buffer-auto-save-file-name dir))
   (do-auto-save))"#;
     assert_oracle_batch_stdout_has_no_bel(form);
+}
+
+/// A filename buffer whose text is under 3/4 of a `buffer-saved-size` above
+/// 5000. Pinned GNU 31.1: `4*(Z-BEG) < 3*save_length` with size 100 and
+/// `save_length` 8000.
+fn shrunk_filename_buffer(name: &str, saved: i64) -> String {
+    format!(
+        r##"(let ((buf (generate-new-buffer "{name}")))
+  (with-current-buffer buf
+    (setq buffer-file-name (expand-file-name "{name}.txt" temporary-file-directory))
+    (insert (make-string 100 ?x))
+    (setq buffer-saved-size {saved})
+    (setq buffer-auto-save-file-name
+          (expand-file-name "#{name}#" temporary-file-directory)))
+  buf)"##
+    )
+}
+
+#[test]
+fn do_auto_save_shrink_disables_and_sets_save_length_to_minus_one() {
+    // Live GNU: one stderr line, `buffer-saved-size` -1, auto-save file not written.
+    let form = format!(
+        "(progn {} (do-auto-save) (with-current-buffer (get-buffer \"as-shrink\") buffer-saved-size))",
+        shrunk_filename_buffer("as-shrink", 8000)
+    );
+    assert_oracle_batch_stderr_and_value_expect(
+        &form,
+        expect_test::expect![[
+            r#""Buffer as-shrink has shrunk a lot; auto save disabled in that buffer until next real save\nVALUE OK -1""#
+        ]],
+    );
+}
+
+#[test]
+fn do_auto_save_no_message_does_not_take_the_shrink_branch() {
+    // The `&& NILP (no_message)` term skips the whole shrink arm
+    // (`fileio.c:6463`). Live GNU then saves and sets `save_length` to
+    // Z-BEG (100), not -1, and prints nothing.
+    let form = format!(
+        "(progn {} (do-auto-save t) (with-current-buffer (get-buffer \"as-nomsg\") buffer-saved-size))",
+        shrunk_filename_buffer("as-nomsg", 8000)
+    );
+    assert_oracle_batch_stderr_and_value_expect(&form, expect_test::expect![[r#""VALUE OK 100""#]]);
+}
+
+#[test]
+fn do_auto_save_include_big_deletions_does_not_disable() {
+    let form = format!(
+        "(progn (setq auto-save-include-big-deletions t) {} (do-auto-save) (with-current-buffer (get-buffer \"as-include\") buffer-saved-size))",
+        shrunk_filename_buffer("as-include", 8000)
+    );
+    assert_oracle_batch_stderr_and_value_expect(
+        &form,
+        expect_test::expect![[r#""Auto-saving...\nAuto-saving...done\nVALUE OK 100""#]],
+    );
+}
+
+#[test]
+fn do_auto_save_save_length_at_most_5000_does_not_disable() {
+    // `save_length` 5000 is not `> 5000` (`fileio.c:6458`). Live GNU saves.
+    let form = format!(
+        "(progn {} (do-auto-save) (with-current-buffer (get-buffer \"as-small\") buffer-saved-size))",
+        shrunk_filename_buffer("as-small", 5000)
+    );
+    assert_oracle_batch_stderr_and_value_expect(
+        &form,
+        expect_test::expect![[r#""Auto-saving...\nAuto-saving...done\nVALUE OK 100""#]],
+    );
 }

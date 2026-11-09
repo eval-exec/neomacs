@@ -7514,6 +7514,55 @@ fn auto_save_say(eval: &mut neovm_eval::emacs_core::eval::Context, text: &str) {
     let _ = eval.funcall_general(Value::symbol("message"), vec![Value::string(text)]);
 }
 
+fn read_minibuffer_auto_raise(eval: &mut Context) -> Value {
+    eval.visible_runtime_variable_value_by_id(intern("minibuffer-auto-raise"))
+        .ok()
+        .flatten()
+        .unwrap_or(Value::NIL)
+}
+
+fn set_minibuffer_auto_raise(eval: &mut Context, value: Value) -> Result<(), Flow> {
+    eval.set_internal_after_watchers(
+        intern("minibuffer-auto-raise"),
+        value,
+        neovm_value::symbol::SetInternalBind::Set,
+    )
+}
+
+/// GNU's shrink arm (`fileio.c:6464-6474`): restore `minibuffer_auto_raise`
+/// for the message, then force it off, set `save_length` to -1, and
+/// `Fsleep_for` 1. The caller's post-hook value is put back before return
+/// because this function has no `do_auto_save_unwind` specpdl entry.
+fn auto_save_disable_for_shrink(
+    eval: &mut Context,
+    buf_id: neovm_edit::buffer::BufferId,
+    buffer_name: Value,
+    raise_at_entry: Value,
+    raise_after_hook: Value,
+) -> Result<(), Flow> {
+    set_minibuffer_auto_raise(eval, raise_at_entry)?;
+    let said = eval.funcall_general(
+        Value::symbol("message"),
+        vec![
+            Value::string(
+                "Buffer %s has shrunk a lot; auto save disabled in that buffer until next real save",
+            ),
+            buffer_name,
+        ],
+    );
+    if let Err(err) = said {
+        set_minibuffer_auto_raise(eval, raise_after_hook)?;
+        return Err(err);
+    }
+    set_minibuffer_auto_raise(eval, Value::NIL)?;
+    if let Some(buf) = eval.edit.buffers.get_mut(buf_id) {
+        buf.set_buffer_local("buffer-saved-size", Value::fixnum(-1));
+    }
+    let slept = eval.funcall_general(Value::symbol("sleep-for"), vec![Value::fixnum(1)]);
+    set_minibuffer_auto_raise(eval, raise_after_hook)?;
+    slept.map(|_| ())
+}
+
 /// GNU `ring_bell` (src/terminal.c:56-79), the direct call `auto_save_error`
 /// makes (src/fileio.c:6239).
 ///
@@ -7659,7 +7708,12 @@ pub fn builtin_do_auto_save(
     // `auto-save-hook` is a fixed GNU DEFSYM; this save path runs per
     // auto-save and previously re-interned the spelling.
     static AUTO_SAVE_HOOK: WellKnown = WellKnown::AutoSaveHook;
+    // GNU snapshots `minibuffer_auto_raise` before the hook (`fileio.c:6340`)
+    // and again after it, for the unwind (`:6384`). The shrink message
+    // temporarily restores the pre-hook value (`:6466`).
+    let raise_at_entry = read_minibuffer_auto_raise(eval);
     eval.safe_run_hook_if_bound(AUTO_SAVE_HOOK.id())?;
+    let raise_after_hook = read_minibuffer_auto_raise(eval);
 
     let auto_save_visited = eval
         .builtin_var_value_by_name("auto-save-visited-file-name")
@@ -7674,7 +7728,7 @@ pub fn builtin_do_auto_save(
 
     for buf_id in buffer_ids {
         // Gather info from the buffer (immutable borrow)
-        let (auto_save_name, file_name) = {
+        let (auto_save_name, file_name, content_len, buffer_name, saved_size) = {
             let Some(buf) = eval.edit.buffers.get(buf_id) else {
                 continue;
             };
@@ -7689,12 +7743,13 @@ pub fn builtin_do_auto_save(
                 continue;
             }
 
-            // Check buffer-saved-size: if negative, auto-save is disabled for
-            // this buffer
-            if let Some(saved_size_val) = buf.get_buffer_local("buffer-saved-size")
-                && let Some(n) = saved_size_val.as_fixnum()
-                && n < 0
-            {
+            // GNU skips the buffer unless `save_length` is a fixnum >= 0
+            // (`fileio.c:6436-6437`). A negative value is the shrink-a-lot
+            // disable, cleared only by a real save.
+            let saved_size = buf
+                .get_buffer_local("buffer-saved-size")
+                .and_then(|value| value.as_fixnum());
+            if saved_size.is_some_and(|n| n < 0) {
                 continue;
             }
 
@@ -7722,7 +7777,13 @@ pub fn builtin_do_auto_save(
                 continue;
             }
             let visit_name = buf.file_name_lisp_string().cloned();
-            (auto_name, visit_name)
+            (
+                auto_name,
+                visit_name,
+                buf.total_emacs_byte_len().get() as i64,
+                buf.name_value(),
+                saved_size,
+            )
         };
 
         // Determine which file to write to
@@ -7739,6 +7800,30 @@ pub fn builtin_do_auto_save(
             // here (no visited file), and GNU skips that buffer too.
             continue;
         };
+
+        // Shrink-a-lot (`fileio.c:6450-6474`) runs before the progress
+        // line and does not count as a save. `4*(Z-BEG) < 3*save_length`
+        // is `(growth_factor) * size < (growth_factor - 1) * save_length`
+        // with `growth_factor = 4`. A non-nil NO-MESSAGE skips the whole
+        // conjunction, so the save proceeds and `save_length` is not -1.
+        let include_big_deletions = eval
+            .builtin_var_value_by_name("auto-save-include-big-deletions")
+            .is_some_and(|value| value.is_truthy());
+        let shrunk = !include_big_deletions
+            && saved_size.is_some_and(|saved| saved > 5000)
+            && saved_size.is_some_and(|saved| (content_len as i128) * 4 < (saved as i128) * 3)
+            && file_name.is_some()
+            && !no_message;
+        if shrunk {
+            auto_save_disable_for_shrink(
+                eval,
+                buf_id,
+                buffer_name,
+                raise_at_entry,
+                raise_after_hook,
+            )?;
+            continue;
+        }
 
         // GNU makes the buffer current, runs `auto_save_1` under
         // `internal_condition_case (auto_save_1, Qt, auto_save_error)`, marks
