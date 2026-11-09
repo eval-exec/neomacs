@@ -791,7 +791,6 @@ pub fn collect_regex_gc_roots(
             // A publication preserves roots without advancing a collection stamp.
             activate_regex_thread_locals(heap_identity, collection_epoch, false);
         }
-        #[cfg(any(test, feature = "test-support"))]
         neovm_value::tagged::gc::CacheRootScan::Snapshot {
             collection_in_progress,
         } => {

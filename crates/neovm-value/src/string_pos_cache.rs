@@ -166,7 +166,6 @@ pub fn collect_string_pos_cache_gc_roots(
             // A publication preserves roots without advancing a collection stamp.
             activate_string_pos_cache(heap_identity, collection_epoch, false, false);
         }
-        #[cfg(any(test, feature = "test-support"))]
         crate::tagged::gc::CacheRootScan::Snapshot {
             collection_in_progress,
         } => {
