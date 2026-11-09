@@ -419,7 +419,7 @@ pub struct BufferTextStorage {
     single_byte_span: Cell<SingleBytePositionSpan>,
     /// Internal (non-Lisp-visible) anchor positions populated on long scans.
     /// Invalidated wholesale when the content epoch advances.
-    pub anchor_cache: RefCell<Vec<TextPositionAnchor>>,
+    anchor_cache: RefCell<Vec<TextPositionAnchor>>,
     /// Content epoch at which the anchor_cache is valid.
     /// Mismatch triggers a wholesale clear on next read.
     anchor_cache_key: Cell<u64>,
@@ -651,16 +651,28 @@ pub struct BufferText {
 impl BufferText {
     /// Observe the live text storage in a read-only, scoped borrow.
     ///
-    /// The `RefCell` carrier stays private in both cfg arms, so this is the
-    /// only cross-crate route to its contents and it exposes no `borrow_mut`
-    /// path: the borrow is scoped to `observe` and the reference cannot
-    /// escape the call.
+    /// The `RefCell` carrier and every interior-mutability field of the
+    /// storage stay private in both cfg arms, so this view exposes no
+    /// `borrow_mut` route: the borrow is scoped to `observe`, the reference
+    /// cannot escape the call, and the only public field left on
+    /// `BufferTextStorage` is plain data (`content_epoch`).
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn with_storage_observe<R>(
         &self,
         observe: impl FnOnce(&BufferTextStorage) -> R,
     ) -> R {
         observe(&self.storage.borrow())
+    }
+
+    /// Snapshot the anchor cache's element count and allocated capacity.
+    ///
+    /// Observe-only: the cache is borrowed only for this call and the result
+    /// is `Copy`; no reference to the cache or its elements can escape.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn anchor_storage_snapshot(&self) -> (usize, usize) {
+        let storage = self.storage.borrow();
+        let anchors = storage.anchor_cache.borrow();
+        (anchors.len(), anchors.capacity())
     }
 }
 
