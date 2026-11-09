@@ -445,7 +445,13 @@ const MACRO_PRODUCTS: &[MacroProduct] = &[
     MacroProduct {
         file: "crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs",
         macro_name: "era_operations",
-        template_fingerprint: 0xd88e_8a25_caf0_cce2,
+        // PC11 re-derivation (R4 fixup, lead #652/#654): R4 converted the
+        // `symbol_table_admission_charge_for_test` method's cfg from bare
+        // `test` to `any(test, feature = "test-support")`, which changes the
+        // reviewed template's tokens.  The doc(hidden) products below are
+        // unchanged (that method is pub(crate), not a product); the pinned
+        // fingerprint is re-derived from the reviewed template.
+        template_fingerprint: 0xbded_6d03_3d28_96b4,
         params: &["era", "failure"],
         products: &[
             (
