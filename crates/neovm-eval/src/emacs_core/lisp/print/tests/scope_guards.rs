@@ -42,6 +42,7 @@ fn depth_and_traversal_guards_restore_prefix_after_rust_unwind() {
         object_stack: vec![13],
         world_sink_flushed: None,
         world_sink_touched: false,
+        world_active: None,
     };
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut depth = PrintDepthGuard::enter(&mut state);
