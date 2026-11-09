@@ -1533,6 +1533,113 @@ pub(crate) fn assert_oracle_parity_expect(form: &str, expected: expect_test::Exp
     assert_oracle_parity_expect_with_sandbox(form, expected, &sandbox, EvalProgram::Normalized);
 }
 
+/// A write-error auto-save must not print BEL on batch stdout.
+///
+/// GNU `auto_save_error` calls `ring_bell` directly (`fileio.c:6239`,
+/// `terminal.c:56-79`). Lisp `(ding)` would write BEL to stdout in batch.
+/// The stderr error line is the witness that the error path ran.
+pub(crate) fn assert_oracle_batch_stdout_has_no_bel(form: &str) {
+    ensure_nonempty_form(form).expect("form should not be empty");
+    let eval_program = EvalProgram::Normalized;
+    let observe = |engine: OracleEngine| {
+        let sandbox = oracle_sandbox(form, &[], &project_lisp_dir());
+        let output = spawn_batch_editor(&sandbox, eval_program, engine).expect("editor should run");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let evaluation =
+            CapturedEvaluation::from_marked_streams(&stdout, &stderr, ORACLE_OUTCOME_MARKER)
+                .unwrap_or_else(|error| {
+                    panic!("invalid marked outcome: {error}\nstdout:\n{stdout}\nstderr:\n{stderr}")
+                });
+        assert!(
+            evaluation.outcome().is_value(),
+            "form signalled: {:?}\nstderr:\n{stderr}",
+            evaluation.outcome()
+        );
+        assert!(
+            !output.stdout.contains(&0x07),
+            "BEL in batch stdout\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("Error (auto-save)"),
+            "error path did not warn\nstderr:\n{stderr}"
+        );
+        let text = stdout
+            .replace('\r', "")
+            .lines()
+            .filter(|line| !line.contains(ORACLE_OUTCOME_MARKER) && !line.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        inline_debug_text(&text)
+    };
+    match OracleMode::from_env() {
+        OracleMode::Snapshot => {
+            observe(OracleEngine::Neomacs);
+        }
+        OracleMode::Verify | OracleMode::Live => {
+            let oracle = observe(OracleEngine::Gnu);
+            let neovm = observe(OracleEngine::Neomacs);
+            assert_eq!(neovm, oracle, "oracle stdout mismatch for form: {form}");
+        }
+        OracleMode::Refresh => {
+            observe(OracleEngine::Gnu);
+        }
+    }
+}
+
+fn spawn_batch_editor(
+    sandbox: &OracleSandbox,
+    eval_program: EvalProgram,
+    engine: OracleEngine,
+) -> Result<std::process::Output, String> {
+    let (program, identity) = match engine {
+        OracleEngine::Gnu => {
+            let oracle = attested_oracle_emacs();
+            (
+                oracle.executable().to_path_buf(),
+                WindowSystemIdentity::Gnu(gnu_window_system(sandbox, oracle.executable())),
+            )
+        }
+        OracleEngine::Neomacs => (
+            PathBuf::from(neomacs_binary_path()),
+            WindowSystemIdentity::Neovm,
+        ),
+    };
+    let mut cmd = sandbox.pinned_command(&program);
+    sandbox.configure(&mut cmd);
+    cmd.env(OracleEngine::ENV, engine.as_env_value());
+    match engine {
+        OracleEngine::Gnu => {
+            cmd.env("EMACSNATIVELOADPATH", "/dev/null");
+            apply_virtual_memory_limit(&mut cmd, oracle_mem_limit_bytes());
+        }
+        OracleEngine::Neomacs => {
+            if let Some(mem_limit) = neomacs_binary_mem_limit_bytes() {
+                apply_virtual_memory_limit(&mut cmd, mem_limit);
+            }
+        }
+    }
+    eval_program.configure_command(&mut cmd, identity);
+    cmd.output()
+        .map_err(|error| format!("failed to run batch editor: {error}"))
+        .and_then(|output| {
+            if output.status.success() {
+                Ok(output)
+            } else {
+                Err(format!(
+                    "batch editor failed: status={}\nstdout:\n{}\nstderr:\n{}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr),
+                ))
+            }
+        })
+}
+
+fn inline_debug_text(text: &str) -> String {
+    format!("{:?}", text.replace('\0', "\\0"))
+}
+
 /// Pin a KNOWN divergence as an expected failure: `expected` is GNU's answer
 /// (written by `NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1`, never by hand), and
 /// the test passes while Neomacs still answers something else.

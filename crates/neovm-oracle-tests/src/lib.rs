@@ -21,6 +21,7 @@ mod ash_logand_logior_patterns;
 mod assoc;
 mod assq;
 mod atimer_debug_availability_semantics;
+mod auto_save_message_semantics;
 mod autoload_semantics;
 mod backquote;
 mod backtrace_frame_semantics;
