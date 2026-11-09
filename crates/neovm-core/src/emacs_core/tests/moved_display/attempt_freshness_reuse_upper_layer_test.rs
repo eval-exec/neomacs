@@ -141,7 +141,7 @@ fn same_buffer_attempt_keeps_gnu_static_across_fontifier_name_unintern() {
     let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
         .args([
             "--exact",
-            "emacs_core::tests::moved_display::attempt_freshness_reuse_upper_layer_test::same_buffer_fontifier_name_unintern_child",
+            "emacs_core::moved_display_tests::attempt_freshness_reuse_upper_layer_test::same_buffer_fontifier_name_unintern_child",
             "--test-threads",
             "1",
         ])
