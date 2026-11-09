@@ -56,22 +56,52 @@
 ;; t on a toolkit GUI frame (fileio.c:6556-6572, via use-dialog-box and
 ;; use-file-dialog).  Neomacs's backend has no native file-panel primitive, so
 ;; this is GNU's own Lisp arm for that case: the same name, signature and
-;; argument mapping (return contract differs, see MX-4), with minibuffer
-;; completion performing the prompt.  It lives
-;; here, the dump-safe preload (loadup.el:267), not in the GUI-runtime-only
-;; term/neo-win.el, so batch and TTY sessions expose the same surface GNU's
-;; dump does.  Because the caller may itself have been reached from
+;; argument mapping, with minibuffer completion performing the prompt.  It
+;; lives here, the dump-safe preload (loadup.el:267), not in the GUI-runtime-
+;; only term/neo-win.el, so batch and TTY sessions expose the same surface
+;; GNU's dump does.  Because the caller may itself have been reached from
 ;; `read-file-name', the inner call binds `use-file-dialog' to nil: once
 ;; `next-read-file-uses-dialog-p' follows GNU on GUI frames, the chooser must
 ;; not re-enter `x-file-dialog' through `read-file-name-default'.
+;;
+;; The return contract is GNU's, per dialog backend (MX-4):
+;;   - GTK (xfns.c:9665-9728): MUSTMATCH is cosmetic -- it only selects the
+;;     OPEN vs SAVE chooser and the accept-button label, and the user can
+;;     still enter a non-existing name (gtkutil.c:2634-2637); a cancelled,
+;;     closed, or empty-OK dialog yields NULL, which the DEFUN turns into
+;;     quit() (9721-9723, "Make Cancel equivalent to C-g").  A successful
+;;     result is the decoded absolute file name (9725-9727).
+;;   - NS (nsfns.m:1758-1883): a cancelled panel returns nil (1882), not a
+;;     quit.  MUSTMATCH selects the Save vs Open panel (1769) but adds no
+;;     explicit existence test; the panel itself only lets the user pick
+;;     existing entries.
+;;   - W32 (w32fns.c:8255-8542): MUSTMATCH becomes OFN_FILEMUSTEXIST and
+;;     OFN_PATHMUSTEXIST (8431-8438); a cancelled dialog ends in quit()
+;;     (8537-8539).
+;; GNU chooses the backend when it is built, so the choice is captured at
+;; dump time here: a run-time `system-type' read would follow a let-binding of
+;; that variable, which GNU's C bodies never consult.
+(defvar neomacs--x-file-dialog-surface
+  (cond ((eq system-type 'darwin) 'ns)
+        ((memq system-type '(windows-nt cygwin ms-dos)) 'w32)
+        (t 'gtk))
+  "Dialog contract `x-file-dialog' follows, fixed when the dump is built.
+GNU selects its file-dialog backend at build time, so rebinding
+`system-type' at run time must not change the contract.")
+
 (defun x-file-dialog (prompt dir &optional default-filename
                              mustmatch only-dir-p)
   "Read a file name; the Neomacs backend has no native file panel.
 PROMPT, DIR, DEFAULT-FILENAME, MUSTMATCH and ONLY-DIR-P have the same
 meaning as in GNU's `x-file-dialog'; minibuffer completion stands in for
 the toolkit dialog, with `use-file-dialog' bound to nil around it so the
-call cannot re-enter this function.  On a non-graphical frame (batch or
--nw) this signals the same error GNU's backend for this surface signals."
+call cannot re-enter this function.  The return contract follows the
+dialog backend GNU builds for this surface: the GTK arm treats MUSTMATCH
+as cosmetic and turns an empty or cancelled choice into a `quit' signal,
+the NS arm returns nil when the panel is cancelled, and the W32 arm
+enforces MUSTMATCH and quits on cancel.  On a non-graphical frame (batch
+or -nw) this signals the same error GNU's backend for this surface
+signals."
   (unless (display-graphic-p)
     ;; GNU's C bodies check the window system before any argument work, but
     ;; the message is backend-specific: the X DEFUN checks the selected frame
@@ -80,11 +110,30 @@ call cannot re-enter this function.  On a non-graphical frame (batch or
     ;; check_window_system(NULL) (nsfns.m:1784) and says "Window system is not
     ;; in use or not initialized".  Neo's surface gives the matching answer.
     (error "%s"
-           (if (eq system-type 'darwin)
+           (if (eq neomacs--x-file-dialog-surface 'ns)
                "Window system is not in use or not initialized"
              "Window system frame should be used")))
   (let ((use-file-dialog nil))
-    (read-file-name prompt dir default-filename mustmatch nil
-                    (and only-dir-p #'file-directory-p))))
+    (cond
+     ((eq neomacs--x-file-dialog-surface 'ns)
+      ;; ns-read-file-name returns nil for a cancelled panel, and the
+      ;; minibuffer stand-in's cancel (C-g) is a `quit' signal; map it.
+      (condition-case nil
+          (read-file-name prompt dir default-filename mustmatch nil
+                          (and only-dir-p #'file-directory-p))
+        (quit nil)))
+     ((eq neomacs--x-file-dialog-surface 'w32)
+      (read-file-name prompt dir default-filename mustmatch nil
+                      (and only-dir-p #'file-directory-p)))
+     (t
+      ;; GTK: MUSTMATCH is cosmetic (gtkutil.c:2634-2637), so it is not
+      ;; forwarded as a validation requirement; an empty accepted name is the
+      ;; NULL the C layer turns into a quit (xfns.c:9721-9723).  A `quit'
+      ;; from C-g is already GNU's answer and passes through untouched.
+      (let ((file (read-file-name prompt dir default-filename nil nil
+                                  (and only-dir-p #'file-directory-p))))
+        (if (equal file "")
+            (signal 'quit nil)
+          file))))))
 
 ;;; neo-preload.el ends here
