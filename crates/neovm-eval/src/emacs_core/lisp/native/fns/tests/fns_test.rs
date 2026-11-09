@@ -794,7 +794,7 @@ fn md5_eval_buffer_core_semantics() {
         ));
         buf.insert("abc");
     }
-    let id = eval.buffers.current_buffer().expect("current buffer").id;
+    let id = eval.buffers.current_buffer().expect("current buffer").id();
 
     let full = builtin_md5(&mut eval, vec![Value::make_buffer(id)]).unwrap();
     assert_eq!(full.as_utf8_str(), Some("900150983cd24fb0d6963f7d28e17f72"));
@@ -822,7 +822,7 @@ fn md5_eval_buffer_range_errors() {
         ));
         buf.insert("abc");
     }
-    let id = eval.buffers.current_buffer().expect("current buffer").id;
+    let id = eval.buffers.current_buffer().expect("current buffer").id();
 
     match builtin_md5(&mut eval, vec![Value::make_buffer(id), Value::fixnum(5)]).kinded() {
         Err(FlowKind::Signal(sig)) => {
@@ -837,7 +837,7 @@ fn md5_eval_buffer_range_errors() {
 fn md5_eval_buffer_index_type_error() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let id = eval.buffers.current_buffer().expect("current buffer").id;
+    let id = eval.buffers.current_buffer().expect("current buffer").id();
 
     match builtin_md5(
         &mut eval,
@@ -893,7 +893,7 @@ fn md5_and_secure_hash_preserve_unibyte_raw_bytes() {
             0xFF,
         ]));
     }
-    let id = eval.buffers.current_buffer().expect("current buffer").id;
+    let id = eval.buffers.current_buffer().expect("current buffer").id();
 
     let string_md5 = builtin_md5(&mut eval, vec![raw]).unwrap();
     assert_eq!(
@@ -1086,7 +1086,7 @@ fn secure_hash_eval_buffer_sha1() {
         ));
         buf.insert("abc");
     }
-    let id = eval.buffers.current_buffer().expect("current buffer").id;
+    let id = eval.buffers.current_buffer().expect("current buffer").id();
     let r = builtin_secure_hash(
         &mut eval,
         vec![Value::symbol("sha1"), Value::make_buffer(id)],
@@ -1109,7 +1109,7 @@ fn secure_hash_encodes_multibyte_buffer_raw_byte_characters_for_writing() {
         ]));
     }
     eval.set_variable("coding-system-for-write", Value::symbol("utf-8-unix"));
-    let id = eval.buffers.current_buffer().expect("current buffer").id;
+    let id = eval.buffers.current_buffer().expect("current buffer").id();
 
     let result = builtin_secure_hash(
         &mut eval,
@@ -1135,7 +1135,7 @@ fn secure_hash_eval_buffer_range_errors() {
         ));
         buf.insert("abc");
     }
-    let id = eval.buffers.current_buffer().expect("current buffer").id;
+    let id = eval.buffers.current_buffer().expect("current buffer").id();
 
     match builtin_secure_hash(
         &mut eval,
@@ -1159,7 +1159,7 @@ fn secure_hash_eval_buffer_range_errors() {
 fn secure_hash_eval_buffer_index_type_error() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    let id = eval.buffers.current_buffer().expect("current buffer").id;
+    let id = eval.buffers.current_buffer().expect("current buffer").id();
 
     match builtin_secure_hash(
         &mut eval,
@@ -1195,7 +1195,7 @@ fn secure_hash_eval_buffer_marker_range() {
         ));
         buf.insert("abc");
     }
-    let id = eval.buffers.current_buffer().expect("current buffer").id;
+    let id = eval.buffers.current_buffer().expect("current buffer").id();
     let marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
         &mut eval.buffers,
         id,

@@ -493,14 +493,14 @@ fn deterministic_order_overlay_serials_survive_dump_and_resume_the_counter() {
     eval.buffers
         .get_mut(buffer)
         .unwrap()
-        .overlays
+        .overlays_mut()
         .insert_overlay(attached);
     eval.set_variable("pdump-overlay-detached", detached);
     eval.set_variable("pdump-overlay-attached", attached);
 
     // Redisplay snapshots are observers: their cloned objects keep the
     // creation serial of the overlay they observe.
-    let observer = eval.buffers.get(buffer).unwrap().overlays.snapshot_clone();
+    let observer = eval.buffers.get(buffer).unwrap().overlays().snapshot_clone();
     let observer_values = observer.dump_overlays();
     assert_eq!(
         observer_values[0].as_overlay_data().unwrap().serial.get(),
@@ -531,7 +531,7 @@ fn deterministic_order_overlay_serials_survive_dump_and_resume_the_counter() {
     assert_eq!(a.as_overlay_data().unwrap().serial.get(), DETACHED_SERIAL);
     assert_eq!(b.as_overlay_data().unwrap().serial.get(), ATTACHED_SERIAL);
     let restored_buffer = loaded.buffers.get(buffer).unwrap();
-    for value in restored_buffer.overlays.dump_overlays() {
+    for value in restored_buffer.overlays().dump_overlays() {
         assert_eq!(
             value.as_overlay_data().unwrap().serial.get(),
             ATTACHED_SERIAL

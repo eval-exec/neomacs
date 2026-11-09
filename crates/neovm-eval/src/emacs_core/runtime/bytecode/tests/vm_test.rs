@@ -1776,7 +1776,7 @@ fn vm_unbind_restores_saved_current_buffer() {
 
     assert_eq!(result, Value::NIL);
     assert_eq!(
-        buffers.current_buffer().map(|buffer| buffer.id),
+        buffers.current_buffer().map(|buffer| buffer.id()),
         Some(saved_buffer)
     );
 }
@@ -3078,7 +3078,7 @@ fn vm_unbind_restores_saved_excursion_point() {
 
     assert_eq!(result, Value::NIL);
     assert_eq!(
-        buffers.current_buffer().map(|buffer| buffer.id),
+        buffers.current_buffer().map(|buffer| buffer.id()),
         Some(buffer_id)
     );
     assert_eq!(
@@ -5558,7 +5558,7 @@ fn vm_window_tree_and_list_builtins_use_shared_runtime_state() {
             |eval| {
                 let fid = crate::emacs_core::window_cmds::ensure_selected_frame_id(eval);
                 let left = eval.frames.get(fid).expect("frame").selected_window;
-                let buffer_id = eval.buffers.current_buffer().expect("buffer").id;
+                let buffer_id = eval.buffers.current_buffer().expect("buffer").id();
                 let right = eval
                     .frames
                     .split_window(
@@ -5690,7 +5690,7 @@ fn vm_window_selection_and_buffer_builtins_use_shared_runtime_state() {
             |eval| {
                 let fid = crate::emacs_core::window_cmds::ensure_selected_frame_id(eval);
                 let w1 = eval.frames.get(fid).expect("frame").selected_window;
-                let buffer_id = eval.buffers.current_buffer().expect("buffer").id;
+                let buffer_id = eval.buffers.current_buffer().expect("buffer").id();
                 let _w2 = eval
                     .frames
                     .split_window(
@@ -5744,7 +5744,7 @@ fn vm_window_deletion_and_frame_builtins_use_shared_runtime_state() {
                 crate::emacs_core::terminal::pure::mark_selected_terminal_usable_for_test(eval);
                 let fid = crate::emacs_core::window_cmds::ensure_selected_frame_id(eval);
                 let w1 = eval.frames.get(fid).expect("frame").selected_window;
-                let buffer_id = eval.buffers.current_buffer().expect("buffer").id;
+                let buffer_id = eval.buffers.current_buffer().expect("buffer").id();
                 let _w2 = eval
                     .frames
                     .split_window(

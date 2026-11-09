@@ -559,7 +559,7 @@ fn reused_local_reader_observes_cache_misses_writes_and_unbinding() {
     // Exercise a real void local cell independently of public makunbound's
     // handling of local bindings. The cached cons must expose UNBOUND and
     // preserve it across a buffer switch, even with a bound default.
-    let current = eval.buffers.current_buffer().expect("current buffer").id;
+    let current = eval.buffers.current_buffer().expect("current buffer").id();
     eval.buffers
         .set_buffer_local_property_by_sym_id(
             current,

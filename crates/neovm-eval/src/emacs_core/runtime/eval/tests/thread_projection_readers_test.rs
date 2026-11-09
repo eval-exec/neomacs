@@ -132,7 +132,7 @@ fn every_context_free_reader_refuses_a_projected_variable() {
         );
         let current = ev.buffers.current_buffer().expect("a current buffer");
         let slot_read = buf_fwd.value_in(
-            Some(&current.slots[..]),
+            Some(&current.slots()[..]),
             current.local_flags,
             Some(&ev.buffers.buffer_defaults[..]),
         );
@@ -419,11 +419,11 @@ struct ProjectionBufferProbe<'a> {
 
 impl neovm_value::value::buffer_vocab::BufferLocalView for ProjectionBufferProbe<'_> {
     fn buffer_id(&self) -> neovm_value::value::buffer_vocab::BufferId {
-        self.buffer.id
+        self.buffer.id()
     }
 
     fn slot_value(&self, slot: neovm_value::value::buffer_vocab::BufferSlot) -> Value {
-        self.buffer.slots[slot.index()]
+        self.buffer.slots()[slot.index()]
     }
 
     fn local_binding(&self, id: SymId, localized: bool) -> Option<Value> {
