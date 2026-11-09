@@ -243,14 +243,6 @@ fn p3sym_c6_function_intern_projected() {
     );
 }
 #[test]
-fn p3sym_c6_name_return_plain() {
-    super::super::super::symbol_functions::names::return_case(PlainSymbolBacking::Unprojected);
-}
-#[test]
-fn p3sym_c6_name_return_projected() {
-    super::super::super::symbol_functions::names::return_case(PlainSymbolBacking::Projected);
-}
-#[test]
 fn p3sym_c6_keeper_census_plain() {
     assert_eq!(
         fixture(

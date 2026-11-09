@@ -15,6 +15,14 @@ pub(in crate::tagged::gc::mutator_registration) struct PreparedNameFunction {
     not(feature = "gc-memory-telemetry")
 ))]
 impl PreparedNameFunction {
+    pub(in crate::tagged::gc::mutator_registration) fn handle(self) -> SymbolHandle {
+        self.key
+    }
+
+    pub(in crate::tagged::gc::mutator_registration) fn from_handle(key: SymbolHandle) -> Self {
+        Self { key }
+    }
+
     pub(in crate::tagged::gc::mutator_registration) fn validate_running(
         &self,
         run: &RunAccess<'_, '_>,

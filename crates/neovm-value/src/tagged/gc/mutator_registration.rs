@@ -1015,6 +1015,7 @@ mod cons_allocation_tests;
 mod a8_probes;
 #[cfg(feature = "test-support")]
 pub mod a8_probes;
+pub(crate) mod name_ops;
 #[cfg(test)]
 mod restricted_lisp;
 

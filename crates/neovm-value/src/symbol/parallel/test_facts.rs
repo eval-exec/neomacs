@@ -153,3 +153,45 @@ pub fn fresh_registry_facts_for_test(
 pub fn with_symbol_registry_writer_for_test(body: impl FnOnce()) {
     crate::intern::parallel::with_registry_writer_for_test(body);
 }
+
+/// Prepare a C6 name capability and return its symbol handle. The capability
+/// value stays in value; the handle is the same key the capability stores.
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[doc(hidden)]
+pub fn prepare_name_symbol_for_test<K: crate::tagged::gc::mutator_registration::EraKeeper>(
+    era: &crate::test_support::authority::ProofEra<'_, K>,
+    key: &crate::tagged::gc::mutator_registration::SymbolHandle,
+) -> Result<
+    crate::tagged::gc::mutator_registration::SymbolHandle,
+    crate::tagged::gc::mutator_registration::FunctionError,
+> {
+    crate::tagged::gc::mutator_registration::name_ops::prepare_name_symbol(era, key)
+}
+
+/// `RunAccess::sym_name_fset_into` for a handle previously returned by
+/// [`prepare_name_symbol_for_test`].
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[doc(hidden)]
+pub fn sym_name_fset_into_for_test<'era>(
+    run: &mut crate::tagged::gc::mutator_registration::RunAccess<'_, 'era>,
+    symbol: crate::tagged::gc::mutator_registration::SymbolHandle,
+    src: &crate::tagged::gc::mutator_registration::OwnerRootSlot<'era>,
+    dst: &mut crate::tagged::gc::mutator_registration::OwnerRootSlot<'era>,
+) -> Result<(), crate::tagged::gc::mutator_registration::FunctionError> {
+    crate::tagged::gc::mutator_registration::name_ops::sym_name_fset_into(run, symbol, src, dst)
+}
+
+/// `RunAccess::sym_name_call_begin` for a handle previously returned by
+/// [`prepare_name_symbol_for_test`].
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[doc(hidden)]
+pub fn sym_name_call_begin_for_test<'era>(
+    run: &mut crate::tagged::gc::mutator_registration::RunAccess<'_, 'era>,
+    symbol: crate::tagged::gc::mutator_registration::SymbolHandle,
+    cache: &mut crate::tagged::gc::mutator_registration::FunctionCallCache<'era>,
+    activation: &mut crate::tagged::gc::mutator_registration::FunctionActivation<'era>,
+) -> Result<(), crate::tagged::gc::mutator_registration::FunctionError> {
+    crate::tagged::gc::mutator_registration::name_ops::sym_name_call_begin(
+        run, symbol, cache, activation,
+    )
+}

@@ -1,15 +1,23 @@
 //! C6.3a native name-return boundary; no combined tape or minor-GC claim yet.
-use super::super::symbol_authority::PreparedNameFunction;
-use super::super::{
-    Mutator, PlainSymbolBacking, ProofEra as ParallelHeapEra, RegistrationError, RendezvousError,
+//! Re-homed into core because the fixture names the evaluator's symbol-function
+//! era. The name capability stays in value; this file passes its symbol handle.
+use super::{
+    FunctionActivation, FunctionCallCache, FunctionError, FunctionStep, OwnerRootSlot, RunAccess,
+    SymbolHandle,
 };
-use super::retry::{self as contention, Deadline, Retry, retry_owned};
-use super::*;
-use crate::emacs_core::eval::Context;
 use crate::intern::intern;
+use crate::tagged::gc::{
+    InitialInternError, Mutator, PlainSymbolBacking, RegistrationError, RendezvousError,
+};
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue as Value;
+use neovm_eval::test_support::authority::with_test_symbol_functions_init_era;
+use neovm_value::symbol::parallel::test_facts::{
+    prepare_name_symbol_for_test, sym_name_call_begin_for_test, sym_name_fset_into_for_test,
+};
+use neovm_value::test_support::authority::{self as contention, Deadline, Retry, retry_owned};
 use std::cell::RefCell;
+use std::num::NonZeroU32;
 use std::ops::ControlFlow;
 use std::rc::Rc;
 
@@ -45,7 +53,7 @@ enum FixtureConfig {
 struct Handles {
     target: SymbolHandle,
     replacement: SymbolHandle,
-    name: PreparedNameFunction,
+    name: SymbolHandle,
 }
 struct Homes<'era> {
     definition: OwnerRootSlot<'era>,
@@ -129,8 +137,9 @@ fn fixture(
         GraphFacts,
     ),
 ) -> std::thread::Result<()> {
+    crate::test_utils::init_test_tracing();
     let seed_state = RefCell::new(SeedState::Empty);
-    Context::with_test_symbol_functions_init_era(
+    with_test_symbol_functions_init_era(
         backing,
         |obarray, ids| {
             let kind = match config {
@@ -158,7 +167,7 @@ fn fixture(
                 }
                 GraphKind::PropertyGraph => {
                     name.with_lisp_string_mut(|s| {
-                        use crate::value::positions::CharRange;
+                        use neovm_value::value::positions::CharRange;
                         s.intervals_mut().put_property_in_char_range(
                             CharRange::from_usize(0, 1),
                             Value::from_sym_id(intern("c6-property")),
@@ -251,7 +260,7 @@ fn fixture(
                     assert_eq!(scalar_admission, Err(FunctionError::UnsupportedDefinition))
                 }
             }
-            let prepared = era.prepare_name_function_symbol(&target).unwrap();
+            let prepared = prepare_name_symbol_for_test(&era, &target).unwrap();
             let handles = Handles {
                 target,
                 replacement,
@@ -370,20 +379,20 @@ fn complete_call<'era>(run: &mut RunAccess<'_, 'era>, homes: &mut Homes<'era>) {
     );
 }
 
-pub(in crate::tagged::gc::mutator_registration) fn return_case(backing: PlainSymbolBacking) {
+fn return_case(backing: PlainSymbolBacking) {
     fixture(backing, FixtureConfig::Empty(GraphKind::Name), |run, handles, homes, facts| {
         let before = run.function_facts_for_test(&handles.target).unwrap();
         assert_eq!(run.sym_fset_into(&handles.target, &homes.definition, &mut homes.answer), Err(FunctionError::UnsupportedDefinition));
         assert_eq!(before, run.function_facts_for_test(&handles.target).unwrap());
         assert_eq!(answer(run, homes), RootIdentity(Value::NIL.bits()));
-        run.sym_name_fset_into(&handles.name, &homes.definition, &mut homes.answer).unwrap();
+        sym_name_fset_into_for_test(run, handles.name, &homes.definition, &mut homes.answer).unwrap();
         assert_eq!(answer(run, homes), facts.definition);
         let installed = run.function_facts_for_test(&handles.target).unwrap();
         assert_eq!(run.sym_fset_into(&handles.target, &homes.definition, &mut homes.answer), Err(FunctionError::UnsupportedDefinition));
         assert_eq!(installed, run.function_facts_for_test(&handles.target).unwrap());
-        run.sym_name_fset_into(&handles.name, &homes.definition, &mut homes.answer).unwrap();
+        sym_name_fset_into_for_test(run, handles.name, &homes.definition, &mut homes.answer).unwrap();
         assert_eq!(installed, run.function_facts_for_test(&handles.target).unwrap());
-        run.sym_name_call_begin(&handles.name, &mut homes.cache, &mut homes.activation).unwrap();
+        sym_name_call_begin_for_test(run, handles.name, &mut homes.cache, &mut homes.activation).unwrap();
         complete_call(run, homes);
         assert_eq!(answer(run, homes), facts.name);
         let cache_counts = homes.cache.counts_for_test();
@@ -391,21 +400,21 @@ pub(in crate::tagged::gc::mutator_registration) fn return_case(backing: PlainSym
         assert_eq!(run.sym_call_begin(&handles.target, &mut homes.cache, &mut homes.activation), Err(FunctionError::UnsupportedDefinition));
         assert_eq!(homes.cache.counts_for_test(), cache_counts);
         assert_eq!(answer(run, homes), facts.name);
-        run.sym_name_call_begin(&handles.name, &mut homes.cache, &mut homes.activation).unwrap();
+        sym_name_call_begin_for_test(run, handles.name, &mut homes.cache, &mut homes.activation).unwrap();
         assert_eq!(run.sym_call_step(&mut homes.activation, &mut homes.answer, NonZeroU32::MIN), Ok(FunctionStep::Yielded));
         homes.cache.clear(run).unwrap();
         run.sym_fset_into(&handles.target, &homes.replacement, &mut homes.answer).unwrap();
         assert_eq!(run.sym_call_step(&mut homes.activation, &mut homes.answer, NonZeroU32::MIN), Ok(FunctionStep::Returned));
         assert_eq!(answer(run, homes), facts.name, "selected old definition returns its exact original child");
         assert_eq!(run.sym_call_step(&mut homes.activation, &mut homes.answer, NonZeroU32::MIN), Err(FunctionError::InactiveActivation));
-        run.sym_name_call_begin(&handles.name, &mut homes.cache, &mut homes.activation).unwrap();
+        sym_name_call_begin_for_test(run, handles.name, &mut homes.cache, &mut homes.activation).unwrap();
         complete_call(run, homes);
         assert_eq!(answer(run, homes), RootIdentity(Value::fixnum(97).bits()));
         run.sym_call_begin(&handles.target, &mut homes.cache, &mut homes.activation).unwrap();
         complete_call(run, homes);
         assert_eq!(answer(run, homes), RootIdentity(Value::fixnum(97).bits()));
         run.sym_fmakunbound_into(&handles.target, &mut homes.answer).unwrap();
-        assert_eq!(run.sym_name_call_begin(&handles.name, &mut homes.cache, &mut homes.activation), Err(FunctionError::VoidFunction));
+        assert_eq!(sym_name_call_begin_for_test(run, handles.name, &mut homes.cache, &mut homes.activation), Err(FunctionError::VoidFunction));
         eprintln!("P3SYM_C6_NAME_RETURN exact_child_scalar_cache_refusal_selected_old_return_scalar_replacement {backing:?}");
     }).unwrap();
 }
@@ -445,8 +454,13 @@ fn p3sym_c6_name_preparation_does_not_enable_legacy_scalar_begin() {
                 run.sym_call_begin(&handles.target, &mut homes.cache, &mut homes.activation),
                 Err(FunctionError::UnsupportedDefinition)
             );
-            run.sym_name_call_begin(&handles.name, &mut homes.cache, &mut homes.activation)
-                .unwrap();
+            sym_name_call_begin_for_test(
+                run,
+                handles.name,
+                &mut homes.cache,
+                &mut homes.activation,
+            )
+            .unwrap();
             complete_call(run, homes);
             assert_eq!(answer(run, homes), facts.name);
         },
@@ -460,7 +474,12 @@ fn shape_refusal(graph: GraphKind) {
         |run, handles, homes, _| {
             let before = run.function_facts_for_test(&handles.target).unwrap();
             assert_eq!(
-                run.sym_name_fset_into(&handles.name, &homes.definition, &mut homes.answer),
+                sym_name_fset_into_for_test(
+                    run,
+                    handles.name,
+                    &homes.definition,
+                    &mut homes.answer
+                ),
                 Err(FunctionError::UnsupportedDefinition)
             );
             assert_eq!(
@@ -497,15 +516,20 @@ fn p3sym_c6_name_keyword_return_keeps_c5_intern_refusal() {
         PlainSymbolBacking::Unprojected,
         FixtureConfig::Empty(GraphKind::Keyword),
         |run, handles, homes, facts| {
-            run.sym_name_fset_into(&handles.name, &homes.definition, &mut homes.answer)
+            sym_name_fset_into_for_test(run, handles.name, &homes.definition, &mut homes.answer)
                 .unwrap();
-            run.sym_name_call_begin(&handles.name, &mut homes.cache, &mut homes.activation)
-                .unwrap();
+            sym_name_call_begin_for_test(
+                run,
+                handles.name,
+                &mut homes.cache,
+                &mut homes.activation,
+            )
+            .unwrap();
             complete_call(run, homes);
             assert_eq!(answer(run, homes), facts.name);
             assert_eq!(
                 run.initial_intern_into(&homes.answer, &mut homes.definition),
-                Err(super::super::InitialInternError::UnsupportedName)
+                Err(InitialInternError::UnsupportedName)
             );
             assert_eq!(
                 RootIdentity(homes.definition.word_for_test(run)),
@@ -519,7 +543,7 @@ fn p3sym_c6_name_keyword_return_keeps_c5_intern_refusal() {
 #[derive(Clone, Copy)]
 enum PreparedState {
     Empty,
-    Retired(PreparedNameFunction),
+    Retired(SymbolHandle),
 }
 #[test]
 fn p3sym_c6_name_retired_preparation_refuses_another_heap() {
@@ -541,17 +565,25 @@ fn p3sym_c6_name_retired_preparation_refuses_another_heap() {
         FixtureConfig::Empty(GraphKind::Name),
         |run, handles, homes, _| {
             assert_eq!(
-                run.sym_name_fset_into(&retired, &homes.definition, &mut homes.answer),
+                sym_name_fset_into_for_test(run, retired, &homes.definition, &mut homes.answer),
                 Err(FunctionError::Authority(RegistrationError::WrongHeap))
             );
             assert_eq!(
-                run.sym_name_call_begin(&retired, &mut homes.cache, &mut homes.activation),
+                sym_name_call_begin_for_test(run, retired, &mut homes.cache, &mut homes.activation),
                 Err(FunctionError::Authority(RegistrationError::WrongHeap))
             );
             assert_eq!(answer(run, homes), RootIdentity(Value::NIL.bits()));
-            run.sym_name_fset_into(&handles.name, &homes.definition, &mut homes.answer)
+            sym_name_fset_into_for_test(run, handles.name, &homes.definition, &mut homes.answer)
                 .unwrap();
         },
     )
     .unwrap();
+}
+#[test]
+fn p3sym_c6_name_return_plain() {
+    return_case(PlainSymbolBacking::Unprojected);
+}
+#[test]
+fn p3sym_c6_name_return_projected() {
+    return_case(PlainSymbolBacking::Projected);
 }

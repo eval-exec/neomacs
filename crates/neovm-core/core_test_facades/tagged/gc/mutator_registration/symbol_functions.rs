@@ -19,3 +19,10 @@ pub use neovm_value::tagged::gc::{
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 #[path = "../../../../core_tests/tagged/gc/mutator_registration/symbol_functions/tests.rs"]
 mod tests;
+
+/// C6 name-return tests re-homed out of value. They name the evaluator's
+/// symbol-function era. The name capability stays in value; the tests pass
+/// its symbol handle through copied operations. Assertions are unchanged.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "../../../../core_tests/tagged/gc/mutator_registration/symbol_functions/names.rs"]
+mod names;

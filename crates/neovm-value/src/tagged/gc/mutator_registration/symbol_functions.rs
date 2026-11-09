@@ -1,8 +1,5 @@
 //! Closed C4 instruction syntax and native twins of the production rooted API.
-use super::{
-    FunctionActivation, FunctionCallCache, FunctionError, FunctionStep, OwnerRootSlot, RunAccess,
-    SymbolHandle,
-};
+use super::{FunctionError, RunAccess, SymbolHandle};
 use std::num::NonZeroU32;
 
 pub(crate) mod retry;
@@ -25,6 +22,3 @@ pub(super) enum FunctionOp {
 pub(crate) mod boundary;
 #[cfg(all(feature = "test-support", not(feature = "gc-memory-telemetry")))]
 pub mod boundary;
-
-#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
-pub(super) mod names;
