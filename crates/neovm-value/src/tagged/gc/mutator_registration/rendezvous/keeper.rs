@@ -318,6 +318,24 @@ impl<'era> AllStopped<'era> {
         Ok(result)
     }
 
+    /// Copied owner-work census. Root words are bits; other items keep their Debug text.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn owner_work_census_for_test(
+        &self,
+        key: MutatorKey,
+    ) -> Result<(Vec<usize>, Vec<String>), RendezvousError> {
+        self.with_owner_image_for_test(key, |image| {
+            let mut roots = Vec::new();
+            let mut other = Vec::new();
+            image.visit_work(|work| match work {
+                super::super::image::PublishedGcWork::Root(word) => roots.push(word.value().bits()),
+                other_work => other.push(format!("{other_work:?}")),
+            });
+            (roots, other)
+        })
+    }
+
     /// VIS row: shared-borrow stopped-owner image observation for the re-homed
     /// root-slot tests. The mutable image never leaves the crate.
     #[cfg(any(test, feature = "test-support"))]

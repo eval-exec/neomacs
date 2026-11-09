@@ -272,6 +272,28 @@ impl<'heap, K: EraKeeper> ProofEra<'heap, K> {
         self.core.keeper.as_ref()
     }
 
+    /// Copy the frozen legacy root words. The `Option` stays private.
+    #[doc(hidden)]
+    pub fn append_legacy_root_words_for_test(
+        &self,
+        out: &mut Vec<crate::tagged::value::TaggedValue>,
+    ) {
+        self.core
+            .legacy_roots
+            .as_ref()
+            .expect("legacy roots")
+            .append_words(out);
+    }
+
+    /// Copied registration keys. The registry gate stays private.
+    #[doc(hidden)]
+    pub fn registered_mutator_keys_for_test(
+        &self,
+    ) -> Result<Vec<super::MutatorKey>, RegistrationError> {
+        let gate = self.registry().lock()?;
+        Ok(gate.entries.iter().map(|entry| entry.key()).collect())
+    }
+
     /// Era follow-up row (peer 10:5xZ item 1): the erased-root major
     /// collection entry, forwarded with the original signature. The caller
     /// supplies the complete World root walk, exactly as `EraCore` requires.

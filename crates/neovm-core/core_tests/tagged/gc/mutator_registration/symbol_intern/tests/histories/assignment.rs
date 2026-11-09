@@ -2,9 +2,10 @@
 //! Every handle below is admitted from the actual rooted intern result.
 use super::*;
 use crate::intern::parallel::identity_census_for_test;
-use crate::tagged::gc::ProofEra as ParallelHeapEra;
+use neovm_eval::test_support::authority::WorldProofEra as ParallelHeapEra;
 
 fn with_inputs<R>(body: impl for<'heap> FnOnce(ParallelHeapEra<'heap>, Vec<SymId>) -> R) -> R {
+    crate::test_utils::init_test_tracing();
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let prefix = format!(
         "p3sym-c5-assignment-{}",
@@ -14,7 +15,7 @@ fn with_inputs<R>(body: impl for<'heap> FnOnce(ParallelHeapEra<'heap>, Vec<SymId
     let right = format!("{prefix}-right");
     assert!(crate::intern::lookup_interned(&left).is_none());
     assert!(crate::intern::lookup_interned(&right).is_none());
-    Context::with_test_symbol_name_inputs_init_era(
+    neovm_eval::test_support::authority::with_test_symbol_name_inputs_init_era(
         PlainSymbolBacking::VoidProjection,
         &left,
         |obarray, ids| obarray.seed_value_id(ids[2], Value::string(&right)),
@@ -95,7 +96,7 @@ fn prepare<'era>(
         })?;
     }
     let before = attempt(owner, "assignment pre-write facts", |run| {
-        Ok(run.initial_facts_for_test(symbols[0].0)?)
+        Ok(run.initial_facts_copy_for_test(symbols[0].0)?)
     })?;
     Ok(Inputs {
         names,
@@ -131,7 +132,7 @@ fn p3sym_c5_fresh_projected_first_assignment_preserves_shared_void() {
                 let shared = before.shared_void.expect("actual shared VOID exists");
                 assert_void(&before, shared);
                 let second = attempt(owner, "second fresh VOID facts", |run| {
-                    Ok(run.initial_facts_for_test(right)?)
+                    Ok(run.initial_facts_copy_for_test(right)?)
                 })?;
                 assert_void(&second, shared);
                 let registry = identity_census_for_test();
@@ -139,12 +140,12 @@ fn p3sym_c5_fresh_projected_first_assignment_preserves_shared_void() {
                     Ok(run.sym_makunbound_into(&handle, &mut inputs.dst)?)
                 })?;
                 let after_void = attempt(owner, "still VOID after makunbound", |run| {
-                    Ok(run.initial_facts_for_test(left)?)
+                    Ok(run.initial_facts_copy_for_test(left)?)
                 })?;
                 assert_void(&after_void, shared);
                 assert_eq!(after_void.projections, before.projections);
                 let charge = attempt(owner, "first assignment charge baseline", |run| {
-                    Ok(run.owner.local.as_ref().unwrap().hot.bytes_since_gc)
+                    Ok(run.hot_bytes_since_gc_for_test().unwrap())
                 })?;
                 attempt(owner, "first fresh set", |run| {
                     run.sym_set_into(&handle, &inputs.src, &mut inputs.dst)?;
@@ -154,7 +155,7 @@ fn p3sym_c5_fresh_projected_first_assignment_preserves_shared_void() {
                     Ok(())
                 })?;
                 let assigned = attempt(owner, "private assignment facts", |run| {
-                    Ok(run.initial_facts_for_test(left)?)
+                    Ok(run.initial_facts_copy_for_test(left)?)
                 })?;
                 assert_eq!(assigned.backing, Some(PlainSymbolBacking::Projected));
                 assert_eq!(assigned.projections, before.projections + 1);
@@ -163,7 +164,7 @@ fn p3sym_c5_fresh_projected_first_assignment_preserves_shared_void() {
                 assert!(descriptor.1 > 0);
                 assert_eq!(descriptor.2, Value::fixnum(97).bits());
                 let charged = attempt(owner, "first assignment charged", |run| {
-                    Ok(run.owner.local.as_ref().unwrap().hot.bytes_since_gc)
+                    Ok(run.hot_bytes_since_gc_for_test().unwrap())
                 })?;
                 assert_eq!(
                     charged - charge,
@@ -171,7 +172,7 @@ fn p3sym_c5_fresh_projected_first_assignment_preserves_shared_void() {
                 );
                 // Match the existing GNU31.1 fresh-global twin, not a handwritten
                 // expected Lisp result. These inputs/outputs remain rooted.
-                let oracle: Vec<_> = include_str!("../../../symbol_intern_oracle.expected")
+                let oracle: Vec<_> = include_str!("../../../../../../../../neovm-value/src/tagged/gc/mutator_registration/symbol_intern_oracle.expected")
                     .lines()
                     .collect();
                 let bound = attempt(owner, "GNU fresh boundp", |run| {
@@ -180,14 +181,16 @@ fn p3sym_c5_fresh_projected_first_assignment_preserves_shared_void() {
                 })?;
                 let value = attempt(owner, "GNU fresh value", |run| {
                     run.sym_value_into(&handle, &mut inputs.dst)?;
-                    Ok(Value::from_bits(inputs.dst.word_for_test(run)).as_fixnum())
+                    let word = inputs.dst.word_for_test(run);
+                    // SAFETY: `word` is the rooted cell value just read into the destination slot.
+                    Ok(unsafe { Value::from_bits(word) }.as_fixnum())
                 })?;
                 assert_eq!(
                     format!("({} {})", if bound { "t" } else { "nil" }, value.unwrap()),
                     oracle[21]
                 );
                 let untouched = attempt(owner, "other fresh symbol still VOID", |run| {
-                    Ok(run.initial_facts_for_test(right)?)
+                    Ok(run.initial_facts_copy_for_test(right)?)
                 })?;
                 assert_void(&untouched, shared);
                 assert_eq!(untouched.projections, assigned.projections);
@@ -208,7 +211,7 @@ fn p3sym_c5_fresh_projected_first_assignment_preserves_shared_void() {
                     Ok(run.sym_makunbound_into(&handle, &mut inputs.dst)?)
                 })?;
                 let unbound = attempt(owner, "private UNBOUND facts", |run| {
-                    Ok(run.initial_facts_for_test(left)?)
+                    Ok(run.initial_facts_copy_for_test(left)?)
                 })?;
                 assert_eq!(unbound.backing, Some(PlainSymbolBacking::Projected));
                 assert_eq!(
@@ -222,7 +225,7 @@ fn p3sym_c5_fresh_projected_first_assignment_preserves_shared_void() {
                     Ok(run.sym_set_into(&handle, &inputs.src, &mut inputs.dst)?)
                 })?;
                 let repeated = attempt(owner, "same private descriptor after reset", |run| {
-                    Ok(run.initial_facts_for_test(left)?)
+                    Ok(run.initial_facts_copy_for_test(left)?)
                 })?;
                 assert_eq!(repeated.projection, Some(descriptor));
                 assert_eq!(repeated.projections, assigned.projections);
@@ -236,9 +239,9 @@ fn p3sym_c5_fresh_projected_first_assignment_preserves_shared_void() {
                 // Re-intern also retains the winner after the cell arm changed.
                 attempt(owner, "intern assigned name", |run| {
                     run.initial_intern_into(&inputs.names[0], &mut inputs.dst)?;
-                    if Value::from_bits(inputs.dst.word_for_test(run)).as_bare_symbol_id()
-                        != Some(left)
-                    {
+                    let word = inputs.dst.word_for_test(run);
+                    // SAFETY: `word` is the rooted intern result just stored in the destination slot.
+                    if unsafe { Value::from_bits(word) }.as_bare_symbol_id() != Some(left) {
                         return Err(Failure::Fixture("assignment replaced symbol identity"));
                     }
                     Ok(())
@@ -317,11 +320,11 @@ fn p3sym_c5_two_to_four_owners_issue_one_fresh_plain_descriptor() {
                                 let observed =
                                     attempt(owner, "concurrent assigned value", |run| {
                                         run.sym_value_into(&handle, &mut inputs.dst)?;
-                                        Value::from_bits(inputs.dst.word_for_test(run))
-                                            .as_fixnum()
-                                            .ok_or(Failure::Fixture(
-                                                "assignment read was not immediate",
-                                            ))
+                                        let word = inputs.dst.word_for_test(run);
+                                        // SAFETY: `word` is the rooted cell value just read into the destination slot.
+                                        unsafe { Value::from_bits(word) }.as_fixnum().ok_or(
+                                            Failure::Fixture("assignment read was not immediate"),
+                                        )
                                     })?;
                                 Ok(AssignmentRow {
                                     symbols: inputs.symbols,
@@ -345,8 +348,8 @@ fn p3sym_c5_two_to_four_owners_issue_one_fresh_plain_descriptor() {
             let result = rows.and_then(|rows| {
                 guarded(activate(era.register(9001, 1).unwrap(), heap, 9001)?, |owner| {
                     let [(left, handle), (right, _)] = rows[0].symbols;
-                    let after = attempt(owner, "final first-assignment facts", |run| Ok(run.initial_facts_for_test(left)?))?;
-                    let other = attempt(owner, "final untouched VOID facts", |run| Ok(run.initial_facts_for_test(right)?))?;
+                    let after = attempt(owner, "final first-assignment facts", |run| Ok(run.initial_facts_copy_for_test(left)?))?;
+                    let other = attempt(owner, "final untouched VOID facts", |run| Ok(run.initial_facts_copy_for_test(right)?))?;
                     let shared = rows[0].before.shared_void.expect("actual shared VOID");
                     for row in &rows {
                         assert_eq!(row.symbols, rows[0].symbols);
@@ -361,7 +364,8 @@ fn p3sym_c5_two_to_four_owners_issue_one_fresh_plain_descriptor() {
                     let private = after.projection.expect("one private descriptor");
                     assert_ne!(private.0, shared.0);
                     assert!(private.1 > 0);
-                    assert!(submitted.contains(&Value::from_bits(private.2).as_fixnum().unwrap()));
+                    // SAFETY: `private.2` is the rooted cell word stored in the projection fact.
+                    assert!(submitted.contains(&unsafe { Value::from_bits(private.2) }.as_fixnum().unwrap()));
                     assert_void(&other, shared);
                     assert_eq!(other.projections, after.projections);
                     // The pre-assignment handle still addresses the current cell;

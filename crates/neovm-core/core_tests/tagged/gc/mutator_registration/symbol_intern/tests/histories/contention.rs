@@ -35,9 +35,9 @@ fn attempt_until_registry_released<'era, T>(
 pub(super) fn diagnostics(owner: &Mutator<'_>) -> String {
     format!(
         "owner={owner:?} authority_ready={:?} admission={} phase={}",
-        owner.registry.symbols.ready(),
-        owner.entry.admission.load(Ordering::Acquire),
-        owner.registry.phase.load()
+        owner.symbols_ready_for_test(),
+        owner.admission_word_for_test(),
+        owner.phase_word_for_test()
     )
 }
 
@@ -61,11 +61,14 @@ fn p3sym_c5_native_retry_waits_for_a_held_registry_then_observes_one_winner() {
             let (result, held) = std::thread::scope(|scope| {
                 let guard = scope.spawn(move || {
                     let mut result = Ok(());
-                    crate::intern::parallel::with_registry_writer_for_test(|| {
-                        result = ready_tx.send(()).map_err(|e| e.to_string()).and_then(|()| {
-                            release_rx.recv().map_err(|e| e.to_string())
-                        });
-                    });
+                    crate::symbol::parallel::test_facts::with_symbol_registry_writer_for_test(
+                        || {
+                            result = ready_tx
+                                .send(())
+                                .map_err(|e| e.to_string())
+                                .and_then(|()| release_rx.recv().map_err(|e| e.to_string()));
+                        },
+                    );
                     result
                 });
                 let result = ready_rx
@@ -77,16 +80,25 @@ fn p3sym_c5_native_retry_waits_for_a_held_registry_then_observes_one_winner() {
                             "intern after held registry",
                             |run| {
                                 run.initial_intern_into(&homes.name, &mut homes.dst)?;
-                                Ok(Value::from_bits(homes.dst.word_for_test(run)).as_bare_symbol_id())
+                                let word = homes.dst.word_for_test(run);
+                                // SAFETY: `word` is the rooted intern result just stored in the destination slot.
+                                Ok(unsafe { Value::from_bits(word) }.as_bare_symbol_id())
                             },
                             |owner, error| {
                                 // This callback runs AFTER the actual failed RunAccess
                                 // drops, while the other actor still holds the registry.
-                                if !matches!(error, Failure::Intern(InitialInternError::Authority(RegistrationError::Busy)))
-                                    || owner.registry.symbols.ready() != Ok(())
-                                    || owner.entry.admission.load(Ordering::Acquire)
-                                        != crate::tagged::gc::mutator_registration::admission::AdmissionWord::OUT {
-                                    return Err(format!("C5 refused intern retained admission: {error:?}; {}", diagnostics(owner)));
+                                if !matches!(
+                                    error,
+                                    Failure::Intern(InitialInternError::Authority(
+                                        RegistrationError::Busy
+                                    ))
+                                ) || owner.symbols_ready_for_test() != Ok(())
+                                    || !owner.admission_is_out_for_test()
+                                {
+                                    return Err(format!(
+                                        "C5 refused intern retained admission: {error:?}; {}",
+                                        diagnostics(owner)
+                                    ));
                                 }
                                 refusals += 1;
                                 if refusals == 10_001 {
@@ -96,9 +108,7 @@ fn p3sym_c5_native_retry_waits_for_a_held_registry_then_observes_one_winner() {
                                         .take()
                                         .ok_or("C5 release sender absent")?
                                         .send(())
-                                        .map_err(|_| {
-                                            "C5 registry holder ended early".to_owned()
-                                        })?;
+                                        .map_err(|_| "C5 registry holder ended early".to_owned())?;
                                 }
                                 Ok(if refusals >= 10_001 {
                                     RegistryPhase::Released
@@ -124,14 +134,13 @@ fn p3sym_c5_native_retry_waits_for_a_held_registry_then_observes_one_winner() {
             assert_eq!(after, (before.0 + 1, before.1 + 1));
             let repeated = attempt(owner, "intern repeat after held registry", |run| {
                 run.initial_intern_into(&homes.name, &mut homes.dst)?;
-                Ok(Value::from_bits(homes.dst.word_for_test(run)).as_bare_symbol_id())
+                let word = homes.dst.word_for_test(run);
+                // SAFETY: `word` is the rooted intern result just stored in the destination slot.
+                Ok(unsafe { Value::from_bits(word) }.as_bare_symbol_id())
             })
             .expect("C5 repeat after held registry");
             assert_eq!(repeated, Some(id));
-            assert_eq!(
-                crate::intern::parallel::identity_census_for_test(),
-                after
-            );
+            assert_eq!(crate::intern::parallel::identity_census_for_test(), after);
             eprintln!("P3SYM_C5_HELD_REGISTRY_RETRY {kind:?} refusals={refusals} winners=1");
         })
         .unwrap();

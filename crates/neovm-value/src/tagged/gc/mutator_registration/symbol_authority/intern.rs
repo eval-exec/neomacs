@@ -49,6 +49,15 @@ impl KeeperSymbols<'_> {
         crate::intern::collect_symbol_name_gc_roots(roots, self.registry.heap.get());
         Ok(())
     }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn append_name_roots_for_test(
+        &self,
+        roots: &mut Vec<Value>,
+    ) -> Result<(), RegistrationError> {
+        self.append_name_roots(roots)
+    }
 }
 
 /// An era/World-bound obarray reader, without a pre-existing symbol key.
@@ -133,13 +142,101 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn initial_poison_receipt_for_test(&self) -> (bool, bool, u8) {
+    #[doc(hidden)]
+    pub fn initial_poison_receipt_for_test(&self) -> (bool, bool, u8) {
         let symbols = &self.owner.registry.symbols;
         (
             symbols.poisoned.load(Ordering::Acquire),
             word::quiescent(&symbols.word),
             symbols.backing.initial_fault_receipt_for_test(),
         )
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn initial_facts_copy_for_test(
+        &mut self,
+        id: SymId,
+    ) -> Result<crate::symbol::parallel::test_facts::InitialInternFacts, RegistrationError> {
+        self.initial_facts_for_test(id)
+            .map(crate::symbol::parallel::test_facts::InitialInternFacts::from_private)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn arm_initial_fault_for_test(
+        &mut self,
+        fault: crate::symbol::parallel::test_facts::InitialInternFault,
+    ) -> Result<(), RegistrationError> {
+        self.initial_fault_for_test(fault.to_private())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn arm_table_commit_fault_for_test(
+        &mut self,
+        fault: crate::symbol::parallel::test_facts::TableCommitFault,
+    ) -> Result<(), RegistrationError> {
+        let fault = match fault {
+            crate::symbol::parallel::test_facts::TableCommitFault::AfterDescriptorPublication => {
+                TableCommitFault::AfterDescriptorPublication
+            }
+        };
+        self.initial_table_commit_fault_for_test(fault)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn symbol_table_census_for_test(
+        &self,
+    ) -> Result<crate::symbol::parallel::test_facts::SymbolTableCensus, RegistrationError> {
+        let census = self
+            .owner
+            .registry
+            .symbols
+            .tables
+            .census_for_test()
+            .map_err(super::super::super::symbol_table::publication_error)?;
+        Ok(crate::symbol::parallel::test_facts::SymbolTableCensus {
+            address: census.address,
+            slots: census.slots,
+            chunk_slots: census.chunk_slots,
+            chunk0: census.chunk0,
+            generation: census.generation,
+            retired: census.retired,
+            retained_bytes: census.retained_bytes,
+        })
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn override_symbol_table_limits_for_test(
+        &self,
+        probe: crate::symbol::parallel::test_facts::TableLimitProbe,
+    ) -> Result<(), RegistrationError> {
+        let probe = match probe {
+            crate::symbol::parallel::test_facts::TableLimitProbe::Bytes => {
+                super::super::super::symbol_table::publication::TestLimitProbe::Bytes
+            }
+            crate::symbol::parallel::test_facts::TableLimitProbe::Retirees => {
+                super::super::super::symbol_table::publication::TestLimitProbe::Retirees
+            }
+            crate::symbol::parallel::test_facts::TableLimitProbe::Production => {
+                super::super::super::symbol_table::publication::TestLimitProbe::Production
+            }
+        };
+        self.owner
+            .registry
+            .symbols
+            .tables
+            .apply_limit_probe_for_test(probe)
+            .map_err(super::super::super::symbol_table::publication_error)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn registry_heap_for_test(&self) -> crate::tagged::gc::HeapIdentity {
+        self.owner.registry.heap
     }
 
     #[cfg(any(test, feature = "test-support"))]

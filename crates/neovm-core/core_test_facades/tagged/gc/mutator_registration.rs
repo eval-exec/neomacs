@@ -38,6 +38,12 @@ pub(crate) mod era_fixtures;
 #[path = "../../../core_tests/tagged/gc/mutator_registration/root_slot_tests.rs"]
 mod root_slot_tests;
 
+/// Symbol-intern tests re-homed out of value. They name the evaluator's
+/// symbol-name era. The tests module keeps the value telemetry split.
+#[cfg(test)]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/symbol_intern.rs"]
+mod symbol_intern;
+
 /// Slice-boundary tests re-homed out of value. They name the evaluator's
 /// collection era. Assertions are unchanged; private park, admission, and
 /// owner-census reads go through the existing copied observers.

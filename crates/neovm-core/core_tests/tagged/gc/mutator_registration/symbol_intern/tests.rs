@@ -1,13 +1,11 @@
 //! C5 operators using the shared real-World fixture.
-use super::super::symbol_functions::retry::{self as contention, Deadline, Retry, retry_owned};
 use super::*;
 use crate::emacs_core::eval::Context;
 use crate::tagged::gc::{Mutator, PlainSymbolBacking, RendezvousError};
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue as Value;
-use std::cell::RefCell;
+use neovm_value::test_support::authority::{self as contention, Deadline, Retry, retry_owned};
 use std::ops::ControlFlow;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::fixture::*;
@@ -19,25 +17,25 @@ fn fresh_intern(kind: PlainSymbolBacking, query: Query, exact_epoch: bool) {
             homes.target.is_none(),
             "must issue a genuinely new canonical ID"
         );
-        let before = run.initial_facts_for_test(homes.old_id).unwrap();
+        let before = run.initial_facts_copy_for_test(homes.old_id).unwrap();
         let registry_before = identity_census_for_test();
         let name = homes.name.word_for_test(run);
         let loser = homes.equal_name.word_for_test(run);
         let old_word = name;
-        let charge = run.owner.local.as_ref().unwrap().hot.bytes_since_gc;
+        let charge = run.hot_bytes_since_gc_for_test().unwrap();
         intern_retry(run, &homes.name, &mut homes.dst).expect("fresh initial_intern_into");
         let word = homes.dst.word_for_test(run);
         let id = unsafe { Value::from_bits(word) }
             .as_bare_symbol_id()
             .unwrap();
         if exact_epoch {
-            assert_eq!(id.0 as usize, registry_before.1);
+            assert_eq!(id.to_raw() as usize, registry_before.1);
             assert_eq!(
                 identity_census_for_test(),
                 (registry_before.0 + 1, registry_before.1 + 1)
             );
         }
-        let after = run.initial_facts_for_test(id).unwrap();
+        let after = run.initial_facts_copy_for_test(id).unwrap();
         assert!(after.present && after.member && after.spine_current);
         assert_eq!(
             (after.members, after.epoch),
@@ -50,36 +48,37 @@ fn fresh_intern(kind: PlainSymbolBacking, query: Query, exact_epoch: bool) {
         );
         assert_eq!(after.backing, Some(kind));
         assert_eq!(
-            name_publication_for_test(run.owner.registry.heap, id, loser),
+            name_publication_for_test(run.registry_heap_for_test(), id, loser),
             (Some(name), true, false, true)
         );
-        assert!(run.owner.local.as_ref().unwrap().hot.bytes_since_gc > charge);
+        assert!(run.hot_bytes_since_gc_for_test().unwrap() > charge);
         if matches!(query, Query::FreshBoundary) {
             assert!(
                 after.chunks >= before.chunks + 2,
                 "fresh publication must really grow chunk and side tables"
             );
             assert!(
-                !run.initial_facts_for_test(crate::intern::SymId(id.0 - 1))
-                    .unwrap()
-                    .present
+                !run.initial_facts_copy_for_test(unsafe {
+                    // SAFETY: one below an id this process just interned. The
+                    // gap check only observes that the slot is absent.
+                    crate::intern::SymId::from_raw(id.to_raw() - 1)
+                })
+                .unwrap()
+                .present
             );
         }
         let stable_registry = identity_census_for_test();
-        let stable_charge = run.owner.local.as_ref().unwrap().hot.bytes_since_gc;
+        let stable_charge = run.hot_bytes_since_gc_for_test().unwrap();
         intern_retry(run, &homes.equal_name, &mut homes.dst).expect("existing winner lookup");
         assert_eq!(homes.dst.word_for_test(run), word);
         soft_retry(run, &homes.name, &mut homes.dst).expect("soft lookup of committed name");
         assert_eq!(homes.dst.word_for_test(run), word);
-        assert_eq!(
-            run.owner.local.as_ref().unwrap().hot.bytes_since_gc,
-            stable_charge
-        );
+        assert_eq!(run.hot_bytes_since_gc_for_test().unwrap(), stable_charge);
         if exact_epoch {
             assert_eq!(identity_census_for_test(), stable_registry);
         }
         assert_eq!(
-            name_publication_for_test(run.owner.registry.heap, id, loser),
+            name_publication_for_test(run.registry_heap_for_test(), id, loser),
             (Some(name), true, false, true)
         );
         let handle = run.initial_symbol_handle(&homes.dst).unwrap();
@@ -101,29 +100,21 @@ fn existing_intern(kind: PlainSymbolBacking, query: Query) {
         let id = homes
             .target
             .expect("existing canonical ID prepared serially");
-        let before = run.initial_facts_for_test(id).unwrap();
-        let table_before = run
-            .initial_table_statistics_for_test()
-            .unwrap()
-            .retained_bytes;
-        let charge = run.owner.local.as_ref().unwrap().hot.bytes_since_gc;
+        let before = run.initial_facts_copy_for_test(id).unwrap();
+        let table_before = run.symbol_table_census_for_test().unwrap().retained_bytes;
+        let charge = run.hot_bytes_since_gc_for_test().unwrap();
         intern_retry(run, &homes.name, &mut homes.dst).unwrap();
         assert_eq!(homes.dst.word_for_test(run), Value::from_sym_id(id).bits());
-        let after = run.initial_facts_for_test(id).unwrap();
+        let after = run.initial_facts_copy_for_test(id).unwrap();
         assert!(after.present && after.member);
         assert_eq!(after.members, before.members + usize::from(!before.member));
         assert_eq!(after.epoch, before.epoch + u64::from(!before.member));
         assert_eq!(after.chunks, after.sides);
         assert!(after.spine_current);
         assert_eq!(
-            run.owner.local.as_ref().unwrap().hot.bytes_since_gc - charge,
-            after.bytes - before.bytes
-                + run
-                    .initial_table_statistics_for_test()
-                    .unwrap()
-                    .retained_bytes
-                    .get()
-                - table_before.get()
+            run.hot_bytes_since_gc_for_test().unwrap() - charge,
+            after.bytes - before.bytes + run.symbol_table_census_for_test().unwrap().retained_bytes
+                - table_before
         );
         if before.present {
             assert_eq!(
@@ -137,14 +128,18 @@ fn existing_intern(kind: PlainSymbolBacking, query: Query) {
                 "actual chunk/side growth required"
             );
             assert!(
-                !run.initial_facts_for_test(crate::intern::SymId(id.0 - 1))
-                    .unwrap()
-                    .present,
+                !run.initial_facts_copy_for_test(unsafe {
+                    // SAFETY: one below an id this process just interned. The
+                    // gap check only observes that the slot is absent.
+                    crate::intern::SymId::from_raw(id.to_raw() - 1)
+                })
+                .unwrap()
+                .present,
                 "registry-ID gap remains absent in World"
             );
         }
         intern_retry(run, &homes.equal_name, &mut homes.dst).unwrap();
-        let repeated = run.initial_facts_for_test(id).unwrap();
+        let repeated = run.initial_facts_copy_for_test(id).unwrap();
         assert_eq!(
             (repeated.members, repeated.epoch, repeated.bytes),
             (after.members, after.epoch, after.bytes)
@@ -175,7 +170,7 @@ fn existing_intern(kind: PlainSymbolBacking, query: Query) {
                 .unwrap();
             run.sym_value_into(&handle, &mut homes.dst).unwrap();
             assert_eq!(homes.dst.word_for_test(run), Value::fixnum(23).bits());
-            let set = run.initial_facts_for_test(id).unwrap();
+            let set = run.initial_facts_copy_for_test(id).unwrap();
             assert_eq!(
                 set.projections,
                 after.projections + usize::from(kind == PlainSymbolBacking::VoidProjection)
@@ -183,7 +178,7 @@ fn existing_intern(kind: PlainSymbolBacking, query: Query) {
             run.sym_set_into(&handle, &homes.value, &mut homes.dst)
                 .unwrap();
             assert_eq!(
-                run.initial_facts_for_test(id).unwrap().projections,
+                run.initial_facts_copy_for_test(id).unwrap().projections,
                 set.projections,
                 "one descriptor per symbol, no repeated issue"
             );
@@ -323,7 +318,7 @@ fn p3sym_c5_soft_busy_is_a_refusal_and_releases_the_reader() {
         Query::Existing,
         |run, homes| {
             let before = homes.dst.word_for_test(run);
-            crate::intern::parallel::with_registry_writer_for_test(|| {
+            crate::symbol::parallel::test_facts::with_symbol_registry_writer_for_test(|| {
                 assert_eq!(
                     run.initial_intern_soft_into(&homes.name, &mut homes.dst),
                     Err(InitialInternError::Authority(RegistrationError::Busy))
@@ -360,7 +355,9 @@ fn p3sym_c5_soft_stale_homes_refuse_before_decoding() {
 }
 #[test]
 fn p3sym_c5_surface_is_rooted_and_has_no_legacy_intern_fallback() {
-    let source = include_str!("../symbol_intern.rs");
+    let source = include_str!(
+        "../../../../../../neovm-value/src/tagged/gc/mutator_registration/symbol_intern.rs"
+    );
     for forbidden in [
         "-> Value",
         "-> TaggedValue",
@@ -376,7 +373,7 @@ fn p3sym_c5_surface_is_rooted_and_has_no_legacy_intern_fallback() {
             "C5 preparation surface exposed {forbidden}"
         );
     }
-    let fresh = include_str!("../../../../intern/parallel/fresh.rs")
+    let fresh = include_str!("../../../../../../neovm-value/src/intern/parallel/fresh.rs")
         .split("#[cfg(test)]")
         .next()
         .unwrap();
@@ -393,7 +390,9 @@ fn p3sym_c5_surface_is_rooted_and_has_no_legacy_intern_fallback() {
         );
     }
 
-    let sealed = include_str!("../symbol_authority/intern.rs");
+    let sealed = include_str!(
+        "../../../../../../neovm-value/src/tagged/gc/mutator_registration/symbol_authority/intern.rs"
+    );
     assert!(sealed.contains("&OwnerRootSlot<'era>"));
     assert!(sealed.contains("&mut OwnerRootSlot<'era>"));
     for forbidden in [
@@ -410,7 +409,7 @@ fn p3sym_c5_surface_is_rooted_and_has_no_legacy_intern_fallback() {
         );
     }
     assert_eq!(
-        include_str!("../symbol_intern_oracle.expected")
+        include_str!("../../../../../../neovm-value/src/tagged/gc/mutator_registration/symbol_intern_oracle.expected")
             .lines()
             .count(),
         24
@@ -440,15 +439,15 @@ fn p3sym_c5_intern_busy_leaves_output_and_membership_unchanged() {
         Query::RegistryOnly,
         |run, homes| {
             let id = homes.target.unwrap();
-            let before = run.initial_facts_for_test(id).unwrap();
+            let before = run.initial_facts_copy_for_test(id).unwrap();
             let output = homes.dst.word_for_test(run);
-            crate::intern::parallel::with_registry_writer_for_test(|| {
+            crate::symbol::parallel::test_facts::with_symbol_registry_writer_for_test(|| {
                 assert_eq!(
                     run.initial_intern_into(&homes.name, &mut homes.dst),
                     Err(InitialInternError::Authority(RegistrationError::Busy))
                 );
             });
-            let after = run.initial_facts_for_test(id).unwrap();
+            let after = run.initial_facts_copy_for_test(id).unwrap();
             assert_eq!(
                 (after.members, after.epoch, after.bytes, after.present),
                 (before.members, before.epoch, before.bytes, before.present)
@@ -468,13 +467,13 @@ fn p3sym_c5_existing_intern_can_replace_its_name_home() {
     ] {
         fixture(kind, Query::RegistryOnly, |run, homes| {
             let id = homes.target.unwrap();
-            let before = run.initial_facts_for_test(id).unwrap();
+            let before = run.initial_facts_copy_for_test(id).unwrap();
             assert!(!before.member);
             let mut alias = homes.name.clone();
             intern_retry(run, &homes.name, &mut alias).unwrap();
             assert_eq!(homes.name.word_for_test(run), Value::from_sym_id(id).bits());
             assert_eq!(
-                run.initial_facts_for_test(id).unwrap().members,
+                run.initial_facts_copy_for_test(id).unwrap().members,
                 before.members + 1
             );
             run.initial_symbol_handle(&homes.name).unwrap();
@@ -587,7 +586,11 @@ fn p3sym_c5_fresh_id_advances_registry_epoch_once() {
     );
 }
 
+#[path = "tests/failures.rs"]
 mod failures;
+#[path = "tests/fresh_failures.rs"]
 mod fresh_failures;
+#[path = "tests/gc.rs"]
 mod gc;
+#[path = "tests/histories.rs"]
 mod histories;

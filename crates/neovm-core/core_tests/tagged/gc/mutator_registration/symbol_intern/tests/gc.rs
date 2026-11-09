@@ -1,8 +1,8 @@
 //! Fresh names must be reseeded from the live, heap-keyed process index.
 //! The suspended shell/input holders must not mask a missing stopped census.
 use super::*;
-use crate::tagged::gc::mutator_registration::image::PublishedGcWork;
-use crate::tagged::gc::{AllStopped, ProofEra as ParallelHeapEra};
+use crate::tagged::gc::AllStopped;
+use neovm_eval::test_support::authority::WorldProofEra as ParallelHeapEra;
 
 #[derive(Default, Debug)]
 struct Ledger {
@@ -29,41 +29,29 @@ fn ledger(era: &ParallelHeapEra<'_>, stopped: &mut AllStopped<'_>) -> Ledger {
     stopped
         .symbols()
         .unwrap()
-        .append_name_roots(&mut names)
+        .append_name_roots_for_test(&mut names)
         .unwrap();
     result.names = names.into_iter().map(Value::bits).collect();
     let mut world = Vec::new();
-    era.core
-        .keeper
-        .as_ref()
-        .unwrap()
-        .collect_parallel_world_roots(stopped, &mut world)
-        .unwrap();
+    neovm_eval::test_support::authority::baton_collect_parallel_world_roots(
+        era.keeper_for_test().expect("keeper"),
+        stopped,
+        &mut world,
+    )
+    .unwrap();
     result.world = world.into_iter().map(Value::bits).collect();
     let mut external = Vec::new();
-    era.core
-        .legacy_roots
-        .as_ref()
-        .unwrap()
-        .append_words(&mut external);
+    era.append_legacy_root_words_for_test(&mut external);
     era.with_stopped_heap_for_test(stopped, |heap| {
         crate::tagged::transport::collect_shared_root_gc_roots(heap, &mut external);
     })
     .unwrap();
     result.external = external.into_iter().map(Value::bits).collect();
-    let keys: Vec<_> = {
-        let gate = era.registry().lock().unwrap();
-        gate.entries.iter().map(|entry| entry.key).collect()
-    };
+    let keys = era.registered_mutator_keys_for_test().unwrap();
     for key in keys {
-        stopped
-            .with_owner_image(key, |image| {
-                image.visit_work(|work| match work {
-                    PublishedGcWork::Root(word) => result.owners.push(word.value().bits()),
-                    other => result.other_work.push(format!("{other:?}")),
-                });
-            })
-            .unwrap();
+        let (roots, other) = stopped.owner_work_census_for_test(key).unwrap();
+        result.owners.extend(roots);
+        result.other_work.extend(other);
     }
     let mut journal = Vec::new();
     stopped
@@ -87,7 +75,7 @@ fn round(
     // the interval; with_native_extent is for non-keeper blocking owners and
     // forbids that access. Keep this explicit pair and suppress unrelated
     // native-return probes while it drives both completed collections.
-    let _probes = crate::tagged::gc::mutator_registration::a8_probes::suppress();
+    let _probes = neovm_value::test_support::authority::suppress_for_test();
     owner.enter_native(&[]).unwrap();
     let mut stopped = match era.stop() {
         Ok(stopped) => stopped,
@@ -98,15 +86,23 @@ fn round(
     };
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let before = ledger(era, &mut stopped);
-        let report = era.collect_stopped(&mut stopped);
+        let report = era.collect_stopped(
+            &mut stopped,
+            neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
+        );
         let observed = report.as_ref().ok().map(|_| {
             era.with_stopped_heap_for_test(&stopped, |heap| {
-                let live = words.map(|word| heap.owns_heap_value_for_test(Value::from_bits(word)));
+                let live = words.map(|word| {
+                    // SAFETY: `word` is a rooted name bit pattern captured by
+                    // `word_for_test` before this collection.
+                    heap.owns_heap_value_for_test(unsafe { Value::from_bits(word) })
+                });
                 // Allocation membership precedes every payload read. A dead
                 // word stays an inert integer: never read its string payload.
                 let text = live[0]
                     .then(|| {
-                        Value::from_bits(words[0])
+                        // SAFETY: `words[0]` is that same rooted winning-name word.
+                        unsafe { Value::from_bits(words[0]) }
                             .as_lisp_string()
                             .map(|name| name.as_bytes().to_vec())
                     })
@@ -159,9 +155,16 @@ fn sole_name_root(kind: PlainSymbolBacking) {
         let (words, spelling, id) = {
             let mut run = owner.run_access().unwrap();
             let words = [homes.name.word_for_test(&run), homes.equal_name.word_for_test(&run)];
-            let spelling = Value::from_bits(words[0]).as_lisp_string().unwrap().as_bytes().to_vec();
+            // SAFETY: `words[0]` is the rooted name word just read from the home slot.
+            let spelling = unsafe { Value::from_bits(words[0]) }
+                .as_lisp_string()
+                .unwrap()
+                .as_bytes()
+                .to_vec();
             intern_retry(&mut run, &homes.name, &mut homes.dst).unwrap();
-            let id = Value::from_bits(homes.dst.word_for_test(&run)).as_bare_symbol_id().unwrap();
+            let id_word = homes.dst.word_for_test(&run);
+            // SAFETY: `id_word` is the rooted intern result just stored in the destination slot.
+            let id = unsafe { Value::from_bits(id_word) }.as_bare_symbol_id().unwrap();
             assert_eq!(crate::intern::parallel::name_publication_for_test(era.heap_identity(), id, words[1]), (Some(words[0]), true, false, true));
             clear_holders(&mut run, homes);
             (words, spelling, id)

@@ -133,4 +133,11 @@ impl super::super::Obarray {
             self.symbols.grow_for(last);
         }
     }
+
+    /// Slot count as a plain `usize`. `SymbolSlotCount` stays crate-private.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn prepare_symbol_table_slot_count_for_test(&mut self, slots: usize) {
+        self.prepare_symbol_table_slots_for_test(SymbolSlotCount::from(slots));
+    }
 }

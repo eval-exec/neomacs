@@ -150,6 +150,27 @@ impl TableLedger {
     }
 }
 
+/// Copied current-table census. Address is the published descriptor pointer.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy)]
+pub(crate) struct TableCensus {
+    pub(crate) address: usize,
+    pub(crate) slots: usize,
+    pub(crate) chunk_slots: usize,
+    pub(crate) chunk0: Option<usize>,
+    pub(crate) generation: u64,
+    pub(crate) retired: usize,
+    pub(crate) retained_bytes: usize,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy)]
+pub(crate) enum TestLimitProbe {
+    Bytes,
+    Retirees,
+    Production,
+}
+
 /// One owner of every descriptor ever published during this era.
 #[must_use = "retain the publication owner until all table users have returned"]
 pub(crate) struct PublishedSymbolTables {
@@ -243,6 +264,78 @@ impl PublishedSymbolTables {
         };
         ledger.test_limits = limits;
         Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn census_for_test(&self) -> Result<TableCensus, TablePublicationError> {
+        let view = self.view();
+        let table = view.table();
+        let stats = self.stats()?;
+        Ok(TableCensus {
+            address: table as *const PublishedSymbolTable as usize,
+            slots: table.slots().get(),
+            chunk_slots: table.chunk_slots().get(),
+            chunk0: table
+                .chunk(super::SymbolChunkIndex::from(0))
+                .map(|chunk| chunk.as_ptr() as usize),
+            generation: stats.generation.0.get(),
+            retired: stats.retired.get(),
+            retained_bytes: stats.retained_bytes.get(),
+        })
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn apply_limit_probe_for_test(
+        &self,
+        probe: TestLimitProbe,
+    ) -> Result<(), TablePublicationError> {
+        let limits = match probe {
+            TestLimitProbe::Production => TestTableLimits::Production,
+            TestLimitProbe::Bytes => {
+                let retained = self.stats()?.retained_bytes;
+                TestTableLimits::Override(TableLimits::new(retained, TableLimits::DEFAULT_RETIRED))
+            }
+            TestLimitProbe::Retirees => TestTableLimits::Override(TableLimits::new(
+                TableLimits::DEFAULT_BYTES,
+                RetiredTableCount::new(0),
+            )),
+        };
+        self.set_limits_for_test(limits)
+    }
+
+    /// Read one retained cell's name. Searches the current table, then retired
+    /// descriptors. The caller holds the matching cell reader, or the era is
+    /// already poisoned and no writer remains.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn retained_name_at_for_test(
+        &self,
+        address: usize,
+        slot: usize,
+    ) -> crate::intern::NameId {
+        let ledger = match self.ledger.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let owned = std::iter::once(&ledger.current)
+            .chain(ledger.retired.iter())
+            .find(|table| table.as_ptr() as usize == address)
+            .unwrap_or_else(|| panic!("retained symbol table {address:#x}"));
+        let table = owned.table();
+        assert!(slot < table.slots().get());
+        let span = table.chunk_slots().get();
+        let chunk = table
+            .chunk(super::SymbolChunkIndex::from(slot / span))
+            .unwrap_or_else(|| panic!("symbol table chunk"));
+        // SAFETY: the caller retains the matching cell reader, or the era is
+        // poisoned and the writer has returned. The slot bound and the chunk
+        // come from this same retained descriptor. No symbol reference escapes.
+        unsafe {
+            (&*chunk
+                .as_ptr()
+                .cast::<crate::symbol::LispSymbol>()
+                .add(slot % span))
+                .name()
+        }
     }
 
     pub(crate) fn try_prepare(&self, shape: SymbolTableShape) -> TablePreparationAccounting<'_> {

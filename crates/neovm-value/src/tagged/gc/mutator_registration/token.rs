@@ -303,6 +303,34 @@ impl<'era> Mutator<'era> {
         self.entry.admitted()
     }
 
+    /// Copied symbol-sidecar readiness. The sidecar stays private.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn symbols_ready_for_test(&self) -> Result<(), RegistrationError> {
+        self.registry.symbols.ready()
+    }
+
+    /// Copied owner admission word. The atomic stays private.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn admission_word_for_test(&self) -> u64 {
+        self.entry.admission.load(Ordering::Acquire)
+    }
+
+    /// Copied registry phase word.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn phase_word_for_test(&self) -> u64 {
+        self.registry.phase.load()
+    }
+
+    /// Whether the owner admission word is the OUT sentinel.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn admission_is_out_for_test(&self) -> bool {
+        self.admission_word_for_test() == AdmissionWord::OUT
+    }
+
     /// Lock-free slice admission (the safepoint poll): zero RMWs on shared
     /// lines — one plain store to the owner-private admission word, one
     /// full fence, one plain load of the read-mostly phase word.
@@ -577,6 +605,50 @@ pub struct OwnerGcSnapshot {
 impl RunAccess<'_, '_> {
     pub(in crate::tagged::gc) fn state(&mut self) -> &mut OwnerGcState {
         self.owner.local.as_mut().expect("resident owner state")
+    }
+
+    /// Copied hot-byte charge. Absent when this owner has no resident state.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn hot_bytes_since_gc_for_test(&self) -> Option<usize> {
+        self.owner
+            .local
+            .as_ref()
+            .map(|local| local.hot.bytes_since_gc)
+    }
+
+    /// Name through a retained descriptor while the matching cell reader is held.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn symbol_table_name_at_for_test(
+        &mut self,
+        address: usize,
+        handle: &SymbolHandle,
+        id: crate::intern::SymId,
+    ) -> crate::intern::NameId {
+        // Copy the era registry handle first. The cell reader then borrows this
+        // access mutably, and the name read uses the copied handle.
+        let registry = self.owner.registry;
+        let _reader = self.symbol_ref(handle).expect("matching cell reader");
+        registry
+            .symbols
+            .tables
+            .retained_name_at_for_test(address, id.to_raw() as usize)
+    }
+
+    /// Name through a retained descriptor after poison. Does not take a reader.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn retained_symbol_name_for_test(
+        &self,
+        address: usize,
+        id: crate::intern::SymId,
+    ) -> crate::intern::NameId {
+        self.owner
+            .registry
+            .symbols
+            .tables
+            .retained_name_at_for_test(address, id.to_raw() as usize)
     }
 
     /// VIS row: copied owner-GC census for the re-homed root-slot tests.

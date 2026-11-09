@@ -1,10 +1,10 @@
 //! Shared real-World test fixture: exact rooted operands and total teardown. No feature-dependent test hiding.
-use super::super::symbol_functions::retry::{self as contention, Deadline, Retry, retry_owned};
 use super::*;
-use crate::emacs_core::eval::Context;
-use crate::tagged::gc::{Mutator, PlainSymbolBacking, RendezvousError};
+use crate::tagged::gc::{Mutator, PlainSymbolBacking};
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue as Value;
+use neovm_eval::test_support::authority::WorldProofEra as ParallelHeapEra;
+use neovm_value::test_support::authority::{self as contention, Deadline, Retry, retry_owned};
 use std::cell::RefCell;
 use std::ops::ControlFlow;
 use std::rc::Rc;
@@ -80,11 +80,7 @@ pub(super) fn fixture(
 pub(super) fn fixture_owner(
     kind: PlainSymbolBacking,
     query: Query,
-    body: impl for<'heap, 'era> FnOnce(
-        &crate::tagged::gc::ProofEra<'heap>,
-        &mut Mutator<'era>,
-        &mut Homes<'era>,
-    ),
+    body: impl for<'heap, 'era> FnOnce(&ParallelHeapEra<'heap>, &mut Mutator<'era>, &mut Homes<'era>),
 ) -> std::thread::Result<()> {
     with_query_era(kind, query, |era, ids, target| {
         let handles = [
@@ -165,11 +161,12 @@ pub(super) fn with_query_era<R>(
     kind: PlainSymbolBacking,
     query: Query,
     body: impl for<'heap> FnOnce(
-        crate::tagged::gc::ProofEra<'heap>,
+        ParallelHeapEra<'heap>,
         Vec<crate::intern::SymId>,
         Option<crate::intern::SymId>,
     ) -> R,
 ) -> R {
+    crate::test_utils::init_test_tracing();
     static NEXT: AtomicU64 = AtomicU64::new(1);
     // Existing input holders stay below a deliberately distant target ID.
     // Seeding them after the target would pre-grow the World and invalidate
@@ -187,8 +184,8 @@ pub(super) fn with_query_era<R>(
                 } else {
                     2
                 };
-                let target = (u64::from(id.0) / 4096 + added_chunks) * 4096 + 17;
-                while u64::from(id.0) + 1 < target {
+                let target = (u64::from(id.to_raw()) / 4096 + added_chunks) * 4096 + 17;
+                while u64::from(id.to_raw()) + 1 < target {
                     id = crate::intern::intern_uninterned("p3sym-c5-gap");
                 }
             } else if matches!(query, Query::FreshReusedAtom) {
@@ -208,8 +205,8 @@ pub(super) fn with_query_era<R>(
         Query::Boundary => {
             let spelling = format!("p3sym-c5-boundary-{}", NEXT.fetch_add(1, Ordering::Relaxed));
             let mut id = crate::intern::intern_uninterned("p3sym-c5-gap");
-            let target = (u64::from(id.0) / 4096 + 2) * 4096 + 17;
-            while u64::from(id.0) + 1 < target {
+            let target = (u64::from(id.to_raw()) / 4096 + 2) * 4096 + 17;
+            while u64::from(id.to_raw()) + 1 < target {
                 id = crate::intern::intern_uninterned("p3sym-c5-gap");
             }
             crate::intern::intern(&spelling);
@@ -226,16 +223,14 @@ pub(super) fn with_query_era<R>(
         assert!(crate::intern::lookup_interned(&spelling).is_none());
     }
     let target = crate::intern::lookup_interned(&spelling);
-    Context::with_test_symbol_name_inputs_init_era(
+    neovm_eval::test_support::authority::with_test_symbol_name_inputs_init_era(
         kind,
         &spelling,
         |obarray, ids| {
             if matches!(query, Query::SameChunk) {
                 let id = target.expect("serially prepared canonical identity");
-                let slots = (id.0 as usize).checked_add(1).unwrap();
-                obarray.prepare_symbol_table_slots_for_test(
-                    crate::tagged::gc::symbol_table::SymbolSlotCount::from(slots),
-                );
+                let slots = (id.to_raw() as usize).checked_add(1).unwrap();
+                obarray.prepare_symbol_table_slot_count_for_test(slots);
             }
             if matches!(query, Query::Existing | Query::Nonmember) {
                 obarray

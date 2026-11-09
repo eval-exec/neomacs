@@ -9,7 +9,7 @@ fn printed(ctx: &mut Context, form: &str) -> String {
 
 fn audit(scenario: Scenario) {
     static NEXT: AtomicU64 = AtomicU64::new(1);
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     // Use the real serial Lisp surface, including registered builtin function
     // cells and its startup initial-obarray proxy. Retire the default weak
     // table BEFORE any test name; these Context rows are not Miri fixtures.
@@ -28,7 +28,7 @@ fn audit(scenario: Scenario) {
             )
         })
         .collect();
-    let oracle: Vec<_> = include_str!("../../../symbol_intern_oracle.expected")
+    let oracle: Vec<_> = include_str!("../../../../../../../../neovm-value/src/tagged/gc/mutator_registration/symbol_intern_oracle.expected")
         .lines()
         .collect();
     assert_eq!(oracle.len(), 24);
@@ -65,7 +65,7 @@ fn audit(scenario: Scenario) {
     let holders: Vec<_> = (0..2)
         .map(|index| {
             let id = crate::intern::intern(&format!("p3sym-c5-serial-holder-{index}"));
-            ctx.obarray
+            ctx.obarray_mut()
                 .set_symbol_value_id(id, Value::string(&spellings[index]));
             id
         })
@@ -75,21 +75,26 @@ fn audit(scenario: Scenario) {
     assert_eq!(printed(&mut ctx, &filtered), oracle[11]);
     assert_eq!(
         ctx.eval_str(all).unwrap().as_fixnum(),
-        Some(ctx.obarray.len() as i64)
+        Some(ctx.obarray().len() as i64)
     );
     let mut gap = crate::intern::intern_uninterned("p3sym-c5-serial-gap");
-    let target = (u64::from(gap.0) / 4096 + 2) * 4096 + 17;
-    while u64::from(gap.0) + 1 < target {
+    let target = (u64::from(gap.to_raw()) / 4096 + 2) * 4096 + 17;
+    while u64::from(gap.to_raw()) + 1 < target {
         gap = crate::intern::intern_uninterned("p3sym-c5-serial-gap");
     }
-    let before: BTreeSet<_> = ctx.obarray.global_member_ids().map(|id| id.0).collect();
+    let before: BTreeSet<_> = ctx
+        .obarray()
+        .global_member_ids()
+        .map(|id| id.to_raw())
+        .collect();
     assert_eq!(
-        ctx.obarray.len(),
+        ctx.obarray().len(),
         before.len(),
         "actual initial count before era"
     );
-    let receipt = ctx
-        .admit_owned_proof_parallel(|projection| {
+    let receipt = neovm_eval::test_support::authority::admit_owned_proof_parallel_for_test(
+        &mut ctx,
+        |projection| {
             // Only scalar holder identities/scenario enter this closure. There is
             // no Context/evaluator/Obarray view until both capabilities return.
             let result = exercise(projection.era(), &holders, scenario);
@@ -97,16 +102,21 @@ fn audit(scenario: Scenario) {
                 .finish()
                 .expect("C5 serial audit clean era finish");
             (collector, keeper, result)
-        })
-        .expect("C5 serial audit owned admission")
-        .expect("C5 serial audit history after normal Context recovery");
+        },
+    )
+    .expect("C5 serial audit owned admission")
+    .expect("C5 serial audit history after normal Context recovery");
     assert_history(&receipt, scenario, None, true);
     assert!(
-        ctx.obarray.admission_matches_canonical(),
+        ctx.obarray_view().admission_matches_canonical(),
         "returning serial view refreshed after actual spine growth"
     );
-    let after: BTreeSet<_> = ctx.obarray.global_member_ids().map(|id| id.0).collect();
-    let winners: BTreeSet<_> = receipt.rows.iter().map(|row| row.id.0).collect();
+    let after: BTreeSet<_> = ctx
+        .obarray()
+        .global_member_ids()
+        .map(|id| id.to_raw())
+        .collect();
+    let winners: BTreeSet<_> = receipt.rows.iter().map(|row| row.id.to_raw()).collect();
     assert!(
         before.is_subset(&after),
         "growth preserves every old member"
@@ -116,7 +126,7 @@ fn audit(scenario: Scenario) {
         winners
     );
     assert_eq!(
-        ctx.obarray.len(),
+        ctx.obarray().len(),
         after.len(),
         "actual count equals serial member iterator"
     );
@@ -144,7 +154,7 @@ fn audit(scenario: Scenario) {
         "real unfiltered mapatoms count equals actual initial membership"
     );
     assert_eq!(
-        ctx.obarray.len(),
+        ctx.obarray().len(),
         after.len(),
         "serial soft/traversal must not repair or add members"
     );

@@ -12,6 +12,9 @@ mod intern;
 mod write;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use intern::{InitialInternFacts, InitialInternFault};
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod test_facts;
 
 use super::{Obarray, SymbolTrappedWrite, ValueCell};
 use crate::forward::{CanonicalArm, ThreadProjectionTable};

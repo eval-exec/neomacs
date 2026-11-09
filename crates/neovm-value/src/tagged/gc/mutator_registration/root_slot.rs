@@ -130,7 +130,8 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
     /// and cannot make the failed era resumable. Production poison checks
     /// remain intact, including ordinary clear_root_slots.
     #[cfg(any(test, feature = "test-support"))]
-    pub(super) fn clear_terminal_roots_for_test(&mut self) -> Result<(), RegistrationError> {
+    #[doc(hidden)]
+    pub fn clear_terminal_roots_for_test(&mut self) -> Result<(), RegistrationError> {
         if self.owner.thread != std::thread::current().id() {
             return Err(RegistrationError::WrongThread);
         }

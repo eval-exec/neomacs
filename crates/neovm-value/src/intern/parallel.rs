@@ -6,7 +6,7 @@ mod fresh;
 pub(crate) use fresh::PreparedFreshCanonical;
 mod retained_bytes;
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) use fresh::{FreshRegistryFacts, fresh_registry_facts_for_test};
+pub(crate) use fresh::fresh_registry_facts_for_test;
 pub(crate) use retained_bytes::RetainedBytes;
 
 /// Scalar metadata captured under the process registry guard. It contains no

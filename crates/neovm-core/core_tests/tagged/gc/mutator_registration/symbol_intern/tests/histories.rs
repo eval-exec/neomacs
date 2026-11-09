@@ -4,11 +4,12 @@
 use super::contention as retry_protocol;
 use super::*;
 use crate::intern::{SymId, parallel::name_publication_for_test};
-use crate::symbol::parallel::InitialInternFacts;
+use crate::symbol::parallel::test_facts::InitialInternFacts;
 use crate::tagged::gc::{
-    FunctionError, GlobalError, HeapIdentity, InitialInternError, MutatorPermit,
-    ProofEra as ParallelHeapEra, RegistrationError, SymbolHandle,
+    FunctionError, GlobalError, HeapIdentity, InitialInternError, MutatorPermit, RegistrationError,
+    SymbolHandle,
 };
+use neovm_eval::test_support::authority::WorldProofEra as ParallelHeapEra;
 use std::collections::BTreeSet;
 use std::sync::Barrier;
 
@@ -46,13 +47,28 @@ impl From<FunctionError> for Failure {
         Self::Function(error)
     }
 }
+/// Same classification as the crate-private `symbol_functions::retry::function`.
+/// That helper is not on the public authority fence, so the history driver
+/// keeps the match here. `Authority` still goes through the fenced registration
+/// classifier; every other function error refuses.
+fn function_retry(error: &FunctionError) -> Retry {
+    match error {
+        FunctionError::Authority(error) => retry_protocol::registration(error),
+        FunctionError::VoidFunction
+        | FunctionError::UnsupportedDefinition
+        | FunctionError::EpochExhausted
+        | FunctionError::ActiveActivation
+        | FunctionError::InactiveActivation => Retry::Refuse,
+    }
+}
+
 impl Failure {
     fn retry(&self) -> Retry {
         match self {
             Self::Control(error) => retry_protocol::registration(error),
             Self::Global(error) => retry_protocol::global(error),
             Self::Intern(error) => retry_protocol::initial_intern(error),
-            Self::Function(error) => retry_protocol::function(error),
+            Self::Function(error) => function_retry(error),
             Self::Fixture(_) => Retry::Refuse,
         }
     }
@@ -227,10 +243,12 @@ fn seed<'era>(
 
 fn perform<'era>(owner: &mut Mutator<'era>, mut homes: ActorHomes<'era>) -> Result<Row, String> {
     #[cfg(feature = "jit")]
-    let function_before = crate::emacs_core::jit::stats::epoch::EpochCounters::snapshot();
+    let function_before = crate::emacs_core::jit::stats::EpochCounters::snapshot();
     let id = attempt(owner, "initial_intern_into", |run| {
         run.initial_intern_into(&homes.name, &mut homes.dst)?;
-        Value::from_bits(homes.dst.word_for_test(run))
+        let word = homes.dst.word_for_test(run);
+        // SAFETY: `word` is the rooted intern result just stored in `homes.dst`.
+        unsafe { Value::from_bits(word) }
             .as_bare_symbol_id()
             .ok_or(Failure::Fixture("intern did not root a bare symbol"))
     })?;
@@ -253,12 +271,8 @@ fn perform<'era>(owner: &mut Mutator<'era>, mut homes: ActorHomes<'era>) -> Resu
         run.initial_intern_soft_into(&homes.name, &mut homes.dst)?;
         Ok((
             homes.dst.word_for_test(run),
-            run.owner
-                .local
-                .as_ref()
-                .ok_or(Failure::Fixture("owner absent"))?
-                .hot
-                .bytes_since_gc,
+            run.hot_bytes_since_gc_for_test()
+                .ok_or(Failure::Fixture("owner absent"))?,
         ))
     })?;
     Ok(Row {
@@ -271,7 +285,7 @@ fn perform<'era>(owner: &mut Mutator<'era>, mut homes: ActorHomes<'era>) -> Resu
         function_nil,
         charge,
         #[cfg(feature = "jit")]
-        function_bumps: crate::emacs_core::jit::stats::epoch::EpochCounters::snapshot()
+        function_bumps: crate::emacs_core::jit::stats::EpochCounters::snapshot()
             .since(&function_before)
             .total(),
     })
@@ -328,7 +342,7 @@ fn exercise_with_relocation(
         )?,
         |owner| {
             attempt(owner, "initial_facts_for_test(before)", |run| {
-                Ok(run.initial_facts_for_test(inputs[0])?)
+                Ok(run.initial_facts_copy_for_test(inputs[0])?)
             })
         },
     )?;
@@ -394,14 +408,21 @@ fn exercise_with_relocation(
             let mut gaps_absent = true;
             for (index, row) in rows.iter().enumerate() {
                 cells.push(attempt(owner, "initial_facts_for_test(after)", |run| {
-                    Ok(run.initial_facts_for_test(row.id)?)
+                    Ok(run.initial_facts_copy_for_test(row.id)?)
                 })?);
                 // Every forced-gap fixture leaves the slot immediately before its
                 // FIRST winner absent. Later different-name winners are contiguous.
-                let first = rows.iter().map(|row| row.id.0).min().ok_or("C5 no rows")?;
+                let first = rows
+                    .iter()
+                    .map(|row| row.id.to_raw())
+                    .min()
+                    .ok_or("C5 no rows")?;
                 if first > 0 {
                     gaps_absent &= !attempt(owner, "initial_facts_for_test(gap)", |run| {
-                        Ok(run.initial_facts_for_test(SymId(first - 1))?)
+                        Ok(run.initial_facts_copy_for_test(unsafe {
+                            // SAFETY: one below the first winner id, observed only for absence.
+                            SymId::from_raw(first - 1)
+                        })?)
                     })?
                     .present;
                 }
@@ -451,7 +472,7 @@ fn assert_history(
         rows.iter().all(|row| row.function_bumps == 0),
         "intern, repeated intern and soft lookup contribute no function-epoch reason"
     );
-    let ids: BTreeSet<_> = rows.iter().map(|row| row.id.0).collect();
+    let ids: BTreeSet<_> = rows.iter().map(|row| row.id.to_raw()).collect();
     let inputs: BTreeSet<_> = rows.iter().map(|row| row.input).collect();
     let expected = if scenario == Scenario::DifferentNames {
         rows.len()
@@ -536,6 +557,7 @@ fn assert_history(
 }
 
 fn histories(scenario: Scenario) {
+    crate::test_utils::init_test_tracing();
     static NEXT: AtomicU64 = AtomicU64::new(1);
     for kind in [
         PlainSymbolBacking::Unprojected,
@@ -558,8 +580,10 @@ fn histories(scenario: Scenario) {
             for spelling in &spellings {
                 assert!(crate::intern::lookup_interned(spelling).is_none());
             }
-            let receipt =
-                Context::with_test_symbol_intern_race_era(kind, &spellings, |era, ids| {
+            let receipt = neovm_eval::test_support::authority::with_test_symbol_intern_race_era(
+                kind,
+                &spellings,
+                |era, ids| {
                     let result = exercise(&era, &ids[1..], scenario);
                     let (collector, keeper) = era
                         .finish()
@@ -568,8 +592,9 @@ fn histories(scenario: Scenario) {
                     drop(keeper);
                     eprintln!("P3SYM_C5_NATIVE_TEARDOWN_OK {scenario:?} {kind:?} owners={count}");
                     result
-                })
-                .expect("C5 history after clean teardown");
+                },
+            )
+            .expect("C5 history after clean teardown");
             assert_history(&receipt, scenario, Some(kind), true);
         }
     }
@@ -588,7 +613,11 @@ fn p3sym_c5_two_to_four_owners_grow_distinct_names_without_filling_gaps() {
     histories(Scenario::DifferentNames);
 }
 
+#[path = "histories/assignment.rs"]
 mod assignment;
+#[path = "histories/boundary.rs"]
 mod boundary;
+#[path = "histories/contention.rs"]
 mod contention;
+#[path = "histories/serial.rs"]
 mod serial;
