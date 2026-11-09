@@ -7544,9 +7544,12 @@ fn auto_save_error(eval: &mut Context, flow: &Flow) -> Result<(), Flow> {
             .buffers
             .current_buffer()
             .map_or(Value::NIL, |buf| buf.name_value());
-        let message = eval.funcall_general(
-            Value::symbol("format"),
-            vec![format_string, buffer_name, error_message],
+        // GNU fileio.c:6234-6245 calls CALLN (Fformat, ...) DIRECTLY from C,
+        // so advice on `format` never applies to this message. Call the
+        // implementation directly (the same function the format subr runs).
+        let message = neovm_eval::emacs_core::builtins::builtin_format_slice(
+            eval,
+            &[format_string, buffer_name, error_message],
         )?;
         eval.funcall_general(
             Value::symbol("display-warning"),
