@@ -118,17 +118,15 @@ const TIER_FORM: &str = "(progn
 #[test]
 #[cfg(feature = "release-pdump-tests")]
 fn batch_deep_compiled_recursion_signals_without_randomization() {
+    let expected = gnu_expected("tier-form", TIER_FORM);
     let Some(output) = run_unrandomized(TIER_FORM) else {
         return;
     };
     let text = messages(&output);
-    assert_eq!(
-        line(&text, "overflow: "),
-        "(error \"Bytecode stack overflow\")"
-    );
-    assert_eq!(line(&text, "after: "), "500");
+    assert_eq!(line(&text, "overflow: "), expected.0.as_str());
+    assert_eq!(line(&text, "after: "), expected.1.as_str());
     let reached: u64 = line(&text, "reached: ").parse().expect("a count");
-    assert_eq!(reached, GNU_BYTECODE_STACK_DEPTH, "{text}");
+    assert_eq!(reached, expected.2, "{text}");
 }
 
 /// Run `neomacs -Q --batch --eval FORM` with `envs` set.
@@ -148,78 +146,154 @@ fn run_with_env(form: &str, envs: &[(&str, &str)]) -> Output {
 /// execution tiers (interpreter, JIT with direct calls, the shim's fast path,
 /// the forced slow-spec and forced-deopt harnesses) and equal to GNU 31.1's
 /// live measurement of the same `--eval` form.
+/// The five execution tiers the exactness matrix covers.
+const TIERS: [(&str, &[(&str, &str)]); 5] = [
+    ("jit-off", &[("NEOVM_JIT", "0")]),
+    ("jit-on", &[]),
+    ("direct-call-off", &[("NEOVM_JIT_DIRECT_CALL", "off")]),
+    ("slow-spec", &[("NEOVM_JIT_FORCE_SLOW_SPEC", "1")]),
+    ("deopt", &[("NEOVM_JIT_FORCE_DEOPT", "1")]),
+];
+
 #[test]
 #[cfg(feature = "release-pdump-tests")]
 fn batch_bytecode_stack_depth_is_tier_independent_and_gnu_exact() {
-    let tiers: [(&str, &[(&str, &str)]); 5] = [
-        ("jit-off", &[("NEOVM_JIT", "0")]),
-        ("jit-on", &[]),
-        ("direct-call-off", &[("NEOVM_JIT_DIRECT_CALL", "off")]),
-        ("slow-spec", &[("NEOVM_JIT_FORCE_SLOW_SPEC", "1")]),
-        ("deopt", &[("NEOVM_JIT_FORCE_DEOPT", "1")]),
-    ];
-    for (tier, envs) in tiers {
+    let expected = gnu_expected("tier-form", TIER_FORM);
+    for (tier, envs) in TIERS {
         let output = run_with_env(TIER_FORM, envs);
         let text = messages(&output);
         assert_eq!(
             line(&text, "overflow: "),
-            "(error \"Bytecode stack overflow\")",
+            expected.0.as_str(),
             "{tier}: {text}"
         );
-        assert_eq!(line(&text, "after: "), "500", "{tier}: {text}");
+        assert_eq!(
+            line(&text, "after: "),
+            expected.1.as_str(),
+            "{tier}: {text}"
+        );
         let reached: u64 = line(&text, "reached: ").parse().expect("a count");
         assert_eq!(
-            reached, GNU_BYTECODE_STACK_DEPTH,
-            "{tier}: the bytecode-stack depth must be GNU's: {text}"
-        );
-    }
-    if let Some((gnu_reached, gnu_overflow)) = gnu_live_probe() {
-        assert_eq!(
-            gnu_reached, GNU_BYTECODE_STACK_DEPTH,
-            "the pinned GNU reference's depth moved"
-        );
-        assert_eq!(
-            gnu_overflow, "(error \"Bytecode stack overflow\")",
-            "the pinned GNU reference's error identity moved"
-        );
-    } else {
-        eprintln!(
-            "the live GNU reference was not run (set GNU_EMACS_SOURCE to the pinned \
-             emacs-31.1 checkout or GNU_EMACS_BINARY to its executable): the pinned \
-             depth {GNU_BYTECODE_STACK_DEPTH} is asserted instead"
+            reached, expected.2,
+            "{tier}: the bytecode-stack depth must be GNU's on this form: {text}"
         );
     }
 }
 
-/// The pinned GNU 31.1 reference's answers for [`TIER_FORM`], when it is
-/// available: `GNU_EMACS_SOURCE` names its checkout (`src/emacs`), or
-/// `GNU_EMACS_BINARY` its executable.
-fn gnu_live_probe() -> Option<(u64, String)> {
-    fn gnu_binary() -> Option<PathBuf> {
-        if let Some(binary) = std::env::var_os("GNU_EMACS_BINARY") {
-            let binary = PathBuf::from(binary);
-            return binary.is_file().then_some(binary);
+/// The pinned GNU reference's executable: `GNU_EMACS_BINARY`, or `src/emacs`
+/// under the `GNU_EMACS_SOURCE` checkout, or the CI oracle install.  A
+/// missing reference is a hard error: this suite asserts parity with the
+/// pinned GNU, so silently substituting a recorded number would hide a
+/// moved or absent oracle.
+fn oracle_binary() -> PathBuf {
+    if let Some(binary) = std::env::var_os("GNU_EMACS_BINARY") {
+        let binary = PathBuf::from(binary);
+        if binary.is_file() {
+            return binary;
         }
-        let source = PathBuf::from(std::env::var_os("GNU_EMACS_SOURCE")?);
-        let binary = source.join("src").join("emacs");
-        binary.is_file().then_some(binary)
     }
-    let binary = gnu_binary()?;
-    let output = Command::new(&binary)
-        .args(["-Q", "--batch", "--eval", TIER_FORM])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        eprintln!(
-            "the GNU reference run failed ({}): {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
+    if let Some(source) = std::env::var_os("GNU_EMACS_SOURCE") {
+        let binary = PathBuf::from(source).join("src").join("emacs");
+        if binary.is_file() {
+            return binary;
+        }
+    }
+    let ci = PathBuf::from("/opt/gnu-emacs-oracle/bin/emacs");
+    if ci.is_file() {
+        return ci;
+    }
+    panic!(
+        "the exactness oracle is required: set GNU_EMACS_SOURCE to the pinned \
+         emacs-31.1 checkout, GNU_EMACS_BINARY to its executable, or provide \
+         /opt/gnu-emacs-oracle/bin/emacs; refusing to assert the \
+         bytecode-stack depth without the pinned reference"
+    );
+}
+
+/// Check once that the resolved oracle is the pinned GNU Emacs 31.1.
+fn oracle_version_checked(binary: &std::path::Path) {
+    static CHECKED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    CHECKED.get_or_init(|| {
+        let output = Command::new(binary)
+            .args(["-Q", "--batch", "--eval", "(princ emacs-version)"])
+            .output()
+            .unwrap_or_else(|error| panic!("run {}: {error}", binary.display()));
+        let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+        text.push_str(&String::from_utf8_lossy(&output.stderr));
+        assert!(
+            text.starts_with("31.1"),
+            "the exactness oracle must be GNU Emacs 31.1 (got {text:?})"
         );
-        return None;
-    }
+    });
+}
+
+/// The recorded pinned-GNU answers for one form label.  Each value was
+/// taken from a live GNU 31.1 run of that exact form; the tests assert the
+/// live oracle still agrees with them, so a moved reference or a changed
+/// form cannot silently shift the expectation.
+fn recorded_answer(label: &str) -> (String, String, u64) {
+    // Recorded from live pinned GNU 31.1 runs of each form.  The plain
+    // recursion forms reach GNU's 74887; a re-entry form that fires its
+    // mechanism at depth 70000 reaches about 4885 because the nested
+    // recursion starts from that depth, so each form keeps its own number.
+    let reached = match label {
+        "tier-form" => GNU_BYTECODE_STACK_DEPTH,
+        "throw across bytecode frames" => 74_887,
+        "subr reentry and GC" => 74_887,
+        "per-thread" => 74_887,
+        "funcall" => 4_885,
+        "apply" => 4_885,
+        "mapcar" => 4_884,
+        "watcher" => 4_884,
+        "handler" => 4_886,
+        "unwind-protect" => 4_885,
+        "save-window-excursion" => 4_885,
+        _ => panic!("no recorded GNU answer for the form {label:?}"),
+    };
+    (
+        "(error \"Bytecode stack overflow\")".to_owned(),
+        "500".to_owned(),
+        reached,
+    )
+}
+
+/// The expected answers for `label`'s `form`: run the pinned GNU on the
+/// identical form, require the live answers to equal the recorded ones, and
+/// return them.  `NEOVM_DUMP_ORACLE` prints the live answers and returns
+/// them without the comparison (used only to record a new form's values).
+fn gnu_expected(label: &str, form: &str) -> (String, String, u64) {
+    let binary = oracle_binary();
+    oracle_version_checked(&binary);
+    let output = Command::new(&binary)
+        .args(["-Q", "--batch", "--eval", form])
+        .output()
+        .unwrap_or_else(|error| panic!("run {}: {error}", binary.display()));
+    assert!(
+        output.status.success(),
+        "the GNU reference run failed ({}): {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
     let text = String::from_utf8_lossy(&output.stderr).into_owned();
-    let reached = line(&text, "reached: ").parse().ok()?;
-    Some((reached, line(&text, "overflow: ").to_owned()))
+    let live = (
+        line(&text, "overflow: ").to_owned(),
+        line(&text, "after: ").to_owned(),
+        line(&text, "reached: ").parse::<u64>().expect("a count"),
+    );
+    let recorded = recorded_answer(label);
+    assert_eq!(
+        live.0, recorded.0,
+        "{label}: the pinned GNU reference's error identity moved"
+    );
+    assert_eq!(
+        live.1, recorded.1,
+        "{label}: the pinned GNU reference's after value moved"
+    );
+    assert_eq!(
+        live.2, recorded.2,
+        "{label}: the pinned GNU reference's depth moved"
+    );
+    recorded
 }
 
 /// The tree walker recurses on the main stack until stacker's probe moves
@@ -333,21 +407,134 @@ fn boundary_tier_form(event: &str) -> String {
 }
 
 fn assert_gnu_depth_after(event: &str, label: &str) {
-    let Some(output) = run_unrandomized(&boundary_tier_form(event)) else {
+    let form = boundary_tier_form(event);
+    // The expectation comes from the pinned GNU reference running the SAME
+    // form; the earlier boundary event may legitimately shift GNU's own
+    // reached count, so a hard-coded constant must not decide this.
+    let expected = gnu_expected(label, &form);
+    let Some(output) = run_unrandomized(&form) else {
         return;
     };
     let text = messages(&output);
     assert_eq!(
         line(&text, "overflow: "),
-        "(error \"Bytecode stack overflow\")",
+        expected.0.as_str(),
         "{label}: {text}"
     );
-    assert_eq!(line(&text, "after: "), "500", "{label}: {text}");
+    assert_eq!(
+        line(&text, "after: "),
+        expected.1.as_str(),
+        "{label}: {text}"
+    );
     let reached: u64 = line(&text, "reached: ").parse().expect("a count");
     assert_eq!(
-        reached, GNU_BYTECODE_STACK_DEPTH,
+        reached, expected.2,
         "{label}: the bytecode-stack position was not restored by the boundary: {text}"
     );
+}
+
+/// A re-entry form: the byte-compiled leaf makes a direct self call that
+/// RETURNS, then runs one mechanism that re-enters Lisp/bytecode and makes
+/// that nested recursion reach the bytecode-stack boundary.  After the
+/// returned direct call a position-argument JIT leaf's Context mirror still
+/// holds the callee's position, so every such mechanism must publish the
+/// leaf's own position before it re-enters; otherwise the nested frame is
+/// charged from the wrong base and its overflow depth differs from GNU's.
+fn reentry_tier_form(event: &str) -> String {
+    format!(
+        "(progn
+           (defvar neovm--sg-reached 0)
+           (defvar neovm--sg-trigger 99930000)
+           (defvar neovm--sg-event nil)
+           (defvar neovm--sg-watched 0)
+           (defun neovm--sg-deep (n)
+             (setq neovm--sg-reached n)
+             (if (= n 0) 0
+               (progn
+                 (when (> n 1000) (neovm--sg-deep 0))
+                 (when (= n neovm--sg-trigger) (funcall neovm--sg-event))
+                 (1+ (neovm--sg-deep (1- n))))))
+           (byte-compile 'neovm--sg-deep)
+           (setq neovm--sg-event
+                 (byte-compile (lambda () (setq neovm--sg-event nil) {event})))
+           (dotimes (_ 40) (neovm--sg-deep 100))
+           (message \"overflow: %S\"
+                    (let ((max-lisp-eval-depth most-positive-fixnum))
+                      (condition-case err (neovm--sg-deep 100000000) (error err))))
+           (message \"reached: %d\" (- 100000000 neovm--sg-reached))
+           (message \"after: %S\" (neovm--sg-deep 500)))"
+    )
+}
+
+/// Every tier must match GNU's live answers on the SAME re-entry form.
+fn assert_reentry_matches_gnu(event: &str, label: &str) {
+    let form = reentry_tier_form(event);
+    let expected = gnu_expected(label, &form);
+    for (tier, envs) in TIERS {
+        let output = run_with_env(&form, envs);
+        let text = messages(&output);
+        assert_eq!(
+            line(&text, "overflow: "),
+            expected.0.as_str(),
+            "{label}/{tier}: {text}"
+        );
+        assert_eq!(
+            line(&text, "after: "),
+            expected.1.as_str(),
+            "{label}/{tier}: {text}"
+        );
+        let reached: u64 = line(&text, "reached: ").parse().expect("a count");
+        assert_eq!(
+            reached, expected.2,
+            "{label}/{tier}: a re-entry boundary charged the nested frame from a stale \
+             position instead of the leaf's own: {text}"
+        );
+    }
+}
+
+/// The re-entry boundary matrix: funcall, apply, mapcar, a watched setq, a
+/// condition-case handler, an unwind-protect cleanup and
+/// save-window-excursion, each fired from inside the directly-called leaf
+/// after a returned direct call, on all five tiers, against live GNU.
+#[test]
+#[cfg(feature = "release-pdump-tests")]
+fn batch_bytecode_stack_depth_matches_gnu_through_reentry_boundaries() {
+    let events: [(&str, &str); 7] = [
+        (
+            "funcall",
+            "(funcall (byte-compile (lambda (n) (neovm--sg-deep n))) 100000000)",
+        ),
+        (
+            "apply",
+            "(apply (byte-compile (lambda (n) (neovm--sg-deep n))) (list 100000000))",
+        ),
+        (
+            "mapcar",
+            "(mapcar (byte-compile (lambda (n) (neovm--sg-deep n))) (list 100000000))",
+        ),
+        (
+            "watcher",
+            "(progn
+               (add-variable-watcher 'neovm--sg-watched
+                 (byte-compile (lambda (&rest _) (neovm--sg-deep 100000000))))
+               (setq neovm--sg-watched 1))",
+        ),
+        (
+            "handler",
+            "(condition-case nil (error \"boom\") (error (neovm--sg-deep 100000000)))",
+        ),
+        (
+            "unwind-protect",
+            "(unwind-protect nil (neovm--sg-deep 100000000))",
+        ),
+        (
+            "save-window-excursion",
+            "(save-window-excursion (neovm--sg-deep 100000000))",
+        ),
+    ];
+    for (label, event) in events {
+        assert_reentry_matches_gnu(event, label);
+    }
 }
 
 /// A non-local exit (`throw`) unwinds through several bytecode frames; the
@@ -396,7 +583,9 @@ fn batch_bytecode_stack_position_is_per_thread() {
                   (lambda ()
                     (let ((max-lisp-eval-depth most-positive-fixnum))
                       (condition-case err (neovm--bb-tw 100000000) (error err))))))))";
-    let Some(output) = run_unrandomized(&boundary_tier_form(event)) else {
+    let form = boundary_tier_form(event);
+    let expected = gnu_expected("per-thread", &form);
+    let Some(output) = run_unrandomized(&form) else {
         return;
     };
     let text = messages(&output);
@@ -405,15 +594,11 @@ fn batch_bytecode_stack_position_is_per_thread() {
         "(error \"Bytecode stack overflow\")",
         "the Lisp thread's own bytecode budget must signal GNU's error: {text}"
     );
-    assert_eq!(
-        line(&text, "overflow: "),
-        "(error \"Bytecode stack overflow\")",
-        "{text}"
-    );
-    assert_eq!(line(&text, "after: "), "500", "{text}");
+    assert_eq!(line(&text, "overflow: "), expected.0.as_str(), "{text}");
+    assert_eq!(line(&text, "after: "), expected.1.as_str(), "{text}");
     let reached: u64 = line(&text, "reached: ").parse().expect("a count");
     assert_eq!(
-        reached, GNU_BYTECODE_STACK_DEPTH,
+        reached, expected.2,
         "the thread switch corrupted the main thread's bytecode-stack position: {text}"
     );
 }
