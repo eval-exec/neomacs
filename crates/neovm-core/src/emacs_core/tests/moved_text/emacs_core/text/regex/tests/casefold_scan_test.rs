@@ -231,7 +231,11 @@ fn folded_scan_is_rebuilt_with_the_fastmap() {
     // Change the literal operand without changing bytecode boundaries, so a
     // stale scan would still skip to `A`/`a` and miss the new byte.
     assert_eq!(&compiled.buffer[..3], &[RegexOp::Exactn as u8, 1, b'a']);
-    compiled.buffer[2] = b'b';
+    neovm_text::test_support::authority::set_compiled_pattern_buffer_byte_for_test(
+        &mut compiled,
+        2,
+        b'b',
+    );
     recompute_fastmap(&mut compiled, &syntax);
     assert!(
         compiled.folded_scan(&table, false).is_none(),

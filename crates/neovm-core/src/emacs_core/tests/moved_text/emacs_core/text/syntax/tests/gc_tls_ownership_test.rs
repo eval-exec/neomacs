@@ -74,7 +74,7 @@ fn gc_tls_ownership_syntax_weak_ascii_keys_invalidate_before_heap_reuse() {
     let old_tick = {
         let mut first = crate::test_utils::new_context();
         let chartable = first.eval_str("(progn (set-syntax-table (copy-syntax-table)) (modify-syntax-entry ?a \".\") (syntax-table))").unwrap();
-        let table = SyntaxTable { chartable };
+        let table = neovm_text::test_support::authority::syntax_table(chartable);
         assert_eq!(
             flat_ascii_syntax_entry(&table, b'a').class,
             SyntaxClass::Punctuation

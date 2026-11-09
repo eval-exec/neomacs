@@ -72,10 +72,17 @@ fn ordinary_symbol_boundaries_follow_gnu_lookup_order_and_short_circuit() {
     lookup.boundary_syntax_at(request(SyntaxAssertion::SymbolEnd, '_', '!'));
     assert_eq!(*lookup.0.borrow(), [2, 3]);
     lookup.0.borrow_mut().clear();
-    let at_beginning = BoundarySyntaxRequest {
-        previous: None,
-        ..request(SyntaxAssertion::SymbolEnd, 'c', 'd')
-    };
+    let at_beginning = neovm_text::test_support::authority::boundary_syntax_request(
+        SyntaxAssertion::SymbolEnd,
+        neovm_edit::buffer::EmacsBytePos::new(3),
+        None,
+        Some(
+            neovm_text::test_support::authority::boundary_syntax_character(
+                neovm_value::emacs_char::EmacsChar::from_code_unchecked('d' as u32),
+                neovm_edit::buffer::EmacsBytePos::new(3),
+            ),
+        ),
+    );
     lookup.boundary_syntax_at(at_beginning);
     assert!(lookup.0.borrow().is_empty());
 }
@@ -219,18 +226,22 @@ fn physical_match_plan_keeps_symbol_lookup_order_and_short_circuit() {
 }
 
 fn request(kind: SyntaxAssertion, before: char, after: char) -> BoundarySyntaxRequest {
-    BoundarySyntaxRequest {
+    neovm_text::test_support::authority::boundary_syntax_request(
         kind,
-        current_byte: neovm_edit::buffer::EmacsBytePos::new(3),
-        previous: Some(BoundarySyntaxCharacter {
-            character: neovm_value::emacs_char::EmacsChar::from_code_unchecked(before as u32),
-            byte_position: neovm_edit::buffer::EmacsBytePos::new(2),
-        }),
-        current: Some(BoundarySyntaxCharacter {
-            character: neovm_value::emacs_char::EmacsChar::from_code_unchecked(after as u32),
-            byte_position: neovm_edit::buffer::EmacsBytePos::new(3),
-        }),
-    }
+        neovm_edit::buffer::EmacsBytePos::new(3),
+        Some(
+            neovm_text::test_support::authority::boundary_syntax_character(
+                neovm_value::emacs_char::EmacsChar::from_code_unchecked(before as u32),
+                neovm_edit::buffer::EmacsBytePos::new(2),
+            ),
+        ),
+        Some(
+            neovm_text::test_support::authority::boundary_syntax_character(
+                neovm_value::emacs_char::EmacsChar::from_code_unchecked(after as u32),
+                neovm_edit::buffer::EmacsBytePos::new(3),
+            ),
+        ),
+    )
 }
 
 #[derive(Default)]

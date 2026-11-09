@@ -224,7 +224,7 @@ fn from_membership_survives_collisions_eviction_and_invalidation() {
         .with_syntax_parse_cache(|cache, _| {
             let from = colliding + 400;
             let mut key = cache.runs[0].key.clone();
-            key.from_char = from;
+            neovm_text::test_support::authority::set_run_key_from_char_for_test(&mut key, from);
             cache.store(key, Record::new(from, from, from), None);
             assert!(!cache.has_run_from(from), "empty recording not retained");
             assert!(

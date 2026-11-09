@@ -876,15 +876,15 @@ fn gnu_detect_state() -> CodingDetectionBindings {
         }
     }
     let mgr = CodingSystemManager::new();
-    CodingDetectionBindings {
+    neovm_text::test_support::authority::coding_detection_bindings(
         priorities,
-        systems: cat_system,
-        charset: CharsetDetectionPlan::for_coding_system(
+        cat_system,
+        CharsetDetectionPlan::for_coding_system(
             &mgr,
             intern("iso-latin-1"),
             neovm_value::tagged::value::SymbolMode::Bare,
         ),
-    }
+    )
 }
 
 fn detect_list(bytes: &[u8]) -> Vec<String> {
@@ -931,8 +931,13 @@ fn detect_highest_with_front(front: Option<CodingCat>) -> String {
     let mut bindings = gnu_detect_state();
     if let Some(cat) = front {
         let c = cat as usize;
-        bindings.priorities.retain(|&x| x != c);
-        bindings.priorities.insert(0, c);
+        neovm_text::test_support::authority::with_coding_detection_priorities_mut_for_test(
+            &mut bindings,
+            |priorities| {
+                priorities.retain(|&x| x != c);
+                priorities.insert(0, c);
+            },
+        );
     }
     let v = detect_categories(
         &bindings,

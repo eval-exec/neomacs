@@ -84,3 +84,263 @@ pub fn define_charset_alias_for_test(
 ) -> neovm_value::error::EvalResult {
     crate::emacs_core::charset::builtin_define_charset_alias(args)
 }
+// ---------------------------------------------------------------------------
+// peer #816 VIS write-arm (neovm-text): construction fences and one setter
+// per widened field.  Consumer tests stay read-only over the widened fields;
+// every write goes through one of these functions, which carry an
+// AUTHORITY-ITEMS row and are the only cross-crate test route for their item.
+// ---------------------------------------------------------------------------
+
+use neovm_edit::buffer::EmacsBytePos;
+use neovm_value::emacs_char::EmacsChar;
+use neovm_value::intern::SymId;
+use neovm_value::value::Value;
+
+use crate::emacs_core::charset::{CharsetInfo, CharsetMapCacheKey, CharsetMapData, CharsetMethod};
+use crate::emacs_core::coding::{CODING_CAT_MAX, CharsetDetectionPlan, CodingDetectionBindings};
+use crate::emacs_core::regex_emacs::dfa::{
+    ClassContext, DfaCounters, DfaGaveUp, DfaLease, DfaSlot, ExistenceDfa,
+};
+use crate::emacs_core::regex_emacs::{
+    BoundarySyntaxCharacter, BoundarySyntaxRequest, CompiledPattern, MatchSyntax, SyntaxAssertion,
+};
+use crate::emacs_core::syntax::SyntaxTable;
+use crate::emacs_core::syntax::parse_cache::RunKey;
+
+/// FENCE (peer #816 write-arm): `BoundarySyntaxCharacter` construction.
+/// Every field explicit; the only cross-crate test construction path.
+pub fn boundary_syntax_character(
+    character: EmacsChar,
+    byte_position: EmacsBytePos,
+) -> BoundarySyntaxCharacter {
+    BoundarySyntaxCharacter {
+        character,
+        byte_position,
+    }
+}
+
+/// FENCE (peer #816 write-arm): `BoundarySyntaxRequest` construction.
+/// Every field explicit; the only cross-crate test construction path.
+pub fn boundary_syntax_request(
+    kind: SyntaxAssertion,
+    current_byte: EmacsBytePos,
+    previous: Option<BoundarySyntaxCharacter>,
+    current: Option<BoundarySyntaxCharacter>,
+) -> BoundarySyntaxRequest {
+    BoundarySyntaxRequest {
+        kind,
+        current_byte,
+        previous,
+        current,
+    }
+}
+
+/// FENCE (peer #816 write-arm): `SyntaxTable` construction.
+pub fn syntax_table(chartable: Value) -> SyntaxTable {
+    SyntaxTable { chartable }
+}
+
+/// FENCE (peer #816 write-arm): `CodingDetectionBindings` construction.
+/// Every field explicit; the only cross-crate test construction path.
+pub fn coding_detection_bindings(
+    priorities: Vec<usize>,
+    systems: [Option<SymId>; CODING_CAT_MAX],
+    charset: Option<CharsetDetectionPlan>,
+) -> CodingDetectionBindings {
+    CodingDetectionBindings {
+        priorities,
+        systems,
+        charset,
+    }
+}
+
+/// FENCE (peer #816 write-arm): `Place` construction.  Every field explicit;
+/// the only cross-crate test construction path.
+pub fn place<'a>(
+    text: &'a [u8],
+    d: usize,
+    stop: usize,
+    point: usize,
+    target_multibyte: bool,
+    syntax: MatchSyntax<'a>,
+) -> crate::emacs_core::regex_emacs::dfa::Place<'a> {
+    crate::emacs_core::regex_emacs::dfa::Place {
+        text,
+        d,
+        stop,
+        point,
+        target_multibyte,
+        syntax,
+    }
+}
+
+/// FENCE (peer #816 write-arm): `CharsetMapData` construction.  Every field
+/// explicit; the only cross-crate test construction path.
+pub fn charset_map_data(
+    code_to_char: rustc_hash::FxHashMap<i64, i64>,
+    char_to_code: rustc_hash::FxHashMap<i64, i64>,
+) -> CharsetMapData {
+    CharsetMapData {
+        code_to_char,
+        char_to_code,
+    }
+}
+
+/// FENCE (peer #816 write-arm): `CharsetMapCacheKey` construction.  Every
+/// field explicit; the only cross-crate test construction path.
+pub fn charset_map_cache_key(
+    map_name: String,
+    code_space: [i64; 8],
+    min_code: i64,
+) -> CharsetMapCacheKey {
+    CharsetMapCacheKey {
+        map_name,
+        code_space,
+        min_code,
+    }
+}
+
+/// FENCE (peer #816 write-arm): set `CharsetInfo::method` in place.
+pub fn set_charset_info_method(info: &mut CharsetInfo, value: CharsetMethod) {
+    info.method = value;
+}
+
+/// FENCE (peer #816 write-arm): set `CharsetInfo::unified_p` in place.
+pub fn set_charset_info_unified_p(info: &mut CharsetInfo, value: bool) {
+    info.unified_p = value;
+}
+
+/// FENCE (peer #816 write-arm): set `CharsetInfo::unify_map` in place.
+pub fn set_charset_info_unify_map(info: &mut CharsetInfo, value: Value) {
+    info.unify_map = value;
+}
+
+/// FENCE (peer #816 write-arm): write one `ExistenceDfa::trans` entry.
+pub fn set_existence_dfa_trans_at(dfa: &mut ExistenceDfa, at: usize, value: u32) {
+    dfa.trans[at] = value;
+}
+
+/// FENCE (peer #816 write-arm): set `ExistenceDfa::gave_up` in place.
+pub fn set_existence_dfa_gave_up(dfa: &mut ExistenceDfa, value: Option<DfaGaveUp>) {
+    dfa.gave_up = value;
+}
+
+/// FENCE (peer #816 write-arm): write one `CharClasses::byte_class` entry
+/// through the owning `ExistenceDfa` (its `classes` field stays read-only at
+/// the consumer).
+pub fn set_existence_dfa_byte_class(dfa: &mut ExistenceDfa, byte: usize, value: u8) {
+    dfa.classes.byte_class[byte] = value;
+}
+
+/// FENCE (peer #816 write-arm): write one `CharClasses::byte_facts` entry
+/// through the owning `ExistenceDfa`.
+pub fn set_existence_dfa_byte_facts(dfa: &mut ExistenceDfa, byte: usize, value: u8) {
+    dfa.classes.byte_facts[byte] = value;
+}
+
+/// FENCE (peer #816 write-arm): set `SearchSyntax::read_limit` in place
+/// through the owning `ExistenceDfa`.
+pub fn set_existence_dfa_search_read_limit(dfa: &mut ExistenceDfa, value: usize) {
+    dfa.search.read_limit = value;
+}
+
+/// FENCE (peer #816 write-arm): set `SearchSyntax::positional` in place
+/// through the owning `ExistenceDfa`.
+pub fn set_existence_dfa_search_positional(dfa: &mut ExistenceDfa, value: bool) {
+    dfa.search.positional = value;
+}
+
+/// FENCE (peer #816 write-arm): sync the DFA's `CharClasses` (an
+/// `&mut self` method on the widened `classes` field).
+pub fn sync_existence_dfa_classes(dfa: &mut ExistenceDfa, context: ClassContext) {
+    dfa.classes.sync(context);
+}
+
+/// FENCE (peer #816 write-arm): read the live lease's
+/// `LiveDfa::overflow_free_span`; the consumer never borrows `slot`.
+pub fn live_dfa_overflow_free_span_for_test(lease: &DfaLease<'_>) -> Option<usize> {
+    match &*lease.slot {
+        DfaSlot::Live(live) => Some(live.overflow_free_span),
+        _ => None,
+    }
+}
+
+/// FENCE (peer #816 write-arm): set the live lease's
+/// `LiveDfa::overflow_free_span`; the consumer never borrows `slot`.
+pub fn set_live_dfa_overflow_free_span_for_test(lease: &mut DfaLease<'_>, value: usize) {
+    if let DfaSlot::Live(live) = &mut *lease.slot {
+        live.overflow_free_span = value;
+    }
+}
+
+/// FENCE (peer #816 write-arm): read the live lease's `LiveDfa::dfa`
+/// counters; the consumer never borrows `slot`.
+pub fn live_dfa_counters_for_test(lease: &DfaLease<'_>) -> Option<DfaCounters> {
+    match &*lease.slot {
+        DfaSlot::Live(live) => Some(live.dfa.counters),
+        _ => None,
+    }
+}
+
+/// FENCE (peer #816 write-arm): set `RunKey::from_char` in place.
+pub fn set_run_key_from_char_for_test(key: &mut RunKey, value: usize) {
+    key.from_char = value;
+}
+
+/// FENCE (peer #816 write-arm): write one `CompiledPattern::buffer` byte.
+pub fn set_compiled_pattern_buffer_byte_for_test(
+    pattern: &mut CompiledPattern,
+    at: usize,
+    value: u8,
+) {
+    pattern.buffer[at] = value;
+}
+
+/// FENCE (peer #816 write-arm): mutate `CodingDetectionBindings::priorities`
+/// through a scoped borrow; the field stays read-only at the consumer.
+pub fn with_coding_detection_priorities_mut_for_test<R>(
+    bindings: &mut CodingDetectionBindings,
+    f: impl FnOnce(&mut Vec<usize>) -> R,
+) -> R {
+    f(&mut bindings.priorities)
+}
+
+/// FENCE (peer #816 write-arm): run the anchored existence search on the
+/// compiled pattern's live DFA slot; the consumer never borrows
+/// `CompiledPattern::dfa` or `DfaCell::slot`.
+pub fn compiled_pattern_anchored_exists_for_test(
+    pattern: &CompiledPattern,
+    text: &[u8],
+    p: usize,
+    stop: usize,
+    point: usize,
+    syntax: &dyn crate::emacs_core::regex_emacs::SyntaxLookup,
+) -> crate::emacs_core::regex_emacs::dfa::Exists {
+    let mut slot = pattern.dfa.slot.borrow_mut();
+    match &mut *slot {
+        DfaSlot::Live(live) => live
+            .dfa
+            .anchored_exists(pattern, text, p, stop, point, syntax),
+        _ => panic!("compiled DFA slot is not live"),
+    }
+}
+
+/// FENCE (peer #816 write-arm): write one `SyntaxPropByteRun::ascii` cell;
+/// the array is interior-mutable and stays a read surface for consumers.
+pub fn set_syntax_prop_byte_run_ascii_for_test(
+    run: &crate::emacs_core::syntax::SyntaxPropByteRun<'_>,
+    byte: usize,
+    entry: Option<crate::emacs_core::syntax::SyntaxEntry>,
+) {
+    run.ascii[byte].set(entry);
+}
+
+/// FENCE (peer #816 write-arm): write one `SyntaxPropRange::ascii` cell;
+/// the array is interior-mutable and stays a read surface for consumers.
+pub fn set_syntax_prop_range_ascii_for_test(
+    range: &crate::emacs_core::syntax::SyntaxPropRange<'_>,
+    byte: usize,
+    entry: Option<crate::emacs_core::syntax::SyntaxEntry>,
+) {
+    range.ascii[byte].set(entry);
+}

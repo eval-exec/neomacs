@@ -106,7 +106,7 @@ fn install_overlapping_charsets() -> (neovm_value::intern::SymId, neovm_value::i
         .clone();
     let mut names = Vec::new();
     for (index, first_code) in [33, 34].into_iter().enumerate() {
-        let mut info = template.clone();
+        let mut info: neovm_text::emacs_core::charset::CharsetInfoSnapshot = template.clone();
         info.name = intern(if index == 0 {
             "neovm-mule-first"
         } else {

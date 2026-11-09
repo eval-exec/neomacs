@@ -62,24 +62,30 @@ fn prepared_mule_scalar_preserves_map_alias_and_unification() {
     mapped.code_space = [33, 126, 0, 0, 0, 0, 0, 0];
     let map_name = "neovm-mule-synthetic-map";
     mapped.method = CharsetMethod::Map(map_name.to_string());
-    let map = Arc::new(CharsetMapData {
-        code_to_char: [(105, 233)].into_iter().collect(),
-        char_to_code: [(233, 105)].into_iter().collect(),
-    });
+    let map = Arc::new(neovm_text::test_support::authority::charset_map_data(
+        [(105, 233)].into_iter().collect(),
+        [(233, 105)].into_iter().collect(),
+    ));
     charset_map_cache().write().expect("charset cache").insert(
-        CharsetMapCacheKey {
-            map_name: map_name.to_string(),
-            code_space: mapped.code_space,
-            min_code: mapped.min_code,
-        },
+        neovm_text::test_support::authority::charset_map_cache_key(
+            map_name.to_string(),
+            mapped.code_space,
+            mapped.min_code,
+        ),
         Some(map),
     );
     let mut unified = mapped.clone();
     unified.name = intern("neovm-mule-unified");
     unified.id = 911;
-    unified.method = CharsetMethod::Offset(0x1f300);
-    unified.unified_p = true;
-    unified.unify_map = Value::string(map_name);
+    neovm_text::test_support::authority::set_charset_info_method(
+        &mut unified,
+        CharsetMethod::Offset(0x1f300),
+    );
+    neovm_text::test_support::authority::set_charset_info_unified_p(&mut unified, true);
+    neovm_text::test_support::authority::set_charset_info_unify_map(
+        &mut unified,
+        Value::string(map_name),
+    );
     CHARSET_REGISTRY.with(|slot| {
         let mut registry = slot.borrow_mut();
         registry.register(mapped);

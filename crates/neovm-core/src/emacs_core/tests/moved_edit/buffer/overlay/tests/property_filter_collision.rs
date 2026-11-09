@@ -193,7 +193,7 @@ fn assert_filtered_extent(
 
 fn replace_carrier_property(list: &mut OverlayList, carrier: Value, property: Value, value: i64) {
     carrier
-        .with_overlay_data_mut(|data| {
+        .with_overlay_data_mut(|data: &mut neovm_value::heap_types::OverlayData| {
             data.plist = Value::cons(
                 Value::symbol("priority"),
                 Value::cons(

@@ -131,8 +131,16 @@ fn issue554_ascii_syntax_properties_override_a_warm_table_memo() {
         );
         let bytes = SyntaxPropByteRun::new(properties);
         let chars = SyntaxPropRange::new(properties);
-        bytes.ascii[b'a' as usize].set(Some(word));
-        chars.ascii[b'a' as usize].set(Some(word));
+        neovm_text::test_support::authority::set_syntax_prop_byte_run_ascii_for_test(
+            &bytes,
+            b'a' as usize,
+            Some(word),
+        );
+        neovm_text::test_support::authority::set_syntax_prop_range_ascii_for_test(
+            &chars,
+            b'a' as usize,
+            Some(word),
+        );
         let buffer = context.edit.buffers.current_buffer().unwrap();
         assert_eq!(
             effective_syntax_entry_for_char_at_byte(

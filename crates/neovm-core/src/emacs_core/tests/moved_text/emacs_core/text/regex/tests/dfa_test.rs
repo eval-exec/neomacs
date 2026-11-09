@@ -134,7 +134,7 @@ fn classes_agree_with_the_matcher_tests_on_every_sample_character() {
     for source in CLASS_PATTERNS {
         for translate in case_settings() {
             let lisp = neovm_value::heap_types::LispString::from_utf8(source);
-            let mut compiled =
+            let mut compiled: neovm_text::emacs_core::regex_emacs::CompiledPattern =
                 regex_compile_lisp_with_translation(&lisp, false, translate.clone()).unwrap();
             for multibyte in [true, false] {
                 compiled.target_multibyte = multibyte;
@@ -282,9 +282,10 @@ fn dfa_verdicts_agree_with_the_matcher_on_random_patterns() {
     for case in 0..1_500 {
         let source = gen_pattern(&mut rng, 2);
         let case_fold = rng.below(3) == 0;
-        let Ok(mut compiled) = regex_compile(&source, rng.below(5) == 0, case_fold) else {
+        let Ok(compiled_value) = regex_compile(&source, rng.below(5) == 0, case_fold) else {
             continue;
         };
+        let mut compiled: neovm_text::emacs_core::regex_emacs::CompiledPattern = compiled_value;
         let multibyte = rng.below(4) != 0;
         compiled.target_multibyte = multibyte;
         let Ok(nfa) = Nfa::build(&compiled) else {
@@ -607,9 +608,10 @@ fn verify_mode_finds_no_mismatch_on_random_searches() {
     for _ in 0..800 {
         let source = gen_pattern(&mut rng, 2);
         let posix = rng.below(5) == 0;
-        let Ok(mut compiled) = regex_compile(&source, posix, rng.below(3) == 0) else {
+        let Ok(compiled_value) = regex_compile(&source, posix, rng.below(3) == 0) else {
             continue;
         };
+        let mut compiled: neovm_text::emacs_core::regex_emacs::CompiledPattern = compiled_value;
         compiled.target_multibyte = true;
         let lookup: &dyn SyntaxLookup = if rng.below(2) == 0 {
             &DefaultSyntaxLookup
@@ -665,9 +667,10 @@ fn dfa_verdicts_agree_with_the_matcher_inside_property_runs() {
     for case in 0..1_500 {
         let source = gen_pattern(&mut rng, 2);
         let case_fold = rng.below(3) == 0;
-        let Ok(mut compiled) = regex_compile(&source, rng.below(5) == 0, case_fold) else {
+        let Ok(compiled_value) = regex_compile(&source, rng.below(5) == 0, case_fold) else {
             continue;
         };
+        let mut compiled: neovm_text::emacs_core::regex_emacs::CompiledPattern = compiled_value;
         let multibyte = rng.below(4) != 0;
         compiled.target_multibyte = multibyte;
         let Ok(nfa) = Nfa::build(&compiled) else {
@@ -719,7 +722,8 @@ fn unibyte_current_symbol_facts_distinguish_warmed_plain_transitions() {
     let text = b" \xa9 \xe9 a\xa9 a\xe9 ";
     for source in ["\\_<", "\\_>", "$\\|\\_<", "\\b\\|\\_>"] {
         for case_fold in [false, true] {
-            let mut compiled = regex_compile(source, false, case_fold).unwrap();
+            let mut compiled: neovm_text::emacs_core::regex_emacs::CompiledPattern =
+                regex_compile(source, false, case_fold).unwrap();
             compiled.target_multibyte = false;
             let mut dfa = ExistenceDfa::new(Nfa::build(&compiled).unwrap());
             for _ in 0..3 {
@@ -751,7 +755,8 @@ fn unibyte_current_symbol_facts_distinguish_warmed_property_transitions() {
         lookup.reports_runs = reports_runs;
         for source in ["\\_<", "\\_>", "$\\|\\_<", "\\b\\|\\_>"] {
             for case_fold in [false, true] {
-                let mut compiled = regex_compile(source, false, case_fold).unwrap();
+                let mut compiled: neovm_text::emacs_core::regex_emacs::CompiledPattern =
+                    regex_compile(source, false, case_fold).unwrap();
                 compiled.target_multibyte = false;
                 let mut dfa = ExistenceDfa::new(Nfa::build(&compiled).unwrap());
                 for _ in 0..3 {
@@ -812,9 +817,10 @@ fn searches_inside_property_runs_equal_the_matcher_alone() {
     for _ in 0..300 {
         let source = gen_pattern(&mut rng, 2);
         let posix = rng.below(5) == 0;
-        let Ok(mut compiled) = regex_compile(&source, posix, rng.below(3) == 0) else {
+        let Ok(compiled_value) = regex_compile(&source, posix, rng.below(3) == 0) else {
             continue;
         };
+        let mut compiled: neovm_text::emacs_core::regex_emacs::CompiledPattern = compiled_value;
         compiled.target_multibyte = true;
         let _ = prime(&compiled, &DefaultSyntaxLookup);
         for _ in 0..4 {
@@ -871,9 +877,10 @@ fn the_frontier_records_what_the_matcher_alone_records() {
         if source.len() > 160 {
             continue;
         }
-        let Ok(mut compiled) = regex_compile(&source, false, rng.below(3) == 0) else {
+        let Ok(compiled_value) = regex_compile(&source, false, rng.below(3) == 0) else {
             continue;
         };
+        let mut compiled: neovm_text::emacs_core::regex_emacs::CompiledPattern = compiled_value;
         compiled.target_multibyte = true;
         let _ = prime(&compiled, &DefaultSyntaxLookup);
         for _ in 0..4 {
@@ -1093,10 +1100,10 @@ fn cached_first_step_respects_point_stop_and_unknown_entries() {
     let at = start as usize + class as usize;
     let original = dfa.trans[at];
     for unresolved in [UNKNOWN, SLOW, MATCH, start] {
-        dfa.trans[at] = unresolved;
+        neovm_text::test_support::authority::set_existence_dfa_trans_at(&mut dfa, at, unresolved);
         assert!(!dfa.cached_first_step_dead(&compiled, text, 1, text.len(), 0));
     }
-    dfa.trans[at] = original;
+    neovm_text::test_support::authority::set_existence_dfa_trans_at(&mut dfa, at, original);
     dfa.clear_states();
     assert!(!dfa.cached_first_step_dead(&compiled, text, 1, text.len(), 0));
 }
@@ -1123,7 +1130,10 @@ fn cached_first_step_keeps_memory_and_give_up_guards() {
         Exists::No { consumed: 0 }
     );
     assert_eq!(dfa.counters.clears, clears + 1);
-    dfa.gave_up = Some(DfaGaveUp::StateExplosion);
+    neovm_text::test_support::authority::set_existence_dfa_gave_up(
+        &mut dfa,
+        Some(DfaGaveUp::StateExplosion),
+    );
     assert_eq!(
         with_first_step(true, || {
             dfa.anchored_exists(&compiled, text, 0, text.len(), 0, &syntax)
@@ -1147,16 +1157,32 @@ fn cached_first_step_context_changes_clear_character_maps() {
     assert!(dfa.cached_first_step_dead(&compiled, text, 1, text.len(), 0));
     let prev_class = dfa.classes.byte_class[b'x' as usize];
     let prev_facts = dfa.classes.byte_facts[b'x' as usize];
-    dfa.classes.byte_class[b'x' as usize] = UNKNOWN_CLASS;
-    dfa.classes.byte_facts[b'x' as usize] = NO_FACTS;
+    neovm_text::test_support::authority::set_existence_dfa_byte_class(
+        &mut dfa,
+        b'x' as usize,
+        UNKNOWN_CLASS,
+    );
+    neovm_text::test_support::authority::set_existence_dfa_byte_facts(
+        &mut dfa,
+        b'x' as usize,
+        NO_FACTS,
+    );
     assert!(!dfa.cached_first_step_dead(&compiled, text, 1, text.len(), 0));
-    dfa.classes.byte_class[b'x' as usize] = prev_class;
-    dfa.classes.byte_facts[b'x' as usize] = prev_facts;
+    neovm_text::test_support::authority::set_existence_dfa_byte_class(
+        &mut dfa,
+        b'x' as usize,
+        prev_class,
+    );
+    neovm_text::test_support::authority::set_existence_dfa_byte_facts(
+        &mut dfa,
+        b'x' as usize,
+        prev_facts,
+    );
     // A multibyte previous character cannot borrow an ASCII byte's facts.
     assert!(!dfa.cached_first_step_dead(&compiled, "中foo".as_bytes(), 3, 6, 0));
     let mut changed = ClassContext::of_search(&compiled, dfa.nfa(), &syntax).unwrap();
     changed.tick = changed.tick.wrapping_add(1);
-    dfa.classes.sync(changed);
+    neovm_text::test_support::authority::sync_existence_dfa_classes(&mut dfa, changed);
     assert!(!dfa.cached_first_step_dead(&compiled, text, 1, text.len(), 0));
     let actual = with_first_step(true, || {
         dfa.anchored_exists(&compiled, text, 1, text.len(), 0, &syntax)
@@ -1177,7 +1203,7 @@ fn cached_first_step_context_changes_clear_character_maps() {
     assert!(dfa.cached_first_step_dead(&compiled, text, 1, text.len(), 0));
     assert!(re_match(&compiled, text, 1, text.len(), &CustomTableLookup, 0).is_none());
     let standard = ClassContext::of_search(&compiled, dfa.nfa(), &syntax).unwrap();
-    dfa.classes.sync(standard);
+    neovm_text::test_support::authority::sync_existence_dfa_classes(&mut dfa, standard);
     dfa.begin_search(&compiled, &syntax);
     assert_eq!(dfa.classes.byte_facts[b'-' as usize], NO_FACTS);
     assert!(!dfa.cached_first_step_dead(&compiled, text, 1, text.len(), 0));
@@ -1743,10 +1769,10 @@ fn cached_prefix_rejections_respect_every_consumed_boundary() {
         None,
         "an unknown byte must resume the classifier"
     );
-    dfa.search.read_limit = 2;
+    neovm_text::test_support::authority::set_existence_dfa_search_read_limit(&mut dfa, 2);
     assert_eq!(probe(&dfa, text.len(), usize::MAX), None);
-    dfa.search.read_limit = usize::MAX;
-    dfa.search.positional = true;
+    neovm_text::test_support::authority::set_existence_dfa_search_read_limit(&mut dfa, usize::MAX);
+    neovm_text::test_support::authority::set_existence_dfa_search_positional(&mut dfa, true);
     dfa.plain = 0..2;
     assert_eq!(probe(&dfa, text.len(), usize::MAX), None);
     dfa.plain = 0..3;
@@ -1856,25 +1882,25 @@ fn inline_cached_prefix_keeps_consumed_accounting_and_captures() {
     with_first_step(true, || {
         with_dfa_mode(DfaMode::On, || {
             let mut lease = DfaLease::acquire(&compiled, &syntax, text.len()).unwrap();
-            let DfaSlot::Live(live) = &mut *lease.slot else {
-                panic!("primed slot should be live");
-            };
-            let safe_span = live.overflow_free_span;
-            live.overflow_free_span = 2;
+            let safe_span =
+                neovm_text::test_support::authority::live_dfa_overflow_free_span_for_test(&lease)
+                    .expect("primed slot should be live");
+            neovm_text::test_support::authority::set_live_dfa_overflow_free_span_for_test(
+                &mut lease, 2,
+            );
             assert!(!lease.try_inline_first_step_skip(&compiled, text, 0, text.len(), 0));
-            let DfaSlot::Live(live) = &mut *lease.slot else {
-                panic!("guarded rejection should stay live");
-            };
-            live.overflow_free_span = safe_span;
-            let before = live.dfa.counters;
+            neovm_text::test_support::authority::set_live_dfa_overflow_free_span_for_test(
+                &mut lease, safe_span,
+            );
+            let before = neovm_text::test_support::authority::live_dfa_counters_for_test(&lease)
+                .expect("guarded rejection should stay live");
             let entries = matcher_entry_count();
             assert!(lease.try_inline_first_step_skip(&compiled, text, 0, text.len(), 0));
             assert_eq!(matcher_entry_count(), entries);
-            let DfaSlot::Live(live) = &*lease.slot else {
-                panic!("cached rejection should stay live");
-            };
-            assert_eq!(live.dfa.counters.no, before.no + 1);
-            assert_eq!(live.dfa.counters.bytes, before.bytes + 2);
+            let after = neovm_text::test_support::authority::live_dfa_counters_for_test(&lease)
+                .expect("cached rejection should stay live");
+            assert_eq!(after.no, before.no + 1);
+            assert_eq!(after.bytes, before.bytes + 2);
             assert_eq!(lease.skipped, 1);
         });
         let entries = matcher_entry_count();
@@ -2066,16 +2092,14 @@ fn an_earlier_verdict_does_not_poison_a_later_candidate_over_a_non_head_run() {
     ];
     let syntax = DefaultSyntaxLookup;
     use neovm_text::emacs_core::regex_emacs::with_anchor_alt;
-    let mut compiled = with_anchor_alt(true, || regex_compile(PATTERN, false, true)).unwrap();
+    let mut compiled: neovm_text::emacs_core::regex_emacs::CompiledPattern =
+        with_anchor_alt(true, || regex_compile(PATTERN, false, true)).unwrap();
     compiled.target_multibyte = true;
     prime(&compiled, &syntax).unwrap();
     let verdict = |p: usize| {
-        let mut slot = compiled.dfa.slot.borrow_mut();
-        let DfaSlot::Live(live) = &mut *slot else {
-            panic!("slot not live")
-        };
-        live.dfa
-            .anchored_exists(&compiled, TEXT, p, 44, 45, &syntax)
+        neovm_text::test_support::authority::compiled_pattern_anchored_exists_for_test(
+            &compiled, TEXT, p, 44, 45, &syntax,
+        )
     };
 
     // The earlier candidates of the crash's backward search: 34 is correctly
@@ -2092,7 +2116,8 @@ fn an_earlier_verdict_does_not_poison_a_later_candidate_over_a_non_head_run() {
     // And the same search the fuzzer ran, end to end from a cold pattern:
     // the backtracker pass first, then the Pike pass, one compiled pattern.
     use neovm_text::emacs_core::regex_emacs::{RegexEngineOverride, with_regex_engine_override};
-    let mut cold = with_anchor_alt(true, || regex_compile(PATTERN, false, true)).unwrap();
+    let mut cold: neovm_text::emacs_core::regex_emacs::CompiledPattern =
+        with_anchor_alt(true, || regex_compile(PATTERN, false, true)).unwrap();
     cold.target_multibyte = true;
     for engine in [
         RegexEngineOverride::Backtracker,
@@ -2624,20 +2649,20 @@ impl SyntaxLookup for RawCurrentSymbolLookup {
 fn first_step_dfa(pattern: &CompiledPattern, syntax: &dyn SyntaxLookup) -> ExistenceDfa {
     let mut dfa = ExistenceDfa::new(Nfa::build(pattern).unwrap());
     let context = ClassContext::of_search(pattern, dfa.nfa(), syntax).unwrap();
-    dfa.classes.sync(context);
+    neovm_text::test_support::authority::sync_existence_dfa_classes(&mut dfa, context);
     dfa.begin_search(pattern, syntax);
     dfa
 }
 
 fn place<'a>(text: &'a [u8], d: usize) -> Place<'a> {
-    Place {
+    neovm_text::test_support::authority::place(
         text,
         d,
-        stop: text.len(),
-        point: 0,
-        target_multibyte: true,
-        syntax: MatchSyntax::new(&DefaultSyntaxLookup),
-    }
+        text.len(),
+        0,
+        true,
+        MatchSyntax::new(&DefaultSyntaxLookup),
+    )
 }
 
 fn case_table(folds: &[(char, char)]) -> Value {
