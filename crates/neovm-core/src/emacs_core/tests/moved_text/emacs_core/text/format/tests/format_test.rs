@@ -384,13 +384,13 @@ fn string_pixel_width_bootstrap_matches_gnu_subr_x() {
 fn broken_down_epoch() {
     crate::test_utils::init_test_tracing();
     let tm = unix_to_broken_down(0);
-    assert_eq!(tm.year, 1970);
-    assert_eq!(tm.month, 1);
-    assert_eq!(tm.day, 1);
-    assert_eq!(tm.hour, 0);
-    assert_eq!(tm.minute, 0);
-    assert_eq!(tm.second, 0);
-    assert_eq!(tm.weekday, 4); // Thursday
+    assert_eq!(tm.year(), 1970);
+    assert_eq!(tm.month(), 1);
+    assert_eq!(tm.day(), 1);
+    assert_eq!(tm.hour(), 0);
+    assert_eq!(tm.minute(), 0);
+    assert_eq!(tm.second(), 0);
+    assert_eq!(tm.weekday(), 4); // Thursday
 }
 
 #[test]
@@ -398,10 +398,10 @@ fn broken_down_y2k() {
     crate::test_utils::init_test_tracing();
     // 2000-01-01 00:00:00 UTC = 946684800
     let tm = unix_to_broken_down(946684800);
-    assert_eq!(tm.year, 2000);
-    assert_eq!(tm.month, 1);
-    assert_eq!(tm.day, 1);
-    assert_eq!(tm.weekday, 6); // Saturday
+    assert_eq!(tm.year(), 2000);
+    assert_eq!(tm.month(), 1);
+    assert_eq!(tm.day(), 1);
+    assert_eq!(tm.weekday(), 6); // Saturday
 }
 
 #[test]
@@ -409,9 +409,9 @@ fn broken_down_leap_year() {
     crate::test_utils::init_test_tracing();
     // 2000-02-29 00:00:00 UTC = 946684800 + 59*86400 = 946684800 + 5097600 = 951782400
     let tm = unix_to_broken_down(951782400);
-    assert_eq!(tm.year, 2000);
-    assert_eq!(tm.month, 2);
-    assert_eq!(tm.day, 29);
+    assert_eq!(tm.year(), 2000);
+    assert_eq!(tm.month(), 2);
+    assert_eq!(tm.day(), 29);
 }
 
 #[test]
@@ -419,12 +419,12 @@ fn broken_down_end_of_day() {
     crate::test_utils::init_test_tracing();
     // 1970-01-01 23:59:59 = 86399
     let tm = unix_to_broken_down(86399);
-    assert_eq!(tm.year, 1970);
-    assert_eq!(tm.month, 1);
-    assert_eq!(tm.day, 1);
-    assert_eq!(tm.hour, 23);
-    assert_eq!(tm.minute, 59);
-    assert_eq!(tm.second, 59);
+    assert_eq!(tm.year(), 1970);
+    assert_eq!(tm.month(), 1);
+    assert_eq!(tm.day(), 1);
+    assert_eq!(tm.hour(), 23);
+    assert_eq!(tm.minute(), 59);
+    assert_eq!(tm.second(), 59);
 }
 
 #[test]
@@ -438,12 +438,12 @@ fn broken_down_2024() {
     // + 12*3600 + 30*60 + 45 = 43200 + 1800 + 45 = 45045
     // Total: 1710505845
     let tm = unix_to_broken_down(1710505845);
-    assert_eq!(tm.year, 2024);
-    assert_eq!(tm.month, 3);
-    assert_eq!(tm.day, 15);
-    assert_eq!(tm.hour, 12);
-    assert_eq!(tm.minute, 30);
-    assert_eq!(tm.second, 45);
+    assert_eq!(tm.year(), 2024);
+    assert_eq!(tm.month(), 3);
+    assert_eq!(tm.day(), 15);
+    assert_eq!(tm.hour(), 12);
+    assert_eq!(tm.minute(), 30);
+    assert_eq!(tm.second(), 45);
 }
 
 #[test]

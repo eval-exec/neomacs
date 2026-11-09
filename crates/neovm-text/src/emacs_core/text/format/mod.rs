@@ -46,14 +46,14 @@ pub struct BrokenDownTime {
 /// Broken-down time fields computed from a Unix timestamp.
 #[doc(hidden)]
 pub struct BrokenDownTime {
-    pub year: i64,
-    pub month: u32,   // 1..=12
-    pub day: u32,     // 1..=31
-    pub hour: u32,    // 0..=23
-    pub minute: u32,  // 0..=59
-    pub second: u32,  // 0..=60 (leap second)
-    pub weekday: u32, // 0=Sunday .. 6=Saturday
-    yearday: u32,     // 0..=365
+    year: i64,
+    month: u32,   // 1..=12
+    day: u32,     // 1..=31
+    hour: u32,    // 0..=23
+    minute: u32,  // 0..=59
+    second: u32,  // 0..=60 (leap second)
+    weekday: u32, // 0=Sunday .. 6=Saturday
+    yearday: u32, // 0..=365
 }
 
 /// Whether a year is a leap year (Gregorian).
@@ -844,3 +844,37 @@ fn emit_tz_offset(result: &mut String, flags: &DirectiveFlags, offset_secs: i64,
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+/// VIS read rows (lead #1052): the broken-down time fields stay private;
+/// these copy getters are the cross-crate test route.
+#[cfg(any(test, feature = "test-support"))]
+impl BrokenDownTime {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn year(&self) -> i64 {
+        self.year
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn month(&self) -> u32 {
+        self.month
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn day(&self) -> u32 {
+        self.day
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn hour(&self) -> u32 {
+        self.hour
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn minute(&self) -> u32 {
+        self.minute
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn second(&self) -> u32 {
+        self.second
+    }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn weekday(&self) -> u32 {
+        self.weekday
+    }
+}
