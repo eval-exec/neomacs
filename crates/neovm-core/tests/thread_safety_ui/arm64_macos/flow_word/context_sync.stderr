@@ -231,6 +231,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<neomacs_display_protocol::tty_palette::TtyPalette>: std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
+           `Rc<RefCell<Vec<std::rc::Weak<[TaggedValue]>>>>: Send`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `*mut emacs_value_tag: Send`
            which is required by `neovm_core::Context: std::marker::Sync`
            `*mut GcHeader: std::marker::Sync`
@@ -294,8 +296,6 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `*mut *mut MarkerObj: std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
            `Cell<()>: std::marker::Sync`
-           which is required by `neovm_core::Context: std::marker::Sync`
-           `std::rc::Weak<[TaggedValue]>: Send`
            which is required by `neovm_core::Context: std::marker::Sync`
            `*mut VectorObj: Send`
            which is required by `neovm_core::Context: std::marker::Sync`

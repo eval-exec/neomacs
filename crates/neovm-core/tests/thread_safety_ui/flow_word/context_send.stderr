@@ -216,6 +216,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `Rc<Cell<Option<shared::PointBeforeCommand>>>: Send`
            which is required by `neovm_core::Context: Send`
+           `Rc<RefCell<Vec<std::rc::Weak<[TaggedValue]>>>>: Send`
+           which is required by `neovm_core::Context: Send`
            `*mut emacs_value_tag: Send`
            which is required by `neovm_core::Context: Send`
            `*mut GcHeader: std::marker::Sync`
@@ -267,8 +269,6 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `*mut *mut MarkerObj: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `Cell<()>: std::marker::Sync`
-           which is required by `neovm_core::Context: Send`
-           `std::rc::Weak<[TaggedValue]>: Send`
            which is required by `neovm_core::Context: Send`
            `*mut VectorObj: Send`
            which is required by `neovm_core::Context: Send`
