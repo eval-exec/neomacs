@@ -884,3 +884,38 @@ fn green_returned_unjoined_worker_is_dead_and_unlisted() {
         RETURNED_UNJOINED_IS_DEAD_EXPECT
     );
 }
+
+/// `finish_thread` leaves `Completing(Returned)` with join still unobserved.
+/// `mark_thread_exited` has not run, so the phase is not `Terminal` yet.
+/// GNU `thread_live_p` is already false in that window (`src/thread.c:76`,
+/// cleared at `:822-823`, before join).
+///
+/// Lisp cannot see the window. The sim runner calls `finish_make_thread_result`
+/// and `finish_sim_thread_registration` with no release between them, and a
+/// green worker holds the baton from `finish_make_thread_result` through
+/// `prepare_thread_completion`. No exit hook or process sentinel runs there.
+#[test]
+fn completing_returned_unobserved_is_dead_before_mark_exited() {
+    crate::test_utils::init_test_tracing();
+    let mut mgr = neovm_eval::emacs_core::threads::ThreadManager::new();
+    let native = mgr
+        .try_create_thread(
+            Value::NIL,
+            neovm_eval::emacs_core::threads::ThreadName::UNNAMED,
+        )
+        .expect("thread identity")
+        .native_key();
+    mgr.finish_thread(native, Value::fixnum(42));
+    let state = mgr.get_thread(native).expect("still registered").native();
+    assert_eq!(
+        state.phase(),
+        neovm_value::heap_types::threading::ThreadPhase::Completing(
+            neovm_value::heap_types::threading::ThreadOutcome::Returned
+        )
+    );
+    assert_eq!(
+        state.join_observation(),
+        neovm_value::heap_types::threading::JoinObservation::Unobserved
+    );
+    assert!(!mgr.thread_alive_p(native));
+}
