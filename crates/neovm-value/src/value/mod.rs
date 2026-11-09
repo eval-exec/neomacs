@@ -1146,7 +1146,14 @@ impl HashTableStorage {
     }
 
     /// The slot `value`'s entry occupies.
-    #[inline]
+    ///
+    /// Kept out of line: the hashed lookup is the cold fallback for a table
+    /// with a switch plan, while the plan path must stay lean.  When the
+    /// split moved this file to a different crate than the VM, the inliner
+    /// pulled this body into `vm_switch_target`, whose 100M-call plan path
+    /// then carried a callee-saved frame for a branch it never takes
+    /// (elb-pcase VM +1.4%, b288A had kept this out of line).
+    #[inline(never)]
     fn slot_by_value(
         &self,
         value: Value,
