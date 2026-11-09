@@ -2646,6 +2646,18 @@ pub use concurrent::concurrent_hash_snapshot;
 pub(crate) use concurrent::prepare_concurrent_hash_write;
 pub(crate) mod concurrent_hash;
 
+/// Tier-H user-guard probes. The bodies are in `gc/tier_h_probes.rs` so this
+/// root stays under the facade ceiling. Re-exported for `test_support::authority`.
+#[cfg(feature = "test-support")]
+mod tier_h_probes;
+#[cfg(feature = "test-support")]
+pub(crate) use tier_h_probes::{
+    concurrent_hash_mutator_state_for_test, concurrent_hash_scan_policy_is_always_clone_for_test,
+    concurrent_obarray_start_slots_present_for_test, hash_snapshot_entry_state_for_test,
+    hash_snapshot_present_for_test, hash_snapshot_untouched_for_test,
+    set_concurrent_claims_for_test, set_minors_since_major_for_test,
+};
+
 mod rows_observation;
 #[doc(hidden)]
 pub use rows_observation::RowsOwnedDomain;
@@ -2715,7 +2727,7 @@ pub mod arena_pages;
 #[doc(hidden)]
 pub use arena_pages::*;
 
-mod gc_thread;
+pub(crate) mod gc_thread;
 #[cfg(any(test, feature = "test-support"))]
 pub use gc_thread::set_tagged_heap;
 pub use gc_thread::*;

@@ -1293,6 +1293,101 @@ pub fn fresh_registry_facts_with_bytes(
     crate::symbol::parallel::test_facts::FreshRegistryFacts { bytes, ..facts }
 }
 
+/// FENCE: the re-homed Tier-H cold-mutation test body. The core shell owns
+/// the #[test] and supplies the four evaluator/text builtin seams; every heap
+/// assertion stays in the value body.
+#[doc(hidden)]
+pub fn run_concurrent_hash_builtin_test_for_test(
+    remhash: &mut dyn FnMut(
+        crate::tagged::value::TaggedValue,
+        crate::tagged::value::TaggedValue,
+        bool,
+    ) -> Result<crate::tagged::value::TaggedValue, String>,
+    puthash: &mut dyn FnMut(
+        Vec<crate::tagged::value::TaggedValue>,
+        bool,
+    ) -> Result<crate::tagged::value::TaggedValue, String>,
+    clrhash: &mut dyn FnMut(
+        Vec<crate::tagged::value::TaggedValue>,
+    ) -> Result<crate::tagged::value::TaggedValue, String>,
+    json_parse: &mut dyn FnMut(
+        Vec<crate::tagged::value::TaggedValue>,
+    ) -> Result<crate::tagged::value::TaggedValue, String>,
+) {
+    let mut builtins =
+        crate::tagged::gc::gc_thread::concurrent_hash_worker_tests::ColdMutationBuiltins {
+            remhash,
+            puthash,
+            clrhash,
+            json_parse,
+        };
+    crate::tagged::gc::gc_thread::concurrent_hash_worker_tests::run_tier_h_builtin_cold_mutation_paths(
+        &mut builtins,
+    );
+}
+
+/// FENCE: thread-local Tier-H claims override for the re-homed user-guard
+/// test. The original stays pub(crate); the trace scope is unchanged.
+#[doc(hidden)]
+pub fn set_concurrent_claims_for_test(on: Option<bool>) {
+    crate::tagged::gc::set_concurrent_claims_for_test(on);
+}
+
+/// FENCE (copied read): the frozen Tier-H scan policy reduced to its
+/// always-clone row, for the re-homed user-guard assertion.
+#[doc(hidden)]
+pub fn concurrent_hash_scan_policy_is_always_clone_for_test() -> bool {
+    crate::tagged::gc::concurrent_hash_scan_policy_is_always_clone_for_test()
+}
+
+/// FENCE (copied read): the snapshot's untouched COW state for the re-homed
+/// user-guard assertion; the constant itself stays private.
+#[doc(hidden)]
+pub fn hash_snapshot_untouched_for_test() -> u8 {
+    crate::tagged::gc::hash_snapshot_untouched_for_test()
+}
+
+/// FENCE (copied read): one snapshot entry's (cow, dirty, poisoned) state
+/// for the re-homed user-guard assertion; entry fields stay private.
+#[doc(hidden)]
+pub fn hash_snapshot_entry_state_for_test(
+    heap: &crate::tagged::gc::TaggedHeap,
+    owner: usize,
+) -> (u8, bool, bool) {
+    crate::tagged::gc::hash_snapshot_entry_state_for_test(heap, owner)
+}
+
+/// FENCE (copied read): whether a Tier-H snapshot is installed.
+#[doc(hidden)]
+pub fn hash_snapshot_present_for_test(heap: &crate::tagged::gc::TaggedHeap) -> bool {
+    crate::tagged::gc::hash_snapshot_present_for_test(heap)
+}
+
+/// FENCE (copied read): the current Tier-H mutator log as (retired buffer
+/// count, written owners) for the re-homed user-guard assertions.
+#[doc(hidden)]
+pub fn concurrent_hash_mutator_state_for_test(
+    heap: &crate::tagged::gc::TaggedHeap,
+) -> (usize, Vec<crate::tagged::value::TaggedValue>) {
+    crate::tagged::gc::concurrent_hash_mutator_state_for_test(heap)
+}
+
+/// FENCE: force the next automatic collection to the major row through the
+/// owning heap's pacing counters; `&mut` heap only, no global state.
+#[doc(hidden)]
+pub fn set_minors_since_major_for_test(heap: &mut crate::tagged::gc::TaggedHeap, value: usize) {
+    crate::tagged::gc::set_minors_since_major_for_test(heap, value);
+}
+
+/// FENCE (copied read): whether the start handshake captured its obarray
+/// slot count; the heap field stays private.
+#[doc(hidden)]
+pub fn concurrent_obarray_start_slots_present_for_test(
+    heap: &crate::tagged::gc::TaggedHeap,
+) -> bool {
+    crate::tagged::gc::concurrent_obarray_start_slots_present_for_test(heap)
+}
+
 /// The fence's own behavioural tests are a DECLARED CHILD of the authority
 /// module, not a physical sibling: TA2's definition surface is this module
 /// tree, so the tests' `crate::test_support::authority` references stay

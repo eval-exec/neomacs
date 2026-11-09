@@ -70,3 +70,11 @@ mod symbol_barrier_tests;
 #[cfg(test)]
 #[path = "../../core_tests/tagged/gc/tests/ownership_obarray_claim_test.rs"]
 mod ownership_obarray_claim_tests;
+
+#[cfg(test)]
+#[path = "../../core_tests/tagged/gc/tests/concurrent_hash_builtin_test.rs"]
+mod concurrent_hash_builtin_test;
+
+#[cfg(test)]
+#[path = "../../core_tests/tagged/gc/tests/concurrent_hash_user_guard_test.rs"]
+mod concurrent_hash_user_guard_test;

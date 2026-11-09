@@ -2554,9 +2554,9 @@ mod chartable_concurrent_write_tests;
 #[path = "tests/concurrent_leaf_claim_tests.rs"]
 mod concurrent_leaf_claim_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "tests/concurrent_hash_worker_tests.rs"]
-mod concurrent_hash_worker_tests;
+pub(crate) mod concurrent_hash_worker_tests;
 
 #[cfg(test)]
 mod worker_symbol_classification_tests {

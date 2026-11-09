@@ -235,6 +235,17 @@ pub mod authority {
         context.admit_owned_proof_parallel(body)
     }
 
+    /// FENCE (oracleb worker re-home): the Context-free puthash builtin used
+    /// by the re-homed Tier-H cold-mutation test. The original stays
+    /// `pub(crate)` and this fence is the only cross-crate route.
+    #[doc(hidden)]
+    pub fn builtin_puthash_with_symbols_for_test(
+        args: Vec<neovm_value::value::Value>,
+        symbols_with_pos_enabled: bool,
+    ) -> neovm_value::error::EvalResult {
+        crate::emacs_core::builtins::builtin_puthash_with_symbols(args, symbols_with_pos_enabled)
+    }
+
     /// S-2: the V1 minimal VM harness, reached only with the REAL boot proof.
     ///
     /// The constructor stays `pub(crate)` and unwidened; this fence is the one

@@ -15,6 +15,13 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 const UNTOUCHED: u8 = 0;
+
+/// Test-support copy of the untouched COW state for the re-homed Tier-H
+/// user-guard assertion; the constant itself stays private.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn untouched_for_test() -> u8 {
+    UNTOUCHED
+}
 const COPYING: u8 = 1;
 const READY: u8 = 2;
 
@@ -239,6 +246,18 @@ impl HashTableScanSnapshot {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn is_poisoned(&self) -> bool {
         self.poisoned.load(Ordering::Acquire)
+    }
+
+    /// Test-support copy of one entry's (cow, dirty, poisoned) state for the
+    /// re-homed Tier-H user-guard test; the entry fields stay private.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn entry_state_for_test(&self, owner: usize) -> (u8, bool, bool) {
+        let entry = self.get(owner).unwrap();
+        (
+            entry.cow.load(Ordering::Acquire),
+            entry.dirty.load(Ordering::Acquire),
+            self.is_poisoned(),
+        )
     }
 
     /// Test helper for a single complete lease; DONE cannot be scanned again.

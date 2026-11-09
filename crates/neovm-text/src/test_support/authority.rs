@@ -393,3 +393,11 @@ pub fn set_charset_info_supplementary_p(info: &mut CharsetInfo, value: bool) {
 pub fn set_charset_info_plist(info: &mut CharsetInfo, value: CharsetPlist) {
     info.plist = value;
 }
+
+/// FENCE (oracleb worker re-home): the Context-free JSON parse builtin used
+/// by the re-homed Tier-H cold-mutation test. The original stays pub(crate).
+pub fn builtin_json_parse_string_for_test(
+    args: Vec<neovm_value::value::Value>,
+) -> neovm_value::error::EvalResult {
+    crate::emacs_core::json::builtin_json_parse_string(args)
+}

@@ -1,9 +1,13 @@
 //! The actual worker must finish every child of a freshly claimed Tier-H owner.
 
 use super::*;
+#[cfg(test)]
 use crate::intern::intern_uninterned;
+#[cfg(test)]
 use crate::tagged::bytecode::chunk::ByteCodeFunction;
-use crate::value::{HashKey, HashTableTest, HashTableWeakness, LambdaParams, LispHashTable};
+use crate::value::{HashKey, HashTableTest, LispHashTable};
+#[cfg(test)]
+use crate::value::{HashTableWeakness, LambdaParams};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -32,6 +36,7 @@ fn finish_cycle(heap: &mut TestHeap, roots: &[TaggedValue]) {
 
 /// Inspect only the joined worker's owned handoff, then relay the entire
 /// result through the normal finish seam so promotion and symbol logs survive.
+#[cfg(test)]
 fn inspect_completed_deferred(heap: &mut TestHeap, inspect: impl FnOnce(&[MarkWord])) {
     let result = heap
         .gc_exited
@@ -61,12 +66,14 @@ fn ordinary_cycle(heap: &mut TestHeap, roots: &[TaggedValue]) {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 enum SymbolAncestor {
     Cons,
     Bytecode,
     Vector,
 }
 
+#[cfg(test)]
 fn transitive_bare_symbol_cycle(claims: bool, generational: bool, ancestor: SymbolAncestor) {
     // The ordinary helper freezes claims ON. Construct both policies explicitly
     // without changing process environment while nextest runs other tests.
@@ -204,6 +211,7 @@ fn tier_h_actual_worker_transitive_vector_symbol_keeps_only_strongly_held_weak_k
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PauseAt {
     BeforeClaim,
+    #[allow(dead_code)]
     AfterFirstWord,
 }
 
@@ -227,6 +235,7 @@ impl PausedWorker {
     }
 }
 
+#[cfg(test)]
 fn paused_worker(
     heap: &mut TestHeap,
     owner: TaggedValue,
@@ -723,17 +732,35 @@ fn tier_h_actual_worker_deferred_first_write_keeps_header_white_and_both_child_s
     }
 }
 
+#[cfg(test)]
 fn worker_hash_table(child: TaggedValue) -> LispHashTable {
     let mut table = LispHashTable::new(HashTableTest::Eq);
     table.insert(HashKey::Int(1), TaggedValue::fixnum(1), child);
     table
 }
 
-#[test]
-fn tier_h_builtin_cold_mutation_paths_keep_deleted_and_inserted_children_live() {
-    use crate::emacs_core::builtins::collections::{
-        builtin_clrhash, builtin_puthash_with_symbols, builtin_remhash_values,
-    };
+/// The four cold-mutation builtins the re-homed test drives. The core shell
+/// supplies them (they are evaluator/text functions value may not name); the
+/// value body keeps every heap assertion.
+#[cfg(feature = "test-support")]
+pub(crate) struct ColdMutationBuiltins<'a> {
+    pub(crate) remhash:
+        &'a mut dyn FnMut(TaggedValue, TaggedValue, bool) -> Result<TaggedValue, String>,
+    pub(crate) puthash: &'a mut dyn FnMut(Vec<TaggedValue>, bool) -> Result<TaggedValue, String>,
+    pub(crate) clrhash: &'a mut dyn FnMut(Vec<TaggedValue>) -> Result<TaggedValue, String>,
+    pub(crate) json_parse: &'a mut dyn FnMut(Vec<TaggedValue>) -> Result<TaggedValue, String>,
+}
+
+/// Re-homed body of tier_h_builtin_cold_mutation_paths (the core shell owns
+/// the #[test] and supplies the builtin seams).
+#[cfg(feature = "test-support")]
+pub(crate) fn run_tier_h_builtin_cold_mutation_paths(builtins: &mut ColdMutationBuiltins<'_>) {
+    let ColdMutationBuiltins {
+        remhash,
+        puthash,
+        clrhash,
+        json_parse,
+    } = builtins;
     use concurrent_hash::HashTableScanPolicy::{CloneUntilTraced, DeferWrites};
 
     for generational in [false, true] {
@@ -749,18 +776,16 @@ fn tier_h_builtin_cold_mutation_paths_keep_deleted_and_inserted_children_live() 
             worker.wait();
             assert!(concurrent_hash_mutation_active());
             assert_eq!(
-                builtin_remhash_values(TaggedValue::fixnum(1), owner, false).unwrap(),
+                remhash(TaggedValue::fixnum(1), owner, false).unwrap(),
                 TaggedValue::NIL,
             );
             assert_eq!(
-                builtin_puthash_with_symbols(vec![TaggedValue::fixnum(2), inserted, owner], false)
-                    .unwrap(),
+                puthash(vec![TaggedValue::fixnum(2), inserted, owner], false).unwrap(),
                 inserted,
             );
-            assert_eq!(builtin_clrhash(vec![owner]).unwrap(), owner);
+            assert_eq!(clrhash(vec![owner]).unwrap(), owner);
             assert_eq!(
-                builtin_puthash_with_symbols(vec![TaggedValue::fixnum(3), inserted, owner], false)
-                    .unwrap(),
+                puthash(vec![TaggedValue::fixnum(3), inserted, owner], false).unwrap(),
                 inserted,
             );
             // JSON creates post-start owners. Its active insertion clone must
@@ -768,7 +793,7 @@ fn tier_h_builtin_cold_mutation_paths_keep_deleted_and_inserted_children_live() 
             let input = heap.alloc_string(crate::heap_types::LispString::from_utf8(
                 "{\"member\":{\"nested\":7}}",
             ));
-            let parsed = crate::emacs_core::json::builtin_json_parse_string(vec![input]).unwrap();
+            let parsed = json_parse(vec![input]).unwrap();
             let nested = parsed
                 .as_hash_table()
                 .unwrap()
@@ -814,6 +839,7 @@ fn tier_h_builtin_cold_mutation_paths_keep_deleted_and_inserted_children_live() 
     }
 }
 
+#[cfg(test)]
 fn wait_for_hash_worker(heap: &TestHeap) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while !heap.concurrent_mark_done() {
