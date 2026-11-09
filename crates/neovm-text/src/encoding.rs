@@ -6025,7 +6025,7 @@ fn builtin_char_width_with_display_table(
 
 /// `(string-bytes STRING)` -> integer byte length of STRING.
 #[doc(hidden)]
-pub fn builtin_string_bytes_1<H: crate::emacs_core::text_host::TextHost>(
+pub fn builtin_string_bytes_1<H: TextHost>(
     _ctx: &mut H,
     arg: Value,
 ) -> EvalResult {
@@ -6040,7 +6040,7 @@ pub fn builtin_string_bytes_1<H: crate::emacs_core::text_host::TextHost>(
 
 /// `(multibyte-string-p STRING)` -> t or nil
 #[doc(hidden)]
-pub fn builtin_multibyte_string_p_1<H: crate::emacs_core::text_host::TextHost>(
+pub fn builtin_multibyte_string_p_1<H: TextHost>(
     _ctx: &mut H,
     arg: Value,
 ) -> EvalResult {
@@ -6234,7 +6234,7 @@ pub(crate) fn builtin_decode_coding_string_with_known(
 
 /// `(char-or-string-p OBJ)` -> t or nil
 #[doc(hidden)]
-pub fn builtin_char_or_string_p_1<H: crate::emacs_core::text_host::TextHost>(
+pub fn builtin_char_or_string_p_1<H: TextHost>(
     _ctx: &mut H,
     arg: Value,
 ) -> EvalResult {
