@@ -17978,10 +17978,10 @@ fn jit_subr_spec_fixed_return_preserves_unwind_protocol() {
             )
             .expect("return protocol setup");
             let count = ev.specpdl().len();
-            let depth = ev.depth;
+            let depth = ev.depth_for_test();
             let result = ev.funcall_general_untraced(caller, vec![Value::fixnum(mode)]);
             assert_eq!(ev.specpdl().len(), count, "mode {mode}: frame cleanup");
-            assert_eq!(ev.depth, depth, "mode {mode}: depth cleanup");
+            assert_eq!(ev.depth_for_test(), depth, "mode {mode}: depth cleanup");
             if mode < 2 {
                 assert_eq!(
                     result.as_ref().unwrap().as_utf8_str(),
@@ -19927,12 +19927,12 @@ fn spec_call_fast_path_keeps_the_reference_protocol_on_its_exits() {
 
     // At the depth limit (the callee would be one past it) the fast path
     // declines and the slow half signals as the interpreter would.
-    let depth = ev.depth;
+    let depth = ev.depth_for_test();
     let max_depth = ev.max_depth_for_test();
-    ev.depth = 101;
+    neovm_eval::test_support::authority::set_depth_for_test(&mut ev, 101);
     neovm_eval::test_support::authority::set_max_depth_for_test(&mut ev, 101);
     let at_limit = signal_name(ev.funcall_general_untraced(call3, vec![seven]));
-    ev.depth = depth;
+    neovm_eval::test_support::authority::set_depth_for_test(&mut ev, depth);
     neovm_eval::test_support::authority::set_max_depth_for_test(&mut ev, max_depth);
     assert_eq!(at_limit, "error", "a call over max-lisp-eval-depth signals");
     assert_eq!(ev.specpdl().len(), spec_base);

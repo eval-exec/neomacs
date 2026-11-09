@@ -216,7 +216,7 @@ fn assert_case_in(
         ctx.specpdl().len(),
         ctx.condition_stack.len(),
         ctx.bc_buf.len(),
-        ctx.depth,
+        ctx.depth_for_test(),
     );
     let value = ctx
         .eval_str(&observe)
@@ -235,7 +235,7 @@ fn assert_case_in(
             ctx.specpdl().len(),
             ctx.condition_stack.len(),
             ctx.bc_buf.len(),
-            ctx.depth
+            ctx.depth_for_test()
         ),
         frontier,
         "{name}: debugger unwind restores all activation frontiers"
@@ -370,7 +370,7 @@ fn gnu_bytecode_error_condition_case_pops_frame() {
         ctx.specpdl().len(),
         ctx.condition_stack.len(),
         ctx.bc_buf.len(),
-        ctx.depth,
+        ctx.depth_for_test(),
     );
     for _ in 0..3 {
         let value = ctx
@@ -382,7 +382,7 @@ fn gnu_bytecode_error_condition_case_pops_frame() {
                 ctx.specpdl().len(),
                 ctx.condition_stack.len(),
                 ctx.bc_buf.len(),
-                ctx.depth
+                ctx.depth_for_test()
             ),
             frontier,
             "condition-case must remove the primitive frame and balance specpdl"
@@ -415,7 +415,7 @@ fn gnu_bytecode_error_unwind_protect_pops_primitive_before_cleanup() {
         ctx.specpdl().len(),
         ctx.condition_stack.len(),
         ctx.bc_buf.len(),
-        ctx.depth,
+        ctx.depth_for_test(),
     );
     let value = ctx.eval_str(&observe).expect("debugger throw runs cleanup");
     assert_eq!(print_value(&value), expected);
@@ -424,7 +424,7 @@ fn gnu_bytecode_error_unwind_protect_pops_primitive_before_cleanup() {
             ctx.specpdl().len(),
             ctx.condition_stack.len(),
             ctx.bc_buf.len(),
-            ctx.depth
+            ctx.depth_for_test()
         ),
         frontier
     );

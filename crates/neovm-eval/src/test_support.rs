@@ -964,6 +964,13 @@ pub mod authority {
         ctx.max_depth = max_depth;
     }
 
+    /// Setter fence for `Context::depth` (peer #982/#1005): the field is
+    /// private in every arm now; consumers write it through this fence and
+    /// read it through `Context::depth_for_test`.
+    pub fn set_depth_for_test(ctx: &mut crate::emacs_core::eval::Context, depth: usize) {
+        ctx.depth = depth;
+    }
+
     /// FENCE delegate: set the noninteractive flag for the re-homed test (N2
     /// write; the field stays private).
     pub fn set_noninteractive_for_test(

@@ -348,7 +348,7 @@ fn contain_lisp_panics_restores_boundary_state() {
     let spec0 = ev.specpdl().len();
     let cond0 = ev.condition_stack.len();
     let bc0 = ev.bc_buf.len();
-    let depth0 = ev.depth;
+    let depth0 = ev.depth_for_test();
     let roots0 = neovm_eval::emacs_core::eval::save_scratch_gc_roots();
 
     let result: Result<Value, Flow> = contain_lisp_panics(&mut ev, |ctx| {
@@ -364,7 +364,8 @@ fn contain_lisp_panics_restores_boundary_state() {
         // objects forever otherwise).
         neovm_eval::emacs_core::eval::push_scratch_gc_root(Value::NIL);
         neovm_eval::emacs_core::eval::push_scratch_gc_root(Value::T);
-        ctx.depth += 3;
+        let dirtied_depth = ctx.depth_for_test() + 3;
+        neovm_eval::test_support::authority::set_depth_for_test(ctx, dirtied_depth);
         panic!("boundary-dirt-probe");
     });
 
@@ -380,7 +381,7 @@ fn contain_lisp_panics_restores_boundary_state() {
     assert_eq!(ev.specpdl().len(), spec0);
     assert_eq!(ev.condition_stack.len(), cond0);
     assert_eq!(ev.bc_buf.len(), bc0);
-    assert_eq!(ev.depth, depth0);
+    assert_eq!(ev.depth_for_test(), depth0);
     assert_eq!(
         neovm_eval::emacs_core::eval::save_scratch_gc_roots(),
         roots0,

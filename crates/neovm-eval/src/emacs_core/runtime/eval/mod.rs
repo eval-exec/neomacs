@@ -3644,11 +3644,10 @@ pub struct Context {
     media_generation: u64,
     /// GNU `lisp_eval_depth`: one shared counter for interpreted cons-form
     /// evaluation, Lisp-visible `funcall`, and bytecode `Bcall`.
-    #[cfg(not(feature = "test-support"))]
+    /// Private in EVERY arm (peer #982/#1005): consumers read it through
+    /// `depth_for_test` and set it through the AUTHORITY setter fence, so a
+    /// cross-crate write is a compile error, not a ledger audit.
     pub(crate) depth: usize,
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub depth: usize,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     eval_counter: u64,
     /// Maximum recursion depth.
@@ -5244,6 +5243,15 @@ impl Context {
     #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
     pub(crate) fn max_depth_for_test(&self) -> usize {
         self.max_depth
+    }
+
+    /// Copied current eval-depth observer (peer #982/#1005): the field is
+    /// private in every arm; consumers read it through this getter and write
+    /// it through the AUTHORITY setter fence.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn depth_for_test(&self) -> usize {
+        self.depth
     }
 
     /// Copied display-variable change counter observer (C4/N2).

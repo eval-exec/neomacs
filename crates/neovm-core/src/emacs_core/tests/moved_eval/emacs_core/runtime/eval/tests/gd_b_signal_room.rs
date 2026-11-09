@@ -14,9 +14,9 @@ fn depth_limit_signal_hook_has_reserved_evaluator_room() {
     )
     .unwrap();
     ev.set_variable("max-lisp-eval-depth", Value::fixnum(100));
-    ev.depth = 100;
+    neovm_eval::test_support::authority::set_depth_for_test(&mut ev, 100);
     let result = ev.dispatch_signal_flow_cold(signal("error", vec![Value::string("depth")]));
-    ev.depth = 0;
+    neovm_eval::test_support::authority::set_depth_for_test(&mut ev, 0);
     assert!(result.is_err());
     assert_eq!(ev.eval_str("gd-b-depth-seen").unwrap(), Value::fixnum(120));
     assert_eq!(ev.max_depth_for_test(), 100);
@@ -39,12 +39,12 @@ fn depth_limit_signal_hook_has_reserved_evaluator_room() {
         handler,
         mute_span: 0,
     });
-    ev.depth = 100;
+    neovm_eval::test_support::authority::set_depth_for_test(&mut ev, 100);
     assert!(
         ev.dispatch_signal_flow_cold(signal("error", Vec::new()))
             .is_err()
     );
-    ev.depth = 0;
+    neovm_eval::test_support::authority::set_depth_for_test(&mut ev, 0);
     ev.pop_condition_frame();
     assert_eq!(
         format_eval_result(&ev.eval_str("gd-b-depth-seen")),
@@ -62,9 +62,9 @@ fn depth_limit_signal_hook_has_reserved_evaluator_room() {
                  (list max-lisp-eval-depth lisp-eval-depth-reserve)))",
     )
     .unwrap();
-    ev.depth = 100;
+    neovm_eval::test_support::authority::set_depth_for_test(&mut ev, 100);
     let result = ev.call_debugger(vec![Value::symbol("error"), Value::NIL]);
-    ev.depth = 0;
+    neovm_eval::test_support::authority::set_depth_for_test(&mut ev, 0);
     assert_eq!(
         crate::emacs_core::print::print_value(&result.unwrap()),
         "(300 0)"
@@ -89,16 +89,16 @@ fn nested_signal_hook_replacement_restores_evaluator_reserve() {
     .unwrap();
     ev.set_variable("max-lisp-eval-depth", Value::fixnum(100));
     let spec_base = ev.specpdl().len();
-    ev.depth = 100;
+    neovm_eval::test_support::authority::set_depth_for_test(&mut ev, 100);
     let result = ev.dispatch_signal_flow_cold(signal("error", vec![Value::string("depth")]));
-    assert_eq!(ev.depth, 100);
+    assert_eq!(ev.depth_for_test(), 100);
     assert_eq!(ev.max_depth_for_test(), 100);
     assert_eq!(ev.specpdl().len(), spec_base);
     assert!(matches!(
         result.kinded(),
         Err(FlowKind::Signal(sig)) if sig.symbol_name() == "file-error"
     ));
-    ev.depth = 0;
+    neovm_eval::test_support::authority::set_depth_for_test(&mut ev, 0);
     ev.set_variable("signal-hook-function", Value::NIL);
     assert_eq!(ev.eval_str("gd-b-depth-count").unwrap(), Value::fixnum(2));
     assert_eq!(
@@ -121,9 +121,9 @@ fn signal_hook_throw_restores_evaluator_reserve() {
     });
     ev.set_variable("max-lisp-eval-depth", Value::fixnum(100));
     let spec_base = ev.specpdl().len();
-    ev.depth = 100;
+    neovm_eval::test_support::authority::set_depth_for_test(&mut ev, 100);
     let result = ev.dispatch_signal_flow_cold(signal("error", vec![Value::string("depth")]));
-    assert_eq!(ev.depth, 100);
+    assert_eq!(ev.depth_for_test(), 100);
     assert_eq!(ev.max_depth_for_test(), 100);
     assert_eq!(ev.specpdl().len(), spec_base);
     assert!(matches!(
@@ -132,7 +132,7 @@ fn signal_hook_throw_restores_evaluator_reserve() {
             if thrown.tag == Value::symbol("gd-b-hook-exit")
                 && thrown.value == Value::symbol("escaped")
     ));
-    ev.depth = 0;
+    neovm_eval::test_support::authority::set_depth_for_test(&mut ev, 0);
     ev.pop_condition_frame();
     ev.set_variable("signal-hook-function", Value::NIL);
     assert_eq!(
@@ -151,12 +151,12 @@ fn signal_hook_limit_change_returns_current_excess_to_reserve() {
     )
     .unwrap();
     ev.set_variable("max-lisp-eval-depth", Value::fixnum(100));
-    ev.depth = 100;
+    neovm_eval::test_support::authority::set_depth_for_test(&mut ev, 100);
     let result = ev.dispatch_signal_flow_cold(signal("error", vec![Value::string("depth")]));
     assert!(result.is_err());
-    assert_eq!(ev.depth, 100);
+    assert_eq!(ev.depth_for_test(), 100);
     assert_eq!(ev.max_depth_for_test(), 100);
-    ev.depth = 0;
+    neovm_eval::test_support::authority::set_depth_for_test(&mut ev, 0);
     ev.set_variable("signal-hook-function", Value::NIL);
     assert_eq!(
         ev.eval_str("max-lisp-eval-depth").unwrap(),
@@ -186,10 +186,10 @@ fn localized_signal_depth_reserve_updates_the_current_binding_without_watchers()
                        gd-b-reserve-writes)))",
     )
     .unwrap();
-    ev.depth = 50;
+    neovm_eval::test_support::authority::set_depth_for_test(&mut ev, 50);
     let result = ev.call_debugger(vec![Value::symbol("error"), Value::NIL]);
-    assert_eq!(ev.depth, 50);
-    ev.depth = 0;
+    assert_eq!(ev.depth_for_test(), 50);
+    neovm_eval::test_support::authority::set_depth_for_test(&mut ev, 0);
     assert_eq!(
         crate::emacs_core::print::print_value(&result.unwrap()),
         "(250 50 nil)"
@@ -226,12 +226,12 @@ fn localized_signal_depth_restore_uses_the_buffer_selected_by_the_hook() {
                        lisp-eval-depth-reserve (+ lisp-eval-depth-reserve 3))))",
     )
     .unwrap();
-    ev.depth = 100;
+    neovm_eval::test_support::authority::set_depth_for_test(&mut ev, 100);
     let result = ev.dispatch_signal_flow_cold(signal("error", vec![Value::string("depth")]));
     assert!(result.is_err());
-    assert_eq!(ev.depth, 100);
+    assert_eq!(ev.depth_for_test(), 100);
     assert_eq!(ev.max_depth_for_test(), 100);
-    ev.depth = 0;
+    neovm_eval::test_support::authority::set_depth_for_test(&mut ev, 0);
     ev.set_variable("signal-hook-function", Value::NIL);
     assert_eq!(
         format_eval_result(&ev.eval_str(
@@ -293,7 +293,7 @@ fn compiled_no_borrow_signal_hook_reads_current_localized_reserve_without_watche
     // last reserve read in source, and do not inspect it before dispatch.
     ev.eval_str("(set-buffer gd-b-no-borrow-target)").unwrap();
     let state = (
-        ev.depth,
+        ev.depth_for_test(),
         ev.specpdl().len(),
         ev.condition_stack.len(),
         ev.bc_buf.len(),
@@ -316,7 +316,7 @@ fn compiled_no_borrow_signal_hook_reads_current_localized_reserve_without_watche
     );
     assert_eq!(
         (
-            ev.depth,
+            ev.depth_for_test(),
             ev.specpdl().len(),
             ev.condition_stack.len(),
             ev.bc_buf.len(),

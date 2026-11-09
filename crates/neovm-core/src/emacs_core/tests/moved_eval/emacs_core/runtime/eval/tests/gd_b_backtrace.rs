@@ -90,7 +90,7 @@ fn compiled_raw_signal_gc_keeps_wide_native_argument_frame() {
     .unwrap();
     assert_native_frames_warmed(&ev, &["gd-b-gc-raw-leaf", "gd-b-gc-raw-caller"]);
     let state = (
-        ev.depth,
+        ev.depth_for_test(),
         ev.specpdl().len(),
         ev.condition_stack.len(),
         ev.bc_buf.len(),
@@ -113,7 +113,7 @@ fn compiled_raw_signal_gc_keeps_wide_native_argument_frame() {
     );
     assert_eq!(
         (
-            ev.depth,
+            ev.depth_for_test(),
             ev.specpdl().len(),
             ev.condition_stack.len(),
             ev.bc_buf.len(),
@@ -149,7 +149,7 @@ fn compiled_framed_signal_gc_keeps_wide_arguments_and_inner_binding() {
     .unwrap();
     assert_native_frames_warmed(&ev, &["gd-b-gc-framed-leaf", "gd-b-gc-framed-caller"]);
     let state = (
-        ev.depth,
+        ev.depth_for_test(),
         ev.specpdl().len(),
         ev.condition_stack.len(),
         ev.bc_buf.len(),
@@ -173,7 +173,7 @@ fn compiled_framed_signal_gc_keeps_wide_arguments_and_inner_binding() {
     );
     assert_eq!(
         (
-            ev.depth,
+            ev.depth_for_test(),
             ev.specpdl().len(),
             ev.condition_stack.len(),
             ev.bc_buf.len(),

@@ -22,12 +22,12 @@ struct LispEvalDepth(usize);
 impl LispEvalDepth {
     #[doc(hidden)]
     pub fn capture(context: &Context) -> Self {
-        Self(context.depth)
+        Self(context.depth_for_test())
     }
 
     #[doc(hidden)]
     pub fn restore(self, context: &mut Context) {
-        context.depth = self.0;
+        neovm_eval::test_support::authority::set_depth_for_test(context, self.0);
     }
 }
 
