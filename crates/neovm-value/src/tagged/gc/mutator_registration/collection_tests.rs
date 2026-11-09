@@ -93,7 +93,13 @@ fn assert_owned<K: EraKeeper>(
         era.with_stopped_heap_for_test(stop, |heap| {
             for &word in words {
                 assert_eq!(
-                    heap.owns_heap_value_for_test(Value::from_bits(word)),
+                    heap.owns_heap_value_for_test(
+                        // SAFETY: `word` is the bit pattern `graph` stored from
+                        // a cons allocated in this heap (`head.bits()` /
+                        // `child.bits()`) before the stop. Rehydration only
+                        // feeds the ownership query.
+                        unsafe { Value::from_bits(word) }
+                    ),
                     expected,
                     "ownership of opaque observation {word:#x}"
                 );
