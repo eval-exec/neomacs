@@ -25,7 +25,9 @@ crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eva
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::DisplayHost	ec:display_host
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::ModeLineUpdateTarget::AllBuffers	ec:eval
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::data::command_loop::AUTO_SAVE_TIMEOUT	lateral
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::data::command_loop::COMMAND_EXECUTE	lateral
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::data::command_loop::CommandLoop	lateral
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::data::command_loop::KBoard	lateral
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::data::posn_object_extent::retained_posn_extent	lateral
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::data::posn_object_extent::window_part_of_region	lateral
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::data::window_edge_drag::WindowEdgeGrab	ec:window_edge_drag
@@ -47,6 +49,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eva
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::data::window_state::WindowPart::Text	lateral
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::data::window_state::WindowPresentationSnapshot::GeometryOnly	lateral
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::data::window_state::WindowPresentationSnapshot::LiveWindow	lateral
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::display_query_hooks::window_regions_at	lateral
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::hooks_proof::frontend::apply_xwidget_frontend_event	ec:xwidget
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::hooks_proof::timer::next_idle_gnu_timer_timeout	ec:timer
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::hooks_proof::timer::next_ordinary_gnu_timer_timeout_before	ec:timer
@@ -71,7 +74,11 @@ crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eva
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::keymap_lookup::list_keymap_lookup_seq	ec:keymap
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::keymap_lookup::lookup_key_in_keymaps_in_obarray	ec:keymap
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::keymap_lookup::maybe_keymap_in_obarray	ec:keymap
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::keymap_lookup::resolve_prefix_keymap_binding_in_obarray	ec:keymap
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::lifecycle::dbusbind_drain_events	ec:dbusbind
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::lifecycle::dbusbind_has_active_watches	ec:dbusbind
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::lifecycle::delete_terminal_noelisp_owned	ec:terminal
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::lifecycle::resize_frame_pixelwise_with_buffer_constraints	lateral
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::lifecycle::terminal_handle_value	ec:terminal
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::protocol::SystemFontRole	ec:display_host
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	crate::emacs_core::eval::protocol::SystemFonts	ec:display_host

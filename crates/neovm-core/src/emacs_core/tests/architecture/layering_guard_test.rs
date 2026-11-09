@@ -19,7 +19,7 @@ use super::architecture_production_source_roots::{crates_dir, production_source_
 /// the approved M1-M3 derivation. The row count is pinned and may only
 /// shrink; an unmapped item falls back to the current module model (M-b).
 const ITEM_MAP_TSV: &str = include_str!("layering_item_map.tsv");
-const ITEM_MAP_ROWS: usize = 120;
+const ITEM_MAP_ROWS: usize = 127;
 
 fn item_map() -> &'static BTreeMap<(String, String), String> {
     static MAP: std::sync::OnceLock<BTreeMap<(String, String), String>> =
@@ -1023,10 +1023,89 @@ impl ProductionWalker {
     /// one site per distinct target pair. The frozen item map overrides the
     /// shallow prefix classification for mapped leaves; unmapped leaves keep
     /// the current module model (M-b). A glob import counts at its module.
+    /// Pre-split counting rule: a use statement records ONE site per shared
+    /// upward prefix of its use tree (the old walk recorded at the first
+    /// upward prefix and stopped descending). Item-level attribution happens
+    /// at that same boundary: the site names the historical row of the first
+    /// upward leaf under the prefix, so a grouped import under one prefix
+    /// stays one site even when its leaves name several items.
     fn use_references(&mut self, tree: &syn::UseTree, prefix: &mut Vec<String>, span: Span) {
+        self.use_walk(tree, prefix, span);
+    }
+
+    fn use_walk(&mut self, tree: &syn::UseTree, prefix: &mut Vec<String>, span: Span) {
+        match tree {
+            syn::UseTree::Path(path) => {
+                prefix.push(path.ident.unraw().to_string());
+                if matches!(self.classify(prefix, span), Classification::Upward(_)) {
+                    self.record_use_subtree(&path.tree, prefix, span);
+                } else {
+                    self.use_walk(&path.tree, prefix, span);
+                }
+                prefix.pop();
+            }
+            syn::UseTree::Name(name) => {
+                let terminal_self = name.ident == "self" && !prefix.is_empty();
+                if !terminal_self {
+                    prefix.push(name.ident.unraw().to_string());
+                }
+                self.record_use_leaf(prefix, span);
+                if !terminal_self {
+                    prefix.pop();
+                }
+            }
+            syn::UseTree::Rename(rename) => {
+                let terminal_self = rename.ident == "self" && !prefix.is_empty();
+                if !terminal_self {
+                    prefix.push(rename.ident.unraw().to_string());
+                }
+                self.record_use_leaf(prefix, span);
+                if !terminal_self {
+                    prefix.pop();
+                }
+            }
+            syn::UseTree::Group(group) => {
+                for item in &group.items {
+                    self.use_walk(item, prefix, span);
+                }
+            }
+            syn::UseTree::Glob(_) => {
+                self.record_use_leaf(prefix, span);
+            }
+        }
+    }
+
+    fn push_site(&mut self, pair: Pair, reference: String, span: Span) {
+        self.sites.entry(pair).or_default().push(Site {
+            source: self.source.clone(),
+            line: span.start().line,
+            reference,
+        });
+    }
+
+    fn record_use_leaf(&mut self, segments: &[String], span: Span) {
+        self.observe_path(segments);
+        match self.classify(segments, span) {
+            Classification::Upward(pair) => {
+                assert_intra_crate_upper(&pair.upper);
+                self.push_site(pair, segments.join("::"), span);
+            }
+            Classification::NotUpward => self.observe_not_upward(segments, span),
+        }
+    }
+
+    /// Attribute the subtree under an already-upward prefix to its first
+    /// upward leaf; the whole subtree is ONE site (pre-split shared-prefix
+    /// rule). Every leaf is observed for the frozen-map completeness test.
+    fn record_use_subtree(
+        &mut self,
+        subtree: &syn::UseTree,
+        prefix: &mut Vec<String>,
+        span: Span,
+    ) {
         let mut leaves = Vec::new();
-        use_leaves(tree, prefix, &mut leaves);
-        let mut pairs = BTreeMap::new();
+        use_leaves(subtree, prefix, &mut leaves);
+        let mut chosen: Option<(Pair, String)> = None;
         for (path, _name) in leaves {
             let segments = if path.last().is_some_and(|part| part == "*") {
                 path[..path.len() - 1].to_vec()
@@ -1034,21 +1113,23 @@ impl ProductionWalker {
                 path
             };
             self.observe_path(&segments);
-            match self.classify(&segments, span) {
-                Classification::Upward(pair) => {
-                    assert_intra_crate_upper(&pair.upper);
-                    pairs.entry(pair).or_insert_with(|| segments.join("::"));
+            if chosen.is_none() {
+                match self.classify(&segments, span) {
+                    Classification::Upward(pair) => {
+                        assert_intra_crate_upper(&pair.upper);
+                        chosen = Some((pair, segments.join("::")));
+                    }
+                    Classification::NotUpward => self.observe_not_upward(&segments, span),
                 }
-                Classification::NotUpward => self.observe_not_upward(&segments, span),
             }
         }
-        for (pair, reference) in pairs {
-            self.sites.entry(pair).or_default().push(Site {
-                source: self.source.clone(),
-                line: span.start().line,
-                reference,
-            });
+        if let Some((pair, reference)) = chosen {
+            self.push_site(pair, reference, span);
         }
+        // No leaf resolved upward: the subtree's leaves are lateral/self or
+        // outside the model. The facade prefix is NOT a substitute site; a
+        // mapped lateral item must stay NotUpward (T3a), never re-counted
+        // through the module it was re-exported from.
     }
 }
 
@@ -2238,14 +2319,21 @@ fn layering_item_map_stale_row_fails() {
     assert_eq!(stale.len(), 1, "a row absent from the scan is stale");
 }
 
-fn real_tree_walker() -> ProductionWalker {
+fn real_tree_walker_for(source: &str, logical: &str) -> ProductionWalker {
     let (index, _sites) = production_sites_across_crates();
     let mut walker = new_walker();
     walker.phase = ScanPhase::References;
     walker.index = index;
-    walker.logical_path = vec!["buffer".to_owned()];
-    walker.source = Path::new("crates/neovm-edit/src/buffer/buffer.rs").to_path_buf();
+    walker.logical_path = vec![logical.to_owned()];
+    walker.source = Path::new(source).to_path_buf();
     walker
+}
+
+fn real_tree_walker() -> ProductionWalker {
+    real_tree_walker_for(
+        "crates/neovm-edit/src/buffer/buffer.rs",
+        "buffer",
+    )
 }
 
 /// M-d: a mapped lateral item stays NotUpward.
@@ -2494,6 +2582,87 @@ fn layering_item_map_tagged_window_state_turns_red() {
         walker.classify(&segments, Span::call_site()),
         Classification::Upward(_)
     ));
+}
+
+/// T3a-PROXY plant: the eval resize/window_regions hooks purely forward to
+/// the moved lateral Frame methods (pre window/mod.rs:6484), so the refs stay
+/// NotUpward through the frozen map; the unmapped-direct-ref plant above
+/// proves a genuinely new edge still turns RED.
+#[test]
+fn layering_item_map_proxy_hooks_are_lateral() {
+    let walker = real_tree_walker_for(
+        "crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs",
+        "keyboard",
+    );
+    for segments in [
+        [
+            "crate",
+            "emacs_core",
+            "eval",
+            "lifecycle",
+            "resize_frame_pixelwise_with_buffer_constraints",
+        ],
+        [
+            "crate",
+            "emacs_core",
+            "eval",
+            "display_query_hooks",
+            "window_regions_at",
+        ],
+    ] {
+        let segments = segments.map(str::to_owned);
+        assert!(matches!(
+            walker.classify(&segments, Span::call_site()),
+            Classification::NotUpward
+        ));
+    }
+}
+
+/// Counting-rule plant: a grouped use under ONE shared upward prefix records
+/// ONE site no matter how many leaves it names (the pre-split rule). The
+/// second statement spans two modules and correctly records two sites, one
+/// per shared prefix.
+#[test]
+fn layering_guard_counts_one_site_per_shared_use_prefix() {
+    let directory = fixture(
+        r#"
+        mod emacs_core { pub mod text {} pub mod keymap {} }
+        mod tagged {
+            use crate::emacs_core::text::{Glyph, GlyphKind};
+            use crate::emacs_core::{text::A, keymap::B};
+        }
+    "#,
+    );
+    let root = directory.path();
+    let (index, sites) = production_sites(root);
+    assert_eq!(current_table(&sites), "tagged keymap 1\ntagged text 2\n");
+    assert_production_ceilings(
+        root,
+        &sites,
+        &parse_ceilings(&current_table(&sites), &index),
+    );
+}
+
+/// The grouped keymap use attributes item-level to keymap through the frozen
+/// map (its first upward leaf is DefaultBindingMode -> ec:keymap).
+#[test]
+fn layering_item_map_grouped_keymap_use_attributes_to_keymap() {
+    let walker = real_tree_walker_for(
+        "crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs",
+        "keyboard",
+    );
+    let segments = [
+        "crate",
+        "emacs_core",
+        "eval",
+        "keymap_lookup",
+        "DefaultBindingMode",
+    ]
+    .map(str::to_owned);
+    match walker.classify(&segments, Span::call_site()) {
+        Classification::Upward(pair) => assert_eq!(pair.upper.text(), "keymap"),
+        other => panic!("expected Upward keymap, got {other:?}"),
+    }
 }
 
 /// D-c plants: one NotUpward site per reason.
