@@ -755,21 +755,42 @@ pub(crate) fn emit_direct_bytecode_call(
         // the charge is one add and the overflow test is one compare against
         // the constant limit.
         let max_declared = (BC_STACK_POSITION_LIMIT - BC_FRAME_HEADER_BYTES) / 8;
-        let frame_bytes = match callee {
-            DirectCallee::Symbol { .. } => fb.ins().iconst(types::I64, site.frame_bytes as i64),
+        let limit = fb.ins().iconst(types::I64, BC_STACK_POSITION_LIMIT as i64);
+        let (frame_bytes, declared_too_big) = match callee {
+            DirectCallee::Symbol { .. } => {
+                let immediate = site.frame_bytes as i64;
+                // A named site's cost is a compile-time fact.  If it exceeds
+                // the limit it can never fit from any position; the constant
+                // true makes the emitted branch unconditional, so the add's
+                // wrap is never stored.  Otherwise `position <= limit` and
+                // `frame_bytes <= limit` prove the add cannot wrap.
+                let too_big = (site.frame_bytes > BC_STACK_POSITION_LIMIT as u64)
+                    .then(|| fb.ins().iconst(types::I64, 1));
+                (fb.ins().iconst(types::I64, immediate), too_big)
+            }
             DirectCallee::Source { callee } => {
                 let object = super::lowering::band_imm_p(fb, callee, !(TAG_MASK as i64));
                 let declared =
                     fb.ins()
                         .load(types::I64, flags, object, BYTECODE_MAX_STACK_OFFSET as i32);
-                // Saturate like `bytecode_frame_bytes`: a hostile declared
-                // depth must not wrap the shift into a small frame cost.
-                // One past `max_declared` is enough to make the frame too
-                // big, and keeps the add below the wrap point.
-                let cap = fb.ins().iconst(types::I64, (max_declared + 1) as i64);
-                let capped = fb.ins().umin(declared, cap);
-                let data = ishl_imm_p(fb, capped, 3);
-                iadd_imm_p(fb, data, BC_FRAME_HEADER_BYTES as i64)
+                // A hostile declared depth must not wrap the shift into a
+                // small frame cost.  One compare (the saturation is exact:
+                // any depth over `max_declared` cannot fit) replaces the
+                // `umin`+`icmp`+`bor` sequence that cost every direct call
+                // three instructions; the reject branch goes to the shim,
+                // whose Rust entry applies the saturating rule and raises
+                // GNU's overflow error.
+                let too_big = icmp_imm_p(
+                    fb,
+                    IntCC::UnsignedGreaterThan,
+                    declared,
+                    max_declared as i64,
+                );
+                let data = ishl_imm_p(fb, declared, 3);
+                (
+                    iadd_imm_p(fb, data, BC_FRAME_HEADER_BYTES as i64),
+                    Some(too_big),
+                )
             }
         };
         let saved_position = fb.ins().load(
@@ -778,20 +799,16 @@ pub(crate) fn emit_direct_bytecode_call(
             vmctx,
             CONTEXT_BYTECODE_STACK_POSITION_OFFSET as i32,
         );
-        let limit = fb.ins().iconst(types::I64, BC_STACK_POSITION_LIMIT as i64);
-        // A cost over the limit can never fit even from position 0; catch it
-        // before the add.  For the surviving costs (`<= limit`) the sum with
-        // a valid position is at most `2 * limit` and cannot wrap, so the
-        // unsigned compare against the constant is exact.  `after > limit`
-        // is GNU's `(char *)fp->next_stack > bc->stack_end`: the frame does
-        // not fit, and the shim's slow half raises GNU's error on entry.
-        let frame_too_big = fb
-            .ins()
-            .icmp(IntCC::UnsignedGreaterThan, frame_bytes, limit);
-        let frame_capped = fb.ins().umin(frame_bytes, limit);
-        let after = fb.ins().iadd(saved_position, frame_capped);
+        // `after > limit` is GNU's `(char *)fp->next_stack > bc->stack_end`:
+        // the frame does not fit, and the shim's slow half raises GNU's error
+        // on entry.  A source cost rejected above never stores its wrapped
+        // sum: `next` branches to the cold block before the store.
+        let after = fb.ins().iadd(saved_position, frame_bytes);
         let over_limit = fb.ins().icmp(IntCC::UnsignedGreaterThan, after, limit);
-        let over_budget = fb.ins().bor(frame_too_big, over_limit);
+        let over_budget = match declared_too_big {
+            Some(too_big) => fb.ins().bor(too_big, over_limit),
+            None => over_limit,
+        };
         next(fb, over_budget);
         fb.ins().store(
             flags,

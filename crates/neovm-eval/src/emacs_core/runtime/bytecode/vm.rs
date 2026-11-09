@@ -4318,14 +4318,11 @@ impl<'a> Vm<'a> {
 
         // Read everything needed from the ACTIVE frame before popping it: after
         // `leave_callee` the top of the stack is the caller, not this frame.
-        let (cleanup, frame_base, own_position, frame_cost) = {
+        // The release below re-reads the CALLER's own position from its frame
+        // after the pop, so nothing here needs this frame's cost.
+        let (cleanup, frame_base) = {
             let current = callers.active();
-            (
-                current.cleanup,
-                current.frame_base,
-                current.caller_return.bytecode_position(),
-                bytecode_frame_bytes(current.function.code().max_stack.get()),
-            )
+            (current.cleanup, current.frame_base)
         };
         #[cfg(debug_assertions)]
         let entry_lexenv = callers.active().entry_lexenv;
@@ -4369,15 +4366,17 @@ impl<'a> Vm<'a> {
         // only when there is no suspended caller, which the guard above already
         // rejected. The old unchecked pop existed because the caller frame had
         // to be COPIED back into `current`; there is nothing to copy any more.
-        // The charge taken when this callee was installed is released here on
-        // the fast Breturn path too: release must ride every exit (normal,
-        // signal/throw); the slow path releases in finish_interpreter_frame.
-        // The caller's position is this frame's own minus its immutable cost.
-        debug_assert!(own_position >= frame_cost);
-        release_bytecode_frame(self.ctx, own_position - frame_cost);
         let continuation = callers
             .leave_callee()
             .expect("a suspended caller was proven above");
+        // Release the callee's charge on the fast Breturn path: restore the
+        // mirror to the caller's position, which the caller's own frame packs.
+        // Reading it after the pop replaces the per-return derivation from
+        // this frame's cost (a max_stack load, shift, add and subtract); no
+        // Lisp or GC runs between the pop and this store. The slow path
+        // releases in finish_interpreter_frame before its cleanup can run
+        // Lisp.
+        release_bytecode_frame(self.ctx, callers.active().caller_return.bytecode_position());
         self.leave_bytecode_call_depth();
         // The eligibility gate above asked `backtrace_debug_on_exit` about
         // exactly this index, so the checking pop would ask a second time on
