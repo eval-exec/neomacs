@@ -92,13 +92,6 @@ impl InternReadDomain {
             confined: PhantomData,
         })
     }
-
-    #[cfg(test)]
-    pub(crate) fn seeded_for_test(word: u64) -> Self {
-        Self {
-            word: AtomicU64::new(word),
-        }
-    }
 }
 
 /// A counted loan of the process read domain. Drop it before stop ack, park,
@@ -213,3 +206,11 @@ const _: () = {
     assert!(std::mem::size_of::<InternReadDomain>() == 8);
     assert!(std::mem::align_of::<InternReadDomain>() == 8);
 };
+
+/// Value-test-only constructor.  The `mod` declaration is the split-cfg
+/// guard's exemption for a bare `test`, and keeping it in a child module
+/// keeps this file (which the compile-fail fixtures `#[path]`-include) free
+/// of `test-support` cfg tokens (CG-5 mechanism (b)).
+#[cfg(test)]
+#[path = "domain_test_support.rs"]
+mod domain_test_support;

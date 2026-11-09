@@ -344,7 +344,7 @@ fn clear_cons_observed_block_slow(base: usize) {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn with_collection_observed_registry_locked<R>(f: impl FnOnce() -> R) -> R {
     observation_radix::with_insertion_locked(f)
 }

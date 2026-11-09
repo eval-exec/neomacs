@@ -102,7 +102,7 @@ fn register(address: usize) -> &'static ObservationBits {
     unsafe { &*bits }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn with_insertion_locked<R>(f: impl FnOnce() -> R) -> R {
     let _insertion = INSERTION_LOCK
         .lock()

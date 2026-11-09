@@ -259,7 +259,7 @@ thread_local! {
     /// is destroyed inside TLS destruction, and an owning TaggedHeap dropped
     /// there could join its collector and emit a tracing event after
     /// tracing's own TLS is gone (peer ruling 11:5xZ G3).
-    #[cfg(any(test, feature = "test-thread-fallback-heap"))]
+    #[cfg(any(any(test, feature = "test-support"), feature = "test-thread-fallback-heap"))]
     static TEST_FALLBACK_TAGGED_HEAP: std::cell::RefCell<
         Option<crate::thread_exit_leak::ThreadExitLeak<AliasableBox<TaggedHeap>>>,
     > = const { std::cell::RefCell::new(None) };
@@ -273,7 +273,10 @@ thread_local! {
 /// The feature only makes the fallback available; this process flag is what
 /// keeps the "no TaggedHeap set" tripwire armed for a crate that never had the
 /// fallback pre-split.  See [`enable_test_thread_fallback`].
-#[cfg(any(test, feature = "test-thread-fallback-heap"))]
+#[cfg(any(
+    any(test, feature = "test-support"),
+    feature = "test-thread-fallback-heap"
+))]
 static TEST_FALLBACK_ENABLED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -284,18 +287,50 @@ static TEST_FALLBACK_ENABLED: std::sync::atomic::AtomicBool =
 /// test build the feature is compiled for every dependent, so this flag -- not
 /// the feature -- is what preserves the production panic for crates that never
 /// call the init (`neomacs-layout-engine`).
-#[cfg(any(test, feature = "test-thread-fallback-heap"))]
+#[cfg(any(
+    any(test, feature = "test-support"),
+    feature = "test-thread-fallback-heap"
+))]
 #[inline]
 pub(crate) fn enable_test_thread_fallback() {
     TEST_FALLBACK_ENABLED.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Whether THIS compilation is neovm-value's own test build.
+///
+/// This is the runtime `cfg!(test)` question, kept distinct from the R4
+/// presence conversion: `test-support` is a DEPENDENCY-build feature, and a
+/// unified workspace test build enables it in every dependent while `test`
+/// stays false there.  Answering this question with the feature would disarm
+/// the "no TaggedHeap set" tripwire for every dependent (peer R4-1), so the
+/// bare `test` predicate lives on these two guard-exempt `mod` declarations
+/// and the call site reads a value.
+#[cfg(any(
+    any(test, feature = "test-support"),
+    feature = "test-thread-fallback-heap"
+))]
+#[cfg(test)]
+mod own_build {
+    pub(super) const IS_OWN_TEST_BUILD: bool = true;
+}
+#[cfg(any(
+    any(test, feature = "test-support"),
+    feature = "test-thread-fallback-heap"
+))]
+#[cfg(not(test))]
+mod own_build {
+    pub(super) const IS_OWN_TEST_BUILD: bool = false;
+}
+
 /// Whether the fallback heap may be created: always in neovm-value's own
 /// cfg(test) build, otherwise only after an explicit arming call.
-#[cfg(any(test, feature = "test-thread-fallback-heap"))]
+#[cfg(any(
+    any(test, feature = "test-support"),
+    feature = "test-thread-fallback-heap"
+))]
 #[inline]
 pub(crate) fn test_fallback_enabled() -> bool {
-    cfg!(test) || TEST_FALLBACK_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
+    own_build::IS_OWN_TEST_BUILD || TEST_FALLBACK_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Query the installed mutator's existing write-tracking protocol mirror.
@@ -319,7 +354,7 @@ pub(crate) fn installed_tagged_heap_root_for_test_scope() -> Option<std::ptr::No
     TAGGED_HEAP.with(|slot| std::ptr::NonNull::new(slot.get()))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Writes the barrier's thread-local rejects passed on to the heap.
     static RECORD_HEAP_WRITE_CALLS: Cell<usize> = const { Cell::new(0) };
@@ -1565,7 +1600,7 @@ impl TaggedHeap {
     }
 
     fn record_heap_write(&mut self, record: HeapWriteRecord) {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         RECORD_HEAP_WRITE_CALLS.with(|calls| calls.set(calls.get() + 1));
         // Dump partition: a mutated dumped object may now hold heap children,
         // so remember it as a permanent root. Conservative — a false positive
@@ -2590,6 +2625,16 @@ pub(crate) mod mapped_veclike_scan;
 mod mutator_registry_tests;
 #[doc(hidden)]
 pub mod scan_contract;
+/// Production young-log bridge for `scan_contract::SingleMutatorWorld`,
+/// kept out of the fixture-included source (CG-5 mechanism (b)).
+mod scan_contract_bridge;
+/// Test-support constructor for `scan_contract::StoppedMutatorsProof`.
+/// Kept out of scan_contract.rs so that file stays free of `test-support`
+/// cfg tokens beyond its pre-existing visibility attr (CG-5 mechanism (b)):
+/// the compile-fail fixtures `#[path]`-include it from a scratch crate that
+/// does not declare the feature.
+#[cfg(any(test, feature = "test-support"))]
+mod scan_contract_test_support;
 use mapped_veclike_scan::MappedVeclikeScanSnapshot;
 #[cfg(test)]
 #[path = "gc/tests/shutdown_tests.rs"]
@@ -2653,12 +2698,12 @@ mod aliasable;
 mod collector_reads;
 #[doc(hidden)]
 pub use aliasable::AliasableBox;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "gc/tests/test_heap.rs"]
-mod test_heap;
-#[cfg(test)]
+pub(crate) mod test_heap;
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
-pub(crate) use test_heap::{SyntheticConcurrentBarrier, TestHeap};
+pub(crate) use test_heap::TestHeap;
 
 #[cfg(not(feature = "test-support"))]
 mod arena_pages;
@@ -2713,7 +2758,7 @@ pub use gen1_admission::{Gen1Admission, Gen1AdmissionError};
 mod mutator_registration;
 #[cfg(feature = "test-support")]
 pub mod mutator_registration;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use census::CensusRecord;
 use census::{CensusCycleKind, GenCensus, census_remset_probe_on};
 pub use facade_mark::{
@@ -2738,16 +2783,29 @@ pub use mutator_registration::{
     RunSlice, SealedTableAccess, SliceRoot, Snapshot, StoppedSummaries, SymbolHandle, SymbolMut,
     SymbolRef, TableMut, TableRef, YoungWorkerLoan,
 };
-#[cfg(test)]
+// The extension-trait convenience re-export is `pub(crate)`: it can never name
+// anything for a dependency build, and no consumer in any configuration uses
+// this root path (the A' ledgered paths are the public test-support surface).
+// Exposing the name under the feature only changed the known eval lib-test
+// error identity (E0432 -> E0603) without making the path usable, so it is
+// scoped to this crate's own no-feature test build with the same guard-legal
+// spelling as collection_reads (condition (d)).
+#[cfg(all(any(test, feature = "test-support"), not(feature = "test-support")))]
 pub(crate) use mutator_registration::{EraCoreHofExt, RunAccessHofExt, RunAccessUnaryExt};
 
-#[cfg(test)]
-pub(crate) use crate::emacs_core::eval::world::WorldProofEra as ProofEra;
 #[doc(hidden)]
 pub use mutator_registration::facade::*;
-/// R6 TA2 fence spelling for the proof-era type in a `test-support` build
-/// (value is then a dependency and cannot reach the evaluator's alias above).
-#[cfg(all(feature = "test-support", not(test)))]
+/// R6 TA2 fence spelling for the proof-era type.
+///
+/// The evaluator's `WorldProofEra` is this same generic item with its own
+/// keeper (`neovm_value::test_support::authority::ProofEra<'heap, Baton>`,
+/// eval test_support.rs), so value names the generic type here for BOTH the
+/// test build and the `test-support` dependency build.  The previous
+/// `crate::emacs_core::...` spelling could never resolve inside value (the
+/// evaluator is upper); its only consequence was the libval lib-test red.
+/// Under the feature a non-test build is exactly the dependency build the R6
+/// fence needs.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use mutator_registration::{
     GenericProofEra as ProofEra, GenericProofEraFinishFailure as ProofEraFinishFailure,
 };
@@ -2758,9 +2816,9 @@ use alloc_region::RegionBook;
 use alloc_region::RegionStats;
 #[cfg(feature = "test-support")]
 pub use alloc_region::RegionStats;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use alloc_region::{CONS_REGION_MAX_CELLS, ConsRegionSource, FLOAT_REGION_MAX_SLOTS};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use barrier_window::published_barrier_window;
 #[cfg_attr(not(feature = "jit"), allow(unused_imports))]
 #[doc(hidden)]

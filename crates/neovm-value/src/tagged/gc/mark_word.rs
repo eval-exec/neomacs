@@ -78,7 +78,7 @@ impl MarkStack {
     }
 
     /// The remaining work as values, for collector tests.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn into_values(self) -> Vec<TaggedValue> {
         self.0.into_iter().map(MarkWord::value).collect()
     }

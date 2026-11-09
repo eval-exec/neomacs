@@ -10,7 +10,10 @@ pub(in crate::tagged::gc::mutator_registration) struct PreparedNameFunction {
     pub(super) key: SymbolHandle,
 }
 
-#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
 impl PreparedNameFunction {
     pub(in crate::tagged::gc::mutator_registration) fn validate_running(
         &self,

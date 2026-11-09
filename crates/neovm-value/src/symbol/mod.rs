@@ -57,7 +57,7 @@ pub enum CanonicalWrite {
     /// The cell is a thread projection: the owner-aware caller routes it.
     Projected,
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use cell::plist_epoch;
 pub(crate) use cell::store_plist_head;
 use cell::{ArmMut, CellWrite, MarkGate, RevealedCell, read_symbol_children};
@@ -1401,7 +1401,7 @@ impl SymbolChunks {
     }
 
     /// Whether slot `idx`'s chunk holds a stamp array (tests).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn chunk_has_fn_stamps(&self, idx: usize) -> bool {
         self.sides
             .get(idx >> 12)
@@ -2845,7 +2845,7 @@ impl Obarray {
     /// Shared readers may use only the cached descriptor or armed Boolean.
     #[inline]
     #[cfg_attr(
-        not(test),
+        not(any(test, feature = "test-support")),
         expect(
             dead_code,
             reason = "standalone manager resolver retained for its cold-owner and compile-fail contracts"
@@ -3704,7 +3704,7 @@ impl Obarray {
     /// Phase 2: thin wrapper over `set_symbol_value_id` that exposes
     /// the GNU name. Phase 5+ adds the LOCALIZED-aware logic and the
     /// `where`/`bindflag` parameters via [`Self::set_internal_localized`].
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_internal(&mut self, id: SymId, value: Value) {
         self.set_canonical_value(CanonicalAccess::TEST, id, value);
     }
@@ -4057,7 +4057,8 @@ impl Obarray {
         // test of sentinel skipping, while catching it in production debug
         // builds rather than silently proving an old binding current.
         debug_assert!(
-            next > current || (cfg!(test) && current == u64::MAX - 1),
+            next > current
+                || (cfg!(any(test, feature = "test-support")) && current == u64::MAX - 1),
             "the function-binding clock wrapped"
         );
         next
@@ -4080,7 +4081,7 @@ impl Obarray {
     }
 
     /// Test hook: whether `id`'s chunk has allocated its stamp array.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn chunk_has_fn_stamps_for_test(&self, id: SymId) -> bool {
         self.symbols.chunk_has_fn_stamps(Self::slot_index(id))
     }
@@ -5247,54 +5248,7 @@ mod plist_epoch_tests;
 /// The pre-`CanonicalAccess` spellings, for tests, which set up and inspect
 /// canonical storage. Production code names its reason
 /// ([`CanonicalAccess`]) or reads through the owner-aware `Context` API.
-#[cfg(test)]
-impl Obarray {
-    pub fn symbol_value_copied(&self, name: &str) -> Option<Value> {
-        self.canonical_value_by_name(CanonicalAccess::TEST, name)
-    }
-    pub fn symbol_value_id_copied(&self, id: SymId) -> Option<Value> {
-        self.canonical_value(CanonicalAccess::TEST, id)
-    }
-    pub fn symbol_value_id_or_nil(&self, id: SymId) -> Value {
-        self.canonical_value_or_nil(CanonicalAccess::TEST, id)
-    }
-    pub fn value_without_buffer(&self, name: &str) -> BufferlessValue {
-        self.canonical_value_without_buffer(CanonicalAccess::TEST, name)
-    }
-    pub fn value_without_buffer_id(&self, id: SymId) -> BufferlessValue {
-        self.canonical_value_without_buffer_id(CanonicalAccess::TEST, id)
-    }
-    pub fn find_symbol_value(&self, id: SymId) -> Option<Value> {
-        self.canonical_find_value(CanonicalAccess::TEST, id)
-    }
-    pub fn default_value_id_copied(&self, id: SymId) -> Option<Value> {
-        self.canonical_default_value(CanonicalAccess::TEST, id)
-    }
-    pub fn boundp(&self, name: &str) -> bool {
-        self.canonical_boundp(CanonicalAccess::TEST, name)
-    }
-    pub fn boundp_id(&self, id: SymId) -> bool {
-        self.canonical_boundp_id(CanonicalAccess::TEST, id)
-    }
-    pub fn set_symbol_value(&mut self, name: &str, value: Value) {
-        self.set_canonical_value_by_name(CanonicalAccess::TEST, name, value);
-    }
-    pub fn set_symbol_value_id(&mut self, id: SymId, value: Value) {
-        self.set_canonical_value(CanonicalAccess::TEST, id, value);
-    }
-    pub fn makunbound(&mut self, name: &str) {
-        self.makunbound_canonical_by_name(CanonicalAccess::TEST, name);
-    }
-    pub fn makunbound_id(&mut self, id: SymId) {
-        self.makunbound_canonical(CanonicalAccess::TEST, id);
-    }
-}
-
-/// Additive test-support surface (peer A1) for upper-crate tests: the
-/// pre-`CanonicalAccess` spellings that do not name edit-layer buffers.
-/// Compiled for a dependency build with `feature = "test-support"` and not
-/// for value's own test build, which keeps the full test-only block above.
-#[cfg(all(feature = "test-support", not(test)))]
+#[cfg(any(test, feature = "test-support"))]
 impl Obarray {
     pub fn symbol_value_copied(&self, name: &str) -> Option<Value> {
         self.canonical_value_by_name(CanonicalAccess::TEST, name)

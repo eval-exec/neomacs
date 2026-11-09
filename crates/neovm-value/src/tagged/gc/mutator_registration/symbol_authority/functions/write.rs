@@ -22,7 +22,10 @@ unsafe impl Sync for FunctionState {}
 impl FunctionState {
     /// Read prepared scalar metadata using the actual matching stopped
     /// receiver, without the serial interner's legacy TLS lookup caches.
-    #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+    #[cfg(all(
+        any(test, feature = "test-support"),
+        not(feature = "gc-memory-telemetry")
+    ))]
     pub(super) fn lambda_for_keeper(
         &self,
         id: SymId,

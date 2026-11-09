@@ -47,7 +47,7 @@ static CAPTURE_SCOPES: AtomicUsize = AtomicUsize::new(POLICY_MASK);
 /// Never reset this gate on scope exit. No Lisp state is shared by this flag.
 static HISTORY_REQUIRED: AtomicBool = AtomicBool::new(true);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static STATE_INITIALIZATIONS: AtomicUsize = AtomicUsize::new(0);
 
 static CONFIG: LazyLock<()> = LazyLock::new(|| {
@@ -109,13 +109,13 @@ thread_local! {
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
     static RECENT_READS: RecentReads = const { RecentReads::new() };
     static STATE: store_state::StateSlot = store_state::StateSlot::default();
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     static OBSERVATION_STATE_ACCESSES: Cell<usize> = const { Cell::new(0) };
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     static OBSERVED_OWNER_PUBLICATIONS: Cell<usize> = const { Cell::new(0) };
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     static RECENT_CLEARED_CELLS: Cell<usize> = const { Cell::new(0) };
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     static RECENT_CLEARED_MASKS: Cell<usize> = const { Cell::new(0) };
 }
 
@@ -167,7 +167,7 @@ impl RecentReads {
                     let word = &self.words[index];
                     if word.get() != 0 {
                         word.set(0);
-                        #[cfg(test)]
+                        #[cfg(any(test, feature = "test-support"))]
                         RECENT_CLEARED_CELLS.with(|count| count.set(count.get() + 1));
                     }
                     mask &= mask - 1;
@@ -179,7 +179,7 @@ impl RecentReads {
             for word in &self.words {
                 word.set(0);
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             RECENT_CLEARED_CELLS.with(|count| count.set(count.get() + self.words.len()));
         }
         self.epoch.set(epoch);
@@ -291,7 +291,7 @@ impl State {
 
 impl Default for State {
     fn default() -> Self {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         STATE_INITIALIZATIONS.fetch_add(1, Ordering::Relaxed);
         // CONFIG cannot touch STATE or call Lisp. Force it before remembering
         // history permanently: WRITE_LAZY may clear the conservative initial flag.
@@ -721,7 +721,7 @@ fn record_observation(
     revision: LispCollectionRevision,
     publication_epoch: Option<u64>,
 ) {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     OBSERVATION_STATE_ACCESSES.with(|count| count.set(count.get() + 1));
     for capture in &mut state.captures {
         if capture.publication_epoch != publication_epoch {
@@ -910,7 +910,7 @@ mod compiled_journal;
 mod observed_envelope;
 #[cfg(feature = "test-support")]
 pub mod observed_envelope;
-#[cfg(all(test, not(feature = "test-support")))]
+#[cfg(all(any(test, feature = "test-support"), not(feature = "test-support")))]
 pub(crate) use compiled_journal::force_compiled_journal_for_test;
 #[cfg(feature = "test-support")]
 pub use compiled_journal::force_compiled_journal_for_test;
@@ -1047,7 +1047,7 @@ fn publish_observed_owner_in_state(state: &mut State, bits: usize) -> bool {
             promoted_geometry.unwrap_or_else(|| native_window_collection_owner(bits));
         let changed = state.observed.insert(bits, native_geometry);
         let newly = if changed {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             OBSERVED_OWNER_PUBLICATIONS.with(|count| count.set(count.get() + 1));
             super::gc::mark_collection_observed(bits)
         } else {

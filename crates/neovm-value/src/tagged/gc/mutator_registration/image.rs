@@ -370,7 +370,7 @@ impl PublishedGcImage {
         self.facts.bytes_since_gc = self.facts.bytes_since_gc.saturating_add(bytes.get());
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(in crate::tagged::gc) fn seed_collection_words_for_test(
         &mut self,
         root: MarkWord,
@@ -469,7 +469,7 @@ impl PublishedGcImage {
 
     /// A4's stopped fixture consumes only its known immediate work marker.
     /// It cannot discard another payload or act as a production collector.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(in crate::tagged::gc) fn consume_synthetic_remembered_for_test(
         &mut self,
         expected: MarkWord,

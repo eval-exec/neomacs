@@ -338,7 +338,7 @@ const DESCRIPTOR_PAGE: usize = 256;
 impl ThreadProjectionTable {
     /// How many projections the table has issued (VOID not counted).
     #[inline]
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn len(&self) -> usize {
         self.issued.len()
@@ -346,7 +346,7 @@ impl ThreadProjectionTable {
 
     /// Whether no projection has been issued.
     #[inline]
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn is_empty(&self) -> bool {
         self.issued.is_empty()
@@ -358,7 +358,7 @@ impl ThreadProjectionTable {
     /// real per-buffer header always fails), then the descriptor's index is
     /// matched against this table's, so a header copied out of a projection
     /// is never mistaken for one.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn projection(&self, fwd: FwdRef) -> Option<&'static ThreadProjectionDescriptor> {
         if fwd.as_buffer_obj_fwd()?.offset != THREAD_PROJECTION_OFFSET {
@@ -398,7 +398,7 @@ impl ThreadProjectionTable {
     }
 
     /// The descriptor issued for INDEX, if any (never VOID).
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn get(&self, index: TlsIndex) -> Option<&'static ThreadProjectionDescriptor> {
         self.issued.get(index.slot().checked_sub(1)?).copied()

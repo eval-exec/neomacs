@@ -15,7 +15,7 @@ use super::TaggedHeap;
 #[must_use = "the admission keeps the heap exclusively borrowed during capture"]
 #[doc(hidden)]
 pub struct SingleMutatorWorld<'h> {
-    heap: &'h mut TaggedHeap,
+    pub(super) heap: &'h mut TaggedHeap,
     _thread: PhantomData<Rc<()>>,
 }
 
@@ -140,7 +140,7 @@ impl std::fmt::Debug for ScanStorageLease {
 /// admission. The key cannot be sent to another owner or cloned.
 #[derive(Debug)]
 pub(super) struct StoppedMutatorsProof {
-    _owner: PhantomData<Rc<()>>,
+    pub(super) _owner: PhantomData<Rc<()>>,
 }
 
 static_assertions::assert_not_impl_any!(StoppedMutatorsProof: Send, Sync, Copy, Clone);
@@ -331,160 +331,88 @@ impl SingleMutatorWorld<'_> {
             .ensure_young_logs_stopped(&proof)?;
         Ok(body(&mut *self.heap, &proof))
     }
-
-    /// Split the allocator and the canonical cold registry under the same
-    /// closed-world proof used for SATB folding. No callbacks into Lisp or GC,
-    /// allocation safepoints, or mutator resumes are allowed inside `body`.
-    ///
-    /// The bridge itself never drains logs or clears flags. C2/C3 use its
-    /// resolver for capture, then ConsStopAll clears flags only after promotion
-    /// and detaches sweep work before releasing this physical stop-all.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Typed split bridge retained for worker integration; current collectors use with_stopped_heap."
-        )
-    )]
-    pub(super) fn with_stopped_young_logs<R>(
-        &mut self,
-        body: impl FnOnce(
-            &mut super::cons_allocator::ConsAllocatorOwner,
-            &mut super::young_registry::StoppedYoungLogs<'_>,
-            &[super::ConsBlock],
-        ) -> R,
-    ) -> Result<R, super::young_registry::YoungRegistryError> {
-        assert!(
-            !self.heap.concurrent_mark_running(),
-            "young capture requires an explicit successful marker join"
-        );
-        let proof = StoppedMutatorsProof {
-            _owner: PhantomData,
-        };
-        let heap = &mut *self.heap;
-        let mut logs =
-            super::young_registry::StoppedYoungLogs::new(&mut heap._satb_layout_reserve, &proof)?;
-        Ok(body(&mut heap.cons_allocator, &mut logs, &heap.cons_blocks))
-    }
-
-    /// Transfer only a young payload to a worker; SATB remains owner-confined.
-    /// The caller must return the loan before collection or owner retirement.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Young-only worker transfer remains a production capability; current production uses a confined mutator."
-        )
-    )]
-    pub(super) fn take_young_log_loan(
-        &mut self,
-        id: super::young_registry::YoungRegistrationId,
-    ) -> Result<super::young_registry::YoungLogLoan, super::young_registry::YoungRegistryError>
-    {
-        let proof = StoppedMutatorsProof {
-            _owner: PhantomData,
-        };
-        self.heap._satb_layout_reserve.take_young_loan(id, &proof)
-    }
-
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Young-only worker transfer remains a production capability; current production uses a confined mutator."
-        )
-    )]
-    pub(super) fn return_young_log_loan(
-        &mut self,
-        loan: super::young_registry::YoungLogLoan,
-    ) -> Result<(), super::young_registry::YoungLogReturnError> {
-        let proof = StoppedMutatorsProof {
-            _owner: PhantomData,
-        };
-        self.heap
-            ._satb_layout_reserve
-            .return_young_loan(loan, &proof)
-    }
-
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Young-only worker transfer remains a production capability; current production uses a confined mutator."
-        )
-    )]
-    pub(super) fn current_young_registration_id(
-        &self,
-    ) -> super::young_registry::YoungRegistrationId {
-        self.heap._satb_layout_reserve.current_young_id()
-    }
-
-    #[cfg(test)]
-    pub(super) fn registered_young_id_for_test(
-        &self,
-        id: super::mutator_gc::TestMutatorGcId,
-    ) -> Result<super::young_registry::YoungRegistrationId, super::young_registry::YoungRegistryError>
-    {
-        let proof = StoppedMutatorsProof {
-            _owner: PhantomData,
-        };
-        self.heap
-            ._satb_layout_reserve
-            .registered_young_id(id, &proof)
-    }
-
-    /// Logical young IDs continue to resolve the same canonical cold owner
-    /// while nested physical test-owner selections are installed.
-    #[cfg(test)]
-    pub(super) fn retire_young_registration_for_test(
-        &mut self,
-        id: super::young_registry::YoungRegistrationId,
-    ) -> Result<super::satb::SatbRetired, super::mutator_gc::MutatorRetireError> {
-        let proof = StoppedMutatorsProof {
-            _owner: PhantomData,
-        };
-        let handoff = self.heap.satb_handoff.clone();
-        self.heap
-            ._satb_layout_reserve
-            .retire_young_registration(id, &handoff, &proof)
-    }
-
-    #[cfg(test)]
-    pub(super) fn register_mutator_gc_for_test(&mut self) -> super::mutator_gc::TestMutatorGcId {
-        let proof = StoppedMutatorsProof {
-            _owner: PhantomData,
-        };
-        self.heap.register_mutator_gc_for_test(&proof)
-    }
-
-    #[cfg(test)]
-    pub(super) fn mutator_gc_for_test(
-        &mut self,
-        id: super::mutator_gc::TestMutatorGcId,
-    ) -> super::mutator_gc::StoppedMutatorGc<'_> {
-        let proof = StoppedMutatorsProof {
-            _owner: PhantomData,
-        };
-        self.heap.registered_mutator_gc_for_test(id, &proof)
-    }
-
-    #[cfg(test)]
-    #[must_use = "test retirement must be acknowledged before unregistering"]
-    pub(super) fn retire_mutator_gc_for_test(
-        &mut self,
-        id: super::mutator_gc::TestMutatorGcId,
-    ) -> Result<super::satb::SatbRetired, super::mutator_gc::MutatorRetireError> {
-        let handoff = self.heap.satb_handoff.clone();
-        self.mutator_gc_for_test(id).satb.retire(&handoff)
-    }
 }
 
+/// Test-only `SingleMutatorWorld` helpers, used only by this crate's tests.
+///
+/// The `mod` declaration is the split-cfg guard's exemption for a bare
+/// `test`, and keeping the methods in a `cfg(test)` module keeps this file
+/// (which the compile-fail fixtures `#[path]`-include) free of
+/// `test-support` cfg tokens for them: the fixtures' scratch crate does
+/// not declare the feature (CG-5 mechanism (b)).
 #[cfg(test)]
-impl StoppedMutatorsProof {
-    /// Transport-only tests own every buffer locally and have no heap aliases.
-    pub(super) fn for_test() -> Self {
-        Self {
-            _owner: PhantomData,
-        }
+mod value_test_bridge {
+    use super::*;
+
+    macro_rules! scan_contract_test_methods {
+        () => {
+            impl SingleMutatorWorld<'_> {
+                pub(in crate::tagged::gc) fn registered_young_id_for_test(
+                    &self,
+                    id: super::super::mutator_gc::TestMutatorGcId,
+                ) -> Result<
+                    super::super::young_registry::YoungRegistrationId,
+                    super::super::young_registry::YoungRegistryError,
+                > {
+                    let proof = StoppedMutatorsProof {
+                        _owner: PhantomData,
+                    };
+                    self.heap
+                        ._satb_layout_reserve
+                        .registered_young_id(id, &proof)
+                }
+
+                /// Logical young IDs continue to resolve the same canonical cold owner
+                /// while nested physical test-owner selections are installed.
+                pub(in crate::tagged::gc) fn retire_young_registration_for_test(
+                    &mut self,
+                    id: super::super::young_registry::YoungRegistrationId,
+                ) -> Result<
+                    super::super::satb::SatbRetired,
+                    super::super::mutator_gc::MutatorRetireError,
+                > {
+                    let proof = StoppedMutatorsProof {
+                        _owner: PhantomData,
+                    };
+                    let handoff = self.heap.satb_handoff.clone();
+                    self.heap
+                        ._satb_layout_reserve
+                        .retire_young_registration(id, &handoff, &proof)
+                }
+
+                pub(in crate::tagged::gc) fn register_mutator_gc_for_test(
+                    &mut self,
+                ) -> super::super::mutator_gc::TestMutatorGcId {
+                    let proof = StoppedMutatorsProof {
+                        _owner: PhantomData,
+                    };
+                    self.heap.register_mutator_gc_for_test(&proof)
+                }
+
+                pub(in crate::tagged::gc) fn mutator_gc_for_test(
+                    &mut self,
+                    id: super::super::mutator_gc::TestMutatorGcId,
+                ) -> super::super::mutator_gc::StoppedMutatorGc<'_> {
+                    let proof = StoppedMutatorsProof {
+                        _owner: PhantomData,
+                    };
+                    self.heap.registered_mutator_gc_for_test(id, &proof)
+                }
+
+                #[must_use = "test retirement must be acknowledged before unregistering"]
+                pub(in crate::tagged::gc) fn retire_mutator_gc_for_test(
+                    &mut self,
+                    id: super::super::mutator_gc::TestMutatorGcId,
+                ) -> Result<
+                    super::super::satb::SatbRetired,
+                    super::super::mutator_gc::MutatorRetireError,
+                > {
+                    let handoff = self.heap.satb_handoff.clone();
+                    self.mutator_gc_for_test(id).satb.retire(&handoff)
+                }
+            }
+        };
     }
+
+    scan_contract_test_methods!();
 }

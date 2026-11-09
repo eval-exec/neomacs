@@ -15,7 +15,7 @@ mod unary;
 #[cfg(feature = "test-support")]
 pub mod unary;
 pub(super) use constant::{CallShape, ReturnSubset};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(in crate::tagged::gc::mutator_registration) use name::PreparedNameFunction;
 #[doc(hidden)]
 pub use unary::PreparedUnaryFunction;
@@ -53,7 +53,10 @@ enum FunctionRead {
 /// The stopped mixed-input checker shares the exact running parser. The
 /// copied child stays inside symbol authority and never becomes an executor
 /// operand or an owning root in an admission receipt.
-#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
 pub(super) fn frozen_constant(
     value: Value,
     lambda: SymId,
@@ -74,7 +77,7 @@ pub enum FunctionOpKind {
     CallStep,
     Reconcile,
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl FunctionOpKind {
     pub(crate) fn method(self) -> &'static str {
         match self {

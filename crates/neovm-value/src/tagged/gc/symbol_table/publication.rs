@@ -41,7 +41,7 @@ pub(crate) struct TableLimits {
 }
 
 /// Test-only limit selection belongs to one ledger, never process state.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy)]
 pub(crate) enum TestTableLimits {
     Production,
@@ -110,7 +110,7 @@ pub(crate) struct TableStatistics {
 struct TableLedger {
     current: OwnedSymbolTable,
     retired: Vec<OwnedSymbolTable>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     test_limits: TestTableLimits,
 }
 
@@ -182,7 +182,7 @@ impl PublishedSymbolTables {
             ledger: Mutex::new(TableLedger {
                 current: initial,
                 retired: Vec::new(),
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 test_limits: TestTableLimits::Production,
             }),
             limits,
@@ -231,7 +231,7 @@ impl PublishedSymbolTables {
         self.stats().map(|statistics| statistics.retained_bytes)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn set_limits_for_test(
         &self,
         limits: TestTableLimits,
@@ -291,7 +291,7 @@ impl PublishedSymbolTables {
         shape: SymbolTableShape,
     ) -> Result<PreparedTablePublication<'owner>, (TablePublicationError, RetainedTableBytes)> {
         let limits = self.limits;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let limits = match ledger.test_limits {
             TestTableLimits::Production => limits,
             TestTableLimits::Override(limits) => limits,

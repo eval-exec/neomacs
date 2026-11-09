@@ -254,9 +254,9 @@ impl TaggedHeap {
             // unless this same epoch already recorded the identical block.
             let base = ConsBlockBase::of_cell(first);
             let identity = self.heap_identity();
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             let can_cache = !cons_allocator::carve_fault_active();
-            #[cfg(not(test))]
+            #[cfg(not(any(test, feature = "test-support")))]
             let can_cache = true;
             let recorded = match self._satb_layout_reserve.current_young_log_mut() {
                 Ok(log) if log.id().heap_identity() != identity => {
@@ -637,21 +637,21 @@ impl TaggedHeap {
 
     /// Test hook: flip the deferred-sweep flag the way `incremental_finish`
     /// and `finish_incremental_sweep` do, closing the regions first.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn set_sweep_in_progress_for_test(&mut self, on: bool) {
         self.close_alloc_regions();
         self.sweep_in_progress = on;
     }
 
     /// Test hook: the open cons region, `(cursor, limit)` (zeros when closed).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn cons_region_for_test(&self) -> (usize, usize) {
         (self.jit.cons_cur.get(), self.jit.cons_lim.get())
     }
 
     /// Test hook: the open float region, `(cursor, limit)` (zeros when
     /// closed).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn float_region_for_test(&self) -> (usize, usize) {
         (self.jit.float_cur.get(), self.jit.float_lim.get())
     }

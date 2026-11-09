@@ -784,7 +784,7 @@ impl SymbolNameRootIndex {
         }
     }
 
-    #[cfg(all(test, debug_assertions))]
+    #[cfg(all(any(test, feature = "test-support"), debug_assertions))]
     fn root_count(&self, heap_id: SymbolNameHeapId) -> usize {
         self.by_heap.get(&heap_id).map_or(0, FxHashMap::len)
     }
@@ -1475,7 +1475,7 @@ impl SymbolRegistry {
         // Cross-check the identity set against the authoritative per-symbol
         // metadata in debug tests. The production root walk stays O(unique
         // name objects), independent of how many symbols share each object.
-        #[cfg(all(test, debug_assertions))]
+        #[cfg(all(any(test, feature = "test-support"), debug_assertions))]
         {
             let mut unique = FxHashMap::default();
             for name_value in self
@@ -1906,7 +1906,7 @@ pub fn resolve_sym_lisp_string(id: SymId) -> &'static LispString {
     if let Some(name) = thread_local_resolve_lisp_string(id) {
         return name;
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     note_resolve_sym_lisp_string_registry_read();
     let registry = global_symbol_registry().read();
     let name = registry.resolve_lisp_string(id);
@@ -2181,29 +2181,29 @@ thread_local! {
     static MATERIALIZED_SYMBOL_NAME_VALUE_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn note_exact_symbol_name_value_probe() {
     EXACT_SYMBOL_NAME_VALUE_PROBES.set(EXACT_SYMBOL_NAME_VALUE_PROBES.get() + 1);
 }
 
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-support")))]
 fn note_exact_symbol_name_value_probe() {}
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn note_materialized_symbol_name_value_probe() {
     MATERIALIZED_SYMBOL_NAME_VALUE_PROBES.set(MATERIALIZED_SYMBOL_NAME_VALUE_PROBES.get() + 1);
 }
 
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-support")))]
 fn note_materialized_symbol_name_value_probe() {}
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn reset_symbol_name_value_probes() {
     EXACT_SYMBOL_NAME_VALUE_PROBES.set(0);
     MATERIALIZED_SYMBOL_NAME_VALUE_PROBES.set(0);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn symbol_name_value_probes() -> (usize, usize) {
     (
         EXACT_SYMBOL_NAME_VALUE_PROBES.get(),
@@ -2211,17 +2211,17 @@ fn symbol_name_value_probes() -> (usize, usize) {
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn note_resolve_sym_lisp_string_registry_read() {
     RESOLVE_SYM_LISP_STRING_REGISTRY_READS.with(|reads| *reads.borrow_mut() += 1);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn reset_resolve_sym_lisp_string_registry_reads() {
     RESOLVE_SYM_LISP_STRING_REGISTRY_READS.with(|reads| *reads.borrow_mut() = 0);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn resolve_sym_lisp_string_registry_reads() -> usize {
     RESOLVE_SYM_LISP_STRING_REGISTRY_READS.with(|reads| *reads.borrow())
 }

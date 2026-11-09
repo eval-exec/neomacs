@@ -1,12 +1,12 @@
 //! One-attempt adapters to proof 2's shared authority protocol.
 //! Busy returns outside every loan, so the owner may service a stop.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use super::super::authority_word::{COUNT_MASK, WRITER};
 pub(super) use super::super::authority_word::{
     quiescent, reader_exit, try_reader_enter as reader_enter, try_writer_enter as writer_enter,
     writer_exit,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(test)]

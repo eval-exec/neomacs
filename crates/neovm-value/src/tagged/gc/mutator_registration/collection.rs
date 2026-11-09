@@ -22,7 +22,7 @@ mod threading_payload_tests {
     use crate::tagged::header::VecLikeHeader;
     use crate::tagged::value::TaggedValue;
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     impl TaggedValue {
         /// Preserve the collector projection inside a stopped graph check. The
         /// caller checks exact heap membership before dereferencing the raw pointer;
@@ -35,7 +35,7 @@ mod threading_payload_tests {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     impl AllStopped<'_> {
         /// Acknowledge the no-collection result after the GEN0 minor refusal.
         /// The callback neither inspects the heap nor changes liveness.
@@ -116,7 +116,7 @@ fn supported_with_weak(
         || !heap.pending_surface_destroys.is_empty()
         || !heap.pending_video_destroys.is_empty()
     {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         eprintln!(
             "A5 unsupported registry: finalizers={} doomed={} always_swept_weak={} weak={} surfaces={} videos={}",
             heap.finalizer_registry.len(),
@@ -143,7 +143,7 @@ fn supported_with_weak(
                 | VecLikeType::Sqlite
                 | VecLikeType::SurfaceHandle
                 | VecLikeType::VideoHandle => {
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-support"))]
                     eprintln!(
                         "A5 unsupported callback-bearing payload: {:?}",
                         (*ptr).type_tag
@@ -170,7 +170,7 @@ fn supported_with_weak(
                             && eligible
                     });
                     if weakness.is_some() && !allowed {
-                        #[cfg(test)]
+                        #[cfg(any(test, feature = "test-support"))]
                         eprintln!("A5 unsupported weak hash payload: {:?}", weakness);
                         Err(RendezvousError::Publication)
                     } else {
@@ -268,11 +268,11 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
     }
 
     fn weak_sweep_permit(&self) -> Option<&WeakSweepPermit> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             self.weak_sweep.as_ref()
         }
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-support")))]
         {
             None
         }

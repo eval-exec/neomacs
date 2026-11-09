@@ -144,8 +144,8 @@ impl<'era> Mutator<'era> {
                         return Err(RendezvousError::Busy);
                     }
                     drop(state);
-                    #[cfg(test)]
-                    if let Some(hook) = self.protocol.restore_wait_hook.take() {
+                    #[cfg(any(test, feature = "test-support"))]
+                    if let Some(hook) = self.protocol.hooks.take_restore_wait() {
                         hook();
                     }
                     // The predicate mutex is released by Condvar. No entry,

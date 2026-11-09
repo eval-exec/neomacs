@@ -177,7 +177,7 @@ impl ChunkSide {
     }
 
     /// Whether this chunk holds a stamp array (tests: the lazy allocation).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn has_stamps(&self) -> bool {
         !self.fn_stamps.load(Ordering::Acquire).is_null()
     }

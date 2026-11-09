@@ -343,7 +343,7 @@ impl TaggedHeap {
         // `non_cons_object_addrs` set — the filter walk was 11-32% of this
         // world-stopped start handshake. Vectors allocated mid-cycle are absent from
         // this capture and are covered by allocate-black.
-        if (cfg!(test) && cfg!(debug_assertions))
+        if (cfg!(any(test, feature = "test-support")) && cfg!(debug_assertions))
             || std::env::var("NEOVM_GC_VERIFY_PARTITION").as_deref() == Ok("1")
         {
             // Fix A INVARIANT, stage-3 form: the registry equals the live
@@ -865,7 +865,9 @@ impl TaggedHeap {
         // reads cost real STW time on a large buffer (~20ns/entry), so outside
         // the crate's own tests it only runs when the trace that prints it is
         // on; the kind buckets stay zero otherwise.
-        if cfg!(test) || std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
+        if cfg!(any(test, feature = "test-support"))
+            || std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1")
+        {
             let mut kinds = DrainKinds::default();
             for &word in &deferred {
                 // SAFETY: parked entries are live heap values; nothing has been

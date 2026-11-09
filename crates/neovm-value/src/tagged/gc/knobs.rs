@@ -72,7 +72,7 @@ thread_local! {
 
 /// `NEOVM_GC_CENSUS` / `NEOVM_GC_CENSUS_REMSET`.
 pub(crate) fn census_mode() -> CensusMode {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(mode) = CENSUS_OVERRIDE.with(|c| c.get()) {
         return mode;
     }
@@ -92,7 +92,7 @@ pub(crate) fn census_mode() -> CensusMode {
 
 /// `NEOVM_GC_CHUNK_MAP`.
 pub(crate) fn chunk_map_on() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(on) = CHUNK_MAP_OVERRIDE.with(|c| c.get()) {
         return on;
     }
@@ -114,7 +114,7 @@ pub(crate) fn chunk_map_on() -> bool {
 
 /// `NEOVM_GC_VEC_SCAN`.
 pub(crate) fn vec_scan_mode() -> VecScanMode {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(mode) = VEC_SCAN_OVERRIDE.with(|c| c.get()) {
         return mode;
     }
@@ -205,7 +205,7 @@ pub(crate) fn with_card_tag_filter_for_test<R>(on: bool, f: impl FnOnce() -> R) 
 }
 
 /// Test hook for heaps created on this thread; no process environment race.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn set_concurrent_claims_for_test(on: Option<bool>) {
     CONCURRENT_CLAIMS_OVERRIDE.with(|c| c.set(on));
 }
@@ -225,21 +225,21 @@ pub(crate) fn with_concurrent_claims_for_test<R>(on: bool, f: impl FnOnce() -> R
 
 /// Test hook: the census mode heaps created on this thread use (`None`
 /// restores the environment's).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn set_census_mode_for_test(mode: Option<CensusMode>) {
     CENSUS_OVERRIDE.with(|c| c.set(mode));
 }
 
 /// Test hook: whether heaps created on this thread use the chunk map
 /// (`None` restores the environment's).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn set_chunk_map_for_test(on: Option<bool>) {
     CHUNK_MAP_OVERRIDE.with(|c| c.set(on));
 }
 
 /// Test hook: the vector scan mode heaps created on this thread use (`None`
 /// restores the environment's).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn set_vec_scan_mode_for_test(mode: Option<VecScanMode>) {
     VEC_SCAN_OVERRIDE.with(|c| c.set(mode));
 }

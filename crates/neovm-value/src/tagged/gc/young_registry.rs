@@ -10,7 +10,7 @@ use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use typed_index_collections::TiVec;
 
 use super::HeapIdentity;
@@ -68,7 +68,7 @@ impl YoungRegistrationId {
 }
 
 // Outbound indexing only: no conversion can mint an arbitrary registration ID.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl From<YoungRegistrationId> for usize {
     fn from(id: YoungRegistrationId) -> Self {
         id.ordinal.get() - 1
@@ -358,7 +358,7 @@ impl YoungLogLoan {
 
     #[inline]
     #[cfg_attr(
-        not(test),
+        not(any(test, feature = "test-support")),
         expect(
             dead_code,
             reason = "Young-only worker transfer remains a production capability; current production uses a confined mutator."
@@ -385,7 +385,7 @@ pub(super) enum YoungRegistryError {
     GenerationMismatch,
     #[error("young loan generation space exhausted")]
     GenerationExhausted,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[error("young registration ordinal space exhausted")]
     RegistrationExhausted,
     #[error("young outstanding loan count exhausted")]
@@ -407,7 +407,7 @@ pub(super) struct YoungLogReturnError {
 
 impl YoungLogReturnError {
     #[cfg_attr(
-        not(test),
+        not(any(test, feature = "test-support")),
         expect(
             dead_code,
             reason = "Young-only worker transfer remains a production capability; current production uses a confined mutator."
@@ -418,7 +418,7 @@ impl YoungLogReturnError {
     }
 
     #[cfg_attr(
-        not(test),
+        not(any(test, feature = "test-support")),
         expect(
             dead_code,
             reason = "Young-only worker transfer remains a production capability; current production uses a confined mutator."
@@ -436,15 +436,15 @@ impl YoungLogReturnError {
 #[derive(Clone, Copy, Debug)]
 pub(super) enum YoungRegistrationLocation {
     Current,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     Registered(YoungRegisteredIndex),
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug)]
 pub(super) struct YoungRegisteredIndex(NonZeroUsize);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl YoungRegisteredIndex {
     pub(super) fn index(self) -> usize {
         self.0.get() - 1
@@ -455,7 +455,7 @@ impl YoungRegisteredIndex {
 /// the heap's identity; it never issues a new atomic identity or admission bit.
 pub(super) struct YoungRegistryControl {
     heap: HeapIdentity,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     locations: TiVec<YoungRegistrationId, YoungRegistrationLocation>,
     outstanding_loans: usize,
 }
@@ -466,7 +466,7 @@ impl std::fmt::Debug for YoungRegistryControl {
         // IDs deliberately have no such authority-creating conversion.
         let mut debug = f.debug_struct("YoungRegistryControl");
         debug.field("heap", &self.heap);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         debug.field("locations", &self.locations.raw);
         debug
             .field("outstanding_loans", &self.outstanding_loans)
@@ -488,7 +488,7 @@ impl YoungRegistryControl {
     }
 
     pub(super) fn new(heap: HeapIdentity) -> (Self, YoungLogSlot) {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let locations = {
             let mut locations = TiVec::new();
             locations.raw.push(YoungRegistrationLocation::Current);
@@ -496,7 +496,7 @@ impl YoungRegistryControl {
         };
         let control = Self {
             heap,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             locations,
             outstanding_loans: 0,
         };
@@ -520,7 +520,7 @@ impl YoungRegistryControl {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn register(&mut self) -> Result<YoungLogSlot, YoungRegistryError> {
         let ordinal = self
             .locations
@@ -546,7 +546,7 @@ impl YoungRegistryControl {
         if id.heap != self.heap {
             return Err(YoungRegistryError::WrongHeap);
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             self.locations
                 .raw
@@ -554,7 +554,7 @@ impl YoungRegistryControl {
                 .copied()
                 .ok_or(YoungRegistryError::UnknownRegistration)
         }
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-support")))]
         {
             // Production currently has exactly the legacy current owner. A
             // future production K registry must adopt the canonical location
@@ -571,7 +571,7 @@ impl YoungRegistryControl {
     /// same whole hot/cold swaps. This also runs in the infallible unwind guard.
     /// Registry APIs never remove entries; checks make this total even if that
     /// restriction changes. No allocation, callback, lock or assertion in Drop.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn swap_locations(&mut self, left: YoungRegistrationId, right: YoungRegistrationId) {
         let left = usize::from(left);
         let right = usize::from(right);
@@ -582,11 +582,11 @@ impl YoungRegistryControl {
 
     #[cfg(feature = "gc-memory-telemetry")]
     pub(super) fn allocation_bytes(&self) -> usize {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             self.locations.raw.capacity() * std::mem::size_of::<YoungRegistrationLocation>()
         }
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-support")))]
         {
             0
         }

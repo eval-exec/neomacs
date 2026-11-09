@@ -1,5 +1,5 @@
 //! Exact-root publication, then owner-side parking. No heap or World access.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use super::super::a8_probes;
 use super::*;
 use crate::tagged::transport::PreparedParallelRootBatch;
@@ -233,8 +233,8 @@ impl<'era> Mutator<'era> {
             }
             e.rendezvous.mode = Mode::Publishing;
         }
-        #[cfg(test)]
-        if let Some(hook) = self.protocol.publication_hook.take() {
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(hook) = self.protocol.hooks.take_publication() {
             hook();
         }
         let witness = OwnerRootAdmission {

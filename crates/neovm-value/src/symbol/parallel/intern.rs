@@ -39,7 +39,7 @@ pub(crate) struct InitialInternFacts {
     pub(crate) projection_bytes: usize,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Obarray {
     pub(crate) fn prepare_initial_nonmember_for_test(&mut self, id: SymId, nonmember: bool) {
         self.seed_value_id(id, super::super::Value::fixnum(73));
@@ -135,13 +135,13 @@ impl SymbolBacking {
     }
 
     /// Scalar diagnostics only, never a World view after a poisoned commit.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn initial_fault_receipt_for_test(&self) -> u8 {
         self.intern_fault_receipt
             .load(std::sync::atomic::Ordering::Acquire)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn record_initial_poison_for_test(&self, writer_held: bool) {
         if writer_held
             && self.initial_fault_receipt_for_test()

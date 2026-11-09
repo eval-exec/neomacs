@@ -1604,7 +1604,7 @@ impl HashTableStorage {
     }
 
     /// Every key with a remembered hash, for the consistency test.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn remembered_user_hash_keys(&self) -> Vec<HashKey> {
         self.user_hashes.keys().cloned().collect()
     }
@@ -4138,7 +4138,7 @@ impl TaggedValue {
     /// tagged-runtime write path. Post-publish bytecode is IMMUTABLE in
     /// production — see `mutate::with_bytecode_data_mut_for_test` for the
     /// invariant this gate enforces.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn with_bytecode_data_mut_for_test<R>(
         self,
         f: impl FnOnce(&mut crate::tagged::bytecode::chunk::ByteCodeFunction) -> R,
@@ -5861,7 +5861,7 @@ pub fn lexenv_prepend(lexenv: Value, sym_id: SymId, val: Value) -> Value {
 /// matching GNU Emacs `eq` semantics. Tests that compare VALUES structurally
 /// (like `assert_eq!(eval("(cons 1 2)"), Value::cons(...))`) must use this
 /// macro instead of `assert_eq!`.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[macro_export]
 macro_rules! assert_val_eq {
     ($left:expr, $right:expr) => {{

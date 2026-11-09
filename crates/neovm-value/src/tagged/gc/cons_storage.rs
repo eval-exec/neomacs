@@ -720,7 +720,7 @@ impl ConsCatalog {
         }
         state.live_count += count;
         state.active_regions = active;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             let source_index = match source {
                 CatalogSource::FreeList => 0,
@@ -998,7 +998,7 @@ impl ConsCatalog {
             .ok_or(RegistrationError::Exhausted)?;
         state.live_count += handed;
         state.active_regions += tails.len();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             for tail in &tails {
                 let source_index = match tail.source {

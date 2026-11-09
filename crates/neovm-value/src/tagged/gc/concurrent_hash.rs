@@ -82,17 +82,17 @@ static_assertions::assert_not_impl_any!(HashTableScanSnapshot: Clone);
 
 impl HashTableScanSnapshot {
     /// An unbound snapshot for protocol tests that never install it in a heap.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn new() -> Self {
         Self::with_capacity(0, 0)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn with_capacity(tables: usize, _initialized_entries: usize) -> Self {
         Self::unbound_with_policy(tables, HashTableScanPolicy::CloneUntilTraced)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn unbound_with_policy(tables: usize, policy: HashTableScanPolicy) -> Self {
         Self::with_identity(tables, policy, 0)
     }
@@ -245,7 +245,7 @@ impl HashTableScanSnapshot {
     /// # Safety
     /// `entry` must belong to this current-cycle snapshot. Capture and every
     /// writer must obey its mutex/retirement protocol.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) unsafe fn scan_entry(
         &self,
         entry: &HashTableScanEntry,

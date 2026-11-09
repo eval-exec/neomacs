@@ -72,7 +72,7 @@ impl SymbolBacking {
 // Calls below require exclusive admission or this exact backing's writer;
 // pointer entries are nonowning and no array or symbol reference escapes.
 unsafe impl SymbolTableBacking for SymbolBacking {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     unsafe fn arm_initial_table_refusal_for_test(&self) {
         self.intern_fault.store(
             super::InitialInternFault::InitialTablePreparation as u8,
@@ -81,7 +81,7 @@ unsafe impl SymbolTableBacking for SymbolBacking {
     }
 
     unsafe fn prepare_initial_symbol_table(&self) -> Result<OwnedSymbolTable, RegistrationError> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if self
             .intern_fault
             .compare_exchange(
@@ -126,7 +126,7 @@ unsafe impl SymbolTableBacking for SymbolBacking {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl super::super::Obarray {
     pub(crate) fn prepare_symbol_table_slots_for_test(&mut self, minimum: SymbolSlotCount) {
         if let Some(last) = minimum.get().checked_sub(1) {

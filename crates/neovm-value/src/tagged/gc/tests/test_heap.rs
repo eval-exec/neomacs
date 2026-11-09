@@ -11,14 +11,20 @@ use std::ptr::NonNull;
 /// A consistent no-worker SATB scope for native/Lisp store probes. Automatic
 /// collection must remain inhibited; the probe must not force an explicit GC.
 /// The Context loan and thread marker keep restoration on the installing owner.
+///
+/// Test-only: its whole purpose is to lend the upper evaluator's `Context`, so
+/// it cannot exist in a `test-support` dependency build of this crate.
+#[cfg(test)]
 #[doc(hidden)]
 pub struct SyntheticConcurrentBarrier<'a> {
     context: &'a mut crate::emacs_core::eval::Context,
     _thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
+#[cfg(test)]
 static_assertions::assert_not_impl_any!(SyntheticConcurrentBarrier<'static>: Send, Sync);
 
+#[cfg(test)]
 impl<'a> SyntheticConcurrentBarrier<'a> {
     pub(crate) fn enter(context: &'a mut crate::emacs_core::eval::Context) -> Self {
         assert!(
@@ -47,6 +53,7 @@ impl<'a> SyntheticConcurrentBarrier<'a> {
     }
 }
 
+#[cfg(test)]
 impl Drop for SyntheticConcurrentBarrier<'_> {
     fn drop(&mut self) {
         // SAFETY: serial test heap; no concurrent marker has been launched and

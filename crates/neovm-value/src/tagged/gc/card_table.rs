@@ -241,7 +241,7 @@ impl CardTable {
     }
 
     /// Every slot whose summary is dirty, in slot order.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn dirty_slots(&self) -> Vec<ChunkSlot> {
         let mut slots = Vec::new();
         self.collect_dirty_slots(&mut slots);
@@ -250,7 +250,7 @@ impl CardTable {
 
     /// Clean one card, leaving its chunk summary dirty (tests: the collector
     /// cleans whole chunks).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn clear(&self, owner_addr: usize) {
         self.byte(card_index(owner_addr))
             .store(CARD_CLEAN, Ordering::Relaxed);

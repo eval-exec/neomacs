@@ -102,7 +102,10 @@ impl RootedSlot for OwnerRootSlot<'_> {}
 impl<'owner, 'era> RunAccess<'owner, 'era> {
     /// Closed C6 executor primitive: discard one census value, without opening
     /// an allocator slice or lending any graph mutation/decoding authority.
-    #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+    #[cfg(all(
+        any(test, feature = "test-support"),
+        not(feature = "gc-memory-telemetry")
+    ))]
     pub(super) fn clear_owner_root_for_test(
         &mut self,
         home: &OwnerRootSlot<'era>,
@@ -126,7 +129,7 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
     /// owner's private homes after poison; it grants no World/heap authority
     /// and cannot make the failed era resumable. Production poison checks
     /// remain intact, including ordinary clear_root_slots.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn clear_terminal_roots_for_test(&mut self) -> Result<(), RegistrationError> {
         if self.owner.thread != std::thread::current().id() {
             return Err(RegistrationError::WrongThread);

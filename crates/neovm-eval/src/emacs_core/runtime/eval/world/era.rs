@@ -185,5 +185,25 @@ world_collection!(WorldEra);
 world_collection!(WorldProofEra);
 
 static_assertions::assert_not_impl_any!(WorldEra<'static>: Send, Sync, Clone, Copy);
-#[cfg(test)]
+// R4-4: the evaluator-keeper auto-trait assertions re-homed from neovm-value.
+// `WorldEra`/`WorldProofEra` are literally value's `ParallelHeapEra`/
+// `ProofEra` with this crate's `Baton`, and `EraAdmissionFailure` is the
+// public failure wrapper returned by every admission path: it carries the
+// same `QuiescentCollector` + `K` composition as value's internal
+// `ProductionAdmission`/`ProofAdmission` witnesses.  Those two witnesses are
+// `pub(super)` construction types that never cross the crate boundary, so
+// naming them here would require widening value's signed TEST-SUPPORT-VIS
+// surface for a type no upper test can construct or observe; the keeper
+// propagation invariant is pinned through the public wrapper instead.
+// Compiled in the cross-crate test-support build too (not only cfg(test)), so
+// core's test graph checks it.
+#[cfg(any(test, feature = "test-support"))]
 static_assertions::assert_not_impl_any!(WorldProofEra<'static>: Send, Sync, Clone, Copy);
+#[cfg(any(test, feature = "test-support"))]
+static_assertions::assert_not_impl_any!(
+    neovm_value::tagged::gc::mutator_registration::EraAdmissionFailure<'static, Baton>:
+        Send,
+        Sync,
+        Clone,
+        Copy
+);

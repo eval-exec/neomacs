@@ -830,13 +830,13 @@ fn parse_watched_prop_demand_os_mode(value: Option<&std::ffi::OsStr>) -> Watched
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static WATCHED_PROP_DEMAND_OVERRIDE: std::cell::Cell<Option<WatchedPropDemandMode>> =
         const { std::cell::Cell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn with_watched_prop_demand_mode_for_test<T>(
     mode: WatchedPropDemandMode,
     body: impl FnOnce() -> T,
@@ -849,7 +849,7 @@ fn with_watched_prop_demand_mode_for_test<T>(
 
 #[inline]
 fn watched_prop_demand_mode() -> WatchedPropDemandMode {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(mode) = WATCHED_PROP_DEMAND_OVERRIDE.with(std::cell::Cell::get) {
         return mode;
     }
@@ -1783,7 +1783,7 @@ impl IntervalTree {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn max_depth_for_test(&self) -> usize {
         fn depth(tree: &IntervalTree, id: Option<IntervalId>) -> usize {
             match id {
@@ -2328,7 +2328,7 @@ impl IntervalTree {
 
     /// `find_id` without consulting or updating the memo -- the ground truth used
     /// by the differential test to prove the cache never goes stale.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn find_id_uncached(&self, pos: CharPos0) -> Option<(CharPos0, IntervalId)> {
         let mut id = self.root?;
         let mut base = CharPos0::ZERO;
@@ -2619,7 +2619,7 @@ impl ConservativePropertyNames {
 enum ReplacementPropertyNames<'a> {
     /// Only the test-only shape-merge helper performs a pure structural
     /// rewrite today; every production replacement can add names.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     Preserve,
     Include(&'a ConservativePropertyNames),
 }
@@ -3190,7 +3190,7 @@ impl TextPropertyTable {
     ) {
         self.mutation_tick += 1;
         match property_names {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             ReplacementPropertyNames::Preserve => {}
             ReplacementPropertyNames::Include(names) => self.property_names.include(names),
         }
@@ -5278,7 +5278,7 @@ impl TextPropertyTable {
     /// The pre-graft algorithm (split, re-find and re-home per run), kept as
     /// the reference oracle for `graft_shifted_runs`: the two must leave the
     /// same interval partition and plist values.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn append_shifted_reference_for_test(
         &mut self,
         other: &TextPropertyTable,
@@ -5317,7 +5317,7 @@ impl TextPropertyTable {
 
     /// The raw plist object stored on the interval containing `pos` (identity
     /// matters for the `copy_properties` aliasing rules).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn raw_plist_at_for_test(&self, pos: CharPos0) -> Option<Value> {
         self.intervals
             .find_id(pos)
@@ -5330,7 +5330,7 @@ impl TextPropertyTable {
         self.intervals.assert_invariants_for_test();
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn tree_max_depth_for_test(&self) -> usize {
         self.intervals.max_depth_for_test()
     }
@@ -5421,7 +5421,7 @@ impl TextPropertyTable {
     /// The pre-local algorithm, kept as the reference oracle for
     /// [`Self::merge_adjacent_equal_properties_around`]: the two must leave
     /// the same interval partition and plist values.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn merge_adjacent_equal_properties_around_reference_for_test(
         &mut self,
         range: CharRange,
@@ -5473,7 +5473,7 @@ impl TextPropertyTable {
         self.intervals_snapshot()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn debug_interval_bounds(&self) -> Vec<(usize, usize, bool)> {
         self.intervals
             .runs()

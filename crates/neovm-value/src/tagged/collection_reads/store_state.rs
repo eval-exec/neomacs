@@ -381,7 +381,7 @@ pub(super) fn take_recent_dirty() -> Option<[u64; 4]> {
                 for mask in &slot.recent_dirty {
                     mask.set(0);
                 }
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 RECENT_CLEARED_MASKS.with(|count| count.set(count.get() + 4));
             }
             dirty
@@ -389,7 +389,7 @@ pub(super) fn take_recent_dirty() -> Option<[u64; 4]> {
         .ok()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn recent_scratch_dirty() -> bool {
     STATE.with(|slot| slot.recent_dirty.iter().any(|mask| mask.get() != 0))
 }

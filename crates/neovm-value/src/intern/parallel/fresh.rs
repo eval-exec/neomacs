@@ -331,7 +331,7 @@ impl PreparedFreshCanonical<'_, '_> {
 
 /// Scalar-only observations of a proposed ID and exact heap/name root. No
 /// registry storage or managed value escapes this assertion-only snapshot.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FreshRegistryFacts {
     pub(crate) epoch: u64,
@@ -349,7 +349,7 @@ pub(crate) struct FreshRegistryFacts {
     pub(crate) bytes: usize,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn fresh_registry_facts_for_test(
     heap: HeapIdentity,
     id: SymId,

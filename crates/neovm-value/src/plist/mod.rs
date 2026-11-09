@@ -15,7 +15,7 @@ use crate::value::{Value, eq_value};
 
 pub use crate::symbol::plist_core::{SafeTailGuard, TailCycleCheck};
 pub use crate::symbol::plist_core::{plist_get, plist_get_swp, plist_put, plist_put_swp};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use crate::symbol::plist_core::{
     plist_get_walks, reset_plist_get_walks, reset_symbol_with_pos_plist_comparisons,
     symbol_with_pos_plist_comparisons,

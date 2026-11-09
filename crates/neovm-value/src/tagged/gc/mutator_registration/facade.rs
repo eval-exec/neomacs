@@ -12,5 +12,5 @@ pub(crate) use super::{
     EraFinishFailure, OwnerRootAdmission, StoppedRootAdmission, SymbolReadToken,
 };
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use super::{GenericProofEra, GenericProofEraFinishFailure};

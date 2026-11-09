@@ -139,7 +139,7 @@ struct ChunkLeaf([AtomicU32; LEAF_LEN]);
 
 // Only dedicated test setters install this one-shot hook. It forces two
 // setters past the null observation before either publishes its candidate.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     pub(super) static BEFORE_LEAF_INSTALL: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const {
         std::cell::RefCell::new(None)
@@ -219,7 +219,7 @@ impl ChunkMap {
             if leaf.is_null() {
                 alloc::handle_alloc_error(layout);
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             BEFORE_LEAF_INSTALL.with(|slot| {
                 let hook = slot.borrow_mut().take();
                 if let Some(hook) = hook {

@@ -148,7 +148,7 @@ impl TaggedHeap {
         carrier.concurrent = Some(Box::new(ConcurrentClaimsState::new()));
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn census_state(&self) -> Option<&GenCensus> {
         self.census
             .as_deref()

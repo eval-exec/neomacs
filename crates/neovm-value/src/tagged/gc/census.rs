@@ -201,7 +201,7 @@ impl GenCensus {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn measurement_enabled(&self) -> bool {
         !self.census_disabled
     }
@@ -248,7 +248,7 @@ impl GenCensus {
     }
 
     /// Test hook: does the census hold history for the block at `base`?
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn has_cons_block_history(&self, base: usize) -> bool {
         self.cons.contains_key(&base)
     }
@@ -497,7 +497,7 @@ impl TaggedHeap {
     }
 
     /// Test hook: the last cycle's census, when the census is on.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn last_census_for_test(&self) -> Option<CensusRecord> {
         self.census.as_deref().and_then(|census| census.last)
     }

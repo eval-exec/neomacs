@@ -115,7 +115,7 @@ pub const HEAP_JIT_BARRIER_LEN: usize =
 // from the existing ABI. Test-only heap fields and unmeasured configurations
 // have their own layout probes rather than inheriting these numeric values.
 #[cfg(all(
-    not(test),
+    not(any(test, feature = "test-support")),
     target_arch = "x86_64",
     target_os = "linux",
     target_pointer_width = "64",

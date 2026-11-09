@@ -472,7 +472,7 @@ impl TaggedHeap {
         // I1 (`sweep_in_progress` clears below) and I2 (the recount).
         self.close_alloc_regions();
         if self.generational.enabled {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             {
                 // SAFETY: finish has closed all regions in this stopped extent.
                 // Keep this mutation before recount consumes CURRENT work.

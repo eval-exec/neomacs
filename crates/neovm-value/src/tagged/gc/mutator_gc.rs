@@ -122,11 +122,11 @@ impl TaggedHeap {
 
     #[inline]
     pub(super) fn mutators(&self) -> impl Iterator<Item = &MutatorGcState> {
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-support")))]
         {
             std::iter::once(self.current_mutator_gc())
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             std::iter::once(&self.mutator_gc).chain(
                 self._satb_layout_reserve
@@ -140,11 +140,11 @@ impl TaggedHeap {
 
     #[inline]
     pub(super) fn mutators_mut(&mut self) -> impl Iterator<Item = &mut MutatorGcState> {
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-support")))]
         {
             std::iter::once(self.current_mutator_gc_mut())
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             std::iter::once(&mut self.mutator_gc).chain(
                 self._satb_layout_reserve
@@ -269,7 +269,7 @@ impl SatbMutatorState {
 /// One registered test owner includes a real hot MutatorGcState, not merely a
 /// transport buffer. The ordinary iterator family and the stopped SATB fold
 /// both enumerate this exact same set of registrations.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 struct RegisteredMutatorGc {
     gc: MutatorGcState,
     satb: SatbMutatorState,
@@ -287,7 +287,7 @@ struct MutatorSatbRegistry {
     /// Owner-resident SATB words folded by the last successful termination.
     /// Keep diagnostics in this cold allocation so heap/JIT offsets do not move.
     last_termination_partial_words: usize,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     registered: Vec<RegisteredMutatorGc>,
     /// Scoped pointer to the actual AllStopped guard; never a manufactured proof.
     /// Access and lifetime erasure are confined to collector_tables.
@@ -354,7 +354,7 @@ impl MutatorSatbSlot {
             current: SatbMutatorState::new(young),
             young_control,
             last_termination_partial_words: 0,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             registered: Vec::new(),
             collector_tables: None,
             observations: std::cell::OnceCell::new(),
@@ -383,11 +383,11 @@ impl MutatorSatbSlot {
         let bytes = std::mem::size_of::<MutatorSatbRegistry>()
             + self.0.young_control.allocation_bytes()
             + self.0.current.young.resident_allocation_bytes();
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-support")))]
         {
             bytes
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             bytes
                 + self.0.registered.capacity() * std::mem::size_of::<RegisteredMutatorGc>()
@@ -428,7 +428,7 @@ impl MutatorSatbSlot {
         let location = registry.young_control.location(id)?;
         let owner = match location {
             YoungRegistrationLocation::Current => &mut registry.current,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             YoungRegistrationLocation::Registered(index) => {
                 &mut registry
                     .registered
@@ -455,7 +455,7 @@ impl MutatorSatbSlot {
         control.take_loan(&mut owner.young)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn retire_young_registration(
         &mut self,
         id: YoungRegistrationId,
@@ -500,9 +500,9 @@ impl MutatorSatbSlot {
         _: &StoppedMutatorsProof,
     ) -> impl Iterator<Item = &YoungBlockLog> {
         let current = std::iter::once(&self.0.current);
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-support")))]
         let owners = current;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let owners = current.chain(self.0.registered.iter().map(|entry| &entry.satb));
         owners.map(|owner| {
             owner
@@ -512,7 +512,7 @@ impl MutatorSatbSlot {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn registered_young_id(
         &self,
         id: TestMutatorGcId,
@@ -529,7 +529,7 @@ impl MutatorSatbSlot {
     /// destructor fallback cannot take locks, wait, or publish any new work.
     pub(super) fn abandon(&mut self) {
         self.0.current.satb.abandon();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         for registration in &mut self.0.registered {
             registration.satb.satb.abandon();
         }
@@ -588,11 +588,11 @@ impl TaggedHeap {
     /// Inventory reads the same registrations as the hot iterator family.
     pub(super) fn mutator_satb_states(&self) -> impl Iterator<Item = &SatbMutatorState> {
         let current = std::iter::once(self.current_mutator_satb());
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-support")))]
         {
             current
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             current.chain(
                 self._satb_layout_reserve
@@ -614,11 +614,11 @@ impl TaggedHeap {
             gc: &mut self.mutator_gc,
             satb: &mut registry.current,
         });
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-support")))]
         {
             current
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             current.chain(
                 registry
@@ -633,12 +633,12 @@ impl TaggedHeap {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)]
 pub(super) struct TestMutatorGcId(std::num::NonZeroUsize);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl TestMutatorGcId {
     fn for_index(index: usize) -> Self {
         Self(
@@ -654,7 +654,7 @@ impl TestMutatorGcId {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl TaggedHeap {
     /// Only the capability exposes registration to tests; IDs stay valid
     /// through retirement and final fold, so exited logs cannot disappear.
@@ -714,7 +714,7 @@ const _: () = {
     assert!(offset_of!(MutatorGcState, pacing) == 776);
 };
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, thiserror::Error)]
 pub(super) enum TestMutatorSwitchError {
     #[error("unknown registered test mutator")]
@@ -723,13 +723,13 @@ pub(super) enum TestMutatorSwitchError {
     Retired,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 struct TestMutatorSwitch {
     heap: std::ptr::NonNull<TaggedHeap>,
     id: TestMutatorGcId,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl TestMutatorSwitch {
     /// Refresh the existing heap's owner mirrors without a fallible TLS access.
     /// Same-heap owner switching changes no compiled barrier-window field.
@@ -771,7 +771,7 @@ impl TestMutatorSwitch {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for TestMutatorSwitch {
     fn drop(&mut self) {
         // Construction validated the ID; no test API removes registrations.
@@ -792,7 +792,7 @@ impl Drop for TestMutatorSwitch {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl TaggedHeap {
     /// Run actual barriers with the selected artificial owner's hot/SATB
     /// state. Neither this frame nor the body receives a protected heap loan.
@@ -837,7 +837,7 @@ impl TaggedHeap {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl AliasableBox<TaggedHeap> {
     /// Root-owning fixture entry, excluding loans from this owner for the whole
     /// selection. Raw callback access must obey the switch helper's contract.

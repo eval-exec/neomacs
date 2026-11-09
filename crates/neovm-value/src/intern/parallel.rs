@@ -5,7 +5,7 @@ use crate::tagged::gc::{RegistrationError, SymbolReadToken};
 mod fresh;
 pub(crate) use fresh::PreparedFreshCanonical;
 mod retained_bytes;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use fresh::{FreshRegistryFacts, fresh_registry_facts_for_test};
 pub(crate) use retained_bytes::RetainedBytes;
 
@@ -80,7 +80,7 @@ pub(crate) fn lookup(
     Ok(registry.lookup_lisp_string(name))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn with_registry_writer_for_test(body: impl FnOnce()) {
     let _guard = global_symbol_registry().write();
     body();

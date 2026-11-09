@@ -13,9 +13,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use super::mark_word::MarkWord;
 use super::scan_contract::StoppedMutatorsProof;
 
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-support")))]
 pub(super) const SATB_CHUNK_WORDS: usize = 256;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) const SATB_CHUNK_WORDS: usize = 4;
 
 /// Poison proves an interruption inside correctness-critical queue mutation.
@@ -48,7 +48,7 @@ impl SatbRetired {
 }
 
 /// Allocated word storage. Counts do not imply the queued words are roots.
-#[cfg(any(test, feature = "gc-memory-telemetry"))]
+#[cfg(any(any(test, feature = "test-support"), feature = "gc-memory-telemetry"))]
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(super) struct SatbStorageUsage {
     pub(super) words: usize,
@@ -56,7 +56,7 @@ pub(super) struct SatbStorageUsage {
 }
 
 /// Handoff storage includes the chunk descriptors and each chunk's payload.
-#[cfg(any(test, feature = "gc-memory-telemetry"))]
+#[cfg(any(any(test, feature = "test-support"), feature = "gc-memory-telemetry"))]
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(super) struct SatbHandoffUsage {
     pub(super) chunks: usize,
@@ -146,7 +146,7 @@ impl SatbBuffer {
         self.words.is_empty()
     }
 
-    #[cfg(any(test, feature = "gc-memory-telemetry"))]
+    #[cfg(any(any(test, feature = "test-support"), feature = "gc-memory-telemetry"))]
     pub(super) fn storage_usage(&self) -> SatbStorageUsage {
         SatbStorageUsage {
             words: self.words.len(),
@@ -154,7 +154,7 @@ impl SatbBuffer {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn words_for_test(&self) -> &[MarkWord] {
         &self.words
     }
@@ -191,17 +191,17 @@ static_assertions::const_assert_eq!(std::mem::size_of::<SatbHandoff>(), 128);
 // Count its requested allocation extent, including the header's padding; the
 // marker's temporary Arc clone does not create another allocation.
 #[repr(C)]
-#[cfg(any(test, feature = "gc-memory-telemetry"))]
+#[cfg(any(any(test, feature = "test-support"), feature = "gc-memory-telemetry"))]
 struct SatbArcAllocationLayout {
     strong: AtomicUsize,
     weak: AtomicUsize,
     payload: SatbHandoff,
 }
 
-#[cfg(any(test, feature = "gc-memory-telemetry"))]
+#[cfg(any(any(test, feature = "test-support"), feature = "gc-memory-telemetry"))]
 pub(super) const SATB_HANDOFF_ALLOCATION_BYTES: usize =
     std::mem::size_of::<SatbArcAllocationLayout>();
-#[cfg(any(test, feature = "gc-memory-telemetry"))]
+#[cfg(any(any(test, feature = "test-support"), feature = "gc-memory-telemetry"))]
 static_assertions::const_assert_eq!(SATB_HANDOFF_ALLOCATION_BYTES, 256);
 
 impl SatbHandoff {
@@ -247,7 +247,7 @@ impl SatbHandoff {
         Ok(self.pending.load(Ordering::Acquire) == 0)
     }
 
-    #[cfg(any(test, feature = "gc-memory-telemetry"))]
+    #[cfg(any(any(test, feature = "test-support"), feature = "gc-memory-telemetry"))]
     pub(super) fn storage_usage(&self) -> Result<SatbHandoffUsage, SatbPoisoned> {
         let chunks = self.chunks.lock().map_err(|_| SatbPoisoned)?;
         let mut usage = SatbHandoffUsage {
@@ -270,7 +270,7 @@ impl SatbHandoff {
         }));
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn snapshot_words_for_test(&self) -> Result<Vec<MarkWord>, SatbPoisoned> {
         let chunks = self.chunks.lock().map_err(|_| SatbPoisoned)?;
         Ok(chunks

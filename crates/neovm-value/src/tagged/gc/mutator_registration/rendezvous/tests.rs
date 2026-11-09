@@ -217,7 +217,7 @@ fn two_owners_pause_before_ack_and_while_restoring_across_two_epochs() {
                         let publication_rx = std::sync::Arc::clone(&publication_rx);
                         // Hook runs after Publishing is visible and the gate
                         // is released. Store a fresh one-shot closure each epoch.
-                        owner.protocol.publication_hook = Some(Box::new(move || {
+                        owner.protocol.hooks.publication_hook = Some(Box::new(move || {
                             publishing.send(index).unwrap();
                             receive(&publication_rx.lock().unwrap());
                         }));
@@ -551,7 +551,7 @@ fn native_return_waits_for_active_stop_before_restoration() {
                 retry(|| owner.enter_native(&input));
                 ready_tx.send(()).unwrap();
                 receive(&return_rx);
-                owner.protocol.restore_wait_hook = Some(Box::new(move || {
+                owner.protocol.hooks.restore_wait_hook = Some(Box::new(move || {
                     waiting_tx.send(()).unwrap();
                 }));
                 let image = owner.begin_restore_retry(true).unwrap();
@@ -683,7 +683,7 @@ fn native_publication_is_not_stopped_until_root_and_image_commit() {
             let input = vec![roots[0].clone()];
             let worker = scope.spawn(move || {
                 let mut owner = activate(permit, heap, 660);
-                owner.protocol.publication_hook = Some(Box::new(move || {
+                owner.protocol.hooks.publication_hook = Some(Box::new(move || {
                     publishing_tx.send(()).unwrap();
                     receive(&release_rx);
                 }));
@@ -735,7 +735,7 @@ fn a6_ht_b9_table_scope_gate_contention_retries_before_job() {
                 retry(|| owner.enter_native(&input));
                 ready_tx.send(()).unwrap();
                 receive(&return_rx);
-                owner.protocol.restore_wait_hook = Some(Box::new(move || {
+                owner.protocol.hooks.restore_wait_hook = Some(Box::new(move || {
                     held_tx.send(()).unwrap();
                     receive(&release_rx);
                 }));

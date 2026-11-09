@@ -122,9 +122,4 @@ impl<'heap, K: EraKeeper> CoreAdmission<'heap, K> for ProofAdmission<'heap, K> {
 }
 
 #[cfg(test)]
-static_assertions::assert_not_impl_any!(ProductionAdmission<'static, super::Baton>: Send, Sync, Clone, Copy);
-#[cfg(test)]
-static_assertions::assert_not_impl_any!(ProofAdmission<'static, super::Baton>: Send, Sync, Clone, Copy);
-
-#[cfg(test)]
 mod tests;

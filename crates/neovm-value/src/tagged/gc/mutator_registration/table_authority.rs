@@ -476,7 +476,7 @@ static_assertions::assert_not_impl_any!(KeeperTableMut<'static>: Send, Sync, Clo
 /// targets directly. This scans the executor's own source and fails on a
 /// banned path, so a future op body that bypasses the seal trips a test
 /// rather than silently forking the mutation path.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[test]
 fn restricted_lisp_does_not_name_the_serial_choke_points() {
     let source = include_str!("restricted_lisp.rs");

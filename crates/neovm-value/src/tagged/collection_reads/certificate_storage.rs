@@ -79,14 +79,14 @@ impl CertificateLease {
         self.storage.iter().flat_map(|storage| storage.reads.iter())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn contains(&self, bits: &usize) -> bool {
         self.storage
             .as_ref()
             .is_some_and(|storage| storage.reads.contains(bits))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn is_empty(&self) -> bool {
         self.storage
             .as_ref()

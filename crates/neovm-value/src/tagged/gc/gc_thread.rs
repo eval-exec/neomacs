@@ -8,13 +8,13 @@ use super::*;
 
 // Rendezvous installed only on dedicated test worker threads. Production jobs
 // carry no hook state.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static CONCURRENT_HASH_BEFORE_CLAIM_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
     static CONCURRENT_HASH_SCAN_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn concurrent_hash_before_claim_hook_for_test() {
     let hook = CONCURRENT_HASH_BEFORE_CLAIM_HOOK.with(|slot| slot.borrow_mut().take());
     if let Some(hook) = hook {
@@ -22,7 +22,7 @@ fn concurrent_hash_before_claim_hook_for_test() {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn concurrent_hash_scan_hook_for_test() {
     let hook = CONCURRENT_HASH_SCAN_HOOK.with(|slot| slot.borrow_mut().take());
     if let Some(hook) = hook {
@@ -379,7 +379,7 @@ impl Collector {
     #[cold]
     #[inline(never)]
     fn spawn(heap: HeapIdentity) -> CollectorStart {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if let Some(error) = collector_test_support::injected_start_failure(heap) {
             return CollectorStart::Unavailable(error);
         }
@@ -766,7 +766,7 @@ pub(super) fn ewma_half(prev: u64, sample: u64) -> u64 {
 }
 
 // Existing direct claim tests keep their legacy three-argument surface.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[inline]
 pub(super) fn concurrent_try_mark_owned(
     val: TaggedValue,
@@ -785,7 +785,7 @@ pub(super) fn concurrent_try_mark_owned(
     handled
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[inline]
 fn concurrent_try_mark_owned_logged<const MAJOR: bool>(
     val: TaggedValue,
@@ -802,7 +802,7 @@ fn concurrent_try_mark_owned_logged<const MAJOR: bool>(
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[inline]
 fn concurrent_try_mark_owned_enabled<const MAJOR: bool>(
     val: TaggedValue,
@@ -1149,7 +1149,7 @@ impl ClaimExtension for EnabledClaims {
                 if unsafe { (*ptr).gc.black_by_generation(job.scope()) } {
                     return Some(true);
                 }
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 concurrent_hash_before_claim_hook_for_test();
                 // Reader admission precedes the header claim. A first writer
                 // may defer an unread table, but never an already claimed one.
@@ -1164,12 +1164,12 @@ impl ClaimExtension for EnabledClaims {
                     logs.note_promotion::<MAJOR>(ptr.cast());
                     // Complete this snapshot scan even if stop arrives now:
                     // a claimed header cannot be sent back for retracing.
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-support"))]
                     let mut first_word = true;
                     unsafe {
                         reader.scan(|child| {
                             logs.queue_snapshot_child(child, gray);
-                            #[cfg(test)]
+                            #[cfg(any(test, feature = "test-support"))]
                             if first_word {
                                 first_word = false;
                                 concurrent_hash_scan_hook_for_test();
@@ -1761,7 +1761,10 @@ pub fn carrier_heap_is_acceptable_for_job_start() -> bool {
     if ptr.is_null() {
         return true;
     }
-    #[cfg(any(test, feature = "test-thread-fallback-heap"))]
+    #[cfg(any(
+        any(test, feature = "test-support"),
+        feature = "test-thread-fallback-heap"
+    ))]
     {
         // Only an ARMED fallback is acceptable: an unarmed process keeps the
         // production rule even when the feature is compiled in.
@@ -1774,7 +1777,10 @@ pub fn carrier_heap_is_acceptable_for_job_start() -> bool {
                 .is_some_and(|leak| leak.get().root().as_ptr() == ptr)
         })
     }
-    #[cfg(not(any(test, feature = "test-thread-fallback-heap")))]
+    #[cfg(not(any(
+        any(test, feature = "test-support"),
+        feature = "test-thread-fallback-heap"
+    )))]
     {
         false
     }
@@ -1918,7 +1924,7 @@ pub fn current_tagged_heap_identity() -> Option<usize> {
 /// identity contract, as do BLV leaves with baked cell addresses.
 #[doc(hidden)]
 pub fn current_heap_generational_enabled() -> bool {
-    #[cfg(all(test, debug_assertions, feature = "jit"))]
+    #[cfg(all(any(test, feature = "test-support"), debug_assertions, feature = "jit"))]
     HEAP_GENERATIONAL_MODE_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     TAGGED_HEAP.with(|slot| {
         // SAFETY: an installed heap is live while its mutator lowers code.
@@ -1969,7 +1975,10 @@ pub fn with_tagged_heap<R>(f: impl FnOnce(&mut TaggedHeap) -> R) -> R {
         if !ptr.is_null() {
             return f(unsafe { &mut *ptr });
         }
-        #[cfg(any(test, feature = "test-thread-fallback-heap"))]
+        #[cfg(any(
+            any(test, feature = "test-support"),
+            feature = "test-thread-fallback-heap"
+        ))]
         {
             // The feature only makes the fallback available; it is created
             // only after this process's test tree armed it (see
@@ -1996,7 +2005,10 @@ pub fn with_tagged_heap<R>(f: impl FnOnce(&mut TaggedHeap) -> R) -> R {
                 f(unsafe { &mut *root.as_ptr() })
             })
         }
-        #[cfg(not(any(test, feature = "test-thread-fallback-heap")))]
+        #[cfg(not(any(
+            any(test, feature = "test-support"),
+            feature = "test-thread-fallback-heap"
+        )))]
         {
             panic!("no TaggedHeap set for this thread");
         }
@@ -2217,7 +2229,7 @@ fn generation_only_cons_is_old(heap: &TaggedHeap, owner: TaggedValue) -> bool {
 }
 
 /// Debug/test witness for the owned slot-store input invariant.
-#[cfg(any(debug_assertions, test))]
+#[cfg(any(debug_assertions, any(test, feature = "test-support")))]
 #[inline(always)]
 fn generation_only_cons_cell_offset(addr: usize) -> Option<usize> {
     let offset = addr & (CONS_BLOCK_ALIGN - 1);
@@ -2291,7 +2303,7 @@ fn note_heap_write_slow(
     slot: Option<usize>,
     value: Option<TaggedValue>,
 ) {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     BARRIER_SLOW_CALLS.with(|calls| calls.set(calls.get() + 1));
     let record = HeapWriteRecord {
         owner,
@@ -2699,7 +2711,9 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
     cold_gc::carrier_tls_fingerprint(h);
 }
 
-#[cfg(test)]
+// The start-failure injection its call site needs exists in a `test-support`
+// dependency build too, so the helper module is gated with that call site.
+#[cfg(any(test, feature = "test-support"))]
 #[path = "tests/collector_test_support.rs"]
 mod collector_test_support;
 

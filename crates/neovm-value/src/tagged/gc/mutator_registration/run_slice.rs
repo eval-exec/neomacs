@@ -196,12 +196,12 @@ impl<'brand> RunSlice<'brand, '_> {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn word_bits_for_test(&self, root: &SliceRoot<'brand>) -> usize {
         slot_value(root).bits()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn plant_word_for_test(&mut self, result: &mut SliceRoot<'brand>, bits: usize) {
         write_slot(result, unsafe { TaggedValue::from_bits(bits) });
     }

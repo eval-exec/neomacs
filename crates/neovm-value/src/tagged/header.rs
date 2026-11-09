@@ -1089,7 +1089,7 @@ unsafe impl Send for LispByteVecStorage {}
 unsafe impl Sync for LispByteVecStorage {}
 
 impl LispByteVec {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn owned_storage_ref_count_for_test(&self) -> Option<usize> {
         match &self.storage {
             LispByteVecStorage::Owned(bytes) => Some(std::sync::Arc::strong_count(bytes)),
@@ -1152,7 +1152,7 @@ impl LispByteVec {
     }
 
     /// Whether `self` and `other` read the same owned allocation (tests).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn shares_storage_with(&self, other: &Self) -> bool {
         match (&self.storage, &other.storage) {
             (LispByteVecStorage::Owned(a), LispByteVecStorage::Owned(b)) => {

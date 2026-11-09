@@ -188,7 +188,7 @@ impl TaggedHeap {
     }
 
     /// Exercise the same invariant in tests even when debug assertions are off.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn assert_remembered_membership_for_test(&self, owner: TaggedValue) {
         assert!(
             self.remembered_membership_is_valid(owner),
@@ -196,7 +196,7 @@ impl TaggedHeap {
         );
     }
 
-    #[cfg(any(test, debug_assertions))]
+    #[cfg(any(any(test, feature = "test-support"), debug_assertions))]
     fn remembered_membership_is_valid(&self, owner: TaggedValue) -> bool {
         if owner.is_cons() || self.owner_is_mapped(owner) {
             return true;
@@ -541,7 +541,7 @@ impl TaggedHeap {
 
     /// Whether VALUE, an owned cons, reads old in the age mirror that the
     /// write barrier tests.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn cons_age_is_old_for_test(&self, value: TaggedValue) -> bool {
         let (trailer, index) = self.old_cons_trailer(value).expect("owned cons");
         trailer.age_is_old(index)

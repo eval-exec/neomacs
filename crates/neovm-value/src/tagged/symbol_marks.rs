@@ -63,7 +63,7 @@ impl SymbolMarkBits {
         self.words.fill(0);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn count(&self) -> usize {
         self.words.iter().map(|w| w.count_ones() as usize).sum()
     }

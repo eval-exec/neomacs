@@ -337,7 +337,7 @@ pub(crate) unsafe trait SymbolTableBacking {
     /// # Safety
     /// The test owns the exclusive collector and retained backing, before
     /// admission can publish a table or register any participant.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     unsafe fn arm_initial_table_refusal_for_test(&self);
 
     /// # Safety

@@ -83,7 +83,7 @@ impl Drop for InitialObarrayRef<'_, '_, '_> {
 }
 
 impl<'owner, 'era> RunAccess<'owner, 'era> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn initial_table_commit_fault_for_test(
         &mut self,
         fault: TableCommitFault,
@@ -99,7 +99,7 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn initial_table_statistics_for_test(
         &self,
     ) -> Result<super::super::super::symbol_table::publication::TableStatistics, RegistrationError>
@@ -132,7 +132,7 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn initial_poison_receipt_for_test(&self) -> (bool, bool, u8) {
         let symbols = &self.owner.registry.symbols;
         (
@@ -406,7 +406,7 @@ pub(super) fn publish_initial(
     *charged = charged.saturating_add(accounting.retained);
     if accounting.result == Err(RegistrationError::Poisoned) {
         symbols.poison();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         symbols.backing.record_initial_poison_for_test(
             symbols.poisoned.load(Ordering::Acquire)
                 && symbols.word.load(Ordering::Acquire) == super::super::authority_word::WRITER,
@@ -437,7 +437,7 @@ pub(super) fn publish_initial(
             return Err(RegistrationError::Poisoned.into());
         }
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     {
         let fault = match symbols.table_commit_fault.try_lock() {
             Ok(mut armed) => Ok(std::mem::replace(&mut *armed, TableCommitFault::None)),

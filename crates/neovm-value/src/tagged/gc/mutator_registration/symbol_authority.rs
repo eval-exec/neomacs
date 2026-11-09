@@ -5,7 +5,10 @@ mod closed_graph;
 pub mod closed_graph;
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 pub(super) mod combined_inputs;
-#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
 pub(super) fn check_owner_home_for_test(
     run: &RunAccess<'_, '_>,
     home: &OwnerRootSlot<'_>,
@@ -30,9 +33,9 @@ pub use intern::InitialInternError;
 mod functions;
 #[cfg(feature = "test-support")]
 pub mod functions;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub use functions::FunctionOpKind;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) use functions::PreparedNameFunction;
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use functions::{EraCoreHofExt, EraCoreUnaryExt, RunAccessHofExt, RunAccessUnaryExt};
@@ -48,7 +51,7 @@ pub use crate::symbol::parallel::PlainSymbolBacking;
 pub(super) use crate::symbol::parallel::{KeeperWorldDesignator, SymbolBacking};
 use crate::tagged::gc::symbol_table::SymbolSlotIndex;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy)]
 pub(crate) enum TableCommitFault {
     None,
@@ -63,7 +66,7 @@ pub(super) struct SymbolSidecar {
     era: NonZeroU64,
     pub(super) functions: functions::write::FunctionState,
     pub(super) tables: super::super::symbol_table::publication::PublishedSymbolTables,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     table_commit_fault: Mutex<TableCommitFault>,
 }
 impl SymbolSidecar {
@@ -79,7 +82,7 @@ impl SymbolSidecar {
             era,
             functions: functions::write::FunctionState::new(),
             tables,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             table_commit_fault: Mutex::new(TableCommitFault::None),
         }
     }

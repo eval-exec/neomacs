@@ -47,7 +47,7 @@ pub(super) struct ObservedEnvelope {
     // It is never rooted or dereferenced. Observation of this address closes
     // it before publishing a mark or taking the read's revision snapshot.
     single_cons: usize,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     geometry_rebuilds: usize,
 }
 
@@ -67,7 +67,7 @@ const _: () = {
         excluded: Option<BarrierWindow>,
         excluded_cons: usize,
         single_cons: usize,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         geometry_rebuilds: usize,
     }
     assert!(size_of::<ObservedEnvelope>() == size_of::<LegacyEnvelope>());
@@ -99,7 +99,7 @@ impl ObservedEnvelope {
             excluded: None,
             excluded_cons: 0,
             single_cons: 0,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             geometry_rebuilds: 0,
         }
     }
@@ -223,7 +223,7 @@ impl ObservedEnvelope {
         self.full
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn geometry_rebuilds_for_test(&self) -> usize {
         self.geometry_rebuilds
     }
@@ -312,7 +312,7 @@ impl ObservedEnvelope {
     #[cold]
     #[inline(never)]
     fn rebuild(&mut self, dump: BarrierWindow) {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             self.geometry_rebuilds += 1;
         }

@@ -28,7 +28,7 @@ impl Deadline {
     }
 
     /// Deterministic deadline boundary for fixtures; never sleep for SPIN_WAIT.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn expired_for_test() -> Self {
         Self(Instant::now())
     }

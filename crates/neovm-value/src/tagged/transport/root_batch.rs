@@ -382,7 +382,7 @@ impl PreparedRootBatch {
     /// Reserve every host allocation and a stable table position before the
     /// owner's reverse exchange. This proves exclusion, not Value provenance.
     #[cfg_attr(
-        not(test),
+        not(any(test, feature = "test-support")),
         expect(
             dead_code,
             reason = "Part B will admit registry publications through this prepared constructor"

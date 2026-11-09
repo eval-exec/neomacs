@@ -600,7 +600,7 @@ impl AllocatorState {
         if log.id().heap_identity() != self.identity {
             return Err(YoungRegistryError::WrongHeap);
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if test_fault_is(ConsAllocatorFault::SkipCarveRecording) {
             return Ok(ConsCarveAge::MayHaveOldOwners);
         }
@@ -634,7 +634,7 @@ impl AllocatorState {
                 index,
             });
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if test_fault_is(ConsAllocatorFault::CorruptAvailable) {
             // Only metadata is perturbed; no canonical payload is shared/read.
             let slot = state.slot(base);
@@ -736,7 +736,7 @@ impl AllocatorState {
         self.sweep_unvisited_old
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn sweep_work_snapshot(&self) -> Vec<ConsBlockBase> {
         self.sweep_work.clone()
     }
@@ -745,7 +745,7 @@ impl AllocatorState {
     /// preserving every next-minor young flag and registry entry.
     pub(super) fn take_completed_sweep_freed(&mut self) -> usize {
         let freed = self.take_completed_sweep_freed_inner();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if test_fault_is(ConsAllocatorFault::CorruptCompletedSweepFreed) {
             return freed
                 .checked_add(1)
@@ -881,7 +881,7 @@ impl AllocatorState {
             .is_some_and(|&slot| state.block(slot).availability == BlockAvailability::Ready)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn free_count(&self) -> usize {
         self.slots.iter().flatten().map(|b| b.count).sum()
     }
@@ -907,7 +907,7 @@ impl AllocatorState {
             .collect()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn verify(&self) {
         let state = self;
         let mut visited: TiVec<BlockSlot, bool> = vec![false; state.slots.len()].into();
@@ -989,7 +989,7 @@ impl ConsAllocator {
     pub(super) fn threads_admitted(&self) -> bool {
         matches!(self.storage, AllocatorStorage::Admitted(_))
     }
-    #[cfg_attr(not(test), allow(dead_code))] // Future production mutators use this explicit facade.
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))] // Future production mutators use this explicit facade.
     pub(super) fn shared(&self) -> SharedConsAllocator<'_> {
         let AllocatorStorage::Admitted(state) = &self.storage else {
             panic!("allocator sharing requires stopped-world admission");
@@ -1159,7 +1159,7 @@ impl ConsAllocator {
         self.with_state(|state, _mode| state.sweep_unvisited_old_cells())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn sweep_work_snapshot(&self) -> Vec<ConsBlockBase> {
         self.with_state(|state, _mode| state.sweep_work_snapshot())
     }
@@ -1217,7 +1217,7 @@ impl ConsAllocator {
         self.with_state(|state, _mode| state.is_ready(base))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn free_count(&self) -> usize {
         self.with_state(|state, _mode| state.free_count())
     }
@@ -1233,7 +1233,7 @@ impl ConsAllocator {
         self.with_state(|state, _mode| state.free_heads())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn verify(&self) {
         self.with_state(|state, _mode| state.verify())
     }
@@ -1350,7 +1350,7 @@ impl SharedConsAllocator<'_> {
         self.with_state(|state, _mode| state.sweep_unvisited_old_cells())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn sweep_work_snapshot(&self) -> Vec<ConsBlockBase> {
         self.with_state(|state, _mode| state.sweep_work_snapshot())
     }
@@ -1408,7 +1408,7 @@ impl SharedConsAllocator<'_> {
         self.with_state(|state, _mode| state.is_ready(base))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn free_count(&self) -> usize {
         self.with_state(|state, _mode| state.free_count())
     }
@@ -1424,7 +1424,7 @@ impl SharedConsAllocator<'_> {
         self.with_state(|state, _mode| state.free_heads())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn verify(&self) {
         self.with_state(|state, _mode| state.verify())
     }
@@ -1708,7 +1708,7 @@ impl ConsStopAll<'_> {
         for base in mark_work.iter().chain(pending.iter()) {
             let block = self.state.block_for_base_mut(*base);
             debug_assert!(block.young.load(Ordering::Relaxed));
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             if test_fault_is(ConsAllocatorFault::KeepFlagAfterPromotion) {
                 continue;
             }
@@ -1760,7 +1760,7 @@ impl ConsStopAll<'_> {
 
     /// Deliberately model the rejected late-clear race. Test-only mutation
     /// still requires a real stop-all guard; production has no late-clear API.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn apply_late_clear_mutation_for_test(&mut self) {
         if test_fault_is(ConsAllocatorFault::ClearNextFlagAtSweepCompletion) {
             for base in &self.state.sweep_work {
@@ -1900,7 +1900,7 @@ impl ConsStopAll<'_> {
 
 /// Mutation switches affect ONLY the current test thread. They carry no Lisp
 /// runtime state and are restored on unwind by the non-Send RAII guard.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ConsAllocatorFault {
     SkipCarveRecording,
@@ -1910,24 +1910,24 @@ pub(super) enum ConsAllocatorFault {
     ClearNextFlagAtSweepCompletion,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static CONS_ALLOCATOR_FAULT: std::cell::Cell<Option<ConsAllocatorFault>> = const { std::cell::Cell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn test_fault_is(fault: ConsAllocatorFault) -> bool {
     CONS_ALLOCATOR_FAULT.with(|slot| slot.get() == Some(fault))
 }
 
 /// Refill-cache tests must preserve every existing canonical fault site.
 /// Read the existing slot; no additional thread-local or allocator state.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn carve_fault_active() -> bool {
     CONS_ALLOCATOR_FAULT.with(|slot| slot.get().is_some())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 #[must_use = "hold fault injection for the test extent"]
 pub(super) struct ConsAllocatorFaultGuard {
@@ -1935,10 +1935,10 @@ pub(super) struct ConsAllocatorFaultGuard {
     _owner: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static_assertions::assert_not_impl_any!(ConsAllocatorFaultGuard: Send, Sync);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ConsAllocatorFaultGuard {
     pub(super) fn inject(fault: ConsAllocatorFault) -> Self {
         let previous = CONS_ALLOCATOR_FAULT.with(|slot| slot.replace(Some(fault)));
@@ -1949,7 +1949,7 @@ impl ConsAllocatorFaultGuard {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for ConsAllocatorFaultGuard {
     fn drop(&mut self) {
         CONS_ALLOCATOR_FAULT.with(|slot| slot.set(self.previous));

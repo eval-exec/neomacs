@@ -37,10 +37,6 @@ pub use execution::{
     ImmediateResult, ImmediateResultError,
 };
 mod wrappers;
-#[cfg(test)]
-use crate::emacs_core::eval::world::{
-    WorldProofEra as ProofEra, WorldProofEraFinishFailure as ProofEraFinishFailure,
-};
 pub(crate) use wrappers::EraFinishFailure;
 pub use wrappers::ParallelHeapEra;
 #[cfg(any(test, feature = "test-support"))]
@@ -90,7 +86,7 @@ mod symbol_globals;
 pub mod symbol_globals;
 #[cfg(test)]
 mod symbol_intern;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub use symbol_authority::FunctionOpKind;
 pub(crate) use symbol_authority::SymbolReadToken;
 #[doc(hidden)]
@@ -146,8 +142,6 @@ pub(crate) fn entry_image_present_for_test(entry: &MutatorEntry) -> Result<bool,
 pub(crate) fn entry_image_epoch_for_test(entry: &MutatorEntry) -> Result<u64, RendezvousError> {
     rendezvous::entry_state(entry).map(|state| state.rendezvous.image_epoch)
 }
-#[cfg(test)]
-use crate::emacs_core::eval::world::Baton;
 use image::{OwnerGcState, PublishedGcImage};
 use weak_policy::WeakSweepPermit;
 
@@ -181,7 +175,7 @@ impl From<YoungRegistryError> for RegistrationError {
     fn from(error: YoungRegistryError) -> Self {
         match error {
             YoungRegistryError::WrongHeap => Self::WrongHeap,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             YoungRegistryError::RegistrationExhausted => Self::Exhausted,
             _ => Self::OutstandingLoan,
         }
@@ -414,7 +408,7 @@ struct EraCore<'heap, K: EraKeeper> {
     collector: RefCell<Option<QuiescentCollector<'heap>>>,
     suspended_cons: RefCell<Option<super::facade_mark::SuspendedConsCollector<'heap>>>,
     legacy_roots: Option<FrozenLegacyRoots>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     symbol_table_admission_charge: super::symbol_table::publication::RetainedTableBytes,
     #[cfg(any(test, feature = "test-support"))]
     weak_sweep: Option<WeakSweepPermit>,
@@ -527,7 +521,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         };
         // All fallible pointer-table preparation precedes detaching the legacy
         // image, so refusal returns both original construction inputs intact.
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         match preparation {
             InitialTablePreparation::Actual => {}
             InitialTablePreparation::RefuseOnce => {
@@ -617,7 +611,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
                 collector: RefCell::new(Some(collector)),
                 suspended_cons: RefCell::new(None),
                 legacy_roots: None,
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 symbol_table_admission_charge: table_bytes,
                 #[cfg(any(test, feature = "test-support"))]
                 weak_sweep: None,
@@ -1001,8 +995,6 @@ impl<K: EraKeeper> Drop for EraCore<'_, K> {
     }
 }
 
-#[cfg(test)]
-static_assertions::assert_not_impl_any!(ParallelHeapEra<'static, Baton>: Send, Sync, Clone, Copy);
 static_assertions::assert_impl_all!(MutatorEntry: Send, Sync);
 static_assertions::assert_impl_all!(MutatorKey: Send, Sync, Copy);
 

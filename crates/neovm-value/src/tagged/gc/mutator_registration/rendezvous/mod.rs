@@ -124,13 +124,51 @@ impl StoppedRootAdmission<'_> {
     }
 }
 
+/// Test-only publication/restore hooks on the owner protocol.
+///
+/// Only this crate's tests set them; the hook closures are one-shot and run
+/// inside the rendezvous paths below.  Keeping the real fields out of every
+/// non-test build preserves the production auto-trait diagnostics the
+/// compile-fail contracts pin (CG-5): in a dependency `test-support` build
+/// `Hooks` is the empty arm, exactly like production, so `Mutator` cannot
+/// grow the `dyn FnOnce(): Send` note.  The two `mod` declarations are the
+/// split-cfg guard's exemption for a bare `test` predicate; `Hooks` exists in
+/// every build, so `OwnerLocal` needs no cfg on its field.
+#[cfg(test)]
+mod owner_test_hooks {
+    #[derive(Default)]
+    pub(super) struct Hooks {
+        pub(super) publication_hook: Option<Box<dyn FnOnce()>>,
+        pub(super) restore_wait_hook: Option<Box<dyn FnOnce()>>,
+    }
+    impl Hooks {
+        pub(super) fn take_publication(&mut self) -> Option<Box<dyn FnOnce()>> {
+            self.publication_hook.take()
+        }
+        pub(super) fn take_restore_wait(&mut self) -> Option<Box<dyn FnOnce()>> {
+            self.restore_wait_hook.take()
+        }
+    }
+}
+#[cfg(not(test))]
+mod owner_test_hooks {
+    #[derive(Default)]
+    pub(super) struct Hooks;
+    impl Hooks {
+        pub(super) fn take_publication(&mut self) -> Option<Box<dyn FnOnce()>> {
+            None
+        }
+        pub(super) fn take_restore_wait(&mut self) -> Option<Box<dyn FnOnce()>> {
+            None
+        }
+    }
+}
+use owner_test_hooks::Hooks;
+
 #[derive(Default)]
 pub(super) struct OwnerLocal {
     pub(super) participating: bool,
-    #[cfg(test)]
-    pub(super) publication_hook: Option<Box<dyn FnOnce()>>,
-    #[cfg(test)]
-    pub(super) restore_wait_hook: Option<Box<dyn FnOnce()>>,
+    pub(super) hooks: Hooks,
 }
 impl std::fmt::Debug for OwnerLocal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

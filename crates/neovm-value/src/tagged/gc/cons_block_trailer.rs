@@ -266,7 +266,7 @@ impl ConsBlockTrailer {
     }
 
     /// Test setup only, as `set_old`. Writes both copies.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn clear_old(&self, index: usize) {
         let bit = Self::mark_bit(index);
         self.old_atomic(bit.word_index)
@@ -318,7 +318,7 @@ impl ConsBlockTrailer {
             promoted += newly_old.count_ones() as usize;
             let old = previous_old | marked;
             self.old_atomic(w).store(old, Ordering::Relaxed);
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             if mirror_fault::is(mirror_fault::MirrorFault::SkipPromotionLanes) {
                 continue;
             }
@@ -351,7 +351,7 @@ impl ConsBlockTrailer {
             }
             self.old_atomic(w).store(marked, Ordering::Relaxed);
             let changed = marked ^ previous_old;
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             let changed = if mirror_fault::is(mirror_fault::MirrorFault::SkipMajorClear) {
                 changed & marked
             } else {
@@ -383,9 +383,11 @@ impl ConsBlockTrailer {
     }
 }
 
-/// Test-only faults that make a promotion skip mirror writes, so GEN1
-/// verify can be shown to catch a dropped age write.
-#[cfg(test)]
+/// Test faults that make a promotion skip mirror writes, so GEN1 verify can
+/// be shown to catch a dropped age write.  The check sites are compiled in
+/// `test-support` builds too (cfg(any(test, feature = "test-support"))); the
+/// module stays inert there unless a test installs a fault.
+#[cfg(any(test, feature = "test-support"))]
 pub(super) mod mirror_fault {
     use std::cell::Cell;
 

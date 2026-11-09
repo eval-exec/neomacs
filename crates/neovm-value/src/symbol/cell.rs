@@ -608,7 +608,7 @@ static PLIST_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 /// The current plist-head epoch.  One Acquire load is the per-signal freshness
 /// check of the P10 snapshot store; in P10-a1 only the tests read it.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[inline(always)]
 pub(crate) fn plist_epoch() -> u64 {
     PLIST_EPOCH.load(Ordering::Acquire)
@@ -1352,7 +1352,7 @@ impl ForwardedArm<'_, '_> {
 /// Caller must hold the start-of-cycle chunk snapshot so `sym`/`seq` address live,
 /// non-moving memory. Bounded in practice: with a single mutator the odd window
 /// is ~4 stores, so the retry loop converges immediately.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn read_symbol_children_consistent(
     seq: &AtomicU32,
     sym: &LispSymbol,

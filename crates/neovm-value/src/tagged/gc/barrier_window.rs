@@ -640,7 +640,7 @@ pub(crate) fn current_collection_dump_window() -> BarrierWindow {
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl TaggedHeap {
     /// Read the current synthetic fixture's words without consuming them.
     pub(super) fn satb_words_for_test(&self) -> Vec<TaggedValue> {
@@ -759,13 +759,13 @@ impl TaggedHeap {
 }
 
 /// The barrier window this thread's stores currently test.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn published_barrier_window() -> BarrierWindow {
     TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.get())
 }
 
 /// The protocol window Rust cons stores currently test.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn published_cons_barrier_window() -> BarrierWindow {
     TAGGED_HEAP_CONS_BARRIER_WINDOW.with(|w| w.get())
 }

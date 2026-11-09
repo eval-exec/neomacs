@@ -72,7 +72,7 @@ pub(super) trait PagedObject: Sized {
     const CHUNK_CLASS: ChunkClass;
     /// TEST-ONLY live page counter (teardown-leak / double-free probe for the
     /// Drop tests): `ObjectPage::new` increments, `ObjectPage::drop` decrements.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn live_page_counter() -> &'static AtomicUsize;
 }
 
@@ -153,23 +153,23 @@ const _: () = assert!(
      link (bytes 56..64); bump the symbol-with-pos stride if the struct grew",
 );
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) static LIVE_FLOAT_PAGES: AtomicUsize = AtomicUsize::new(0);
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) static LIVE_STRING_PAGES: AtomicUsize = AtomicUsize::new(0);
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) static LIVE_VECTOR_PAGES: AtomicUsize = AtomicUsize::new(0);
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) static LIVE_BYTECODE_PAGES: AtomicUsize = AtomicUsize::new(0);
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) static LIVE_LAMBDA_PAGES: AtomicUsize = AtomicUsize::new(0);
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) static LIVE_MACRO_PAGES: AtomicUsize = AtomicUsize::new(0);
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) static LIVE_RECORD_PAGES: AtomicUsize = AtomicUsize::new(0);
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) static LIVE_SYMBOL_WITH_POS_PAGES: AtomicUsize = AtomicUsize::new(0);
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) static LIVE_MARKER_PAGES: AtomicUsize = AtomicUsize::new(0);
 // Marker: `MarkerObj` is VecLikeHeader 24 + LispMarker 32 (a niche
 // `MarkerBuffer` word, the tagged `MarkerLink` word, charpos, bytepos) = 56B
@@ -208,7 +208,7 @@ const _: () = assert!(
     "BignumObj must fit a 64-byte slot with its trailing free-list link \
      (bytes 56..64 — zero slack); bump the bignum stride if malachite grew",
 );
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) static LIVE_BIGNUM_PAGES: AtomicUsize = AtomicUsize::new(0);
 
 impl PagedObject for BignumObj {
@@ -218,7 +218,7 @@ impl PagedObject for BignumObj {
     const KIND: HeapObjectKind = HeapObjectKind::VecLike;
     const CLASS: &'static str = "bignum";
     const CHUNK_CLASS: ChunkClass = ChunkClass::Bignum;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn live_page_counter() -> &'static AtomicUsize {
         &LIVE_BIGNUM_PAGES
     }
@@ -232,7 +232,7 @@ impl PagedObject for MarkerObj {
     const KIND: HeapObjectKind = HeapObjectKind::VecLike;
     const CLASS: &'static str = "marker";
     const CHUNK_CLASS: ChunkClass = ChunkClass::Marker;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn live_page_counter() -> &'static AtomicUsize {
         &LIVE_MARKER_PAGES
     }
@@ -242,7 +242,7 @@ impl PagedObject for FloatObj {
     const KIND: HeapObjectKind = HeapObjectKind::Float;
     const CLASS: &'static str = "float";
     const CHUNK_CLASS: ChunkClass = ChunkClass::Float;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn live_page_counter() -> &'static AtomicUsize {
         &LIVE_FLOAT_PAGES
     }
@@ -253,7 +253,7 @@ impl PagedObject for StringObj {
     const KIND: HeapObjectKind = HeapObjectKind::String;
     const CLASS: &'static str = "string";
     const CHUNK_CLASS: ChunkClass = ChunkClass::String;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn live_page_counter() -> &'static AtomicUsize {
         &LIVE_STRING_PAGES
     }
@@ -264,7 +264,7 @@ impl PagedObject for VectorObj {
     const KIND: HeapObjectKind = HeapObjectKind::VecLike;
     const CLASS: &'static str = "vector";
     const CHUNK_CLASS: ChunkClass = ChunkClass::Vector;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn live_page_counter() -> &'static AtomicUsize {
         &LIVE_VECTOR_PAGES
     }
@@ -277,7 +277,7 @@ impl PagedObject for ByteCodeObj {
     const KIND: HeapObjectKind = HeapObjectKind::VecLike;
     const CLASS: &'static str = "bytecode";
     const CHUNK_CLASS: ChunkClass = ChunkClass::ByteCode;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn live_page_counter() -> &'static AtomicUsize {
         &LIVE_BYTECODE_PAGES
     }
@@ -289,7 +289,7 @@ impl PagedObject for LambdaObj {
     const KIND: HeapObjectKind = HeapObjectKind::VecLike;
     const CLASS: &'static str = "lambda";
     const CHUNK_CLASS: ChunkClass = ChunkClass::Lambda;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn live_page_counter() -> &'static AtomicUsize {
         &LIVE_LAMBDA_PAGES
     }
@@ -301,7 +301,7 @@ impl PagedObject for MacroObj {
     const KIND: HeapObjectKind = HeapObjectKind::VecLike;
     const CLASS: &'static str = "macro";
     const CHUNK_CLASS: ChunkClass = ChunkClass::Macro;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn live_page_counter() -> &'static AtomicUsize {
         &LIVE_MACRO_PAGES
     }
@@ -314,7 +314,7 @@ impl PagedObject for RecordObj {
     const KIND: HeapObjectKind = HeapObjectKind::VecLike;
     const CLASS: &'static str = "record";
     const CHUNK_CLASS: ChunkClass = ChunkClass::Record;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn live_page_counter() -> &'static AtomicUsize {
         &LIVE_RECORD_PAGES
     }
@@ -326,41 +326,41 @@ impl PagedObject for SymbolWithPosObj {
     const KIND: HeapObjectKind = HeapObjectKind::VecLike;
     const CLASS: &'static str = "symbol-with-pos";
     const CHUNK_CLASS: ChunkClass = ChunkClass::SymbolWithPos;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn live_page_counter() -> &'static AtomicUsize {
         &LIVE_SYMBOL_WITH_POS_PAGES
     }
 }
 
 /// Slot count of a float page (test scenarios size their populations off it).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) const FLOAT_PAGE_SLOTS: usize =
     OBJECT_PAGE_BYTES / <FloatObj as PagedObject>::SLOT_BYTES;
 /// Slot count of a bytecode page (170: the 384B stride does not divide 64KB;
 /// the 256B page tail is never allocated).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) const BYTECODE_PAGE_SLOTS: usize =
     OBJECT_PAGE_BYTES / <ByteCodeObj as PagedObject>::SLOT_BYTES;
 /// Slot count of a lambda/macro page (512: the 128B stride divides 64KB
 /// exactly, no tail). LambdaObj and MacroObj share the stride so this const
 /// applies to both arenas.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) const LAMBDA_PAGE_SLOTS: usize =
     OBJECT_PAGE_BYTES / <LambdaObj as PagedObject>::SLOT_BYTES;
 /// Slot count of a record page (1024: 64B stride divides 64KB exactly).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) const RECORD_PAGE_SLOTS: usize =
     OBJECT_PAGE_BYTES / <RecordObj as PagedObject>::SLOT_BYTES;
 /// Slot count of a symbol-with-pos page (1024: 64B stride).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) const SYMBOL_WITH_POS_PAGE_SLOTS: usize =
     OBJECT_PAGE_BYTES / <SymbolWithPosObj as PagedObject>::SLOT_BYTES;
 /// Slot count of a marker page (512: 128B stride).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) const MARKER_PAGE_SLOTS: usize =
     OBJECT_PAGE_BYTES / <MarkerObj as PagedObject>::SLOT_BYTES;
 /// Slot count of a bignum page (1024: 64B stride).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) const BIGNUM_PAGE_SLOTS: usize =
     OBJECT_PAGE_BYTES / <BignumObj as PagedObject>::SLOT_BYTES;
 
@@ -470,7 +470,7 @@ impl<T: PagedObject> ObjectPage<T> {
         if storage.is_null() {
             alloc::handle_alloc_error(Self::layout());
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         T::live_page_counter().fetch_add(1, Ordering::Relaxed);
         storage
     }
@@ -478,7 +478,7 @@ impl<T: PagedObject> ObjectPage<T> {
     /// Return `storage` (from `alloc_storage`, owned by no page) to the
     /// allocator.
     pub(super) fn free_storage(storage: *mut u8) {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         T::live_page_counter().fetch_sub(1, Ordering::Relaxed);
         unsafe { alloc::dealloc(storage, Self::layout()) };
     }

@@ -41,7 +41,7 @@ impl RunAccess<'_, '_> {
     }
 
     /// Test-only observation of the actual copying lease, before its snapshot.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn copy_hash_table_into_observed(
         &mut self,
         source: &OwnerRootSlot<'_>,
