@@ -1533,6 +1533,49 @@ pub(crate) fn assert_oracle_parity_expect(form: &str, expected: expect_test::Exp
     assert_oracle_parity_expect_with_sandbox(form, expected, &sandbox, EvalProgram::Normalized);
 }
 
+/// Parity of the batch stderr `do-auto-save` writes through `message1`.
+///
+/// The harness outcome marker and the blank line it prints ahead of that
+/// marker are removed. Directory prefixes owned by this case become
+/// `[ORACLE-TMP]`. What remains is the product text GNU prints on stderr.
+pub(crate) fn assert_oracle_batch_stderr_parity_expect(form: &str, expected: expect_test::Expect) {
+    ensure_nonempty_form(form).expect("form should not be empty");
+    let eval_program = EvalProgram::Normalized;
+    let observe = |engine: OracleEngine| {
+        let sandbox = oracle_sandbox(form, &[], &project_lisp_dir());
+        let roots = sandbox.stderr_path_roots();
+        let output = spawn_batch_editor(&sandbox, eval_program, engine).expect("editor should run");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let evaluation =
+            CapturedEvaluation::from_marked_streams(&stdout, &stderr, ORACLE_OUTCOME_MARKER)
+                .unwrap_or_else(|error| {
+                    panic!("invalid marked outcome: {error}\nstdout:\n{stdout}\nstderr:\n{stderr}")
+                });
+        assert!(
+            evaluation.outcome().is_value(),
+            "form signalled on stderr observation: {:?}\nstderr:\n{stderr}",
+            evaluation.outcome()
+        );
+        inline_debug_text(&product_batch_stderr(&stderr, &roots))
+    };
+    match OracleMode::from_env() {
+        OracleMode::Snapshot => expected.assert_eq(&observe(OracleEngine::Neomacs)),
+        OracleMode::Verify => {
+            let oracle = observe(OracleEngine::Gnu);
+            let neovm = observe(OracleEngine::Neomacs);
+            expected.assert_eq(&oracle);
+            assert_eq!(neovm, oracle, "oracle stderr mismatch for form: {form}");
+        }
+        OracleMode::Refresh => expected.assert_eq(&observe(OracleEngine::Gnu)),
+        OracleMode::Live => {
+            let oracle = observe(OracleEngine::Gnu);
+            let neovm = observe(OracleEngine::Neomacs);
+            assert_eq!(neovm, oracle, "oracle stderr mismatch for form: {form}");
+        }
+    }
+}
+
 /// A write-error auto-save must not print BEL on batch stdout.
 ///
 /// GNU `auto_save_error` calls `ring_bell` directly (`fileio.c:6239`,
@@ -1634,6 +1677,17 @@ fn spawn_batch_editor(
                 ))
             }
         })
+}
+
+fn product_batch_stderr(stderr: &str, roots: &[String]) -> String {
+    let mut text = stderr.replace('\r', "");
+    for root in roots {
+        text = text.replace(root, "[ORACLE-TMP]");
+    }
+    text.lines()
+        .filter(|line| !line.contains(ORACLE_OUTCOME_MARKER) && !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn inline_debug_text(text: &str) -> String {

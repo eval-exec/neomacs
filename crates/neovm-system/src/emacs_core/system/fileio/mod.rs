@@ -7509,6 +7509,11 @@ fn auto_save_1(
     Ok(())
 }
 
+/// Batch `message1` text. GNU prints this on stderr (`xdisp.c:12591`).
+fn auto_save_say(eval: &mut neovm_eval::emacs_core::eval::Context, text: &str) {
+    let _ = eval.funcall_general(Value::symbol("message"), vec![Value::string(text)]);
+}
+
 /// GNU `ring_bell` (src/terminal.c:56-79), the direct call `auto_save_error`
 /// makes (src/fileio.c:6239).
 ///
@@ -7625,7 +7630,24 @@ pub fn builtin_do_auto_save(
     expect_min_args("do-auto-save", &args, 0)?;
     expect_max_args("do-auto-save", &args, 2)?;
 
-    let _no_message = args.first().is_some_and(|v| v.is_truthy());
+    // GNU `Fdo_auto_save` (`fileio.c:6344-6351`): a live minibuffer forces
+    // silence, then `push_message` remembers a non-empty echo message.
+    // `auto-save-no-message` is not read here; the command loop passes it
+    // as NO-MESSAGE (`keyboard.c:2902`, `:2970`).
+    let mut no_message = args.first().is_some_and(|v| v.is_truthy());
+    if eval.minibuffers().depth() > 0 {
+        no_message = true;
+    }
+    let old_message = if no_message {
+        None
+    } else {
+        eval.current_message_value()
+    };
+    // File-local stand-in for GNU's `auto_save_error_occurred`. It is
+    // cleared at the start of each call and read only to suppress
+    // "Auto-saving...done" (`fileio.c:6388`, `:6505`).
+    let mut auto_saved = false;
+    let mut auto_save_error_occurred = false;
     let current_only = args.get(1).is_some_and(|v| v.is_truthy());
     // GNU's `old`: the buffer current on entry, before `auto-save-hook`.
     let old_buffer = eval.edit.buffers.current_buffer_id();
@@ -7729,8 +7751,16 @@ pub fn builtin_do_auto_save(
         // goes on with the next buffer, and this one is not retried before
         // its next change.
         eval.set_current_buffer_unrecorded(buf_id)?;
+        // GNU prints the progress line once, before the first attempt,
+        // including an attempt that then signals (`fileio.c:6476-6478`).
+        if !auto_saved && !no_message {
+            auto_save_say(eval, "Auto-saving...");
+        }
         let result = match auto_save_1(eval, buf_id, file_name.as_ref(), &target_path) {
-            Err(flow) if flow.is_signal() => auto_save_error(eval, &flow),
+            Err(flow) if flow.is_signal() => {
+                auto_save_error_occurred = true;
+                auto_save_error(eval, &flow)
+            }
             other => other,
         };
         if result.is_ok() {
@@ -7743,6 +7773,7 @@ pub fn builtin_do_auto_save(
         if let Some(old_buffer) = old_buffer {
             eval.restore_current_buffer_if_live(old_buffer);
         }
+        auto_saved = true;
         result?;
     }
 
@@ -7751,6 +7782,18 @@ pub fn builtin_do_auto_save(
     // also makes direct Lisp calls and idle-triggered calls obey the same
     // "new input is required before another automatic pass" invariant.
     eval.command_loop_mut().last_auto_save_input_events = eval.num_nonmacro_input_events();
+
+    // GNU `fileio.c:6496-6509`, after `record_auto_save`. An old echo
+    // message is restored after `sit-for`; otherwise a clean pass prints
+    // the done line. An `auto_save_error` leaves the warning in place.
+    if auto_saved && !no_message {
+        if let Some(old) = old_message {
+            let _ = eval.funcall_general(Value::symbol("sit-for"), vec![Value::fixnum(1)]);
+            let _ = eval.funcall_general(Value::symbol("message"), vec![old]);
+        } else if !auto_save_error_occurred {
+            auto_save_say(eval, "Auto-saving...done");
+        }
+    }
 
     Ok(Value::NIL)
 }

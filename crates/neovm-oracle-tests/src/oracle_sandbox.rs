@@ -301,6 +301,20 @@ impl OracleSandbox {
         }
     }
 
+    /// Absolute directory prefixes this case may print. Longest first, so a
+    /// nested root is replaced before the directory that contains it.
+    pub(crate) fn stderr_path_roots(&self) -> Vec<String> {
+        let mut roots = vec![
+            self.session_root.path().to_string_lossy().into_owned(),
+            self.case_root.path().to_string_lossy().into_owned(),
+            self.home_root.to_string_lossy().into_owned(),
+        ];
+        roots.retain(|root| root.len() > 1);
+        roots.sort_by_key(|root| std::cmp::Reverse(root.len()));
+        roots.dedup();
+        roots
+    }
+
     pub(crate) fn create_fixture_tempdir() -> Result<TempDir, String> {
         create_case_tempdir_in(&project_root())
     }
