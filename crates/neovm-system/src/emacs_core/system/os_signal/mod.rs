@@ -1252,7 +1252,8 @@ pub fn drain_pending_os_signals(
 
 /// Test-support access to the signal-capture state the moved core tests
 /// observe (TEST-SUPPORT-DESIGN rule 8; the statics stay private in product
-/// builds).
+/// builds). The statics and the C handler are unix-only, and so are the callers.
+#[cfg(unix)]
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support {
     pub fn termination_signal() -> &'static std::sync::atomic::AtomicI32 {
