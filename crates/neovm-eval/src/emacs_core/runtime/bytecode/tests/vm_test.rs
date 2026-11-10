@@ -14,10 +14,6 @@ use neovm_value::value::HashTableTest;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-#[cfg(test)]
-#[path = "primitive_opcode_cells_test.rs"]
-mod primitive_opcode_cells;
-
 #[path = "verified_dead_checks_test.rs"]
 mod verified_dead_checks;
 

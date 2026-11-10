@@ -3651,7 +3651,7 @@ pub(crate) fn lower_leaf_full_osr_with_opt(
 
 /// Direct IR harness: only test-owned verified plans, with source-derived
 /// guard facts disabled so mutations cannot reuse an obsolete source proof.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn lower_opt_ir_for_test(
     ops: &[Op],
     constants: &[Value],
@@ -4233,6 +4233,9 @@ use leaf_builder::build_leaf_fn;
 mod knobs;
 pub(crate) use knobs::*;
 
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use opt_profile::enter_lists48_osr_profile_for_test;
+
 pub(crate) mod call_census;
 pub(crate) mod call_feedback;
 pub(crate) mod calls;
@@ -4254,9 +4257,9 @@ pub use lowering::inline_cbsym_read_emitted_for_test;
 pub use lowering::*;
 
 mod shims;
-pub use shims::*;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use shims::var_shim_calls;
+pub use shims::*;
 
 pub(crate) mod sink;
 pub(crate) use sink::{LeafEntry, LeafSink};

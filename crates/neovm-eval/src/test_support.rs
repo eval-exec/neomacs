@@ -1852,7 +1852,8 @@ pub mod authority {
     /// Thread admission, with the refusal as a plain copy.
     #[cfg(any(test, feature = "test-support"))]
     pub fn admit_threads_refusal_for_test(ctx: &mut Context) -> Result<(), AdmissionRefusal> {
-        ctx.admit_threads().map_err(|error| admission_refusal(&error))
+        ctx.admit_threads()
+            .map_err(|error| admission_refusal(&error))
     }
 
     /// Capacity refusal after a full reservation. The private reservation
@@ -1998,9 +1999,7 @@ pub mod authority {
     /// Park this owner. The parked token is opaque; only
     /// [`resume_owner_for_test`] consumes it. `ParkedOwner` stays crate-private.
     #[allow(private_interfaces)]
-    pub fn park_owner_for_test(
-        context: &mut Context,
-    ) -> crate::emacs_core::eval::ParkedOwner {
+    pub fn park_owner_for_test(context: &mut Context) -> crate::emacs_core::eval::ParkedOwner {
         context.park_owner()
     }
 
@@ -2051,9 +2050,7 @@ pub mod authority {
     }
 
     /// FENCE: park this owner as runnable. `Wait` stays crate-private.
-    pub fn green_park_runnable_for_test(
-        ctx: &mut Context,
-    ) -> Result<(), neovm_value::error::Flow> {
+    pub fn green_park_runnable_for_test(ctx: &mut Context) -> Result<(), neovm_value::error::Flow> {
         ctx.green_park_runnable_for_test()
     }
 
@@ -2146,7 +2143,7 @@ pub mod authority {
 
     // Signed knob tokens for re-homed compiler tests. Each converts to the
     // pub(crate) original inside this module. Eval's own tests keep calling
-    // the originals. No `TestOptAdmit::ALL`: callers write the six fields.
+    // the originals. No `TestOptAdmit::ALL`: callers use `TestOptAdmit::parts`. Fields stay pub(crate).
 
     #[cfg(feature = "jit")]
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2267,6 +2264,28 @@ pub mod authority {
     }
 
     #[cfg(feature = "jit")]
+    impl TestOptAdmit {
+        /// Fields stay pub(crate). Cross-crate construction uses this Copy constructor.
+        pub fn parts(
+            args: bool,
+            env: bool,
+            vars: bool,
+            binds: bool,
+            switch: bool,
+            handlers: bool,
+        ) -> Self {
+            Self {
+                args,
+                env,
+                vars,
+                binds,
+                switch,
+                handlers,
+            }
+        }
+    }
+
+    #[cfg(feature = "jit")]
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum TestOptPasses {
         All,
@@ -2289,9 +2308,7 @@ pub mod authority {
     }
 
     #[cfg(feature = "jit")]
-    fn to_sites(
-        mode: TestDirectSitesMode,
-    ) -> crate::emacs_core::jit::compile::DirectSitesMode {
+    fn to_sites(mode: TestDirectSitesMode) -> crate::emacs_core::jit::compile::DirectSitesMode {
         use crate::emacs_core::jit::compile::DirectSitesMode;
         match mode {
             TestDirectSitesMode::All => DirectSitesMode::All,
@@ -2408,7 +2425,9 @@ pub mod authority {
     }
 
     #[cfg(feature = "jit")]
-    fn to_policy(policy: TestRegallocPolicy) -> crate::emacs_core::jit::compile::lowering::RegallocPolicy {
+    fn to_policy(
+        policy: TestRegallocPolicy,
+    ) -> crate::emacs_core::jit::compile::lowering::RegallocPolicy {
         use crate::emacs_core::jit::compile::lowering::RegallocPolicy;
         match policy {
             TestRegallocPolicy::Auto => RegallocPolicy::Auto,
@@ -2437,7 +2456,9 @@ pub mod authority {
 
     #[cfg(feature = "jit")]
     pub fn direct_shapes_parse_for_test(value: Option<&str>) -> TestDirectShapes {
-        from_shapes(crate::emacs_core::jit::compile::DirectShapesKnob::parse(value))
+        from_shapes(crate::emacs_core::jit::compile::DirectShapesKnob::parse(
+            value,
+        ))
     }
 
     #[cfg(feature = "jit")]
@@ -2457,7 +2478,9 @@ pub mod authority {
 
     #[cfg(feature = "jit")]
     pub fn inline_vars_parse_for_test(value: Option<&str>) -> TestInlineVars {
-        from_inline_vars(crate::emacs_core::jit::compile::InlineVarsKnob::parse(value))
+        from_inline_vars(crate::emacs_core::jit::compile::InlineVarsKnob::parse(
+            value,
+        ))
     }
 
     #[cfg(feature = "jit")]
@@ -2472,7 +2495,10 @@ pub mod authority {
 
     #[cfg(feature = "jit")]
     pub fn force_opt_token_for_test(mode: Option<TestOptMode>, admit: Option<TestOptAdmit>) {
-        crate::emacs_core::jit::compile::force_opt_for_test(mode.map(to_opt_mode), admit.map(to_admit));
+        crate::emacs_core::jit::compile::force_opt_for_test(
+            mode.map(to_opt_mode),
+            admit.map(to_admit),
+        );
     }
 
     #[cfg(feature = "jit")]
@@ -2518,7 +2544,9 @@ pub mod authority {
     }
 
     #[cfg(feature = "jit")]
-    pub fn leaf_chains_empty_for_test(leaf: &crate::emacs_core::jit::compile::CompiledLeaf) -> bool {
+    pub fn leaf_chains_empty_for_test(
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+    ) -> bool {
         leaf.chains.is_empty()
     }
 
@@ -2531,14 +2559,16 @@ pub mod authority {
         dynamic_prefix: usize,
         self_site: bool,
     ) -> TestLeafAbi {
-        from_abi(crate::emacs_core::jit::compile::reg_abi::LeafAbi::for_build(
-            aot,
-            osr,
-            arity,
-            frameless,
-            dynamic_prefix,
-            self_site,
-        ))
+        from_abi(
+            crate::emacs_core::jit::compile::reg_abi::LeafAbi::for_build(
+                aot,
+                osr,
+                arity,
+                frameless,
+                dynamic_prefix,
+                self_site,
+            ),
+        )
     }
 
     #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
@@ -2631,7 +2661,9 @@ pub mod authority {
     pub fn leaf_identity_for_test(
         leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
     ) -> LeafIdentity {
-        LeafIdentity::from_address(leaf as *const crate::emacs_core::jit::compile::CompiledLeaf as usize)
+        LeafIdentity::from_address(
+            leaf as *const crate::emacs_core::jit::compile::CompiledLeaf as usize,
+        )
     }
 
     /// FENCE: address identity of a leaf's raw entry word.
@@ -3029,7 +3061,8 @@ pub mod authority {
     pub fn bytecode_spec_slots_all_unarmed_for_test(
         leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
     ) -> bool {
-        leaf.bytecode_spec_slots().all(|slot| slot.leaf_ptr().is_null())
+        leaf.bytecode_spec_slots()
+            .all(|slot| slot.leaf_ptr().is_null())
     }
 
     /// FENCE: every bytecode spec slot's fast-path key is armed (nonzero).
@@ -3092,9 +3125,9 @@ pub mod authority {
     pub fn sidecar_census_shape_names_for_test(
         leaf: &mut crate::emacs_core::jit::compile::CompiledLeaf,
     ) -> (bool, &'static str, &'static str, &'static str) {
+        use crate::emacs_core::jit::compile::LeafSidecar;
         use crate::emacs_core::jit::compile::call_census::named_shape_name_for_test;
         use crate::emacs_core::jit::compile::spec_slot::SpecSlot;
-        use crate::emacs_core::jit::compile::LeafSidecar;
         leaf.sidecar = Some(Box::new(LeafSidecar {
             reloc_base: core::ptr::null(),
             spill_base: core::ptr::null(),
@@ -3166,12 +3199,7 @@ pub mod authority {
         resume: &crate::emacs_core::jit::compile::DeoptResume,
         index: usize,
     ) -> usize {
-        resume
-            .inlined
-            .as_ref()
-            .expect("inlined chain")
-            .frames[index]
-            .pc
+        resume.inlined.as_ref().expect("inlined chain").frames[index].pc
     }
 
     /// FENCE: operand stack of inlined frame `index`, copied out.
@@ -3180,11 +3208,7 @@ pub mod authority {
         resume: &crate::emacs_core::jit::compile::DeoptResume,
         index: usize,
     ) -> Vec<neovm_value::value::Value> {
-        resume
-            .inlined
-            .as_ref()
-            .expect("inlined chain")
-            .frames[index]
+        resume.inlined.as_ref().expect("inlined chain").frames[index]
             .stack
             .clone()
     }
@@ -3349,6 +3373,251 @@ pub mod authority {
     #[cfg(any(test, feature = "test-support"))]
     pub fn primitive_inventory_names_for_test() -> Vec<&'static str> {
         crate::emacs_core::subr::effect_catalog::primitive_inventory_names_for_test()
+    }
+
+    /// FENCE: parse an opt-pass spec (`sink`, `all`, `fold,bool,reps,reads`).
+    /// `OptPasses` stays pub(crate). `None` clears the override.
+    #[cfg(feature = "jit")]
+    pub fn force_opt_passes_spec_for_test(spec: Option<&str>) {
+        crate::emacs_core::jit::compile::force_opt_passes_for_test(
+            spec.map(|spec| crate::emacs_core::jit::compile::OptPasses::parse(Some(spec))),
+        );
+    }
+
+    /// FENCE: `(fold, bool_rep, reps, gvn, reads, range, licm, sink)`.
+    #[cfg(feature = "jit")]
+    pub fn opt_passes_flags_for_test() -> (bool, bool, bool, bool, bool, bool, bool, bool) {
+        crate::group1_startup_drivers::opt_passes_flags_for_test()
+    }
+
+    /// FENCE: parse a profit token (`loops`, `primitive-loops`, `off`).
+    /// `OptProfitMode` stays pub(crate). `None` clears the override.
+    #[cfg(feature = "jit")]
+    pub fn force_opt_profit_name_for_test(name: Option<&str>) {
+        crate::emacs_core::jit::compile::force_opt_profit_for_test(
+            name.map(|name| crate::emacs_core::jit::compile::OptProfitMode::parse(Some(name))),
+        );
+    }
+
+    /// FENCE: the profit variant ident (`PrimitiveLoops`, not the parse token).
+    #[cfg(feature = "jit")]
+    pub fn opt_profit_name_for_test() -> &'static str {
+        crate::group1_startup_drivers::opt_profit_name_for_test()
+    }
+
+    /// FENCE: parse an early-mode token. `OptEarlyMode` stays pub(crate).
+    /// `None` clears the override.
+    #[cfg(feature = "jit")]
+    pub fn force_opt_early_name_for_test(name: Option<&str>) {
+        crate::emacs_core::jit::compile::force_opt_early_for_test(
+            name.map(|name| crate::emacs_core::jit::compile::OptEarlyMode::parse(Some(name))),
+        );
+    }
+
+    /// FENCE: force the opt op ceiling. `None` clears the override.
+    #[cfg(feature = "jit")]
+    pub fn force_opt_max_ops_for_test(value: Option<usize>) {
+        crate::emacs_core::jit::compile::force_opt_max_ops_for_test(value);
+    }
+
+    /// FENCE: the live opt op ceiling.
+    #[cfg(feature = "jit")]
+    pub fn opt_max_ops_for_test() -> usize {
+        crate::emacs_core::jit::compile::jit_opt_max_ops()
+    }
+
+    /// FENCE: force the OSR admission prerequisite. `None` clears the override.
+    #[cfg(feature = "jit")]
+    pub fn force_opt_require_osr_for_test(value: Option<bool>) {
+        crate::emacs_core::jit::compile::force_opt_require_osr_for_test(value);
+    }
+
+    /// FENCE: the live OSR admission prerequisite.
+    #[cfg(feature = "jit")]
+    pub fn opt_require_osr_for_test() -> bool {
+        crate::emacs_core::jit::compile::jit_opt_require_osr()
+    }
+
+    /// FENCE: Plain compile, origin Direct, profit gate bypassed.
+    /// `CompileRequest` fields stay pub(crate).
+    #[cfg(feature = "jit")]
+    pub fn compile_plain_bypassing_profit_for_test(
+        function: &crate::emacs_core::bytecode::ByteCodeFunction,
+        obarray: Option<&neovm_value::symbol::Obarray>,
+        policy: TestRegallocPolicy,
+    ) -> Result<
+        crate::emacs_core::jit::compile::CompiledLeaf,
+        crate::emacs_core::jit::compile::CompileError,
+    > {
+        use crate::emacs_core::jit::compile::CompileRequest;
+        crate::emacs_core::jit::compile::compile_bytecode_function_requested(
+            function,
+            obarray,
+            CompileRequest {
+                regalloc: to_policy(policy),
+                bypass_profit_gate: true,
+                origin: crate::emacs_core::jit::stats::CompileOrigin::Direct,
+                tier: crate::emacs_core::jit::tier2::CompileTier::Plain,
+            },
+        )
+    }
+
+    /// FENCE: feedback upgrade, origin Direct, profit gate bypassed, full
+    /// regalloc. `CompileTier` stays pub(crate).
+    #[cfg(feature = "jit")]
+    pub fn compile_feedback_upgrade_for_test(
+        function: &crate::emacs_core::bytecode::ByteCodeFunction,
+        obarray: Option<&neovm_value::symbol::Obarray>,
+        policy: TestRegallocPolicy,
+    ) -> Result<
+        crate::emacs_core::jit::compile::CompiledLeaf,
+        crate::emacs_core::jit::compile::CompileError,
+    > {
+        use crate::emacs_core::jit::compile::CompileRequest;
+        crate::emacs_core::jit::compile::compile_bytecode_function_requested(
+            function,
+            obarray,
+            CompileRequest {
+                regalloc: to_policy(policy),
+                bypass_profit_gate: true,
+                origin: crate::emacs_core::jit::stats::CompileOrigin::Direct,
+                tier: crate::emacs_core::jit::tier2::CompileTier::Upgrade(
+                    crate::emacs_core::jit::tier2::T2Upgrade::Feedback,
+                ),
+            },
+        )
+    }
+
+    /// FENCE: selected-tier name (`baseline`, `mir`, `aot`, `opt`).
+    /// `SelectedTier` stays pub(crate).
+    #[cfg(feature = "jit")]
+    pub fn compiled_leaf_selected_tier_name_for_test(
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+    ) -> &'static str {
+        crate::group1_startup_drivers::compiled_leaf_selected_tier_name_for_test(leaf)
+    }
+
+    /// FENCE: `(cons_sources, cons_reads_elided)` when the sink pass ran.
+    /// `SinkStats` stays pub(crate).
+    #[cfg(feature = "jit")]
+    pub fn compiled_leaf_opt_sink_counts_for_test(
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+    ) -> Option<(usize, usize)> {
+        crate::group1_startup_drivers::compiled_leaf_opt_sink_counts_for_test(leaf)
+    }
+
+    /// FENCE: `(MaterializeCons count, every such pc is after Baset)`.
+    /// The IR walk stays inside eval.
+    #[cfg(feature = "jit")]
+    pub fn sink_only_materialize_at_aset_for_test(
+        source: &crate::emacs_core::bytecode::ByteCodeFunction,
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+    ) -> (u32, bool) {
+        crate::group1_startup_drivers::sink_only_materialize_at_aset_for_test(source, leaf)
+    }
+
+    /// FENCE: required-parameter count. The field stays pub(crate). Arity
+    /// uses [`CompiledLeaf::arity`].
+    #[cfg(feature = "jit")]
+    pub fn compiled_leaf_required_for_test(
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+    ) -> usize {
+        crate::group1_startup_drivers::compiled_leaf_required_for_test(leaf)
+    }
+
+    /// FENCE: register-ABI argument ceiling. `MAX_REG_ARGS` stays pub(crate).
+    #[cfg(feature = "jit")]
+    pub fn max_reg_args_for_test() -> usize {
+        crate::group1_startup_drivers::max_reg_args_for_test()
+    }
+
+    /// FENCE: lists48-osr profile plus the surrounding Opt stack. The profile
+    /// TLS stays pub(super).
+    #[cfg(feature = "jit")]
+    #[must_use = "the lists48-osr profile ends when the guard is dropped"]
+    pub fn enter_lists48_osr_profile_for_test() -> impl Drop {
+        crate::emacs_core::jit::compile::enter_lists48_osr_profile_for_test()
+    }
+
+    /// FENCE: redefining-callback map snapshot. `MapCallee` stays pub(crate).
+    pub fn map_resume_redefining_snapshot_for_test(
+        eval: &mut crate::emacs_core::eval::Context,
+        split: usize,
+    ) -> String {
+        crate::group1_startup_drivers::map_resume_redefining_snapshot_for_test(eval, split)
+    }
+
+    /// FENCE: debug-on-entry mapcar observations. Depth and the specpdl
+    /// stay pub(crate); the test compares the returned words.
+    #[cfg(feature = "jit")]
+    pub fn mapcar_debug_entry_obs_for_test(
+        ctx: &mut crate::emacs_core::eval::Context,
+    ) -> (
+        Option<i64>,
+        String,
+        usize,
+        usize,
+        usize,
+        usize,
+        bool,
+        bool,
+        String,
+    ) {
+        crate::group1_startup_drivers::mapcar_debug_entry_obs_for_test(ctx)
+    }
+
+    /// FENCE: mid-callback mapcar backtrace words. `HofResume` stays pub(crate).
+    #[cfg(feature = "jit")]
+    pub fn inline_hof_mapcar_backtrace_obs_for_test(
+        ctx: &mut crate::emacs_core::eval::Context,
+    ) -> (usize, usize, Option<i64>, usize, bool) {
+        crate::group1_startup_drivers::inline_hof_mapcar_backtrace_obs_for_test(ctx)
+    }
+
+    /// FENCE: switch-hoist mutation answer. The plan and the lower stay in eval.
+    #[cfg(feature = "jit")]
+    pub fn opt_switch_hoist_call_mutation_for_test(
+        ctx: &mut crate::emacs_core::eval::Context,
+    ) -> (bool, bool, String) {
+        crate::group1_startup_drivers::opt_switch_hoist_call_mutation_for_test(ctx)
+    }
+
+    /// FENCE: raw frameless entry of either ABI. `EntryShape` stays pub(crate).
+    ///
+    /// # Safety
+    /// `args_ptr` addresses `leaf`'s arity in tagged words, `vmctx` is the
+    /// dormant owner `Context` for the call, and `out` is a writable slot.
+    #[cfg(feature = "jit")]
+    pub unsafe fn entry_call_raw_consts_for_test(
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+        vmctx: *mut u8,
+        consts: *const neovm_value::value::Value,
+        args_ptr: *const i64,
+        out: &mut i64,
+    ) -> i64 {
+        unsafe { leaf.entry_call_raw_consts(vmctx, consts, args_ptr, out) }
+    }
+
+    /// FENCE: lists48-osr aset observations. The OSR entry stays pub(crate).
+    #[cfg(feature = "jit")]
+    pub fn lists48_osr_aset_advice_obs_for_test(
+        ctx: &mut crate::emacs_core::eval::Context,
+    ) -> (
+        usize,
+        bool,
+        &'static str,
+        bool,
+        bool,
+        bool,
+        &'static str,
+        bool,
+        bool,
+        Option<i64>,
+        usize,
+        String,
+        Option<i64>,
+    ) {
+        crate::group1_startup_drivers::lists48_osr_aset_advice_obs_for_test(ctx)
     }
 }
 

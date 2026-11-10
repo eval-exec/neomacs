@@ -637,44 +637,6 @@ fn inline_hof_runtime_metadata_rejects_malformed_state_and_active_handlers() {
 }
 
 #[test]
-fn inline_hof_runtime_mid_callback_backtrace_retains_original_argument() {
-    let mut ctx = crate::test_utils::runtime_startup_context();
-    let callback = Value::make_bytecode(function(
-        1,
-        vec![Op::Constant(0), Op::Constant(1), Op::Call(1), Op::Return],
-        vec![Value::symbol("backtrace-frame"), Value::make_int(1)],
-    ));
-    let sequence = Value::list(vec![Value::make_int(1)]);
-    let state = active(&mut ctx, HofKind::Mapcar, callback, sequence, 0);
-    sequence.set_car(Value::make_int(9));
-    // The local parameter also differs: neither it nor the mutated list car
-    // is the argument GNU's record_in_backtrace retained on callback entry.
-    let result = resume_mapping(
-        &mut ctx,
-        &state,
-        &frame(
-            callback,
-            2,
-            vec![
-                Value::make_int(8),
-                Value::symbol("backtrace-frame"),
-                Value::make_int(1),
-            ],
-        ),
-        0,
-    )
-    .unwrap();
-    let backtrace = result.cons_car();
-    assert_eq!(backtrace.cons_cdr().cons_car(), callback);
-    assert_eq!(
-        backtrace.cons_cdr().cons_cdr().cons_car().as_fixnum(),
-        Some(1)
-    );
-    assert_eq!(ctx.depth, 0);
-    assert!(ctx.specpdl.is_empty());
-}
-
-#[test]
 fn inline_hof_runtime_native_guard_resumes_lambda_and_parent_after_call() {
     let _knobs = Knobs::enter();
     let mut ctx = Context::new(crate::test_utils::unit_runtime());

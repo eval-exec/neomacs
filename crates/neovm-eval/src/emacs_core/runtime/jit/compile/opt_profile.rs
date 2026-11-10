@@ -109,7 +109,7 @@ pub(super) fn selected() -> Defaults {
         .defaults()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     /// Test-thread scalar compiler configuration only; never Lisp/mutator state.
     static TEST_PROFILE: std::cell::Cell<Option<Profile>> = const { std::cell::Cell::new(None) };
@@ -117,14 +117,14 @@ std::thread_local! {
 
 /// Effective preset defaults for test compilers, below existing individual test
 /// overrides and above process configuration. No process environment is mutated.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn test_defaults() -> Option<Defaults> {
     TEST_PROFILE.with(|value| value.get().map(Profile::defaults))
 }
 
 /// Test-owned scalar selection. Threading: restores the exact previous override
 /// on this compiler thread; it neither reads nor retains any Lisp state.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[must_use = "the profile override ends when the returned guard is dropped"]
 pub(super) fn scope_for_test(profile: Profile) -> impl Drop {
     /// Threading: scalar override owned and restored on this test's compiler thread.
@@ -142,6 +142,60 @@ pub(super) fn scope_for_test(profile: Profile) -> impl Drop {
     }
     Scope {
         previous: TEST_PROFILE.with(|value| value.replace(Some(profile))),
+        _thread: std::marker::PhantomData,
+    }
+}
+
+/// The lists48-osr startup stack from the Opt profit tests.
+///
+/// `Settings::enter` publishes Opt+ALL, then the test clears those individual
+/// overrides so this profile supplies them, while inline2, tier-2, deopt and
+/// the background mode stay on the surrounding stack. Drop restores that
+/// stack and clears the JIT cache, matching `CacheScope`.
+///
+/// Threading: scalar compiler TLS and this thread's compile cache only.
+#[cfg(any(test, feature = "test-support"))]
+#[must_use = "the lists48-osr profile ends when the guard is dropped"]
+pub(crate) fn enter_lists48_osr_profile_for_test() -> impl Drop {
+    /// Threading: restored on this compiler thread; holds no Lisp state.
+    struct Guard {
+        previous: Option<Profile>,
+        _thread: std::marker::PhantomData<*const ()>,
+    }
+    static_assertions::assert_not_impl_any!(Guard: Send, Sync);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            crate::emacs_core::jit::cache::clear();
+            TEST_PROFILE.with(|value| value.set(self.previous));
+            super::force_opt_for_test(None, None);
+            super::force_opt_profit_for_test(None);
+            super::force_opt_require_osr_for_test(None);
+            super::force_opt_early_for_test(None);
+            super::force_opt_max_ops_for_test(None);
+            super::force_inline2_for_test(None);
+            super::force_tier2_for_test(None);
+            super::force_deopt_for_test(false);
+            crate::emacs_core::jit::bg::force_mode_for_test(None);
+        }
+    }
+    super::force_opt_for_test(Some(super::OptMode::Opt), Some(super::OptAdmit::ALL));
+    super::force_opt_profit_for_test(Some(super::OptProfitMode::Loops));
+    super::force_opt_require_osr_for_test(Some(false));
+    super::force_opt_early_for_test(Some(super::OptEarlyMode::Off));
+    super::force_opt_max_ops_for_test(Some(0));
+    super::force_inline2_for_test(Some(super::Inline2Mode::Off));
+    super::force_tier2_for_test(Some(super::Tier2Knob::from_env(|_| None)));
+    super::force_deopt_for_test(false);
+    crate::emacs_core::jit::bg::force_mode_for_test(Some(crate::emacs_core::jit::bg::BgMode::Sync));
+    let previous = TEST_PROFILE.with(|value| value.replace(Some(Profile::Lists48Osr)));
+    super::force_opt_for_test(None, None);
+    super::force_opt_profit_for_test(None);
+    super::force_opt_require_osr_for_test(None);
+    super::force_opt_early_for_test(None);
+    super::force_opt_max_ops_for_test(None);
+    crate::emacs_core::jit::cache::clear();
+    Guard {
+        previous,
         _thread: std::marker::PhantomData,
     }
 }

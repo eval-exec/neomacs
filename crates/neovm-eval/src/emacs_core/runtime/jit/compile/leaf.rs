@@ -1361,9 +1361,11 @@ impl CompiledLeaf {
     /// through `out`, the status returned.
     ///
     /// SAFETY: as [`Self::entry_call_raw_memory`].
-    #[cfg(test)]
+    /// Crate-private under test-support so a core build can reach it through
+    /// the authority fence. `EntryShape` stays pub(crate).
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub unsafe fn entry_call_raw_consts(
+    pub(crate) unsafe fn entry_call_raw_consts(
         &self,
         vmctx: *mut u8,
         consts: *const Value,

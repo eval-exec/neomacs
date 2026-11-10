@@ -290,27 +290,6 @@ fn normalize(text: &str) -> String {
     output
 }
 
-const MUTATION_SETUP: &str = r#"(progn
- (require 'cl-lib)
- (defvar switch-hoist-ticks 0)
- (defvar switch-hoist-table nil)
- (defun switch-hoist-mutate ()
-   (setq switch-hoist-ticks (1+ switch-hoist-ticks))
-   (when (= switch-hoist-ticks 3)
-     (puthash 'a (gethash 'b switch-hoist-table) switch-hoist-table)))
- (setq switch-hoist-function
-   (byte-compile
-    (lambda (x n)
-      (let ((acc 0))
-        (while (> n 0)
-          (switch-hoist-mutate)
-          (setq acc (+ acc (pcase x ('a 1) ('b 10) ('c 20) ('d 30) ('e 40) ('f 50) (_ 0))))
-          (setq n (1- n)))
-        acc))))
- (setq switch-hoist-ticks 0
-       switch-hoist-table
-       (cl-find-if #'hash-table-p (append (aref switch-hoist-function 2) nil))))"#;
-
 fn gnu_fixture(name: &str, form: &str) -> String {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture = root.join(format!(
@@ -343,13 +322,6 @@ fn gnu_fixture(name: &str, form: &str) -> String {
         .to_owned()
 }
 
-fn gnu_mutation_expect() -> String {
-    gnu_fixture(
-        "call",
-        &format!("(progn {MUTATION_SETUP} (funcall switch-hoist-function 'a 300))"),
-    )
-}
-
 /// GNU executes the same control loop on each materialized continuation.
 /// Poll cadence itself is a native protocol assertion, not a GNU expectation.
 fn gnu_control_expect(index: usize) -> String {
@@ -372,34 +344,6 @@ fn gnu_control_expect(index: usize) -> String {
         .nth(index)
         .expect("GNU control answer")
         .to_owned()
-}
-
-#[test]
-fn opt_switch_hoist_call_mutation_matches_gnu() {
-    let _settings = SwitchSettings::enter();
-    let expected = gnu_mutation_expect();
-    let mut ctx = crate::test_utils::runtime_startup_context();
-    ctx.eval_str(&format!("(eval '{MUTATION_SETUP} t)"))
-        .unwrap();
-    let f = ctx.eval_str("switch-hoist-function").unwrap();
-    let _roots = Roots::new(&[f]);
-    let data = f.get_bytecode_data().unwrap();
-    let ir = plan(data);
-    let sites = switch_sites(&ir);
-    assert!(!sites.is_empty());
-    let schedule = SwitchEpochGuards::build(&ir, &sites).unwrap();
-    assert!(
-        sites.iter().all(|&s| !schedule.is_hoisted(s)),
-        "the call must block hoisting"
-    );
-    let leaf = lower(data, &ir);
-    let args = [Value::symbol("a"), Value::fixnum(300)];
-    let actual = match leaf.call(&mut ctx as *mut Context as *mut u8, &args) {
-        NativeRun::Ok(bits) => Value::from_bits(bits),
-        NativeRun::DeoptAt(resume) => resumed(&mut ctx, data, &resume).unwrap(),
-        other => panic!("native call mutation: {other:?}"),
-    };
-    assert_eq!(print_value(&actual), expected);
 }
 
 #[test]

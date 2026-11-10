@@ -592,3 +592,31 @@ mod emacs_core_lisp_reader_tests_minibuffer_unwind_order_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/native/subr/tests/effect_catalog_rehome_test.rs"]
 mod emacs_core_lisp_native_subr_tests_effect_catalog_rehome_test_rs;
+
+// Group-1 runtime-startup re-home. `runtime_startup_context` is minted here.
+// Private observations stay behind `test_support::authority`. The inline HOF
+// file is mounted twice so both nextest ids survive the move.
+#[cfg(test)]
+#[path = "emacs_core/runtime/bytecode/tests/primitive_opcode_cells_test.rs"]
+mod emacs_core_runtime_bytecode_tests_primitive_opcode_cells_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/map_resume_redefine_test.rs"]
+mod emacs_core_lisp_native_builtins_tests_map_resume_redefine_test_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/lisp/native/builtins/tests/mapcar_debug_entry_test.rs"]
+mod emacs_core_lisp_native_builtins_tests_mapcar_debug_entry_test_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/tests/inline_hof_runtime_backtrace_test.rs"]
+mod emacs_core_runtime_jit_tests_inline_hof_runtime_backtrace_test_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/tests/inline_hof_runtime_backtrace_test.rs"]
+mod emacs_core_runtime_jit_tests_inline_hof_runtime_backtrace_default_profile_test_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/compile/tests/opt_switch_hoist_call_mutation_test.rs"]
+mod emacs_core_runtime_jit_compile_tests_opt_switch_hoist_call_mutation_test_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/compile/opt_profit/tests/lists48_osr_aset_test.rs"]
+mod emacs_core_runtime_jit_compile_opt_profit_tests_lists48_osr_aset_test_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/compile/reg_abi/tests/reg_abi_startup_test.rs"]
+mod emacs_core_runtime_jit_compile_reg_abi_tests_reg_abi_startup_test_rs;

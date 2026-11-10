@@ -1459,7 +1459,7 @@ impl Tier2Knob {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static TIER2_TEST_OVERRIDE: std::cell::Cell<Option<Tier2Knob>> =
         const { std::cell::Cell::new(None) };
@@ -1467,7 +1467,7 @@ std::thread_local! {
 
 /// Force the tier-spine knobs on the current thread (tests only; `None`
 /// returns to the process setting).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_tier2_for_test(knob: Option<Tier2Knob>) {
     TIER2_TEST_OVERRIDE.with(|c| c.set(knob));
 }
@@ -1492,12 +1492,18 @@ pub(crate) fn jit_tier_upgrade_enabled() -> bool {
                 || aot.unwrap_or_else(jit_aot_retier_on);
         }
     }
+    // The profile guard forces tier-2 off for a moved test. The AOT cell
+    // stays cfg(test); this arm only exists when that cell is absent.
+    #[cfg(all(not(test), feature = "test-support"))]
+    if let Some(knob) = TIER2_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return knob.on || jit_aot_retier_on();
+    }
     TIER_UPGRADE_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The tier-spine knobs this thread's compiles and requests use.
 pub(crate) fn jit_tier2() -> Tier2Knob {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(knob) = TIER2_TEST_OVERRIDE.with(std::cell::Cell::get) {
         return knob;
     }
@@ -1786,7 +1792,7 @@ pub(crate) fn jit_opt_mode() -> OptMode {
     if let Some(mode) = OPT_TEST_OVERRIDE.with(|v| v.get()) {
         return mode;
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(defaults) = super::opt_profile::test_defaults() {
         return defaults.mode;
     }
@@ -1844,7 +1850,7 @@ pub(crate) fn jit_opt_admit() -> OptAdmit {
     if let Some(bits) = OPT_ADMIT_TEST_OVERRIDE.with(|v| v.get()) {
         return bits;
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(defaults) = super::opt_profile::test_defaults() {
         return defaults.admit;
     }
@@ -1955,7 +1961,7 @@ pub(crate) fn jit_opt_passes() -> OptPasses {
     if let Some(passes) = OPT_PASSES_TEST_OVERRIDE.with(|v| v.get()) {
         return passes;
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(defaults) = super::opt_profile::test_defaults() {
         return defaults.passes;
     }
@@ -2059,7 +2065,7 @@ pub(crate) fn jit_opt_fast() -> bool {
     if let Some(schedule) = OPT_FAST_TEST_OVERRIDE.with(std::cell::Cell::get) {
         return schedule.enabled();
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(defaults) = super::opt_profile::test_defaults() {
         return defaults.fast;
     }
@@ -2106,7 +2112,7 @@ pub(crate) fn jit_opt_profit() -> OptProfitMode {
     if let Some(mode) = OPT_PROFIT_TEST_OVERRIDE.with(std::cell::Cell::get) {
         return mode;
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(defaults) = super::opt_profile::test_defaults() {
         return defaults.profit;
     }
@@ -2139,7 +2145,7 @@ pub(crate) fn jit_opt_require_osr() -> bool {
     if let Some(value) = OPT_REQUIRE_OSR_TEST_OVERRIDE.with(std::cell::Cell::get) {
         return value;
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(defaults) = super::opt_profile::test_defaults() {
         return defaults.require_osr;
     }
@@ -2226,7 +2232,7 @@ pub(crate) fn jit_opt_early() -> OptEarlyMode {
     if let Some(value) = OPT_EARLY_TEST_OVERRIDE.with(std::cell::Cell::get) {
         return value;
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(defaults) = super::opt_profile::test_defaults() {
         return defaults.early;
     }
@@ -2247,7 +2253,7 @@ pub(crate) fn jit_opt_max_ops() -> usize {
     if let Some(value) = OPT_MAX_OPS_TEST_OVERRIDE.with(std::cell::Cell::get) {
         return value;
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(defaults) = super::opt_profile::test_defaults() {
         return defaults.max_ops;
     }

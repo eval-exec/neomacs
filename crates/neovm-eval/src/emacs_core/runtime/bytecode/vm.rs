@@ -2915,9 +2915,11 @@ impl<'a> Vm<'a> {
         }
     }
 
-    #[cfg(all(test, feature = "jit"))]
+    // Group-1 drivers compile with feature = "test-support" and cfg(test) off.
+    // Crate-private, so the wider cfg is not a public test-support surface.
+    #[cfg(all(any(test, feature = "test-support"), feature = "jit"))]
     #[doc(hidden)]
-    pub fn force_interpreter_only_for_test(&mut self) {
+    pub(crate) fn force_interpreter_only_for_test(&mut self) {
         self.bytecode_tier_policy = BytecodeTierPolicy::InterpreterOnly;
     }
 

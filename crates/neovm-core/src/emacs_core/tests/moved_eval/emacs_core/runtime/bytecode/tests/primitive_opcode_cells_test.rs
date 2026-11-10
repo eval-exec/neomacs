@@ -4,14 +4,17 @@
 //! Threading: evaluator state and Lisp roots belong to this test's mutator;
 //! scoped compiler overrides contain only scalar settings and restore on exit.
 
-use crate::emacs_core::bytecode::ByteCodeFunctionExt;
-use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op, Vm};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
 use neovm_value::value::{Value, list_to_vec};
 use std::path::PathBuf;
+
+fn value_from_native_bits(bits: usize) -> Value {
+    // SAFETY: `NativeRun::Ok` carries the tagged bits of a real Value.
+    unsafe { Value::from_bits(bits) }
+}
 
 #[derive(Clone, Copy, Debug)]
 enum Mutation {
@@ -201,7 +204,7 @@ fn gnu_expect(name: &str, program: &str, fixture: &str) -> String {
     let expected = String::from_utf8(output.stdout).expect("GNU output UTF-8");
     assert!(!expected.is_empty(), "GNU must produce an expectation");
     let fixture_path = root
-        .join("src/emacs_core/runtime/bytecode/tests/primitive_opcode_cells")
+        .join("src/emacs_core/tests/moved_eval/emacs_core/runtime/bytecode/tests/primitive_opcode_cells")
         .join(format!("{name}.expect"));
     let refreshed = format!("{}\n", expected.trim_end());
     // Refresh from GNU on every request, but preserve include_str! mtimes
@@ -221,18 +224,15 @@ enum Mode {
 
 #[cfg(feature = "jit")]
 fn compile_native(f: &ByteCodeFunction) -> crate::emacs_core::jit::compile::CompiledLeaf {
-    use crate::emacs_core::jit::compile::{self, CompileRequest, lowering::RegallocPolicy};
-    compile::compile_bytecode_function_requested(
-        f,
-        None,
-        CompileRequest {
-            regalloc: RegallocPolicy::Auto,
-            bypass_profit_gate: true,
-            origin: crate::emacs_core::jit::stats::CompileOrigin::Direct,
-            tier: crate::emacs_core::jit::tier2::CompileTier::Plain,
-        },
-    )
-    .expect("compile native behaviour even when the body is call-heavy")
+    use neovm_eval::test_support::authority::{
+        TestRegallocPolicy, compile_plain_bypassing_profit_for_test,
+    };
+    compile_plain_bypassing_profit_for_test(f, None, TestRegallocPolicy::Auto)
+        .expect("compile native behaviour even when the body is call-heavy")
+}
+
+fn ops_of(function: &ByteCodeFunction) -> Vec<Op> {
+    crate::emacs_core::bytecode::executable_ops_for_test(function)
 }
 
 fn assert_opcode_present(case: &Case, ops: &[Op]) {
@@ -274,13 +274,13 @@ fn run_cases_with_constant_pool(
         ctx.eval_str(&setup(case))
             .expect("compile before function-cell mutation");
         let value = ctx
-            .obarray
+            .obarray()
             .symbol_function("gnuop--f")
             .expect("compiled function");
         let source = value
             .get_bytecode_data()
             .expect("byte-compile returns bytecode");
-        assert_opcode_present(case, source.executable_ops());
+        assert_opcode_present(case, &ops_of(source));
         let mut adapted = None;
         let f = if constant_pool_builtin {
             // CallBuiltin is the older constants-index primitive adapter.
@@ -292,8 +292,7 @@ fn run_cases_with_constant_pool(
             f.max_stack = source.max_stack;
             let mut constants = source.constants.to_vec();
             let mut replaced = false;
-            f.ops = source
-                .executable_ops()
+            f.ops = ops_of(source)
                 .iter()
                 .map(|op| match *op {
                     Op::CallBuiltinSym(symbol, arity) => {
@@ -307,7 +306,7 @@ fn run_cases_with_constant_pool(
                 .collect();
             assert!(replaced, "constant-pool primitive adapter was installed");
             f.constants = constants.into();
-            f.seal_hand_assembled_ops_for_test();
+            neovm_eval::test_support::authority::seal_hand_assembled_ops_for_test(&mut f);
             adapted.insert(f)
         } else {
             source
@@ -331,7 +330,9 @@ fn run_cases_with_constant_pool(
                 .unwrap()
                 .call((&mut ctx as *mut Context).cast(), &args)
             {
-                crate::emacs_core::jit::compile::NativeRun::Ok(bits) => Value::from_bits(bits),
+                crate::emacs_core::jit::compile::NativeRun::Ok(bits) => {
+                    value_from_native_bits(bits)
+                }
                 other => panic!("{} native primitive: {other:?}", case.name),
             },
         };
@@ -490,19 +491,15 @@ fn overrides_only_affect_genuine_calls(mode: Mode) {
       (setq gnuop--override-args (list (vector 0) "ab")))"#,
     )
     .expect("compile before overrides");
-    let value = ctx.obarray.symbol_function("gnuop--override-f").unwrap();
+    let value = ctx.obarray().symbol_function("gnuop--override-f").unwrap();
     let f = value.get_bytecode_data().unwrap();
-    assert!(f.executable_ops().iter().any(|op| matches!(op, Op::Aset)));
+    assert!(ops_of(f).iter().any(|op| matches!(op, Op::Aset)));
     assert!(
-        f.executable_ops()
+        ops_of(f)
             .iter()
             .any(|op| matches!(op, Op::CallBuiltinSym(_, 1)))
     );
-    assert!(
-        f.executable_ops()
-            .iter()
-            .any(|op| matches!(op, Op::Call(2)))
-    );
+    assert!(ops_of(f).iter().any(|op| matches!(op, Op::Call(2))));
     #[cfg(feature = "jit")]
     let leaf = match mode {
         Mode::Vm => None,
@@ -523,7 +520,7 @@ fn overrides_only_affect_genuine_calls(mode: Mode) {
             .unwrap(),
         #[cfg(feature = "jit")]
         Mode::Jit => match leaf.unwrap().call((&mut ctx as *mut Context).cast(), &args) {
-            crate::emacs_core::jit::compile::NativeRun::Ok(bits) => Value::from_bits(bits),
+            crate::emacs_core::jit::compile::NativeRun::Ok(bits) => value_from_native_bits(bits),
             other => panic!("override native body: {other:?}"),
         },
     };
@@ -578,126 +575,39 @@ const SINK_OBSERVE: &str =
     "(progn (make-string 64 ?z) (list gnuop--sink-result gnuop--sink-calls))";
 
 #[cfg(feature = "jit")]
-fn assert_sink_only_cons_is_virtual_at_aset(
-    source: &ByteCodeFunction,
-    selected_stats: &crate::emacs_core::jit::opt::sink_recipes::SinkStats,
-) {
-    use crate::emacs_core::jit::compile;
-    use crate::emacs_core::jit::opt::{build, ir, passes::sink, sink_recipes, verify};
-    let cfg = compile::analyze_cfg(
-        source.executable_ops(),
-        &source.constants,
-        source.executable_gnu_byte_offset_map(),
-        source.params.fixed_arity().unwrap(),
-    )
-    .expect("exact sink repro CFG");
-    let constants = source
-        .constants
-        .iter()
-        .copied()
-        .map(ir::ValueBits::from_value)
-        .collect::<Vec<_>>();
-    let mut plan = build::build(build::BuildInput {
-        ops: source.executable_ops(),
-        constants: &constants,
-        cfg: &cfg,
-        params: ir::ParamShape {
-            required: source.params.fixed_arity().unwrap(),
-            ..Default::default()
-        },
-        dynamic_prefix: 0,
-        fused: None,
-        osr: None,
-    })
-    .expect("exact sink-only builder input");
-    let stats = sink::run(&mut plan, &[]).expect("numeric-free sink-only plan");
-    assert_eq!(
-        &stats, selected_stats,
-        "independent exact-source plan matches selected native census"
-    );
-    let (aset_index, aset) = plan
-        .insts
-        .iter()
-        .enumerate()
-        .find(|(_, inst)| {
-            matches!(
-                inst.op,
-                ir::Opcode::Opaque(Op::Aset) | ir::Opcode::Builtin(Op::Aset)
-            )
-        })
-        .expect("Baset stays in the selected plan");
-    let aset_id = ir::Inst(u32::try_from(aset_index).unwrap());
-    let owner = plan
-        .sink_recipes
-        .owners
-        .values()
-        .find(|owner| matches!(owner.origin, sink_recipes::RecipeOrigin::ConsSource { .. }))
-        .expect("fresh cons recipe")
-        .owner;
-    let native_proof = verify::verify_for_native(&plan).expect("independent complete native proof");
-    let recipes = native_proof
-        .sink()
-        .expect("verified sink recipe capability");
-    let before_aset = recipes
-        .version_at(sink_recipes::RecipePoint::Before(aset_id), owner)
-        .expect("exact cons recipe immediately before Baset");
-    assert!(
-        !recipes.guaranteed_boxed(before_aset),
-        "cons must still be virtual across Baset"
-    );
-    let mut materializations = 0;
-    for inst in &plan.insts {
-        if matches!(
-            inst.op,
-            ir::Opcode::Sink(sink_recipes::SinkOp::MaterializeCons)
-        ) {
-            materializations += 1;
-            assert!(
-                inst.pc > aset.pc,
-                "cons materialization must occur after Baset"
-            );
-        }
-    }
-    assert_eq!(
-        materializations, 1,
-        "sink-only materializes at Car's later CheckType"
-    );
-}
-
-#[cfg(feature = "jit")]
 fn sink_cannot_call_advised_aset(all_passes: bool) {
-    use crate::emacs_core::jit::compile::opt_census::{SelectedTier, snapshot_leaf};
-    use crate::emacs_core::jit::compile::{
-        self, NativeRun, OptAdmit, OptEarlyMode, OptMode, OptPasses, OptProfitMode,
+    use crate::emacs_core::jit::compile::NativeRun;
+    use neovm_eval::test_support::authority::{
+        TestOptAdmit, TestOptMode, TestRegallocPolicy, compile_feedback_upgrade_for_test,
+        compiled_leaf_opt_sink_counts_for_test, compiled_leaf_selected_tier_name_for_test,
+        force_opt_early_name_for_test, force_opt_passes_spec_for_test,
+        force_opt_profit_name_for_test, force_opt_require_osr_for_test, force_opt_token_for_test,
+        force_profit_gate_for_test, sink_only_materialize_at_aset_for_test,
     };
     /// Scalar overrides belong to this test's compiler thread, with no Lisp state.
     struct Settings;
     impl Drop for Settings {
         fn drop(&mut self) {
-            compile::force_opt_for_test(None, None);
-            compile::force_opt_passes_for_test(None);
-            compile::force_opt_profit_for_test(None);
-            compile::force_opt_require_osr_for_test(None);
-            compile::force_opt_early_for_test(None);
-            compile::force_profit_gate_for_test(true);
+            force_opt_token_for_test(None, None);
+            force_opt_passes_spec_for_test(None);
+            force_opt_profit_name_for_test(None);
+            force_opt_require_osr_for_test(None);
+            force_opt_early_name_for_test(None);
+            force_profit_gate_for_test(true);
         }
     }
     let _settings = Settings;
-    compile::force_opt_for_test(Some(OptMode::Opt), Some(OptAdmit::ALL));
-    compile::force_opt_passes_for_test(Some(if all_passes {
-        OptPasses::ALL
-    } else {
-        OptPasses {
-            sink: true,
-            ..OptPasses::default()
-        }
-    }));
+    force_opt_token_for_test(
+        Some(TestOptMode::Opt),
+        Some(TestOptAdmit::parts(true, true, true, true, true, true)),
+    );
+    force_opt_passes_spec_for_test(Some(if all_passes { "all" } else { "sink" }));
     // This fixture verifies native Sink semantics through an explicit feedback
     // upgrade, independently of the default list-loop admission policy.
-    compile::force_opt_profit_for_test(Some(OptProfitMode::Off));
-    compile::force_opt_require_osr_for_test(Some(false));
-    compile::force_opt_early_for_test(Some(OptEarlyMode::Off));
-    compile::force_profit_gate_for_test(false);
+    force_opt_profit_name_for_test(Some("off"));
+    force_opt_require_osr_for_test(Some(false));
+    force_opt_early_name_for_test(Some("off"));
+    force_profit_gate_for_test(false);
     let expected = gnu_expect(
         "sink",
         &format!(
@@ -710,43 +620,35 @@ fn sink_cannot_call_advised_aset(all_passes: bool) {
     let mut ctx = crate::test_utils::runtime_startup_context();
     ctx.set_lexical_binding(true);
     ctx.eval_str(SINK_SETUP).expect("warm exact sink repro");
-    let value = ctx.obarray.symbol_function("gnuop--sink-f").unwrap();
+    let value = ctx.obarray().symbol_function("gnuop--sink-f").unwrap();
     let source = value.get_bytecode_data().unwrap();
     // Opt plans are admitted by an actual tier-two Feedback upgrade request;
     // a Plain compile intentionally retains the baseline even in OptMode.
-    let leaf = compile::compile_bytecode_function_requested(
-        source,
-        Some(&ctx.obarray),
-        compile::CompileRequest {
-            regalloc: compile::lowering::RegallocPolicy::Full,
-            bypass_profit_gate: true,
-            origin: crate::emacs_core::jit::stats::CompileOrigin::Direct,
-            tier: crate::emacs_core::jit::tier2::CompileTier::Upgrade(
-                crate::emacs_core::jit::tier2::T2Upgrade::Feedback,
-            ),
-        },
-    )
-    .expect("sink repro tier-two feedback upgrade compiles");
+    let leaf =
+        compile_feedback_upgrade_for_test(source, Some(ctx.obarray()), TestRegallocPolicy::Full)
+            .expect("sink repro tier-two feedback upgrade compiles");
     assert_eq!(
-        leaf.selected_tier(),
-        SelectedTier::Opt,
+        compiled_leaf_selected_tier_name_for_test(&leaf),
+        "opt",
         "actual native optimizing tier"
     );
-    let sink = snapshot_leaf(&leaf).opt_sink.expect("sink pass selected");
-    assert!(
-        sink.cons_sources > 0,
-        "fresh cons must enter Sink: {sink:?}"
-    );
+    let sink = compiled_leaf_opt_sink_counts_for_test(&leaf).expect("sink pass selected");
+    assert!(sink.0 > 0, "fresh cons must enter Sink: {sink:?}");
     if all_passes {
         assert!(
-            sink.cons_reads_elided > 0,
+            sink.1 > 0,
             "all passes elide the virtual cons read: {sink:?}"
         );
     } else {
         // With only Sink, Car's original CheckType materializes the cons.
         // It does so after Baset: the vulnerable copied string was virtual
         // at the precise operation where old function-cell dispatch ran GC.
-        assert_sink_only_cons_is_virtual_at_aset(source, &sink);
+        let (materializations, after_aset) = sink_only_materialize_at_aset_for_test(source, &leaf);
+        assert!(after_aset, "cons materialization must occur after Baset");
+        assert_eq!(
+            materializations, 1,
+            "sink-only materializes at Car's later CheckType"
+        );
     }
     ctx.eval_str(SINK_ADVICE)
         .expect("collecting advice after warmup");
@@ -758,11 +660,11 @@ fn sink_cannot_call_advised_aset(all_passes: bool) {
     // Check before dereferencing the returned string: the old implementation
     // could already have collected the virtual cons's copied string.
     assert_eq!(
-        ctx.obarray.symbol_value_copied("gnuop--sink-calls"),
+        ctx.obarray().symbol_value_copied("gnuop--sink-calls"),
         Some(Value::make_int(0)),
         "Baset never invokes collecting advice"
     );
-    ctx.set_variable("gnuop--sink-result", Value::from_bits(bits));
+    ctx.set_variable("gnuop--sink-result", value_from_native_bits(bits));
     let result = ctx
         .eval_str(SINK_OBSERVE)
         .expect("allocation after native return");
@@ -814,11 +716,10 @@ fn primitive_insert_keeps_its_collecting_hooks(mode: Mode) {
     ctx.set_lexical_binding(true);
     ctx.eval_str(INSERT_SETUP)
         .expect("primitive insert with GC hooks");
-    let value = ctx.obarray.symbol_function("gnuop--insert-f").unwrap();
+    let value = ctx.obarray().symbol_function("gnuop--insert-f").unwrap();
     let source = value.get_bytecode_data().unwrap();
     assert!(
-        source
-            .executable_ops()
+        ops_of(source)
             .iter()
             .any(|op| matches!(op, Op::CallBuiltinSym(_, 1))),
         "insert must use the primitive opcode adapter"
@@ -832,7 +733,9 @@ fn primitive_insert_keeps_its_collecting_hooks(mode: Mode) {
         Mode::Jit => {
             let leaf = compile_native(source);
             match leaf.call((&mut ctx as *mut Context).cast(), &args) {
-                crate::emacs_core::jit::compile::NativeRun::Ok(bits) => Value::from_bits(bits),
+                crate::emacs_core::jit::compile::NativeRun::Ok(bits) => {
+                    value_from_native_bits(bits)
+                }
                 other => panic!("insert hook native body: {other:?}"),
             }
         }

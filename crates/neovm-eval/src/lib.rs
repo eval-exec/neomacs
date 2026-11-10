@@ -17,6 +17,10 @@ pub mod host_effect;
 /// carried by every per-host platform table.
 pub(crate) mod platform_surface;
 
+/// Group-1 startup re-home. The bodies stay next to the private items they
+/// call. `test_support::authority` is the only public name.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) mod group1_startup_drivers;
 /// Test support shared by this crate's own unit tests and, behind
 /// `test-support`, by core's test build (a dependency crate never has
 /// `cfg(test)` on). See TEST-SUPPORT-DESIGN.md rev 2.
