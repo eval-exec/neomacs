@@ -4,17 +4,24 @@
 //! (`facade_binding_admission_test.rs:38, :210, :238`) and reconstruction
 //! tests (`facade_bindings_test.rs:648, :775`) to the owner-slab model.
 
-use super::super::owner_bindings::{Channel, UndoTarget};
-use super::super::{NativeUnwindAction, SpecBinding};
-use super::{AdmissionError, ThreadingMode};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
+use crate::window::DisplayFrameManagerExt;
+use neovm_eval::test_support::authority::{
+    AdmissionRefusal, ObservedOwnerChannel, ObservedOwnerUndo, ObservedSpecBinding,
+    admit_threads_refusal_for_test, admit_threads_refusing_capacity_for_test,
+    owner_canonical_buffer_local_for_test, owner_canonical_default_for_test,
+    owner_records_for_test, park_owner_for_test, resume_owner_for_test,
+    spec_binding_kinds_for_test,
+};
 use neovm_value::intern::{SymId, intern};
 use neovm_value::value::Value;
 
 fn green() -> Context {
     crate::test_utils::init_test_tracing();
-    Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime())
+    let mut ev = crate::test_utils::new_context();
+    ev.set_green_threading_mode_at_construction_for_test();
+    ev
 }
 
 fn eval(ev: &mut Context, src: &str) -> String {
@@ -24,45 +31,55 @@ fn eval(ev: &mut Context, src: &str) -> String {
     }
 }
 
-fn canonical(ev: &mut Context, id: SymId, channel: Channel) -> String {
-    print_value(&ev.owner_canonical_value(id, channel))
+fn canonical(ev: &mut Context, id: SymId, channel: ObservedOwnerChannel) -> String {
+    let value = match channel {
+        ObservedOwnerChannel::Default => owner_canonical_default_for_test(ev, id),
+        ObservedOwnerChannel::BufferLocal(buffer) => {
+            owner_canonical_buffer_local_for_test(ev, id, buffer)
+        }
+    };
+    print_value(&value)
 }
 
 fn owner_entries(ev: &Context) -> usize {
-    ev.specpdl
-        .iter()
-        .filter(|entry| {
+    spec_binding_kinds_for_test(ev)
+        .into_iter()
+        .filter(|kind| *kind == ObservedSpecBinding::OwnerBinding)
+        .count()
+}
+
+fn legacy_lets(ev: &Context) -> usize {
+    spec_binding_kinds_for_test(ev)
+        .into_iter()
+        .filter(|kind| {
             matches!(
-                entry,
-                SpecBinding::NativeUnwind {
-                    action: NativeUnwindAction::OwnerBinding(_)
-                }
+                kind,
+                ObservedSpecBinding::Let
+                    | ObservedSpecBinding::LetLocal
+                    | ObservedSpecBinding::LetDefault
+                    | ObservedSpecBinding::KeyboardLet
             )
         })
         .count()
 }
 
-fn legacy_lets(ev: &Context) -> usize {
-    ev.specpdl
-        .iter()
-        .filter(|entry| entry.let_bound_symbol().is_some())
-        .count()
-}
-
 #[test]
 fn admission_needs_a_green_world_and_is_sticky() {
-    let mut sim = Context::new(crate::test_utils::unit_runtime());
-    assert!(matches!(sim.admit_threads(), Err(AdmissionError::NotGreen)));
-    assert!(!sim.threads_admitted());
+    let mut sim = crate::test_utils::new_context();
+    assert!(matches!(
+        admit_threads_refusal_for_test(&mut sim),
+        Err(AdmissionRefusal::NotGreen)
+    ));
+    assert!(!sim.tagged_heap().threads_admitted());
 
     let mut ev = green();
-    ev.admit_threads().expect("admission");
-    assert!(ev.threads_admitted());
+    admit_threads_refusal_for_test(&mut ev).expect("admission");
+    assert!(ev.tagged_heap().threads_admitted());
     assert!(matches!(
-        ev.admit_threads(),
-        Err(AdmissionError::AlreadyAdmitted)
+        admit_threads_refusal_for_test(&mut ev),
+        Err(AdmissionRefusal::AlreadyAdmitted)
     ));
-    assert!(ev.threads_admitted());
+    assert!(ev.tagged_heap().threads_admitted());
 }
 
 #[test]
@@ -71,33 +88,31 @@ fn admission_reconstructs_the_bottom_saved_value_and_nested_bindings() {
     eval(&mut ev, "(defvar tad-bottom 1)");
     let id = intern("tad-bottom");
     ev.try_specbind(id, Value::fixnum(2)).expect("bind");
-    let inner = ev.specpdl.len();
+    let inner = ev.specpdl_len_for_test();
     ev.try_specbind(id, Value::fixnum(3)).expect("bind");
-    ev.admit_threads().expect("admission");
+    admit_threads_refusal_for_test(&mut ev).expect("admission");
 
-    assert!(ev.obarray.thread_projection_of(id).is_some());
+    assert!(ev.obarray().thread_projection_of(id).is_some());
     assert_eq!(owner_entries(&ev), 2);
     assert_eq!(legacy_lets(&ev), 0);
     assert_eq!(eval(&mut ev, "tad-bottom"), "3");
-    assert_eq!(canonical(&mut ev, id, Channel::Default), "1");
-    let undo: Vec<_> = ev
-        .owner
-        .slab()
+    assert_eq!(canonical(&mut ev, id, ObservedOwnerChannel::Default), "1");
+    let undo: Vec<_> = owner_records_for_test(&ev, id)
         .expect("the owner slab")
-        .records_of(id)
-        .map(|record| record.undo)
+        .into_iter()
+        .map(|(_, undo)| undo)
         .collect();
     assert!(matches!(
         undo[..],
-        [UndoTarget::Inherited { suspended: None }, UndoTarget::Previous(outer)]
-            if outer.get() == Value::fixnum(2)
+        [ObservedOwnerUndo::InheritedNone, ObservedOwnerUndo::Previous(outer)]
+            if outer == Value::fixnum(2)
     ));
 
     ev.unbind_to(inner);
     assert_eq!(eval(&mut ev, "tad-bottom"), "2");
     ev.unbind_to(0);
     assert_eq!(eval(&mut ev, "tad-bottom"), "1");
-    assert_eq!(canonical(&mut ev, id, Channel::Default), "1");
+    assert_eq!(canonical(&mut ev, id, ObservedOwnerChannel::Default), "1");
 }
 
 #[test]
@@ -122,12 +137,21 @@ fn admission_publishes_the_first_saved_value_per_channel() {
     // A local exists in the current buffer: these are LetLocal bindings.
     ev.try_specbind(auto, Value::fixnum(31)).expect("bind");
     ev.try_specbind(auto, Value::fixnum(32)).expect("bind");
-    ev.admit_threads().expect("admission");
+    admit_threads_refusal_for_test(&mut ev).expect("admission");
 
     assert_eq!(owner_entries(&ev), 4);
-    assert_eq!(canonical(&mut ev, first, Channel::Default), "10");
-    assert_eq!(canonical(&mut ev, auto, Channel::BufferLocal(buffer)), "30");
-    assert_eq!(canonical(&mut ev, auto, Channel::Default), "20");
+    assert_eq!(
+        canonical(&mut ev, first, ObservedOwnerChannel::Default),
+        "10"
+    );
+    assert_eq!(
+        canonical(&mut ev, auto, ObservedOwnerChannel::BufferLocal(buffer)),
+        "30"
+    );
+    assert_eq!(
+        canonical(&mut ev, auto, ObservedOwnerChannel::Default),
+        "20"
+    );
     assert_eq!(eval(&mut ev, "(list tad-first tad-auto)"), "(12 32)");
     ev.unbind_to(0);
     assert_eq!(eval(&mut ev, "(list tad-first tad-auto)"), "(10 30)");
@@ -139,29 +163,29 @@ fn a_capacity_refusal_leaves_the_owner_as_it_was() {
     eval(&mut ev, "(defvar tad-capacity 1)");
     let id = intern("tad-capacity");
     ev.try_specbind(id, Value::fixnum(2)).expect("bind");
-    let before = ev.specpdl.len();
+    let before = ev.specpdl_len_for_test();
     let projections = ev.thread_projection_count_for_test();
-    let inhibit = ev.gc_inhibit_depth;
+    let inhibit = ev.gc_inhibit_depth_for_test();
 
     assert!(matches!(
-        ev.admit_threads_refusing_capacity_for_test(),
-        Err(AdmissionError::Capacity)
+        admit_threads_refusing_capacity_for_test(&mut ev),
+        Err(AdmissionRefusal::Capacity)
     ));
-    assert!(!ev.threads_admitted());
-    assert!(ev.owner.is_dormant(), "no slab was installed");
-    assert_eq!(ev.gc_inhibit_depth, inhibit);
-    assert_eq!(ev.specpdl.len(), before);
+    assert!(!ev.tagged_heap().threads_admitted());
+    assert!(ev.owner().is_dormant(), "no slab was installed");
+    assert_eq!(ev.gc_inhibit_depth_for_test(), inhibit);
+    assert_eq!(ev.specpdl_len_for_test(), before);
     assert_eq!(legacy_lets(&ev), 1);
     assert_eq!(owner_entries(&ev), 0);
-    assert!(ev.obarray.thread_projection_of(id).is_none());
+    assert!(ev.obarray().thread_projection_of(id).is_none());
     assert_eq!(ev.thread_projection_count_for_test(), projections);
     assert_eq!(eval(&mut ev, "tad-capacity"), "2");
     ev.unbind_to(0);
     assert_eq!(eval(&mut ev, "tad-capacity"), "1");
 
     // The refusal left nothing behind: admission still succeeds.
-    ev.admit_threads().expect("admission");
-    assert!(ev.obarray.thread_projection_of(id).is_some());
+    admit_threads_refusal_for_test(&mut ev).expect("admission");
+    assert!(ev.obarray().thread_projection_of(id).is_some());
 }
 
 #[test]
@@ -170,7 +194,7 @@ fn a_collection_right_after_admission_keeps_hidden_values() {
     eval(&mut ev, "(defvar tad-gc (cons 41 42))");
     let id = intern("tad-gc");
     ev.try_specbind(id, Value::NIL).expect("bind");
-    ev.admit_threads().expect("admission");
+    admit_threads_refusal_for_test(&mut ev).expect("admission");
     ev.gc_collect_exact();
     assert_eq!(
         eval(
@@ -188,23 +212,26 @@ fn a_collection_right_after_admission_keeps_hidden_values() {
 #[test]
 fn an_inhibition_overflow_refuses_and_keeps_the_depth() {
     let mut ev = green();
-    ev.gc_inhibit_depth = usize::MAX;
+    ev.set_gc_inhibit_depth_for_test(usize::MAX);
     assert!(matches!(
-        ev.admit_threads(),
-        Err(AdmissionError::InhibitDepthOverflow)
+        admit_threads_refusal_for_test(&mut ev),
+        Err(AdmissionRefusal::InhibitDepthOverflow)
     ));
-    assert_eq!(ev.gc_inhibit_depth, usize::MAX);
-    assert!(!ev.threads_admitted());
-    ev.gc_inhibit_depth = 0;
+    assert_eq!(ev.gc_inhibit_depth_for_test(), usize::MAX);
+    assert!(!ev.tagged_heap().threads_admitted());
+    ev.set_gc_inhibit_depth_for_test(0);
 }
 
 #[test]
 fn a_symbol_born_after_admission_starts_on_void_and_holds_values() {
     let mut ev = green();
-    ev.admit_threads().expect("admission");
+    admit_threads_refusal_for_test(&mut ev).expect("admission");
     let id = intern("tad-born-later");
-    ev.obarray.ensure_symbol_id(id);
-    let projection = ev.obarray.thread_projection_of(id).expect("born projected");
+    ev.obarray_mut().ensure_symbol_id(id);
+    let projection = ev
+        .obarray()
+        .thread_projection_of(id)
+        .expect("born projected");
     assert!(projection.is_void());
     assert_eq!(eval(&mut ev, "(boundp 'tad-born-later)"), "nil");
     assert_eq!(
@@ -212,7 +239,7 @@ fn a_symbol_born_after_admission_starts_on_void_and_holds_values() {
         "7"
     );
     assert!(
-        !ev.obarray
+        !ev.obarray()
             .thread_projection_of(id)
             .expect("still projected")
             .is_void(),
@@ -234,10 +261,10 @@ fn a_void_variable_stays_on_void_until_written() {
         &mut ev,
         "(progn (defvar tad-void 0) (makunbound 'tad-void))",
     );
-    ev.admit_threads().expect("admission");
+    admit_threads_refusal_for_test(&mut ev).expect("admission");
     let id = intern("tad-void");
     assert!(
-        ev.obarray
+        ev.obarray()
             .thread_projection_of(id)
             .expect("projected")
             .is_void()
@@ -269,17 +296,15 @@ fn a_killed_local_binding_is_captured() {
         .expect("a current buffer");
     ev.try_specbind(id, Value::fixnum(3)).expect("bind");
     eval(&mut ev, "(kill-local-variable 'tad-killed)");
-    ev.admit_threads().expect("admission");
+    admit_threads_refusal_for_test(&mut ev).expect("admission");
 
-    let record = *ev
-        .owner
-        .slab()
+    let (channel, undo) = owner_records_for_test(&ev, id)
         .expect("the owner slab")
-        .records_of(id)
+        .into_iter()
         .next()
         .expect("the binding became an owner record");
-    assert_eq!(record.channel, Channel::BufferLocal(buffer));
-    assert!(matches!(record.undo, UndoTarget::Captured(saved) if saved.get() == Value::fixnum(2)));
+    assert_eq!(channel, ObservedOwnerChannel::BufferLocal(buffer));
+    assert!(matches!(undo, ObservedOwnerUndo::Captured(saved) if saved == Value::fixnum(2)));
     assert_eq!(eval(&mut ev, "tad-killed"), "1");
     // Made again, the local takes back what the binding hid at its pop.
     eval(&mut ev, "(make-local-variable 'tad-killed)");
@@ -299,16 +324,16 @@ fn a_per_buffer_slot_binding_stays_in_place() {
     ev.try_specbind(id, Value::fixnum(44)).expect("bind");
     ev.try_specbind(intern("buffer-undo-list"), Value::T)
         .expect("bind");
-    ev.admit_threads().expect("admission");
+    admit_threads_refusal_for_test(&mut ev).expect("admission");
 
     assert_eq!(owner_entries(&ev), 0);
-    assert!(matches!(
-        ev.specpdl[..],
-        [SpecBinding::LetLocal { .. }, SpecBinding::LetLocal { .. }]
-    ));
-    assert!(ev.obarray.thread_projection_of(id).is_some());
+    assert_eq!(
+        spec_binding_kinds_for_test(&ev),
+        vec![ObservedSpecBinding::LetLocal, ObservedSpecBinding::LetLocal]
+    );
+    assert!(ev.obarray().thread_projection_of(id).is_some());
     assert!(
-        ev.obarray
+        ev.obarray()
             .thread_projection_of(intern("buffer-undo-list"))
             .is_none()
     );
@@ -325,11 +350,11 @@ fn admission_moves_the_function_epoch_and_republishes_mirrors() {
     let mut ev = green();
     let id = intern("inhibit-quit");
     ev.try_specbind(id, Value::T).expect("bind");
-    let epoch = ev.obarray.function_epoch();
-    ev.admit_threads().expect("admission");
-    assert_ne!(ev.obarray.function_epoch(), epoch);
+    let epoch = ev.obarray_mut().function_epoch();
+    admit_threads_refusal_for_test(&mut ev).expect("admission");
+    assert_ne!(ev.obarray_mut().function_epoch(), epoch);
     assert_eq!(ev.inhibit_quit, Value::T, "the owner's binding is its view");
-    assert_eq!(canonical(&mut ev, id, Channel::Default), "nil");
+    assert_eq!(canonical(&mut ev, id, ObservedOwnerChannel::Default), "nil");
     ev.unbind_to(0);
     assert_eq!(ev.inhibit_quit, Value::NIL);
 }
@@ -339,9 +364,9 @@ fn an_owner_binding_of_debug_on_next_call_takes_the_header() {
     let mut ev = green();
     let id = intern("debug-on-next-call");
     ev.try_specbind(id, Value::T).expect("bind");
-    ev.admit_threads().expect("admission");
+    admit_threads_refusal_for_test(&mut ev).expect("admission");
     assert!(ev.debug_on_next_call_is_armed());
-    assert_eq!(canonical(&mut ev, id, Channel::Default), "nil");
+    assert_eq!(canonical(&mut ev, id, ObservedOwnerChannel::Default), "nil");
     ev.unbind_to(0);
     assert!(!ev.debug_on_next_call_is_armed());
 }
@@ -371,11 +396,11 @@ fn symbols_born_after_admission_behave_as_before() {
     ];
     let setup = "(progn (defvar tfr-pre 1) (defvar tfr-pre-local 2)
                         (make-variable-buffer-local 'tfr-pre-local))";
-    let mut sim = Context::new(crate::test_utils::unit_runtime());
+    let mut sim = crate::test_utils::new_context();
     let mut ev = green();
     eval(&mut sim, setup);
     eval(&mut ev, setup);
-    ev.admit_threads().expect("admission");
+    admit_threads_refusal_for_test(&mut ev).expect("admission");
     for form in forms {
         let expected = eval(&mut sim, form);
         assert!(!expected.starts_with("ERR"), "{form} => {expected}");
@@ -400,25 +425,25 @@ fn admission_inventory_probe() {
     use neovm_value::symbol::AdmissionPlanCell;
 
     let mut ev = crate::test_utils::runtime_startup_context();
-    ev.set_threading_mode_at_construction(ThreadingMode::Green);
+    ev.set_green_threading_mode_at_construction_for_test();
     eval(&mut ev, "(defvar tad-probe 1)");
     let id = intern("tad-probe");
     ev.try_specbind(id, Value::fixnum(2)).expect("bind");
-    let undo_list = super::super::buffer_undo_list_symbol();
+    let undo_list = intern("buffer-undo-list");
     let (mut cells, mut owned, mut void, mut skipped) = (0usize, 0usize, 0usize, 0usize);
-    for (id, _) in ev.obarray.iter_symbols() {
+    for (id, _) in ev.obarray().iter_symbols() {
         cells += 1;
-        match (id == undo_list, ev.obarray.admission_plan(id)) {
+        match (id == undo_list, ev.obarray().admission_plan(id)) {
             (false, Some(AdmissionPlanCell::Owned)) => owned += 1,
             (false, Some(AdmissionPlanCell::Void)) => void += 1,
             _ => skipped += 1,
         }
     }
-    let entries = ev.specpdl.len();
+    let entries = ev.specpdl_len_for_test();
     ev.gc_collect_exact();
     let rss_before = rss_kib();
     let started = std::time::Instant::now();
-    ev.admit_threads().expect("admission");
+    admit_threads_refusal_for_test(&mut ev).expect("admission");
     let elapsed = started.elapsed();
     let rss_after = rss_kib();
     let issued = ev.thread_projection_count_for_test();
@@ -458,7 +483,7 @@ fn admission_inventory_probe() {
 fn a_default_binding_of_a_per_buffer_variable_reaches_direct_slot_readers() {
     let mut ev = green();
     eval(&mut ev, "(set-buffer (get-buffer-create \"tad-truncate\"))");
-    ev.admit_threads().expect("admission");
+    admit_threads_refusal_for_test(&mut ev).expect("admission");
     let id = intern("truncate-lines");
     let info =
         neovm_edit::buffer::buffer::lookup_buffer_slot_by_sym_id(id).expect("a per-buffer slot");
@@ -467,9 +492,10 @@ fn a_default_binding_of_a_per_buffer_variable_reaches_direct_slot_readers() {
         .buffers
         .current_buffer_id()
         .expect("a current buffer");
-    let count = ev.specpdl.len();
+    let count = ev.specpdl_len_for_test();
     ev.try_specbind(id, Value::T).expect("bind");
-    let slot = |ev: &Context| ev.edit.buffers.get(buffer).expect("live").slots[info.offset.index()];
+    let slot =
+        |ev: &Context| ev.edit.buffers.get(buffer).expect("live").slots()[info.offset.index()];
     assert_eq!(eval(&mut ev, "truncate-lines"), "t");
     assert_eq!(slot(&ev), Value::T, "a direct slot reader sees the binding");
     ev.unbind_to(count);
@@ -522,7 +548,7 @@ fn defvaralias_of_a_variable_another_owner_binds_follows_the_gnu_oracle() {
 fn truncate_slot(ev: &Context, buffer: neovm_edit::buffer::BufferId) -> Value {
     let info = neovm_edit::buffer::buffer::lookup_buffer_slot_by_sym_id(intern("truncate-lines"))
         .expect("a per-buffer slot");
-    ev.edit.buffers.get(buffer).expect("live").slots[info.offset.index()]
+    ev.edit.buffers.get(buffer).expect("live").slots()[info.offset.index()]
 }
 
 #[test]
@@ -532,7 +558,7 @@ fn a_parked_default_binding_lets_another_owner_set_the_default() {
         &mut ev,
         "(set-buffer (get-buffer-create \"tad-park-default\"))",
     );
-    ev.admit_threads().expect("admission");
+    admit_threads_refusal_for_test(&mut ev).expect("admission");
     let buffer = ev
         .edit
         .buffers
@@ -540,13 +566,16 @@ fn a_parked_default_binding_lets_another_owner_set_the_default() {
         .expect("a current buffer");
     ev.try_specbind(intern("truncate-lines"), Value::T)
         .expect("bind");
-    assert!(matches!(ev.specpdl[..], [SpecBinding::LetDefault { .. }]));
+    assert_eq!(
+        spec_binding_kinds_for_test(&ev),
+        vec![ObservedSpecBinding::LetDefault]
+    );
     assert_eq!(truncate_slot(&ev, buffer), Value::T);
-    let parked = ev.park_owner();
+    let parked = park_owner_for_test(&mut ev);
     // The other owner sees the outer default and sets it.
     assert_eq!(truncate_slot(&ev, buffer), Value::NIL);
     eval(&mut ev, "(set-default 'truncate-lines 'other)");
-    ev.resume_owner(parked);
+    resume_owner_for_test(&mut ev, parked);
     assert_eq!(truncate_slot(&ev, buffer), Value::T, "the binding is back");
     assert_eq!(eval(&mut ev, "truncate-lines"), "t");
     ev.unbind_to(0);
@@ -562,7 +591,7 @@ fn a_buffer_made_inside_a_default_binding_starts_with_it() {
         &mut ev,
         "(set-buffer (get-buffer-create \"tad-made-inside\"))",
     );
-    ev.admit_threads().expect("admission");
+    admit_threads_refusal_for_test(&mut ev).expect("admission");
     ev.try_specbind(intern("truncate-lines"), Value::T)
         .expect("bind");
     assert_eq!(
@@ -590,12 +619,12 @@ fn killing_a_buffer_inside_a_default_binding_keeps_the_restore() {
         "(progn (get-buffer-create \"tad-kill-other\")
                 (set-buffer (get-buffer-create \"tad-kill-home\")))",
     );
-    ev.admit_threads().expect("admission");
+    admit_threads_refusal_for_test(&mut ev).expect("admission");
     ev.try_specbind(intern("truncate-lines"), Value::T)
         .expect("bind");
     eval(&mut ev, "(kill-buffer \"tad-kill-other\")");
-    let parked = ev.park_owner();
-    ev.resume_owner(parked);
+    let parked = park_owner_for_test(&mut ev);
+    resume_owner_for_test(&mut ev, parked);
     ev.unbind_to(0);
     assert_eq!(eval(&mut ev, "(default-value 'truncate-lines)"), "nil");
     assert_eq!(eval(&mut ev, "truncate-lines"), "nil");
@@ -610,8 +639,11 @@ fn admission_leaves_a_per_buffer_default_binding_legacy() {
     );
     ev.try_specbind(intern("truncate-lines"), Value::T)
         .expect("bind");
-    ev.admit_threads().expect("admission");
-    assert!(matches!(ev.specpdl[..], [SpecBinding::LetDefault { .. }]));
+    admit_threads_refusal_for_test(&mut ev).expect("admission");
+    assert_eq!(
+        spec_binding_kinds_for_test(&ev),
+        vec![ObservedSpecBinding::LetDefault]
+    );
     let buffer = ev
         .edit
         .buffers
@@ -628,12 +660,12 @@ fn selected_keyboard_binding_stays_owned_across_admission_and_thread_exchange() 
     let buffer = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(buffer);
     let tty = ev
-        .frames
+        .frame_manager_mut()
         .create_frame_on_terminal("terminal", 1, 80, 25, buffer);
     let gui = ev
-        .frames
+        .frame_manager_mut()
         .create_frame_on_terminal("graphical", 0, 800, 600, buffer);
-    ev.frames
+    ev.frame_manager_mut()
         .get_mut(gui)
         .unwrap()
         .set_window_system(Some(Value::symbol("neo")));
@@ -647,7 +679,7 @@ fn selected_keyboard_binding_stays_owned_across_admission_and_thread_exchange() 
         "neo"
     );
     let symbol = intern("window-system");
-    let depth = ev.specpdl.len();
+    let depth = ev.specpdl_len_for_test();
     ev.try_specbind(symbol, Value::string("bound graphical keyboard"))
         .unwrap();
     assert_eq!(
@@ -658,9 +690,9 @@ fn selected_keyboard_binding_stays_owned_across_admission_and_thread_exchange() 
         "nil"
     );
 
-    ev.admit_threads().unwrap();
+    admit_threads_refusal_for_test(&mut ev).unwrap();
     assert!(
-        ev.obarray.thread_projection_of(symbol).is_none(),
+        ev.obarray().thread_projection_of(symbol).is_none(),
         "a default owner projection must not hide keyboard-local storage"
     );
     let suspended = ev.suspend_dynamic_bindings_for_thread_switch().unwrap();

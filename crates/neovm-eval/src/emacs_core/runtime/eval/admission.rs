@@ -112,7 +112,7 @@ pub(crate) enum AdmissionError {
 enum Reservation {
     Real,
     /// Reserve everything, then refuse as if the last reservation had.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     RefuseAfterReserving,
 }
 
@@ -256,7 +256,7 @@ impl Context {
     }
 
     /// [`Self::admit_threads`] refusing after it reserved everything.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn admit_threads_refusing_capacity_for_test(
         &mut self,
     ) -> Result<(), AdmissionError> {
@@ -494,7 +494,7 @@ impl Context {
         .map_err(|_| AdmissionError::Capacity)?;
         match reservation {
             Reservation::Real => Ok(fresh),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             Reservation::RefuseAfterReserving => Err(AdmissionError::Capacity),
         }
     }
@@ -679,10 +679,6 @@ fn reconstruct_owner(
         }
     }
 }
-
-#[cfg(test)]
-#[path = "tests/admission_test.rs"]
-mod tests;
 
 #[cfg(test)]
 #[path = "tests/admission_scenarios_test.rs"]

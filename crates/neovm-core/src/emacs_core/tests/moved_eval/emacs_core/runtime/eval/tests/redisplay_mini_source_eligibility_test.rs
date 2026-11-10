@@ -1,7 +1,15 @@
 //! GNU's cleared-echo branch cannot displace a selected active mini source.
 //! These fixtures retain the real Context-owned echo history and reader owner;
 //! only the frontend producer is replaced with a typed request observer.
-use super::*;
+use crate::emacs_core::eval::redisplay_hooks::{
+    RedisplayMiniGeometryRequest, RedisplayMiniGeometrySource,
+};
+use crate::emacs_core::eval::{Context, RedisplayHookPolicyGuard};
+use crate::window::DisplayFrameManagerExt;
+use neovm_edit::buffer::BufferId;
+use neovm_edit::emacs_core::display_metrics::WindowId;
+use neovm_value::display_vocab::FrameId;
+use neovm_value::value::Value;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -12,11 +20,13 @@ fn context_with_remembered_echo() -> (
     BufferId,
     Rc<RefCell<Vec<RedisplayMiniGeometryRequest>>>,
 ) {
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     let buffer = eval.edit.buffers.current_buffer_id().expect("root buffer");
-    let frame = eval.frames.create_frame("mini-source", 80, 25, buffer);
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("mini-source", 80, 25, buffer);
     let window = eval
-        .frames
+        .frame_manager()
         .get(frame)
         .expect("frame")
         .minibuffer_window
@@ -34,13 +44,19 @@ fn context_with_remembered_echo() -> (
     eval.redisplay_with_force_flow(true)
         .expect("remember echo preparation");
     let echo_buffer = eval.echo_area_display_buffer().expect("echo source");
-    assert_eq!(eval.gnu_redisplay_hooks.echo_geometry_window, Some(window));
+    assert_eq!(
+        neovm_eval::test_support::authority::echo_geometry_window_for_test(&eval),
+        Some(window)
+    );
     let request = requests.borrow_mut().pop().expect("first echo preparation");
     assert_eq!(request.source, RedisplayMiniGeometrySource::EchoArea);
     assert_eq!(request.buffer, echo_buffer);
     eval.set_current_message(None);
     assert!(!eval.has_current_message());
-    assert_eq!(eval.gnu_redisplay_hooks.echo_geometry_window, Some(window));
+    assert_eq!(
+        neovm_eval::test_support::authority::echo_geometry_window_for_test(&eval),
+        Some(window)
+    );
     (eval, frame, window, echo_buffer, requests)
 }
 
@@ -82,9 +98,12 @@ fn remembered_cleared_echo_does_not_displace_selected_active_mini_preparation() 
     );
     assert!(!observed[0].exact);
     assert_eq!(eval.edit.buffers.current_buffer_id(), Some(active));
-    assert_eq!(eval.gnu_redisplay_hooks.echo_geometry_window, None);
+    assert_eq!(
+        neovm_eval::test_support::authority::echo_geometry_window_for_test(&eval),
+        None
+    );
     assert!(eval.redisplay_prepare_fn.is_some());
-    assert!(!eval.gnu_redisplay_hooks.active.is_active());
+    assert!(!eval.gnu_redisplay_hooks_active());
 }
 
 #[test]
@@ -103,5 +122,8 @@ fn remembered_cleared_echo_still_prepares_inactive_nonselected_mini() {
         (observed[0].frame, observed[0].window, observed[0].buffer),
         (frame, window, echo_buffer)
     );
-    assert_eq!(eval.gnu_redisplay_hooks.echo_geometry_window, None);
+    assert_eq!(
+        neovm_eval::test_support::authority::echo_geometry_window_for_test(&eval),
+        None
+    );
 }

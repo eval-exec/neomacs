@@ -7456,7 +7456,9 @@ pub use green::switch::MainNativeHandoff;
 pub use green::{SelectTurn, green_make_thread, green_world};
 mod keyboard_forwarding;
 mod owner_bindings;
+pub(crate) use owner_bindings::{Channel, UndoTarget};
 mod owner_mirrors;
+pub(crate) use owner_mirrors::ParkedOwner;
 mod variable_access;
 #[doc(hidden)]
 pub use command_error::builtin_command_error_default_function;

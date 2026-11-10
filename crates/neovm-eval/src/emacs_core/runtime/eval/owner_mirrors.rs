@@ -39,6 +39,7 @@ use neovm_value::intern::intern;
 /// returning continuation.
 #[must_use = "a parked owner runs again only through `Context::resume_owner`"]
 #[derive(Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct ParkedOwner {
     /// The obarray generation of the World the owner belongs to.
     generation: u64,

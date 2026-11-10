@@ -504,6 +504,24 @@ mod emacs_core_runtime_eval_tests_specpdl_chrome_binding_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/tests/redisplay_mode_line_flow_test.rs"]
 mod emacs_core_runtime_eval_tests_redisplay_mode_line_flow_test_rs;
+// F4 redisplay ownership. Offset equality is a production const assert.
+// Runtime assertions use the existing copied getters. Echo geometry is an
+// authority copy because that field has no getter. Frame creation is
+// display's DisplayFrameManagerExt.
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/redisplay_hooks/tests/echo_message_test.rs"]
+mod emacs_core_runtime_eval_redisplay_hooks_tests_echo_message_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/redisplay_mini_source_eligibility_test.rs"]
+mod emacs_core_runtime_eval_tests_redisplay_mini_source_eligibility_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/redisplay_transaction_owner_test.rs"]
+mod emacs_core_runtime_eval_tests_redisplay_transaction_owner_test_rs;
+// Admission names no raw specpdl entry. Binding kinds, owner records, and
+// admission refusals are plain copies. ThreadingMode stays crate-private.
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/admission_test.rs"]
+mod emacs_core_runtime_eval_tests_admission_test_rs;
 // TTY row receipts need display's terminal, face, and frame traits.
 // replace_face_definitions_for_test, record_definitions_only_face_change_for_test,
 // and build_font_object_for_test are the new display authority routes for the

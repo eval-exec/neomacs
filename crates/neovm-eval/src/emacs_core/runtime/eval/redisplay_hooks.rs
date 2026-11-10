@@ -132,6 +132,104 @@ pub struct RedisplayHookOwnership {
     accepted_serial: u64,
 }
 
+/// Historical layout whose `active` word was a `bool`. `RedisplayActiveOwner`
+/// keeps that word's size and alignment, and this record keeps every later
+/// field at the same offset. The check is a production invariant: the test
+/// that used to own it now only asserts runtime behaviour.
+struct PreviousBoolHookOwnership {
+    active: bool,
+    windows: PendingScope,
+    mode_lines: PendingScope,
+    redisplay_windows: HashSet<WindowId>,
+    mode_line_windows: HashSet<WindowId>,
+    redisplay_frames: HashSet<FrameId>,
+    physical_redraw_frames: HashSet<FrameId>,
+    redisplay_text: HashSet<BufferId>,
+    last_points: HashMap<WindowId, LispCharPos1>,
+    frame_window_change: HashSet<FrameId>,
+    dimensions: HashMap<WindowId, HookWindowDimensions>,
+    old_selected_frame: Option<FrameId>,
+    old_selected_window: Option<WindowId>,
+    layout_flow: Option<Flow>,
+    echo_geometry_window: Option<WindowId>,
+    accepted_serial: u64,
+}
+
+const _: () = {
+    assert!(
+        std::mem::size_of::<RedisplayHookOwnership>()
+            == std::mem::size_of::<PreviousBoolHookOwnership>()
+    );
+    assert!(
+        std::mem::align_of::<RedisplayHookOwnership>()
+            == std::mem::align_of::<PreviousBoolHookOwnership>()
+    );
+    assert!(
+        std::mem::offset_of!(RedisplayHookOwnership, active)
+            == std::mem::offset_of!(PreviousBoolHookOwnership, active)
+    );
+    assert!(
+        std::mem::offset_of!(RedisplayHookOwnership, windows)
+            == std::mem::offset_of!(PreviousBoolHookOwnership, windows)
+    );
+    assert!(
+        std::mem::offset_of!(RedisplayHookOwnership, mode_lines)
+            == std::mem::offset_of!(PreviousBoolHookOwnership, mode_lines)
+    );
+    assert!(
+        std::mem::offset_of!(RedisplayHookOwnership, redisplay_windows)
+            == std::mem::offset_of!(PreviousBoolHookOwnership, redisplay_windows)
+    );
+    assert!(
+        std::mem::offset_of!(RedisplayHookOwnership, mode_line_windows)
+            == std::mem::offset_of!(PreviousBoolHookOwnership, mode_line_windows)
+    );
+    assert!(
+        std::mem::offset_of!(RedisplayHookOwnership, redisplay_frames)
+            == std::mem::offset_of!(PreviousBoolHookOwnership, redisplay_frames)
+    );
+    assert!(
+        std::mem::offset_of!(RedisplayHookOwnership, physical_redraw_frames)
+            == std::mem::offset_of!(PreviousBoolHookOwnership, physical_redraw_frames)
+    );
+    assert!(
+        std::mem::offset_of!(RedisplayHookOwnership, redisplay_text)
+            == std::mem::offset_of!(PreviousBoolHookOwnership, redisplay_text)
+    );
+    assert!(
+        std::mem::offset_of!(RedisplayHookOwnership, last_points)
+            == std::mem::offset_of!(PreviousBoolHookOwnership, last_points)
+    );
+    assert!(
+        std::mem::offset_of!(RedisplayHookOwnership, frame_window_change)
+            == std::mem::offset_of!(PreviousBoolHookOwnership, frame_window_change)
+    );
+    assert!(
+        std::mem::offset_of!(RedisplayHookOwnership, dimensions)
+            == std::mem::offset_of!(PreviousBoolHookOwnership, dimensions)
+    );
+    assert!(
+        std::mem::offset_of!(RedisplayHookOwnership, old_selected_frame)
+            == std::mem::offset_of!(PreviousBoolHookOwnership, old_selected_frame)
+    );
+    assert!(
+        std::mem::offset_of!(RedisplayHookOwnership, old_selected_window)
+            == std::mem::offset_of!(PreviousBoolHookOwnership, old_selected_window)
+    );
+    assert!(
+        std::mem::offset_of!(RedisplayHookOwnership, layout_flow)
+            == std::mem::offset_of!(PreviousBoolHookOwnership, layout_flow)
+    );
+    assert!(
+        std::mem::offset_of!(RedisplayHookOwnership, echo_geometry_window)
+            == std::mem::offset_of!(PreviousBoolHookOwnership, echo_geometry_window)
+    );
+    assert!(
+        std::mem::offset_of!(RedisplayHookOwnership, accepted_serial)
+            == std::mem::offset_of!(PreviousBoolHookOwnership, accepted_serial)
+    );
+};
+
 impl RedisplayHookOwnership {
     #[doc(hidden)]
     pub fn initial() -> Self {
@@ -198,6 +296,12 @@ impl Context {
     #[doc(hidden)]
     pub fn gnu_redisplay_hooks_accepted_serial(&self) -> u64 {
         self.gnu_redisplay_hooks.accepted_serial
+    }
+
+    /// Plain copy of the echo-geometry window. The ownership field stays in this module.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn echo_geometry_window_for_test(&self) -> Option<WindowId> {
+        self.gnu_redisplay_hooks.echo_geometry_window
     }
 
     /// Build a rooted failure for the full minibuffer display-motion producer.
@@ -1366,14 +1470,6 @@ impl Drop for CommittedScrollGuard<'_> {
         self.eval.gnu_redisplay_hooks.active = self.previous;
     }
 }
-
-#[cfg(test)]
-#[path = "tests/redisplay_mini_source_eligibility_test.rs"]
-mod mini_source_eligibility_tests;
-
-#[cfg(test)]
-#[path = "tests/redisplay_transaction_owner_test.rs"]
-mod transaction_owner_tests;
 
 #[doc(hidden)]
 pub fn restore_gnu_configuration_hook_default(obarray: &mut Obarray) {

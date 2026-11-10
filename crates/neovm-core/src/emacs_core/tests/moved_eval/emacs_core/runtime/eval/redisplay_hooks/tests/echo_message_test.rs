@@ -2,18 +2,26 @@
 //! geometry planning/commit, and display acceptance. Only glyph measurement is
 //! supplied by the typed frontend seam; the real renderer is covered by the
 //! existing live GNU echo-grow/clear oracle. State is exclusive to one Context.
-use super::super::*;
+use crate::emacs_core::eval::data::window_state::Window;
+use crate::emacs_core::eval::redisplay_hooks::RedisplayMiniGeometrySource;
+use crate::emacs_core::eval::{Context, RedisplayHookPolicyGuard};
+use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
+use neovm_edit::emacs_core::display_metrics::WindowId;
+use neovm_value::display_vocab::FrameId;
+use neovm_value::value::Value;
 use std::cell::Cell;
 use std::rc::Rc;
 
 fn fixture() -> (Context, FrameId, WindowId, Rc<Cell<f32>>, Rc<Cell<usize>>) {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("noninteractive", Value::NIL);
     let buffer = eval.edit.buffers.current_buffer_id().expect("root buffer");
-    let frame = eval.frames.create_frame("message-mini", 80, 25, buffer);
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("message-mini", 80, 25, buffer);
     let mini = {
-        let state = eval.frames.get_mut(frame).expect("frame");
+        let state = eval.frame_manager_mut().get_mut(frame).expect("frame");
         state.char_width = 1.0;
         state.char_height = 1.0;
         state.shrink_mini_window();
@@ -33,7 +41,7 @@ fn fixture() -> (Context, FrameId, WindowId, Rc<Cell<f32>>, Rc<Cell<usize>>) {
         "inhibit-message",
         "pre-redisplay-function",
     ] {
-        eval.obarray.set_symbol_value(name, Value::NIL);
+        eval.obarray_mut().set_symbol_value(name, Value::NIL);
     }
     let desired = Rc::new(Cell::new(1.0));
     let measured = desired.clone();
@@ -41,7 +49,10 @@ fn fixture() -> (Context, FrameId, WindowId, Rc<Cell<f32>>, Rc<Cell<usize>>) {
         assert_eq!(request.source, RedisplayMiniGeometrySource::EchoArea);
         assert_eq!(eval.edit.buffers.current_buffer_id(), Some(request.buffer));
         let resized = {
-            let state = eval.frames.get_mut(request.frame).expect("live frame");
+            let state = eval
+                .frame_manager_mut()
+                .get_mut(request.frame)
+                .expect("live frame");
             if let Some(plan) = state.plan_mini_window_resize(measured.get(), 3.0) {
                 state.apply_mini_window_resize(plan);
                 true
@@ -76,14 +87,18 @@ fn fixture() -> (Context, FrameId, WindowId, Rc<Cell<f32>>, Rc<Cell<usize>>) {
 
 fn pre_targets(eval: &Context) -> Vec<Value> {
     let pres = eval
-        .obarray
+        .obarray()
         .symbol_value_copied("d5-message-pres")
         .expect("pre log");
     neovm_value::value::list_to_vec(&pres).expect("pre observations")
 }
 
 fn assert_frame_targets(eval: &Context, frame: FrameId, mini: WindowId, targets: Value) {
-    let main = eval.frames.get(frame).expect("frame").selected_window;
+    let main = eval
+        .frame_manager()
+        .get(frame)
+        .expect("frame")
+        .selected_window;
     let windows = neovm_value::value::list_to_vec(&targets).expect("frame targets");
     assert_eq!(
         windows,
@@ -104,13 +119,13 @@ fn gnu_message_growth_prepares_before_pre_callback_and_rearms_next_pass() {
     let pre = pre_targets(&eval);
     assert_eq!(pre.len(), 1);
     assert_frame_targets(&eval, frame, mini, pre[0]);
-    assert!(eval.gnu_redisplay_hooks.redisplay_frames.contains(&frame));
+    assert!(eval.frame_redisplay_pending(frame));
     eval.redisplay_with_force_flow(true)
         .expect("explicit next pass");
     let pre = pre_targets(&eval);
     assert_eq!(pre.len(), 2);
     assert_frame_targets(&eval, frame, mini, pre[0]);
-    assert!(!eval.gnu_redisplay_hooks.redisplay_frames.contains(&frame));
+    assert!(!eval.frame_redisplay_pending(frame));
 }
 
 #[test]
@@ -122,13 +137,14 @@ fn gnu_message_clear_prepares_shrink_before_pre_and_rearms_next_pass() {
         .expect("grow");
     eval.redisplay_with_force_flow(true)
         .expect("accept armed next pass");
-    eval.obarray.set_symbol_value("d5-message-pres", Value::NIL);
+    eval.obarray_mut()
+        .set_symbol_value("d5-message-pres", Value::NIL);
     paints.set(0);
     desired.set(1.0);
     assert_eq!(eval.eval_str("(message nil)").expect("clear"), Value::NIL);
     assert_eq!(paints.get(), 1);
     assert_eq!(
-        eval.frames
+        eval.frame_manager()
             .get(frame)
             .expect("frame")
             .find_window(mini)
@@ -140,7 +156,7 @@ fn gnu_message_clear_prepares_shrink_before_pre_and_rearms_next_pass() {
     let pre = pre_targets(&eval);
     assert_eq!(pre.len(), 1);
     assert_frame_targets(&eval, frame, mini, pre[0]);
-    assert!(eval.gnu_redisplay_hooks.redisplay_frames.contains(&frame));
+    assert!(eval.frame_redisplay_pending(frame));
     eval.redisplay_with_force_flow(true)
         .expect("next explicit pass");
     assert_eq!(pre_targets(&eval).len(), 2);
@@ -169,14 +185,14 @@ fn gnu_message_sizing_throw_restores_source_callback_and_propagates_flow() {
     let (mut eval, frame, mini, _, paints) = fixture();
     let caller = eval.edit.buffers.current_buffer_id();
     let source = eval
-        .frames
+        .frame_manager()
         .get(frame)
         .expect("frame")
         .find_window(mini)
         .and_then(Window::buffer_id);
-    let serial = eval.gnu_redisplay_hooks.accepted_serial;
+    let serial = eval.gnu_redisplay_hooks_accepted_serial();
     eval.redisplay_prepare_fn = Some(Box::new(|_, _| {
-        Err(Flow::throw(
+        Err(neovm_value::error::Flow::throw(
             Value::symbol("message-sizing"),
             Value::symbol("interrupted"),
         ))
@@ -187,7 +203,7 @@ fn gnu_message_sizing_throw_restores_source_callback_and_propagates_flow() {
     assert_eq!(transferred, Value::symbol("interrupted"));
     assert_eq!(eval.edit.buffers.current_buffer_id(), caller);
     assert_eq!(
-        eval.frames
+        eval.frame_manager()
             .get(frame)
             .expect("frame")
             .find_window(mini)
@@ -196,8 +212,8 @@ fn gnu_message_sizing_throw_restores_source_callback_and_propagates_flow() {
     );
     assert!(eval.redisplay_prepare_fn.is_some());
     assert!(eval.redisplay_fn.is_some());
-    assert!(!eval.gnu_redisplay_hooks.active.is_active());
-    assert_eq!(eval.gnu_redisplay_hooks.accepted_serial, serial);
+    assert!(!eval.gnu_redisplay_hooks_active());
+    assert_eq!(eval.gnu_redisplay_hooks_accepted_serial(), serial);
     assert_eq!(paints.get(), 0);
 }
 

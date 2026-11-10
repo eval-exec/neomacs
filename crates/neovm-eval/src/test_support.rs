@@ -1808,6 +1808,195 @@ pub mod authority {
         ctx.admit_threads()
     }
 
+    /// Plain copy of an admission refusal. `AdmissionError` stays crate-private.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum AdmissionRefusal {
+        NotGreen,
+        AlreadyAdmitted,
+        SimulatedThreadsLive,
+        InhibitDepthOverflow,
+        Collector,
+        MarkExclusion,
+        Capacity,
+    }
+
+    fn admission_refusal(error: &crate::emacs_core::eval::AdmissionError) -> AdmissionRefusal {
+        use crate::emacs_core::eval::AdmissionError;
+        match error {
+            AdmissionError::NotGreen => AdmissionRefusal::NotGreen,
+            AdmissionError::AlreadyAdmitted => AdmissionRefusal::AlreadyAdmitted,
+            AdmissionError::SimulatedThreadsLive => AdmissionRefusal::SimulatedThreadsLive,
+            AdmissionError::InhibitDepthOverflow => AdmissionRefusal::InhibitDepthOverflow,
+            AdmissionError::Collector(_) => AdmissionRefusal::Collector,
+            AdmissionError::MarkExclusion(_) => AdmissionRefusal::MarkExclusion,
+            AdmissionError::Capacity => AdmissionRefusal::Capacity,
+        }
+    }
+
+    /// Thread admission, with the refusal as a plain copy.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn admit_threads_refusal_for_test(ctx: &mut Context) -> Result<(), AdmissionRefusal> {
+        ctx.admit_threads().map_err(|error| admission_refusal(&error))
+    }
+
+    /// Capacity refusal after a full reservation. The private reservation
+    /// stays crate-private; the refusal is a plain copy.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn admit_threads_refusing_capacity_for_test(
+        ctx: &mut Context,
+    ) -> Result<(), AdmissionRefusal> {
+        ctx.admit_threads_refusing_capacity_for_test()
+            .map_err(|error| admission_refusal(&error))
+    }
+
+    /// Plain copy of one specpdl entry's binding kind. The entry itself stays
+    /// on the stack. `KeyboardLet` is a let subkind, matching
+    /// `SpecBinding::let_bound_symbol`.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum ObservedSpecBinding {
+        Let,
+        LetLocal,
+        LetDefault,
+        KeyboardLet,
+        OwnerBinding,
+        Other,
+    }
+
+    fn observed_spec_binding(
+        binding: &crate::emacs_core::eval::SpecBinding,
+    ) -> ObservedSpecBinding {
+        use crate::emacs_core::eval::{NativeUnwindAction, SpecBinding};
+        match binding {
+            SpecBinding::Let { .. } => ObservedSpecBinding::Let,
+            SpecBinding::LetLocal { .. } => ObservedSpecBinding::LetLocal,
+            SpecBinding::LetDefault { .. } => ObservedSpecBinding::LetDefault,
+            SpecBinding::NativeUnwind {
+                action: NativeUnwindAction::KeyboardBinding(_),
+            } => ObservedSpecBinding::KeyboardLet,
+            SpecBinding::NativeUnwind {
+                action: NativeUnwindAction::OwnerBinding(_),
+            } => ObservedSpecBinding::OwnerBinding,
+            SpecBinding::LexicalEnv { .. }
+            | SpecBinding::GcRoot { .. }
+            | SpecBinding::Backtrace { .. }
+            | SpecBinding::Backtrace1 { .. }
+            | SpecBinding::Backtrace2 { .. }
+            | SpecBinding::BacktraceNative { .. }
+            | SpecBinding::UnwindProtect { .. }
+            | SpecBinding::SaveExcursion { .. }
+            | SpecBinding::SaveCurrentBuffer { .. }
+            | SpecBinding::SaveRestriction { .. }
+            | SpecBinding::LoadsInProgress { .. }
+            | SpecBinding::RequireStack { .. }
+            | SpecBinding::NativeUnwind { .. }
+            | SpecBinding::Nop => ObservedSpecBinding::Other,
+        }
+    }
+
+    /// One plain kind per specpdl entry, outermost first. Callers do not
+    /// borrow the stack.
+    pub fn spec_binding_kinds_for_test(context: &Context) -> Vec<ObservedSpecBinding> {
+        context
+            .specpdl()
+            .iter()
+            .map(observed_spec_binding)
+            .collect()
+    }
+
+    /// Plain copy of the echo-geometry window. The ownership field stays private.
+    pub fn echo_geometry_window_for_test(
+        context: &Context,
+    ) -> Option<neovm_edit::emacs_core::display_metrics::WindowId> {
+        context.echo_geometry_window_for_test()
+    }
+
+    /// Which owner storage a binding shadows. `Channel` stays crate-private.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum ObservedOwnerChannel {
+        Default,
+        BufferLocal(neovm_edit::buffer::BufferId),
+    }
+
+    /// What popping an owner binding restores, as copied values. `UndoTarget`
+    /// and `SlotValue` stay crate-private.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum ObservedOwnerUndo {
+        InheritedNone,
+        InheritedSuspended(neovm_value::value::Value),
+        Previous(neovm_value::value::Value),
+        Captured(neovm_value::value::Value),
+        Retired,
+    }
+
+    /// Live owner records for `id`, outermost first. `None` when this owner
+    /// has no slab. The slab and its records stay crate-private.
+    pub fn owner_records_for_test(
+        context: &Context,
+        id: neovm_value::intern::SymId,
+    ) -> Option<Vec<(ObservedOwnerChannel, ObservedOwnerUndo)>> {
+        use crate::emacs_core::eval::{Channel, UndoTarget};
+        let slab = context.owner().slab()?;
+        Some(
+            slab.records_of(id)
+                .map(|record| {
+                    let channel = match record.channel {
+                        Channel::Default => ObservedOwnerChannel::Default,
+                        Channel::BufferLocal(buffer) => ObservedOwnerChannel::BufferLocal(buffer),
+                    };
+                    let undo = match record.undo {
+                        UndoTarget::Inherited { suspended: None } => {
+                            ObservedOwnerUndo::InheritedNone
+                        }
+                        UndoTarget::Inherited {
+                            suspended: Some(value),
+                        } => ObservedOwnerUndo::InheritedSuspended(value.get()),
+                        UndoTarget::Previous(value) => ObservedOwnerUndo::Previous(value.get()),
+                        UndoTarget::Captured(value) => ObservedOwnerUndo::Captured(value.get()),
+                        UndoTarget::Retired => ObservedOwnerUndo::Retired,
+                    };
+                    (channel, undo)
+                })
+                .collect(),
+        )
+    }
+
+    /// Canonical value on the default channel. `Channel` stays crate-private.
+    pub fn owner_canonical_default_for_test(
+        context: &mut Context,
+        id: neovm_value::intern::SymId,
+    ) -> neovm_value::value::Value {
+        use crate::emacs_core::eval::Channel;
+        context.owner_canonical_value(id, Channel::Default)
+    }
+
+    /// Canonical value on one buffer-local channel. `Channel` stays crate-private.
+    pub fn owner_canonical_buffer_local_for_test(
+        context: &mut Context,
+        id: neovm_value::intern::SymId,
+        buffer: neovm_edit::buffer::BufferId,
+    ) -> neovm_value::value::Value {
+        use crate::emacs_core::eval::Channel;
+        context.owner_canonical_value(id, Channel::BufferLocal(buffer))
+    }
+
+    /// Park this owner. The parked token is opaque; only
+    /// [`resume_owner_for_test`] consumes it. `ParkedOwner` stays crate-private.
+    #[allow(private_interfaces)]
+    pub fn park_owner_for_test(
+        context: &mut Context,
+    ) -> crate::emacs_core::eval::ParkedOwner {
+        context.park_owner()
+    }
+
+    /// Resume an owner parked by [`park_owner_for_test`].
+    #[allow(private_interfaces)]
+    pub fn resume_owner_for_test(
+        context: &mut Context,
+        parked: crate::emacs_core::eval::ParkedOwner,
+    ) {
+        context.resume_owner(parked);
+    }
+
     /// FENCE: copied count of warm Tier-I bodies whose first node is an
     /// already-lowered `let` or `let*`. The registry stays private.
     pub fn tier_i_lowered_binding_body_count_for_test(ctx: &Context) -> usize {
