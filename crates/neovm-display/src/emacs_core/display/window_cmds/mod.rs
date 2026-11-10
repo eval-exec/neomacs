@@ -3939,22 +3939,6 @@ pub fn builtin_window_margins(
     expect_max_args("window-margins", &args, 1)?;
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
-    if let Some(regions) = published_window_regions(frames, fid, wid)? {
-        let left = regions.left_margin_columns();
-        let right = regions.right_margin_columns();
-        return Ok(Value::cons(
-            if left == 0 {
-                Value::NIL
-            } else {
-                Value::fixnum(left)
-            },
-            if right == 0 {
-                Value::NIL
-            } else {
-                Value::fixnum(right)
-            },
-        ));
-    }
     let w = get_leaf(frames, fid, wid)?;
     let margins = match w {
         Window::Leaf { margins, .. } => *margins,
@@ -3984,17 +3968,6 @@ pub fn builtin_window_fringes(
     expect_max_args("window-fringes", &args, 1)?;
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
-    if let Some(regions) = published_window_regions(frames, fid, wid)? {
-        let (left, right) = published_geometry(regions.fringe_widths_pixels())?;
-        let (_, _, outside, persistent) =
-            frames.window_fringes(wid).unwrap_or((0, 0, false, false));
-        return Ok(Value::list(vec![
-            Value::fixnum(left),
-            Value::fixnum(right),
-            if outside { Value::T } else { Value::NIL },
-            if persistent { Value::T } else { Value::NIL },
-        ]));
-    }
     let (left, right, outside, persistent) =
         frames.window_fringes(wid).unwrap_or((0, 0, false, false));
     Ok(Value::list(vec![

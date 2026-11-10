@@ -801,6 +801,68 @@ fn gui_window_body_geometry_excludes_fringes_and_margins() {
 }
 
 #[test]
+fn gui_window_fringes_and_margins_read_new_values_before_redisplay() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    let buf = ev.edit.buffers.create_buffer("*scratch*");
+    ev.edit.buffers.set_current(buf);
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
+    ev.frame_manager_mut()
+        .get_mut(fid)
+        .expect("frame")
+        .set_window_system(Some(Value::symbol("neo")));
+    super::builtin_set_window_margins(
+        &mut ev,
+        vec![Value::NIL, Value::fixnum(8), Value::fixnum(8)],
+    )
+    .expect("initial margins");
+    publish_selected_gui_window_regions(
+        &mut ev,
+        fid,
+        1,
+        crate::window::PresentedWindowRegions {
+            outer: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 800.0, 600.0),
+            text_body: neomacs_display_protocol::types::Rect::new(72.0, 0.0, 656.0, 568.0),
+            left_margin_columns: 8,
+            right_margin_columns: 8,
+            left_fringe: Some(neomacs_display_protocol::types::Rect::new(
+                0.0, 0.0, 8.0, 568.0,
+            )),
+            right_fringe: Some(neomacs_display_protocol::types::Rect::new(
+                784.0, 0.0, 8.0, 568.0,
+            )),
+            ..Default::default()
+        },
+    );
+
+    super::builtin_set_window_fringes(
+        &mut ev,
+        vec![Value::NIL, Value::fixnum(123), Value::fixnum(45), Value::T],
+    )
+    .expect("set fringes");
+    super::builtin_set_window_margins(
+        &mut ev,
+        vec![Value::NIL, Value::fixnum(0), Value::fixnum(3)],
+    )
+    .expect("set margins");
+
+    // GNU reads the window's own fields, so no redisplay is needed.
+    assert_eq!(
+        super::builtin_window_fringes(&mut ev, &vec![Value::NIL]).expect("window-fringes"),
+        Value::list(vec![
+            Value::fixnum(123),
+            Value::fixnum(45),
+            Value::T,
+            Value::NIL,
+        ])
+    );
+    assert_eq!(
+        super::builtin_window_margins(&mut ev, &vec![Value::NIL]).expect("window-margins"),
+        Value::cons(Value::NIL, Value::fixnum(3))
+    );
+}
+
+#[test]
 fn gui_window_fringes_default_to_frame_defaults_when_reset() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
