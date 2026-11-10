@@ -100,6 +100,8 @@ fn jit_bg_full_queue_refuses_and_drops_the_lowest_class_newest() {
     force_mode_for_test(Some(BgMode::Threaded));
     force_queue_cap_for_test(Some(2));
     force_deopt_for_test(false);
+    // `add1` is four instructions. Unarmed, that backend runs in line.
+    force_inline_insts_for_test(Some(0));
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let _ = take_served_for_test();
@@ -135,6 +137,7 @@ fn jit_bg_full_queue_refuses_and_drops_the_lowest_class_newest() {
         .collect();
     assert_eq!(served, [JobClass::FirstSight, JobClass::Entry]);
     assert_eq!(entry(ctx, &e1), Some(Value::make_int(2).bits()));
+    force_inline_insts_for_test(None);
     force_queue_cap_for_test(None);
     force_mode_for_test(None);
 }

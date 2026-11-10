@@ -46,6 +46,9 @@ fn mutator(role: usize, commands: Receiver<Command>, reports: Sender<Report>) {
     force_mode_for_test(Some(BgMode::Threaded));
     force_deferred_install_for_test(false);
     force_deopt_for_test(false);
+    // The private body is two instructions. Unarmed, that backend runs in
+    // line and the first call is not a pending tier-up.
+    force_inline_insts_for_test(Some(0));
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let payload = ctx
         .eval_str(if role == 0 {

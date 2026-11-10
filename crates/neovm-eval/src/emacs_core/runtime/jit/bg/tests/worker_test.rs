@@ -20,6 +20,9 @@ const QUIET: Duration = Duration::from_secs(60);
 fn threaded() {
     force_mode_for_test(Some(BgMode::Threaded));
     force_deopt_for_test(false);
+    // `add1` is four instructions. Unarmed, that backend runs in line.
+    // These rows need the deferred worker route.
+    force_inline_insts_for_test(Some(0));
 }
 
 /// `(lambda (x) (+ x 1))`.
@@ -59,6 +62,7 @@ fn jit_bg_worker_compiles_an_entry_tier_up() {
     let stats = stats_snapshot();
     assert_eq!(stats.installed[JobClass::Entry as usize], 1);
     assert!(stats.latency_us.iter().sum::<u64>() >= 1);
+    force_inline_insts_for_test(None);
     force_mode_for_test(None);
 }
 
@@ -86,6 +90,7 @@ fn jit_bg_worker_panic_is_contained() {
     assert_eq!(run(ctx, &g, 1), None);
     assert!(quiesce_for_test(QUIET));
     assert_eq!(run(ctx, &g, 1), Some(Value::make_int(2).bits()));
+    force_inline_insts_for_test(None);
     force_mode_for_test(None);
 }
 
@@ -111,6 +116,7 @@ fn jit_bg_cancelled_job_is_skipped() {
     assert!(quiesce_for_test(QUIET));
     assert_eq!(WORKER_STATS.skipped.load(Ordering::Relaxed), skipped + 1);
     assert_eq!(WORKER_STATS.jobs.load(Ordering::Relaxed), jobs);
+    force_inline_insts_for_test(None);
     force_mode_for_test(None);
 }
 
@@ -120,6 +126,9 @@ fn jit_bg_cancelled_job_is_skipped() {
 fn corpus_by_dispatch(mode: BgMode) -> (Vec<String>, Vec<String>) {
     force_mode_for_test(Some(mode));
     force_deopt_for_test(false);
+    // The corpus bodies are small. Unarmed, their backends run in line and
+    // the capture sees nothing. Both sides take the deferred route.
+    force_inline_insts_for_test(Some(0));
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx = &mut ev as *mut Context;
     let wrong = [Value::NIL, Value::NIL, Value::NIL];
@@ -137,6 +146,7 @@ fn corpus_by_dispatch(mode: BgMode) -> (Vec<String>, Vec<String>) {
             assert_eq!(pending_count(), 0);
         })
     });
+    force_inline_insts_for_test(None);
     force_mode_for_test(None);
     let mask = |text: &str| {
         // CLIF prints immediates digit-grouped; drop the grouping first.
