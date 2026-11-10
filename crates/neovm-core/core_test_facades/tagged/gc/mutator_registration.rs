@@ -172,3 +172,10 @@ mod collection_tests;
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 #[path = "../../../core_tests/tagged/gc/mutator_registration/cons_allocation_tests.rs"]
 mod cons_allocation_tests;
+
+/// Rooted-rendezvous rows re-homed out of the value lib test. The shell opens
+/// the real rooted or plain mutator era; the bodies and assertions stay in
+/// value. One core row per former value row.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/rendezvous_tests.rs"]
+mod rendezvous_tests;

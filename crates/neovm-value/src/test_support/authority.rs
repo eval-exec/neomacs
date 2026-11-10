@@ -198,23 +198,43 @@ pub fn reset_bytecode_data_access_count_for_test() {
 /// `cfg(any(test, feature = "test-support"))` + `pub(crate)`.
 pub type ProofEra<'heap, K> = crate::tagged::gc::ProofEra<'heap, K>;
 
-#[cfg(all(any(test, feature = "test-support"), not(feature = "gc-memory-telemetry")))]
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
 pub type CollectionCase = crate::tagged::gc::mutator_registration::CollectionCase;
-#[cfg(all(any(test, feature = "test-support"), not(feature = "gc-memory-telemetry")))]
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
 pub type ConsAllocationCase = crate::tagged::gc::mutator_registration::ConsAllocationCase;
 
 /// Case selectors for the three singleton families. The variants are value
 /// items; the core shells only name them.
-#[cfg(all(any(test, feature = "test-support"), not(feature = "gc-memory-telemetry")))]
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
 pub type ChartableConcurrentWriteCase = crate::tagged::gc::ChartableConcurrentWriteCase;
-#[cfg(all(any(test, feature = "test-support"), not(feature = "gc-memory-telemetry")))]
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
 pub type ConcurrentLeafClaimCase = crate::tagged::gc::ConcurrentLeafClaimCase;
-#[cfg(all(any(test, feature = "test-support"), not(feature = "gc-memory-telemetry")))]
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
 pub type AdmissionProbeCase = crate::tagged::gc::mutator_registration::AdmissionProbeCase;
 
 /// Finish refusal of [`ProofEra`]; same item as
 /// `tagged::gc::GenericProofEraFinishFailure`.
 pub type ProofEraFinishFailure<'heap, K> = crate::tagged::gc::ProofEraFinishFailure<'heap, K>;
+
+/// Case selector for the rooted-rendezvous family. The variants are value
+/// items; the core shell only names them and never builds a Context in value.
+#[cfg(any(test, feature = "test-support"))]
+pub type RootedRendezvousCase = crate::tagged::gc::mutator_registration::RootedRendezvousCase;
 
 /// C5 intern-growth AUTHORITY fence (LEAD 05:3xZ; peer B2 host ruling).
 ///
@@ -2178,4 +2198,31 @@ pub fn run_cons_allocation_test_for_test<K, W>(
         partial_era_then,
         world_roots,
     );
+}
+
+/// FENCE: run one rooted-rendezvous row. The core shell opens the real rooted
+/// or plain mutator era; the bodies and their assertions stay in value.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn run_rooted_mutator_test_for_test<K>(
+    case: RootedRendezvousCase,
+    rooted_era: for<'a> fn(
+        &'a mut dyn for<'e> FnMut(
+            crate::tagged::gc::ProofEra<'e, K>,
+            Vec<crate::tagged::transport::SharedRoot>,
+        ),
+    ),
+    mutator_era: for<'a> fn(i64, &'a mut dyn for<'e> FnMut(crate::tagged::gc::ProofEra<'e, K>)),
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper + std::fmt::Debug + 'static,
+{
+    crate::tagged::gc::mutator_registration::run_rooted_mutator_case(case, rooted_era, mutator_era);
+}
+
+/// FENCE: install the core mapping shell's row runner for the legacy zero-arg
+/// Control adapters. Without one the adapters fail loudly at setup (#1580).
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn install_rooted_mapping_runner_for_test(runner: fn(&'static str)) {
+    crate::tagged::gc::mutator_registration::install_rooted_mapping_runner(runner)
 }

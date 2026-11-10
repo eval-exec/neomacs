@@ -2,6 +2,7 @@
 //! check where one exists. Fixed ordering/linearity are not runtime race detectors.
 #![forbid(unsafe_code)]
 
+use super::rooted_tests::*;
 use super::*;
 use std::collections::BTreeSet;
 

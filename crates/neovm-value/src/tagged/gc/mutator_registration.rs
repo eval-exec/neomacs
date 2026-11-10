@@ -1049,6 +1049,13 @@ pub(crate) use cons_allocation_tests::{
     ConsAllocationCase, CreditsFixture, CreditsResult, RootsFixture, run_cons_allocation_test,
 };
 
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use rendezvous::fixture_helpers::RootedRendezvousCase;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use rendezvous::run_rooted_mutator_case;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use rendezvous::rooted_tests::install_rooted_mapping_runner;
+
 #[cfg(all(test, not(feature = "test-support")))]
 mod a8_probes;
 #[cfg(feature = "test-support")]

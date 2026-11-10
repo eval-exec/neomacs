@@ -134,10 +134,10 @@ impl StoppedRootAdmission<'_> {
 /// grow the `dyn FnOnce(): Send` note.  The two `mod` declarations are the
 /// split-cfg guard's exemption for a bare `test` predicate; `Hooks` exists in
 /// every build, so `OwnerLocal` needs no cfg on its field.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 mod owner_test_hooks {
     #[derive(Default)]
-    pub(super) struct Hooks {
+    pub(in crate::tagged::gc::mutator_registration) struct Hooks {
         pub(super) publication_hook: Option<Box<dyn FnOnce()>>,
         pub(super) restore_wait_hook: Option<Box<dyn FnOnce()>>,
     }
@@ -150,7 +150,7 @@ mod owner_test_hooks {
         }
     }
 }
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-support")))]
 mod owner_test_hooks {
     #[derive(Default)]
     pub(super) struct Hooks;
@@ -379,5 +379,11 @@ static_assertions::assert_impl_all!(Rendezvous<'static>:Send,Sync,Clone,Copy);
 static_assertions::assert_not_impl_any!(OwnerRootAdmission<'static>:Send,Sync,Clone,Copy);
 static_assertions::assert_not_impl_any!(StoppedRootAdmission<'static>:Send,Sync,Clone,Copy);
 
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) mod fixture_helpers;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) mod rooted_tests;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use rooted_tests::run_rooted_mutator_case;
 #[cfg(test)]
 mod tests;

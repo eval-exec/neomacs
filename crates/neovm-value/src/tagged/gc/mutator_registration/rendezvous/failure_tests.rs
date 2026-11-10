@@ -1,98 +1,36 @@
 #![forbid(unsafe_code)]
 
+use super::fixture_helpers::*;
 use super::*;
 
-#[test]
-fn trace_callback_error_poison_is_visible_before_guard_drop() {
-    Context::with_test_rooted_mutator_era(|era, roots| {
-        let mut owner = era
-            .register(701, 1)
-            .unwrap()
-            .activate(era.heap_identity(), 701)
-            .unwrap();
-        owner.enter_native(&roots[..1]).unwrap();
-        let rv = era.rendezvous();
-        let mut stopped = era.stop().unwrap();
-        assert_eq!(
-            stopped.trace::<()>(|_, _| Err(RendezvousError::Root)),
-            Err(RendezvousError::Root)
-        );
-        assert_eq!(rv.request(), Err(RendezvousError::Poisoned));
-        drop(stopped);
-        drop(owner);
-        assert_eq!(
-            era.finish().unwrap_err().reason,
-            RegistrationError::Poisoned
-        );
-    });
+pub(crate) fn completion_requires_trace_and_every_explicit_reader_finish() {
+    super::run_rooted_mapping_row("completion_requires_trace_and_every_explicit_reader_finish");
+}
+pub(crate) fn stale_registration_exhaustion_and_frozen_removal_refuse_before_trace() {
+    super::run_rooted_mapping_row(
+        "stale_registration_exhaustion_and_frozen_removal_refuse_before_trace",
+    );
+}
+pub(crate) fn forgotten_reader_refuses_resume_and_retains_roots() {
+    super::run_rooted_mapping_row("forgotten_reader_refuses_resume_and_retains_roots");
+}
+pub(crate) fn unfinished_reader_drop_refuses_resume_and_retains_roots() {
+    super::run_rooted_mapping_row("unfinished_reader_drop_refuses_resume_and_retains_roots");
+}
+pub(crate) fn external_poison_between_predicate_and_wait_is_event_driven() {
+    super::run_rooted_mapping_row("external_poison_between_predicate_and_wait_is_event_driven");
+}
+pub(crate) fn lost_poison_notification_between_predicate_and_wait_fails_closed() {
+    super::run_rooted_mapping_row(
+        "lost_poison_notification_between_predicate_and_wait_fails_closed",
+    );
 }
 
-#[test]
-fn trace_callback_panic_poison_retains_published_images() {
-    Context::with_test_rooted_mutator_era(|era, roots| {
-        let mut owner = era
-            .register(702, 1)
-            .unwrap()
-            .activate(era.heap_identity(), 702)
-            .unwrap();
-        let entry = owner.entry();
-        owner.enter_native(&roots[..1]).unwrap();
-        let rv = era.rendezvous();
-        let mut stopped = era.stop().unwrap();
-        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = stopped.trace::<()>(|_, _| panic!("synthetic trace panic"));
-        }))
-        .unwrap_err();
-        assert_eq!(panic.downcast_ref::<&str>(), Some(&"synthetic trace panic"));
-        assert_eq!(rv.request(), Err(RendezvousError::Poisoned));
-        assert!(entry.state.lock().unwrap().image.is_some());
-        assert!(entry.state.lock().unwrap().roots.is_some());
-        drop(stopped);
-        drop(owner);
-        assert_eq!(
-            era.finish().unwrap_err().reason,
-            RegistrationError::Poisoned
-        );
-    });
-}
-
-#[test]
-fn dropped_stopped_guard_wakes_owner_waiting_for_completion() {
-    Context::with_test_rooted_mutator_era(|era, roots| {
-        let heap = era.heap_identity();
-        let permit = era.register(703, 1).unwrap();
-        let input = vec![roots[0].clone()];
-        let rv = era.rendezvous();
-        thread::scope(|scope| {
-            let (ready_tx, ready_rx) = mpsc::channel();
-            let (ack_tx, ack_rx) = mpsc::channel();
-            let worker = scope.spawn(move || {
-                let mut owner = activate(permit, heap, 703);
-                ready_tx.send(()).unwrap();
-                let epoch = retry(|| owner.wait_request());
-                retry(|| owner.acknowledge(epoch, &input));
-                ack_tx.send(()).unwrap();
-                assert!(matches!(
-                    owner.begin_restore_retry(false),
-                    Err(RendezvousError::Poisoned)
-                ));
-            });
-            receive(&ready_rx);
-            retry(|| rv.request());
-            receive(&ack_rx);
-            drop(retry(|| era.stop()));
-            worker.join().unwrap();
-        });
-        assert_eq!(rv.request(), Err(RendezvousError::Poisoned));
-        assert_eq!(
-            era.finish().unwrap_err().reason,
-            RegistrationError::Poisoned
-        );
-    });
-}
-
-fn abandoned_reader_case(forget: bool) {
-    Context::with_test_rooted_mutator_era(|era, roots| {
+fn abandoned_reader_case_body<K: EraKeeper + std::fmt::Debug + 'static>(
+    forget: bool,
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, roots| {
         let mut owner = era
             .register(704, 1)
             .unwrap()
@@ -130,19 +68,126 @@ fn abandoned_reader_case(forget: bool) {
     });
 }
 
-#[test]
-pub(super) fn unfinished_reader_drop_refuses_resume_and_retains_roots() {
-    abandoned_reader_case(false);
+pub(crate) fn trace_callback_error_poison_is_visible_before_guard_drop_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, roots| {
+        let mut owner = era
+            .register(701, 1)
+            .unwrap()
+            .activate(era.heap_identity(), 701)
+            .unwrap();
+        owner.enter_native(&roots[..1]).unwrap();
+        let rv = era.rendezvous();
+        let mut stopped = era.stop().unwrap();
+        assert_eq!(
+            stopped.trace::<()>(|_, _| Err(RendezvousError::Root)),
+            Err(RendezvousError::Root)
+        );
+        assert_eq!(rv.request(), Err(RendezvousError::Poisoned));
+        drop(stopped);
+        drop(owner);
+        assert_eq!(
+            era.finish().unwrap_err().reason,
+            RegistrationError::Poisoned
+        );
+    });
 }
 
-#[test]
-pub(super) fn forgotten_reader_refuses_resume_and_retains_roots() {
-    abandoned_reader_case(true);
+pub(crate) fn trace_callback_panic_poison_retains_published_images_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, roots| {
+        let mut owner = era
+            .register(702, 1)
+            .unwrap()
+            .activate(era.heap_identity(), 702)
+            .unwrap();
+        let entry = owner.entry();
+        owner.enter_native(&roots[..1]).unwrap();
+        let rv = era.rendezvous();
+        let mut stopped = era.stop().unwrap();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = stopped.trace::<()>(|_, _| panic!("synthetic trace panic"));
+        }))
+        .unwrap_err();
+        assert_eq!(panic.downcast_ref::<&str>(), Some(&"synthetic trace panic"));
+        assert_eq!(rv.request(), Err(RendezvousError::Poisoned));
+        assert!(entry.state.lock().unwrap().image.is_some());
+        assert!(entry.state.lock().unwrap().roots.is_some());
+        drop(stopped);
+        drop(owner);
+        assert_eq!(
+            era.finish().unwrap_err().reason,
+            RegistrationError::Poisoned
+        );
+    });
 }
 
-#[test]
-pub(super) fn completion_requires_trace_and_every_explicit_reader_finish() {
-    Context::with_test_rooted_mutator_era(|era, roots| {
+pub(crate) fn dropped_stopped_guard_wakes_owner_waiting_for_completion_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, roots| {
+        let heap = era.heap_identity();
+        let permit = era.register(703, 1).unwrap();
+        let input = vec![roots[0].clone()];
+        let rv = era.rendezvous();
+        thread::scope(|scope| {
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (ack_tx, ack_rx) = mpsc::channel();
+            let worker = scope.spawn(move || {
+                let mut owner = activate(permit, heap, 703);
+                ready_tx.send(()).unwrap();
+                let epoch = retry(|| owner.wait_request());
+                retry(|| owner.acknowledge(epoch, &input));
+                ack_tx.send(()).unwrap();
+                assert!(matches!(
+                    owner.begin_restore_retry(false),
+                    Err(RendezvousError::Poisoned)
+                ));
+            });
+            receive(&ready_rx);
+            retry(|| rv.request());
+            receive(&ack_rx);
+            drop(retry(|| era.stop()));
+            worker.join().unwrap();
+        });
+        assert_eq!(rv.request(), Err(RendezvousError::Poisoned));
+        assert_eq!(
+            era.finish().unwrap_err().reason,
+            RegistrationError::Poisoned
+        );
+    });
+}
+
+pub(crate) fn unfinished_reader_drop_refuses_resume_and_retains_roots_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    abandoned_reader_case_body(false, rooted_era);
+}
+
+pub(crate) fn forgotten_reader_refuses_resume_and_retains_roots_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    abandoned_reader_case_body(true, rooted_era);
+}
+
+pub(crate) fn completion_requires_trace_and_every_explicit_reader_finish_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, roots| {
         let mut owner = era
             .register(705, 1)
             .unwrap()
@@ -180,9 +225,12 @@ pub(super) fn completion_requires_trace_and_every_explicit_reader_finish() {
     });
 }
 
-#[test]
-fn reader_callback_reentry_refuses_run_access_without_waiting() {
-    Context::with_test_rooted_mutator_era(|era, roots| {
+pub(crate) fn reader_callback_reentry_refuses_run_access_without_waiting_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, roots| {
         let mut owner = era
             .register(706, 1)
             .unwrap()
@@ -207,9 +255,12 @@ fn reader_callback_reentry_refuses_run_access_without_waiting() {
     });
 }
 
-#[test]
-pub(super) fn lost_poison_notification_between_predicate_and_wait_fails_closed() {
-    Context::with_test_rooted_mutator_era(|era, _roots| {
+pub(crate) fn lost_poison_notification_between_predicate_and_wait_fails_closed_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, _roots| {
         let registry = era.registry();
         let gate = registry.lock().unwrap();
         assert!(!registry.park.poisoned.load(Ordering::Acquire));
@@ -228,9 +279,12 @@ pub(super) fn lost_poison_notification_between_predicate_and_wait_fails_closed()
     });
 }
 
-#[test]
-pub(super) fn external_poison_between_predicate_and_wait_is_event_driven() {
-    Context::with_test_mutator_era(|era| {
+pub(crate) fn external_poison_between_predicate_and_wait_is_event_driven_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    mutator_era: MutatorEraFn<K>,
+) {
+    mutator_era(0, &mut |era| {
         let registry = era.registry();
         std::thread::scope(|scope| {
             let gate = registry.lock().unwrap();
@@ -261,9 +315,12 @@ pub(super) fn external_poison_between_predicate_and_wait_is_event_driven() {
     });
 }
 
-#[test]
-fn mutex_unwind_recovers_guard_before_publishing_terminal_poison() {
-    Context::with_test_mutator_era(|era| {
+pub(crate) fn mutex_unwind_recovers_guard_before_publishing_terminal_poison_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    mutator_era: MutatorEraFn<K>,
+) {
+    mutator_era(0, &mut |era| {
         let registry = era.registry();
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _gate = registry.lock().unwrap();
@@ -283,9 +340,12 @@ fn mutex_unwind_recovers_guard_before_publishing_terminal_poison() {
     });
 }
 
-#[test]
-fn condvar_reacquire_recovers_poisoned_guard_without_recursive_lock() {
-    Context::with_test_mutator_era(|era| {
+pub(crate) fn condvar_reacquire_recovers_poisoned_guard_without_recursive_lock_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    mutator_era: MutatorEraFn<K>,
+) {
+    mutator_era(0, &mut |era| {
         let registry = era.registry();
         std::thread::scope(|scope| {
             let gate = registry.lock().unwrap();
@@ -317,9 +377,12 @@ fn condvar_reacquire_recovers_poisoned_guard_without_recursive_lock() {
     });
 }
 
-#[test]
-pub(super) fn stale_registration_exhaustion_and_frozen_removal_refuse_before_trace() {
-    Context::with_test_rooted_mutator_era(|era, roots| {
+pub(crate) fn stale_registration_exhaustion_and_frozen_removal_refuse_before_trace_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, roots| {
         let mut owner = era
             .register(707, 1)
             .unwrap()
@@ -357,9 +420,12 @@ pub(super) fn stale_registration_exhaustion_and_frozen_removal_refuse_before_tra
     });
 }
 
-#[test]
-fn forgotten_run_access_blocks_finish_and_ack_then_owner_drop_poisons() {
-    Context::with_test_rooted_mutator_era(|era, _roots| {
+pub(crate) fn forgotten_run_access_blocks_finish_and_ack_then_owner_drop_poisons_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, _roots| {
         let mut owner = era
             .register(709, 1)
             .unwrap()
@@ -375,7 +441,7 @@ fn forgotten_run_access_blocks_finish_and_ack_then_owner_drop_poisons() {
         drop(failure);
         assert!(registry.park.poisoned.load(Ordering::Acquire));
     });
-    Context::with_test_rooted_mutator_era(|era, roots| {
+    rooted_era(&mut |era, roots| {
         let mut owner = era
             .register(710, 1)
             .unwrap()
@@ -401,9 +467,12 @@ fn forgotten_run_access_blocks_finish_and_ack_then_owner_drop_poisons() {
     });
 }
 
-#[test]
-fn legacy_epoch_only_publication_and_restore_cannot_bypass_rooted_rendezvous() {
-    Context::with_test_rooted_mutator_era(|era, roots| {
+pub(crate) fn legacy_epoch_only_publication_and_restore_cannot_bypass_rooted_rendezvous_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, roots| {
         let mut owner = era
             .register(711, 1)
             .unwrap()
@@ -433,10 +502,13 @@ fn legacy_epoch_only_publication_and_restore_cannot_bypass_rooted_rendezvous() {
     });
 }
 
-#[test]
-fn callback_panic_outside_trace_immediately_poisons_root_and_image_readers() {
+pub(crate) fn callback_panic_outside_trace_immediately_poisons_root_and_image_readers_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
     for image in [false, true] {
-        Context::with_test_rooted_mutator_era(|era, roots| {
+        rooted_era(&mut |era, roots| {
             let mut owner = era
                 .register(712, 1)
                 .unwrap()

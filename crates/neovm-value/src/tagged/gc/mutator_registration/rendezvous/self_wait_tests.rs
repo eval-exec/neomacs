@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use super::fixture_helpers::*;
 use super::*;
 
 fn keeper_case(body: impl FnOnce() + Send + 'static) {
@@ -14,10 +15,13 @@ fn keeper_case(body: impl FnOnce() + Send + 'static) {
     actor.join().unwrap();
 }
 
-#[test]
-fn keeper_running_owner_stop_refuses_and_can_ack_afterward() {
-    keeper_case(|| {
-        Context::with_test_rooted_mutator_era(|era, roots| {
+pub(crate) fn keeper_running_owner_stop_refuses_and_can_ack_afterward_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    keeper_case(move || {
+        rooted_era(&mut |era, roots| {
             let heap = era.heap_identity();
             let mut owner = activate(era.register(801, 1).unwrap(), heap, 801);
             assert!(matches!(era.stop(), Err(RendezvousError::Busy)));
@@ -33,10 +37,13 @@ fn keeper_running_owner_stop_refuses_and_can_ack_afterward() {
     });
 }
 
-#[test]
-fn keeper_native_restore_refuses_active_stop_and_keeps_image() {
-    keeper_case(|| {
-        Context::with_test_rooted_mutator_era(|era, roots| {
+pub(crate) fn keeper_native_restore_refuses_active_stop_and_keeps_image_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    keeper_case(move || {
+        rooted_era(&mut |era, roots| {
             let heap = era.heap_identity();
             let mut owner = activate(era.register(802, 1).unwrap(), heap, 802);
             owner.enter_native(&roots[..1]).unwrap();
@@ -60,10 +67,13 @@ fn keeper_native_restore_refuses_active_stop_and_keeps_image() {
     });
 }
 
-#[test]
-fn keeper_starting_owner_waits_refuse_until_bootstrap_opens() {
-    keeper_case(|| {
-        Context::with_test_rooted_mutator_era(|era, roots| {
+pub(crate) fn keeper_starting_owner_waits_refuse_until_bootstrap_opens_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    keeper_case(move || {
+        rooted_era(&mut |era, roots| {
             let heap = era.heap_identity();
             active(era.rendezvous().request().unwrap());
             let mut owner = activate(era.register(803, 1).unwrap(), heap, 803);
@@ -79,10 +89,13 @@ fn keeper_starting_owner_waits_refuse_until_bootstrap_opens() {
     });
 }
 
-#[test]
-fn already_published_owner_wait_request_refuses() {
-    keeper_case(|| {
-        Context::with_test_rooted_mutator_era(|era, roots| {
+pub(crate) fn already_published_owner_wait_request_refuses_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    keeper_case(move || {
+        rooted_era(&mut |era, roots| {
             let heap = era.heap_identity();
             let mut owner = activate(era.register(804, 1).unwrap(), heap, 804);
             owner.enter_native(&roots[..1]).unwrap();
@@ -101,10 +114,13 @@ fn already_published_owner_wait_request_refuses() {
     });
 }
 
-#[test]
-fn keeper_resume_debt_refuses_next_stop_until_owner_applies() {
-    keeper_case(|| {
-        Context::with_test_rooted_mutator_era(|era, roots| {
+pub(crate) fn keeper_resume_debt_refuses_next_stop_until_owner_applies_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    keeper_case(move || {
+        rooted_era(&mut |era, roots| {
             let heap = era.heap_identity();
             let mut owner = activate(era.register(805, 1).unwrap(), heap, 805);
             let first = active(era.rendezvous().request().unwrap());
