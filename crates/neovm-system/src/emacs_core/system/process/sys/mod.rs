@@ -68,10 +68,12 @@ pub use serial::{
 // consumerless cfg-split block of the TS-UNROWED class.
 pub(crate) mod net;
 
+// test-support widens this module to `pub`. The body is waitpid, so it keeps
+// the unix gate the product declaration has. Windows reaps through try_wait.
 #[cfg(unix)]
 #[cfg(not(feature = "test-support"))]
 mod child_wait;
-#[cfg(feature = "test-support")]
+#[cfg(all(unix, feature = "test-support"))]
 pub mod child_wait;
 #[cfg(unix)]
 pub use child_wait::{ChildWait, poll_child_status};
