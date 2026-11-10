@@ -7975,9 +7975,9 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         }
         #[cfg(windows)]
         {
-            owner_pending = self.processes.check_child_status_change(owner_id)
+            owner_pending = self.processes_mut().check_child_status_change(owner_id)
                 && self
-                    .processes
+                    .processes()
                     .get(owner_id)
                     .is_some_and(|owner| owner.status_notify_pending);
             if owner_pending {
