@@ -2808,9 +2808,19 @@ fn gnu_lisp_window_edges_use_logical_outer_and_presented_body_regions() {
             .display_mut()
             .expect("leaf display state");
         display.scroll_bar_width = 13;
+        // Redisplay publishes these widths from the window's own state, and
+        // `window-fringes'/`window-margins' read that state as GNU does.
+        display.left_fringe_width = 8;
+        display.right_fringe_width = 12;
         display.vertical_scroll_bar_type =
             Value::symbol(if scrollbar_left { "left" } else { "right" });
         display.horizontal_scroll_bar_type = Value::NIL;
+        let crate::window::Window::Leaf { margins, .. } =
+            frame.find_window_mut(wid).expect("live window")
+        else {
+            panic!("the selected window should be a leaf");
+        };
+        *margins = crate::window::WindowMargins::new(1, 2);
 
         let result = ev
             .eval_str(
