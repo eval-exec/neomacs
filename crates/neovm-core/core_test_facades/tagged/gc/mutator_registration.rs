@@ -179,3 +179,9 @@ mod cons_allocation_tests;
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 #[path = "../../../core_tests/tagged/gc/mutator_registration/rendezvous_tests.rs"]
 mod rendezvous_tests;
+
+/// Symbol-authority rows re-homed out of the value lib test. The shell owns
+/// the Context entry points and obarray setup; the bodies stay in value.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/symbol_authority_tests.rs"]
+mod symbol_authority_tests;

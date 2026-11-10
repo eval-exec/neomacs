@@ -413,5 +413,7 @@ static_assertions::assert_not_impl_any!(SymbolRef<'static, 'static, 'static>: Se
 static_assertions::assert_not_impl_any!(SymbolMut<'static, 'static, 'static>: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(KeeperSymbols<'static>: Send, Sync, Clone, Copy);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use tests::{SymbolAuthorityCase, run_symbol_authority_case};

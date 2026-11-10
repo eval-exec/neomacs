@@ -236,6 +236,11 @@ pub type ProofEraFinishFailure<'heap, K> = crate::tagged::gc::ProofEraFinishFail
 #[cfg(any(test, feature = "test-support"))]
 pub type RootedRendezvousCase = crate::tagged::gc::mutator_registration::RootedRendezvousCase;
 
+/// Case selector for the symbol-authority family. The variants are value
+/// items; the core shell only names them and owns the obarray setup.
+#[cfg(any(test, feature = "test-support"))]
+pub type SymbolAuthorityCase = crate::tagged::gc::mutator_registration::SymbolAuthorityCase;
+
 /// C5 intern-growth AUTHORITY fence (LEAD 05:3xZ; peer B2 host ruling).
 ///
 /// The real two-actor intern-growth transaction is value's test-support
@@ -2225,4 +2230,31 @@ pub fn run_rooted_mutator_test_for_test<K>(
 #[doc(hidden)]
 pub fn install_rooted_mapping_runner_for_test(runner: fn(&'static str)) {
     crate::tagged::gc::mutator_registration::install_rooted_mapping_runner(runner)
+
+}
+
+/// FENCE: run one symbol-authority row. The core shell owns the Context entry
+/// points and the obarray setup; the bodies and assertions stay in value.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn run_symbol_authority_case_for_test<K>(
+    case: SymbolAuthorityCase,
+    symbol_era: for<'a> fn(
+        &'a mut dyn for<'e> FnMut(crate::tagged::gc::ProofEra<'e, K>, crate::intern::SymId),
+    ),
+    seeded_global_era: for<'a> fn(
+        &'a mut dyn for<'e> FnMut(crate::tagged::gc::ProofEra<'e, K>, crate::intern::SymId),
+    ),
+    alias_setup_era: for<'a> fn(
+        &'a mut dyn for<'e> FnMut(crate::tagged::gc::ProofEra<'e, K>, [crate::intern::SymId; 4]),
+    ),
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper + std::fmt::Debug + 'static,
+{
+    crate::tagged::gc::mutator_registration::run_symbol_authority_case(
+        case,
+        symbol_era,
+        seeded_global_era,
+        alias_setup_era,
+    );
 }

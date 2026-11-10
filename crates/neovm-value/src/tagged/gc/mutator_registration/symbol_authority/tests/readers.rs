@@ -132,8 +132,11 @@ fn observe(
         },
     )
 }
-pub(super) fn check(scenario: Scenario) {
-    Context::with_test_symbol_era(|era, id| {
+pub(super) fn check_body<K: EraKeeper + std::fmt::Debug + 'static>(
+    scenario: Scenario,
+    symbol_era: SymbolEraFn<K>,
+) {
+    symbol_era(&mut |era, id| {
         let handle = era.admit_plain_symbol(id).unwrap();
         let heap = era.heap_identity();
         let permits = [era.register(1, 8).unwrap(), era.register(2, 8).unwrap()];
