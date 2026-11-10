@@ -609,7 +609,7 @@ fn json_encode_string(s: &str) -> String {
 /// bytes are copied through untouched exactly as the per-char loop emitted
 /// them.
 fn json_encode_string_into(out: &mut String, s: &str) {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
     out.push('"');
     let bytes = s.as_bytes();
     let mut run_start = 0usize;

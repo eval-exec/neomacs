@@ -27,6 +27,23 @@ use neovm_value::heap_types::LispString;
 use neovm_value::value::{ValueKind, VecLikeType};
 
 #[test]
+fn json_control_escapes_use_uppercase_hex_digits() {
+    crate::test_utils::init_test_tracing();
+    // GNU `json_out_string` (src/json.c) formats \u00XX from "0123456789ABCDEF".
+    let mut eval = crate::test_utils::new_context();
+    let rendered = neovm_eval::emacs_core::print::format_eval_result(&eval.eval_str(
+        r#"(let ((value ["\x0b\x1a\x1f"]))
+             (erase-buffer)
+             (json-insert value)
+             (list (json-serialize value) (buffer-string)))"#,
+    ));
+    assert_eq!(
+        rendered,
+        r#"OK ("[\"\\u000B\\u001A\\u001F\"]" "[\"\\u000B\\u001A\\u001F\"]")"#
+    );
+}
+
+#[test]
 fn json_parse_buffer_advances_point_after_value() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
