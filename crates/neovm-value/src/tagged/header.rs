@@ -1153,6 +1153,7 @@ impl LispByteVec {
 
     /// Whether `self` and `other` read the same owned allocation (tests).
     #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn shares_storage_with(&self, other: &Self) -> bool {
         match (&self.storage, &other.storage) {
             (LispByteVecStorage::Owned(a), LispByteVecStorage::Owned(b)) => {

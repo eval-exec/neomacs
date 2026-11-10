@@ -47,6 +47,7 @@ impl FakeImage {
     }
 
     /// Register the image cons with `heap` and answer it.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn register_cons(&mut self, heap: &mut TaggedHeap) -> TaggedValue {
         let cell = self.cons.as_mut_ptr();
         unsafe { heap.register_mapped_cons_range(cell, 1) };
