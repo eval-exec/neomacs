@@ -4,8 +4,10 @@ use super::*;
 use crate::tagged::value::TaggedValue as Value;
 use std::num::NonZeroU32;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use tests::{CombinedInputsCase, run_combined_inputs_case};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::tagged::gc::mutator_registration) enum CombinedInputRole {

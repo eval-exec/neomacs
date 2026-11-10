@@ -241,6 +241,14 @@ pub type RootedRendezvousCase = crate::tagged::gc::mutator_registration::RootedR
 #[cfg(any(test, feature = "test-support"))]
 pub type SymbolAuthorityCase = crate::tagged::gc::mutator_registration::SymbolAuthorityCase;
 
+/// Case selector for the combined-inputs family. The variants are value
+/// items; the core shell only names them and owns the Context call.
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+pub type CombinedInputsCase = crate::tagged::gc::mutator_registration::CombinedInputsCase;
+
 /// C5 intern-growth AUTHORITY fence (LEAD 05:3xZ; peer B2 host ruling).
 ///
 /// The real two-actor intern-growth transaction is value's test-support
@@ -2256,5 +2264,29 @@ pub fn run_symbol_authority_case_for_test<K>(
         symbol_era,
         seeded_global_era,
         alias_setup_era,
+    );
+}
+
+/// FENCE: run one combined-inputs row. The core shell owns the Context call
+/// and the backing; the init closure, the era body, and the assertions stay
+/// in value.
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+#[doc(hidden)]
+pub fn run_combined_inputs_case_for_test<K>(
+    case: CombinedInputsCase,
+    symbol_functions_init_era: for<'a> fn(
+        crate::tagged::gc::mutator_registration::PlainSymbolBacking,
+        &'a mut dyn FnMut(&mut crate::symbol::Obarray, &[crate::intern::SymId]),
+        &'a mut dyn for<'e> FnMut(crate::tagged::gc::ProofEra<'e, K>, Vec<crate::intern::SymId>),
+    ),
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper + std::fmt::Debug + 'static,
+{
+    crate::tagged::gc::mutator_registration::run_combined_inputs_case(
+        case,
+        symbol_functions_init_era,
     );
 }

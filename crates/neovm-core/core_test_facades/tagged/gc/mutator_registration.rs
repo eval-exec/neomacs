@@ -185,3 +185,9 @@ mod rendezvous_tests;
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 #[path = "../../../core_tests/tagged/gc/mutator_registration/symbol_authority_tests.rs"]
 mod symbol_authority_tests;
+
+/// Combined-inputs rows re-homed out of the value lib test. The shell owns
+/// the Context call and the backing; the bodies stay in value.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/combined_inputs_tests.rs"]
+mod combined_inputs_tests;

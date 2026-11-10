@@ -1057,6 +1057,11 @@ pub(crate) use rendezvous::run_rooted_mutator_case;
 pub(crate) use rendezvous::rooted_tests::install_rooted_mapping_runner;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use symbol_authority::{SymbolAuthorityCase, run_symbol_authority_case};
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+pub(crate) use symbol_authority::combined_inputs::{CombinedInputsCase, run_combined_inputs_case};
 
 #[cfg(all(test, not(feature = "test-support")))]
 mod a8_probes;
