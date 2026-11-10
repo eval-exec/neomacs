@@ -428,11 +428,18 @@ fn check_manifests(
     let providers = provider_features(manifests)?;
     // No provider feature other than `test-support` may reach that provider's
     // own test surface. This covers `default` and every product feature.
+    // `test-thread-fallback-heap` is the one test-only exception: it implies
+    // `test-support` so `thread_exit_leak`'s existing cfg arm compiles. A
+    // product feature that reaches the surface through that implication is
+    // still refused below, because this skip names only the fallback feature.
     for (provider, definitions) in &providers {
         for name in definitions
             .keys()
             .filter(|name| name.as_str() != "test-support")
         {
+            if provider == "neovm-value" && name == "test-thread-fallback-heap" {
+                continue;
+            }
             if reaches_surface(name, definitions, &mut BTreeSet::new())? {
                 return Err(GuardError::new(
                     ErrorCode::FeatureForwardEscape,
@@ -1238,6 +1245,94 @@ fn architecture_a2_target_dev_edges_are_never_sanctioned() {
         check_manifests(&target_only, &toml::map::Map::new(), SurfaceState::Present)
             .expect_err("a target dev edge is not the signed package dev edge")
             .is(ErrorCode::NonDevEnabler)
+    );
+}
+
+#[test]
+fn architecture_a2_accepts_the_fallback_heap_implication_only() {
+    let inherited = toml::map::Map::new();
+    let mut allowed = fixture(&format!("{NORMAL}{DEV}"), "");
+    allowed[0]
+        .data
+        .get_mut("features")
+        .and_then(Value::as_table_mut)
+        .expect("fixture feature table")
+        .insert(
+            "test-thread-fallback-heap".into(),
+            Value::Array(vec![Value::String("test-support".into())]),
+        );
+    assert_eq!(
+        check_manifests(&allowed, &inherited, SurfaceState::Present),
+        Ok(())
+    );
+    let mut product = fixture(&format!("{NORMAL}{DEV}"), "");
+    product[0]
+        .data
+        .get_mut("features")
+        .and_then(Value::as_table_mut)
+        .expect("fixture feature table")
+        .insert(
+            "jit".into(),
+            Value::Array(vec![Value::String("test-thread-fallback-heap".into())]),
+        );
+    product[0]
+        .data
+        .get_mut("features")
+        .and_then(Value::as_table_mut)
+        .expect("fixture feature table")
+        .insert(
+            "test-thread-fallback-heap".into(),
+            Value::Array(vec![Value::String("test-support".into())]),
+        );
+    assert!(
+        check_manifests(&product, &inherited, SurfaceState::Present)
+            .expect_err("a product feature must not reach the surface through the fallback")
+            .is(ErrorCode::FeatureForwardEscape)
+    );
+}
+
+/// The fallback implication opens a route to `test-support`. A normal
+/// dependency and a workspace dependency that request
+/// `test-thread-fallback-heap` are still non-dev enablers.
+#[test]
+fn architecture_a2_refuses_normal_and_workspace_fallback_heap_enablers() {
+    let imply = |mut manifests: Vec<Manifest>| {
+        manifests[0]
+            .data
+            .get_mut("features")
+            .and_then(Value::as_table_mut)
+            .expect("fixture feature table")
+            .insert(
+                "test-thread-fallback-heap".into(),
+                Value::Array(vec![Value::String("test-support".into())]),
+            );
+        manifests
+    };
+    // neovm-value = { features = ["test-thread-fallback-heap"] }
+    let normal = imply(fixture(
+        &format!("{NORMAL}{DEV}"),
+        "[dependencies]\nneovm-value={features=['test-thread-fallback-heap']}\n",
+    ));
+    let error = check_manifests(&normal, &toml::map::Map::new(), SurfaceState::Present)
+        .expect_err("a normal dependency must not enable the fallback heap");
+    assert!(error.is(ErrorCode::NonDevEnabler), "{error}");
+    assert!(
+        error.detail.contains("Normal") && error.detail.contains("alias=neovm-value"),
+        "{error}"
+    );
+
+    // The same edge in [workspace.dependencies].
+    let inherited: Value =
+        toml::from_str("neovm-value={features=['test-thread-fallback-heap']}").expect("fixture");
+    let inherited = inherited.as_table().expect("table");
+    let workspace = imply(fixture(&format!("{NORMAL}{DEV}"), ""));
+    let error = check_manifests(&workspace, inherited, SurfaceState::Present)
+        .expect_err("workspace.dependencies must not enable the fallback heap");
+    assert!(error.is(ErrorCode::NonDevEnabler), "{error}");
+    assert!(
+        error.detail.contains("workspace.dependencies")
+            && error.detail.contains("alias=neovm-value"),
+        "{error}"
     );
 }
 
