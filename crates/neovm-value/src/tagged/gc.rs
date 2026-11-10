@@ -2503,9 +2503,11 @@ mod layout_stats_tests;
 #[path = "gc/tests/pacer_test.rs"]
 mod pacer_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "gc/tests/ownership_test.rs"]
 mod ownership_tests;
+#[cfg(feature = "test-support")]
+pub(crate) use ownership_tests::run_ownership_upper_test;
 
 #[cfg(test)]
 #[path = "gc/tests/thread_local_ownership_test.rs"]

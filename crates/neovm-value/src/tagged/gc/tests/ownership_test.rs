@@ -1,5 +1,27 @@
 use super::*;
 
+/// Upper-crate adapters for the four re-homed rows. The eval subr mint and
+/// the edit `clear-string` builtin stay out of this crate.
+#[cfg(feature = "test-support")]
+#[derive(Clone, Copy)]
+struct OwnershipHost {
+    clear_string: fn(Vec<TaggedValue>) -> Result<TaggedValue, crate::error::Flow>,
+    leaked_subr: fn() -> (TaggedValue, *mut crate::tagged::header::SubrMetadata),
+}
+
+#[cfg(feature = "test-support")]
+std::thread_local! {
+    static OWNERSHIP_HOST: std::cell::Cell<Option<OwnershipHost>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(feature = "test-support")]
+fn ownership_host() -> OwnershipHost {
+    OWNERSHIP_HOST.with(|cell| {
+        cell.get()
+            .expect("ownership upper host is installed by the core shell")
+    })
+}
+
 /// Growth helper mirroring the production insert resize policy closely enough
 /// to force rehashes during the concurrent-mark stress test.
 fn maybe_resize_for_test(ht: &mut crate::value::LispHashTable) {
@@ -950,8 +972,9 @@ fn concurrent_mark_defers_mapped_strings_and_marks_their_interval_children() {
 /// Build a leaked-static `SubrObj` exactly like the production
 /// constructor (`allocate_static_subr_object` `Box::leak`s and never
 /// registers with any heap list), returning the veclike value + raw ptr.
+#[cfg(feature = "test-support")]
 fn leaked_test_subr() -> (TaggedValue, *mut crate::tagged::header::SubrMetadata) {
-    crate::test_utils::leaked_subr_metadata_for_test()
+    (ownership_host().leaked_subr)()
 }
 
 /// Task 01 SUBR RECOGNIZE-AND-DROP: a leaked-static subr (the only
@@ -962,11 +985,10 @@ fn leaked_test_subr() -> (TaggedValue, *mut crate::tagged::header::SubrMetadata)
 /// never written. The subr stays permanently live with its payload
 /// intact (`is_value_marked` unconditionally true for
 /// not-owned/not-mapped).
-#[test]
+#[cfg(feature = "test-support")]
 fn concurrent_leaked_subr_dropped_from_defer_path() {
     crate::test_utils::init_test_tracing();
-    let mut heap = TaggedHeap::new();
-    set_tagged_heap(&mut heap);
+    let mut heap = TestHeap::new();
 
     let (subr_val, subr_ptr) = leaked_test_subr();
     let root = heap.alloc_cons(subr_val, TaggedValue::fixnum(0));
@@ -1023,12 +1045,11 @@ fn concurrent_leaked_subr_dropped_from_defer_path() {
 /// `mapped_veclike_objects` side table that only the mutator's
 /// termination may write. The termination must mark it there, and the
 /// armed partition/tricolor verifiers must pass.
-#[test]
+#[cfg(feature = "test-support")]
 fn concurrent_mapped_subr_still_deferred_and_side_table_marked() {
     crate::test_utils::init_test_tracing();
     unsafe { std::env::set_var("NEOVM_GC_VERIFY_PARTITION", "1") };
-    let mut heap = TaggedHeap::new();
-    set_tagged_heap(&mut heap);
+    let mut heap = TestHeap::new();
 
     // Fake-mapped subr: registered exactly like the pdump loader
     // registers image veclikes (extends the dump span over it).
@@ -3491,11 +3512,10 @@ fn dropping_the_installed_heap_uninstalls_it() {
     crate::tagged::gc::clear_tagged_heap_if_installed(&kept);
 }
 
-#[test]
+#[cfg(feature = "test-support")]
 fn concurrent_builtin_clear_string_retains_interval_child_for_snapshot() {
     crate::test_utils::init_test_tracing();
-    let mut heap = TaggedHeap::new();
-    set_tagged_heap(&mut heap);
+    let mut heap = TestHeap::new();
     let child = heap.alloc_string(crate::heap_types::LispString::from_utf8(
         "only-in-properties",
     ));
@@ -3511,7 +3531,7 @@ fn concurrent_builtin_clear_string_retains_interval_child_for_snapshot() {
     heap.concurrent_begin();
     heap.seed_root(root);
     heap.launch_concurrent_mark();
-    crate::emacs_core::buffer::builtin_clear_string(vec![owner]).unwrap();
+    (ownership_host().clear_string)(vec![owner]).unwrap();
     assert!(!owner.as_lisp_string().unwrap().has_intervals());
     finish_concurrent_cycle(&mut heap, root);
     assert!(
@@ -3526,10 +3546,10 @@ fn concurrent_builtin_clear_string_retains_interval_child_for_snapshot() {
 
 /// Exercise the residual owned-Box sweep with the real upper ABI; the
 /// production canonical factory itself never registers/leaks into a heap.
-#[test]
+#[cfg(feature = "test-support")]
 fn owned_subr_storage_is_deallocated_by_its_exact_layout() {
     let mut heap = TaggedHeap::new();
-    let (value, ptr) = crate::test_utils::leaked_subr_metadata_for_test();
+    let (value, ptr) = (ownership_host().leaked_subr)();
     // The cfg(test) adapter returns an unregistered allocation whose only
     // owner is this fixture; unlike the static tests, transfer it to the heap.
     heap.link_veclike(ptr.cast::<VecLikeHeader>());
@@ -3538,4 +3558,39 @@ fn owned_subr_storage_is_deallocated_by_its_exact_layout() {
     // Drop's existing exclusive owned sweep must use the fixed exact Layout.
     // Miri with leak checking verifies both deallocation and allocator size.
     drop(heap);
+}
+
+#[cfg(feature = "test-support")]
+pub(crate) fn run_ownership_upper_test(
+    name: &str,
+    clear_string: fn(Vec<TaggedValue>) -> Result<TaggedValue, crate::error::Flow>,
+    leaked_subr: fn() -> (TaggedValue, *mut crate::tagged::header::SubrMetadata),
+) {
+    let host = OwnershipHost {
+        clear_string,
+        leaked_subr,
+    };
+    OWNERSHIP_HOST.with(|cell| cell.set(Some(host)));
+    struct Clear;
+    impl Drop for Clear {
+        fn drop(&mut self) {
+            OWNERSHIP_HOST.with(|cell| cell.set(None));
+        }
+    }
+    let _clear = Clear;
+    match name {
+        "concurrent_leaked_subr_dropped_from_defer_path" => {
+            concurrent_leaked_subr_dropped_from_defer_path()
+        }
+        "concurrent_mapped_subr_still_deferred_and_side_table_marked" => {
+            concurrent_mapped_subr_still_deferred_and_side_table_marked()
+        }
+        "concurrent_builtin_clear_string_retains_interval_child_for_snapshot" => {
+            concurrent_builtin_clear_string_retains_interval_child_for_snapshot()
+        }
+        "owned_subr_storage_is_deallocated_by_its_exact_layout" => {
+            owned_subr_storage_is_deallocated_by_its_exact_layout()
+        }
+        other => panic!("unknown ownership upper test {other}"),
+    }
 }

@@ -1524,6 +1524,22 @@ pub fn run_generational_major_test_for_test(
     );
 }
 
+/// FENCE: one re-homed ownership test that needs an upper adapter. The core
+/// shell passes the edit `clear-string` builtin and the eval subr-metadata
+/// mint. The original dispatcher stays `pub(crate)`. The other ownership
+/// rows stay `#[test]` in value.
+#[doc(hidden)]
+pub fn run_ownership_upper_test_for_test(
+    name: &str,
+    clear_string: fn(Vec<crate::value::Value>) -> crate::error::EvalResult,
+    leaked_subr: fn() -> (
+        crate::value::Value,
+        *mut crate::tagged::header::SubrMetadata,
+    ),
+) {
+    crate::tagged::gc::run_ownership_upper_test(name, clear_string, leaked_subr);
+}
+
 /// FENCE: process collection-read configuration. The original stays
 /// `pub(crate)`. This is the only public path; it writes the process gate.
 #[cfg(any(test, feature = "test-support"))]

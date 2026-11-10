@@ -57,6 +57,12 @@ mod generational_marker_unchain_tests;
 #[cfg(test)]
 #[path = "../../core_tests/tagged/gc/tests/marker_chain_unchain_test.rs"]
 mod marker_chain_unchain_tests;
+/// Ownership rows that call the edit clear-string builtin or the eval subr
+/// mint. Assertions stay in the value bodies. The other ownership rows stay
+/// `#[test]` in value.
+#[cfg(test)]
+#[path = "../../core_tests/tagged/gc/tests/ownership_upper_tests.rs"]
+mod ownership_upper_tests;
 #[cfg(test)]
 #[path = "../../core_tests/tagged/gc/tests/symbol_barrier_test.rs"]
 mod symbol_barrier_tests;
