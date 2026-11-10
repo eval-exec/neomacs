@@ -1961,11 +1961,11 @@ fn vm_redefined_fillarray_preserves_keys_values_and_cyclic_roots() {
         let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
         let fixture = vm_string_alias_fixture(&mut eval, test);
         assert!(!neovm_value::tagged::gc::concurrent_hash_mutation_active());
-        let epoch = fixture.table.as_hash_table().unwrap().data.switch_epoch;
+        let epoch = fixture.table.as_hash_table().unwrap().data.switch_epoch();
         vm_redefined_fillarray_call_preserving_argument(&mut eval, &fixture, intern("fillarray"));
         vm_string_alias_assert_graph(&eval, &fixture);
         assert_eq!(
-            fixture.table.as_hash_table().unwrap().data.switch_epoch,
+            fixture.table.as_hash_table().unwrap().data.switch_epoch(),
             epoch
         );
         eval.gc_collect_exact();
@@ -1980,11 +1980,11 @@ fn vm_fillarray_alias_call_preserves_original_roots() {
     let alias = intern("vm-string-alias-callee");
     eval.obarray
         .set_symbol_function_id(alias, Value::from_sym_id(intern("fillarray")));
-    let epoch = fixture.table.as_hash_table().unwrap().data.switch_epoch;
+    let epoch = fixture.table.as_hash_table().unwrap().data.switch_epoch();
     vm_redefined_fillarray_call_preserving_argument(&mut eval, &fixture, alias);
     vm_string_alias_assert_graph(&eval, &fixture);
     assert_eq!(
-        fixture.table.as_hash_table().unwrap().data.switch_epoch,
+        fixture.table.as_hash_table().unwrap().data.switch_epoch(),
         epoch
     );
 }
@@ -2082,11 +2082,11 @@ fn vm_redefined_fillarray_concurrent_context_cycle_keeps_graph_live() {
         neovm_value::tagged::gc::concurrent_hash_snapshot(fixture.table)
             .expect("the real enabled cycle captured this hydrated strong table")
     });
-    let epoch = fixture.table.as_hash_table().unwrap().data.switch_epoch;
+    let epoch = fixture.table.as_hash_table().unwrap().data.switch_epoch();
     vm_redefined_fillarray_call_preserving_argument(&mut eval, &fixture, intern("fillarray"));
     vm_string_alias_assert_graph(&eval, &fixture);
     assert_eq!(
-        fixture.table.as_hash_table().unwrap().data.switch_epoch,
+        fixture.table.as_hash_table().unwrap().data.switch_epoch(),
         epoch
     );
     if let Some(snapshot) = snapshot {
