@@ -16551,3 +16551,519 @@ fn dump_emacs_portable_under_umask_022_writes_world_readable() {
         "umask 022 must yield GNU's open(0666) mode 0644 (world-readable, as a root install needs)"
     );
 }
+
+/// GNU's dump-emacs-portable opens an existing target with
+/// `emacs_open (filename, O_RDWR | O_TRUNC | O_CREAT, 0666)`
+/// (src/pdumper.c:4200): O_TRUNC keeps the inode, so the file keeps its mode
+/// and owner.  The atomic-rename replacement must reproduce the observable
+/// mode even though it installs a fresh inode (a deliberate trade-off: a
+/// running process may have the old image mapped and must not see it
+/// truncated under its mappings).
+#[test]
+#[cfg(unix)]
+fn dump_emacs_portable_keeps_an_existing_targets_mode() {
+    use std::os::unix::fs::PermissionsExt;
+
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    let dir = tempdir().expect("dump tempdir");
+    let dump_path = dir.path().join("existing-mode.pdump");
+    std::fs::write(&dump_path, b"stale").expect("seed existing target");
+    std::fs::set_permissions(&dump_path, std::fs::Permissions::from_mode(0o600))
+        .expect("seed target mode");
+
+    crate::emacs_core::system_entries::builtin_dump_emacs_portable(
+        &mut eval,
+        vec![Value::string(dump_path.to_string_lossy().into_owned())],
+    )
+    .expect("dump-emacs-portable should succeed");
+
+    let mode = std::fs::metadata(&dump_path)
+        .expect("dump metadata")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600, "an existing 0600 dump must stay 0600");
+    // The path really holds the new dump, not the stale bytes.
+    crate::emacs_core::load_boot::load_from_dump(&dump_path)
+        .expect("reloading the redump should succeed");
+}
+
+/// GNU's open(2) follows a symlink in the final component, so dumping to a
+/// link truncates and rewrites the link's target and leaves the link intact.
+/// The rename-based writer must resolve the link and replace the target.
+#[test]
+#[cfg(unix)]
+fn dump_emacs_portable_writes_through_a_symlink() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    let dir = tempdir().expect("dump tempdir");
+    let target = dir.path().join("real.pdump");
+    std::fs::write(&target, b"stale").expect("seed symlink target");
+    let link = dir.path().join("link.pdump");
+    std::os::unix::fs::symlink("real.pdump", &link).expect("create relative symlink");
+
+    crate::emacs_core::system_entries::builtin_dump_emacs_portable(
+        &mut eval,
+        vec![Value::string(link.to_string_lossy().into_owned())],
+    )
+    .expect("dump-emacs-portable should follow the symlink");
+
+    let link_meta = std::fs::symlink_metadata(&link).expect("link metadata");
+    assert!(
+        link_meta.file_type().is_symlink(),
+        "the symlink must survive the dump"
+    );
+    assert_eq!(
+        std::fs::read_link(&link).expect("read link"),
+        std::path::PathBuf::from("real.pdump")
+    );
+    crate::emacs_core::load_boot::load_from_dump(&target)
+        .expect("the symlink target must hold the new dump");
+}
+
+/// A dangling link: open(O_CREAT) follows it and creates the target file, and
+/// the link stays a link.  The resolver's not-exists branch must match.
+#[test]
+#[cfg(unix)]
+fn dump_emacs_portable_creates_through_a_dangling_symlink() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    let dir = tempdir().expect("dump tempdir");
+    let target = dir.path().join("created.pdump");
+    let link = dir.path().join("dangling.pdump");
+    std::os::unix::fs::symlink("created.pdump", &link).expect("create dangling symlink");
+
+    crate::emacs_core::system_entries::builtin_dump_emacs_portable(
+        &mut eval,
+        vec![Value::string(link.to_string_lossy().into_owned())],
+    )
+    .expect("dump-emacs-portable should create the link target");
+
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .expect("link metadata")
+            .file_type()
+            .is_symlink(),
+        "the dangling symlink must survive the dump"
+    );
+    crate::emacs_core::load_boot::load_from_dump(&target)
+        .expect("the created link target must hold the dump");
+}
+
+/// GNU's dump writer opens the target with
+/// `emacs_open (filename, O_RDWR | O_TRUNC | O_CREAT, 0666)`
+/// (src/pdumper.c:4200) and reports a failed open through
+/// `report_file_error ("Opening dump output", filename)` (:4204).  The
+/// errno mapping in `get_file_errno_data` (src/fileio.c:265-283) signals
+/// `permission-denied` for EACCES with DATA (ACTION STRERROR FILE).
+/// Measured on GNU 31.1 running as non-root:
+///   (permission-denied "Opening dump output" "Permission denied" FILE)
+/// and the failed open leaves the 0444 file untouched.  Root bypasses the
+/// mode check, so this test has nothing to compare there.
+#[test]
+#[cfg(unix)]
+fn dump_emacs_portable_refuses_a_read_only_target_like_gnu() {
+    use std::os::unix::fs::PermissionsExt;
+
+    crate::test_utils::init_test_tracing();
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("skipping: root can open a 0444 file for writing");
+        return;
+    }
+    let mut eval = crate::test_utils::new_context();
+    let dir = tempdir().expect("dump tempdir");
+    let dump_path = dir.path().join("read-only.pdump");
+    std::fs::write(&dump_path, b"stale").expect("seed read-only target");
+    std::fs::set_permissions(&dump_path, std::fs::Permissions::from_mode(0o444))
+        .expect("seed read-only mode");
+
+    let err = crate::emacs_core::system_entries::builtin_dump_emacs_portable(
+        &mut eval,
+        vec![Value::string(dump_path.to_string_lossy().into_owned())],
+    )
+    .expect_err("a 0444 target must fail GNU's O_RDWR open");
+
+    match err.into_kind() {
+        neovm_value::error::FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "permission-denied");
+            assert_eq!(
+                sig.data,
+                vec![
+                    Value::string("Opening dump output"),
+                    Value::string("Permission denied"),
+                    Value::string(dump_path.to_string_lossy().into_owned()),
+                ],
+                "GNU 31.1 non-root: (permission-denied \"Opening dump output\" \"Permission denied\" FILE)"
+            );
+        }
+        other => panic!("unexpected flow: {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read(&dump_path).expect("read the refused target"),
+        b"stale",
+        "a refused open must leave the target untouched"
+    );
+}
+
+/// GNU truncates an existing target in place, so the kernel applies its
+/// setid-write rule to the inode: a caller without CAP_FSETID loses
+/// S_ISUID, and S_ISGID when group-exec is set
+/// (fs/attr.c:setattr_should_drop_suidgid).  GNU 31.1 run as non-root
+/// leaves 0755 after dumping over a 4755 file; a tempfile+rename writer
+/// that restores the pre-dump mode would wrongly keep 4755.  Root holds
+/// CAP_FSETID and keeps the bits, so the expectation follows the euid.
+#[test]
+#[cfg(target_os = "linux")]
+fn dump_emacs_portable_drops_setuid_like_gnu() {
+    use std::os::unix::fs::PermissionsExt;
+
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    let dir = tempdir().expect("dump tempdir");
+    let dump_path = dir.path().join("setuid.pdump");
+    std::fs::write(&dump_path, b"stale").expect("seed setuid target");
+    std::fs::set_permissions(&dump_path, std::fs::Permissions::from_mode(0o4755))
+        .expect("seed setuid mode");
+
+    crate::emacs_core::system_entries::builtin_dump_emacs_portable(
+        &mut eval,
+        vec![Value::string(dump_path.to_string_lossy().into_owned())],
+    )
+    .expect("dump-emacs-portable should succeed");
+
+    let mode = std::fs::metadata(&dump_path)
+        .expect("dump metadata")
+        .permissions()
+        .mode()
+        & 0o7777;
+    let expected = if unsafe { libc::geteuid() } == 0 {
+        0o4755
+    } else {
+        0o755
+    };
+    assert_eq!(
+        mode, expected,
+        "the kernel's setid write rule decides the final mode (GNU non-root 4755 -> 0755)"
+    );
+    crate::emacs_core::load_boot::load_from_dump(&dump_path)
+        .expect("reloading the redump should succeed");
+}
+
+const DUMP_WRITE_FAILURE_PATH_ENV: &str = "NEOVM_DUMP_WRITE_FAILURE_PATH";
+// Spawned through libtest's substring filter, so the moved module path does
+// not have to be repeated here.
+const DUMP_WRITE_FAILURE_WORKER_TEST: &str = "dump_emacs_portable_write_failure_worker";
+const DUMP_WRITE_FAILURE_WORKER_OK: &str = "DUMP_WRITE_FAILURE_WORKER_OK";
+
+/// Child half of the write-failure test: the parent starts this test binary
+/// with RLIMIT_FSIZE=1 and SIGXFSZ ignored, so the temp-file write returns
+/// EFBIG instead of the signal GNU takes as fatal (src/sysdep.c:2132).
+#[test]
+fn dump_emacs_portable_write_failure_worker() {
+    crate::test_utils::init_test_tracing();
+    let Some(dump_path) = std::env::var_os(DUMP_WRITE_FAILURE_PATH_ENV) else {
+        return;
+    };
+    let dump_path = PathBuf::from(dump_path);
+    let mut eval = crate::test_utils::new_context();
+
+    let err = crate::emacs_core::system_entries::builtin_dump_emacs_portable(
+        &mut eval,
+        vec![Value::string(dump_path.to_string_lossy().into_owned())],
+    )
+    .expect_err("a write past RLIMIT_FSIZE must fail the dump");
+
+    match err.into_kind() {
+        neovm_value::error::FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "file-error");
+            let data: Vec<Option<String>> =
+                sig.data.iter().map(|value| value.as_str_owned()).collect();
+            assert_eq!(
+                data,
+                vec![
+                    Some("Could not write to dump file".to_string()),
+                    Some("File too large".to_string()),
+                    Some(dump_path.to_string_lossy().into_owned()),
+                ],
+                "GNU 31.1 report_file_error shape for the write phase (src/pdumper.c:4348)"
+            );
+        }
+        other => panic!("unexpected flow: {other:?}"),
+    }
+    assert!(
+        !dump_path.exists(),
+        "atomic rename: unlike GNU (which leaves a partial/truncated target, \
+         pdumper.c open O_TRUNC), no target is installed on a write failure"
+    );
+    println!("DUMP_WRITE_FAILURE_WORKER_OK");
+}
+
+/// Mapping test for the write-phase report: GNU reports a failed write with
+/// `report_file_error ("Could not write to dump file", ctx->dump_filename)`
+/// (src/pdumper.c:4348), not the open action of :4204.  The child starves
+/// the write with RLIMIT_FSIZE=1 and ignores SIGXFSZ, so the write returns
+/// EFBIG and our mapping must produce GNU's condition/DATA with the errno
+/// text ("File too large").  GNU itself cannot be observed in this case:
+/// it installs a fatal SIGXFSZ handler (src/sysdep.c:2132) and dies before
+/// report_file_error, so the live-parity assertion lives in the ENOSPC test
+/// below, which is the shape GNU actually produces.
+#[test]
+#[cfg(target_os = "linux")]
+fn dump_emacs_portable_maps_efbig_write_failures_to_gnus_write_action() {
+    use std::os::unix::process::CommandExt;
+
+    crate::test_utils::init_test_tracing();
+    let dir = tempdir().expect("dump tempdir");
+    let dump_path = dir.path().join("write-failure.pdump");
+    let exe = std::env::current_exe().expect("current test binary");
+
+    let mut command = Command::new(&exe);
+    command
+        .env(DUMP_WRITE_FAILURE_PATH_ENV, &dump_path)
+        .arg(DUMP_WRITE_FAILURE_WORKER_TEST)
+        .arg("--nocapture");
+    // SAFETY: `pre_exec` runs the closure between fork and exec; it only
+    // makes async-signal-safe libc calls and changes nothing outside the
+    // forked child.
+    unsafe {
+        command.pre_exec(|| {
+            // SAFETY: getrlimit/setrlimit/signal are async-signal-safe and
+            // operate on the forked child only.  Only the soft limit moves.
+            unsafe {
+                let mut limit: libc::rlimit = std::mem::zeroed();
+                if libc::getrlimit(libc::RLIMIT_FSIZE, &mut limit) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                limit.rlim_cur = 1;
+                if libc::setrlimit(libc::RLIMIT_FSIZE, &limit) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // The kernel raises SIGXFSZ when the limit stops a write;
+                // GNU makes that signal fatal, but the report site under
+                // test needs the write to return EFBIG.
+                libc::signal(libc::SIGXFSZ, libc::SIG_IGN);
+            }
+            Ok(())
+        });
+    }
+    let output = command.output().expect("spawn the rlimit dump worker");
+    assert!(
+        output.status.success(),
+        "rlimit dump worker failed: {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains(DUMP_WRITE_FAILURE_WORKER_OK),
+        "worker marker missing; the spawned filter probably matched no test\nstdout:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+}
+
+const DUMP_ENOSPC_MOUNT_ENV: &str = "NEOVM_DUMP_ENOSPC_MOUNT_DIR";
+// Spawned through libtest's substring filter, so the moved module path does
+// not have to be repeated here.
+const DUMP_ENOSPC_WORKER_TEST: &str = "dump_emacs_portable_enospc_worker";
+const DUMP_ENOSPC_WORKER_OK: &str = "DUMP_ENOSPC_WORKER_OK";
+const DUMP_ENOSPC_SETUP_FAILED: &str = "DUMP_ENOSPC_SETUP_FAILED";
+
+/// Write `bytes` to the NUL-terminated `path` with raw syscalls.  Only called
+/// between fork and exec: no allocation and no std I/O locks.
+#[cfg(target_os = "linux")]
+unsafe fn preexec_write_file(path: &std::ffi::CStr, bytes: &[u8]) -> bool {
+    let fd = libc::open(path.as_ptr(), libc::O_WRONLY);
+    if fd < 0 {
+        return false;
+    }
+    let mut written = 0;
+    while written < bytes.len() {
+        let n = libc::write(fd, bytes[written..].as_ptr().cast(), bytes.len() - written);
+        if n <= 0 {
+            libc::close(fd);
+            return false;
+        }
+        written += n as usize;
+    }
+    libc::close(fd);
+    true
+}
+
+/// Write a `0 <id> 1\n` id map with raw syscalls (no allocation).
+#[cfg(target_os = "linux")]
+unsafe fn preexec_write_id(path: &std::ffi::CStr, id: u32) -> bool {
+    let mut buffer = [0u8; 24];
+    buffer[0] = b'0';
+    buffer[1] = b' ';
+    let mut len = 2;
+    let mut digits = [0u8; 10];
+    let mut count = 0;
+    let mut value = id;
+    loop {
+        digits[count] = b'0' + (value % 10) as u8;
+        count += 1;
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+    while count > 0 {
+        count -= 1;
+        buffer[len] = digits[count];
+        len += 1;
+    }
+    buffer[len] = b' ';
+    buffer[len + 1] = b'1';
+    buffer[len + 2] = b'\n';
+    len += 3;
+    preexec_write_file(path, &buffer[..len])
+}
+
+/// Map the caller's uid/gid to root in a fresh user namespace with a fresh
+/// mount namespace, then mount a one-page tmpfs on `target`.  Called between
+/// fork and exec: only raw syscalls and raw-fd writes, no allocation, and
+/// only the forked child's namespaces change.
+#[cfg(target_os = "linux")]
+fn preexec_setup_tiny_tmpfs(target: &std::ffi::CStr) -> std::io::Result<()> {
+    // SAFETY: see the function doc; every call below is a raw syscall or a
+    // raw-fd write, and the ids are read before the namespace is entered
+    // because an unmapped user namespace reports the overflow id.
+    unsafe {
+        let uid = libc::getuid();
+        let gid = libc::getgid();
+        if libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS) != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // A user namespace has no mapping until its creator writes one;
+        // setgroups must be denied first for an unprivileged gid_map.
+        if !preexec_write_file(c"/proc/self/setgroups", b"deny")
+            || !preexec_write_id(c"/proc/self/uid_map", uid)
+            || !preexec_write_id(c"/proc/self/gid_map", gid)
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        if libc::mount(
+            c"tmpfs".as_ptr(),
+            target.as_ptr(),
+            c"tmpfs".as_ptr(),
+            0,
+            c"size=4k".as_ptr().cast(),
+        ) != 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+/// Child half of the ENOSPC parity test: the parent starts this binary with
+/// a private user+mount namespace and a one-page tmpfs already mounted on
+/// the env-named directory, so the dump write hits a real ENOSPC and must
+/// answer GNU's exact live shape
+///   (file-error "Could not write to dump file" "No space left on device" FILE).
+#[test]
+#[cfg(target_os = "linux")]
+fn dump_emacs_portable_enospc_worker() {
+    crate::test_utils::init_test_tracing();
+    let Some(mount_dir) = std::env::var_os(DUMP_ENOSPC_MOUNT_ENV) else {
+        return;
+    };
+    let mount_dir = PathBuf::from(mount_dir);
+    let dump_path = mount_dir.join("enospc.pdump");
+    let mut eval = crate::test_utils::new_context();
+
+    let err = crate::emacs_core::system_entries::builtin_dump_emacs_portable(
+        &mut eval,
+        vec![Value::string(dump_path.to_string_lossy().into_owned())],
+    )
+    .expect_err("a full tmpfs must fail the dump write");
+
+    match err.into_kind() {
+        neovm_value::error::FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "file-error");
+            let data: Vec<Option<String>> =
+                sig.data.iter().map(|value| value.as_str_owned()).collect();
+            assert_eq!(
+                data,
+                vec![
+                    Some("Could not write to dump file".to_string()),
+                    Some("No space left on device".to_string()),
+                    Some(dump_path.to_string_lossy().into_owned()),
+                ],
+                "GNU 31.1 live shape for a write that hits ENOSPC"
+            );
+        }
+        other => panic!("unexpected flow: {other:?}"),
+    }
+    assert!(
+        !dump_path.exists(),
+        "atomic rename: unlike GNU (which leaves a partial/truncated target, \
+         pdumper.c open O_TRUNC), no target is installed on a write failure"
+    );
+    println!("{DUMP_ENOSPC_WORKER_OK}");
+}
+
+/// Parity test for the write-phase report: the child enters a private user
+/// and mount namespace and dumps onto a one-page tmpfs.  ENOSPC is a write
+/// failure GNU can also reach, and a live pinned GNU 31.1 run on a tiny
+/// tmpfs answers exactly
+///   (file-error "Could not write to dump file" "No space left on device" FILE)
+/// so this is live GNU parity, not merely our errno mapping.  Hosts without
+/// unprivileged user namespaces report the setup failure marker and skip;
+/// the RLIMIT/EFBIG test above still covers the mapping there.
+#[test]
+#[cfg(target_os = "linux")]
+fn dump_emacs_portable_reports_enospc_with_gnus_write_action() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::process::CommandExt;
+
+    crate::test_utils::init_test_tracing();
+    let mount_dir = tempdir().expect("tmpfs mount point");
+    let exe = std::env::current_exe().expect("current test binary");
+    let target = CString::new(mount_dir.path().as_os_str().as_bytes())
+        .expect("tempdir path contains no NUL");
+
+    let mut command = Command::new(&exe);
+    command
+        .env(DUMP_ENOSPC_MOUNT_ENV, mount_dir.path())
+        .arg(DUMP_ENOSPC_WORKER_TEST)
+        .arg("--nocapture");
+    // SAFETY: `pre_exec` runs the closure between fork and exec; the closure
+    // makes only raw syscalls / raw-fd writes and changes namespaces only in
+    // the forked child.
+    unsafe {
+        command.pre_exec(move || match preexec_setup_tiny_tmpfs(&target) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                // SAFETY: raw write to the inherited stdout pipe; the static
+                // marker bytes need no allocation.
+                unsafe {
+                    let marker = DUMP_ENOSPC_SETUP_FAILED.as_bytes();
+                    libc::write(1, marker.as_ptr().cast(), marker.len());
+                    libc::write(1, b"\n".as_ptr().cast(), 1);
+                }
+                Err(error)
+            }
+        });
+    }
+    let output = command.output().expect("spawn the ENOSPC worker");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout.contains(DUMP_ENOSPC_SETUP_FAILED) {
+        eprintln!("skipping the ENOSPC parity test: unprivileged user namespaces unavailable");
+        return;
+    }
+    assert!(
+        output.status.success(),
+        "ENOSPC worker failed: {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        stdout,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        stdout.contains(DUMP_ENOSPC_WORKER_OK),
+        "worker marker missing; the spawned filter probably matched no test\nstdout:\n{stdout}"
+    );
+    eprintln!("ENOSPC parity exercised on a one-page tmpfs");
+}
