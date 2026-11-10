@@ -103,6 +103,9 @@ mod process_tests_signal_number_rs;
 #[path = "emacs_core/system/process/tests/timeout.rs"]
 mod process_tests_timeout_rs;
 
+#[path = "emacs_core/system/process/tests/green_select_rehome.rs"]
+mod process_tests_green_select_rehome_rs;
+
 #[cfg(not(feature = "sqlite"))]
 #[path = "emacs_core/system/sqlite/tests/disabled_test.rs"]
 mod sqlite_tests_disabled_test_rs;

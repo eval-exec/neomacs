@@ -10,6 +10,12 @@
 
 use super::super::world::Baton;
 use super::host_service::{HostParkRegistration, HostRequestKey, RealWaitPermit, SettledHostCall};
+#[cfg(any(test, feature = "test-support"))]
+use crate::emacs_core::eval::data::process_state::{
+    MainConnectPending, PendingConnectObservationError,
+};
+#[cfg(any(test, feature = "test-support"))]
+use neovm_value::heap_types::ProcessId;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
@@ -1147,7 +1153,7 @@ impl ControlState {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SelectParkObservationError {
     #[error("select park gate lock poisoned")]
@@ -1157,26 +1163,26 @@ pub(crate) enum SelectParkObservationError {
     #[error("select park gate prepared twice")]
     AlreadyPrepared,
     #[error(transparent)]
-    PendingConnect(#[from] crate::emacs_core::process::PendingConnectObservationError),
+    PendingConnect(#[from] PendingConnectObservationError),
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static_assertions::assert_impl_all!(SelectParkObservationError: std::error::Error, Send, Sync);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SelectParkExpectation {
     Ordinary,
-    MainConnectPending(crate::emacs_core::process::ProcessId),
+    MainConnectPending(ProcessId),
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 pub(crate) enum SelectParkFacts {
     Ordinary,
-    MainConnectPending(crate::emacs_core::process::MainConnectPending),
+    MainConnectPending(MainConnectPending),
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 pub(crate) struct SelectParked {
     owner: ThreadKey,
@@ -1184,7 +1190,7 @@ pub(crate) struct SelectParked {
     facts: SelectParkFacts,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl SelectParked {
     #[doc(hidden)]
     pub fn owner(&self) -> ThreadKey {
@@ -1198,15 +1204,15 @@ impl SelectParked {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static_assertions::assert_impl_all!(SelectParked: Send, std::fmt::Debug);
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static_assertions::assert_not_impl_any!(SelectParked: Clone, Copy);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 type SelectParkCallback = Box<dyn FnOnce(SelectParked) + Send>;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 enum SelectParkGate {
     Armed {
         owner: ThreadKey,
@@ -1220,7 +1226,7 @@ enum SelectParkGate {
     },
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl std::fmt::Debug for SelectParkGate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1246,7 +1252,7 @@ impl std::fmt::Debug for SelectParkGate {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static_assertions::assert_impl_all!(SelectParkGate: Send, std::fmt::Debug);
 
 #[cfg(test)]
@@ -1265,7 +1271,7 @@ pub(crate) struct Control {
     #[cfg(test)]
     main_native_events: Mutex<Vec<MainNativeWaitEvent>>,
     metadata_changed: Condvar,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     after_next_select_park: Mutex<Option<SelectParkGate>>,
     /// An owned I/O handle: the idle scheduler never reads World storage.
     select: OnceLock<Option<crate::emacs_core::eval::process_hooks::SelectHandleToken>>,
@@ -2764,7 +2770,7 @@ impl Control {
             Some((_, Some(_))) | None => None,
         };
         drop(state);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.observe_select_park_for_test(ThreadKey::Main, wait_end);
         match next {
             Some(key) => {
@@ -2914,7 +2920,7 @@ impl Control {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn after_next_select_park_for_test(
         &self,
         owner: ThreadKey,
@@ -2936,7 +2942,7 @@ impl Control {
     /// The live owner prepares only native facts immediately before its
     /// parked-root/Baton transfer. No process operation occurs during that
     /// transfer; the token itself is minted only after Select is committed.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn prepare_select_park_for_test(
         &self,
         owner: ThreadKey,
@@ -3009,7 +3015,7 @@ impl Control {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn observe_select_park_for_test(&self, owner: ThreadKey, wait_end: Instant) {
         let callback = {
             let mut slot = self
@@ -3922,7 +3928,7 @@ impl Control {
                 Self::enqueue_ready(&mut state, me);
             }
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if let Wait::Select { wait_end } = wait {
             self.observe_select_park_for_test(me, wait_end);
         }

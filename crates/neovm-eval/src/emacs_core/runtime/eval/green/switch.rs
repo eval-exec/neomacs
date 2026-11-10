@@ -913,13 +913,95 @@ impl Context {
         self.green_select_turn(wait_time)
     }
 
+    /// Arm the next Main select park for one pending TCP connect.
+    ///
+    /// The scheduler tests that need this live above eval, and they must not
+    /// name `Control` or the park types. The returned pieces are: a receiver
+    /// that yields once Main is parked on this connect, the sender the peer
+    /// uses after it has written, the callback's completion, and a wake that
+    /// requests quit and wakes Main.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn arm_main_connect_select_park_for_test(
+        &mut self,
+        process: neovm_value::heap_types::ProcessId,
+    ) -> (
+        mpsc::Receiver<()>,
+        mpsc::Sender<()>,
+        mpsc::Receiver<Result<(), String>>,
+        Box<dyn Fn() + Send>,
+    ) {
+        self.eval_str("(thread-join (make-thread (lambda () nil)))")
+            .expect("seat the owned Green scheduler");
+        let control = Arc::clone(&self.green_seat().expect("Green main seat").control);
+        let (parked_tx, parked_rx) = mpsc::channel();
+        let (ack_tx, ack_rx) = mpsc::channel();
+        let (completed_tx, completed_rx) = mpsc::channel();
+        let cancel = self.quit_requested.clone();
+        let weak = Arc::downgrade(&control);
+        let wake_cancel = cancel.clone();
+        let wake_weak = weak.clone();
+        let wake: Box<dyn Fn() + Send> = Box::new(move || {
+            wake_cancel.request();
+            if let Some(control) = wake_weak.upgrade() {
+                control.wake(ThreadKey::Main);
+            }
+        });
+        control.after_next_select_park_for_test(
+            ThreadKey::Main,
+            super::scheduler::SelectParkExpectation::MainConnectPending(process),
+            move |witness| {
+                let outcome = (|| {
+                    if witness.owner() != ThreadKey::Main {
+                        return Err("unexpected Main Select owner".to_string());
+                    }
+                    match witness.into_facts() {
+                        super::scheduler::SelectParkFacts::MainConnectPending(pending)
+                            if pending.process() == process => {}
+                        super::scheduler::SelectParkFacts::MainConnectPending(_) => {
+                            return Err("wrong pending-connect owner".to_string());
+                        }
+                        super::scheduler::SelectParkFacts::Ordinary => {
+                            return Err("wrong Main Select phase".to_string());
+                        }
+                    }
+                    parked_tx
+                        .send(())
+                        .map_err(|_| "Main Select witness receiver closed".to_string())?;
+                    match ack_rx.recv_timeout(Duration::from_secs(5)) {
+                        Ok(()) => Ok(()),
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            Err("real output write acknowledgement missing".to_string())
+                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            Err("real output writer disconnected".to_string())
+                        }
+                    }
+                })();
+                if outcome.is_err() {
+                    cancel.request();
+                    match weak.upgrade() {
+                        Some(control) => control.wake(ThreadKey::Main),
+                        None => {
+                            let _ = completed_tx
+                                .send(Err("Main Select owner closed before failure cancellation"
+                                    .to_string()));
+                            return;
+                        }
+                    }
+                }
+                let _ = completed_tx.send(outcome);
+            },
+        );
+        (parked_rx, ack_tx, completed_rx, wake)
+    }
+
     #[cold]
     #[inline(never)]
     pub(crate) fn green_select_turn(&mut self, wait_time: Duration) -> Result<SelectTurn, Flow> {
         if wait_time.is_zero() || switch_refusal(self).is_some() {
             return Ok(SelectTurn::Block(wait_time));
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let (key, control) = {
             let seat = self.green_seat().expect("seated");
             (seat.key, Arc::clone(&seat.control))
@@ -928,7 +1010,7 @@ impl Context {
         // GNU really_call_select releases the global lock even when no peer
         // is ready. Publish this owner before the scheduler's native wait so
         // a later control publication can wake it without needing the Baton.
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let prepare_park = |context: &Context| {
             control
                 .prepare_select_park_for_test(key, &context.processes)
@@ -949,7 +1031,7 @@ impl Context {
             match crate::emacs_core::eval::process_hooks::prepare_main_wait(self, physical_end) {
                 crate::emacs_core::eval::process_hooks::MainWaitPreparation::Ready => {}
                 crate::emacs_core::eval::process_hooks::MainWaitPreparation::Native(wait) => {
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-support"))]
                     prepare_park(self)?;
                     self.green_park_impl(
                         ParkRequest::MainNative { wait, wait_end },
@@ -969,7 +1051,7 @@ impl Context {
                     )?;
                 }
                 crate::emacs_core::eval::process_hooks::MainWaitPreparation::Scheduler => {
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-support"))]
                     prepare_park(self)?;
                     self.green_wait(Wait::Select { wait_end })?;
                     return Ok(SelectTurn::Switched);
@@ -977,7 +1059,7 @@ impl Context {
             }
             self.green_raise_pending_signal(ThreadKey::Main)?;
         } else {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             prepare_park(self)?;
             self.green_wait(Wait::Select { wait_end })?;
         }

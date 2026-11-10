@@ -487,7 +487,7 @@ static_assertions::const_assert_eq!(std::mem::size_of::<NativeConnectObservation
 /// Moved down from the system process vocabulary (peer 02:5xZ pattern: the
 /// pending-connect observation types live with the evaluator state they
 /// describe; the system copies had no users).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum PendingConnectObservationError {
     #[error("pending connect process missing")]
@@ -503,24 +503,24 @@ pub(crate) enum PendingConnectObservationError {
     #[error("pending connect poller missing")]
     MissingBackend,
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static_assertions::assert_impl_all!(PendingConnectObservationError: std::error::Error, Send, Sync);
 
 /// Native-only proof for the one pending TCP connect in a Green test.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 pub(crate) struct MainConnectPending {
     process: ProcessId,
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl MainConnectPending {
     pub(crate) fn process(&self) -> ProcessId {
         self.process
     }
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static_assertions::assert_impl_all!(MainConnectPending: Send, std::fmt::Debug);
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static_assertions::assert_not_impl_any!(MainConnectPending: Clone, Copy);
 
 pub struct ProcessWaitBackend {
@@ -2008,8 +2008,8 @@ impl ProcessManager {
     /// Project only the live owner's actual pending TCP state. This neither
     /// changes nor claims to inspect the native poller's registration. The
     /// fixture separately requires the real canonical writable backend event.
-    #[cfg(test)]
-    pub fn main_connect_pending_for_test(
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn main_connect_pending_for_test(
         &self,
         id: ProcessId,
     ) -> Result<MainConnectPending, PendingConnectObservationError> {

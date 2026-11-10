@@ -867,6 +867,28 @@ pub mod authority {
         crate::emacs_core::jit::stats::reset_compile_stats();
     }
 
+    /// Fence delegate for the native-leaf depth counter. The counter stays
+    /// `pub(crate)` on the JIT cache; callers copy one `u32` out.
+    #[cfg(feature = "jit")]
+    pub fn native_depth_for_test() -> u32 {
+        crate::emacs_core::jit::cache::native_depth()
+    }
+
+    /// Fence delegate: arm the next Main select park for one pending connect.
+    /// `Control` and the park types stay crate-private. The channels and the
+    /// wake closure are the only values that leave eval.
+    pub fn arm_main_connect_select_park_for_test(
+        context: &mut crate::emacs_core::eval::Context,
+        process: neovm_value::heap_types::ProcessId,
+    ) -> (
+        std::sync::mpsc::Receiver<()>,
+        std::sync::mpsc::Sender<()>,
+        std::sync::mpsc::Receiver<Result<(), String>>,
+        Box<dyn Fn() + Send>,
+    ) {
+        context.arm_main_connect_select_park_for_test(process)
+    }
+
     /// Fence delegates for the JIT tiering test knobs (writes to the
     /// function's runtime state; no &mut Runtime escapes).
     #[cfg(feature = "jit")]
