@@ -252,40 +252,6 @@ fn pdump_round_trip_preserves_last_window_start_lisp_position() {
 }
 
 #[test]
-fn pdump_round_trip_preserves_auto_save_failure_time() {
-    crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
-    let current = eval.buffers.current_buffer_id().expect("current buffer");
-    eval.buffers
-        .get_mut(current)
-        .expect("current buffer")
-        .set_auto_save_failure_time(1_700_000_000);
-
-    let dump = crate::emacs_core::pdump::convert::dump_evaluator(&eval);
-    let dumped = dump
-        .buffers
-        .buffers
-        .iter()
-        .find(|(id, _)| id.0 == current.0)
-        .map(|(_, buffer)| buffer)
-        .expect("dumped current buffer");
-    assert_eq!(dumped.auto_save_failure_time, 1_700_000_000);
-
-    let dir = tempfile::tempdir().unwrap();
-    let dump_path = dir.path().join("auto-save-failure-time.pdump");
-    dump_to_file(&eval, &dump_path).expect("dump should succeed");
-    let loaded = load_from_dump(&dump_path).expect("load should succeed");
-    assert_eq!(
-        loaded
-            .buffers
-            .get(current)
-            .expect("restored buffer")
-            .auto_save_failure_time(),
-        1_700_000_000
-    );
-}
-
-#[test]
 fn test_dump_modes_use_symbol_ids_for_font_lock_faces() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());

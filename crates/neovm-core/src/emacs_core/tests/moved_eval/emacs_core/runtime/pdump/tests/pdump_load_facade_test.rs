@@ -6,7 +6,8 @@
 //! eval's unit-runtime module stays `cfg(test)`, so a dependency build
 //! cannot see it. Symbol cells go through `obarray` / `obarray_mut`
 //! because the obarray field is `pub(crate)`. Buffer state is the public
-//! `edit.buffers` field.
+//! `edit.buffers` field. The auto-save failure-time round trip also asserts
+//! the dumped image field, through the existing `dump_evaluator` surface.
 
 use neovm_edit::buffer::LispCharPos1;
 use neovm_value::heap_types::LispMarker;
@@ -1054,5 +1055,46 @@ fn pdump_round_trip_keeps_the_well_known_symbol_table_identity() {
             .obarray()
             .symbol_value_id_copied(intern(probe.name())),
         Some(Value::fixnum(7))
+    );
+}
+
+#[test]
+fn pdump_round_trip_preserves_auto_save_failure_time() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    let current = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.edit
+        .buffers
+        .get_mut(current)
+        .expect("current buffer")
+        .set_auto_save_failure_time(1_700_000_000);
+
+    let dump = crate::emacs_core::pdump::convert::dump_evaluator(&eval);
+    let dumped = dump
+        .buffers
+        .buffers
+        .iter()
+        .find(|(id, _)| id.0 == current.0)
+        .map(|(_, buffer)| buffer)
+        .expect("dumped current buffer");
+    assert_eq!(dumped.auto_save_failure_time, 1_700_000_000);
+
+    let dir = tempfile::tempdir().unwrap();
+    let dump_path = dir.path().join("auto-save-failure-time.pdump");
+    crate::emacs_core::pdump::dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    let loaded =
+        crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load should succeed");
+    assert_eq!(
+        loaded
+            .edit
+            .buffers
+            .get(current)
+            .expect("restored buffer")
+            .auto_save_failure_time(),
+        1_700_000_000
     );
 }

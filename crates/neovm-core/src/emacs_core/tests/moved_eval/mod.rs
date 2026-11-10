@@ -406,7 +406,8 @@ mod emacs_core_runtime_jit_tests_jit_function_cell_observer_test_rs;
 #[path = "emacs_core/runtime/bytecode/tests/vm_process_builtin_test.rs"]
 mod emacs_core_runtime_bytecode_tests_vm_process_builtin_test_rs;
 // Pdump tests whose subject is the core load facade (`load_from_dump` and
-// the bootstrap constructors). Assertions are unchanged. The interner-failure
+// the bootstrap constructors). Assertions are unchanged. The auto-save
+// failure-time round trip keeps its dump-image assert. The interner-failure
 // test stays in eval: its subject is the loader's error arm.
 #[cfg(test)]
 #[path = "emacs_core/runtime/pdump/tests/pdump_load_facade_test.rs"]
