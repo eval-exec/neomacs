@@ -1499,6 +1499,13 @@ pub(crate) fn stress_mix(seq: u64) -> u64 {
 /// definition.
 const STRESS_PROBE_SKIP_MAX: NonZeroU8 = NonZeroU8::new(4).unwrap();
 
+/// The skip bound the re-homed soak derives its install-probe count from.
+/// The const stays private.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn stress_probe_skip_max_for_test() -> NonZeroU8 {
+    STRESS_PROBE_SKIP_MAX
+}
+
 /// Probes a finished job of `seq` still reads as running under stress.
 fn stress_probe_skips(seq: u64) -> u8 {
     if stress_enabled() {
@@ -1667,10 +1674,6 @@ mod soak_tests;
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 #[path = "bg/tests/mutator_test.rs"]
 mod mutator_tests;
-
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
-#[path = "bg/tests/hof_credit_test.rs"]
-mod hof_credit_tests;
 
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 #[path = "bg/tests/inline_size_test.rs"]

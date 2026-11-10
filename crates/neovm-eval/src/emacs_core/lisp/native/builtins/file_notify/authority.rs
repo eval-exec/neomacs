@@ -82,3 +82,16 @@ pub fn inotify_event_registered_name_lisp_for_test(
         registration,
     )
 }
+
+/// Forge one renamed-to w32 event and return its evaluator encoding.
+/// The platform module constructs the private-field event. Linux unit
+/// tests compile that module; it is not a Windows-only backend.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+pub fn w32_renamed_to_event_lisp_for_test(
+    ctx: &crate::emacs_core::eval::Context,
+    watch_id: WatchId,
+    path: &std::path::Path,
+    registration: WatchRegistration,
+) -> Value {
+    super::platform::windows::w32_renamed_to_event_lisp_for_test(ctx, watch_id, path, registration)
+}

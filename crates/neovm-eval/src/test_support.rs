@@ -185,6 +185,10 @@ pub mod authority {
         context.obarray_mut().invalidate_all_function_bindings(why);
     }
 
+    /// Renamed-to w32 event forge. Linux unit builds compile the windows
+    /// module; the event fields stay private.
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    pub use crate::emacs_core::builtins::file_notify::authority::w32_renamed_to_event_lisp_for_test;
     /// P1 F1 FILE-NOTIFY FENCES (peer 12:57Z (c)): the event-injection and
     /// thread-local-registry fixtures stay authority-only.  The
     /// implementations live in the owning module, where the private fields
@@ -1784,11 +1788,137 @@ pub mod authority {
     }
 
     /// Drop-scope restore: workers take no jobs until the guard drops.
+    /// `WorkerHold` stays private. `impl Drop` is the cross-crate route.
     #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
-    #[allow(private_interfaces)]
     #[must_use = "workers stay held until the guard drops"]
-    pub fn hold_workers_for_test() -> crate::emacs_core::jit::bg::WorkerHold {
+    pub fn hold_workers_for_test() -> impl Drop {
         crate::emacs_core::jit::bg::hold_workers_for_test()
+    }
+
+    /// Copied background-compile counters. `BgStats` and `JobClass` stay
+    /// crate-private. Discriminants match `JobClass`.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[repr(u8)]
+    pub enum BgJobClassCopy {
+        Osr = 0,
+        FirstSight = 1,
+        Entry = 2,
+        Upgrade = 3,
+    }
+
+    /// Copied per-class enqueue and install counts, plus pending probes.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct BgJobStatsCopy {
+        pub(crate) enqueued: [u64; 4],
+        pub(crate) installed: [u64; 4],
+        pub(crate) pending_probes: u64,
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    impl BgJobStatsCopy {
+        /// Field stays pub(crate). Cross-crate reads use this Copy getter.
+        pub fn enqueued(self) -> [u64; 4] {
+            self.enqueued
+        }
+
+        /// Field stays pub(crate). Cross-crate reads use this Copy getter.
+        pub fn installed(self) -> [u64; 4] {
+            self.installed
+        }
+
+        /// Field stays pub(crate). Cross-crate reads use this Copy getter.
+        pub fn pending_probes(self) -> u64 {
+            self.pending_probes
+        }
+    }
+
+    /// This thread's background-compile counters.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn bg_stats_for_test() -> BgJobStatsCopy {
+        let stats = crate::emacs_core::jit::bg::stats_snapshot();
+        debug_assert_eq!(
+            crate::emacs_core::jit::bg::JobClass::Osr as u8,
+            BgJobClassCopy::Osr as u8
+        );
+        debug_assert_eq!(
+            crate::emacs_core::jit::bg::JobClass::FirstSight as u8,
+            BgJobClassCopy::FirstSight as u8
+        );
+        debug_assert_eq!(
+            crate::emacs_core::jit::bg::JobClass::Entry as u8,
+            BgJobClassCopy::Entry as u8
+        );
+        debug_assert_eq!(
+            crate::emacs_core::jit::bg::JobClass::Upgrade as u8,
+            BgJobClassCopy::Upgrade as u8
+        );
+        let mut enqueued = [0; 4];
+        let mut installed = [0; 4];
+        enqueued.copy_from_slice(&stats.enqueued);
+        installed.copy_from_slice(&stats.installed);
+        const _: () =
+            assert!(<crate::emacs_core::jit::bg::JobClass as strum::EnumCount>::COUNT == 4);
+        BgJobStatsCopy {
+            enqueued,
+            installed,
+            pending_probes: stats.pending_probes,
+        }
+    }
+
+    /// What this thread's cache holds for an already-assigned id.
+    /// `"none"` when the id was never assigned is the caller's branch.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn cache_entry_kind_for_test(id: u64) -> &'static str {
+        crate::emacs_core::jit::cache::cache_entry_kind_for_test(id)
+    }
+
+    /// Park this body's tier-up at `heat`.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn defer_tier_up_for_test(
+        function: &crate::emacs_core::bytecode::ByteCodeFunction,
+        heat: u32,
+    ) {
+        use crate::emacs_core::bytecode::ByteCodeFunctionExt as _;
+        use crate::emacs_core::jit::RuntimeStateTieringExt as _;
+        function.jit_runtime().defer_tier_up(heat);
+    }
+
+    /// `dispatch_sized` of this body's executable length is `Plan::Compiled`.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn dispatch_sized_is_compiled_for_test(
+        function: &crate::emacs_core::bytecode::ByteCodeFunction,
+    ) -> bool {
+        use crate::emacs_core::bytecode::ByteCodeFunctionExt as _;
+        use crate::emacs_core::jit::RuntimeStateTieringExt as _;
+        matches!(
+            function
+                .jit_runtime()
+                .dispatch_sized(function.executable_ops().len()),
+            crate::emacs_core::jit::Plan::Compiled
+        )
+    }
+
+    /// Install every pending compile whose backend has finished.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn drain_ready_pending_for_test(ctx: Option<&crate::emacs_core::eval::Context>) {
+        crate::emacs_core::jit::cache::drain_ready_pending(ctx);
+    }
+
+    /// Whether resolving this function installs or finds a compiled leaf.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn compiled_leaf_resolved_for_test(
+        ctx: &mut crate::emacs_core::eval::Context,
+        function: &crate::emacs_core::bytecode::ByteCodeFunction,
+    ) -> bool {
+        crate::emacs_core::jit::cache::resolve_compiled_leaf_ptr(ctx, function).is_some()
+    }
+
+    /// Upper bound of the soak's fake-running probes for one finished job.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn stress_probe_skip_max_for_test() -> u8 {
+        crate::emacs_core::jit::bg::stress_probe_skip_max_for_test().get()
     }
 
     /// Process-wide static reset of the call-census counters. The leaf is

@@ -53,25 +53,6 @@ fn w32_request_parsing_and_lisp_event_shape_match_gnu() {
     );
     assert_eq!(W32Filter::from_lisp_name("unknown-filter"), None);
     assert!(request([W32Filter::Subtree]).recursive());
-
-    let event = W32Event {
-        watch_id: WatchId::new(42, 0),
-        action: W32Action::RenamedTo,
-        path: PathBuf::from(r"nested\new.txt"),
-    };
-    let eval = crate::test_utils::runtime_startup_context();
-    let fields = neovm_value::value::list_to_vec(
-        &event.into_lisp(&eval, WatchRegistration::new(Value::NIL, Value::NIL)),
-    )
-    .expect("w32 event is a proper list");
-    assert_eq!(
-        fields,
-        [
-            Value::fixnum(42),
-            Value::symbol("renamed-to"),
-            Value::string(r"nested\new.txt")
-        ]
-    );
 }
 
 fn encoded_record(action: u32, name: &str) -> Vec<u8> {

@@ -8,7 +8,6 @@ use enumflags2::BitFlags;
 #[cfg(target_os = "windows")]
 use neovm_value::error::Flow;
 use neovm_value::value::Value;
-#[cfg(target_os = "windows")]
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -119,6 +118,27 @@ pub(in super::super) struct W32Event {
     watch_id: WatchId,
     action: W32Action,
     path: PathBuf,
+}
+
+/// Fixture forge for the re-homed Lisp-shape test. Construction stays in
+/// this module; the event fields stay private. The only public route is
+/// the test-support authority fence.
+#[cfg(any(test, feature = "test-support"))]
+pub(in super::super) fn w32_renamed_to_event_lisp_for_test(
+    ctx: &crate::emacs_core::eval::Context,
+    watch_id: WatchId,
+    path: &Path,
+    registration: WatchRegistration,
+) -> Value {
+    FileNotifyEvent::into_lisp(
+        W32Event {
+            watch_id,
+            action: W32Action::RenamedTo,
+            path: path.to_path_buf(),
+        },
+        ctx,
+        registration,
+    )
 }
 
 impl FileNotifyEvent for W32Event {

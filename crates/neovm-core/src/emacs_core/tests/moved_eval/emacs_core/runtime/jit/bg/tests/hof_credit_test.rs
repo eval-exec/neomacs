@@ -7,16 +7,24 @@
 //! answer must match the interpreted run, the specpdl and depth must balance
 //! around it, and the leaf installed once the worker is done must inline the
 //! warm callback loop.
+//!
+//! `runtime_startup_context` is minted in this crate. Inline2 and OptMode
+//! stay crate-private; the signed tokens are the public path. Depth is the
+//! public getter. The job counters and the stress-skip bound are authority.
 
-use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
-use std::time::Duration;
-
-use super::*;
 use crate::emacs_core::eval::Context;
-use crate::emacs_core::jit::compile::{self, Inline2Mode, OptMode};
 use crate::emacs_core::print::print_value;
+use crate::test_utils::{init_test_tracing, runtime_startup_context};
+use neovm_eval::test_support::authority::{
+    BgJobClassCopy, TestInline2Mode, TestOptMode, bg_stats_for_test, force_deopt_for_test,
+    force_hof_inline_for_test, force_inline_for_test, force_inline2_token_for_test,
+    force_mode_for_test, force_profit_gate_for_test, force_stress_for_test,
+    jit_compiled_id_for_test, opt_mode_token_scope_for_test, quiesce_for_test,
+    stress_probe_skip_max_for_test, with_cached_leaf_for_test,
+};
 use neovm_value::intern::intern;
+use std::time::Duration;
 
 /// The production front with the worker forced on: Opt backend, INLINE2
 /// off, profit gate on, HOF inlining on. `stress` delays every worker job
@@ -27,14 +35,14 @@ struct Production(Box<dyn std::any::Any>);
 impl Production {
     #[doc(hidden)]
     pub fn enter(stress: bool) -> Self {
-        compile::force_inline2_for_test(Some(Inline2Mode::Off));
-        compile::force_profit_gate_for_test(true);
-        compile::force_hof_inline_for_test(Some(true));
-        compile::force_deopt_for_test(false);
-        crate::emacs_core::jit::inline::force_inline_for_test(Some(true));
-        force_mode_for_test(Some(BgMode::Threaded));
+        force_inline2_token_for_test(Some(TestInline2Mode::Off));
+        force_profit_gate_for_test(true);
+        force_hof_inline_for_test(Some(true));
+        force_deopt_for_test(false);
+        force_inline_for_test(Some(true));
+        force_mode_for_test(Some(crate::emacs_core::jit::BgMode::Threaded));
         force_stress_for_test(Some(stress));
-        Self(Box::new(compile::opt_mode_scope_for_test(OptMode::Opt)))
+        Self(Box::new(opt_mode_token_scope_for_test(TestOptMode::Opt)))
     }
 }
 
@@ -42,9 +50,9 @@ impl Drop for Production {
     fn drop(&mut self) {
         force_stress_for_test(None);
         force_mode_for_test(None);
-        compile::force_inline2_for_test(None);
-        compile::force_hof_inline_for_test(None);
-        crate::emacs_core::jit::inline::force_inline_for_test(None);
+        force_inline2_token_for_test(None);
+        force_hof_inline_for_test(None);
+        force_inline_for_test(None);
     }
 }
 
@@ -73,25 +81,21 @@ const FUNCTIONS: [&str; 4] = ["hbg-incs", "hbg-walk", "hbg-step", "hbg-drive"];
 const LEN: usize = 3200;
 const ITERATIONS: usize = 60;
 
-fn leaf_inlines(ctx: &mut Context, name: &str, hof: &str) -> bool {
+fn leaf_inlines(ctx: &Context, name: &str, hof: &str) -> bool {
     let function = ctx
-        .obarray
+        .obarray()
         .symbol_function_id(intern(name))
         .expect("defined");
     let data = function.get_bytecode_data().expect("byte-compiled");
-    let Some(id) = data.jit_runtime().compiled_id() else {
+    let Some(id) = jit_compiled_id_for_test(data) else {
         return false;
     };
-    crate::emacs_core::jit::cache::compiled_leaf_ptr_for_test(id).is_some_and(|leaf| {
-        // SAFETY: the cache owns the leaf until eviction; nothing evicts
-        // while this thread only reads it.
-        unsafe { &*leaf }.inline_deps().contains(&intern(hof))
-    })
+    with_cached_leaf_for_test(id, |leaf| leaf.inline_deps().contains(&intern(hof))).unwrap_or(false)
 }
 
 fn run(stress: bool) {
-    crate::test_utils::init_test_tracing();
-    let mut ctx = crate::test_utils::runtime_startup_context();
+    init_test_tracing();
+    let mut ctx = runtime_startup_context();
     ctx.eval_str(DEFINITIONS).expect("defined");
     let drive = format!("(hbg-drive {ITERATIONS} {LEN})");
     let reference = print_value(&ctx.eval_str(&drive).expect("interpreted run"));
@@ -102,38 +106,36 @@ fn run(stress: bool) {
         ctx.eval_str(&format!("(byte-compile '{name})"))
             .expect("byte-compiled");
     }
-    let before = stats_snapshot();
-    let specpdl = ctx.specpdl.len();
-    let depth = ctx.depth;
+    let before = bg_stats_for_test();
+    let specpdl = ctx.specpdl().len();
+    let depth = ctx.depth_for_test();
     let compiled = print_value(&ctx.eval_str(&drive).expect("compiled run"));
-    assert_eq!(ctx.specpdl.len(), specpdl, "specpdl balanced");
-    assert_eq!(ctx.depth, depth, "depth balanced");
+    assert_eq!(ctx.specpdl().len(), specpdl, "specpdl balanced");
+    assert_eq!(ctx.depth_for_test(), depth, "depth balanced");
     assert_eq!(
         compiled, reference,
         "the same answers at the same iterations"
     );
     assert!(quiesce_for_test(Duration::from_secs(60)), "worker drained");
-    let after = stats_snapshot();
+    let after = bg_stats_for_test();
     assert!(
-        after.enqueued[JobClass::Entry as usize] > before.enqueued[JobClass::Entry as usize],
+        after.enqueued()[BgJobClassCopy::Entry as usize]
+            > before.enqueued()[BgJobClassCopy::Entry as usize],
         "credited callers compiled on the worker: {after:?}"
     );
 
     // A finished job installs at its function's next probe, but the
     // background stress soak (`NEOVM_JIT_BG_STRESS`, on for `stress` runs)
     // deliberately makes a finished job read as running for 1..=4 further
-    // probes (`bg::stress_probe_skips`'s STRESS_PROBE_SKIP_MAX, a
-    // NonZeroU8), and the worker can finish after the drive's last call:
-    // "install late under stress" is exactly that case. One warm run is then
-    // a single probe per caller, not a guaranteed install, so give each
-    // caller up to the soak's skip bound + the install probe (with one probe
-    // of margin) through cheap no-op mappings before the warm run exercises
-    // the installed leaves.
-    const INSTALL_PROBES: usize = STRESS_PROBE_SKIP_MAX.get() as usize + 2;
-    for _ in 0..INSTALL_PROBES {
-        if leaf_inlines(&mut ctx, "hbg-incs", "mapcar")
-            && leaf_inlines(&mut ctx, "hbg-walk", "mapc")
-        {
+    // probes (`bg::stress_probe_skips`'s skip bound, a NonZeroU8 of 4), and
+    // the worker can finish after the drive's last call: "install late under
+    // stress" is exactly that case. One warm run is then a single probe per
+    // caller, not a guaranteed install, so give each caller up to the soak's
+    // skip bound + the install probe (with one probe of margin) through cheap
+    // no-op mappings before the warm run exercises the installed leaves.
+    let install_probes = usize::from(stress_probe_skip_max_for_test()) + 2;
+    for _ in 0..install_probes {
+        if leaf_inlines(&ctx, "hbg-incs", "mapcar") && leaf_inlines(&ctx, "hbg-walk", "mapc") {
             break;
         }
         ctx.eval_str("(progn (hbg-incs nil) (hbg-walk nil))")
@@ -144,13 +146,13 @@ fn run(stress: bool) {
             .expect("warm run"),
     );
     assert_eq!(again, format!("(2 {} {LEN} {LEN})", LEN + 1));
-    assert_eq!(ctx.specpdl.len(), specpdl, "specpdl balanced");
+    assert_eq!(ctx.specpdl().len(), specpdl, "specpdl balanced");
     assert!(
-        leaf_inlines(&mut ctx, "hbg-incs", "mapcar"),
+        leaf_inlines(&ctx, "hbg-incs", "mapcar"),
         "the installed mapcar caller inlines its warm callback"
     );
     assert!(
-        leaf_inlines(&mut ctx, "hbg-walk", "mapc"),
+        leaf_inlines(&ctx, "hbg-walk", "mapc"),
         "the installed mapc caller inlines its warm callback"
     );
 }
@@ -170,8 +172,8 @@ fn jit_bg_credited_mapping_callers_install_late_under_stress() {
 /// caller's caller, and the next call runs native again.
 #[test]
 fn jit_bg_installed_mapping_caller_unwinds_a_mid_callback_error() {
-    crate::test_utils::init_test_tracing();
-    let mut ctx = crate::test_utils::runtime_startup_context();
+    init_test_tracing();
+    let mut ctx = runtime_startup_context();
     let _production = Production::enter(false);
     ctx.eval_str(
         r#"(progn
@@ -188,10 +190,10 @@ fn jit_bg_installed_mapping_caller_unwinds_a_mid_callback_error() {
     assert!(quiesce_for_test(Duration::from_secs(60)), "worker drained");
     ctx.eval_str(&good).expect("install probe");
     assert!(
-        leaf_inlines(&mut ctx, "hbg-cars", "mapcar"),
+        leaf_inlines(&ctx, "hbg-cars", "mapcar"),
         "the credited caller installed with its loop inlined"
     );
-    let specpdl = ctx.specpdl.len();
+    let specpdl = ctx.specpdl().len();
     let caught = ctx
         .eval_str("(hbg-outer '((1) (2) 3 (4)))")
         .expect("caught");
@@ -199,7 +201,7 @@ fn jit_bg_installed_mapping_caller_unwinds_a_mid_callback_error() {
         print_value(&caught),
         "(caught (wrong-type-argument listp 3))"
     );
-    assert_eq!(ctx.specpdl.len(), specpdl, "specpdl balanced");
+    assert_eq!(ctx.specpdl().len(), specpdl, "specpdl balanced");
     let after = ctx.eval_str("(hbg-cars '((5) (6)))").expect("native again");
     assert_eq!(print_value(&after), "(5 6)");
 }

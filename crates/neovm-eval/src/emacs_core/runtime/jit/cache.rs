@@ -2007,7 +2007,7 @@ pub(crate) fn evict_inline_dependents(sym: SymId) {
 }
 
 /// Test-only: what the cache holds for `id`.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn cache_entry_kind_for_test(id: u64) -> &'static str {
     COMPILED.with(|c| match c.borrow().get(id) {
         Some(CacheEntry::Compiled(_)) => "compiled",

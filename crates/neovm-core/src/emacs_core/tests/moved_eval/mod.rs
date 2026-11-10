@@ -500,11 +500,11 @@ mod emacs_core_runtime_eval_tests_positioned_control_test_rs;
 // display-variable counter, and the redisplay-signature predicate are the
 // existing copied observers. Assertions are unchanged.
 #[cfg(test)]
-#[path = "emacs_core/runtime/eval/tests/specpdl_chrome_binding_test.rs"]
-mod emacs_core_runtime_eval_tests_specpdl_chrome_binding_test_rs;
-#[cfg(test)]
 #[path = "emacs_core/runtime/eval/tests/redisplay_mode_line_flow_test.rs"]
 mod emacs_core_runtime_eval_tests_redisplay_mode_line_flow_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/specpdl_chrome_binding_test.rs"]
+mod emacs_core_runtime_eval_tests_specpdl_chrome_binding_test_rs;
 // F4 redisplay ownership. Offset equality is a production const assert.
 // Runtime assertions use the existing copied getters. Echo geometry is an
 // authority copy because that field has no getter. Frame creation is
@@ -534,21 +534,24 @@ mod emacs_core_runtime_eval_tests_tty_rows_observation_test_rs;
 // F1 runtime-startup compiler tests. Nested children stay registered from
 // their parent files. Assertions are unchanged. The signed knob tokens and
 // the leaf/slot/shim observers are eval authority routes.
+#[cfg(test)]
+#[path = "emacs_core/runtime/bytecode/tests/decode_test.rs"]
+mod emacs_core_runtime_bytecode_tests_decode_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/green_p15_condition_wait_test.rs"]
+mod emacs_core_runtime_eval_tests_green_p15_condition_wait_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tier_i/tests/list_bindings_test.rs"]
+mod emacs_core_runtime_eval_tier_i_tests_list_bindings_test_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/compile/call_census/tests/call_census_test.rs"]
+mod emacs_core_runtime_jit_compile_call_census_tests_call_census_test_rs;
 #[cfg(all(test, feature = "jit"))]
 #[path = "emacs_core/runtime/jit/tests/direct_call_test.rs"]
 mod emacs_core_runtime_jit_tests_direct_call_test_rs;
 #[cfg(all(test, feature = "jit"))]
 #[path = "emacs_core/runtime/jit/tests/direct_self_test.rs"]
 mod emacs_core_runtime_jit_tests_direct_self_test_rs;
-#[cfg(all(test, feature = "jit"))]
-#[path = "emacs_core/runtime/jit/tests/stack_guard_test.rs"]
-mod emacs_core_runtime_jit_tests_stack_guard_test_rs;
-#[cfg(all(test, feature = "jit"))]
-#[path = "emacs_core/runtime/jit/tests/tail_calls_test.rs"]
-mod emacs_core_runtime_jit_tests_tail_calls_test_rs;
-#[cfg(all(test, feature = "jit"))]
-#[path = "emacs_core/runtime/jit/tests/mir_reach_dead_test.rs"]
-mod emacs_core_runtime_jit_tests_mir_reach_dead_test_rs;
 #[cfg(all(test, feature = "jit"))]
 #[path = "emacs_core/runtime/jit/tests/hof_default_semantics_test.rs"]
 mod emacs_core_runtime_jit_tests_hof_default_semantics_test_rs;
@@ -559,17 +562,14 @@ mod emacs_core_runtime_jit_tests_inline_closure_test_rs;
 #[path = "emacs_core/runtime/jit/tests/inline_vars_test.rs"]
 mod emacs_core_runtime_jit_tests_inline_vars_test_rs;
 #[cfg(all(test, feature = "jit"))]
-#[path = "emacs_core/runtime/jit/compile/call_census/tests/call_census_test.rs"]
-mod emacs_core_runtime_jit_compile_call_census_tests_call_census_test_rs;
-#[cfg(test)]
-#[path = "emacs_core/runtime/bytecode/tests/decode_test.rs"]
-mod emacs_core_runtime_bytecode_tests_decode_test_rs;
-#[cfg(test)]
-#[path = "emacs_core/runtime/eval/tier_i/tests/list_bindings_test.rs"]
-mod emacs_core_runtime_eval_tier_i_tests_list_bindings_test_rs;
-#[cfg(test)]
-#[path = "emacs_core/runtime/eval/tests/green_p15_condition_wait_test.rs"]
-mod emacs_core_runtime_eval_tests_green_p15_condition_wait_test_rs;
+#[path = "emacs_core/runtime/jit/tests/mir_reach_dead_test.rs"]
+mod emacs_core_runtime_jit_tests_mir_reach_dead_test_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/tests/stack_guard_test.rs"]
+mod emacs_core_runtime_jit_tests_stack_guard_test_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/tests/tail_calls_test.rs"]
+mod emacs_core_runtime_jit_tests_tail_calls_test_rs;
 // F5 host input. HostInputPublisher is system's public install/send path.
 // The green park, fixture completion, and main-native wait log stay behind
 // authority copies. Assertions are unchanged.
@@ -584,39 +584,59 @@ mod emacs_core_runtime_jit_tests_green_inline_throw_on_input_test_rs;
 // whole. The catalog file stayed in eval; only the startup-image alias walk
 // and the localized-subr loop live here. Assertions are unchanged.
 #[cfg(test)]
+#[path = "emacs_core/lisp/native/subr/tests/effect_catalog_rehome_test.rs"]
+mod emacs_core_lisp_native_subr_tests_effect_catalog_rehome_test_rs;
+#[cfg(test)]
 #[path = "emacs_core/lisp/reader/tests/minibuffer_teardown_test.rs"]
 mod emacs_core_lisp_reader_tests_minibuffer_teardown_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/reader/tests/minibuffer_unwind_order_test.rs"]
 mod emacs_core_lisp_reader_tests_minibuffer_unwind_order_test_rs;
-#[cfg(test)]
-#[path = "emacs_core/lisp/native/subr/tests/effect_catalog_rehome_test.rs"]
-mod emacs_core_lisp_native_subr_tests_effect_catalog_rehome_test_rs;
 
 // Group-1 runtime-startup re-home. `runtime_startup_context` is minted here.
 // Private observations stay behind `test_support::authority`. The inline HOF
 // file is mounted twice so both nextest ids survive the move.
-#[cfg(test)]
-#[path = "emacs_core/runtime/bytecode/tests/primitive_opcode_cells_test.rs"]
-mod emacs_core_runtime_bytecode_tests_primitive_opcode_cells_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/native/builtins/tests/map_resume_redefine_test.rs"]
 mod emacs_core_lisp_native_builtins_tests_map_resume_redefine_test_rs;
 #[cfg(all(test, feature = "jit"))]
 #[path = "emacs_core/lisp/native/builtins/tests/mapcar_debug_entry_test.rs"]
 mod emacs_core_lisp_native_builtins_tests_mapcar_debug_entry_test_rs;
-#[cfg(all(test, feature = "jit"))]
-#[path = "emacs_core/runtime/jit/tests/inline_hof_runtime_backtrace_test.rs"]
-mod emacs_core_runtime_jit_tests_inline_hof_runtime_backtrace_test_rs;
-#[cfg(all(test, feature = "jit"))]
-#[path = "emacs_core/runtime/jit/tests/inline_hof_runtime_backtrace_test.rs"]
-mod emacs_core_runtime_jit_tests_inline_hof_runtime_backtrace_default_profile_test_rs;
-#[cfg(all(test, feature = "jit"))]
-#[path = "emacs_core/runtime/jit/compile/tests/opt_switch_hoist_call_mutation_test.rs"]
-mod emacs_core_runtime_jit_compile_tests_opt_switch_hoist_call_mutation_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/runtime/bytecode/tests/primitive_opcode_cells_test.rs"]
+mod emacs_core_runtime_bytecode_tests_primitive_opcode_cells_test_rs;
 #[cfg(all(test, feature = "jit"))]
 #[path = "emacs_core/runtime/jit/compile/opt_profit/tests/lists48_osr_aset_test.rs"]
 mod emacs_core_runtime_jit_compile_opt_profit_tests_lists48_osr_aset_test_rs;
 #[cfg(all(test, feature = "jit"))]
 #[path = "emacs_core/runtime/jit/compile/reg_abi/tests/reg_abi_startup_test.rs"]
 mod emacs_core_runtime_jit_compile_reg_abi_tests_reg_abi_startup_test_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/compile/tests/opt_switch_hoist_call_mutation_test.rs"]
+mod emacs_core_runtime_jit_compile_tests_opt_switch_hoist_call_mutation_test_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/tests/inline_hof_runtime_backtrace_test.rs"]
+mod emacs_core_runtime_jit_tests_inline_hof_runtime_backtrace_default_profile_test_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/tests/inline_hof_runtime_backtrace_test.rs"]
+mod emacs_core_runtime_jit_tests_inline_hof_runtime_backtrace_test_rs;
+
+// Startup-context re-home. runtime_startup_context is minted here. The w32
+// event fields, job counters, cache kind, tier-up, dispatch, drain, leaf
+// resolve, and stress-skip bound stay behind authority. Assertions are
+// unchanged. The codec half of the w32 test stays in eval.
+#[cfg(all(test, any(target_os = "windows", target_os = "linux")))]
+#[path = "emacs_core/lisp/native/builtins/file_notify/platform/windows/tests/event_lisp_test.rs"]
+mod emacs_core_lisp_native_builtins_file_notify_platform_windows_tests_event_lisp_test_rs;
+#[cfg(all(test, feature = "jit", target_os = "linux", target_arch = "x86_64"))]
+#[path = "emacs_core/runtime/jit/bg/tests/first_sight_frames_test.rs"]
+mod emacs_core_runtime_jit_bg_tests_first_sight_frames_test_rs;
+#[cfg(all(test, feature = "jit", target_os = "linux", target_arch = "x86_64"))]
+#[path = "emacs_core/runtime/jit/bg/tests/hof_credit_test.rs"]
+mod emacs_core_runtime_jit_bg_tests_hof_credit_test_rs;
+#[cfg(all(test, feature = "jit", target_os = "linux", target_arch = "x86_64"))]
+#[path = "emacs_core/runtime/jit/bg/tests/osr_install_frames_test.rs"]
+mod emacs_core_runtime_jit_bg_tests_osr_install_frames_test_rs;
+#[cfg(all(test, feature = "jit", target_os = "linux", target_arch = "x86_64"))]
+#[path = "emacs_core/runtime/jit/bg/tests/soak_stress_test.rs"]
+mod emacs_core_runtime_jit_bg_tests_soak_stress_test_rs;

@@ -12,7 +12,10 @@ pub(super) mod linux;
 #[cfg(any(target_os = "macos", all(test, target_os = "linux")))]
 pub(super) mod macos;
 
-#[cfg(any(target_os = "windows", all(test, target_os = "linux")))]
+#[cfg(any(
+    target_os = "windows",
+    all(any(test, feature = "test-support"), target_os = "linux")
+))]
 pub(super) mod windows;
 
 // Keep the common evaluator lifecycle available on targets with no native
