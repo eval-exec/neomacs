@@ -198,6 +198,11 @@ pub fn reset_bytecode_data_access_count_for_test() {
 /// `cfg(any(test, feature = "test-support"))` + `pub(crate)`.
 pub type ProofEra<'heap, K> = crate::tagged::gc::ProofEra<'heap, K>;
 
+#[cfg(all(any(test, feature = "test-support"), not(feature = "gc-memory-telemetry")))]
+pub type CollectionCase = crate::tagged::gc::mutator_registration::CollectionCase;
+#[cfg(all(any(test, feature = "test-support"), not(feature = "gc-memory-telemetry")))]
+pub type ConsAllocationCase = crate::tagged::gc::mutator_registration::ConsAllocationCase;
+
 /// Case selectors for the three singleton families. The variants are value
 /// items; the core shells only name them.
 #[cfg(all(any(test, feature = "test-support"), not(feature = "gc-memory-telemetry")))]
@@ -1276,7 +1281,7 @@ pub fn run_function_handoff_test_for_test<K, W>(
     count: usize,
     world_roots: W,
 ) where
-    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    K: crate::tagged::gc::mutator_registration::EraKeeper + std::fmt::Debug,
     W: Copy
         + for<'k, 's, 'e, 'o> Fn(
             &'k K,
@@ -1308,7 +1313,7 @@ pub fn run_peer_young_collection_test_for_test<K, W>(
     words: [usize; 2],
     world_roots: W,
 ) where
-    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    K: crate::tagged::gc::mutator_registration::EraKeeper + std::fmt::Debug,
     W: Copy
         + for<'k, 's, 'e, 'o> Fn(
             &'k K,
@@ -1355,7 +1360,7 @@ pub fn run_restricted_lisp_test_for_test<K, W>(
     switch_flow: &mut dyn FnMut() -> Option<crate::error::Flow>,
     switch_print: &mut dyn FnMut(&crate::tagged::value::TaggedValue) -> String,
 ) where
-    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    K: crate::tagged::gc::mutator_registration::EraKeeper + std::fmt::Debug,
     W: Copy
         + for<'k, 's, 'e, 'o> Fn(
             &'k K,
@@ -1408,7 +1413,7 @@ pub fn run_intern_executor_test_for_test<K, W>(
     ),
     world_roots: W,
 ) where
-    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    K: crate::tagged::gc::mutator_registration::EraKeeper + std::fmt::Debug,
     W: Copy
         + for<'k, 's, 'e, 'o> Fn(
             &'k K,
@@ -1608,7 +1613,7 @@ pub fn run_globals_executor_test_for_test<K, W>(
     ),
     world_roots: W,
 ) where
-    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    K: crate::tagged::gc::mutator_registration::EraKeeper + std::fmt::Debug,
     W: Copy
         + for<'k, 's, 'e, 'o> Fn(
             &'k K,
@@ -1657,7 +1662,7 @@ pub fn run_combined_executor_test_for_test<K, W>(
     ),
     world_roots: W,
 ) where
-    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    K: crate::tagged::gc::mutator_registration::EraKeeper + std::fmt::Debug,
     W: Copy
         + for<'k, 's, 'e, 'o> Fn(
             &'k K,
@@ -1906,7 +1911,7 @@ pub fn run_admission_probe_test_for_test<K, W>(
     era: crate::tagged::gc::ProofEra<'_, K>,
     world_roots: W,
 ) where
-    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    K: crate::tagged::gc::mutator_registration::EraKeeper + std::fmt::Debug,
     W: Copy
         + for<'k, 's, 'e, 'o> Fn(
             &'k K,
@@ -1970,5 +1975,207 @@ pub fn run_concurrent_leaf_claim_test_for_test(
         marker_head,
         marker_walk,
         marker_drop,
+    );
+}
+
+/// FENCE: the collection-era bodies.
+/// The core shell performs the serial setup, admits each era, and supplies
+/// the baton World walk; the bodies and their assertions stay in value. The
+/// original dispatcher stays `pub(crate)`.
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[doc(hidden)]
+pub fn run_collection_test_for_test<K, W>(
+    case: CollectionCase,
+    graph_era: &mut dyn FnMut(
+        i64,
+        &mut dyn for<'e> FnMut(
+            crate::tagged::gc::ProofEra<'e, K>,
+            (
+                crate::tagged::transport::SharedRoot,
+                [usize; 2],
+                crate::tagged::value::TaggedValue,
+            ),
+        ),
+    ),
+    graph_pair_era: &mut dyn FnMut(
+        &mut dyn for<'e> FnMut(
+            crate::tagged::gc::ProofEra<'e, K>,
+            (
+                (
+                    crate::tagged::transport::SharedRoot,
+                    [usize; 2],
+                    crate::tagged::value::TaggedValue,
+                ),
+                (
+                    crate::tagged::transport::SharedRoot,
+                    [usize; 2],
+                    crate::tagged::value::TaggedValue,
+                ),
+            ),
+        ),
+    ),
+    requesters_era: &mut dyn FnMut(
+        &mut dyn for<'e> FnMut(
+            crate::tagged::gc::ProofEra<'e, K>,
+            (
+                (
+                    crate::tagged::transport::SharedRoot,
+                    [usize; 2],
+                    crate::tagged::value::TaggedValue,
+                ),
+                (
+                    crate::tagged::transport::SharedRoot,
+                    [usize; 2],
+                    crate::tagged::value::TaggedValue,
+                ),
+                [usize; 2],
+                [usize; 2],
+                [(
+                    crate::tagged::transport::SharedRoot,
+                    [usize; 2],
+                    crate::tagged::value::TaggedValue,
+                ); 3],
+                usize,
+                (
+                    crate::tagged::transport::SharedRoot,
+                    [usize; 2],
+                    crate::tagged::value::TaggedValue,
+                ),
+                usize,
+                bool,
+            ),
+        ),
+    ),
+    empty_outer_era: &mut dyn FnMut(
+        i64,
+        &mut dyn for<'e> FnMut(crate::tagged::gc::ProofEra<'e, K>),
+    ),
+    empty_nested_era: &mut dyn FnMut(
+        i64,
+        &mut dyn for<'e> FnMut(crate::tagged::gc::ProofEra<'e, K>),
+    ),
+    mutator_era: &mut dyn FnMut(i64, &mut dyn for<'e> FnMut(crate::tagged::gc::ProofEra<'e, K>)),
+    graph_era_then: &mut dyn FnMut(
+        &mut dyn for<'e> FnMut(
+            crate::tagged::gc::ProofEra<'e, K>,
+            (
+                (
+                    crate::tagged::transport::SharedRoot,
+                    [usize; 2],
+                    crate::tagged::value::TaggedValue,
+                ),
+                [usize; 2],
+                [usize; 2],
+            ),
+        ) -> (
+            crate::tagged::gc::QuiescentCollector<'e>,
+            K,
+            ([usize; 2], [usize; 2], [usize; 2]),
+        ),
+    ),
+    world_roots: W,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut crate::tagged::gc::mutator_registration::AllStopped<'e>,
+            &'o mut Vec<crate::tagged::value::TaggedValue>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            crate::tagged::gc::mutator_registration::RendezvousError,
+        >,
+{
+    crate::tagged::gc::mutator_registration::run_collection_test(
+        case,
+        graph_era,
+        graph_pair_era,
+        requesters_era,
+        empty_outer_era,
+        empty_nested_era,
+        mutator_era,
+        graph_era_then,
+        world_roots,
+    );
+}
+
+/// FENCE: the cons-allocation bodies. The core shell performs the serial
+/// setup, admits each era, and supplies the baton World walk; the bodies and
+/// their assertions stay in value. The original dispatcher stays `pub(crate)`.
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[doc(hidden)]
+pub fn run_cons_allocation_test_for_test<K, W>(
+    case: ConsAllocationCase,
+    roots_era: &mut dyn FnMut(
+        &mut dyn for<'e> FnMut(
+            crate::tagged::gc::ProofEra<'e, K>,
+            (
+                [crate::tagged::transport::SharedRoot; 2],
+                crate::tagged::transport::SharedRoot,
+            ),
+        ),
+    ),
+    empty_outer_era: &mut dyn FnMut(
+        i64,
+        &mut dyn for<'e> FnMut(crate::tagged::gc::ProofEra<'e, K>),
+    ),
+    roots_nested_era: &mut dyn FnMut(
+        &mut dyn for<'e> FnMut(
+            crate::tagged::gc::ProofEra<'e, K>,
+            (
+                [crate::tagged::transport::SharedRoot; 2],
+                crate::tagged::transport::SharedRoot,
+            ),
+        ),
+    ),
+    roots_era_then_words: &mut dyn FnMut(
+        &mut dyn for<'e> FnMut(
+            crate::tagged::gc::ProofEra<'e, K>,
+            (
+                [crate::tagged::transport::SharedRoot; 2],
+                crate::tagged::transport::SharedRoot,
+            ),
+        )
+            -> (crate::tagged::gc::QuiescentCollector<'e>, K, [usize; 2]),
+    ),
+    partial_era_then: &mut dyn FnMut(
+        &mut dyn for<'e> FnMut(
+            crate::tagged::gc::ProofEra<'e, K>,
+            (
+                (
+                    [crate::tagged::transport::SharedRoot; 2],
+                    crate::tagged::transport::SharedRoot,
+                ),
+                usize,
+                [u64; crate::tagged::gc::MEMORY_USE_COUNT_LEN],
+                u64,
+            ),
+        ) -> (
+            crate::tagged::gc::QuiescentCollector<'e>,
+            K,
+            (usize, [u64; crate::tagged::gc::MEMORY_USE_COUNT_LEN], u64),
+        ),
+    ),
+    world_roots: W,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut crate::tagged::gc::mutator_registration::AllStopped<'e>,
+            &'o mut Vec<crate::tagged::value::TaggedValue>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            crate::tagged::gc::mutator_registration::RendezvousError,
+        >,
+{
+    crate::tagged::gc::mutator_registration::run_cons_allocation_test(
+        case,
+        roots_era,
+        empty_outer_era,
+        roots_nested_era,
+        roots_era_then_words,
+        partial_era_then,
+        world_roots,
     );
 }

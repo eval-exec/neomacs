@@ -158,3 +158,17 @@ mod keeper_table_scope_tests;
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 #[path = "../../../core_tests/tagged/gc/mutator_registration/admission_probe_tests.rs"]
 mod admission_probe_tests;
+
+/// Real STW collection rows re-homed out of the value lib test. The shell
+/// performs the serial setup, admits each era, and passes the baton World
+/// walk. Assertions stay in the value bodies.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/collection_tests.rs"]
+mod collection_tests;
+
+/// Cons-allocation rows re-homed out of the value lib test. The shell performs
+/// the serial setup, admits each era, and passes the baton World walk.
+/// Assertions stay in the value bodies.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/cons_allocation_tests.rs"]
+mod cons_allocation_tests;

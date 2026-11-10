@@ -1,7 +1,10 @@
 //! Real admitted cons storage: Rust-only owners, rooted results, and A5 stops.
-#![cfg(not(feature = "gc-memory-telemetry"))]
+#![cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
 use super::*;
-use crate::emacs_core::eval::Context;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::gc::TaggedHeap;
 use crate::tagged::gc::card_table::ChunkSlot;
 use crate::tagged::gc::chunk_map::{ChunkClass, ChunkEntry};
@@ -97,19 +100,6 @@ fn receive<T>(rx: &mpsc::Receiver<T>) -> T {
     rx.recv_timeout(Duration::from_secs(30))
         .expect("cons actor reaches bounded boundary")
 }
-fn roots(context: &mut Context) -> ([SharedRoot; 2], SharedRoot) {
-    // SAFETY: immediate values are live on this serial heap; no heap object
-    // or raw Value is transported to an owner.
-    unsafe {
-        (
-            [
-                SharedRoot::new(&context.tagged_heap, Value::fixnum(1701)),
-                SharedRoot::new(&context.tagged_heap, Value::fixnum(1702)),
-            ],
-            SharedRoot::new(&context.tagged_heap, Value::NIL),
-        )
-    }
-}
 fn check_catalog(heap: &TaggedHeap) {
     heap.cons_allocator.verify();
     for (index, block) in heap.cons_blocks.iter().enumerate() {
@@ -151,28 +141,160 @@ impl Drop for PoisonOnUnwind<'_> {
     }
 }
 
-/// This exact test is the Rust-only two-owner TSan selector. It does not use
-/// external fixture blocks, install heap TLS, execute Lisp, or lock around
-/// independent cell initialization. The ready/go phase witnesses two live run
-/// authorities; the stress itself does not claim a specific CPU instruction
-/// from each actor executes at precisely the same instant.
-/// Production correspondence of the admission scan controls: an IN_SLICE
-/// admission word refuses the catalog transition even when every gated
-/// precheck passes. A legally admitted slice can never reach the transition
-/// (Running entries are refused earlier), so the scan is verified by the
-/// exact condition it exists to catch: an admission word left IN_SLICE with
-/// the entry otherwise Starting. Clearing the word lets the same transition
-/// proceed.
-#[test]
-pub(super) fn in_slice_admission_word_refuses_catalog_transition() {
-    super::admission_probe::in_slice_admission_word_refuses_catalog_transition();
+pub(crate) type RootsFixture = ([SharedRoot; 2], SharedRoot);
+pub(crate) type CreditsFixture = (
+    RootsFixture,
+    usize,
+    [u64; crate::tagged::gc::MEMORY_USE_COUNT_LEN],
+    u64,
+);
+pub(crate) type CreditsResult = (usize, [u64; crate::tagged::gc::MEMORY_USE_COUNT_LEN], u64);
+
+/// One row per former value lib-test.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ConsAllocationCase {
+    TwoOwnerConsAllocatorStress,
+    ConsWithoutCatalogRefusesBeforeChargingOrProducingARoot,
+    ForeignConsOperandRefusesBeforeAnyGrantAndCorrectInputsStillWork,
+    DroppingOpenConsRegionPoisonRetainsStorageAndRefusesPublication,
+    CollectionRequiresReturnedCatalogAndResumeRequiresCurrentStop,
+    EarlierTailCloseNeverRewindsThroughAnotherOwnersLiveRegion,
+    ReturnConsStoragePreservesBusyStopValidationForRetry,
+    ForgottenOpenConsRunRefusesPublicationNativeAndFinishWithoutWaiting,
+    ForeignStopCannotReturnOrResumeAConsCatalog,
+    ConsResultSurvivesFromPublishedHeadThenReclaimsAfterSerialRestore,
+    PartialConsGrantRefundsOwnerAndGlobalCreditsThenMergesHistoryOnce,
 }
 
-#[test]
-fn two_owner_cons_allocator_stress() {
-    const PHASES: usize = 2;
-    const PER_OWNER: usize = 4200; // exceeds a real cons block per owner
-    Context::with_test_collection_era(roots, |era, (cars, nil)| {
+impl ConsAllocationCase {
+    pub const ALL: &'static [Self] = &[
+        Self::TwoOwnerConsAllocatorStress,
+        Self::ConsWithoutCatalogRefusesBeforeChargingOrProducingARoot,
+        Self::ForeignConsOperandRefusesBeforeAnyGrantAndCorrectInputsStillWork,
+        Self::DroppingOpenConsRegionPoisonRetainsStorageAndRefusesPublication,
+        Self::CollectionRequiresReturnedCatalogAndResumeRequiresCurrentStop,
+        Self::EarlierTailCloseNeverRewindsThroughAnotherOwnersLiveRegion,
+        Self::ReturnConsStoragePreservesBusyStopValidationForRetry,
+        Self::ForgottenOpenConsRunRefusesPublicationNativeAndFinishWithoutWaiting,
+        Self::ForeignStopCannotReturnOrResumeAConsCatalog,
+        Self::ConsResultSurvivesFromPublishedHeadThenReclaimsAfterSerialRestore,
+        Self::PartialConsGrantRefundsOwnerAndGlobalCreditsThenMergesHistoryOnce,
+    ];
+}
+
+/// Dispatcher for the cons-allocation shells. The core shell performs the
+/// serial setup, admits each era, and supplies the baton World walk; the
+/// bodies and their assertions stay here.
+pub(crate) fn run_cons_allocation_test<K, W>(
+    case: ConsAllocationCase,
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    empty_outer_era: &mut dyn FnMut(i64, &mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>)),
+    roots_nested_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    roots_era_then_words: &mut dyn FnMut(
+        &mut dyn for<'e> FnMut(
+            ParallelHeapEra<'e, K>,
+            RootsFixture,
+        ) -> (QuiescentCollector<'e>, K, [usize; 2]),
+    ),
+    partial_era_then: &mut dyn FnMut(
+        &mut dyn for<'e> FnMut(
+            ParallelHeapEra<'e, K>,
+            CreditsFixture,
+        ) -> (QuiescentCollector<'e>, K, CreditsResult),
+    ),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    match case {
+        ConsAllocationCase::TwoOwnerConsAllocatorStress => {
+            two_owner_cons_allocator_stress(roots_era, world_roots)
+        }
+        ConsAllocationCase::ConsWithoutCatalogRefusesBeforeChargingOrProducingARoot => {
+            cons_without_catalog_refuses_before_charging_or_producing_a_root(roots_era, world_roots)
+        }
+        ConsAllocationCase::ForeignConsOperandRefusesBeforeAnyGrantAndCorrectInputsStillWork => {
+            foreign_cons_operand_refuses_before_any_grant_and_correct_inputs_still_work(
+                roots_era,
+                world_roots,
+            )
+        }
+        ConsAllocationCase::DroppingOpenConsRegionPoisonRetainsStorageAndRefusesPublication => {
+            dropping_open_cons_region_poison_retains_storage_and_refuses_publication(
+                roots_era,
+                world_roots,
+            )
+        }
+        ConsAllocationCase::CollectionRequiresReturnedCatalogAndResumeRequiresCurrentStop => {
+            collection_requires_returned_catalog_and_resume_requires_current_stop(
+                roots_era,
+                world_roots,
+            )
+        }
+        ConsAllocationCase::EarlierTailCloseNeverRewindsThroughAnotherOwnersLiveRegion => {
+            earlier_tail_close_never_rewinds_through_another_owners_live_region(
+                roots_era,
+                world_roots,
+            )
+        }
+        ConsAllocationCase::ReturnConsStoragePreservesBusyStopValidationForRetry => {
+            return_cons_storage_preserves_busy_stop_validation_for_retry(roots_era, world_roots)
+        }
+        ConsAllocationCase::ForgottenOpenConsRunRefusesPublicationNativeAndFinishWithoutWaiting => {
+            forgotten_open_cons_run_refuses_publication_native_and_finish_without_waiting(
+                roots_era,
+                world_roots,
+            )
+        }
+        ConsAllocationCase::ForeignStopCannotReturnOrResumeAConsCatalog => {
+            foreign_stop_cannot_return_or_resume_a_cons_catalog(
+                empty_outer_era,
+                roots_nested_era,
+                world_roots,
+            );
+        }
+        ConsAllocationCase::ConsResultSurvivesFromPublishedHeadThenReclaimsAfterSerialRestore => {
+            cons_result_survives_from_published_head_then_reclaims_after_serial_restore(
+                roots_era_then_words,
+                world_roots,
+            );
+        }
+        ConsAllocationCase::PartialConsGrantRefundsOwnerAndGlobalCreditsThenMergesHistoryOnce => {
+            partial_cons_grant_refunds_owner_and_global_credits_then_merges_history_once(
+                partial_era_then,
+                world_roots,
+            );
+        }
+    }
+}
+fn two_owner_cons_allocator_stress<K, W>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    roots_era(&mut |era, (cars, nil)| {
+        const PHASES: usize = 2;
+        const PER_OWNER: usize = 4200; // exceeds a real cons block per owner
+
         era.start_cons_storage().unwrap();
         let heap = era.heap_identity();
         let permits = [
@@ -277,7 +399,7 @@ fn two_owner_cons_allocator_stress() {
                         }
                     })
                 });
-                let report = retry(|| era.collect_stopped(&mut stopped));
+                let report = retry(|| era.collect_stopped(&mut stopped, world_roots));
                 assert!(report.major);
                 retry(|| {
                     era.with_stopped_heap_for_test(&stopped, |heap| {
@@ -301,61 +423,22 @@ fn two_owner_cons_allocator_stress() {
     });
 }
 
-#[test]
-fn cons_result_survives_from_published_head_then_reclaims_after_serial_restore() {
-    Context::with_test_collection_era_then(
-        roots,
-        |era, (cars, nil)| {
-            era.start_cons_storage().unwrap();
-            let mut owner = activate(era.register(1710, 1).unwrap(), era.heap_identity(), 1710);
-            let (head, words) = with_run(&mut owner, |run| {
-                let child = run.cons(&cars[0], &nil).unwrap();
-                let head = run.cons(&child, &nil).unwrap();
-                let words = [head.cons_word_for_test(), child.cons_word_for_test()];
-                drop(child); // only the head's car retains the child
-                (head, words)
-            });
-            owner.enter_native(std::slice::from_ref(&head)).unwrap();
-            drop(head); // only the authoritative publication retains the graph
-            let mut stopped = era.stop().unwrap();
-            era.return_cons_storage(&stopped).unwrap();
-            era.collect_stopped(&mut stopped).unwrap();
-            era.with_stopped_heap_for_test(&stopped, |heap| {
-                for word in words {
-                    assert!(heap.owns_heap_value_for_test(Value::from_bits(word)));
-                }
-                // SAFETY: exact stopped publication retains the complete graph.
-                unsafe {
-                    let head = &*Value::from_bits(words[0]).as_cons_ptr().unwrap();
-                    assert_eq!(head.car.bits(), words[1]);
-                    let child = &*head.car.as_cons_ptr().unwrap();
-                    assert_eq!(child.car.as_fixnum(), Some(1701));
-                }
-            })
-            .unwrap();
-            complete(stopped);
-            owner.leave_native().unwrap();
-            with_run(&mut owner, |run| run.state().root_scratch.clear());
-            retire(owner);
-            let (collector, keeper) = era.finish().unwrap();
-            (collector, keeper, words)
-        },
-        |context, words| {
-            context.gc_collect_exact();
-            for word in words {
-                assert!(
-                    !context
-                        .tagged_heap
-                        .owns_heap_value_for_test(Value::from_bits(word))
-                );
-            }
-        },
-    );
-}
-
-#[test]
-fn cons_without_catalog_refuses_before_charging_or_producing_a_root() {
-    Context::with_test_collection_era(roots, |era, (cars, nil)| {
+fn cons_without_catalog_refuses_before_charging_or_producing_a_root<K, W>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    roots_era(&mut |era, (cars, nil)| {
         let mut owner = activate(era.register(1711, 0).unwrap(), era.heap_identity(), 1711);
         with_run(&mut owner, |run| {
             let before = (
@@ -382,12 +465,25 @@ fn cons_without_catalog_refuses_before_charging_or_producing_a_root() {
     });
 }
 
-#[test]
-fn foreign_cons_operand_refuses_before_any_grant_and_correct_inputs_still_work() {
+fn foreign_cons_operand_refuses_before_any_grant_and_correct_inputs_still_work<K, W>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
     let foreign_heap = TaggedHeap::new();
     // SAFETY: NIL is immediate and live; this root carries a real foreign brand.
     let foreign = unsafe { SharedRoot::new(&foreign_heap, Value::NIL) };
-    Context::with_test_collection_era(roots, |era, (cars, nil)| {
+    roots_era(&mut |era, (cars, nil)| {
         era.start_cons_storage().unwrap();
         let mut owner = activate(era.register(1712, 0).unwrap(), era.heap_identity(), 1712);
         let root = with_run(&mut owner, |run| {
@@ -414,7 +510,7 @@ fn foreign_cons_operand_refuses_before_any_grant_and_correct_inputs_still_work()
         owner.enter_native(std::slice::from_ref(&root)).unwrap();
         let mut stopped = era.stop().unwrap();
         era.return_cons_storage(&stopped).unwrap();
-        era.collect_stopped(&mut stopped).unwrap();
+        era.collect_stopped(&mut stopped, world_roots).unwrap();
         era.with_stopped_heap_for_test(&stopped, |heap| check_pair(heap, &root, 1701))
             .unwrap();
         complete(stopped);
@@ -427,9 +523,22 @@ fn foreign_cons_operand_refuses_before_any_grant_and_correct_inputs_still_work()
     });
 }
 
-#[test]
-fn dropping_open_cons_region_poison_retains_storage_and_refuses_publication() {
-    Context::with_test_collection_era(roots, |era, (cars, nil)| {
+fn dropping_open_cons_region_poison_retains_storage_and_refuses_publication<K, W>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    roots_era(&mut |era, (cars, nil)| {
         era.start_cons_storage().unwrap();
         let mut owner = activate(era.register(1713, 0).unwrap(), era.heap_identity(), 1713);
         let root = {
@@ -454,20 +563,33 @@ fn dropping_open_cons_region_poison_retains_storage_and_refuses_publication() {
     });
 }
 
-#[test]
-fn collection_requires_returned_catalog_and_resume_requires_current_stop() {
-    Context::with_test_collection_era(roots, |era, (cars, nil)| {
+fn collection_requires_returned_catalog_and_resume_requires_current_stop<K, W>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    roots_era(&mut |era, (cars, nil)| {
         era.start_cons_storage().unwrap();
         let mut owner = activate(era.register(1714, 0).unwrap(), era.heap_identity(), 1714);
         let root = with_run(&mut owner, |run| run.cons(&cars[0], &nil).unwrap());
         owner.enter_native(std::slice::from_ref(&root)).unwrap();
         let mut stopped = era.stop().unwrap();
         assert_eq!(
-            era.collect_stopped(&mut stopped).unwrap_err(),
+            era.collect_stopped(&mut stopped, world_roots).unwrap_err(),
             RendezvousError::Publication
         );
         era.return_cons_storage(&stopped).unwrap();
-        era.collect_stopped(&mut stopped).unwrap();
+        era.collect_stopped(&mut stopped, world_roots).unwrap();
         era.resume_cons_storage(&stopped).unwrap();
         complete(stopped);
         owner.leave_native().unwrap();
@@ -475,7 +597,7 @@ fn collection_requires_returned_catalog_and_resume_requires_current_stop() {
         owner.enter_native(&[root.clone(), second.clone()]).unwrap();
         let mut stopped = era.stop().unwrap();
         era.return_cons_storage(&stopped).unwrap();
-        era.collect_stopped(&mut stopped).unwrap();
+        era.collect_stopped(&mut stopped, world_roots).unwrap();
         era.with_stopped_heap_for_test(&stopped, |heap| {
             check_pair(heap, &root, 1701);
             check_pair(heap, &second, 1702);
@@ -491,9 +613,22 @@ fn collection_requires_returned_catalog_and_resume_requires_current_stop() {
     });
 }
 
-#[test]
-fn earlier_tail_close_never_rewinds_through_another_owners_live_region() {
-    Context::with_test_collection_era(roots, |era, (cars, nil)| {
+fn earlier_tail_close_never_rewinds_through_another_owners_live_region<K, W>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    roots_era(&mut |era, (cars, nil)| {
         era.start_cons_storage().unwrap();
         let heap = era.heap_identity();
         let mut first = activate(era.register(1715, 0).unwrap(), heap, 1715);
@@ -572,7 +707,7 @@ fn earlier_tail_close_never_rewinds_through_another_owners_live_region() {
         assert_eq!(acked.active_regions, 0, "both ACKs published every tail");
         let mut stopped = era.stop().unwrap();
         era.return_cons_storage(&stopped).unwrap();
-        era.collect_stopped(&mut stopped).unwrap();
+        era.collect_stopped(&mut stopped, world_roots).unwrap();
         era.with_stopped_heap_for_test(&stopped, |heap| {
             check_catalog(heap);
             check_pair(heap, &a_root, 1701);
@@ -592,65 +727,22 @@ fn earlier_tail_close_never_rewinds_through_another_owners_live_region() {
     });
 }
 
-#[test]
-fn foreign_stop_cannot_return_or_resume_a_cons_catalog() {
-    // Construct/capture the catalog World LAST: current serial Context TLS
-    // caches are not restored by dropping a separately constructed Context.
-    // The foreign World needs only a metadata stop; do not collect its old
-    // frozen census after the inner Context has changed those caches.
-    Context::with_test_collection_era(
-        |_| (),
-        |foreign, ()| {
-            let mut foreign_stop = foreign.stop().unwrap();
-            Context::with_test_collection_era(roots, |era, (cars, nil)| {
-                era.start_cons_storage().unwrap();
-                let before = era.cons_catalog_snapshot_for_test().unwrap();
-                assert_eq!(
-                    era.return_cons_storage(&foreign_stop),
-                    Err(RegistrationError::WrongHeap)
-                );
-                assert_eq!(
-                    era.resume_cons_storage(&foreign_stop),
-                    Err(RegistrationError::WrongHeap)
-                );
-                let after = era.cons_catalog_snapshot_for_test().unwrap();
-                assert_eq!(after.blocks, before.blocks);
-                assert_eq!(after.live_count, before.live_count);
-                assert_eq!(after.free_count, before.free_count);
-                assert!(after.installed && after.metadata_coherent);
-                // A real allocation and matching stop still succeed after
-                // refusal, on the World whose frozen census was captured last.
-                let mut owner = activate(era.register(1717, 0).unwrap(), era.heap_identity(), 1717);
-                let root = with_run(&mut owner, |run| run.cons(&cars[0], &nil).unwrap());
-                owner.enter_native(std::slice::from_ref(&root)).unwrap();
-                let mut stopped = era.stop().unwrap();
-                era.return_cons_storage(&stopped).unwrap();
-                era.collect_stopped(&mut stopped).unwrap();
-                era.with_stopped_heap_for_test(&stopped, |heap| {
-                    check_catalog(heap);
-                    check_pair(heap, &root, 1701);
-                })
-                .unwrap();
-                complete(stopped);
-                owner.leave_native().unwrap();
-                drop(root);
-                retire(owner);
-                let (collector, keeper) = era.finish().unwrap();
-                drop(collector);
-                drop(keeper);
-            });
-            foreign_stop.trace(|_, _| Ok(())).unwrap();
-            complete(foreign_stop);
-            let (collector, keeper) = foreign.finish().unwrap();
-            drop(collector);
-            drop(keeper);
-        },
-    );
-}
-
-#[test]
-fn return_cons_storage_preserves_busy_stop_validation_for_retry() {
-    Context::with_test_collection_era(roots, |era, (cars, nil)| {
+fn return_cons_storage_preserves_busy_stop_validation_for_retry<K, W>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    roots_era(&mut |era, (cars, nil)| {
         era.start_cons_storage().unwrap();
         let mut owner = activate(era.register(1718, 0).unwrap(), era.heap_identity(), 1718);
         let root = with_run(&mut owner, |run| run.cons(&cars[0], &nil).unwrap());
@@ -674,7 +766,7 @@ fn return_cons_storage_preserves_busy_stop_validation_for_retry() {
             assert!(!registry.park.poisoned.load(Ordering::Acquire));
         });
         retry_registration(|| era.return_cons_storage(&stopped));
-        era.collect_stopped(&mut stopped).unwrap();
+        era.collect_stopped(&mut stopped, world_roots).unwrap();
         era.with_stopped_heap_for_test(&stopped, |heap| check_pair(heap, &root, 1701))
             .unwrap();
         complete(stopped);
@@ -687,9 +779,22 @@ fn return_cons_storage_preserves_busy_stop_validation_for_retry() {
     });
 }
 
-#[test]
-fn forgotten_open_cons_run_refuses_publication_native_and_finish_without_waiting() {
-    Context::with_test_collection_era(roots, |era, (cars, nil)| {
+fn forgotten_open_cons_run_refuses_publication_native_and_finish_without_waiting<K, W>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    roots_era(&mut |era, (cars, nil)| {
         era.start_cons_storage().unwrap();
         let mut owner = activate(era.register(1719, 0).unwrap(), era.heap_identity(), 1719);
         let mut run = owner.run_access().unwrap();
@@ -732,23 +837,150 @@ fn forgotten_open_cons_run_refuses_publication_native_and_finish_without_waiting
     });
 }
 
-#[test]
-fn partial_cons_grant_refunds_owner_and_global_credits_then_merges_history_once() {
-    use crate::tagged::gc::{ConsCell, MemoryUseCountSlot};
-    use std::mem::size_of;
+fn foreign_stop_cannot_return_or_resume_a_cons_catalog<K, W>(
+    empty_outer_era: &mut dyn FnMut(i64, &mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>)),
+    roots_nested_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    empty_outer_era(0, &mut |foreign| {
+        let mut foreign_stop = foreign.stop().unwrap();
+        roots_nested_era(&mut |era, (cars, nil)| {
+            era.start_cons_storage().unwrap();
+            let before = era.cons_catalog_snapshot_for_test().unwrap();
+            assert_eq!(
+                era.return_cons_storage(&foreign_stop),
+                Err(RegistrationError::WrongHeap)
+            );
+            assert_eq!(
+                era.resume_cons_storage(&foreign_stop),
+                Err(RegistrationError::WrongHeap)
+            );
+            let after = era.cons_catalog_snapshot_for_test().unwrap();
+            assert_eq!(after.blocks, before.blocks);
+            assert_eq!(after.live_count, before.live_count);
+            assert_eq!(after.free_count, before.free_count);
+            assert!(after.installed && after.metadata_coherent);
+            // A real allocation and matching stop still succeed after
+            // refusal, on the World whose frozen census was captured last.
+            let mut owner = activate(era.register(1717, 0).unwrap(), era.heap_identity(), 1717);
+            let root = with_run(&mut owner, |run| run.cons(&cars[0], &nil).unwrap());
+            owner.enter_native(std::slice::from_ref(&root)).unwrap();
+            let mut stopped = era.stop().unwrap();
+            era.return_cons_storage(&stopped).unwrap();
+            era.collect_stopped(&mut stopped, world_roots).unwrap();
+            era.with_stopped_heap_for_test(&stopped, |heap| {
+                check_catalog(heap);
+                check_pair(heap, &root, 1701);
+            })
+            .unwrap();
+            complete(stopped);
+            owner.leave_native().unwrap();
+            drop(root);
+            retire(owner);
+            let (collector, keeper) = era.finish().unwrap();
+            drop(collector);
+            drop(keeper);
+        });
 
-    Context::with_test_collection_era_then(
-        |context| {
-            let inputs = roots(context);
-            let heap = &context.tagged_heap;
-            (
-                inputs,
-                heap.cons_live_count,
-                heap.memory_use_counts_snapshot(),
-                heap.total_allocated_bytes(),
-            )
-        },
-        |era, ((cars, nil), base_live, base_memory, base_bytes)| {
+        foreign_stop.trace(|_, _| Ok(())).unwrap();
+        complete(foreign_stop);
+        let (collector, keeper) = foreign.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}
+
+fn cons_result_survives_from_published_head_then_reclaims_after_serial_restore<K, W>(
+    roots_era_then_words: &mut dyn FnMut(
+        &mut dyn for<'e> FnMut(
+            ParallelHeapEra<'e, K>,
+            RootsFixture,
+        ) -> (QuiescentCollector<'e>, K, [usize; 2]),
+    ),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    roots_era_then_words(&mut |era, (cars, nil)| {
+        era.start_cons_storage().unwrap();
+        let mut owner = activate(era.register(1710, 1).unwrap(), era.heap_identity(), 1710);
+        let (head, words) = with_run(&mut owner, |run| {
+            let child = run.cons(&cars[0], &nil).unwrap();
+            let head = run.cons(&child, &nil).unwrap();
+            let words = [head.cons_word_for_test(), child.cons_word_for_test()];
+            drop(child); // only the head's car retains the child
+            (head, words)
+        });
+        owner.enter_native(std::slice::from_ref(&head)).unwrap();
+        drop(head); // only the authoritative publication retains the graph
+        let mut stopped = era.stop().unwrap();
+        era.return_cons_storage(&stopped).unwrap();
+        era.collect_stopped(&mut stopped, world_roots).unwrap();
+        era.with_stopped_heap_for_test(&stopped, |heap| {
+            for word in words {
+                assert!(heap.owns_heap_value_for_test(unsafe { Value::from_bits(word) }));
+            }
+            // SAFETY: exact stopped publication retains the complete graph.
+            unsafe {
+                let head = &*Value::from_bits(words[0]).as_cons_ptr().unwrap();
+                assert_eq!(head.car.bits(), words[1]);
+                let child = &*head.car.as_cons_ptr().unwrap();
+                assert_eq!(child.car.as_fixnum(), Some(1701));
+            }
+        })
+        .unwrap();
+        complete(stopped);
+        owner.leave_native().unwrap();
+        with_run(&mut owner, |run| run.state().root_scratch.clear());
+        retire(owner);
+        let (collector, keeper) = era.finish().unwrap();
+        (collector, keeper, words)
+    });
+}
+
+fn partial_cons_grant_refunds_owner_and_global_credits_then_merges_history_once<K, W>(
+    partial_era_then: &mut dyn FnMut(
+        &mut dyn for<'e> FnMut(
+            ParallelHeapEra<'e, K>,
+            CreditsFixture,
+        ) -> (QuiescentCollector<'e>, K, CreditsResult),
+    ),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    use crate::tagged::gc::{ConsCell, MemoryUseCountSlot};
+    partial_era_then(
+        &mut |era, ((cars, nil), base_live, base_memory, base_bytes)| {
             let table_charge = era.symbol_table_admission_charge_for_test();
             assert!(
                 table_charge.get() > 0,
@@ -827,7 +1059,7 @@ fn partial_cons_grant_refunds_owner_and_global_credits_then_merges_history_once(
             );
             let mut stopped = era.stop().unwrap();
             era.return_cons_storage(&stopped).unwrap();
-            let report = era.collect_stopped(&mut stopped).unwrap();
+            let report = era.collect_stopped(&mut stopped, world_roots).unwrap();
             assert_eq!(report.memory_use_counts, expected_memory);
             assert_eq!(report.total_allocated_bytes, expected_bytes);
             complete(stopped);
@@ -850,13 +1082,6 @@ fn partial_cons_grant_refunds_owner_and_global_credits_then_merges_history_once(
                 keeper,
                 (report.allocated_count, expected_memory, expected_bytes),
             )
-        },
-        |context, (live, memory, bytes)| {
-            // Inspect BEFORE another GC: serial reunion itself must preserve
-            // exactly the post-sweep balance and cumulative owner histories.
-            assert_eq!(context.tagged_heap.allocated_count(), live);
-            assert_eq!(context.tagged_heap.memory_use_counts_snapshot(), memory);
-            assert_eq!(context.tagged_heap.total_allocated_bytes(), bytes);
         },
     );
 }

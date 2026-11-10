@@ -1010,8 +1010,18 @@ impl<K: EraKeeper> Drop for EraCore<'_, K> {
 static_assertions::assert_impl_all!(MutatorEntry: Send, Sync);
 static_assertions::assert_impl_all!(MutatorKey: Send, Sync, Copy);
 
-#[cfg(test)]
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
 mod collection_tests;
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+pub(crate) use collection_tests::{
+    AfterWords, CollectionCase, Graph, RequestersFixture, ThenFixture, run_collection_test,
+};
 #[cfg(test)]
 mod image_tests;
 #[cfg(all(feature = "test-support", not(feature = "gc-memory-telemetry")))]
@@ -1026,8 +1036,18 @@ pub(crate) use tests::run_mutator_registration_era_test;
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 mod collection_scalar_tests;
 
-#[cfg(test)]
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
 mod cons_allocation_tests;
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+pub(crate) use cons_allocation_tests::{
+    ConsAllocationCase, CreditsFixture, CreditsResult, RootsFixture, run_cons_allocation_test,
+};
 
 #[cfg(all(test, not(feature = "test-support")))]
 mod a8_probes;
