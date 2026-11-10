@@ -207,7 +207,7 @@ pub(super) fn note_selection(heap: &TaggedHeap, memory_full: bool, stress: bool)
         return;
     };
     let mut session = session.lock().unwrap_or_else(|error| error.into_inner());
-    let observation = session.heaps.entry(heap.identity()).or_default();
+    let observation = session.heaps.entry(heap.heap_identity().get()).or_default();
     observation.selection_cycle = heap.gc_collections.saturating_add(1);
     observation.selection_reasons = selection_reasons(heap, memory_full, stress);
 }
@@ -218,7 +218,7 @@ pub(super) fn note_promotion(heap: &TaggedHeap, bytes: usize) {
         return;
     };
     let mut session = session.lock().unwrap_or_else(|error| error.into_inner());
-    let observation = session.heaps.entry(heap.identity()).or_default();
+    let observation = session.heaps.entry(heap.heap_identity().get()).or_default();
     observation.promoted_bytes = observation.promoted_bytes.saturating_add(bytes);
 }
 
@@ -260,7 +260,7 @@ pub(super) fn observe(heap: &TaggedHeap, phase: Phase) {
     };
     let mut session = session.lock().unwrap_or_else(|error| error.into_inner());
     let elapsed_us = session.started.elapsed().as_micros().min(u64::MAX as u128) as u64;
-    let observation = session.heaps.entry(heap.identity()).or_default();
+    let observation = session.heaps.entry(heap.heap_identity().get()).or_default();
     if let Phase::CollectionBegin { stw_entry } = phase {
         observation.promoted_bytes = 0;
         if stw_entry {
@@ -281,7 +281,7 @@ pub(super) fn observe(heap: &TaggedHeap, phase: Phase) {
     }
     let record = Record {
         schema: 1,
-        heap_identity: heap.identity(),
+        heap_identity: heap.heap_identity().get(),
         time_us: elapsed_us,
         phase: phase.name(),
         cycle,
