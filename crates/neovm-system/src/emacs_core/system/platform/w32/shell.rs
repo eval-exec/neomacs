@@ -65,7 +65,7 @@ pub(crate) fn w32_shell_execute(ctx: &mut Context, args: Vec<Value>) -> EvalResu
     let current_dir = crate::emacs_core::fileio::default_directory_lisp_in_state(
         ctx.variables(),
         &[],
-        &ctx.buffers,
+        &ctx.edit.buffers,
     )
     .map(|directory| neovm_value::emacs_char::to_utf8_lossy(directory.as_bytes()))
     .unwrap_or_default();
