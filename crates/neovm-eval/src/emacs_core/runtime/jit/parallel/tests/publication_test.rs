@@ -10,11 +10,12 @@ use neovm_value::intern::{
     SymId,
     parallel::{identity_census_for_test, name_publication_for_test},
 };
-use neovm_value::tagged::gc::RunAccessUnaryExt;
+use neovm_value::tagged::gc::mutator_registration::RunAccessUnaryExt;
 use neovm_value::tagged::gc::{
     FunctionStep, GlobalError, HofOperation, InitialInternError, PlainSymbolBacking,
 };
 use neovm_value::tagged::value::TaggedValue;
+use neovm_value::test_support::authority::hof_singleton_new_for_test;
 use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::num::NonZeroU32;
@@ -204,7 +205,7 @@ fn mapping<'era>(
     inputs: &mut PublicationInputs<'era>,
     phase: CohortPhase,
 ) -> Result<(), String> {
-    inputs.hof.singleton = HofSingleton::new(
+    inputs.hof.singleton = hof_singleton_new_for_test(
         run,
         ImmediateResult::from_word(TaggedValue::fixnum(7).bits()).unwrap(),
     )
@@ -516,15 +517,15 @@ fn verify_committed<'era>(
         registration,
     )
     .map_err(|error| format!("publication table statistics: {error:?}"))?;
-    assert_ne!(after_generation, inputs.facts.table_generation);
-    assert!(after_retired > inputs.facts.table_retired);
+    assert_ne!(after_generation, inputs.facts.tables.generation_word());
+    assert!(after_retired > inputs.facts.tables.retired_count());
     admission
         .with_activation(run, home, |activation| {
             let (slots, chunk_count, chunk_slots, first_chunk) =
                 activation.published_table_census_for_test();
-            assert!(slots > inputs.facts.slots);
-            assert!(chunk_count >= inputs.facts.chunks + 2);
-            assert_eq!(chunk_slots, inputs.facts.chunk_slots);
+            assert!(slots > inputs.facts.slots.get());
+            assert!(chunk_count >= inputs.facts.chunks.get() + 2);
+            assert_eq!(chunk_slots, inputs.facts.chunk_slots.get());
             assert!(inputs.facts.original_chunk_is_retained(first_chunk));
         })
         .map_err(|error| format!("publication descriptor view: {error:?}"))?;

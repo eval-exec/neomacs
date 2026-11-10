@@ -6,6 +6,7 @@ use super::execution_fixtures::{
 use super::*;
 use neovm_value::tagged::gc::{GlobalError, HofOperation, PlainSymbolBacking};
 use neovm_value::tagged::value::TaggedValue;
+use neovm_value::test_support::authority::hof_singleton_new_for_test;
 
 struct Kernels {
     scalar: ParallelCompiledCode,
@@ -152,7 +153,7 @@ fn body<'era>(
         CohortPhase::AfterFirstCollection | CohortPhase::AfterSecondCollection => {
             // The prior phase's managed result was retained only by this home.
             assert_mapping(operation, home, run);
-            inputs.singleton = HofSingleton::new(
+            inputs.singleton = hof_singleton_new_for_test(
                 run,
                 ImmediateResult::from_word(TaggedValue::fixnum(7).bits()).unwrap(),
             )

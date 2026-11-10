@@ -4,8 +4,9 @@ use super::super::execution_fixtures::{
 };
 use super::*;
 use neovm_value::tagged::gc::PlainSymbolBacking;
-use neovm_value::tagged::gc::RunAccessUnaryExt;
+use neovm_value::tagged::gc::mutator_registration::RunAccessUnaryExt;
 use neovm_value::tagged::value::TaggedValue;
+use neovm_value::test_support::authority::hof_singleton_new_for_test;
 
 fn oracle() -> [&'static str; 6] {
     include_str!("../../tests/hof_oracle.expected")
@@ -69,7 +70,7 @@ fn history<'era>(
     assert_eq!(ExecutionTestHomes::word(destination, run), result);
     run.sym_unary_fset_into(&inputs.callback, &replacement, &mut destination.clone())
         .unwrap();
-    inputs.singleton = HofSingleton::new(
+    inputs.singleton = hof_singleton_new_for_test(
         run,
         ImmediateResult::from_word(TaggedValue::fixnum(7).bits()).unwrap(),
     )
@@ -255,28 +256,30 @@ fn nmjit_n4_native_hof_refuses_stale_homes() {
 }
 
 /// # Safety
-/// Pointers name the initialized ParallelRuntime and HofInput retained by
-/// lookup. The live activation retains this publication through return.
+/// Pointers name the initialized ParallelRuntime, HofInput, and the live
+/// `ExecutionActivation` retained by lookup through return.
 unsafe extern "C" fn paired_lookup(
     runtime: *const ParallelRuntime<'_>,
-    _activation: *mut c_void,
+    activation: *mut c_void,
     input: *const c_void,
     _output: *mut ScalarOutput,
 ) -> u32 {
     // SAFETY: lookup supplies the declared live initialized ABI objects.
+    // The activation pointer is the same `ExecutionActivation` whose
+    // publication filled `runtime`. `PublicationView::load` stays
+    // crate-private; the copied census is that published table's shape.
+    // A chunk is present exactly when its index is below the chunk count.
     let (runtime, input) = unsafe { (&*runtime, &*input.cast::<HofInput>()) };
     if runtime.version.0 != NativeAbiVersion::V1.0 {
         return NativeStatus::UnsupportedAbi as u32;
     }
-    let view = runtime.publication.load();
-    let table = view.table();
+    let (slots, chunk_count, chunk_slots, _) = unsafe {
+        (&*activation.cast::<neovm_value::tagged::gc::ExecutionActivation<'_, '_, '_>>())
+            .published_table_census_for_test()
+    };
     for slot in [input.mapper, input.callback] {
         let index = slot.get();
-        if index >= table.slots().get()
-            || table
-                .chunk((index / table.chunk_slots().get()).into())
-                .is_none()
-        {
+        if index >= slots || index / chunk_slots >= chunk_count {
             return NativeStatus::SlotAbsent as u32;
         }
     }

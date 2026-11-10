@@ -7,28 +7,29 @@ use super::*;
 use neovm_value::tagged::gc::PlainSymbolBacking;
 
 /// # Safety
-/// Pointers identify initialized ParallelRuntime and CellInput objects retained
-/// through return. The publication borrow belongs to the live activation.
+/// Pointers identify initialized ParallelRuntime, CellInput, and the live
+/// `ExecutionActivation` retained through return.
 unsafe extern "C" fn lookup(
     runtime: *const ParallelRuntime<'_>,
-    _activation: *mut c_void,
+    activation: *mut c_void,
     input: *const c_void,
     _output: *mut ScalarOutput,
 ) -> u32 {
     // SAFETY: execute passes these exact initialized stack objects at the
-    // declared ABI and retains the publication borrow through this return.
+    // declared ABI and retains the activation through this return.
+    // `PublicationView::load` stays crate-private. The copied census is the
+    // shape of that same published table; a chunk is present exactly when
+    // its index is below the chunk count.
     let (runtime, input) = unsafe { (&*runtime, &*input.cast::<CellInput>()) };
     if runtime.version.0 != NativeAbiVersion::V1.0 {
         return NativeStatus::UnsupportedAbi as u32;
     }
-    let view = runtime.publication.load();
-    let table = view.table();
+    let (slots, chunk_count, chunk_slots, _) = unsafe {
+        (&*activation.cast::<neovm_value::tagged::gc::ExecutionActivation<'_, '_, '_>>())
+            .published_table_census_for_test()
+    };
     let slot = input.slot.get();
-    if slot < table.slots().get()
-        && table
-            .chunk((slot / table.chunk_slots().get()).into())
-            .is_some()
-    {
+    if slot < slots && slot / chunk_slots < chunk_count {
         NativeStatus::CellReadReady as u32
     } else {
         NativeStatus::SlotAbsent as u32
