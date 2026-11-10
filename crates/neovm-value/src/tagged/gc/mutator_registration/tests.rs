@@ -1,10 +1,13 @@
-use super::ProofEraFinishFailure as EraFinishFailure;
 use super::image::PublishedGcWork;
 use super::*;
-use crate::emacs_core::eval::Context;
-#[cfg(test)]
-use crate::emacs_core::eval::world::WorldProofEraExt;
+use crate::symbol::parallel::SymbolBacking;
+use crate::tagged::gc::FacadeEpochRetention;
 use crate::tagged::gc::ProofEra as ParallelHeapEra;
+use crate::tagged::gc::ProofEraFinishFailure as EraFinishFailure;
+
+type MutatorEra<'a, K> = dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>)) + 'a;
+type Prepare<'a, K> =
+    dyn FnMut(&K) -> Result<(FacadeEpochRetention, SymbolBacking), RegistrationError> + 'a;
 use crate::tagged::gc::mark_word::MarkWord;
 use crate::tagged::value::TaggedValue;
 
@@ -46,9 +49,10 @@ pub(super) fn finish_retry(mut token: Mutator<'_>, epoch: NonZeroU64) {
     }
 }
 
-#[test]
-fn two_destination_threads_publish_one_canonical_census() {
-    Context::with_test_mutator_era(|era| {
+fn two_destination_threads_publish_one_canonical_census<K: EraKeeper>(
+    with_mutator_era: &mut MutatorEra<'_, K>,
+) {
+    with_mutator_era(&mut |era| {
         let initial = era.stopped_summaries().unwrap().census().unwrap();
         let heap = era.heap_identity();
         let permits = [era.register(1, 8).unwrap(), era.register(2, 8).unwrap()];
@@ -109,9 +113,10 @@ fn two_destination_threads_publish_one_canonical_census() {
     });
 }
 
-#[test]
-fn cancelled_starts_are_never_runnable_and_owner_can_retry() {
-    Context::with_test_mutator_era(|era| {
+fn cancelled_starts_are_never_runnable_and_owner_can_retry<K: EraKeeper>(
+    with_mutator_era: &mut MutatorEra<'_, K>,
+) {
+    with_mutator_era(&mut |era| {
         let first = era.register(17, 2).unwrap();
         let old = first.key();
         drop(first);
@@ -126,9 +131,10 @@ fn cancelled_starts_are_never_runnable_and_owner_can_retry() {
     });
 }
 
-#[test]
-fn wrong_start_heap_or_owner_returns_the_live_permit() {
-    Context::with_test_mutator_era(|era| {
+fn wrong_start_heap_or_owner_returns_the_live_permit<K: EraKeeper>(
+    with_mutator_era: &mut MutatorEra<'_, K>,
+) {
+    with_mutator_era(&mut |era| {
         let other = super::super::TaggedHeap::new();
         let permit = era.register(1, 2).unwrap();
         let failure = permit.activate(other.heap_identity(), 1).unwrap_err();
@@ -148,9 +154,10 @@ fn wrong_start_heap_or_owner_returns_the_live_permit() {
     });
 }
 
-#[test]
-fn wrong_key_heap_owner_and_generation_refuse_without_changes() {
-    Context::with_test_mutator_era(|era| {
+fn wrong_key_heap_owner_and_generation_refuse_without_changes<K: EraKeeper>(
+    with_mutator_era: &mut MutatorEra<'_, K>,
+) {
+    with_mutator_era(&mut |era| {
         let permit = era.register(1, 0).unwrap();
         let key = permit.key();
         let foreign = super::super::TaggedHeap::new();
@@ -174,9 +181,10 @@ fn wrong_key_heap_owner_and_generation_refuse_without_changes() {
     });
 }
 
-#[test]
-fn generation_exhaustion_and_duplicate_owner_leave_membership_unchanged() {
-    Context::with_test_mutator_era(|era| {
+fn generation_exhaustion_and_duplicate_owner_leave_membership_unchanged<K: EraKeeper>(
+    with_mutator_era: &mut MutatorEra<'_, K>,
+) {
+    with_mutator_era(&mut |era| {
         let permit = era.register(1, 0).unwrap();
         assert_eq!(
             era.register(1, 0).unwrap_err(),
@@ -200,9 +208,10 @@ fn generation_exhaustion_and_duplicate_owner_leave_membership_unchanged() {
     });
 }
 
-#[test]
-fn running_or_starting_owner_cannot_be_omitted_from_summary() {
-    Context::with_test_mutator_era(|era| {
+fn running_or_starting_owner_cannot_be_omitted_from_summary<K: EraKeeper>(
+    with_mutator_era: &mut MutatorEra<'_, K>,
+) {
+    with_mutator_era(&mut |era| {
         let permit = era.register(1, 0).unwrap();
         assert!(matches!(
             era.stopped_summaries(),
@@ -227,9 +236,10 @@ fn running_or_starting_owner_cannot_be_omitted_from_summary() {
     });
 }
 
-#[test]
-fn owner_publication_restores_exact_image_and_refuses_old_epoch() {
-    Context::with_test_mutator_era(|era| {
+fn owner_publication_restores_exact_image_and_refuses_old_epoch<K: EraKeeper>(
+    with_mutator_era: &mut MutatorEra<'_, K>,
+) {
+    with_mutator_era(&mut |era| {
         let mut token = era
             .register(1, 3)
             .unwrap()
@@ -265,9 +275,10 @@ fn owner_publication_restores_exact_image_and_refuses_old_epoch() {
     });
 }
 
-#[test]
-fn outstanding_worker_loan_refuses_publication_and_retirement_then_recovers() {
-    Context::with_test_mutator_era(|era| {
+fn outstanding_worker_loan_refuses_publication_and_retirement_then_recovers<K: EraKeeper>(
+    with_mutator_era: &mut MutatorEra<'_, K>,
+) {
+    with_mutator_era(&mut |era| {
         let mut token = era
             .register(1, 0)
             .unwrap()
@@ -287,9 +298,10 @@ fn outstanding_worker_loan_refuses_publication_and_retirement_then_recovers() {
     });
 }
 
-#[test]
-fn wrong_owner_worker_return_keeps_the_only_payload_for_retry() {
-    Context::with_test_mutator_era(|era| {
+fn wrong_owner_worker_return_keeps_the_only_payload_for_retry<K: EraKeeper>(
+    with_mutator_era: &mut MutatorEra<'_, K>,
+) {
+    with_mutator_era(&mut |era| {
         let heap = era.heap_identity();
         let mut first = era.register(1, 0).unwrap().activate(heap, 1).unwrap();
         let mut second = era.register(2, 0).unwrap().activate(heap, 2).unwrap();
@@ -303,9 +315,10 @@ fn wrong_owner_worker_return_keeps_the_only_payload_for_retry() {
     });
 }
 
-#[test]
-fn young_resolver_checks_one_canonical_entry_and_retiring_generation() {
-    Context::with_test_mutator_era(|era| {
+fn young_resolver_checks_one_canonical_entry_and_retiring_generation<K: EraKeeper>(
+    with_mutator_era: &mut MutatorEra<'_, K>,
+) {
+    with_mutator_era(&mut |era| {
         let token = era
             .register(1, 0)
             .unwrap()
@@ -328,9 +341,12 @@ fn young_resolver_checks_one_canonical_entry_and_retiring_generation() {
     });
 }
 
-#[test]
-fn panic_abandonment_poison_retains_owner_state_and_world_authority() {
-    Context::with_test_mutator_era(|era| {
+fn panic_abandonment_poison_retains_owner_state_and_world_authority<
+    K: EraKeeper + std::fmt::Debug,
+>(
+    with_mutator_era: &mut MutatorEra<'_, K>,
+) {
+    with_mutator_era(&mut |era| {
         let initial = era.registry().gate.state.lock().unwrap().entries.len();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut token = era
@@ -362,9 +378,10 @@ fn panic_abandonment_poison_retains_owner_state_and_world_authority() {
     });
 }
 
-#[test]
-fn unfinished_token_drop_and_lost_loan_fail_closed() {
-    Context::with_test_mutator_era(|era| {
+fn unfinished_token_drop_and_lost_loan_fail_closed<K: EraKeeper>(
+    with_mutator_era: &mut MutatorEra<'_, K>,
+) {
+    with_mutator_era(&mut |era| {
         let mut token = era
             .register(1, 0)
             .unwrap()
@@ -387,9 +404,10 @@ fn unfinished_token_drop_and_lost_loan_fail_closed() {
     });
 }
 
-#[test]
-fn summary_reentry_refuses_busy_instead_of_blocking_keeper() {
-    Context::with_test_mutator_era(|era| {
+fn summary_reentry_refuses_busy_instead_of_blocking_keeper<K: EraKeeper>(
+    with_mutator_era: &mut MutatorEra<'_, K>,
+) {
+    with_mutator_era(&mut |era| {
         let view = era.stopped_summaries().unwrap();
         assert_eq!(era.register(1, 0).unwrap_err(), RegistrationError::Busy);
         assert!(matches!(
@@ -403,9 +421,10 @@ fn summary_reentry_refuses_busy_instead_of_blocking_keeper() {
     });
 }
 
-#[test]
-fn root_capacity_failure_returns_unclaimed_permit_for_safe_cancellation() {
-    Context::with_test_mutator_era(|era| {
+fn root_capacity_failure_returns_unclaimed_permit_for_safe_cancellation<K: EraKeeper>(
+    with_mutator_era: &mut MutatorEra<'_, K>,
+) {
+    with_mutator_era(&mut |era| {
         let permit = era.register(1, usize::MAX).unwrap();
         let failed = permit.activate(era.heap_identity(), 1).unwrap_err();
         assert_eq!(failed.reason, RegistrationError::Capacity);
@@ -422,9 +441,12 @@ fn root_capacity_failure_returns_unclaimed_permit_for_safe_cancellation() {
     });
 }
 
-#[test]
-fn pending_root_retirement_failure_preserves_entry_and_allows_explicit_transfer() {
-    Context::with_test_mutator_era(|era| {
+fn pending_root_retirement_failure_preserves_entry_and_allows_explicit_transfer<
+    K: EraKeeper + std::fmt::Debug,
+>(
+    with_mutator_era: &mut MutatorEra<'_, K>,
+) {
+    with_mutator_era(&mut |era| {
         let mut token = era
             .register(1, 1)
             .unwrap()
@@ -451,9 +473,11 @@ fn pending_root_retirement_failure_preserves_entry_and_allows_explicit_transfer(
     });
 }
 
-#[test]
-fn old_registration_key_is_rejected_after_reentering_the_same_world() {
-    Context::with_test_mutator_era(|era| {
+fn old_registration_key_is_rejected_after_reentering_the_same_world<K: EraKeeper>(
+    with_mutator_era: &mut MutatorEra<'_, K>,
+    prepare: &mut Prepare<'_, K>,
+) {
+    with_mutator_era(&mut |era| {
         let token = era
             .register(1, 0)
             .unwrap()
@@ -462,7 +486,11 @@ fn old_registration_key_is_rejected_after_reentering_the_same_world() {
         let old = token.key();
         token.finish(epoch(1)).unwrap();
         let (collector, keeper) = era.finish().unwrap();
-        let again = ParallelHeapEra::admit(collector, keeper).unwrap();
+        let again = unsafe {
+            // SAFETY: the core shell passes the World retained-keeper adapter.
+            ParallelHeapEra::admit_with(collector, keeper, |keeper| prepare(keeper))
+        }
+        .unwrap();
         let permit = again.register(1, 0).unwrap();
         let new = permit.key();
         assert_eq!(old.heap, new.heap);
@@ -489,4 +517,72 @@ fn checked_generation_issuer_refuses_wrap_without_changing_the_counter() {
         Err(RegistrationError::Exhausted)
     );
     assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
+}
+
+/// One moved mutator-era test. The core shell opens the mutator era and
+/// passes the World keeper preparation. The generation-counter test stays
+/// `#[test]` here.
+pub(crate) fn run_mutator_registration_era_test<K: EraKeeper + std::fmt::Debug>(
+    name: &str,
+    with_mutator_era: &mut MutatorEra<'_, K>,
+    prepare: &mut Prepare<'_, K>,
+) {
+    match name {
+        "two_destination_threads_publish_one_canonical_census" => {
+            two_destination_threads_publish_one_canonical_census(with_mutator_era)
+        }
+        "cancelled_starts_are_never_runnable_and_owner_can_retry" => {
+            cancelled_starts_are_never_runnable_and_owner_can_retry(with_mutator_era)
+        }
+        "wrong_start_heap_or_owner_returns_the_live_permit" => {
+            wrong_start_heap_or_owner_returns_the_live_permit(with_mutator_era)
+        }
+        "wrong_key_heap_owner_and_generation_refuse_without_changes" => {
+            wrong_key_heap_owner_and_generation_refuse_without_changes(with_mutator_era)
+        }
+        "generation_exhaustion_and_duplicate_owner_leave_membership_unchanged" => {
+            generation_exhaustion_and_duplicate_owner_leave_membership_unchanged(with_mutator_era)
+        }
+        "running_or_starting_owner_cannot_be_omitted_from_summary" => {
+            running_or_starting_owner_cannot_be_omitted_from_summary(with_mutator_era)
+        }
+        "owner_publication_restores_exact_image_and_refuses_old_epoch" => {
+            owner_publication_restores_exact_image_and_refuses_old_epoch(with_mutator_era)
+        }
+        "outstanding_worker_loan_refuses_publication_and_retirement_then_recovers" => {
+            outstanding_worker_loan_refuses_publication_and_retirement_then_recovers(
+                with_mutator_era,
+            )
+        }
+        "wrong_owner_worker_return_keeps_the_only_payload_for_retry" => {
+            wrong_owner_worker_return_keeps_the_only_payload_for_retry(with_mutator_era)
+        }
+        "young_resolver_checks_one_canonical_entry_and_retiring_generation" => {
+            young_resolver_checks_one_canonical_entry_and_retiring_generation(with_mutator_era)
+        }
+        "panic_abandonment_poison_retains_owner_state_and_world_authority" => {
+            panic_abandonment_poison_retains_owner_state_and_world_authority(with_mutator_era)
+        }
+        "unfinished_token_drop_and_lost_loan_fail_closed" => {
+            unfinished_token_drop_and_lost_loan_fail_closed(with_mutator_era)
+        }
+        "summary_reentry_refuses_busy_instead_of_blocking_keeper" => {
+            summary_reentry_refuses_busy_instead_of_blocking_keeper(with_mutator_era)
+        }
+        "root_capacity_failure_returns_unclaimed_permit_for_safe_cancellation" => {
+            root_capacity_failure_returns_unclaimed_permit_for_safe_cancellation(with_mutator_era)
+        }
+        "pending_root_retirement_failure_preserves_entry_and_allows_explicit_transfer" => {
+            pending_root_retirement_failure_preserves_entry_and_allows_explicit_transfer(
+                with_mutator_era,
+            )
+        }
+        "old_registration_key_is_rejected_after_reentering_the_same_world" => {
+            old_registration_key_is_rejected_after_reentering_the_same_world(
+                with_mutator_era,
+                prepare,
+            )
+        }
+        other => panic!("unknown mutator registration era test {other}"),
+    }
 }

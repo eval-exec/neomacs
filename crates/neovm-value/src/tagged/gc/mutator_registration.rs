@@ -1007,8 +1007,10 @@ mod image_tests;
 mod peer_young_collection_tests;
 #[cfg(all(feature = "test-support", not(feature = "gc-memory-telemetry")))]
 pub(crate) use peer_young_collection_tests::run_peer_young_collection_test;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 mod tests;
+#[cfg(feature = "test-support")]
+pub(crate) use tests::run_mutator_registration_era_test;
 
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 mod collection_scalar_tests;

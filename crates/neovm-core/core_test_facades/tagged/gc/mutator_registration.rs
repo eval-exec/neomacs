@@ -137,6 +137,13 @@ mod combined_executor_tests;
 #[path = "../../../core_tests/tagged/gc/mutator_registration/construction_nmjit_tests.rs"]
 mod construction_nmjit_tests;
 
+/// Mutator-registration era tests re-homed out of value. The shell opens the
+/// mutator era and passes the World keeper preparation. Assertions stay in
+/// the value bodies. The generation-counter row stays `#[test]` in value.
+#[cfg(test)]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/mutator_registration_era_tests.rs"]
+mod mutator_registration_era_tests;
+
 /// MEMQ-TAIL-SHAPES (b)+(i)+(ii), peer 22:30Z approvals: the keeper-table
 /// scope test re-homed out of value. It uses the closure-scoped
 /// stopped-tables install, the scope's nested-install probe, the &self

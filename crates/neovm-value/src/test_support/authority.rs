@@ -1464,6 +1464,32 @@ pub fn run_construction_nmjit_test_for_test<K>(
     );
 }
 
+/// FENCE: one re-homed mutator-registration era test. The core shell opens
+/// the mutator era and passes the World keeper preparation. The original
+/// dispatcher stays `pub(crate)`. The generation-counter test stays in value.
+#[doc(hidden)]
+pub fn run_mutator_registration_era_test_for_test<K>(
+    name: &str,
+    with_mutator_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ProofEra<'e, K>)),
+    prepare: &mut dyn FnMut(
+        &K,
+    ) -> Result<
+        (
+            crate::tagged::gc::FacadeEpochRetention,
+            crate::symbol::parallel::SymbolBacking,
+        ),
+        crate::tagged::gc::RegistrationError,
+    >,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper + std::fmt::Debug,
+{
+    crate::tagged::gc::mutator_registration::run_mutator_registration_era_test(
+        name,
+        with_mutator_era,
+        prepare,
+    );
+}
+
 /// FENCE: process collection-read configuration. The original stays
 /// `pub(crate)`. This is the only public path; it writes the process gate.
 #[cfg(any(test, feature = "test-support"))]
