@@ -90,7 +90,7 @@ pub(crate) mod vm_profile {
     pub(crate) const SITE_KEY_SUBR_VAL: u64 = 3;
     pub(crate) const SITE_KEY_OTHER_VAL: u64 = 4;
     pub(crate) fn site_key_for_symbol(id: SymId) -> u64 {
-        ((id.0 as u64) << 3) | 1
+        ((id.to_raw() as u64) << 3) | 1
     }
     fn site_key_name(key: u64) -> String {
         if key & 7 == 1 {
@@ -190,7 +190,7 @@ pub(crate) mod vm_profile {
     /// show up as the report's "other" column.
     pub(crate) fn bump_entry(sym: SymId, kind: u8) {
         ENTRY_COUNTS.with(|c| {
-            *c.borrow_mut().entry((sym.0, kind)).or_insert(0) += 1;
+            *c.borrow_mut().entry((sym.to_raw(), kind)).or_insert(0) += 1;
         });
     }
 
@@ -241,7 +241,7 @@ pub(crate) mod vm_profile {
     /// Record one `Op::VarRef` execution under its symbol + VR_* class.
     pub(crate) fn bump_varref(sym: SymId, class: u8, via_alias: bool) {
         VARREF_COUNTS.with(|c| {
-            *c.borrow_mut().entry((sym.0, class)).or_insert(0) += 1;
+            *c.borrow_mut().entry((sym.to_raw(), class)).or_insert(0) += 1;
         });
         if via_alias {
             VARREF_ALIAS.with(|c| *c.borrow_mut() += 1);
@@ -298,7 +298,7 @@ pub(crate) mod vm_profile {
         let entry: HashMap<(u32, u8), u64> = ENTRY_COUNTS.with(|c| c.borrow().clone());
         let mut subr_rows: Vec<(SymId, u64)> =
             SUBR_COUNTS.with(|c| c.borrow().iter().map(|(k, v)| (*k, *v)).collect());
-        subr_rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.0.cmp(&b.0.0)));
+        subr_rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_raw().cmp(&b.0.to_raw())));
         let subr_total: u64 = subr_rows.iter().map(|r| r.1).sum();
         let _ = writeln!(
             out,
@@ -317,12 +317,15 @@ pub(crate) mod vm_profile {
         for (id, count) in subr_rows.iter().take(120) {
             let name = neovm_value::intern::resolve_sym(*id);
             let pct = 100.0 * *count as f64 / subr_total.max(1) as f64;
-            let opcall = entry.get(&(id.0, ENTRY_CALL)).copied().unwrap_or(0);
+            let opcall = entry.get(&(id.to_raw(), ENTRY_CALL)).copied().unwrap_or(0);
             let cbsym = entry
-                .get(&(id.0, ENTRY_CALLBUILTINSYM))
+                .get(&(id.to_raw(), ENTRY_CALLBUILTINSYM))
                 .copied()
                 .unwrap_or(0);
-            let cbtin = entry.get(&(id.0, ENTRY_CALLBUILTIN)).copied().unwrap_or(0);
+            let cbtin = entry
+                .get(&(id.to_raw(), ENTRY_CALLBUILTIN))
+                .copied()
+                .unwrap_or(0);
             let other = count.saturating_sub(opcall + cbsym + cbtin);
             let _ = writeln!(
                 out,
@@ -9750,7 +9753,7 @@ impl<'a> Vm<'a> {
                 }
                 if let Some(dedicated) =
                     neovm_edit::buffer::buffer::DedicatedBufferLocal::from_sym_id(name_id)
-                    && let Some(buf) = self.ctx.buffers.current_buffer()
+                    && let Some(buf) = self.ctx.edit.buffers.current_buffer()
                     && !dedicated.read(buf).is_nil()
                 {
                     return (VR_PLAIN_NIL_BLV, false);
