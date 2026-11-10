@@ -11,21 +11,21 @@ fn codes(s: &str) -> Vec<u32> {
     s.chars().map(|c| c as u32).collect()
 }
 
-fn run(a_start: usize, a_end: usize, b_start: usize, b_end: usize) -> ReplaceRegionChangeRun {
-    ReplaceRegionChangeRun {
-        a_start,
-        a_end,
-        b_start,
-        b_end,
-    }
+fn run_bounds(runs: &[ReplaceRegionChangeRun]) -> Vec<(usize, usize, usize, usize)> {
+    runs.iter()
+        .map(|run| (run.a_start(), run.a_end(), run.b_start(), run.b_end()))
+        .collect()
 }
 
 #[test]
 fn minimal_change_runs_pure_insertion() {
     // "abcdef" -> "abcXYZdef": insert "XYZ" between index 3 and 3.
     assert_eq!(
-        replace_region_minimal_change_runs(&codes("abcdef"), &codes("abcXYZdef"), None).unwrap(),
-        vec![run(3, 3, 3, 6)]
+        run_bounds(
+            &replace_region_minimal_change_runs(&codes("abcdef"), &codes("abcXYZdef"), None)
+                .unwrap()
+        ),
+        vec![(3, 3, 3, 6)]
     );
 }
 
@@ -42,8 +42,10 @@ fn minimal_change_runs_two_insertions_keep_interior_match() {
     // "abc" -> "aXbYc": insert X before b, insert Y before c. The "b" between
     // them must remain a matched (untouched) character, i.e. two separate runs.
     assert_eq!(
-        replace_region_minimal_change_runs(&codes("abc"), &codes("aXbYc"), None).unwrap(),
-        vec![run(1, 1, 1, 2), run(2, 2, 3, 4)]
+        run_bounds(
+            &replace_region_minimal_change_runs(&codes("abc"), &codes("aXbYc"), None).unwrap()
+        ),
+        vec![(1, 1, 1, 2), (2, 2, 3, 4)]
     );
 }
 
@@ -51,8 +53,10 @@ fn minimal_change_runs_two_insertions_keep_interior_match() {
 fn minimal_change_runs_two_deletions_keep_interior_match() {
     // "abcde" -> "ace": delete b and d, keeping c between them.
     assert_eq!(
-        replace_region_minimal_change_runs(&codes("abcde"), &codes("ace"), None).unwrap(),
-        vec![run(1, 2, 1, 1), run(3, 4, 2, 2)]
+        run_bounds(
+            &replace_region_minimal_change_runs(&codes("abcde"), &codes("ace"), None).unwrap()
+        ),
+        vec![(1, 2, 1, 1), (3, 4, 2, 2)]
     );
 }
 
@@ -60,8 +64,8 @@ fn minimal_change_runs_two_deletions_keep_interior_match() {
 fn minimal_change_runs_substitution() {
     // "abZZef" region "ZZ" (indices 2..4) replaced by "CD": a single run.
     assert_eq!(
-        replace_region_minimal_change_runs(&codes("ZZ"), &codes("CD"), None).unwrap(),
-        vec![run(0, 2, 0, 2)]
+        run_bounds(&replace_region_minimal_change_runs(&codes("ZZ"), &codes("CD"), None).unwrap()),
+        vec![(0, 2, 0, 2)]
     );
 }
 

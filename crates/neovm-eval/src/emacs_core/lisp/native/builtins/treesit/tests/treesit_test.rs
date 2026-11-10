@@ -90,11 +90,11 @@ fn treesit_query_compile_malformed_query_signals_query_error() {
         .expect("json symbol");
     eval.treesit.cache_loaded_language(
         language_sym,
-        runtime::LoadedLanguage {
-            language: Language::new(tree_sitter_json::LANGUAGE),
-            filename: None,
-            _library: None,
-        },
+        runtime::LoadedLanguage::from_loaded_parts(
+            Language::new(tree_sitter_json::LANGUAGE),
+            None,
+            None,
+        ),
     );
 
     let signal = expect_signal(
@@ -116,11 +116,11 @@ fn treesit_query_compile_accepts_emacs_match_predicate_argument_order() {
         .expect("json symbol");
     eval.treesit.cache_loaded_language(
         language_sym,
-        runtime::LoadedLanguage {
-            language: Language::new(tree_sitter_json::LANGUAGE),
-            filename: None,
-            _library: None,
-        },
+        runtime::LoadedLanguage::from_loaded_parts(
+            Language::new(tree_sitter_json::LANGUAGE),
+            None,
+            None,
+        ),
     );
     let query = Value::list(vec![Value::list(vec![
         Value::list(vec![Value::symbol("string")]),

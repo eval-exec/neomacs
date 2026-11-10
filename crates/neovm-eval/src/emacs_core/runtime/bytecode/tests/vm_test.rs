@@ -3024,44 +3024,43 @@ fn vm_switch_branches_using_hash_table_jump_table() {
         ht.insert(key, Value::symbol("foo"), Value::fixnum(8));
     });
 
-    let func = ByteCodeFunction {
-        source_id: crate::emacs_core::bytecode::fresh_bytecode_source_id(),
-        // Hand-built but seal-shaped by construction (trailing Return,
-        // in-bounds targets/constants); the marker vouches for that. Left
-        // unverified so these run in the checked driver instance.
-        ops_sealed: true,
-        stack_verified: false,
-        ops: vec![
-            Op::Constant(1),
-            Op::Constant(0),
-            Op::Switch,
-            Op::Constant(2),
-            Op::Return,
-            Op::Constant(3),
-            Op::Return,
-        ],
-        constants: vec![
-            table,
-            Value::symbol("foo"),
-            Value::fixnum(10),
-            Value::fixnum(20),
-        ]
-        .into(),
-        max_stack: crate::emacs_core::bytecode::StackDepth::for_test(2),
-        params: neovm_value::value::LambdaParams::simple(vec![]).into(),
-        arglist: Value::NIL,
-        lexical: false,
-        env: None,
-        gnu_byte_offset_map: Some(vec![GnuByteOffsetMapEntry::new(8, 5)]),
-        gnu_bytecode_bytes: None,
-        docstring: None,
-        doc_form: None,
-        interactive: None,
-        closure_slot_count: 4,
-        extra_slots: Vec::new(),
-        #[cfg(feature = "jit")]
-        runtime: Some(crate::emacs_core::jit::Runtime::new()),
-        lazy_gnu_code: None,
+    // SAFETY: the ops are hand-built and seal-shaped (trailing Return,
+    // in-bounds targets and constants), so ops_sealed is true. The stack
+    // proof stays unset, so stack_verified is false.
+    let func = unsafe {
+        ByteCodeFunction::from_parts(
+            crate::emacs_core::bytecode::fresh_bytecode_source_id(),
+            vec![
+                Op::Constant(1),
+                Op::Constant(0),
+                Op::Switch,
+                Op::Constant(2),
+                Op::Return,
+                Op::Constant(3),
+                Op::Return,
+            ],
+            true,
+            false,
+            vec![
+                table,
+                Value::symbol("foo"),
+                Value::fixnum(10),
+                Value::fixnum(20),
+            ]
+            .into(),
+            crate::emacs_core::bytecode::StackDepth::for_test(2),
+            neovm_value::value::LambdaParams::simple(vec![]).into(),
+            Value::NIL,
+            false,
+            None,
+            Some(vec![GnuByteOffsetMapEntry::new(8, 5)]),
+            None,
+            None,
+            None,
+            None,
+            4,
+            Vec::new(),
+        )
     };
 
     let mut vm = new_vm(&mut eval);
@@ -3334,39 +3333,38 @@ fn vm_keymap_predicate_and_lookup_resolve_symbol_function_cells() {
 #[test]
 fn vm_throw_restores_saved_stack_before_resuming_catch() {
     crate::test_utils::init_test_tracing();
-    let func = ByteCodeFunction {
-        source_id: crate::emacs_core::bytecode::fresh_bytecode_source_id(),
-        // Hand-built but seal-shaped by construction (trailing Return,
-        // in-bounds targets/constants); the marker vouches for that. Left
-        // unverified so these run in the checked driver instance.
-        ops_sealed: true,
-        stack_verified: false,
-        ops: vec![
-            Op::Constant(0),
-            Op::Constant(1),
-            Op::PushCatch(6),
-            Op::Constant(1),
-            Op::Constant(2),
-            Op::Throw,
-            Op::List(2),
-            Op::Return,
-        ],
-        constants: vec![Value::fixnum(42), Value::symbol("done"), Value::fixnum(99)].into(),
-        max_stack: crate::emacs_core::bytecode::StackDepth::for_test(3),
-        params: neovm_value::value::LambdaParams::simple(vec![]).into(),
-        arglist: Value::NIL,
-        lexical: false,
-        env: None,
-        gnu_byte_offset_map: None,
-        gnu_bytecode_bytes: None,
-        docstring: None,
-        doc_form: None,
-        interactive: None,
-        closure_slot_count: 4,
-        extra_slots: Vec::new(),
-        #[cfg(feature = "jit")]
-        runtime: Some(crate::emacs_core::jit::Runtime::new()),
-        lazy_gnu_code: None,
+    // SAFETY: the ops are hand-built and seal-shaped (trailing Return,
+    // in-bounds targets and constants), so ops_sealed is true. The stack
+    // proof stays unset, so stack_verified is false.
+    let func = unsafe {
+        ByteCodeFunction::from_parts(
+            crate::emacs_core::bytecode::fresh_bytecode_source_id(),
+            vec![
+                Op::Constant(0),
+                Op::Constant(1),
+                Op::PushCatch(6),
+                Op::Constant(1),
+                Op::Constant(2),
+                Op::Throw,
+                Op::List(2),
+                Op::Return,
+            ],
+            true,
+            false,
+            vec![Value::fixnum(42), Value::symbol("done"), Value::fixnum(99)].into(),
+            crate::emacs_core::bytecode::StackDepth::for_test(3),
+            neovm_value::value::LambdaParams::simple(vec![]).into(),
+            Value::NIL,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            4,
+            Vec::new(),
+        )
     };
 
     let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
@@ -9461,38 +9459,37 @@ fn vm_lambda_parameters_can_shadow_nil_and_t() {
 fn vm_gnu_arg_descriptor_preserves_optional_and_rest_slots() {
     crate::test_utils::init_test_tracing();
     let arg_descriptor = 3 | (4 << 8) | 128;
-    let func = ByteCodeFunction {
-        source_id: crate::emacs_core::bytecode::fresh_bytecode_source_id(),
-        // Hand-built but seal-shaped by construction (trailing Return,
-        // in-bounds targets/constants); the marker vouches for that. Left
-        // unverified so these run in the checked driver instance.
-        ops_sealed: true,
-        stack_verified: false,
-        ops: vec![
-            Op::StackRef(4),
-            Op::StackRef(4),
-            Op::StackRef(4),
-            Op::StackRef(4),
-            Op::StackRef(4),
-            Op::List(5),
-            Op::Return,
-        ],
-        constants: vec![].into(),
-        max_stack: crate::emacs_core::bytecode::StackDepth::for_test(10),
-        params: crate::emacs_core::bytecode::decode::parse_arglist_descriptor(arg_descriptor),
-        arglist: Value::fixnum(arg_descriptor),
-        lexical: false,
-        env: None,
-        gnu_byte_offset_map: None,
-        gnu_bytecode_bytes: None,
-        docstring: None,
-        doc_form: None,
-        interactive: None,
-        closure_slot_count: 4,
-        extra_slots: Vec::new(),
-        #[cfg(feature = "jit")]
-        runtime: Some(crate::emacs_core::jit::Runtime::new()),
-        lazy_gnu_code: None,
+    // SAFETY: the ops are hand-built and seal-shaped (trailing Return,
+    // in-bounds targets and constants), so ops_sealed is true. The stack
+    // proof stays unset, so stack_verified is false.
+    let func = unsafe {
+        ByteCodeFunction::from_parts(
+            crate::emacs_core::bytecode::fresh_bytecode_source_id(),
+            vec![
+                Op::StackRef(4),
+                Op::StackRef(4),
+                Op::StackRef(4),
+                Op::StackRef(4),
+                Op::StackRef(4),
+                Op::List(5),
+                Op::Return,
+            ],
+            true,
+            false,
+            vec![].into(),
+            crate::emacs_core::bytecode::StackDepth::for_test(10),
+            crate::emacs_core::bytecode::decode::parse_arglist_descriptor(arg_descriptor),
+            Value::fixnum(arg_descriptor),
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            4,
+            Vec::new(),
+        )
     };
 
     let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());

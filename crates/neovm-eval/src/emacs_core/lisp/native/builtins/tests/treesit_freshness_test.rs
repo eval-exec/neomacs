@@ -12,11 +12,11 @@ pub(super) fn eval_with_json_parser(text: &str) -> (super::super::eval::Context,
         .expect("json symbol");
     eval.treesit.cache_loaded_language(
         language_sym,
-        runtime::LoadedLanguage {
-            language: Language::new(tree_sitter_json::LANGUAGE),
-            filename: None,
-            _library: None,
-        },
+        runtime::LoadedLanguage::from_loaded_parts(
+            Language::new(tree_sitter_json::LANGUAGE),
+            None,
+            None,
+        ),
     );
     let parser = builtin_treesit_parser_create(
         &mut eval,
