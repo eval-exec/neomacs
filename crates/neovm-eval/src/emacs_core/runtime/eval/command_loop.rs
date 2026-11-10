@@ -206,20 +206,60 @@ impl Context {
         }
     }
 
-    /// Claim exit hooks before running Lisp and publish only after they finish.
-    /// Every evaluator shutdown entry uses this first-entry-wins boundary.
+    /// Run `kill-emacs-hook`, then enter Dying and publish `request`.
+    ///
+    /// A call that arrives while that hook is already running re-enters,
+    /// as GNU `Fkill_emacs` does (`emacs.c:2954`, no recursion guard). The
+    /// hook list runs again through the ordinary walker. Lisp call depth
+    /// stops the recursion at `max-lisp-eval-depth`. The nested shutdown
+    /// error propagates, so this frame does not publish over the inner
+    /// request. A call that arrives while Dying skips the hook and publishes
+    /// only when nothing is stored.
     #[doc(hidden)]
     pub fn shutdown_with_hooks(&mut self, request: ShutdownRequest) -> EvalResult {
         if let Some(request) = self.shutdown_request {
             return Err(Flow::shutdown(request));
         }
-        if self.shutdown_in_progress {
-            // A nested error, signal or explicit exit must neither recurse nor
-            // unwind the original hook list or change its exit/restart policy.
-            return Ok(Value::NIL);
+        match self.shutdown_phase {
+            ShutdownPhase::Dying => self.shutdown_after_hooks_are_dead(request),
+            ShutdownPhase::Running => {
+                self.shutdown_phase = ShutdownPhase::InProgress;
+                self.finish_kill_emacs_hook(request)
+            }
+            ShutdownPhase::InProgress => self.finish_kill_emacs_hook(request),
         }
-        self.shutdown_in_progress = true;
-        let _ = self.run_hook_if_bound("kill-emacs-hook");
+    }
+
+    /// Run the hook, then publish `request` unless a nested kill-emacs already
+    /// published and returned [`Flow::shutdown`].
+    fn finish_kill_emacs_hook(&mut self, request: ShutdownRequest) -> EvalResult {
+        if let Err(flow) = self.run_hook_if_bound("kill-emacs-hook")
+            && flow.is_shutdown()
+        {
+            return Err(flow);
+        }
+        // `shut_down_emacs` (`emacs.c:3107-3110`) nils `Vrun_hooks`
+        // and sets `Vinhibit_redisplay`. Neither assignment is specbound.
+        self.enter_shut_down();
+        self.shutdown_after_hooks_are_dead(request)
+    }
+
+    /// GNU `shut_down_emacs`'s first two assignments (`emacs.c:3107-3110`).
+    fn enter_shut_down(&mut self) {
+        self.shutdown_phase = ShutdownPhase::Dying;
+        self.assign_by_id(CommandLoopSymbol::InhibitRedisplay.id(), Value::T);
+    }
+
+    /// Publish the shutdown request once hook bodies are no longer eligible.
+    ///
+    /// A later entry while `Dying` reaches here without running hook bodies
+    /// (`eval.c:3006-3007`) and publishes `request` when nothing is published
+    /// yet. A request that is already published stays: a nested entry must
+    /// not replace it.
+    fn shutdown_after_hooks_are_dead(&mut self, request: ShutdownRequest) -> EvalResult {
+        if let Some(published) = self.shutdown_request {
+            return Err(Flow::shutdown(published));
+        }
         self.log_cconv_memo_report();
         self.log_tier_i_report();
         self.shutdown_request = Some(request);
@@ -2269,7 +2309,17 @@ impl Context {
         // unwinds to the ordinary host terminal/process cleanup boundary.
         if let Some(sig) = crate::emacs_core::eval::input_hooks::take_termination_signal()
             && self.shutdown_request.is_none()
-            && !self.shutdown_in_progress
+            && match self.shutdown_phase {
+                // `shut_down_emacs` has not started.
+                ShutdownPhase::Running => true,
+                // GNU `terminate_due_to_signal` calls `Fkill_emacs` for
+                // SIGHUP, SIGTERM, and SIGINT with the first call still on
+                // the stack (`emacs.c:453-460`).
+                ShutdownPhase::InProgress => true,
+                // `Vrun_hooks` is already nil. A later fatal signal may enter
+                // `Fkill_emacs` again.
+                ShutdownPhase::Dying => true,
+            }
         {
             return super::super::builtins::symbols::builtin_kill_emacs(
                 self,

@@ -257,6 +257,20 @@ fn minibuffer_quit_does_not_take_down_a_noninteractive_session() {
 #[test]
 fn batch_fatal_report_and_nested_shutdown_share_first_entry_hook_ownership() {
     crate::test_utils::init_test_tracing();
+    // GNU Emacs 31.1 (`a360712c9d`). `keyboard.c:1080-1083` calls
+    // `Fkill_emacs(-1)` without reserving that status. `emacs.c:3015-3020`
+    // runs the hook again on the inner entry. `emacs.c:3082-3088` exits with
+    // the fixnum that reaches `exit`. The admitted shape guards the inner
+    // call with `(when (= n 1) (kill-emacs 19))`, so the second hook runs
+    // once and the form after that call does not. Both the batch fatal entry
+    // and `(kill-emacs 7 t)` exit 19. Probe log shape: START, HOOK 1, HOOK 2,
+    // SECOND. AFTER-INNER and AFTER-OUTER are absent. Artifact basename
+    // gnu-batch-fatal-reentry-artifacts (fatal and restart), under
+    // an unattested GNU build, not the attested oracle. Source contract at
+    // a360712c9d: emacs.c:3015-3020 runs the hook on the inner entry and
+    // emacs.c:3082-3088 exits with the fixnum that reaches exit.
+    // The bare context does not load subr.el; spell GNU when's nonempty
+    // expansion so this guard tests shutdown without a bootstrap macro.
     for request in [
         crate::emacs_core::eval::ShutdownRequest {
             exit_code: -1,
@@ -272,9 +286,8 @@ fn batch_fatal_report_and_nested_shutdown_share_first_entry_hook_ownership() {
         eval.eval_str(
             "(setq shutdown-count 0 shutdown-continued nil shutdown-later nil \
              kill-emacs-hook (list (lambda () (setq shutdown-count (1+ shutdown-count)) \
-             (kill-emacs 19) \
-             (command-error-default-function '(error \"nested fatal\") \"\" nil) \
-             (setq shutdown-continued t)) (lambda () (setq shutdown-later t))))",
+             (if (= shutdown-count 1) (progn (kill-emacs 19) \
+             (setq shutdown-continued t)))) (lambda () (setq shutdown-later t))))",
         )
         .unwrap();
         let reported = if request.exit_code == -1 {
@@ -288,18 +301,24 @@ fn batch_fatal_report_and_nested_shutdown_share_first_entry_hook_ownership() {
         } else {
             eval.shutdown_with_hooks(request).map(|_| ())
         };
-        assert_eq!(
-            reported.err().and_then(|flow| flow.shutdown_request()),
-            Some(request)
-        );
-        assert_eq!(eval.shutdown_request(), Some(request));
-        assert_eq!(
-            eval.obarray().symbol_value_copied("shutdown-count"),
-            Some(Value::fixnum(1))
-        );
+        let published = reported
+            .err()
+            .and_then(|flow| flow.shutdown_request())
+            .expect("inner shutdown");
+        assert_eq!(published.exit_code, 19);
+        assert!(!published.restart);
+        let stored = eval.shutdown_request().expect("stored inner request");
+        assert_eq!(stored.exit_code, 19);
+        assert!(!stored.restart);
+        let count = eval
+            .obarray()
+            .symbol_value_copied("shutdown-count")
+            .and_then(|value| value.as_fixnum())
+            .expect("re-entry count");
+        assert_eq!(count, 2, "guarded re-entry runs the hook twice");
         assert_eq!(
             eval.obarray().symbol_value_copied("shutdown-continued"),
-            Some(Value::T)
+            Some(Value::NIL)
         );
         assert_eq!(
             eval.obarray().symbol_value_copied("shutdown-later"),
@@ -309,14 +328,12 @@ fn batch_fatal_report_and_nested_shutdown_share_first_entry_hook_ownership() {
             exit_code: 42,
             restart: false,
         });
-        assert_eq!(
-            repeated.err().and_then(|flow| flow.shutdown_request()),
-            Some(request)
-        );
-        assert_eq!(
-            eval.obarray().symbol_value_copied("shutdown-count"),
-            Some(Value::fixnum(1))
-        );
+        let kept = repeated
+            .err()
+            .and_then(|flow| flow.shutdown_request())
+            .expect("published request stays");
+        assert_eq!(kept.exit_code, 19);
+        assert!(!kept.restart);
     }
 }
 

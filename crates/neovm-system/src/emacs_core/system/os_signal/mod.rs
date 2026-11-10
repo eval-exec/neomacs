@@ -1214,7 +1214,17 @@ pub fn drain_pending_os_signals(
     // Never clear its only wake without consuming the published request.
     if let Some(sig) = take_termination_signal()
         && eval.shutdown_request().is_none()
-        && !eval.shutdown_in_progress
+        && match eval.shutdown_phase {
+            // `shut_down_emacs` has not started.
+            neovm_eval::emacs_core::eval::ShutdownPhase::Running => true,
+            // GNU `terminate_due_to_signal` calls `Fkill_emacs` for
+            // SIGHUP, SIGTERM, and SIGINT with the first call still on
+            // the stack (`emacs.c:453-460`).
+            neovm_eval::emacs_core::eval::ShutdownPhase::InProgress => true,
+            // `Vrun_hooks` is already nil. A later fatal signal may enter
+            // `Fkill_emacs` again.
+            neovm_eval::emacs_core::eval::ShutdownPhase::Dying => true,
+        }
     {
         neovm_eval::emacs_core::builtins::symbols::builtin_kill_emacs(
             eval,

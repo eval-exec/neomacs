@@ -1450,6 +1450,24 @@ pub fn named_hook_value(
     inherit: bool,
     mode: NamedHookCall,
 ) -> EvalResult {
+    crate::emacs_core::hook_runtime::with_hook_walk(
+        eval,
+        || Ok(Value::NIL),
+        |eval, authorization| {
+            named_hook_value_authorized(eval, symbol, value, args, inherit, mode, authorization)
+        },
+    )
+}
+
+fn named_hook_value_authorized(
+    eval: &mut crate::emacs_core::eval::Context,
+    symbol: neovm_value::intern::SymId,
+    mut value: Value,
+    args: &[Value],
+    inherit: bool,
+    mode: NamedHookCall,
+    authorization: &crate::emacs_core::hook_runtime::HookWalkAuthorization<'_>,
+) -> EvalResult {
     let roots = eval.save_specpdl_roots();
     let tail = eval.push_specpdl_root_slot(value);
     for arg in args {
@@ -1466,7 +1484,7 @@ pub fn named_hook_value(
                 value.cons_car() == Value::symbol("lambda")
             };
         if single {
-            return named_hook_call(eval, symbol, value, args, mode);
+            return named_hook_call(eval, symbol, value, args, mode, authorization);
         }
         while value.is_cons() {
             eval.set_specpdl_root_slot(&tail, value);
@@ -1474,10 +1492,18 @@ pub fn named_hook_value(
             if function == Value::T {
                 if inherit {
                     let defaults = default_hook_value(eval, symbol)?;
-                    named_hook_value(eval, symbol, defaults, args, false, mode)?;
+                    named_hook_value_authorized(
+                        eval,
+                        symbol,
+                        defaults,
+                        args,
+                        false,
+                        mode,
+                        authorization,
+                    )?;
                 }
             } else {
-                named_hook_call(eval, symbol, function, args, mode)?;
+                named_hook_call(eval, symbol, function, args, mode, authorization)?;
             }
             value = value.cons_cdr();
         }
@@ -1493,9 +1519,10 @@ fn named_hook_call(
     function: Value,
     args: &[Value],
     mode: NamedHookCall,
+    authorization: &crate::emacs_core::hook_runtime::HookWalkAuthorization<'_>,
 ) -> EvalResult {
     use crate::emacs_core::hook_runtime::HookRuntime;
-    match eval.call_hook_callable(function, args) {
+    match eval.call_hook_callable(function, args, authorization) {
         Err(flow) => {
             if mode == NamedHookCall::Safe
                 && let Some(signal) = flow.as_signal()

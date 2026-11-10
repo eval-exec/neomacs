@@ -231,6 +231,18 @@ mod unit_runtime {
     crate::eval_absent_layer_slots!();
     use absent_layer_slots as s;
 
+    /// The eval unit runtime's terminal slot panics. Production disconnect
+    /// code compares the installed pointer and skips that call.
+    pub(crate) fn terminal_live_ids_slot_is_absent(slot: fn() -> Vec<u64>) -> bool {
+        slot == absent_layer_slots::terminal_live_terminal_ids
+    }
+
+    pub(crate) fn terminal_delete_noelisp_slot_is_absent(
+        slot: fn(&mut crate::emacs_core::eval::Context, u64) -> neovm_value::error::EvalResult,
+    ) -> bool {
+        slot == absent_layer_slots::terminal_delete_noelisp
+    }
+
     include!("upper_subrs.generated.rs");
 
     // The upper layers' bootstrap variables, generated from the four
@@ -648,6 +660,10 @@ mod unit_runtime {
 #[cfg(test)]
 #[allow(unused_imports)]
 pub(crate) use unit_runtime::unit_runtime;
+#[cfg(test)]
+pub(crate) use unit_runtime::{
+    terminal_delete_noelisp_slot_is_absent, terminal_live_ids_slot_is_absent,
+};
 
 /// Drift gate for the H3/H3b snapshots (peer r2 (d)): the checked-in TSVs,
 /// the generated registration source and the compiled tables must agree row

@@ -2884,6 +2884,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	enum	enum FontListError
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	enum	enum FontSpecSelection
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	enum	enum ShaderSurfaceContent
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	enum	enum ShaderSurfaceLanguage
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	enum	enum ShutdownPhase
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	enum	enum SurfaceChannelKind
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	enum	enum VideoResolveSource
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	enum	enum WebKitResolveSource
@@ -2928,7 +2929,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	Context field redispl
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	Context field registers
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	Context field scroll_goal
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	Context field scroll_preview_fn
-crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	Context field shutdown_in_progress
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	Context field shutdown_phase
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	Context field specpdl
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	Context field symbols_with_pos_enabled
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	Context field tagged_heap

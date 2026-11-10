@@ -626,11 +626,7 @@ fn every_context_offset_is_mains() {
             offset_of!(Context, _reserved_message_buf_print),
             "_reserved_message_buf_print",
         ),
-        (
-            44599,
-            offset_of!(Context, shutdown_in_progress),
-            "shutdown_in_progress",
-        ),
+        (44599, offset_of!(Context, shutdown_phase), "shutdown_phase"),
         (
             44600,
             offset_of!(Context, _reserved_input_mode_interrupt),

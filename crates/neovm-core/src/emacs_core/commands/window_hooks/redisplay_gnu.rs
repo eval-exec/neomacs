@@ -112,23 +112,31 @@ fn walk(
     mut functions: Value,
     argument: Value,
 ) -> EvalResult {
-    let roots = eval.save_specpdl_roots();
-    let tail = eval.push_specpdl_root_slot(functions);
-    eval.push_specpdl_root(argument);
-    let result = (|| {
-        while functions.is_cons() {
-            eval.set_specpdl_root_slot(&tail, functions);
-            let function = functions.cons_car();
-            if function != Value::T {
-                *record = true;
-                eval.safe_funcall(function, vec![argument])?;
-            }
-            functions = functions.cons_cdr();
-        }
-        Ok(Value::NIL)
-    })();
-    eval.restore_specpdl_roots(roots);
-    result
+    // `xdisp.c:17562` skips the change-function walk when `Vrun_hooks` is
+    // nil. The loop still reads the live cdr after each callback.
+    crate::emacs_core::hook_runtime::with_live_hook_walk(
+        eval,
+        || Ok(Value::NIL),
+        |eval| {
+            let roots = eval.save_specpdl_roots();
+            let tail = eval.push_specpdl_root_slot(functions);
+            eval.push_specpdl_root(argument);
+            let result = (|| {
+                while functions.is_cons() {
+                    eval.set_specpdl_root_slot(&tail, functions);
+                    let function = functions.cons_car();
+                    if function != Value::T {
+                        *record = true;
+                        eval.safe_funcall(function, vec![argument])?;
+                    }
+                    functions = functions.cons_cdr();
+                }
+                Ok(Value::NIL)
+            })();
+            eval.restore_specpdl_roots(roots);
+            result
+        },
+    )
 }
 
 fn local(
@@ -488,21 +496,30 @@ impl Drop for SelectedWindowContext<'_> {
 }
 
 fn run_funs(eval: &mut crate::emacs_core::eval::Context, mut functions: Value) -> EvalResult {
-    let roots = eval.save_specpdl_roots();
-    let tail = eval.push_specpdl_root_slot(functions);
-    let result = (|| {
-        while functions.is_cons() {
-            eval.set_specpdl_root_slot(&tail, functions);
-            let function = functions.cons_car();
-            if function != Value::T {
-                eval.funcall_general(function, vec![])?;
-            }
-            functions = functions.cons_cdr();
-        }
-        Ok(Value::NIL)
-    })();
-    eval.restore_specpdl_roots(roots);
-    result
+    // `window.c:3797` returns before the configuration-hook walk when
+    // `Vrun_hooks` is nil. The loop still reads the live cdr after each
+    // callback.
+    crate::emacs_core::hook_runtime::with_live_hook_walk(
+        eval,
+        || Ok(Value::NIL),
+        |eval| {
+            let roots = eval.save_specpdl_roots();
+            let tail = eval.push_specpdl_root_slot(functions);
+            let result = (|| {
+                while functions.is_cons() {
+                    eval.set_specpdl_root_slot(&tail, functions);
+                    let function = functions.cons_car();
+                    if function != Value::T {
+                        eval.funcall_general(function, vec![])?;
+                    }
+                    functions = functions.cons_cdr();
+                }
+                Ok(Value::NIL)
+            })();
+            eval.restore_specpdl_roots(roots);
+            result
+        },
+    )
 }
 
 /// Configuration retains its separate selection/unwind contract (window.c3790):
@@ -611,3 +628,7 @@ pub(super) fn run_configuration(
 #[cfg(test)]
 #[path = "redisplay_gnu/tests/default_read_test.rs"]
 mod default_read_tests;
+
+#[cfg(test)]
+#[path = "redisplay_gnu/tests/live_cdr_test.rs"]
+mod live_cdr_tests;

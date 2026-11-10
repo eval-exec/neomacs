@@ -6558,7 +6558,10 @@ pub fn bootstrap_evaluator_for_loadup(
         // If loadup.el set a shutdown request (via kill-emacs at the end
         // of the dump flow), clear it so the caller gets a usable evaluator.
         eval.shutdown_request = None;
-        eval.shutdown_in_progress = false;
+        // The dump reuses this evaluator. GNU's process would have exited
+        // with `Vrun_hooks` nil; restore a live runner and redisplay.
+        eval.shutdown_phase = crate::emacs_core::eval::ShutdownPhase::Running;
+        eval.assign_by_id(neovm_value::intern::intern("inhibit-redisplay"), Value::NIL);
 
         tracing::info!("\n=== LOADUP BOOTSTRAP COMPLETE ===");
 

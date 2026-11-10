@@ -3081,6 +3081,14 @@ fn read_char_disconnected_input_uses_noelisp_terminal_teardown() {
     ev.eval_str(
         r#"
 (setq hook-log nil)
+(setq kill-n 0)
+(setq kill-frame-live nil)
+(setq kill-terminal-live nil)
+(setq kill-emacs-hook
+      (lambda ()
+        (setq kill-n (1+ kill-n))
+        (setq kill-frame-live (frame-live-p (selected-frame)))
+        (setq kill-terminal-live (terminal-live-p (frame-terminal)))))
 (setq delete-terminal-functions
       (list (lambda (term)
               (setq hook-log
@@ -3101,9 +3109,31 @@ fn read_char_disconnected_input_uses_noelisp_terminal_teardown() {
         .read_char()
         .expect_err("disconnected input should unwind read_char");
     assert!(matches!(flow.kind(), FlowRef::Signal(ref sig) if sig.symbol_name() == "quit"));
+    // GNU keyboard.c:8113-8124, emacs.c:441-462. Last-terminal hangup exits
+    // with SIGHUP. The hook runs once while the frame and terminal are live.
+    // Delete hooks do not run. Accepted pty artifact basename
+    // escape-gnu-tty-hangup-2821-artifacts-20261110T210907Z
+    // Unattested GNU, not the attested oracle. Source contract at a360712c9d:
+    // exit 1, kill.log "KILL frame=t terminal=t", delete.log absent.
+    // The unit harness has one input terminal, so the non-last drain stays
+    // the existing noelisp queue assertion (after nil, before nil, terminal nil).
+    use crate::emacs_core::eval::keyboard::{FatalSignal, FatalSignalShutdown};
     assert_eq!(
-        ev.shutdown_request().map(|request| request.exit_code),
-        Some(0)
+        ev.shutdown_request(),
+        Some(crate::emacs_core::eval::ShutdownRequest::fatal_signal(
+            FatalSignal::Hangup
+        ))
+    );
+    assert_eq!(ev.eval_str("kill-n").expect("kill-n"), Value::fixnum(1));
+    assert!(
+        ev.eval_str("kill-frame-live")
+            .expect("kill-frame-live")
+            .is_t()
+    );
+    assert!(
+        ev.eval_str("kill-terminal-live")
+            .expect("kill-terminal-live")
+            .is_t()
     );
     assert!(ev.frame_manager().frame_list().is_empty());
     assert!(
@@ -3122,13 +3152,15 @@ fn read_char_disconnected_input_uses_noelisp_terminal_teardown() {
 
     ev.flush_pending_safe_funcalls();
 
+    // Pending delete-terminal / delete-frame calls go through
+    // `run-hook-with-args` (`terminal.c:405-411`, `frame.c:2708`,
+    // `frame.c:3099`, drain at `keyboard.c:4763`). `eval.c:3004-3007`
+    // skips that walk once `emacs.c:3107` has cleared the hook gate, so
+    // the queue stays empty after the shutdown is published.
     let post_flush = ev
         .eval_str("(nreverse hook-log)")
         .expect("hook-log after flush");
-    assert_eq!(
-        format!("{}", post_flush),
-        "((after nil) (before nil) (terminal nil))"
-    );
+    assert_eq!(post_flush, Value::NIL);
 }
 
 #[test]

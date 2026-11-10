@@ -3183,6 +3183,26 @@ static INHIBIT_MESSAGE: WellKnown = WellKnown::InhibitMessage;
 static INHIBIT_EOL_CONVERSION: WellKnown = WellKnown::InhibitEolConversion;
 static CLEAR_MESSAGE_FUNCTION: WellKnown = WellKnown::ClearMessageFunction;
 
+/// `Fkill_emacs` relative to `shut_down_emacs` (`emacs.c:3104-3110`).
+///
+/// `#[repr(u8)]` keeps the field the same size as the bool it replaced, so
+/// the pinned `Context` offset does not move. `Dying` is GNU's
+/// `Vrun_hooks = Qnil` plus `Vinhibit_redisplay = Qt`: neither assignment is
+/// specbound, and hook bodies do not run again.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShutdownPhase {
+    /// `shut_down_emacs` has not been entered.
+    Running = 0,
+    /// The first `Fkill_emacs` is on the stack, before `shut_down_emacs`.
+    InProgress = 1,
+    /// `shut_down_emacs` has been entered. Later `kill-emacs` skips hook bodies.
+    Dying = 2,
+}
+
+const _: () = assert!(std::mem::size_of::<ShutdownPhase>() == 1);
+const _: () = assert!(std::mem::align_of::<ShutdownPhase>() == 1);
+
 /// The evaluator state owned by the mutator thread that constructs it.
 ///
 /// Host hooks, Rc leases and active TLS registry views remain on that thread.
@@ -3823,9 +3843,11 @@ pub struct Context {
     /// Reserve for the World's value (plan-3w.md section 3).
     #[allow(dead_code)]
     _reserved_message_buf_print: bool,
-    /// First shutdown entry owns the hooks; the request is published after them.
+    /// Where this process is relative to `shut_down_emacs` (`emacs.c:3104`).
+    ///
+    /// One byte, at the offset `context_layout_test` pins for the old bool.
     #[doc(hidden)]
-    pub shutdown_in_progress: bool,
+    pub shutdown_phase: ShutdownPhase,
     /// Batch-compatible input-mode interrupt flag for `current-input-mode`.
     /// Reserve for the World's value (plan-3w.md section 3).
     #[allow(dead_code)]

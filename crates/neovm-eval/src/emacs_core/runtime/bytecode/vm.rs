@@ -2726,7 +2726,13 @@ impl<'a> crate::emacs_core::hook_runtime::HookRuntime for Vm<'a> {
         self.ctx
     }
 
-    fn call_hook_callable(&mut self, function: Value, args: &[Value]) -> EvalResult {
+    fn call_hook_callable(
+        &mut self,
+        function: Value,
+        args: &[Value],
+        authorization: &crate::emacs_core::hook_runtime::HookWalkAuthorization<'_>,
+    ) -> EvalResult {
+        let _ = authorization;
         self.call_function_with_roots(function, args)
     }
 

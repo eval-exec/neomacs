@@ -36,6 +36,26 @@ pub(crate) use neovm_value::system_vocab::input::{
 };
 pub(crate) use unread::UnreadCommandEvent;
 
+/// GNU fatal signals that `terminate_due_to_signal` passes to
+/// `Fkill_emacs(make_fixnum(sig))` (`emacs.c:441-462`). The exit code is
+/// the signal number. SIGHUP is 1, SIGINT is 2, SIGTERM is 15.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(i32)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) enum FatalSignal {
+    Hangup = 1,
+    Interrupt = 2,
+    Terminate = 15,
+}
+
+/// Builds a [`ShutdownRequest`] whose code is the signal number and whose
+/// restart flag is false. A method on the value-crate struct would be a new
+/// plain-pub identity, and that ledger is already at its ceiling.
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) trait FatalSignalShutdown {
+    fn fatal_signal(signal: FatalSignal) -> Self;
+}
+
 // Command-loop and keyboard state lives in the evaluator data module
 // (stage-4 W2/E6b); these re-exports keep the historical keyboard paths.
 pub(crate) use crate::emacs_core::eval::data::command_loop::{
@@ -3301,8 +3321,23 @@ impl crate::emacs_core::eval::Context {
         // event. The existing noelisp terminal deletion removes every
         // attached frame newest-first and queues its hooks; the timer
         // boundary drains those calls LIFO, after all objects are dead.
-        crate::emacs_core::eval::lifecycle::delete_terminal_noelisp_owned(self, terminal_id)
-            .map(|_| ())
+        // GNU keyboard.c:8113-8124. The last terminal
+        // (`!terminal_list->next_terminal`) calls
+        // `terminate_due_to_signal(SIGHUP, 10)` before `Fdelete_terminal`.
+        // emacs.c:441-462 turns that into `Fkill_emacs(make_fixnum(sig))`
+        // while the frame and terminal are still live. Another live
+        // terminal only queues the noelisp delete. The decision and the
+        // absent-slot skip live in `delete_terminal_noelisp_owned`.
+        // RESOLVED: this shared helper is the one facade call. It passes
+        // the typed Hangup request. The facade shuts down only when this
+        // is the last live display terminal, so a non-last terminal never
+        // shuts down.
+        crate::emacs_core::eval::lifecycle::delete_terminal_noelisp_owned(
+            self,
+            terminal_id,
+            crate::emacs_core::eval::ShutdownRequest::fatal_signal(FatalSignal::Hangup),
+        )
+        .map(|_| ())
     }
 
     /// Read a complete key sequence through keymaps.
@@ -4102,10 +4137,6 @@ impl crate::emacs_core::eval::Context {
         let _ = self.delete_input_terminal_noelisp(
             crate::emacs_core::eval::protocol::tty_host::TERMINAL_ID,
         );
-        let _ = self.shutdown_with_hooks(crate::emacs_core::eval::ShutdownRequest {
-            exit_code: 0,
-            restart: false,
-        });
     }
 
     /// Translate a freshly read character event through
