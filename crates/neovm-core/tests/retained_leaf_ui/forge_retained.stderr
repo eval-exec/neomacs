@@ -1,0 +1,5 @@
+error[E0451]: field `leaf` of struct `RetainedLeafForTest` is private
+ --> tests/retained_leaf_ui/forge_retained.rs:4:29
+  |
+4 |     RetainedLeafForTest { ..leaf }
+  |                             ^^^^ field `leaf` is private

@@ -1521,6 +1521,130 @@ pub mod authority {
             .map(|ptr| LeafIdentity::from_address(ptr as usize))
     }
 
+    /// Retained entry-code identity, copied without exposing an executable pointer.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    pub struct NativeEntryIdentityForTest(usize);
+
+    /// Owned, owner-thread leaf capability. Private fields prevent construction
+    /// without retaining the real cache Rc; the Rc makes this handle !Send.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub struct RetainedLeafForTest {
+        leaf: std::rc::Rc<crate::emacs_core::jit::compile::CompiledLeaf>,
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    impl RetainedLeafForTest {
+        pub fn retired(&self) -> bool {
+            self.leaf.retired.get()
+        }
+
+        pub fn identity(&self) -> LeafIdentity {
+            LeafIdentity::from_address(std::rc::Rc::as_ptr(&self.leaf) as usize)
+        }
+
+        pub fn entry_identity(&self) -> NativeEntryIdentityForTest {
+            NativeEntryIdentityForTest(self.leaf.entry as usize)
+        }
+
+        /// Invoke retained code through the existing dormant-owner boundary.
+        ///
+        /// # Safety
+        /// `ctx` points to the live owner Context on this thread and stays
+        /// dormant throughout the call. The caller preserves the native
+        /// entry's argument, root, and heap-lifetime requirements.
+        pub unsafe fn call(
+            &self,
+            ctx: *mut u8,
+            args: &[neovm_value::value::Value],
+        ) -> crate::emacs_core::jit::compile::NativeRun {
+            self.leaf.call(ctx, args)
+        }
+    }
+
+    /// Retain the cache's current leaf before returning to the caller. The
+    /// compiled id is process-unique source provenance, not caller-forged data.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn retained_current_leaf_for_test(id: u64) -> Option<RetainedLeafForTest> {
+        let leaf = crate::emacs_core::jit::cache::retained_current_leaf_for_test(id)?;
+        Some(RetainedLeafForTest { leaf })
+    }
+
+    /// Resolve this source's armable entry, then retain the exact cached Rc.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn resolve_retained_leaf_for_test(
+        context: &mut Context,
+        function: &crate::emacs_core::bytecode::ByteCodeFunction,
+    ) -> Option<RetainedLeafForTest> {
+        use crate::emacs_core::bytecode::ByteCodeFunctionExt as _;
+        use crate::emacs_core::jit::RuntimeStateTieringExt as _;
+        let resolved = crate::emacs_core::jit::cache::resolve_compiled_leaf_ptr(context, function)?;
+        let retained = retained_current_leaf_for_test(function.jit_runtime().compiled_id()?)?;
+        (std::rc::Rc::as_ptr(&retained.leaf) == resolved).then_some(retained)
+    }
+
+    /// Copy the resolved identity without granting the ability to arm a slot.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn resolve_compiled_leaf_identity_for_test(
+        context: &mut Context,
+        function: &crate::emacs_core::bytecode::ByteCodeFunction,
+    ) -> Option<LeafIdentity> {
+        resolve_retained_leaf_for_test(context, function).map(|leaf| leaf.identity())
+    }
+
+    /// Copy the armed identity at the caller's observed epoch.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn armed_leaf_identity_for_test(
+        runtime: &neovm_value::value::jit_runtime::Runtime,
+        epoch: u64,
+    ) -> Option<LeafIdentity> {
+        runtime
+            .armed_leaf_word(epoch)
+            .map(|word| LeafIdentity::from_address(word.get() as usize))
+    }
+
+    /// Observation-only OSR capability. Its Rc pins the original allocation;
+    /// OSR entry requires an operand snapshot and uses the production OSR path.
+    /// This type deliberately has no function-entry invocation method.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub struct RetainedOsrLeafForTest {
+        leaf: std::rc::Rc<crate::emacs_core::jit::compile::CompiledLeaf>,
+    }
+
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    impl RetainedOsrLeafForTest {
+        pub fn retired(&self) -> bool {
+            self.leaf.retired.get()
+        }
+
+        pub fn identity(&self) -> LeafIdentity {
+            LeafIdentity::from_address(std::rc::Rc::as_ptr(&self.leaf) as usize)
+        }
+    }
+
+    /// Retain an OSR leaf before callback execution or eviction. The distinct
+    /// observation type cannot invoke its incompatible function-entry ABI.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn retained_osr_leaf_for_test(
+        function: &crate::emacs_core::bytecode::ByteCodeFunction,
+        pc: usize,
+    ) -> Option<RetainedOsrLeafForTest> {
+        crate::emacs_core::jit::cache::retained_osr_leaf_for_test(function, pc)
+            .map(|leaf| RetainedOsrLeafForTest { leaf })
+    }
+
+    /// Keep the OSR Rc owned INSIDE the fence throughout the callback. Safe
+    /// callback code may evict or clear the cache without invalidating `leaf`.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn with_osr_leaf_for_test<R>(
+        function: &crate::emacs_core::bytecode::ByteCodeFunction,
+        pc: usize,
+        body: impl FnOnce(&crate::emacs_core::jit::compile::CompiledLeaf) -> R,
+    ) -> Option<R> {
+        let leaf = crate::emacs_core::jit::cache::retained_osr_leaf_for_test(function, pc)?;
+        Some(body(&leaf))
+    }
+
     /// P1 CCONV family C4 read: the `(t)` empty-environment value, copied.
     /// The caller inspects the copy immediately; it is never stored across a
     /// GC (peer condition b).

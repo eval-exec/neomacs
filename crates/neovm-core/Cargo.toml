@@ -293,3 +293,8 @@ path = "tests/gnu_overlay_deletion_allocations.rs"
 [[test]]
 name = "core"
 path = "tests/core.rs"
+
+[[test]]
+name = "retained_leaf_contracts"
+path = "tests/retained_leaf_contracts.rs"
+required-features = ["jit", "contract-fixtures"]

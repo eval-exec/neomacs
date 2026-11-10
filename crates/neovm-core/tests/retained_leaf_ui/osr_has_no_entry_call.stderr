@@ -1,0 +1,14 @@
+error[E0599]: the method `call` exists for reference `&RetainedOsrLeafForTest`, but its trait bounds were not satisfied
+ --> tests/retained_leaf_ui/osr_has_no_entry_call.rs:6:10
+  |
+6 |     leaf.call(core::ptr::null_mut::<u8>(), args);
+  |          ^^^^ method cannot be called on `&RetainedOsrLeafForTest` due to unsatisfied trait bounds
+  |
+ ::: $WORKSPACE/crates/neovm-eval/src/test_support.rs
+  |
+  |     pub struct RetainedOsrLeafForTest {
+  |     --------------------------------- doesn't satisfy `RetainedOsrLeafForTest: Fn<_>`
+  |
+  = note: the following trait bounds were not satisfied:
+          `RetainedOsrLeafForTest: Fn<_>`
+          which is required by `&RetainedOsrLeafForTest: Fn<_>`

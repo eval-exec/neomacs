@@ -2062,6 +2062,36 @@ pub(crate) fn compiled_leaf_ptr_for_test(id: u64) -> Option<*const CompiledLeaf>
     })
 }
 
+/// Retain the current entry while the cache is borrowed. The owned handle
+/// remains live across eviction, replacement, or a test callback clearing it.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn retained_current_leaf_for_test(id: u64) -> Option<Rc<CompiledLeaf>> {
+    COMPILED.with(|cache| {
+        cache
+            .try_borrow()
+            .ok()?
+            .get(id)
+            .and_then(CacheEntry::live_leaf)
+            .map(Rc::clone)
+    })
+}
+
+/// Retain an OSR leaf before releasing the cache borrow or invoking a callback.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn retained_osr_leaf_for_test(
+    func: &ByteCodeFunction,
+    pc: usize,
+) -> Option<Rc<CompiledLeaf>> {
+    let id = func.jit_runtime().compiled_id()?;
+    OSR_CACHE.with(|cache| {
+        cache
+            .borrow()
+            .get(&(id, pc))
+            .and_then(Option::as_ref)
+            .map(|entry| Rc::clone(&entry.leaf))
+    })
+}
+
 /// Crate-private OSR-leaf pointer. Content checks inside eval dereference
 /// this. It is not a fence and not an A' surface. The owning mutator retains
 /// the leaf until eviction or clear; callers must not keep the pointer across
