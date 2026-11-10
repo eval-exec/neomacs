@@ -12,7 +12,19 @@ use syn::{Attribute, Expr, Item, ItemMod, Lit, Meta};
 // Base 9bb11e25b0 had 14 production sites. This lane removes six pdump enum
 // conversions and two regex opcode conversions. Lower this ceiling whenever
 // another conversion is removed; never raise it for a new conversion.
-const TRANSMUTE_CEILING: usize = 6;
+//
+// 2026-11-10 peer-signed exception (cired2 fatal P4, pid f70ad89b): 6 -> 7.
+// The one new site is
+// neovm-system/src/emacs_core/system/os_signal/mod.rs
+// `previous_fault_handler`, which reconstitutes the SA_SIGINFO callback from
+// `sigaction.sa_sigaction` (an integer by ABI) so a synchronous SIGSEGV/
+// SIGBUS fault can chain to Rust std's stack-overflow detector before the
+// fatal report. There is no safe route from an integer to a function
+// pointer. The value is only ever read back from a sigaction this process
+// installed, after filtering SIG_DFL/SIG_IGN and requiring SA_SIGINFO. A
+// union spelling of the same conversion was rejected because it hides it
+// from this ratchet.
+const TRANSMUTE_CEILING: usize = 7;
 
 /// Whether a cfg predicate can be true with `test` disabled. Other cfg values
 /// vary across production builds, so both possibilities remain in the scan.
