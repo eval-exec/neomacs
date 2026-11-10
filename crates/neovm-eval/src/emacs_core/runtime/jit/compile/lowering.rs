@@ -5111,6 +5111,12 @@ struct BcallLeafSite {
     /// and, from `bind_subr`, the symbol and the expected binding.
     slot_ptr: i64,
     nargs: usize,
+    /// `Some(sym)` when the site's callee crossed a block boundary: the
+    /// stack callee is checked against the symbol at run time, and a
+    /// mismatch takes the plain generic call of the actual value (GNU reads
+    /// the function cell every call), never the leaf. The check is the same
+    /// one the ordinary `SubrGeneral` lowering emits for a guarded site.
+    guarded_sym: Option<u32>,
 }
 
 /// Lower an `Op::Call` site to a Bcall leaf (design
@@ -5166,6 +5172,24 @@ fn lower_bcall_leaf_site(
 
     // Hot path.
     let carry0 = rootwin_carry_snapshot();
+    // A guarded site's callee reached the call as a block parameter: check
+    // it against the site symbol before anything else, and send a mismatch
+    // to the plain generic call of the actual value (GNU always calls
+    // through the function cell).  This is the same run-time check the
+    // ordinary `SubrGeneral` lowering emits for a guarded site.
+    let callee_mismatch = if let Some(sym) = site.guarded_sym {
+        // SAFETY: round-trip of interned ids stored in JIT lowering descriptors (peer seal N8).
+        let bits = Value::from_sym_id(unsafe { neovm_value::intern::SymId::from_raw(sym) }).bits();
+        let is_sym = icmp_imm_p(fb, IntCC::Equal, func_val, bits as i64);
+        let hot = fb.create_block();
+        let mismatch = fb.create_block();
+        fb.ins().brif(is_sym, hot, &[], mismatch, &[]);
+        fb.switch_to_block(hot);
+        fb.seal_block(hot);
+        Some(mismatch)
+    } else {
+        None
+    };
     let mut sig = Signature::new(rt.refs.call_conv);
     sig.params.push(AbiParam::new(rt.ptr_ty)); // ctx
     sig.params.push(AbiParam::new(rt.ptr_ty)); // slot
@@ -5208,6 +5232,8 @@ fn lower_bcall_leaf_site(
     let need_generic = icmp_imm_p(fb, IntCC::Equal, word, leaf_abi::LEAF_NEED_GENERIC);
     fb.ins().brif(need_generic, reference, &[], signal_blk, &[]);
 
+    // Materialized per cold exit: the hot path carries no call-buffer
+    // address/arity/result setup for any site, guarded or not.
     let spill_args = |fb: &mut FunctionBuilder| {
         for (i, &v) in args.iter().enumerate() {
             fb.ins()
@@ -5336,8 +5362,51 @@ fn lower_bcall_leaf_site(
     let value = load_result(fb);
     fb.def_var(res, value);
     fb.ins().jump(cont, &[]);
+    let carry_ref_ok = rootwin_carry_snapshot();
+
+    // Cold: a guarded site's callee is not the site symbol.  GNU reads the
+    // function cell every call, so the actual callee value is called
+    // generically -- the same protocol the reference path's NEED_GENERIC
+    // takes -- never the leaf and never the subr reference path.
+    if let Some(mismatch) = callee_mismatch {
+        fb.switch_to_block(mismatch);
+        fb.seal_block(mismatch);
+        fb.set_cold_block(mismatch);
+        rootwin_carry_restore(&carry0);
+        let (args_addr, n_val, out_addr) = spill_args(fb);
+        let carry_mismatch = rootwin_carry_snapshot();
+        let saved_mismatch = if stack.is_empty() {
+            CondRoots::NONE
+        } else {
+            emit_model_roots_pre(fb, rt, stack, reps)
+        };
+        let vmctx_mismatch = fb.use_var(rt.vmctx_var);
+        let call = rt.refs.get(fb.func, Shim::Call);
+        let mismatch_call = fb.ins().call(
+            call,
+            &[vmctx_mismatch, func_val, args_addr, n_val, out_addr],
+        );
+        let mismatch_status = fb.inst_results(mismatch_call)[0];
+        emit_cond_residual_roots_post(fb, rt, saved_mismatch);
+        rootwin_carry_meet(&carry_mismatch);
+        let se_mismatch = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
+        let mismatch_ok = fb.create_block();
+        let ok = icmp_imm_p(fb, IntCC::Equal, mismatch_status, STATUS_OK);
+        fb.ins().brif(ok, mismatch_ok, &[], se_mismatch, &[]);
+        fb.switch_to_block(mismatch_ok);
+        fb.seal_block(mismatch_ok);
+        fb.set_cold_block(mismatch_ok);
+        let value = load_result(fb);
+        fb.def_var(res, value);
+        fb.ins().jump(cont, &[]);
+    }
 
     // The continuation: every path's store history met.
+    if callee_mismatch.is_some() {
+        // The mismatch path was emitted last; fold the reference path's
+        // state back in along with the signal and hot paths.
+        rootwin_carry_meet(&carry_ref_ok);
+    }
     rootwin_carry_meet(&carry_signal);
     rootwin_carry_meet(&carry0);
     fb.switch_to_block(cont);
@@ -7914,9 +7983,10 @@ fn lower_simple_op_arms(
             // called through the leaf's armed trampoline -- register
             // arguments, no roots, no frame on success -- with today's
             // protocol call as its cold reference path. A site whose callee
-            // crossed a block boundary keeps the general lowering below.
+            // crossed a block boundary (guarded_sym) takes the same leaf
+            // behind the same run-time symbol check the general lowering
+            // emits; a callee mismatch is the plain call of the actual value.
             if let Some((sym, expected, slot_ptr, _, SpecCalleeKind::SubrGeneral)) = spec
-                && guarded_sym.is_none()
                 && let Some(leaf) = super::leaf_abi::bcall_leaf_site(expected, n, aot)
             {
                 return lower_bcall_leaf_site(
@@ -7929,6 +7999,7 @@ fn lower_simple_op_arms(
                         expected,
                         slot_ptr,
                         nargs: n,
+                        guarded_sym,
                     },
                     stack,
                     reps,

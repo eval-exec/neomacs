@@ -1808,3 +1808,12 @@ pub fn raw_section_inventory_for_test(
         runtime_state_present,
     }
 }
+
+/// The JIT leaf census (`[neovm-jit-final-builtin-leaves]` format) for tests
+/// that must prove a call site took a Bcall leaf and that the leaf's guard
+/// bounced on a redefinition.  Behind `test-support`, like this module;
+/// JIT-only: the census lives in the cfg(feature = "jit") compiler module.
+#[cfg(feature = "jit")]
+pub fn leaf_census_for_test() -> String {
+    crate::emacs_core::jit::compile::leaf_abi::render_leaf_stats()
+}

@@ -29331,3 +29331,162 @@ fn issue554_formal_watchers_change_policy_before_the_next_formal() {
         "OK (7 invalid-function)"
     );
 }
+
+/// A guarded `Op::Call` spec site -- the callee constant pushed before an
+/// argument expression whose control flow crosses a block boundary, the
+/// eieio--slot-name-index shape -- must take the Bcall leaf AND keep GNU's
+/// call-through-the-symbol semantics: `fset`/`advice-add` of gethash runs the
+/// replacement (the leaf trampoline's function-cell guard bounces to the
+/// generic call), and a non-table argument signals from the builtin's frame.
+#[cfg(feature = "jit")]
+#[test]
+fn jit_guarded_bcall_leaf_site_calls_through_the_function_cell() {
+    crate::test_utils::init_test_tracing();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    use crate::emacs_core::bytecode::ByteCodeFunction;
+    use crate::emacs_core::bytecode::opcode::Op;
+    use neovm_value::value::LambdaParams;
+
+    // Leaf census rows `name:opcode_sites=..,bcall_sites=..,...`.
+    fn leaf_field(row: &str, name: &str) -> u64 {
+        row.split(',')
+            .find_map(|field| field.strip_prefix(name))
+            .and_then(|value| value.strip_prefix('='))
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0)
+    }
+    fn gethash_census() -> (u64, u64) {
+        let census = neovm_eval::test_support::leaf_census_for_test();
+        let row = census
+            .split_whitespace()
+            .find(|row| row.starts_with("gethash:"))
+            .unwrap_or("");
+        (
+            leaf_field(row, "bcall_sites"),
+            leaf_field(row, "guard_miss"),
+        )
+    }
+
+    let mut ev = crate::test_utils::runtime_startup_context();
+    let gethash = Value::symbol("gethash");
+    let table = ev
+        .eval_str("(let ((h (make-hash-table))) (puthash 1 'one h) h)")
+        .expect("a hash table");
+    crate::emacs_core::eval::push_scratch_gc_root(table);
+
+    // (lambda (): the callee constant is pushed first, then the argument
+    // expression's branch, so the callee reaches the call as a block
+    // parameter -- the guarded site the eieio benchmark hits.
+    //
+    //   0 Constant(gethash)
+    //   1 Nil
+    //   2 GotoIfNil(5)
+    //   3 Constant(key)
+    //   4 Goto(6)
+    //   5 Constant(key)        <- branch target
+    //   6 Constant(table)
+    //   7 Call(2)
+    //   8 Return
+    let mk = |table: Value| -> Value {
+        let mut f = ByteCodeFunction::new(LambdaParams {
+            required: Vec::new(),
+            optional: Vec::new(),
+            rest: None,
+        });
+        f.lexical = true;
+        f.ops = vec![
+            Op::Constant(0),
+            Op::Nil,
+            Op::GotoIfNil(5),
+            Op::Constant(1),
+            Op::Goto(6),
+            Op::Constant(1),
+            Op::Constant(2),
+            Op::Call(2),
+            Op::Return,
+        ];
+        f.constants = vec![gethash, Value::make_int(1), table].into();
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        neovm_eval::test_support::authority::jit_mark_hot_for_test(&f);
+        Value::make_bytecode(f)
+    };
+
+    let guarded = mk(table);
+    let (sites_before, _) = gethash_census();
+    assert_eq!(
+        ev.funcall_general_untraced(guarded, vec![])
+            .expect("guarded call"),
+        Value::symbol("one")
+    );
+    assert_eq!(
+        ev.funcall_general_untraced(guarded, vec![])
+            .expect("guarded call"),
+        Value::symbol("one")
+    );
+    let (sites_after, _) = gethash_census();
+    assert!(
+        sites_after > sites_before,
+        "the guarded gethash site must lower as a Bcall leaf: {sites_before} -> {sites_after}"
+    );
+
+    // fset: GNU always reads the function cell.  The leaf guard sees the
+    // changed binding and the generic call runs the replacement.
+    ev.eval_str("(setq guarded-leaf-orig (symbol-function 'gethash))")
+        .expect("save gethash");
+    ev.eval_str("(fset 'gethash (lambda (&rest _) 'redefined))")
+        .expect("fset gethash");
+    let (_, misses_before) = gethash_census();
+    assert_eq!(
+        ev.funcall_general_untraced(guarded, vec![])
+            .expect("redefined call"),
+        Value::symbol("redefined")
+    );
+    let (_, misses_after) = gethash_census();
+    assert!(
+        misses_after > misses_before,
+        "the leaf trampoline must bounce on the redefinition: {misses_before} -> {misses_after}"
+    );
+    ev.eval_str("(fset 'gethash guarded-leaf-orig)")
+        .expect("restore gethash");
+    assert_eq!(
+        ev.funcall_general_untraced(guarded, vec![])
+            .expect("restored call"),
+        Value::symbol("one")
+    );
+
+    // advice-add wraps the function cell: the around advice must run, and
+    // removal restores the original answer.
+    ev.eval_str("(setq guarded-leaf-advice (lambda (_orig &rest _args) 'advised))")
+        .expect("advice fn");
+    ev.eval_str("(advice-add 'gethash :around guarded-leaf-advice)")
+        .expect("advice-add");
+    assert_eq!(
+        ev.funcall_general_untraced(guarded, vec![])
+            .expect("advised call"),
+        Value::symbol("advised")
+    );
+    ev.eval_str("(advice-remove 'gethash guarded-leaf-advice)")
+        .expect("advice-remove");
+    assert_eq!(
+        ev.funcall_general_untraced(guarded, vec![])
+            .expect("unadvised call"),
+        Value::symbol("one")
+    );
+
+    // The ordinary error path through the guarded leaf: the leaf's body
+    // signals and the site's signal frame carries GNU's condition data.
+    let bad = mk(Value::make_int(5));
+    let err = ev
+        .funcall_general_untraced(bad, vec![])
+        .expect_err("a non-table must signal");
+    match err.into_kind() {
+        neovm_value::error::FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(
+                sig.data,
+                vec![Value::symbol("hash-table-p"), Value::make_int(5)]
+            );
+        }
+        other => panic!("unexpected flow: {other:?}"),
+    }
+}
