@@ -15,7 +15,7 @@ use crate::emacs_core::bytecode::StackDepth;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::ThreadingMode;
 use crate::emacs_core::jit::{bg, cache, compile};
-use neovm_value::error::{FlowKind, FlowRef};
+use neovm_value::error::FlowKind;
 use neovm_value::value::LambdaParams;
 
 fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunction {
@@ -609,44 +609,6 @@ fn quit_interrupts_compiled_green_intrinsic_loop() {
     }
     assert_eq!(context.jit_root_stack_top, 0);
     assert_eq!(cache::native_depth(), 0);
-    context.green_teardown();
-}
-
-/// `throw-on-input` interrupts the same loop: the poll promotes queued
-/// frontend input into the throw.
-#[test]
-fn throw_on_input_interrupts_compiled_green_intrinsic_loop() {
-    let _backend = opt_mode_scope_for_test(OptMode::Off);
-    let _background = bg::TestModeScope::enter(bg::BgMode::Sync);
-    let _arith = InlineArithScope::on();
-    let mut context =
-        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
-    context.set_lexical_binding(true);
-    let source = Value::make_bytecode(intrinsic_loop());
-    let _root = context.retain_gc_roots([source]);
-    let tx = crate::emacs_core::eval::host_input::HostInputPublisher::install(&mut context);
-    tx.send(crate::emacs_core::eval::keyboard::InputEvent::key_press(
-        crate::emacs_core::eval::keyboard::KeyEvent::char('l'),
-    ))
-    .expect("queue ordinary frontend input");
-    let sentinel = Value::symbol("green-inline-throw-tag");
-    context.set_variable("throw-on-input", sentinel);
-    let run = run_osr_loop_head(&mut context, source, 2_000_000)
-        .expect("the exact snapshot enters native OSR");
-    let NativeRun::Signal = run else {
-        panic!("the back-edge poll must serve throw-on-input: {run:?}")
-    };
-    match shims::take_pending_flow()
-        .expect("throw-on-input flow stashed")
-        .kind()
-    {
-        FlowRef::Throw(thrown) => {
-            assert_eq!(thrown.tag, sentinel);
-            assert_eq!(thrown.value, Value::T);
-        }
-        other => panic!("expected a throw, got {other:?}"),
-    }
-    assert_eq!(context.jit_root_stack_top, 0);
     context.green_teardown();
 }
 

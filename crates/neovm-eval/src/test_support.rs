@@ -1099,6 +1099,22 @@ pub mod authority {
         crate::emacs_core::jit::compile::force_inline_arith_for_test(on)
     }
 
+    /// Drop-scope restore of the per-thread inline-arith override.
+    /// `jit_inline_arith_on` stays pub(crate).
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[must_use = "inline arith returns to its previous value when the guard drops"]
+    pub fn inline_arith_scope_for_test(on: bool) -> impl Drop {
+        struct Guard(bool);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                crate::emacs_core::jit::compile::force_inline_arith_for_test(self.0);
+            }
+        }
+        let was_on = crate::emacs_core::jit::compile::jit_inline_arith_on();
+        crate::emacs_core::jit::compile::force_inline_arith_for_test(on);
+        Guard(was_on)
+    }
+
     #[cfg(feature = "jit")]
     pub fn force_profit_defer_for_test(factor: Option<u32>) {
         crate::emacs_core::jit::force_profit_defer_for_test(factor)
@@ -2007,6 +2023,80 @@ pub mod authority {
     /// pub(crate).
     pub fn green_teardown_for_test(ctx: &mut Context) {
         ctx.green_teardown();
+    }
+
+    /// Plain copy of one main-native wait event. The scheduler log stays
+    /// crate-private.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum ObservedMainNativeWait {
+        Released,
+        PhysicalBlockEntered,
+        PhysicalBlockReturned,
+        Reacquired,
+    }
+
+    /// FENCE: copied owner-park count. The registry stays inside Green.
+    pub fn parked_owner_len_for_test(ctx: &Context) -> usize {
+        ctx.parked_owner_len_for_test()
+    }
+
+    /// FENCE: whether every parked owner and host record is gone.
+    pub fn parked_owners_empty_for_test(ctx: &Context) -> bool {
+        ctx.parked_owners_empty_for_test()
+    }
+
+    /// FENCE: whether main's owner batch is parked.
+    pub fn parked_contains_main_for_test(ctx: &Context) -> bool {
+        ctx.parked_contains_main_for_test()
+    }
+
+    /// FENCE: park this owner as runnable. `Wait` stays crate-private.
+    pub fn green_park_runnable_for_test(
+        ctx: &mut Context,
+    ) -> Result<(), neovm_value::error::Flow> {
+        ctx.green_park_runnable_for_test()
+    }
+
+    /// FENCE: start Green threads. The start-error enum stays crate-private.
+    pub fn start_green_threads_for_test(ctx: &mut Context) -> Result<(), String> {
+        ctx.start_green_threads_for_test()
+    }
+
+    /// FENCE: copied main-native wait log.
+    pub fn main_native_wait_events_for_test(ctx: &Context) -> Vec<ObservedMainNativeWait> {
+        ctx.main_native_wait_events_for_test()
+            .into_iter()
+            .map(|event| match event {
+                crate::emacs_core::eval::MainNativeWaitObservation::Released => {
+                    ObservedMainNativeWait::Released
+                }
+                crate::emacs_core::eval::MainNativeWaitObservation::PhysicalBlockEntered => {
+                    ObservedMainNativeWait::PhysicalBlockEntered
+                }
+                crate::emacs_core::eval::MainNativeWaitObservation::PhysicalBlockReturned => {
+                    ObservedMainNativeWait::PhysicalBlockReturned
+                }
+                crate::emacs_core::eval::MainNativeWaitObservation::Reacquired => {
+                    ObservedMainNativeWait::Reacquired
+                }
+            })
+            .collect()
+    }
+
+    /// FENCE: install the fixture GC handshake. The private completion
+    /// record stays in the host service; only the worker thread id is forwarded.
+    pub fn install_host_fixture_completion_for_test(
+        ctx: &Context,
+        sender: std::sync::mpsc::Sender<std::thread::ThreadId>,
+        count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        ctx.install_host_fixture_completion_for_test(sender, count);
+    }
+
+    /// FENCE: finish the fixture GC. A stage error is the same `error` signal
+    /// the eval test built. `HostRootError` stays crate-private.
+    pub fn finish_host_fixture_gc_for_test(ctx: &Context) -> Result<(), neovm_value::error::Flow> {
+        ctx.finish_host_fixture_gc_for_test()
     }
 
     /// FENCE: unlock the mutex Value. The `MutexHandle` newtype stays
@@ -3114,6 +3204,25 @@ pub mod authority {
         pc: usize,
     ) {
         crate::emacs_core::jit::cache::prepare_osr_for_test(ctx, func, pc);
+    }
+
+    /// FENCE: transfer into a prepared OSR entry. `try_run_osr` stays
+    /// pub(crate).
+    ///
+    /// # Safety
+    /// `ctx` is the live owner `Context` on this thread and stays valid for
+    /// the call. The caller holds the dormant-Context contract of
+    /// `try_run_osr`.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub unsafe fn try_run_osr_for_test(
+        ctx: &mut Context,
+        func: &crate::emacs_core::bytecode::ByteCodeFunction,
+        osr_pc: usize,
+        stack: &[neovm_value::value::Value],
+        binds: &[usize],
+    ) -> Option<crate::emacs_core::jit::compile::NativeRun> {
+        // SAFETY: the caller upholds the dormant-Context contract above.
+        unsafe { crate::emacs_core::jit::cache::try_run_osr(ctx, func, osr_pc, stack, binds) }
     }
 
     /// FENCE: CLIF text of every function `compile` lowers on this thread.

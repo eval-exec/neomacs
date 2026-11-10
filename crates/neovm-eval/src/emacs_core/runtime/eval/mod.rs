@@ -7448,6 +7448,17 @@ pub(crate) use admission::AdmissionError;
 mod global_state;
 mod green;
 
+/// Plain copy of one main-native wait event. The scheduler log stays
+/// crate-private. Recorded only under test or test-support.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MainNativeWaitObservation {
+    Released,
+    PhysicalBlockEntered,
+    PhysicalBlockReturned,
+    Reacquired,
+}
+
 pub(crate) use admission::ThreadingMode;
 pub(crate) use green::GreenStartError;
 #[doc(hidden)]

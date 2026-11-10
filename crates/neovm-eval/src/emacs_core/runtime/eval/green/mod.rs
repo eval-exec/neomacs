@@ -278,6 +278,100 @@ impl Context {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
+fn main_native_wait_observation(
+    event: scheduler::MainNativeWaitEvent,
+) -> super::MainNativeWaitObservation {
+    match event {
+        scheduler::MainNativeWaitEvent::Released => super::MainNativeWaitObservation::Released,
+        scheduler::MainNativeWaitEvent::PhysicalBlockEntered => {
+            super::MainNativeWaitObservation::PhysicalBlockEntered
+        }
+        scheduler::MainNativeWaitEvent::PhysicalBlockReturned => {
+            super::MainNativeWaitObservation::PhysicalBlockReturned
+        }
+        scheduler::MainNativeWaitEvent::Reacquired => super::MainNativeWaitObservation::Reacquired,
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Context {
+    /// Copied owner-park count. The registry stays inside Green.
+    pub(crate) fn parked_owner_len_for_test(&self) -> usize {
+        self.with_green_runtime(|runtime| runtime.parked.borrow().len())
+    }
+
+    /// Whether every parked owner and host record is gone.
+    pub(crate) fn parked_owners_empty_for_test(&self) -> bool {
+        self.with_green_runtime(|runtime| runtime.parked.borrow().is_empty())
+    }
+
+    /// Whether main's owner batch is parked.
+    pub(crate) fn parked_contains_main_for_test(&self) -> bool {
+        self.with_green_runtime(|runtime| runtime.parked.borrow().contains_key(&ThreadKey::Main))
+    }
+
+    /// Park this owner as runnable. `Wait` stays crate-private.
+    pub(crate) fn green_park_runnable_for_test(&mut self) -> Result<(), super::Flow> {
+        self.green_park(Wait::Runnable)
+    }
+
+    /// Start Green threads. The start-error enum stays crate-private.
+    pub(crate) fn start_green_threads_for_test(&mut self) -> Result<(), String> {
+        self.start_green_threads()
+            .map_err(|error| error.to_string())
+    }
+
+    /// Copied main-native wait log. The scheduler vec stays crate-private.
+    pub(crate) fn main_native_wait_events_for_test(&self) -> Vec<super::MainNativeWaitObservation> {
+        self.with_green_runtime(|runtime| {
+            runtime
+                .control
+                .main_native_events_for_test()
+                .into_iter()
+                .map(main_native_wait_observation)
+                .collect()
+        })
+    }
+
+    /// Install the fixture GC handshake and forward the worker thread id.
+    ///
+    /// The completion sender stored on the service stays the private
+    /// `FixtureGcCompleted` channel. This helper forwards only the worker id
+    /// the re-homed test compares.
+    pub(crate) fn install_host_fixture_completion_for_test(
+        &self,
+        sender: std::sync::mpsc::Sender<std::thread::ThreadId>,
+        count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let (inner, incoming) = std::sync::mpsc::channel();
+        self.with_green_runtime(|runtime| {
+            runtime
+                .parked
+                .borrow_mut()
+                .services
+                .install_fixture_completion(inner, count);
+        });
+        std::thread::spawn(move || {
+            if let Ok(completed) = incoming.recv() {
+                let _ = sender.send(completed.worker);
+            }
+        });
+    }
+
+    /// Finish the fixture GC the same way the host-service primitive does.
+    /// A stage error becomes the same `error` signal the eval test built.
+    pub(crate) fn finish_host_fixture_gc_for_test(&self) -> Result<(), super::Flow> {
+        self.with_green_runtime(|runtime| runtime.parked.borrow_mut().services.finish_fixture_gc())
+            .map_err(|error| {
+                neovm_value::error::signal(
+                    "error",
+                    vec![neovm_value::value::Value::string(error.to_string())],
+                )
+            })
+    }
+}
+
 #[cfg(test)]
 #[path = "../tests/green_owner_test.rs"]
 mod tests;

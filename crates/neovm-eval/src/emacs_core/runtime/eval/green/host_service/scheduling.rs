@@ -48,7 +48,7 @@ pub(in crate::emacs_core::eval::green) struct ServiceSession {
     owner_continuations: BTreeMap<HostRequestKey, OwnerContinuation>,
     #[cfg(test)]
     driver: FixtureDriver,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     completion: FixtureCompletion,
 }
 
@@ -150,7 +150,7 @@ impl ServiceRuntime {
                 owner_continuations: BTreeMap::new(),
                 #[cfg(test)]
                 driver: FixtureDriver::Unavailable,
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 completion: FixtureCompletion::Unavailable,
             }));
         }
@@ -1039,13 +1039,13 @@ impl NativeWaitHandoff for NativeServiceScope<'_> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 pub(in crate::emacs_core::eval::green) struct FixtureGcCompleted {
     pub(in crate::emacs_core::eval::green) worker: std::thread::ThreadId,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 enum FixtureCompletion {
     Unavailable,
     Pending {
@@ -1065,6 +1065,35 @@ pub(in crate::emacs_core::eval::green) enum FixtureDriver {
         driver: super::pump::FixtureSemanticDriver,
         cleanup: super::pump::FixtureCleanupDriver,
     },
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl ServiceRuntime {
+    pub(crate) fn install_fixture_completion(
+        &mut self,
+        sender: std::sync::mpsc::Sender<FixtureGcCompleted>,
+        count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        self.session().completion = FixtureCompletion::Pending { sender, count };
+    }
+
+    /// Called only by the test primitive after a completed exact collection.
+    pub(crate) fn finish_fixture_gc(&mut self) -> Result<(), HostRootError> {
+        let slot = std::mem::replace(&mut self.session().completion, FixtureCompletion::Completed);
+        match slot {
+            FixtureCompletion::Pending { sender, count } => {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                sender
+                    .send(FixtureGcCompleted {
+                        worker: std::thread::current().id(),
+                    })
+                    .map_err(|_| HostRootError::Closed)
+            }
+            FixtureCompletion::Unavailable | FixtureCompletion::Completed => {
+                Err(HostRootError::WrongStage)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1106,32 +1135,6 @@ impl ServiceRuntime {
         let settled = self.complete_native_dispatch_for_test(ticket, NativeOutcome::HostClosed);
         waiter.finish();
         settled
-    }
-
-    pub(crate) fn install_fixture_completion(
-        &mut self,
-        sender: std::sync::mpsc::Sender<FixtureGcCompleted>,
-        count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    ) {
-        self.session().completion = FixtureCompletion::Pending { sender, count };
-    }
-
-    /// Called only by the test primitive after a completed exact collection.
-    pub(crate) fn finish_fixture_gc(&mut self) -> Result<(), HostRootError> {
-        let slot = std::mem::replace(&mut self.session().completion, FixtureCompletion::Completed);
-        match slot {
-            FixtureCompletion::Pending { sender, count } => {
-                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                sender
-                    .send(FixtureGcCompleted {
-                        worker: std::thread::current().id(),
-                    })
-                    .map_err(|_| HostRootError::Closed)
-            }
-            FixtureCompletion::Unavailable | FixtureCompletion::Completed => {
-                Err(HostRootError::WrongStage)
-            }
-        }
     }
 
     pub(crate) fn install_fixture_driver(

@@ -1255,7 +1255,7 @@ impl std::fmt::Debug for SelectParkGate {
 #[cfg(any(test, feature = "test-support"))]
 static_assertions::assert_impl_all!(SelectParkGate: Send, std::fmt::Debug);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MainNativeWaitEvent {
     Released,
@@ -1268,7 +1268,7 @@ pub(crate) enum MainNativeWaitEvent {
 #[derive(Default)]
 pub(crate) struct Control {
     state: Mutex<ControlState>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     main_native_events: Mutex<Vec<MainNativeWaitEvent>>,
     metadata_changed: Condvar,
     #[cfg(any(test, feature = "test-support"))]
@@ -1284,11 +1284,11 @@ impl std::fmt::Debug for Control {
 }
 
 impl Control {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn record_main_native_event_for_test(&self, event: MainNativeWaitEvent) {
         self.main_native_events.lock().unwrap().push(event);
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn main_native_events_for_test(&self) -> Vec<MainNativeWaitEvent> {
         self.main_native_events.lock().unwrap().clone()
     }
@@ -2755,7 +2755,7 @@ impl Control {
         {
             std::process::abort();
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.main_native_events
             .lock()
             .unwrap()
@@ -2794,7 +2794,7 @@ impl Control {
         {
             std::process::abort();
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.main_native_events
             .lock()
             .unwrap()

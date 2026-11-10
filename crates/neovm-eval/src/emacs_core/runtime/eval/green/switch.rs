@@ -170,13 +170,13 @@ impl NativeWaitHandoff for MainNativeHandoff<'_> {
                 .into_ordinary_baton(),
         );
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn physical_block_entered(&mut self) {
         self.control.record_main_native_event_for_test(
             super::scheduler::MainNativeWaitEvent::PhysicalBlockEntered,
         );
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn physical_block_returned(&mut self) {
         self.control.record_main_native_event_for_test(
             super::scheduler::MainNativeWaitEvent::PhysicalBlockReturned,

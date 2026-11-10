@@ -570,6 +570,15 @@ mod emacs_core_runtime_eval_tier_i_tests_list_bindings_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/tests/green_p15_condition_wait_test.rs"]
 mod emacs_core_runtime_eval_tests_green_p15_condition_wait_test_rs;
+// F5 host input. HostInputPublisher is system's public install/send path.
+// The green park, fixture completion, and main-native wait log stay behind
+// authority copies. Assertions are unchanged.
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/green/host_service/tests/late_host_input_test.rs"]
+mod emacs_core_runtime_eval_green_host_service_tests_late_host_input_test_rs;
+#[cfg(all(test, feature = "jit"))]
+#[path = "emacs_core/runtime/jit/tests/green_inline_throw_on_input_test.rs"]
+mod emacs_core_runtime_jit_tests_green_inline_throw_on_input_test_rs;
 
 // F2 minibuffer-state and effect-catalog checks. The two reader files moved
 // whole. The catalog file stayed in eval; only the startup-image alias walk

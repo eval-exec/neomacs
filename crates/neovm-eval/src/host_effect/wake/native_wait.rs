@@ -44,9 +44,9 @@ pub(crate) trait NativeWaitHandoff {
     fn continuation(&self) -> NativeWaitContinuation {
         NativeWaitContinuation::RecheckPredicate
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn physical_block_entered(&mut self) {}
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn physical_block_returned(&mut self) {}
 }
 
@@ -139,10 +139,10 @@ impl<H: NativeWaitHandoff> BlockingNativeWait<'_, H> {
         self.handoff.release(RealWaitPermit {
             _confined: PhantomData,
         });
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.handoff.physical_block_entered();
         let result = operation.execute();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.handoff.physical_block_returned();
         self.handoff.reacquire();
         result
