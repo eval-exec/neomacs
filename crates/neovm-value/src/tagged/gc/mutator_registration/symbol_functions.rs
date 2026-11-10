@@ -4,6 +4,15 @@ use std::num::NonZeroU32;
 
 pub(crate) mod retry;
 
+/// Crate-private seam for the authority REGWAIT-GAP `function` classifier
+/// fence (peer #1482 condition 3 audit). Only this module may name the
+/// restricted `retry::function`, so the public route is the authority fence
+/// and the module chain stays private.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn function_retry_for_fence(error: &FunctionError) -> retry::Retry {
+    retry::function(error)
+}
+
 /// Closed syntax only: handles and resident operand homes, no raw callee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FunctionOp {

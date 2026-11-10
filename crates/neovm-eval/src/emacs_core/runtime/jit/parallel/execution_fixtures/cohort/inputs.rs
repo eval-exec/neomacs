@@ -1,11 +1,11 @@
 //! Publication-only cold operands; the small handoff fixture allocates none.
-use super::super::super::super::EraKeeper;
 use super::*;
-use crate::intern::SymId;
-use crate::symbol::Obarray;
-use crate::tagged::gc::FunctionActivation;
-use crate::tagged::gc::ParallelHeapEra;
-use crate::tagged::gc::symbol_table::publication::TableStatistics;
+use neovm_value::intern::SymId;
+use neovm_value::symbol::Obarray;
+use neovm_value::tagged::gc::FunctionActivation;
+use neovm_value::tagged::gc::ParallelHeapEra;
+use neovm_value::tagged::gc::mutator_registration::EraKeeper;
+use neovm_value::tagged::gc::symbol_table::publication::TableStatistics;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_NAMESPACE: AtomicU64 = AtomicU64::new(1);
@@ -44,19 +44,16 @@ pub(crate) struct PublicationFacts {
     first_chunk: ChunkIdentity,
     pub(crate) registry: ObservedRegistryCensus,
     pub(crate) tables: TableStatistics,
-    pub(crate) slots: crate::tagged::gc::symbol_table::SymbolSlotCount,
-    pub(crate) chunks: crate::tagged::gc::symbol_table::SymbolChunkCount,
-    pub(crate) chunk_slots: crate::tagged::gc::symbol_table::SymbolChunkSlots,
+    pub(crate) slots: neovm_value::tagged::gc::symbol_table::SymbolSlotCount,
+    pub(crate) chunks: neovm_value::tagged::gc::symbol_table::SymbolChunkCount,
+    pub(crate) chunk_slots: neovm_value::tagged::gc::symbol_table::SymbolChunkSlots,
 }
 impl PublicationFacts {
-    pub(crate) fn original_chunk_is_retained(
-        &self,
-        table: &crate::tagged::gc::symbol_table::PublishedSymbolTable,
-    ) -> bool {
-        match table.chunk(0.into()) {
-            Some(chunk) => chunk.as_ptr().addr() == self.first_chunk.0,
-            None => false,
-        }
+    /// Compare the copied first-chunk address word observed through the
+    /// signed activation observer with the word recorded at prepare time.
+    /// No table, descriptor or private chunk type crosses this boundary.
+    pub(crate) fn original_chunk_is_retained(&self, first_chunk_word: Option<usize>) -> bool {
+        first_chunk_word == Some(self.first_chunk.0)
     }
 }
 pub(crate) struct PublicationInputs<'era> {
@@ -133,13 +130,13 @@ impl Scenario {
                 obarray.seed_value_id(named_new, definition(FixtureParameters::Nullary, 97));
                 obarray.seed_value_id(scalar, TaggedValue::fixnum(73));
                 let shared_spelling = format!("{prefix}-fresh-shared");
-                assert!(crate::intern::lookup_interned(&shared_spelling).is_none());
+                assert!(neovm_value::intern::lookup_interned(&shared_spelling).is_none());
                 let mut names = Vec::new();
                 for index in 0..size.count() {
                     let shared = intern(&format!("{prefix}-shared-holder-{index}"));
                     let distinct = intern(&format!("{prefix}-distinct-holder-{index}"));
                     let distinct_spelling = format!("{prefix}-fresh-distinct-{index}");
-                    assert!(crate::intern::lookup_interned(&distinct_spelling).is_none());
+                    assert!(neovm_value::intern::lookup_interned(&distinct_spelling).is_none());
                     // Equal shared spellings have independent managed objects.
                     obarray.seed_value_id(shared, TaggedValue::string(shared_spelling.clone()));
                     obarray.seed_value_id(distinct, TaggedValue::string(distinct_spelling));
@@ -147,11 +144,12 @@ impl Scenario {
                 }
                 // Only registry ids grow here. The World has already seeded ALL
                 // holders; the first live intern must append actual World chunks.
-                let mut gap = crate::intern::intern_uninterned("nmjit-native-publication-gap");
-                let chunk_slots = crate::symbol::OBARRAY_CHUNK_SLOTS as u64;
-                let target = (u64::from(gap.0) / chunk_slots + 2) * chunk_slots + 17;
-                while u64::from(gap.0) + 1 < target {
-                    gap = crate::intern::intern_uninterned("nmjit-native-publication-gap");
+                let mut gap =
+                    neovm_value::intern::intern_uninterned("nmjit-native-publication-gap");
+                let chunk_slots = neovm_value::symbol::OBARRAY_CHUNK_SLOTS as u64;
+                let target = (u64::from(gap.to_raw()) / chunk_slots + 2) * chunk_slots + 17;
+                while u64::from(gap.to_raw()) + 1 < target {
+                    gap = neovm_value::intern::intern_uninterned("nmjit-native-publication-gap");
                 }
                 ScenarioSeed::Publication(ColdInputs {
                     named,
@@ -194,29 +192,19 @@ impl ScenarioSeed {
                             .expect("publication distinct-name holder"),
                     })
                     .collect();
-                let registry = era.core.registry();
-                let view = registry.symbols.tables.view();
-                let table = view.table();
+                let (slots, chunks, chunk_slots, tables) = registry_publication_facts_for_test(era);
                 let facts = PublicationFacts {
-                    heap: registry.heap,
+                    heap: era.heap_identity(),
                     first_chunk: ChunkIdentity(
-                        table
-                            .chunk(0.into())
-                            .expect("seeded first chunk")
-                            .as_ptr()
-                            .addr(),
+                        registry_first_chunk_word_for_test(era).expect("seeded first chunk"),
                     ),
                     registry: ObservedRegistryCensus(
-                        crate::intern::parallel::identity_census_for_test(),
+                        neovm_value::intern::parallel::identity_census_for_test(),
                     ),
-                    tables: registry
-                        .symbols
-                        .tables
-                        .stats()
-                        .expect("publication initial table statistics"),
-                    slots: table.slots(),
-                    chunks: table.chunk_count(),
-                    chunk_slots: table.chunk_slots(),
+                    tables,
+                    slots,
+                    chunks,
+                    chunk_slots,
                 };
                 PreparedInputs::Publication { keys, facts }
             }
@@ -227,13 +215,12 @@ fn root_value<'era>(
     run: &mut RunAccess<'_, 'era>,
     key: &SymbolHandle,
 ) -> Result<OwnerRootSlot<'era>, String> {
-    let mut home = run
-        .private_nil_root()
-        .map_err(|error| format!("publication root: {error:?}"))?;
-    contention::retry(
+    let mut home =
+        nil_root_for_test(run).map_err(|error| format!("publication root: {error:?}"))?;
+    retry(
         Deadline::contention(),
         || run.sym_value_into(key, &mut home),
-        contention::global,
+        global,
     )
     .map_err(|error| format!("publication value: {error:?}"))?;
     Ok(home)
@@ -255,8 +242,7 @@ impl PreparedInputs {
                     .map_err(|error| format!("publication activation: {error:?}"))?;
                 let shared_name = root_value(run, &keys.shared)?;
                 let distinct_name = root_value(run, &keys.distinct)?;
-                let fresh_symbol = run
-                    .private_nil_root()
+                let fresh_symbol = nil_root_for_test(run)
                     .map_err(|error| format!("publication symbol home: {error:?}"))?;
                 let fresh_value = root_value(run, &keys.scalar)?;
                 Ok(CohortInputs::Publication(PublicationInputs {

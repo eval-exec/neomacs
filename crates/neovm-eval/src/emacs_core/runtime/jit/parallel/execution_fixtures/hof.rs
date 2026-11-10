@@ -1,11 +1,13 @@
 //! Real GEN1 execution with canonical mappers, unary callbacks and cons homes.
 use super::*;
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::eval::world::ParallelHeapEraWorldExt;
 use crate::emacs_core::eval::{SubrEntry, register_global_subr_entry};
-use crate::intern::intern;
-use crate::tagged::gc::function_write_hooks::HofOperation;
-use crate::tagged::gc::{HofScratch, HofSingleton, PreparedHofBuiltin, PreparedUnaryFunction};
-use crate::test_utils::SubrValueExt;
+use neovm_value::intern::intern;
+use neovm_value::tagged::gc::HofOperation;
+use neovm_value::tagged::gc::{
+    HofScratch, HofSingleton, PreparedHofBuiltin, PreparedUnaryFunction,
+};
 
 pub(crate) struct HofTestInputs<'era> {
     pub(crate) mapper: PreparedHofBuiltin,
@@ -26,7 +28,7 @@ pub(super) fn spelling(operation: HofOperation) -> &'static str {
 }
 
 pub(super) fn builtin(operation: HofOperation) -> SubrEntry {
-    crate::test_utils::builtin_hof_entry_for_test(operation)
+    crate::emacs_core::eval::subr_abi::builtin_hof_entry_for_test(operation)
 }
 
 #[derive(Debug)]
@@ -36,14 +38,14 @@ enum ReconcileError {
 }
 fn reconcile_retry(error: &ReconcileError) -> Retry {
     match error {
-        ReconcileError::Stop(error) => contention::rendezvous(error),
-        ReconcileError::Function(error) => contention::function(error),
+        ReconcileError::Stop(error) => rendezvous(error),
+        ReconcileError::Function(error) => function(error),
     }
 }
 
 pub(super) enum FixtureParameters {
     Nullary,
-    Unary(crate::intern::SymId),
+    Unary(neovm_value::intern::SymId),
 }
 
 pub(super) fn definition(parameter: FixtureParameters, answer: i64) -> TaggedValue {
@@ -99,16 +101,9 @@ pub(crate) fn prepared_hof_fixture<P>(
             );
         },
         |mut proof, id| {
-            let frozen = proof
-                .core
-                .legacy_roots
-                .take()
-                .expect("rooted HOF setup evidence");
+            let frozen = take_legacy_roots_for_test(&mut proof).expect("rooted HOF setup evidence");
             let (mut collector, keeper) = proof.finish().expect("small HOF setup return");
-            let mode = if collector
-                .registration_heap_mut()
-                .tagged_heap_generational_enabled()
-            {
+            let mode = if collector_generational_enabled_for_test(&mut collector) {
                 ActualMode::Gen1
             } else {
                 ActualMode::Gen0
@@ -116,8 +111,8 @@ pub(crate) fn prepared_hof_fixture<P>(
             let admitted = match Gen1Admission::check(collector) {
                 Ok(admitted) => admitted,
                 Err(failure) => {
-                    let reason = failure.reason;
-                    drop(failure.collector);
+                    let (reason, collector) = failure.into_parts();
+                    drop(collector);
                     drop(frozen);
                     drop(keeper);
                     assert_eq!(reason, Gen1AdmissionError::GenerationalRequired);
@@ -139,11 +134,9 @@ pub(crate) fn prepared_hof_fixture<P>(
             let mapper_replacement_key = era
                 .admit_plain_symbol(mapper_replacement)
                 .expect("mapper replacement handle");
-            let callback = era
-                .prepare_unary_function_symbol(&callback_symbol)
+            let callback = era_prepare_unary_function_symbol_for_test(&era, &callback_symbol)
                 .expect("prepared unary callback");
-            let mapper = era
-                .prepare_hof_builtin(operation, &mapper_key)
+            let mapper = era_prepare_hof_builtin_for_test(&era, operation, &mapper_key)
                 .expect("prepared canonical mapper");
             // The singleton and mapcar output allocate only from real detached
             // owner cons storage, never through the serial allocation path.
@@ -160,24 +153,25 @@ pub(crate) fn prepared_hof_fixture<P>(
             let result = {
                 let mut run = owner.run_access().expect("HOF fixture run");
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let destination = run.private_nil_root().expect("HOF result home");
-                    let mut expected = run.private_nil_root().expect("HOF expected callback home");
+                    let destination = nil_root_for_test(&mut run).expect("HOF result home");
+                    let mut expected =
+                        nil_root_for_test(&mut run).expect("HOF expected callback home");
                     run.sym_function_into(&callback_symbol, &mut expected)
                         .expect("root original callback");
                     let mut replacement_home =
-                        run.private_nil_root().expect("HOF replacement home");
+                        nil_root_for_test(&mut run).expect("HOF replacement home");
                     run.sym_value_into(&replacement_key, &mut replacement_home)
                         .expect("root replacement callback");
                     let mut mapper_replacement_home =
-                        run.private_nil_root().expect("HOF mapper replacement home");
+                        nil_root_for_test(&mut run).expect("HOF mapper replacement home");
                     run.sym_value_into(&mapper_replacement_key, &mut mapper_replacement_home)
                         .expect("root mapper replacement");
-                    let singleton = HofSingleton::new(
+                    let singleton = hof_singleton_new_for_test(
                         &mut run,
                         ImmediateResult::Fixnum(Fixnum::try_from(7).expect("small input fixnum")),
                     )
                     .expect("real rooted singleton input");
-                    let scratch = HofScratch::new(&mut run).expect("resident HOF scratch");
+                    let scratch = hof_scratch_new_for_test(&mut run).expect("resident HOF scratch");
                     let inputs = HofTestInputs {
                         mapper,
                         callback,
@@ -204,31 +198,27 @@ pub(crate) fn prepared_hof_fixture<P>(
                 .and_then(|mut run| run.clear_root_slots())
                 .expect("HOF fixture cleared roots");
             drop(admission);
-            let _probes = crate::tagged::gc::mutator_registration::a8_probes::suppress();
+            let _probes = suppress_for_test();
             // This is terminal keeper-thread publication, NOT a blocking
             // worker/native body. The keeper drives and completes its own
             // stop synchronously, then retires this already-published owner.
             // with_native_extent's worker-only wait/restore contract is not
             // appropriate here: there is no blocked native body to resume.
-            contention::retry(
+            retry(
                 Deadline::contention(),
                 || owner.enter_native(&[]),
-                contention::rendezvous,
+                rendezvous,
             )
             .expect("HOF fixture terminal publication");
-            let mut stopped = contention::retry(
-                Deadline::contention(),
-                || era.stop(),
-                contention::rendezvous,
-            )
-            .expect("HOF fixture stop");
-            contention::retry(
+            let mut stopped =
+                retry(Deadline::contention(), || era.stop(), rendezvous).expect("HOF fixture stop");
+            retry(
                 Deadline::contention(),
                 || era.return_cons_storage(&stopped),
-                contention::registration,
+                registration,
             )
             .expect("return HOF cons storage");
-            contention::retry(
+            retry(
                 Deadline::contention(),
                 || {
                     era.reconcile_functions(&mut stopped.symbols().map_err(ReconcileError::Stop)?)
@@ -237,10 +227,10 @@ pub(crate) fn prepared_hof_fixture<P>(
                 reconcile_retry,
             )
             .expect("HOF function reconciliation");
-            let collection = contention::retry(
+            let collection = retry(
                 Deadline::contention(),
                 || era.collect_stopped(&mut stopped),
-                contention::rendezvous,
+                rendezvous,
             )
             .expect("HOF fixture real stopped collection");
             assert!(collection.major);
@@ -249,7 +239,7 @@ pub(crate) fn prepared_hof_fixture<P>(
                 Deadline::contention(),
                 stopped,
                 |stopped| stopped.complete(),
-                |failure| match contention::rendezvous(&failure.reason) {
+                |failure| match rendezvous(&failure.reason) {
                     Retry::Busy => ControlFlow::Continue(failure.into_stopped()),
                     Retry::Refuse => ControlFlow::Break(failure),
                 },
@@ -259,7 +249,7 @@ pub(crate) fn prepared_hof_fixture<P>(
                 Deadline::contention(),
                 owner,
                 |owner| owner.retire_rooted(&[]),
-                |failure| match contention::rendezvous(&failure.reason) {
+                |failure| match rendezvous(&failure.reason) {
                     Retry::Busy => ControlFlow::Continue(failure.into_owner()),
                     Retry::Refuse => ControlFlow::Break(failure),
                 },

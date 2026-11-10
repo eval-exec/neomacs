@@ -290,6 +290,134 @@ pub fn take_legacy_roots_for_test<'heap, K: crate::tagged::gc::EraKeeper>(
     crate::tagged::gc::mutator_registration::test_fences::take_legacy_roots_for_test(era)
 }
 
+/// FENCE (re-homed execution fixtures): construct a HOF singleton on the
+/// calling owner; root/cons allocation is a WRITE, the original stays
+/// `pub(crate)`.
+pub fn hof_singleton_new_for_test<'era>(
+    run: &mut crate::tagged::gc::mutator_registration::RunAccess<'_, 'era>,
+    element: crate::tagged::gc::mutator_registration::ImmediateResult,
+) -> Result<
+    crate::tagged::gc::mutator_registration::HofSingleton<'era>,
+    crate::tagged::gc::mutator_registration::RegistrationError,
+> {
+    crate::tagged::gc::mutator_registration::test_fences::hof_singleton_new_for_test(run, element)
+}
+
+/// FENCE (re-homed execution fixtures): construct the resident HOF scratch
+/// homes; root allocation is a WRITE.
+pub fn hof_scratch_new_for_test<'era>(
+    run: &mut crate::tagged::gc::mutator_registration::RunAccess<'_, 'era>,
+) -> Result<
+    crate::tagged::gc::mutator_registration::HofScratch<'era>,
+    crate::tagged::gc::mutator_registration::HofError,
+> {
+    crate::tagged::gc::mutator_registration::test_fences::hof_scratch_new_for_test(run)
+}
+
+/// FENCE (re-homed execution fixtures): prepare the canonical HOF builtin
+/// under the era's checked function-write authority.
+pub fn era_prepare_hof_builtin_for_test<'heap, K: crate::tagged::gc::EraKeeper>(
+    era: &crate::tagged::gc::ParallelHeapEra<'heap, K>,
+    operation: crate::tagged::gc::HofOperation,
+    key: &crate::tagged::gc::mutator_registration::SymbolHandle,
+) -> Result<
+    crate::tagged::gc::PreparedHofBuiltin,
+    crate::tagged::gc::mutator_registration::FunctionError,
+> {
+    crate::tagged::gc::mutator_registration::test_fences::era_prepare_hof_builtin_for_test(
+        era, operation, key,
+    )
+}
+
+/// FENCE (re-homed execution fixtures): prepare a unary function symbol
+/// under the same checked write authority.
+pub fn era_prepare_unary_function_symbol_for_test<'heap, K: crate::tagged::gc::EraKeeper>(
+    era: &crate::tagged::gc::ParallelHeapEra<'heap, K>,
+    key: &crate::tagged::gc::mutator_registration::SymbolHandle,
+) -> Result<
+    crate::tagged::gc::PreparedUnaryFunction,
+    crate::tagged::gc::mutator_registration::FunctionError,
+> {
+    crate::tagged::gc::mutator_registration::test_fences::era_prepare_unary_function_symbol_for_test(
+        era, key,
+    )
+}
+
+/// FENCE (copied read; peer #1482 condition 3 audit): the retained
+/// registry's published-table shape and statistics for the re-homed
+/// execution fixtures. Delegates to the crate-private `test_fences` seam
+/// because only the `mutator_registration` module tree may name the
+/// Registry sidecar. Only Copy scalars cross.
+pub fn registry_publication_facts_for_test<'heap, K: crate::tagged::gc::EraKeeper>(
+    era: &crate::tagged::gc::ParallelHeapEra<'heap, K>,
+) -> (
+    crate::tagged::gc::symbol_table::SymbolSlotCount,
+    crate::tagged::gc::symbol_table::SymbolChunkCount,
+    crate::tagged::gc::symbol_table::SymbolChunkSlots,
+    crate::tagged::gc::symbol_table::publication::TableStatistics,
+) {
+    crate::tagged::gc::mutator_registration::test_fences::registry_publication_facts_for_test(era)
+}
+
+/// FENCE (copied read; peer #1482 condition 3 audit): the registry-side
+/// address word of the published table's first chunk, captured at prepare
+/// time. The descriptor and backing table stay internal.
+pub fn registry_first_chunk_word_for_test<'heap, K: crate::tagged::gc::EraKeeper>(
+    era: &crate::tagged::gc::ParallelHeapEra<'heap, K>,
+) -> Option<usize> {
+    crate::tagged::gc::mutator_registration::test_fences::registry_first_chunk_word_for_test(era)
+}
+
+/// FENCE (copied read; peer #1482 hold 00:57Z item 1): the activation-side
+/// address word of the published table's first chunk. The consumer compares
+/// this copied word; the private chunk-address type, the view and the
+/// descriptor never cross.
+pub fn table_first_chunk_word_for_test(
+    activation: &crate::tagged::gc::mutator_registration::ExecutionActivation<'_, '_, '_>,
+) -> Option<usize> {
+    crate::tagged::gc::mutator_registration::test_fences::table_first_chunk_word_for_test(
+        activation,
+    )
+}
+
+/// FENCE (copied read; peer #1482 design note B7): a run's initial
+/// published-table statistics as a Copy snapshot. The original
+/// `RunAccess::initial_table_statistics_for_test` stays `pub(crate)`.
+pub fn run_initial_table_statistics_for_test(
+    run: &crate::tagged::gc::mutator_registration::RunAccess<'_, '_>,
+) -> Result<
+    crate::tagged::gc::symbol_table::publication::TableStatistics,
+    crate::tagged::gc::mutator_registration::RegistrationError,
+> {
+    run.initial_table_statistics_for_test()
+}
+
+/// FENCE (peer-signed A composite; peer #1482 condition 3 audit): wait on
+/// the registry's resume-debt event, then run `body` with a run admitted
+/// under the predicate gate. The Mutator registry field, park ticket,
+/// registry guard, live phase word and resume wait never cross.
+pub fn with_registry_admission_gate_for_test<'era, R>(
+    owner: &mut crate::tagged::gc::mutator_registration::Mutator<'era>,
+    body: impl FnMut(
+        &mut crate::tagged::gc::mutator_registration::RunAccess<'_, 'era>,
+    ) -> Result<R, String>,
+) -> Result<R, String> {
+    crate::tagged::gc::mutator_registration::test_fences::with_registry_admission_gate_for_test(
+        owner, body,
+    )
+}
+
+/// FENCE (copied read; peer #1482 design rubric 7): the retained collector
+/// heap's generational mode. The collector's heap accessor stays
+/// `pub(super)`; only the bool crosses.
+pub fn collector_generational_enabled_for_test(
+    collector: &mut crate::tagged::gc::QuiescentCollector<'_>,
+) -> bool {
+    crate::tagged::gc::mutator_registration::test_fences::collector_generational_enabled_for_test(
+        collector,
+    )
+}
+
 /// Fence-only symbol-authority word occupancy (peer 09:2xZ): the word itself
 /// never leaves value. Callers get a copied u64 reading or an RAII guard whose
 /// Drop restores quiescence; the reader/writer sentinel stays private.
@@ -325,6 +453,16 @@ pub fn initial_intern(
 #[doc(hidden)]
 pub fn global(error: &crate::tagged::gc::mutator_registration::GlobalError) -> Retry {
     crate::tagged::gc::mutator_registration::symbol_functions::retry::global(error)
+}
+
+/// FENCE (peer #1482 condition 3 audit; REGWAIT-GAP sibling): the function
+/// retry classifier the moved execution fixtures pass to the retry driver.
+/// Pure error-to-Retry mapping. `retry::function` is restricted to the
+/// `symbol_functions` module tree, so that module's crate-private seam is
+/// the only path this fence can take; nothing is publicly widened.
+#[doc(hidden)]
+pub fn function(error: &crate::tagged::gc::mutator_registration::FunctionError) -> Retry {
+    crate::tagged::gc::mutator_registration::symbol_functions::function_retry_for_fence(error)
 }
 
 /// Fence delegates for the re-homed root-slot tests (peer-signed rows): the

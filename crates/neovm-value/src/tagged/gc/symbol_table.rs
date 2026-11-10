@@ -39,6 +39,7 @@ impl SymbolSlotIndex {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct SymbolSlotCount(usize);
 impl From<usize> for SymbolSlotCount {
     fn from(value: usize) -> Self {
@@ -46,6 +47,7 @@ impl From<usize> for SymbolSlotCount {
     }
 }
 impl SymbolSlotCount {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn get(self) -> usize {
         self.0
     }
@@ -53,6 +55,7 @@ impl SymbolSlotCount {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct SymbolChunkCount(usize);
 impl From<usize> for SymbolChunkCount {
     fn from(value: usize) -> Self {
@@ -60,6 +63,7 @@ impl From<usize> for SymbolChunkCount {
     }
 }
 impl SymbolChunkCount {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn get(self) -> usize {
         self.0
     }
@@ -68,8 +72,10 @@ impl SymbolChunkCount {
 /// The caller supplies the backing's one existing chunk-size definition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct SymbolChunkSlots(NonZeroUsize);
 impl SymbolChunkSlots {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn get(self) -> usize {
         self.0.get()
     }
@@ -95,6 +101,12 @@ impl From<usize> for SymbolChunkIndex {
 pub(crate) struct PointerTableGeneration(NonZeroU64);
 impl PointerTableGeneration {
     pub(crate) const INITIAL: Self = Self(NonZeroU64::MIN);
+
+    /// Crate-private copied word for the test-support statistics accessor.
+    #[cfg(feature = "test-support")]
+    pub(crate) fn get(self) -> u64 {
+        self.0.get()
+    }
 
     pub(crate) fn checked_successor(self) -> Result<Self, TableError> {
         self.0

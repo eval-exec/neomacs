@@ -1,16 +1,15 @@
 //! Owned compiled entries return before every published stop; no JIT grace receipt.
-use crate::test_utils::SubrValueExt;
-#[path = "cohort/inputs.rs"]
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 mod inputs;
 use super::hof::{FixtureParameters, builtin, definition, spelling};
 use super::*;
 use crate::emacs_core::eval::register_global_subr_entry;
 use crate::emacs_core::eval::world::ParallelHeapEraWorldExt;
-use crate::intern::intern;
-use crate::tagged::gc::function_write_hooks::HofOperation;
-use crate::tagged::gc::{PreparedHofBuiltin, PreparedUnaryFunction};
 use inputs::{CohortInputs, Scenario, ScenarioSeed};
 pub(crate) use inputs::{PublicationFacts, PublicationInputs};
+use neovm_value::intern::intern;
+use neovm_value::tagged::gc::HofOperation;
+use neovm_value::tagged::gc::{PreparedHofBuiltin, PreparedUnaryFunction};
 use std::cell::RefCell;
 use std::sync::mpsc::{self, Receiver, Sender};
 
@@ -53,8 +52,8 @@ enum ReconcileError {
 }
 fn reconcile_retry(error: &ReconcileError) -> Retry {
     match error {
-        ReconcileError::Stop(error) => contention::rendezvous(error),
-        ReconcileError::Function(error) => contention::function(error),
+        ReconcileError::Stop(error) => rendezvous(error),
+        ReconcileError::Function(error) => function(error),
     }
 }
 #[must_use = "release every waiting worker before joining the scoped cohort"]
@@ -73,7 +72,7 @@ fn receive<T>(receiver: &Receiver<T>) -> Result<T, String> {
     #[cfg(not(miri))]
     {
         receiver
-            .recv_timeout(contention::SPIN_WAIT)
+            .recv_timeout(SPIN_WAIT)
             .map_err(|error| format!("cohort wait: {error:?}"))
     }
     #[cfg(miri)]
@@ -83,79 +82,14 @@ fn receive<T>(receiver: &Receiver<T>) -> Result<T, String> {
             .map_err(|error| format!("cohort wait: {error:?}"))
     }
 }
-fn failure(payload: Box<dyn std::any::Any + Send>) -> String {
-    payload
-        .downcast_ref::<String>()
-        .cloned()
-        .or_else(|| payload.downcast_ref::<&str>().map(|text| text.to_string()))
-        .unwrap_or_else(|| "non-string cohort assertion".into())
-}
 /// Wait on the product's resume-debt event, never on the body's outcome.
 /// The predicate gate covers admission only and is released before the body;
 /// concurrent native code, publication, and symbol writers remain concurrent.
 fn with_run<'era, R>(
     owner: &mut Mutator<'era>,
-    mut body: impl FnMut(&mut RunAccess<'_, 'era>) -> Result<R, String>,
+    body: impl FnMut(&mut RunAccess<'_, 'era>) -> Result<R, String>,
 ) -> Result<R, String> {
-    use super::super::super::rendezvous::Phase;
-
-    let registry = owner.registry;
-    let _park = registry.park_ticket();
-    let mut gate = registry
-        .lock_blocking()
-        .map_err(|error| format!("cohort admission gate: {error:?}"))?;
-    loop {
-        match gate.rendezvous.phase {
-            Phase::Idle => break,
-            Phase::DrainingResumes => {
-                // Check the specified non-blocking refusal while its actual
-                // predicate is locked. Busy in any other phase is not retried.
-                match owner.run_access() {
-                    Err(RegistrationError::Busy) => {}
-                    Err(error) => return Err(format!("cohort drain refusal: {error:?}")),
-                    Ok(run) => {
-                        drop(gate);
-                        drop(run);
-                        return Err("cohort admitted during DrainingResumes".into());
-                    }
-                }
-                // The final ResumeGcImage::try_apply -> finish_debt opens Idle
-                // and notifies this same condvar. wait atomically releases the
-                // predicate mutex, including the product's poison wake path.
-                gate = registry
-                    .wait(gate)
-                    .map_err(|error| format!("cohort resume-debt wait: {error:?}"))?;
-            }
-            Phase::Stopping(_) | Phase::Tracing(_) | Phase::Poisoned => {
-                return Err(format!(
-                    "cohort unexpected admission phase: {:?}",
-                    gate.rendezvous.phase
-                ));
-            }
-        }
-    }
-    // Admit under the predicate gate so another owner cannot start restoring
-    // between the Idle observation and run_access. The body takes no gate.
-    let admitted = owner.run_access();
-    drop(gate);
-    drop(_park);
-    let mut run = admitted.map_err(|error| format!("cohort run admission: {error:?}"))?;
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(&mut run)));
-    // A close error is terminal evidence, never a reason to repeat the body or
-    // the close. Normal local-region closure requires no registry mutex.
-    let closed = run.close_cons_region();
-    drop(run);
-    let result = match result {
-        Ok(result) => result,
-        Err(payload) => Err(failure(payload)),
-    };
-    match closed {
-        Ok(()) => result,
-        Err(error) => Err(match result {
-            Ok(_) => format!("cohort close: {error:?}"),
-            Err(body) => format!("cohort close: {error:?}; body={body}"),
-        }),
-    }
+    with_registry_admission_gate_for_test(owner, body)
 }
 
 fn seed<'era>(
@@ -166,42 +100,35 @@ fn seed<'era>(
     replacement_key: &SymbolHandle,
     mapper_replacement_key: &SymbolHandle,
 ) -> Result<(OwnerRootSlot<'era>, HofTestInputs<'era>), String> {
-    let destination = run
-        .private_nil_root()
-        .map_err(|e| format!("destination: {e:?}"))?;
-    let mut expected = run
-        .private_nil_root()
-        .map_err(|e| format!("expected: {e:?}"))?;
-    contention::retry(
+    let destination = nil_root_for_test(run).map_err(|e| format!("destination: {e:?}"))?;
+    let mut expected = nil_root_for_test(run).map_err(|e| format!("expected: {e:?}"))?;
+    retry(
         Deadline::contention(),
         || run.sym_function_into(&callback_symbol, &mut expected),
-        contention::function,
+        function,
     )
     .map_err(|e| format!("expected definition: {e:?}"))?;
-    let mut replacement = run
-        .private_nil_root()
-        .map_err(|e| format!("replacement: {e:?}"))?;
-    contention::retry(
+    let mut replacement = nil_root_for_test(run).map_err(|e| format!("replacement: {e:?}"))?;
+    retry(
         Deadline::contention(),
         || run.sym_value_into(replacement_key, &mut replacement),
-        contention::global,
+        global,
     )
     .map_err(|e| format!("replacement value: {e:?}"))?;
-    let mut mapper_replacement = run
-        .private_nil_root()
-        .map_err(|e| format!("mapper replacement: {e:?}"))?;
-    contention::retry(
+    let mut mapper_replacement =
+        nil_root_for_test(run).map_err(|e| format!("mapper replacement: {e:?}"))?;
+    retry(
         Deadline::contention(),
         || run.sym_value_into(mapper_replacement_key, &mut mapper_replacement),
-        contention::global,
+        global,
     )
     .map_err(|e| format!("mapper replacement value: {e:?}"))?;
-    let singleton = HofSingleton::new(
+    let singleton = hof_singleton_new_for_test(
         run,
         ImmediateResult::Fixnum(Fixnum::try_from(7).expect("small fixnum")),
     )
     .map_err(|e| format!("singleton: {e:?}"))?;
-    let scratch = HofScratch::new(run).map_err(|e| format!("scratch: {e:?}"))?;
+    let scratch = hof_scratch_new_for_test(run).map_err(|e| format!("scratch: {e:?}"))?;
     Ok((
         destination,
         HofTestInputs {
@@ -322,17 +249,13 @@ fn prepared_cohort<P: Send>(
             *scenario_seed.borrow_mut() = scenario.initialize(obarray, size);
         },
         |mut proof, id| {
-            let frozen = proof
-                .core
-                .legacy_roots
-                .take()
-                .expect("cohort frozen setup roots");
+            let frozen = take_legacy_roots_for_test(&mut proof).expect("cohort frozen setup roots");
             let (collector, keeper) = proof.finish().expect("cohort setup return");
             let admitted = match Gen1Admission::check(collector) {
                 Ok(admitted) => admitted,
                 Err(failed) => {
-                    let reason = failed.reason;
-                    drop(failed.collector);
+                    let (reason, collector) = failed.into_parts();
+                    drop(collector);
                     drop(frozen);
                     drop(keeper);
                     assert_eq!(reason, Gen1AdmissionError::GenerationalRequired);
@@ -355,11 +278,9 @@ fn prepared_cohort<P: Send>(
             let mapper_replacement_key = era
                 .admit_plain_symbol(mapper_replacement_id)
                 .expect("cohort mapper replacement key");
-            let callback = era
-                .prepare_unary_function_symbol(&callback_symbol)
+            let callback = era_prepare_unary_function_symbol_for_test(&era, &callback_symbol)
                 .expect("cohort unary preparation");
-            let mapper = era
-                .prepare_hof_builtin(operation, &mapper_key)
+            let mapper = era_prepare_hof_builtin_for_test(&era, operation, &mapper_key)
                 .expect("cohort builtin preparation");
             let prepared_inputs =
                 std::mem::replace(&mut *scenario_seed.borrow_mut(), ScenarioSeed::Handoff)
@@ -389,7 +310,7 @@ fn prepared_cohort<P: Send>(
                             Deadline::contention(),
                             permit,
                             |permit| permit.activate(heap, index as u64 + 1),
-                            |failed| match contention::registration(&failed.reason) {
+                            |failed| match registration(&failed.reason) {
                                 Retry::Busy => ControlFlow::Continue(failed.into_permit()),
                                 Retry::Refuse => ControlFlow::Break(failed),
                             },
@@ -441,7 +362,7 @@ fn prepared_cohort<P: Send>(
                                         Err(format!("cohort clear: {error:?}; body={result:?}"));
                                 }
                             }
-                            let _probes = super::super::super::a8_probes::suppress();
+                            let _probes = suppress_for_test();
                             let parked = owner.with_native_extent(&[], |_| {
                                 events
                                     .send(Event::Paused(index, phase))
@@ -484,7 +405,7 @@ fn prepared_cohort<P: Send>(
                             Deadline::contention(),
                             owner,
                             |owner| owner.retire_rooted(&[]),
-                            |failed| match contention::rendezvous(&failed.reason) {
+                            |failed| match rendezvous(&failed.reason) {
                                 Retry::Busy => ControlFlow::Continue(failed.into_owner()),
                                 Retry::Refuse => ControlFlow::Break(failed),
                             },
@@ -521,19 +442,15 @@ fn prepared_cohort<P: Send>(
                         seen.sort_unstable();
                         seen.dedup();
                         assert_eq!(seen.len(), size.count());
-                        let mut stopped = contention::retry(
-                            Deadline::contention(),
-                            || era.stop(),
-                            contention::rendezvous,
-                        )
-                        .expect("cohort stop");
-                        contention::retry(
+                        let mut stopped = retry(Deadline::contention(), || era.stop(), rendezvous)
+                            .expect("cohort stop");
+                        retry(
                             Deadline::contention(),
                             || era.return_cons_storage(&stopped),
-                            contention::registration,
+                            registration,
                         )
                         .expect("cohort return storage");
-                        contention::retry(
+                        retry(
                             Deadline::contention(),
                             || {
                                 era.reconcile_functions(
@@ -544,10 +461,10 @@ fn prepared_cohort<P: Send>(
                             reconcile_retry,
                         )
                         .expect("cohort reconcile");
-                        let report = contention::retry(
+                        let report = retry(
                             Deadline::contention(),
                             || era.collect_stopped(&mut stopped),
-                            contention::rendezvous,
+                            rendezvous,
                         )
                         .expect("cohort collection");
                         assert!(report.major);
@@ -558,10 +475,10 @@ fn prepared_cohort<P: Send>(
                         }
                         previous = Some((report.epoch, report.cycle));
                         if !matches!(phase, CohortPhase::AfterSecondCollection) {
-                            contention::retry(
+                            retry(
                                 Deadline::contention(),
                                 || era.resume_cons_storage(&stopped),
-                                contention::registration,
+                                registration,
                             )
                             .expect("cohort resume storage");
                         }
@@ -569,7 +486,7 @@ fn prepared_cohort<P: Send>(
                             Deadline::contention(),
                             stopped,
                             |stopped| stopped.complete(),
-                            |failed| match contention::rendezvous(&failed.reason) {
+                            |failed| match rendezvous(&failed.reason) {
                                 Retry::Busy => ControlFlow::Continue(failed.into_stopped()),
                                 Retry::Refuse => ControlFlow::Break(failed),
                             },

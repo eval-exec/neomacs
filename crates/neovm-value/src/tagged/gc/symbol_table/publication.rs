@@ -101,10 +101,28 @@ impl PublicationChange {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct TableStatistics {
     pub(crate) generation: PointerTableGeneration,
     pub(crate) retired: RetiredTableCount,
     pub(crate) retained_bytes: RetainedTableBytes,
+}
+
+#[cfg(feature = "test-support")]
+impl TableStatistics {
+    /// Copied read (peer #1482 condition 2/4): the registry generation as a
+    /// plain word. The generation type and field stay private.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn generation_word(&self) -> u64 {
+        self.generation.get()
+    }
+
+    /// Copied read (peer #1482 condition 2/4): the retired-table count as a
+    /// plain usize. The count type and field stay private.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn retired_count(&self) -> usize {
+        self.retired.get()
+    }
 }
 
 struct TableLedger {

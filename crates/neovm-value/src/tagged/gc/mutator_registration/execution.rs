@@ -183,5 +183,3 @@ static_assertions::assert_impl_all!(ImmediateResult: Send, Sync, Copy);
 // execution fixture helper and its tests now live only in core's re-homed
 // execution/tests.rs; this module keeps the non-duplicated cohort/hof
 // fixtures, which remain the single home their eval consumers will use.
-#[cfg(test)]
-mod tests;

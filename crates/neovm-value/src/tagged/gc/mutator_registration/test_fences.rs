@@ -291,6 +291,204 @@ pub unsafe fn with_stopped_tables_for_test<'a, 'era, R, K: crate::tagged::gc::Er
     result
 }
 
+/// FENCE (peer-signed A composite; peer #1482 condition 3 audit): wait on
+/// the registry's resume-debt event, then hand the body a run admitted under
+/// the same predicate gate. The Mutator's registry field, the park ticket,
+/// the registry guard, the live phase word and the resume wait never cross;
+/// the caller sees only `RunAccess`. This is a verbatim move of the fixture's
+/// historical `with_run`; every error string and the close/panic ordering are
+/// preserved.
+pub fn with_registry_admission_gate_for_test<'era, R>(
+    owner: &mut super::Mutator<'era>,
+    mut body: impl FnMut(
+        &mut crate::tagged::gc::mutator_registration::RunAccess<'_, 'era>,
+    ) -> Result<R, String>,
+) -> Result<R, String> {
+    use super::rendezvous::Phase;
+
+    fn failure(payload: Box<dyn std::any::Any + Send>) -> String {
+        payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|text| text.to_string()))
+            .unwrap_or_else(|| "non-string cohort assertion".into())
+    }
+
+    let registry = owner.registry;
+    let _park = registry.park_ticket();
+    let mut gate = registry
+        .lock_blocking()
+        .map_err(|error| format!("cohort admission gate: {error:?}"))?;
+    loop {
+        match gate.rendezvous.phase {
+            Phase::Idle => break,
+            Phase::DrainingResumes => {
+                // Check the specified non-blocking refusal while its actual
+                // predicate is locked. Busy in any other phase is not retried.
+                match owner.run_access() {
+                    Err(crate::tagged::gc::mutator_registration::RegistrationError::Busy) => {}
+                    Err(error) => return Err(format!("cohort drain refusal: {error:?}")),
+                    Ok(run) => {
+                        drop(gate);
+                        drop(run);
+                        return Err("cohort admitted during DrainingResumes".into());
+                    }
+                }
+                // The final ResumeGcImage::try_apply -> finish_debt opens Idle
+                // and notifies this same condvar. wait atomically releases the
+                // predicate mutex, including the product's poison wake path.
+                gate = registry
+                    .wait(gate)
+                    .map_err(|error| format!("cohort resume-debt wait: {error:?}"))?;
+            }
+            Phase::Stopping(_) | Phase::Tracing(_) | Phase::Poisoned => {
+                return Err(format!(
+                    "cohort unexpected admission phase: {:?}",
+                    gate.rendezvous.phase
+                ));
+            }
+        }
+    }
+    // Admit under the predicate gate so another owner cannot start restoring
+    // between the Idle observation and run_access. The body takes no gate.
+    let admitted = owner.run_access();
+    drop(gate);
+    drop(_park);
+    let mut run = admitted.map_err(|error| format!("cohort run admission: {error:?}"))?;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(&mut run)));
+    // A close error is terminal evidence, never a reason to repeat the body or
+    // the close. Normal local-region closure requires no registry mutex.
+    let closed = run.close_cons_region();
+    drop(run);
+    let result = match result {
+        Ok(result) => result,
+        Err(payload) => Err(failure(payload)),
+    };
+    match closed {
+        Ok(()) => result,
+        Err(error) => Err(match result {
+            Ok(_) => format!("cohort close: {error:?}"),
+            Err(body) => format!("cohort close: {error:?}; body={body}"),
+        }),
+    }
+}
+
+/// FENCE (copied read; peer #1482 design rubric 7): the retained collector
+/// heap's generational mode, so the fixture keeps a REAL pre-admission mode
+/// observation without widening the collector's heap accessor.
+pub fn collector_generational_enabled_for_test(
+    collector: &mut crate::tagged::gc::QuiescentCollector<'_>,
+) -> bool {
+    collector
+        .registration_heap_mut()
+        .tagged_heap_generational_enabled()
+}
+
+/// FENCE (re-homed execution fixtures): construct a HOF singleton on the
+/// calling owner. The constructor reserves root homes and cons storage, so
+/// it is a WRITE; the original `HofSingleton::new` stays `pub(crate)`.
+pub fn hof_singleton_new_for_test<'era>(
+    run: &mut crate::tagged::gc::mutator_registration::RunAccess<'_, 'era>,
+    element: crate::tagged::gc::mutator_registration::ImmediateResult,
+) -> Result<
+    crate::tagged::gc::mutator_registration::HofSingleton<'era>,
+    crate::tagged::gc::mutator_registration::RegistrationError,
+> {
+    crate::tagged::gc::mutator_registration::HofSingleton::new(run, element)
+}
+
+/// FENCE (re-homed execution fixtures): construct the resident HOF scratch
+/// homes. Root allocation is a WRITE; the original stays `pub(crate)`.
+pub fn hof_scratch_new_for_test<'era>(
+    run: &mut crate::tagged::gc::mutator_registration::RunAccess<'_, 'era>,
+) -> Result<
+    crate::tagged::gc::mutator_registration::HofScratch<'era>,
+    crate::tagged::gc::mutator_registration::HofError,
+> {
+    crate::tagged::gc::mutator_registration::HofScratch::new(run)
+}
+
+/// FENCE (re-homed execution fixture): prepare the canonical HOF builtin
+/// under the era's checked function-write authority. The preparation takes
+/// the exclusive admission writer, so the original `pub(crate)` era method
+/// stays crate-private and this fence is the cross-crate route.
+pub fn era_prepare_hof_builtin_for_test<'heap, K: crate::tagged::gc::EraKeeper>(
+    era: &crate::tagged::gc::ParallelHeapEra<'heap, K>,
+    operation: crate::tagged::gc::HofOperation,
+    key: &crate::tagged::gc::mutator_registration::SymbolHandle,
+) -> Result<
+    crate::tagged::gc::PreparedHofBuiltin,
+    crate::tagged::gc::mutator_registration::FunctionError,
+> {
+    era.prepare_hof_builtin(operation, key)
+}
+
+/// FENCE (re-homed execution fixture): prepare a unary function symbol under
+/// the same checked write authority. The original stays `pub(crate)`.
+pub fn era_prepare_unary_function_symbol_for_test<'heap, K: crate::tagged::gc::EraKeeper>(
+    era: &crate::tagged::gc::ParallelHeapEra<'heap, K>,
+    key: &crate::tagged::gc::mutator_registration::SymbolHandle,
+) -> Result<
+    crate::tagged::gc::PreparedUnaryFunction,
+    crate::tagged::gc::mutator_registration::FunctionError,
+> {
+    era.prepare_unary_function_symbol(key)
+}
+
+/// FENCE (copied read; peer #1482 condition 3 audit): the retained
+/// registry's published-table shape and statistics for the re-homed
+/// execution fixtures. Only Copy scalars cross; the registry, the sidecar,
+/// the publication view and the backing table stay internal. The stats
+/// snapshot keeps its historical expect point and message.
+pub fn registry_publication_facts_for_test<'heap, K: crate::tagged::gc::EraKeeper>(
+    era: &crate::tagged::gc::ParallelHeapEra<'heap, K>,
+) -> (
+    crate::tagged::gc::symbol_table::SymbolSlotCount,
+    crate::tagged::gc::symbol_table::SymbolChunkCount,
+    crate::tagged::gc::symbol_table::SymbolChunkSlots,
+    crate::tagged::gc::symbol_table::publication::TableStatistics,
+) {
+    let registry = era.core.registry();
+    let tables = &registry.symbols.tables;
+    let view = tables.view();
+    let table = view.table();
+    (
+        table.slots(),
+        table.chunk_count(),
+        table.chunk_slots(),
+        tables
+            .stats()
+            .expect("publication initial table statistics"),
+    )
+}
+
+/// FENCE (copied read): the registry-side address word of the published
+/// table's first chunk, captured by the fixture at prepare time. No chunk,
+/// pointer descriptor or table crosses; `None` means no first chunk.
+pub fn registry_first_chunk_word_for_test<'heap, K: crate::tagged::gc::EraKeeper>(
+    era: &crate::tagged::gc::ParallelHeapEra<'heap, K>,
+) -> Option<usize> {
+    let registry = era.core.registry();
+    registry
+        .symbols
+        .tables
+        .view()
+        .table()
+        .chunk(0.into())
+        .map(|chunk| chunk.as_ptr().addr())
+}
+
+/// FENCE (copied read): the activation-side address word of the published
+/// table's first chunk, for the consumer's identity-retained assertion. The
+/// private chunk-address type and the view never cross; only the word does.
+pub fn table_first_chunk_word_for_test(
+    activation: &crate::tagged::gc::mutator_registration::ExecutionActivation<'_, '_, '_>,
+) -> Option<usize> {
+    let view = activation.table_view();
+    let table = view.table();
+    table.chunk(0.into()).map(|chunk| chunk.as_ptr().addr())
+}
+
 /// Counter reset for the A8 driver (peer MEMQ-TAIL-SHAPES (5)): a write, so
 /// an unsafe fence.
 ///
