@@ -121,9 +121,12 @@ pub(crate) struct WorldLease(Arc<World>);
 static_assertions::assert_not_impl_any!(WorldLease: Send, Sync, Clone);
 static_assertions::assert_eq_size!(WorldLease, Arc<World>);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Context {
     /// Observe allocation lifetime without extending it or exposing World data.
+    /// Widening-hub read view (#1871): the re-homed tests hold the probe and
+    /// ask whether the World is still alive; the World and lease stay private.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
     pub(crate) fn world_lifetime_probe_for_test(&self) -> impl Fn() -> bool + use<> {
         let world = Arc::downgrade(&self.obarray.lease.0);
         move || world.upgrade().is_some()

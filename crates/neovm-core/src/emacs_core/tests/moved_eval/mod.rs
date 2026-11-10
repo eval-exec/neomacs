@@ -640,3 +640,7 @@ mod emacs_core_runtime_jit_bg_tests_osr_install_frames_test_rs;
 #[cfg(all(test, feature = "jit", target_os = "linux", target_arch = "x86_64"))]
 #[path = "emacs_core/runtime/jit/bg/tests/soak_stress_test.rs"]
 mod emacs_core_runtime_jit_bg_tests_soak_stress_test_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/hub_read_surface_test.rs"]
+mod emacs_core_runtime_eval_tests_hub_read_surface_test_rs;

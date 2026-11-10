@@ -679,6 +679,62 @@ impl Context {
         self.jit_stack_limit
     }
 
+    /// Copied GC-driver activity flag (widening-hub read view; the write
+    /// path stays `test_support::authority::set_gc_driver_active_for_test`).
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
+    pub fn gc_driver_active_for_test(&self) -> bool {
+        self.gc_driver_active
+    }
+
+    /// The JIT root stack, observed as a slice (widening-hub read view; the
+    /// field stays pub(crate)).
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
+    pub fn jit_root_stack_for_test(&self) -> &[Value] {
+        &self.jit_root_stack
+    }
+
+    /// The eval temp-root stack, observed as a slice (widening-hub read
+    /// view; the field is private in every arm).
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
+    pub fn eval_temp_roots_for_test(&self) -> &[Value] {
+        &self.eval_temp_roots
+    }
+
+    /// Whether the default owner slot for `projection` holds no value
+    /// (widening-hub observed read; the owner slot, slab and channel enums
+    /// stay crate-private).
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
+    pub fn owner_slot_value_is_none_for_test(
+        &self,
+        projection: &neovm_value::forward::ThreadProjectionDescriptor,
+    ) -> bool {
+        self.owner
+            .slab()
+            .and_then(|slab| {
+                slab.slot(projection.index(), super::owner_bindings::Channel::Default)
+                    .value()
+            })
+            .is_none()
+    }
+
+    /// Whether this Context runs Green threading (widening-hub observed
+    /// read; LEAD #1877(2) keeps `ThreadingMode` private, so this names the
+    /// one observation the moved tests need instead of the enum).
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
+    pub fn threading_mode_is_green_for_test(&self) -> bool {
+        self.threading_mode() == super::admission::ThreadingMode::Green
+    }
+
     /// Typed GC-root push for a Rust-local fixture the collector cannot see.
     /// Roots are owner-thread state, so this never yields the root table.
     ///

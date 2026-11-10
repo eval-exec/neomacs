@@ -138,7 +138,9 @@ impl Context {
 
     /// Derive private group membership from the same const-generic guards
     /// that select the actual park walk, without maintaining another list.
-    #[cfg(test)]
+    /// Widening-hub read view (#1871): the re-homed parked-root tests read
+    /// the names; the tracer itself stays crate-private.
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn private_root_group_names(&self) -> Vec<&'static str> {
         let mut names = Vec::new();
