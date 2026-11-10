@@ -9,60 +9,53 @@ use super::*;
 
 /// A consistent no-worker SATB scope for native/Lisp store probes. Automatic
 /// collection must remain inhibited; the probe must not force an explicit GC.
-/// The Context loan and thread marker keep restoration on the installing owner.
+/// The heap pointer and thread marker keep restoration on the installing owner.
 ///
-/// Test-only: its whole purpose is to lend the upper evaluator's `Context`, so
-/// it cannot exist in a `test-support` dependency build of this crate.
-#[cfg(test)]
+/// The evaluator `Context` stays with the caller. This crate cannot name it, so
+/// [`Self::enter`] takes the heap pointer and the inhibit depth the caller read
+/// from that context. The public route is the authority fence.
 #[doc(hidden)]
-pub struct SyntheticConcurrentBarrier<'a> {
-    context: &'a mut crate::emacs_core::eval::Context,
+pub(crate) struct SyntheticConcurrentBarrier {
+    heap: *mut TaggedHeap,
     _thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
-#[cfg(test)]
-static_assertions::assert_not_impl_any!(SyntheticConcurrentBarrier<'static>: Send, Sync);
+static_assertions::assert_not_impl_any!(SyntheticConcurrentBarrier: Send, Sync);
 
-#[cfg(test)]
-impl<'a> SyntheticConcurrentBarrier<'a> {
-    pub(crate) fn enter(context: &'a mut crate::emacs_core::eval::Context) -> Self {
+impl SyntheticConcurrentBarrier {
+    /// # Safety
+    /// `heap` stays valid until this guard drops. No concurrent marker has been
+    /// launched on it and none can run during the guard's life. The caller may
+    /// mutably use that heap while the guard is alive; this pointer is touched
+    /// only here and in [`Drop`].
+    pub(crate) unsafe fn enter(heap: *mut TaggedHeap, gc_inhibit_depth: usize) -> Self {
         assert!(
-            context.gc_inhibit_depth > 0,
+            gc_inhibit_depth > 0,
             "synthetic barriers require GC inhibition"
         );
-        assert_eq!(context.tagged_heap.mark_phase(), MarkPhase::Idle);
-        let guard = Self {
-            context,
-            _thread: std::marker::PhantomData,
-        };
-        guard.context.tagged_heap.mark_in_progress = true;
+        // SAFETY: the caller upholds the pointer contract above.
+        let heap_ref = unsafe { &mut *heap };
+        assert_eq!(heap_ref.mark_phase(), MarkPhase::Idle);
+        heap_ref.mark_in_progress = true;
         // SAFETY: serial test heap; no concurrent marker has been launched and
         // none can run during the call.
-        unsafe {
-            guard
-                .context
-                .tagged_heap
-                .set_concurrent_active_for_test(true)
-        };
-        guard
-    }
-
-    pub(crate) fn context(&mut self) -> &mut crate::emacs_core::eval::Context {
-        self.context
+        unsafe { heap_ref.set_concurrent_active_for_test(true) };
+        Self {
+            heap,
+            _thread: std::marker::PhantomData,
+        }
     }
 }
 
-#[cfg(test)]
-impl Drop for SyntheticConcurrentBarrier<'_> {
+impl Drop for SyntheticConcurrentBarrier {
     fn drop(&mut self) {
         // SAFETY: serial test heap; no concurrent marker has been launched and
-        // none can run during the call.
+        // none can run during the call. `heap` stays valid until drop.
         unsafe {
-            self.context
-                .tagged_heap
-                .set_concurrent_active_for_test(false)
-        };
-        self.context.tagged_heap.mark_in_progress = false;
+            let heap = &mut *self.heap;
+            heap.set_concurrent_active_for_test(false);
+            heap.mark_in_progress = false;
+        }
     }
 }
 

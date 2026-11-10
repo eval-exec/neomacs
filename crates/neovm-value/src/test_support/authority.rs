@@ -1540,6 +1540,32 @@ pub fn run_ownership_upper_test_for_test(
     crate::tagged::gc::run_ownership_upper_test(name, clear_string, leaked_subr);
 }
 
+/// FENCE: synthetic concurrent-mark scope for a serial fixture. The guard used
+/// to lend an evaluator `Context`, which this crate cannot name. The caller
+/// passes the heap pointer and the inhibit depth it already read; the closure
+/// runs while the SATB barrier is armed, and drop clears it, including on
+/// panic. The original flag sequence stays in the value guard.
+///
+/// # Safety
+/// `heap` must stay live for this call and name the heap whose inhibit depth
+/// was passed. No concurrent marker has been launched on it and none can run
+/// during the call. The closure may mutably use that heap; the pointer stays
+/// dormant until the guard drops. Disarming the barrier (`on = false`) on a
+/// live marker would miss stores and free reachable objects.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub unsafe fn with_synthetic_concurrent_barrier_for_test(
+    heap: *mut crate::tagged::gc::TaggedHeap,
+    gc_inhibit_depth: usize,
+    body: impl FnOnce(),
+) {
+    // SAFETY: the caller upholds the serial-fixture contract above.
+    let _guard = unsafe {
+        crate::tagged::gc::test_heap::SyntheticConcurrentBarrier::enter(heap, gc_inhibit_depth)
+    };
+    body();
+}
+
 /// FENCE: process collection-read configuration. The original stays
 /// `pub(crate)`. This is the only public path; it writes the process gate.
 #[cfg(any(test, feature = "test-support"))]
