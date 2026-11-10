@@ -5,7 +5,7 @@
 //! the one descriptor eval publishes at `Context::new_inner` /
 //! `Context::from_dump`.
 
-use crate::emacs_core::eval::input_hooks::InputHooks;
+use crate::emacs_core::eval::input_hooks::{InputHooks, SignalWakeSource};
 use crate::emacs_core::keyboard::CommandLoopHost;
 
 fn interrupt_for_input_event_if_requested(
@@ -29,12 +29,32 @@ fn drain_pending_os_signals(
     crate::emacs_core::os_signal::drain_pending_os_signals(ctx).map(|_| ())
 }
 
-fn signal_wake_pipe_read_fd() -> Option<i32> {
+/// POSIX self-pipe read end. GNU w32 has no such pipe.
+#[cfg(unix)]
+fn unix_signal_wake_read_fd() -> Option<i32> {
     crate::emacs_core::os_signal::install().self_pipe_read_fd()
 }
 
-fn drain_signal_wake_pipe(fd: i32) {
+/// Drain the POSIX self-pipe. GNU w32 wakes `MsgWaitForMultipleObjects` instead.
+#[cfg(unix)]
+fn unix_signal_wake_drain(fd: i32) {
     crate::emacs_core::os_signal::drain_wake_pipe(fd)
+}
+
+const fn canonical_signal_wake() -> SignalWakeSource {
+    #[cfg(unix)]
+    {
+        SignalWakeSource::SelfPipe {
+            read_fd: unix_signal_wake_read_fd,
+            drain: unix_signal_wake_drain,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // Explicitly absent. `w32xfns.c` `input_available` is a manual-reset
+        // event, not a descriptor this poller owns.
+        SignalWakeSource::Absent
+    }
 }
 
 static CANONICAL_INPUT_HOOKS: InputHooks = InputHooks::new(
@@ -42,8 +62,7 @@ static CANONICAL_INPUT_HOOKS: InputHooks = InputHooks::new(
     os_signal_pending,
     take_termination_signal,
     drain_pending_os_signals,
-    signal_wake_pipe_read_fd,
-    drain_signal_wake_pipe,
+    canonical_signal_wake(),
 );
 
 /// The one canonical input-wait descriptor (published only by the one core

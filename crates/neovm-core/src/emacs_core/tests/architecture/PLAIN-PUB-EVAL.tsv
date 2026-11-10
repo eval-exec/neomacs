@@ -2463,6 +2463,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/hooks_proof.rs	struct	struct Timer
 crates/neovm-eval/src/emacs_core/runtime/eval/hooks_proof.rs	struct	struct WaitServiceHooks
 crates/neovm-eval/src/emacs_core/runtime/eval/hooks_proof.rs	type	type SqliteFinalizerInstaller
 crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	enum	enum CommandInputWaitOutcome
+crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	enum	enum SignalWakeSource
 crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	fn	fn drain_pending_os_signals
 crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	fn	fn drain_signal_wake_pipe
 crates/neovm-eval/src/emacs_core/runtime/eval/input_hooks.rs	fn	fn impl InputHooks::new

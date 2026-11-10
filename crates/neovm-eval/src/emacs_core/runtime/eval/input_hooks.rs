@@ -37,15 +37,33 @@ pub type SignalWakePipeReadFd = fn() -> Option<i32>;
 /// Drain one wake byte from the signal self-pipe.
 pub type DrainSignalWakePipe = fn(i32);
 
-/// The six cold input-wait/OS-signal bodies eval calls.
+/// How an OS signal wakes an evaluator wait.
+///
+/// GNU's POSIX port writes a self-pipe so `pselect` returns. The w32 port
+/// does not: `sys_select` waits in `MsgWaitForMultipleObjects`
+/// (`w32inevt.c`), and GUI input sets the manual-reset event
+/// `input_available` (`w32xfns.c` `notify_msg_ready`). That event is not
+/// this poller's descriptor, so Windows publishes [`SignalWakeSource::Absent`].
+/// The slot is present on every platform.
+#[derive(Clone, Copy)]
+pub enum SignalWakeSource {
+    /// Process-lifetime nonblocking self-pipe.
+    SelfPipe {
+        read_fd: SignalWakePipeReadFd,
+        drain: DrainSignalWakePipe,
+    },
+    /// No POSIX self-pipe. GNU w32 wakes `MsgWaitForMultipleObjects` instead.
+    Absent,
+}
+
+/// The cold input-wait/OS-signal bodies eval calls.
 #[derive(Clone, Copy)]
 pub struct InputHooks {
     interrupt_for_input_event_if_requested: InterruptForInputEvent,
     os_signal_pending: OsSignalPending,
     take_termination_signal: TakeTerminationSignal,
     drain_pending_os_signals: DrainPendingOsSignals,
-    signal_wake_pipe_read_fd: SignalWakePipeReadFd,
-    drain_signal_wake_pipe: DrainSignalWakePipe,
+    signal_wake: SignalWakeSource,
 }
 
 impl InputHooks {
@@ -55,16 +73,14 @@ impl InputHooks {
         os_signal_pending: OsSignalPending,
         take_termination_signal: TakeTerminationSignal,
         drain_pending_os_signals: DrainPendingOsSignals,
-        signal_wake_pipe_read_fd: SignalWakePipeReadFd,
-        drain_signal_wake_pipe: DrainSignalWakePipe,
+        signal_wake: SignalWakeSource,
     ) -> Self {
         Self {
             interrupt_for_input_event_if_requested,
             os_signal_pending,
             take_termination_signal,
             drain_pending_os_signals,
-            signal_wake_pipe_read_fd,
-            drain_signal_wake_pipe,
+            signal_wake,
         }
     }
 }
@@ -121,12 +137,18 @@ pub fn drain_pending_os_signals(ctx: &mut Context) -> Result<(), Flow> {
     (input_hooks().drain_pending_os_signals)(ctx)
 }
 
-/// The process-lifetime signal self-pipe read end for evaluator wait pollers.
+/// The process-lifetime signal self-pipe read end, or `None` when the
+/// installed source is not a self-pipe.
 pub fn signal_wake_pipe_read_fd() -> Option<i32> {
-    (input_hooks().signal_wake_pipe_read_fd)()
+    match input_hooks().signal_wake {
+        SignalWakeSource::SelfPipe { read_fd, .. } => read_fd(),
+        SignalWakeSource::Absent => None,
+    }
 }
 
-/// Drain one wake byte from the signal self-pipe.
+/// Drain one wake byte from the signal self-pipe. An absent source has no byte.
 pub fn drain_signal_wake_pipe(fd: i32) {
-    (input_hooks().drain_signal_wake_pipe)(fd)
+    if let SignalWakeSource::SelfPipe { drain, .. } = input_hooks().signal_wake {
+        drain(fd);
+    }
 }

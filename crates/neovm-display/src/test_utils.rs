@@ -317,7 +317,7 @@ mod unit_runtime {
         DisplayServiceHooks, EvalHookSet, EvalHooksInstalled, FileNotifyHostQueries,
         FrontendServiceHooks, TimerServiceHooks, WaitServiceHooks,
     };
-    use neovm_eval::emacs_core::eval::input_hooks::InputHooks;
+    use neovm_eval::emacs_core::eval::input_hooks::{InputHooks, SignalWakeSource};
     use neovm_eval::emacs_core::eval::kmacro_hooks::KmacroHooks;
     use neovm_eval::emacs_core::eval::lifecycle::{
         BootHooks, CommandSeamHooks, DbusbindHooks, DynamicModuleHooks, FileIoHooks, FontsetHooks,
@@ -1277,8 +1277,10 @@ mod unit_runtime {
         s::input_os_signal_pending,
         s::input_take_termination_signal,
         s::input_drain_pending_os_signals,
-        s::input_signal_wake_pipe_read_fd,
-        s::input_drain_signal_wake_pipe,
+        SignalWakeSource::SelfPipe {
+            read_fd: s::input_signal_wake_pipe_read_fd,
+            drain: s::input_drain_signal_wake_pipe,
+        },
     );
 
     static CALL_INTERACTIVELY: CallInteractivelyHooks =
