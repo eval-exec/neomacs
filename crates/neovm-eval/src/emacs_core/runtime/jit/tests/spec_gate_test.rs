@@ -15,6 +15,18 @@ use neovm_value::value::LambdaParams;
 /// A lexical bytecode function of NARGS required arguments, rooted for the
 /// test's lifetime, hot (tiered up at its first call) when HOT.
 fn lambda(nargs: usize, hot: bool, ops: Vec<Op>, constants: Vec<Value>) -> Value {
+    lambda_stack(nargs, hot, 16, ops, constants)
+}
+
+/// [`lambda`] with an explicit declared `max_stack`. The bytecode-stack
+/// charge is that depth, so two copies of one body can disagree on cost.
+fn lambda_stack(
+    nargs: usize,
+    hot: bool,
+    max_stack: usize,
+    ops: Vec<Op>,
+    constants: Vec<Value>,
+) -> Value {
     let mut f = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
         required: (1..=nargs)
@@ -26,7 +38,7 @@ fn lambda(nargs: usize, hot: bool, ops: Vec<Op>, constants: Vec<Value>) -> Value
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(max_stack);
     f.seal_hand_assembled_ops();
     if hot {
         f.jit_runtime().set_hot_for_test();
@@ -603,4 +615,333 @@ fn debug_on_next_call_set_by_compiled_code_enters_the_debugger_at_the_next_spec_
         "(((lambda) (exit 3)) nil)"
     );
     assert!(!ev.debug_on_next_call_is_armed());
+}
+
+/// Direct calls and inlining bypass the spec shim. These rows are about
+/// that shim, so both stay off for the test and the previous knobs return
+/// when the guard drops.
+struct SpecShimPolicy {
+    direct: bool,
+    inline_on: bool,
+    profit: bool,
+    slow: bool,
+}
+
+impl SpecShimPolicy {
+    fn enter(slow: bool) -> Self {
+        let prior = Self {
+            direct: jit_direct_call_on(),
+            inline_on: crate::emacs_core::jit::inline::jit_inline_on(),
+            profit: jit_profit_gate_on(),
+            slow: jit_force_slow_spec(),
+        };
+        force_direct_call_for_test(Some(false));
+        crate::emacs_core::jit::inline::force_inline_for_test(Some(false));
+        force_profit_gate_for_test(false);
+        force_slow_spec_for_test(Some(slow));
+        prior
+    }
+}
+
+impl Drop for SpecShimPolicy {
+    fn drop(&mut self) {
+        force_direct_call_for_test(Some(self.direct));
+        crate::emacs_core::jit::inline::force_inline_for_test(Some(self.inline_on));
+        force_profit_gate_for_test(self.profit);
+        force_slow_spec_for_test(Some(self.slow));
+    }
+}
+
+fn declared_frame_bytes(fun: Value) -> usize {
+    crate::emacs_core::bytecode::vm::bytecode_frame_bytes(
+        fun.get_bytecode_data().expect("bytecode").max_stack.get(),
+    )
+}
+
+/// Park the bytecode-stack position so `caller`'s own frame still fits and
+/// `callee`'s frame does not. One less than this value lets the callee fit:
+/// GNU's compare is `position > limit` (src/bytecode.c:514-515).
+fn position_rejecting_callee(caller: Value, callee: Value) -> usize {
+    let limit = crate::emacs_core::bytecode::vm::BC_STACK_POSITION_LIMIT;
+    let caller_bytes = declared_frame_bytes(caller);
+    let callee_bytes = declared_frame_bytes(callee);
+    let cost = caller_bytes + callee_bytes;
+    assert!(callee_bytes >= 1 && cost <= limit);
+    let parked = limit - cost + 1;
+    let after_caller = crate::emacs_core::bytecode::vm::charge_frame_of_bytes(parked, caller_bytes)
+        .expect("the caller frame fits at the parked position");
+    assert!(
+        crate::emacs_core::bytecode::vm::charge_frame_of_bytes(after_caller, callee_bytes)
+            .is_none(),
+        "the callee frame must not fit"
+    );
+    parked
+}
+
+fn signal_text(flow: &neovm_value::error::Flow) -> String {
+    let Some(sig) = flow.as_signal() else {
+        return format!("not-a-signal {flow:?}");
+    };
+    let data = sig
+        .data
+        .iter()
+        .map(crate::emacs_core::print::print_value)
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("({} {data})", sig.symbol_name())
+}
+
+fn id_body(nargs: usize) -> Vec<Op> {
+    vec![
+        Op::StackRef(nargs as u16 - 1),
+        Op::GotoIfNil(4),
+        Op::StackRef(0),
+        Op::Return,
+        Op::StackRef(0),
+        Op::Return,
+    ]
+}
+
+/// `(lambda (x) (NAME x))`, hot, so the call site arms the spec shim.
+fn calling(name: &str, max_stack: usize) -> Value {
+    lambda_stack(
+        1,
+        true,
+        max_stack,
+        vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return],
+        vec![Value::symbol(name)],
+    )
+}
+
+fn bind_prepared(ev: &mut Context, name: &str, target: Value, caller: Value) {
+    ev.obarray
+        .set_symbol_function_id(neovm_value::intern::intern(name), target);
+    crate::emacs_core::jit::test_support::prepare_entry(
+        ev,
+        target.get_bytecode_data().expect("callee bytecode"),
+    );
+    crate::emacs_core::jit::test_support::prepare_entry(
+        ev,
+        caller.get_bytecode_data().expect("caller bytecode"),
+    );
+}
+
+const OVERFLOW: &str = "(error \"Bytecode stack overflow\")";
+
+/// LATENT. Expiry: the eval-batch landing. The `neovm-eval` lib-test harness
+/// does not compile at `7a7d474cd8`, so this row does not execute on the
+/// landing SHA; it runs on the `ea12cc96` scratch. The GNU-observable half is
+/// `oracle_eieio_redefined_max_stack_refuses_at_the_new_size`.
+///
+/// (a) A callee redefined to a larger `max_stack` refuses the next call at
+/// the new size. The parked position still accepts the old frame, so a stale
+/// stamp would let the call return.
+#[test]
+fn redefined_max_stack_refuses_at_the_new_size() {
+    crate::test_utils::init_test_tracing();
+    let _policy = SpecShimPolicy::enter(false);
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    let name = "neo-eieio-redef";
+    let small = lambda_stack(1, false, 2, id_body(1), vec![]);
+    let large = lambda_stack(1, false, 48, id_body(1), vec![]);
+    let caller = calling(name, 4);
+    bind_prepared(&mut ev, name, small, caller);
+    crate::emacs_core::jit::test_support::prepare_entry(
+        &mut ev,
+        large.get_bytecode_data().expect("large bytecode"),
+    );
+    let arg = Value::make_int(7);
+    let before = shim_fast();
+    for _ in 0..4 {
+        assert_eq!(ev.funcall_general_untraced(caller, vec![arg]).unwrap(), arg);
+    }
+    assert!(
+        shim_fast() >= before + 3,
+        "the small callee armed the spec shim"
+    );
+    let parked = position_rejecting_callee(caller, large);
+    let after_caller = crate::emacs_core::bytecode::vm::charge_frame_of_bytes(
+        parked,
+        declared_frame_bytes(caller),
+    )
+    .unwrap();
+    assert!(
+        crate::emacs_core::bytecode::vm::charge_frame_of_bytes(
+            after_caller,
+            declared_frame_bytes(small),
+        )
+        .is_some(),
+        "the old frame still fits where the new one does not"
+    );
+    ev.bytecode_stack_position = parked;
+    assert_eq!(
+        ev.funcall_general_untraced(caller, vec![arg]).unwrap(),
+        arg,
+        "the armed old stamp accepts this position"
+    );
+    ev.obarray
+        .set_symbol_function_id(neovm_value::intern::intern(name), large);
+    ev.bytecode_stack_position = parked;
+    let refused = ev
+        .funcall_general_untraced(caller, vec![arg])
+        .expect_err("the new max_stack does not fit");
+    assert_eq!(signal_text(&refused), OVERFLOW);
+    assert_eq!(
+        ev.bytecode_stack_position, parked,
+        "the refused frame restored the caller's position"
+    );
+    ev.bytecode_stack_position = 0;
+    assert_eq!(
+        ev.funcall_general_untraced(caller, vec![arg]).unwrap(),
+        arg,
+        "the redefined callee runs when its new frame fits"
+    );
+}
+
+/// LATENT. Expiry: the eval-batch landing. Needs `bytecode_stack_position`
+/// and the fast-path census, which Lisp cannot see. The GNU-observable half
+/// is `oracle_eieio_armed_byte_limit_refuses_with_gnu_overflow_data`.
+///
+/// (b) An armed shim whose stamped frame does not fit declines before the
+/// fast-path census and the slow half raises GNU's bytecode-stack error
+/// (src/bytecode.c:514-515). One byte under that position still takes the
+/// fast path.
+#[test]
+fn armed_shim_byte_limit_refuses_with_gnu_overflow_data() {
+    crate::test_utils::init_test_tracing();
+    let _policy = SpecShimPolicy::enter(false);
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    let name = "neo-eieio-limit";
+    let target = callee(1);
+    let caller = calling(name, 4);
+    bind_prepared(&mut ev, name, target, caller);
+    let arg = Value::make_int(7);
+    let before = shim_fast();
+    for _ in 0..4 {
+        assert_eq!(ev.funcall_general_untraced(caller, vec![arg]).unwrap(), arg);
+    }
+    assert!(shim_fast() >= before + 3, "the shim is armed");
+    let rejecting = position_rejecting_callee(caller, target);
+    ev.bytecode_stack_position = rejecting - 1;
+    let fitted = shim_fast();
+    assert_eq!(
+        ev.funcall_general_untraced(caller, vec![arg]).unwrap(),
+        arg,
+        "one byte under the limit still runs"
+    );
+    assert!(
+        shim_fast() > fitted,
+        "the fitting call took the armed fast path"
+    );
+    ev.bytecode_stack_position = rejecting;
+    let armed = shim_fast();
+    let refused = ev
+        .funcall_general_untraced(caller, vec![arg])
+        .expect_err("the stamped frame does not fit");
+    assert_eq!(signal_text(&refused), OVERFLOW);
+    assert_eq!(
+        shim_fast(),
+        armed,
+        "a declined charge is not a fast-path run"
+    );
+    assert_eq!(ev.bytecode_stack_position, rejecting);
+    ev.bytecode_stack_position = 0;
+    assert_eq!(ev.funcall_general_untraced(caller, vec![arg]).unwrap(), arg);
+}
+
+/// LATENT. Expiry: the eval-batch landing. Compares the armed spec path with
+/// `force_slow_spec`, which Lisp cannot select. The GNU-observable half is
+/// `oracle_eieio_debug_on_error_backtrace_matches_gnu`.
+///
+/// (c) `debug-on-error` sees the same backtrace on the armed spec shim as on
+/// the slow spec path. Distinct from `debug-on-next-call`, which leaves the
+/// fast path before the call.
+#[test]
+fn debug_on_error_backtrace_matches_the_slow_spec_path() {
+    crate::test_utils::init_test_tracing();
+    let fast = debug_on_error_backtrace(false);
+    let slow = debug_on_error_backtrace(true);
+    assert!(
+        fast.0.contains("neo-eieio-dbg"),
+        "the callee frame is on the armed backtrace: {}",
+        fast.0
+    );
+    assert_eq!(
+        fast.0, slow.0,
+        "debug-on-error backtrace changed on the shim"
+    );
+    assert!(fast.1 >= 1, "the erroring call took the armed fast path");
+    assert_eq!(slow.1, 0, "the slow path never counts a shim fast run");
+}
+
+fn debug_on_error_backtrace(slow: bool) -> (String, u64) {
+    let _policy = SpecShimPolicy::enter(slow);
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    ev.eval_str(
+        "(progn
+           (defvar neo-eieio-arm nil)
+           (defvar neo-eieio-log nil)
+           (setq debugger
+                 (lambda (&rest args)
+                   (let (frames)
+                     (mapbacktrace
+                      (lambda (_evald func args _flags)
+                        (unless (memq func '(mapbacktrace debugger))
+                          (push (list (if (symbolp func) func (type-of func)) args)
+                                frames))))
+                     (setq neo-eieio-log (list args (nreverse frames))))
+                   nil)))",
+    )
+    .unwrap();
+    let name = "neo-eieio-dbg";
+    // Two blocks, so the caller speculates instead of inlining. Nil returns
+    // the argument; non-nil is `(signal 'error '("shim-boom"))`. `signal` is
+    // the subr, so this does not depend on the Lisp `error` definition.
+    let target = lambda(
+        1,
+        false,
+        vec![
+            Op::VarRef(0),
+            Op::GotoIfNil(7),
+            Op::Constant(1),
+            Op::Constant(2),
+            Op::Constant(3),
+            Op::Call(2),
+            Op::Return,
+            Op::StackRef(0),
+            Op::Return,
+        ],
+        vec![
+            Value::symbol("neo-eieio-arm"),
+            Value::symbol("signal"),
+            Value::symbol("error"),
+            Value::cons(Value::string("shim-boom"), Value::NIL),
+        ],
+    );
+    let caller = calling(name, 16);
+    bind_prepared(&mut ev, name, target, caller);
+    let arg = Value::make_int(3);
+    let warmed = shim_fast();
+    for _ in 0..4 {
+        assert_eq!(
+            ev.funcall_general_untraced(caller, vec![arg]).unwrap(),
+            arg,
+            "warmup returns the argument while the flag is nil"
+        );
+    }
+    if slow {
+        assert_eq!(shim_fast(), warmed, "slow spec does not arm the fast path");
+    } else {
+        assert!(shim_fast() >= warmed + 3, "warmup armed the spec shim");
+    }
+    ev.eval_str("(setq neo-eieio-arm t debug-on-error t)")
+        .unwrap();
+    let before = shim_fast();
+    let refused = ev
+        .funcall_general_untraced(caller, vec![arg])
+        .expect_err("the callee signals");
+    assert_eq!(signal_text(&refused), "(error \"shim-boom\")");
+    let delta = shim_fast() - before;
+    let logged = ev.eval_str("neo-eieio-log").unwrap();
+    (crate::emacs_core::print::print_value(&logged), delta)
 }

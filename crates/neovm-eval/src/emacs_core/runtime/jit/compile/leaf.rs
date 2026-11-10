@@ -674,6 +674,13 @@ pub struct CompiledLeaf {
     /// an incoming argument list to exactly this many slots, mirroring the
     /// interpreter's `run_frame` frame seeding.
     pub(crate) arity: usize,
+    /// Bytes one call of this leaf occupies on GNU's bytecode stack:
+    /// `bytecode_frame_bytes` of the function's `max_stack`, stamped when
+    /// the leaf is built from that function. `0` means the leaf was not
+    /// built from a bytecode function; a charge site must not treat that as
+    /// an empty frame. SpecSlot stays 32 bytes; this is not a slot field.
+    /// A redefinition compiles a new leaf, and re-arm stores that pointer.
+    pub(crate) frame_bytes: usize,
     /// Number of required parameters (lower bound of an acceptable call).
     pub(crate) required: usize,
     /// Whether the last native slot is a `&rest` list.
@@ -1123,6 +1130,7 @@ impl CompiledLeaf {
             clif_insts: 0,
             clif_blocks: 0,
             arity: meta.arity,
+            frame_bytes: 0,
             required: meta.required,
             has_rest: meta.has_rest,
             has_binds: meta.has_binds,

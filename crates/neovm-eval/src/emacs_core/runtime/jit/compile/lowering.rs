@@ -3265,6 +3265,7 @@ pub(super) fn lower_mir_with_plan(
         clif_insts: super::clif_size_now().0,
         clif_blocks: super::clif_size_now().1,
         arity: m.arity,
+        frame_bytes: 0,
         required: m.arity,
         has_rest: false,
         has_binds: false,

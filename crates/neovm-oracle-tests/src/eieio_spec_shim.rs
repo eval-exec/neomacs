@@ -18,7 +18,7 @@
 //! it does not repeat the positional compare or the `lisp_eval_depth`
 //! increment at the splice. Rows (a) and (b) are that refusal. The
 //! positional case and the nesting case are the next member, not rows of
-//! this commit.
+//! this commit. Row (c) is the `debug-on-error` backtrace of a warmed call.
 
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
@@ -57,5 +57,35 @@ fn oracle_eieio_armed_byte_limit_refuses_with_gnu_overflow_data() {
   (list (funcall fit 4)
         (condition-case err (neo-eieio-limit-call 4) (error err))))"#;
     let expect = expect_test::expect![[r#""OK (4 (error \"Bytecode stack overflow\"))""#]];
+    crate::common::assert_oracle_parity_with_env_expect(form, JIT_ENV, expect);
+}
+
+/// (c) `debug-on-error` on a warmed compiled call records the callee and
+/// caller symbols with the call's argument. `condition-case-unless-debug`
+/// is what lets the debugger run inside the harness's own `error` handler.
+#[test]
+fn oracle_eieio_debug_on_error_backtrace_matches_gnu() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"(progn
+  (defalias 'neo-eieio-dbg
+    (byte-compile (lambda (x) (if x (signal 'error (list "shim-boom")) x))))
+  (defalias 'neo-eieio-caller (byte-compile (lambda (x) (neo-eieio-dbg x))))
+  (dotimes (_ 4) (neo-eieio-caller nil))
+  (setq debug-on-error t)
+  (setq debugger
+        (lambda (&rest args)
+          (let (fs)
+            (mapbacktrace
+             (lambda (_evald f a _flags)
+               (when (memq f '(neo-eieio-dbg neo-eieio-caller))
+                 (push (list f a) fs))))
+            (throw 'neo-eieio-got (list args (nreverse fs))))))
+  (catch 'neo-eieio-got
+    (condition-case-unless-debug err
+        (neo-eieio-caller t)
+      (error (list :caught err)))))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((error (error \"shim-boom\")) ((neo-eieio-dbg (t)) (neo-eieio-caller (t))))""#
+    ]];
     crate::common::assert_oracle_parity_with_env_expect(form, JIT_ENV, expect);
 }

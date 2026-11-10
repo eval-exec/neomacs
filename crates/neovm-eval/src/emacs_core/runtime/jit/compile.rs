@@ -980,6 +980,10 @@ pub fn compile_bytecode_function_requested(
     let mir_verdict = super::stats::verdict::take();
     if let Ok(leaf) = &mut result {
         leaf.obs.mir_verdict = mir_verdict.clone();
+        // The live function's declared depth, not the JIT operand-stack
+        // depth. Re-arm of a redefined callee compiles a new leaf, so this
+        // stamp is the size the next call charges.
+        leaf.frame_bytes = crate::emacs_core::bytecode::vm::bytecode_frame_bytes(f.max_stack.get());
     }
     if jit_profile_path().is_some() {
         let _phase = super::stats::enter_phase(super::stats::CompilePhase::Other);
@@ -4056,6 +4060,7 @@ fn lower_leaf_body_with_plan(
         clif_insts: clif_size_now().0,
         clif_blocks: clif_size_now().1,
         arity,
+        frame_bytes: 0,
         // Plain fixed-arity defaults; compile_bytecode_function overrides for
         // &optional/&rest lambda lists.
         required: arity,

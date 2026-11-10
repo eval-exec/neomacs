@@ -1560,14 +1560,31 @@ macro_rules! spec_call_body {
             // error); a stub is never armed but resolves on the slow half.
             // Counting a fast-path run only after the charge keeps a budget
             // decline out of the engagement/call census.
-            let Some(bc) = callee.bytecode_data_if_materialized() else {
-                return call_spec_slow(
-                    $ctx, $sym_bits, $expected, slot_ref, $args_ptr, $nargs, $out,
-                );
-            };
-            let Some(saved_budget) =
+            // A stamped leaf already holds bytecode_frame_bytes(max_stack).
+            // The unstamped sentinel (0) keeps today's materialize-and-charge
+            // path, including the stub refusal. An armed cache leaf is stamped
+            // at compile and again when an AOT leaf is inserted.
+            let saved_budget = if leaf.frame_bytes != 0 {
+                #[cfg(debug_assertions)]
+                if let Some(bc) = callee.bytecode_data_if_materialized() {
+                    debug_assert_eq!(
+                        leaf.frame_bytes,
+                        crate::emacs_core::bytecode::vm::bytecode_frame_bytes(bc.max_stack.get())
+                    );
+                }
+                crate::emacs_core::bytecode::vm::charge_bytecode_frame_bytes(
+                    ctx_ref,
+                    leaf.frame_bytes,
+                )
+            } else {
+                let Some(bc) = callee.bytecode_data_if_materialized() else {
+                    return call_spec_slow(
+                        $ctx, $sym_bits, $expected, slot_ref, $args_ptr, $nargs, $out,
+                    );
+                };
                 crate::emacs_core::bytecode::vm::charge_bytecode_frame(ctx_ref, bc.max_stack.get())
-            else {
+            };
+            let Some(saved_budget) = saved_budget else {
                 return call_spec_slow(
                     $ctx, $sym_bits, $expected, slot_ref, $args_ptr, $nargs, $out,
                 );

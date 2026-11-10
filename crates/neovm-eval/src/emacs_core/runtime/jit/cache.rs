@@ -2978,6 +2978,8 @@ pub unsafe fn try_run_compiled(
                 {
                     // AOT leaves never inline → no inline deps to register. Their
                     // reloc consts are rooted via the COMPILED walk (R1c-8).
+                    leaf.frame_bytes =
+                        crate::emacs_core::bytecode::vm::bytecode_frame_bytes(func.max_stack.get());
                     leaf.obs.id = id;
                     super::aot::retier::prepare(&mut leaf, func.jit_runtime());
                     stats::record_aot_load(func.executable_ops().len());
@@ -3292,6 +3294,26 @@ pub(crate) fn current_leaf_of(obs: &super::compile::LeafObs) -> Option<Rc<Compil
     })
 }
 
+/// The callee leaf's cached frame size when it was stamped from this
+/// function, otherwise the live `max_stack`. A stamped size is what
+/// [`bytecode_frame_bytes`] produced at compile; `0` is the unstamped
+/// sentinel and must not charge an empty frame. Release hot paths of
+/// cache-built leaves take the cached arm (one load, no max_stack walk).
+#[inline(always)]
+fn cached_frame_bytes(leaf: &CompiledLeaf, func: &ByteCodeFunction) -> usize {
+    match leaf.frame_bytes {
+        0 => crate::emacs_core::bytecode::vm::bytecode_frame_bytes(func.max_stack.get()),
+        cached => {
+            debug_assert_eq!(
+                cached,
+                crate::emacs_core::bytecode::vm::bytecode_frame_bytes(func.max_stack.get()),
+                "cached frame_bytes diverged from the live function"
+            );
+            cached
+        }
+    }
+}
+
 /// Run an already-resolved `leaf` (the caller validated arity) with the full
 /// `NativeRun` outcome handling — including precise-deopt resume via
 /// `run_resumed_frame`. Shared by `try_run_compiled` and the V3 fast path so
@@ -3314,7 +3336,10 @@ pub(crate) fn run_resolved_leaf(
     // SAFETY: the seam-provided Context is dormant for this native call.
     let charged = {
         let ctx_ref = unsafe { &mut *ctx };
-        crate::emacs_core::bytecode::vm::charge_bytecode_frame(ctx_ref, func.max_stack.get())
+        crate::emacs_core::bytecode::vm::charge_bytecode_frame_bytes(
+            ctx_ref,
+            cached_frame_bytes(leaf, func),
+        )
     };
     let Some(saved_budget) = charged else {
         return Ok(None);
@@ -3374,7 +3399,10 @@ pub(crate) fn run_resolved_leaf_native(
     // SAFETY: the seam-provided Context is dormant for this native call.
     let charged = {
         let ctx_ref = unsafe { &mut *ctx };
-        crate::emacs_core::bytecode::vm::charge_bytecode_frame(ctx_ref, func.max_stack.get())
+        crate::emacs_core::bytecode::vm::charge_bytecode_frame_bytes(
+            ctx_ref,
+            cached_frame_bytes(leaf, func),
+        )
     };
     let Some(saved_budget) = charged else {
         // Over budget: the interpreter fallback enters through

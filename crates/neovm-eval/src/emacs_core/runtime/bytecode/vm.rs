@@ -2635,6 +2635,23 @@ pub(crate) fn charge_bytecode_frame(
     Some(saved)
 }
 
+/// Charge a frame whose byte cost was already computed by
+/// [`bytecode_frame_bytes`]. The accept/reject result matches
+/// [`charge_bytecode_frame`] when `frame_bytes` is that function of the
+/// same `max_stack`. Stamped spec sites call this. The interpreter
+/// entries keep their d119 bodies and do not: one shared helper made
+/// LLVM merge the overflow check and the limit check.
+#[inline(always)]
+pub(crate) fn charge_bytecode_frame_bytes(
+    ctx: &mut crate::emacs_core::eval::Context,
+    frame_bytes: usize,
+) -> Option<usize> {
+    let saved = ctx.bytecode_stack_position;
+    let position = charge_frame_of_bytes(saved, frame_bytes)?;
+    ctx.bytecode_stack_position = position;
+    Some(saved)
+}
+
 /// GNU `setup_frame`'s one pointer add plus one compare
 /// (src/bytecode.c:509-515), without touching Context: `Some(next)` when the
 /// callee frame fits, `None` when it does not.  The interpreter driver
@@ -2648,6 +2665,49 @@ pub(crate) fn charge_frame_position(caller_position: usize, max_stack: usize) ->
         return None;
     }
     Some(position)
+}
+
+/// Stamped-spec form of [`charge_frame_position`]: the byte cost is
+/// already known. Interpreter sites keep the d119 body above and do
+/// not call this.
+#[inline(always)]
+pub(crate) fn charge_frame_of_bytes(caller_position: usize, frame_bytes: usize) -> Option<usize> {
+    let position = caller_position.checked_add(frame_bytes)?;
+    if position > BC_STACK_POSITION_LIMIT {
+        return None;
+    }
+    Some(position)
+}
+
+#[cfg(test)]
+mod charge_frame_bytes_test {
+    use super::{
+        BC_STACK_POSITION_LIMIT, bytecode_frame_bytes, charge_frame_of_bytes, charge_frame_position,
+    };
+
+    /// A cached byte count must accept and reject the same positions as
+    /// charging `max_stack` directly, including a saturating hostile depth.
+    #[test]
+    fn cached_bytes_match_the_max_stack_charge() {
+        let depths = [0usize, 1, 8, 64, 10_000, usize::MAX / 2, usize::MAX];
+        let positions = [
+            0usize,
+            1,
+            32,
+            BC_STACK_POSITION_LIMIT - 1,
+            BC_STACK_POSITION_LIMIT,
+        ];
+        for max_stack in depths {
+            let bytes = bytecode_frame_bytes(max_stack);
+            for position in positions {
+                assert_eq!(
+                    charge_frame_position(position, max_stack),
+                    charge_frame_of_bytes(position, bytes),
+                    "max_stack {max_stack} position {position}"
+                );
+            }
+        }
+    }
 }
 
 /// Release a charge taken by [`charge_bytecode_frame`]: restore the position
