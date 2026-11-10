@@ -115,6 +115,7 @@ mod dotimes;
 mod dynamic;
 mod eager_expansion_failure_semantics;
 mod eieio_comprehensive;
+mod eieio_spec_shim;
 mod elt_aref_aset_patterns;
 mod emacsorphanage_ov;
 mod encode_decode_coding_advanced;

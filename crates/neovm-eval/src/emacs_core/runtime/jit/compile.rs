@@ -1078,6 +1078,14 @@ fn resolve_inline_callee(ob: &Obarray, sym: Value) -> Option<mir::MirFunction> {
     }
     let binding = ob.symbol_function_id(sym_id)?;
     let bc = binding.get_bytecode_data()?;
+    // GNU setup_frame charges the callee's declared depth before the body
+    // (src/bytecode.c:510-515). A depth that cannot fit at position 0 stays
+    // a real call. A depth that fits here is still spliced: the caller's
+    // frame does not grow by the callee's max_stack, and the splice does
+    // not repeat the positional compare.
+    if !crate::emacs_core::bytecode::vm::declared_frame_fits(bc.max_stack.get()) {
+        return None;
+    }
     // Required-only lexical, and no captured lexenv: inlining drops the lexenv
     // install, which is only otherwise safe because lexenv-reading ops lower to
     // Opaque and `callee_inlinable` rejects them — keep the safety local here too.

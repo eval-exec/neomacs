@@ -2603,6 +2603,16 @@ pub(crate) fn bytecode_frame_bytes(max_stack: usize) -> usize {
     BC_FRAME_HEADER_BYTES.saturating_add(max_stack.saturating_mul(std::mem::size_of::<Value>()))
 }
 
+/// GNU `setup_frame` (src/bytecode.c:510-515) refuses a declared depth that
+/// does not fit the bytecode stack from an empty chain. Inlining that callee
+/// would run its body with no charge. A frame that fits at position 0 can
+/// still overflow once the caller has a position; this predicate does not
+/// see that position.
+#[inline(always)]
+pub(crate) fn declared_frame_fits(max_stack: usize) -> bool {
+    bytecode_frame_bytes(max_stack) <= BC_STACK_POSITION_LIMIT
+}
+
 /// Charge one byte-compiled frame of a callee declaring `max_stack` against
 /// GNU's bytecode stack, held as the absolute POSITION the frame chain has
 /// reached (`Context::bytecode_stack_position`).  GNU's check is one pointer

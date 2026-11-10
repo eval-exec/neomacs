@@ -325,6 +325,12 @@ fn inlinable_verdict(callee: &ByteCodeFunction, nargs: usize) -> Result<(), Stri
     if ops.len() > MAX_INLINE_BODY {
         return Err("size".into());
     }
+    // A declared depth that cannot fit at position 0 must stay a call
+    // (GNU setup_frame, src/bytecode.c:510-515). A fitting depth is still
+    // spliced, with no positional charge at the splice.
+    if !crate::emacs_core::bytecode::vm::declared_frame_fits(callee.max_stack.get()) {
+        return Err("frame".into());
+    }
     // A body that has never run has no feedback to trust.
     if callee.jit_runtime().heat() == 0 {
         return Err("cold".into());

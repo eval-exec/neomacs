@@ -79,6 +79,11 @@ pub(crate) fn census_callee_verdict(f: &ByteCodeFunction, nargs: usize) -> Resul
     if ops.len() > 60 {
         return Err("size".into());
     }
+    // Same rule as the MIR and v1 fusers: a declared depth that cannot fit
+    // at position 0 is a call, not a splice (src/bytecode.c:510-515).
+    if !crate::emacs_core::bytecode::vm::declared_frame_fits(f.max_stack.get()) {
+        return Err("frame".into());
+    }
     for op in ops {
         match op {
             Op::Switch => return Err("switch".into()),
