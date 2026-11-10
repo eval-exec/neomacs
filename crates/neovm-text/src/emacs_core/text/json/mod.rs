@@ -354,30 +354,7 @@ fn serialize_into(
             Ok(())
         }
 
-        ValueKind::String => {
-            let string = value
-                .as_lisp_string()
-                .expect("ValueKind::String must carry LispString payload");
-            let rendered = if string.is_multibyte() {
-                string.as_utf8_str().ok_or_else(|| {
-                    signal(
-                        LispCondition::WrongTypeArgument,
-                        vec![Value::symbol("json-value-p"), *value],
-                    )
-                })?
-            } else {
-                if !string.as_bytes().iter().all(u8::is_ascii) {
-                    return Err(signal(
-                        LispCondition::WrongTypeArgument,
-                        vec![Value::symbol("json-value-p"), *value],
-                    ));
-                }
-                std::str::from_utf8(string.as_bytes())
-                    .expect("ASCII unibyte strings must be valid UTF-8")
-            };
-            json_encode_string_into(out, rendered);
-            Ok(())
-        }
+        ValueKind::String => json_out_lisp_string(out, value),
 
         ValueKind::Veclike(VecLikeType::Vector) => {
             let items = value.as_vector_data().unwrap().clone();
@@ -406,14 +383,15 @@ fn serialize_into(
                     out.push(',');
                 }
                 // GNU does `CHECK_STRING (k)` whatever the table's test is,
-                // then writes the key through `json_out_string`.
+                // then writes the key through `json_out_string`, so the
+                // `:null-object` and `:false-object` sentinels never apply.
                 if !entry.key.is_string() {
                     return Err(signal(
                         LispCondition::WrongTypeArgument,
                         vec![Value::symbol("stringp"), entry.key],
                     ));
                 }
-                serialize_into(out, &entry.key, opts, depth + 1)?;
+                json_out_lisp_string(out, &entry.key)?;
                 out.push(':');
                 serialize_into(out, &entry.value, opts, depth + 1)?;
             }
@@ -440,6 +418,31 @@ fn serialize_into(
             vec![Value::symbol("json-value-p"), *value],
         )),
     }
+}
+
+/// Validate and quote a Lisp string, mirroring GNU `json_out_string`.
+fn json_out_lisp_string(out: &mut String, value: &Value) -> Result<(), Flow> {
+    let string = value
+        .as_lisp_string()
+        .expect("ValueKind::String must carry LispString payload");
+    let rendered = if string.is_multibyte() {
+        string.as_utf8_str().ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("json-value-p"), *value],
+            )
+        })?
+    } else {
+        if !string.as_bytes().iter().all(u8::is_ascii) {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("json-value-p"), *value],
+            ));
+        }
+        std::str::from_utf8(string.as_bytes()).expect("ASCII unibyte strings must be valid UTF-8")
+    };
+    json_encode_string_into(out, rendered);
+    Ok(())
 }
 
 /// Serialize an alist or plist as a JSON object, mirroring GNU
