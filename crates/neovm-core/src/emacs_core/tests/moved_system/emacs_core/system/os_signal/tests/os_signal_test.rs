@@ -742,3 +742,71 @@ fn windows_does_not_advertise_or_install_user_signals() {
     assert_eq!(report.self_pipe_read_fd(), None);
     assert!(!os_signal::pending());
 }
+
+/// P4: our SIGSEGV/SIGBUS actions replace the Rust runtime's stack-overflow
+/// handler, and carry the flags the chain back to it needs.
+///
+/// GNU's `init_signals` runs in `main` after the image is mapped
+/// (`PostImageInit::Signals`, src/emacs.c:1951); the Rust runtime's
+/// `stack_overflow::init` runs before `main` and installs its detector for
+/// SIGSEGV/SIGBUS only when the inherited disposition is SIG_DFL. This port
+/// re-installs over it so an external `kill -SEGV` is no longer swallowed.
+/// The previous action is captured for the genuine-overflow chain, which is
+/// only callable when it carries SA_SIGINFO; SA_ONSTACK keeps a handler in
+/// the overflow case off the exhausted stack.
+///
+/// Process-global state: under nextest each test runs in its own process, so
+/// the "before" query below is the runtime's action, not another test's
+/// install. (The whole module already depends on that isolation for its
+/// termination-latch resets.)
+#[test]
+#[cfg(all(unix, not(target_os = "android")))]
+fn sigsegv_and_sigbus_replace_the_runtime_stack_overflow_handler() {
+    fn action(sig: libc::c_int) -> libc::sigaction {
+        // SAFETY: `action` is written by sigaction before it is read; a null
+        // `act` means "query only".
+        let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { libc::sigaction(sig, std::ptr::null(), &mut action) },
+            0,
+            "could not read signal {sig}'s disposition"
+        );
+        action
+    }
+
+    let before = [action(libc::SIGSEGV), action(libc::SIGBUS)];
+    os_signal::install_termination(false);
+    for (index, sig) in [libc::SIGSEGV, libc::SIGBUS].into_iter().enumerate() {
+        let previous = &before[index];
+        let installed = action(sig);
+        assert_ne!(
+            previous.sa_sigaction,
+            libc::SIG_DFL,
+            "signal {sig}: the runtime installed no stack-overflow handler; \
+             this test cannot tell a replacement from the default"
+        );
+        assert_ne!(
+            installed.sa_sigaction, previous.sa_sigaction,
+            "signal {sig} is still handled by the runtime's stack-overflow \
+             handler: an external kill would be swallowed"
+        );
+        assert_ne!(
+            previous.sa_flags & libc::SA_SIGINFO,
+            0,
+            "signal {sig}: the previous handler is not a SA_SIGINFO handler, \
+             so the genuine-overflow chain cannot call it"
+        );
+        assert_ne!(
+            installed.sa_flags & libc::SA_SIGINFO,
+            0,
+            "signal {sig}'s handler lost SA_SIGINFO; the siginfo classification \
+             and the previous-handler chain both need it"
+        );
+        assert_ne!(
+            installed.sa_flags & libc::SA_ONSTACK,
+            0,
+            "signal {sig}'s handler lost SA_ONSTACK; a stack-overflow fault \
+             cannot run a handler on the exhausted stack"
+        );
+    }
+}

@@ -694,9 +694,355 @@ pub fn install_termination(noninteractive: bool) {
                 }
             }
         }
+        // P4: GNU's fatal faults are installed after Rust std's runtime has
+        // taken SIGSEGV/SIGBUS for its stack-overflow detector; the install
+        // saves std's action so a genuine guard-page hit still chains to it.
+        install_fault_dispositions();
     }
     #[cfg(not(unix))]
     let _ = noninteractive;
+}
+
+// ---------------------------------------------------------------------------
+// GNU fatal faults: SIGSEGV/SIGBUS ownership after Rust std (P4)
+// ---------------------------------------------------------------------------
+//
+// Rust std's rt init installs a SIGSEGV/SIGBUS handler when the inherited
+// disposition is SIG_DFL (library/std/src/sys/pal/unix/stack_overflow.rs).
+// That handler only acts when the fault address lies in the current thread's
+// recorded guard-page range; for anything else it sets SIG_DFL and RETURNS,
+// which re-executes the faulting instruction (death by SIG_DFL) for a real
+// fault and lets a `kill -SEGV`-style synthetic delivery continue as if
+// nothing happened -- the observed swallowed-signal divergence: the parity
+// probes' batch editors stayed alive after either signal. GNU instead runs
+// terminate_due_to_signal for both
+// (src/sysdep.c:1917-1944, handle_sigsegv -> deliver_fatal_thread_signal).
+//
+// This section re-installs our own handler after std's, saving the previous
+// action for the genuine-stack-overflow chain, and classifies the delivery by
+// siginfo's si_code: kernel fault codes are positive (SEGV_MAPERR,
+// SEGV_ACCERR, BUS_*), every synthetic sender uses a non-positive code
+// (SI_USER 0, SI_QUEUE -1, SI_TIMER -2, SI_MESGQ -3, SI_ASYNCIO -4,
+// SI_SIGIO -5, SI_TKILL -6). `si_addr == 0` is NOT the discriminator: a real
+// null-pointer fault has si_addr 0 too, which is why Rust std's zero check
+// treats it as synthetic.
+
+/// GNU's fatal backtrace limit (`terminate_due_to_signal (sig, 40)`,
+/// src/emacs.c:440/464); `emacs_backtrace` caps any limit at 500
+/// (src/sysdep.c:1757).
+#[cfg(unix)]
+const FAULT_BACKTRACE_LIMIT: usize = 40;
+
+#[cfg(unix)]
+static FAULT_BACKTRACE: [std::sync::atomic::AtomicPtr<libc::c_void>; FAULT_BACKTRACE_LIMIT] =
+    [const { std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()) }; FAULT_BACKTRACE_LIMIT];
+
+/// How many pointers [`FAULT_BACKTRACE`] holds, written by the handler.
+#[cfg(unix)]
+static FAULT_NPOINTERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The SIGSEGV action that was installed before ours (Rust std's), so a
+/// genuine guard-page fault can chain to the stack-overflow detector.
+#[cfg(unix)]
+static PREVIOUS_SEGV_ACTION: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+#[cfg(unix)]
+static PREVIOUS_SEGV_FLAGS: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+#[cfg(unix)]
+static PREVIOUS_BUS_ACTION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+#[cfg(unix)]
+static PREVIOUS_BUS_FLAGS: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+/// The install runs once; a second `install_termination` must not record our
+/// own action as the previous one.
+#[cfg(unix)]
+static FAULT_INSTALL: OnceLock<()> = OnceLock::new();
+
+/// See the section comment: kernel fault codes are positive, synthetic
+/// delivery codes are non-positive (POSIX `SI_*` values).
+#[cfg(unix)]
+fn fault_is_synchronous(si_code: libc::c_int) -> bool {
+    si_code > 0
+}
+
+/// Read `si_code` from the `siginfo_t` a SA_SIGINFO handler received.
+///
+/// Linux and Darwin both put `si_signo`, `si_errno`, `si_code` as the first
+/// three `int`s of `siginfo_t`; `libc`'s own `siginfo_t::si_addr()` uses the
+/// same prefix cast (linux/gnu/mod.rs).
+#[cfg(unix)]
+unsafe fn siginfo_code(info: *const libc::siginfo_t) -> libc::c_int {
+    #[repr(C)]
+    struct SiginfoPrefix {
+        _si_signo: libc::c_int,
+        _si_errno: libc::c_int,
+        si_code: libc::c_int,
+    }
+    // SAFETY: `info` is the siginfo_t the kernel passed to this SA_SIGINFO
+    // handler; the prefix layout is the ABI's on every supported target.
+    unsafe { (*info.cast::<SiginfoPrefix>()).si_code }
+}
+
+/// GNU `safe_strsignal`'s descriptions for the signals this port can raise
+/// from a fault (src/sysdep.c:2894-2903 routes to `sigdescr_np`). A static
+/// table keeps the handler off `strsignal`, which is not async-signal-safe.
+#[cfg(unix)]
+const fn fatal_signal_description(sig: libc::c_int) -> Option<&'static str> {
+    match sig {
+        libc::SIGHUP => Some("Hangup"),
+        libc::SIGINT => Some("Interrupt"),
+        libc::SIGQUIT => Some("Quit"),
+        libc::SIGILL => Some("Illegal instruction"),
+        libc::SIGTRAP => Some("Trace/breakpoint trap"),
+        libc::SIGABRT => Some("Aborted"),
+        libc::SIGBUS => Some("Bus error"),
+        libc::SIGFPE => Some("Floating point exception"),
+        libc::SIGSEGV => Some("Segmentation fault"),
+        libc::SIGTERM => Some("Terminated"),
+        libc::SIGSYS => Some("Bad system call"),
+        libc::SIGVTALRM => Some("Virtual timer expired"),
+        libc::SIGXCPU => Some("CPU time limit exceeded"),
+        libc::SIGXFSZ => Some("File size limit exceeded"),
+        _ => None,
+    }
+}
+
+/// Write all of `bytes` to `fd`, async-signal-safe (no allocation, no stdio).
+#[cfg(unix)]
+fn write_all_raw(fd: libc::c_int, bytes: &[u8]) {
+    let mut written = 0;
+    while written < bytes.len() {
+        // SAFETY: `bytes` is live for the call; a short write is retried and
+        // an error ends the attempt exactly as GNU's emacs_write diagnostics do.
+        let n = unsafe { libc::write(fd, bytes[written..].as_ptr().cast(), bytes.len() - written) };
+        if n <= 0 {
+            return;
+        }
+        written += n as usize;
+    }
+}
+
+/// GNU `shut_down_emacs`'s fatal diagnostic (src/emacs.c:3112-3147): only
+/// when this process is the foreground process group of its controlling
+/// terminal, and never for SIGTERM (`sig && sig != SIGTERM`).
+#[cfg(unix)]
+unsafe fn write_fatal_error_line(sig: libc::c_int) {
+    if sig == libc::SIGTERM {
+        return;
+    }
+    // SAFETY: tcgetpgrp/getpgrp are async-signal-safe syscalls; a failed
+    // tcgetpgrp returns -1 and skips the line exactly as GNU's test does.
+    let foreground = unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) } == unsafe { libc::getpgrp() };
+    if !foreground {
+        return;
+    }
+    let Some(description) = fatal_signal_description(sig) else {
+        return;
+    };
+    let prefix = b"Fatal error ";
+    let separator = b": ";
+    let mut buf = [0u8; 128];
+    let mut at = 0;
+    buf[..prefix.len()].copy_from_slice(prefix);
+    at += prefix.len();
+    let mut value = u32::from(sig.unsigned_abs());
+    let mut digits = [0u8; 10];
+    let mut ndigits = 0;
+    loop {
+        digits[ndigits] = b'0' + (value % 10) as u8;
+        value /= 10;
+        ndigits += 1;
+        if value == 0 {
+            break;
+        }
+    }
+    for index in (0..ndigits).rev() {
+        buf[at] = digits[index];
+        at += 1;
+    }
+    buf[at..at + separator.len()].copy_from_slice(separator);
+    at += separator.len();
+    let description = description.as_bytes();
+    if at + description.len() + 1 > buf.len() {
+        return;
+    }
+    buf[at..at + description.len()].copy_from_slice(description);
+    at += description.len();
+    buf[at] = b'\n';
+    at += 1;
+    write_all_raw(libc::STDERR_FILENO, &buf[..at]);
+}
+
+/// Capture `backtrace(3)` into the static buffer GNU keeps for fatal
+/// signals (src/sysdep.c:1754-1764). The tables are warmed at install time
+/// because the first `backtrace` call may allocate (src/emacs.c:1627).
+#[cfg(unix)]
+unsafe fn capture_fault_backtrace() {
+    let mut buffer = [std::ptr::null_mut::<libc::c_void>(); FAULT_BACKTRACE_LIMIT];
+    // SAFETY: `buffer` is a live stack array of the length passed.
+    let count =
+        unsafe { libc::backtrace(buffer.as_mut_ptr(), FAULT_BACKTRACE_LIMIT as libc::c_int) };
+    let count = count.max(0) as usize;
+    for (slot, pointer) in FAULT_BACKTRACE.iter().zip(buffer.iter()).take(count) {
+        slot.store(*pointer, Ordering::Relaxed);
+    }
+    FAULT_NPOINTERS.store(count, Ordering::Release);
+}
+
+/// GNU `emacs_backtrace`'s output half (src/sysdep.c:2336-2369): the marker,
+/// then `backtrace_symbols_fd` frames, both async-signal-safe (`glibc`
+/// documents that the `_fd` form does not allocate).
+#[cfg(unix)]
+unsafe fn write_fault_backtrace() {
+    let count = FAULT_NPOINTERS
+        .load(Ordering::Acquire)
+        .min(FAULT_BACKTRACE_LIMIT);
+    if count == 0 {
+        return;
+    }
+    let mut pointers = [std::ptr::null_mut::<libc::c_void>(); FAULT_BACKTRACE_LIMIT];
+    for (destination, slot) in pointers.iter_mut().zip(FAULT_BACKTRACE.iter()).take(count) {
+        *destination = slot.load(Ordering::Relaxed);
+    }
+    write_all_raw(libc::STDERR_FILENO, b"Backtrace:\n");
+    // SAFETY: `pointers` holds `count` valid frame addresses and `count`
+    // does not exceed its length.
+    unsafe {
+        libc::backtrace_symbols_fd(pointers.as_ptr(), count as libc::c_int, libc::STDERR_FILENO);
+    }
+}
+
+/// The SA_SIGINFO callback a `sigaction` names.
+#[cfg(unix)]
+type FaultHandler = unsafe extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void);
+
+/// The previous handler for `sig`, when it takes a SA_SIGINFO signature.
+#[cfg(unix)]
+fn previous_fault_handler(sig: libc::c_int) -> Option<FaultHandler> {
+    let (action, flags) = match sig {
+        libc::SIGSEGV => (
+            PREVIOUS_SEGV_ACTION.load(Ordering::Acquire),
+            PREVIOUS_SEGV_FLAGS.load(Ordering::Acquire),
+        ),
+        libc::SIGBUS => (
+            PREVIOUS_BUS_ACTION.load(Ordering::Acquire),
+            PREVIOUS_BUS_FLAGS.load(Ordering::Acquire),
+        ),
+        _ => return None,
+    };
+    if action == 0 || action == libc::SIG_DFL || action == libc::SIG_IGN {
+        return None;
+    }
+    if flags & libc::SA_SIGINFO == 0 {
+        return None;
+    }
+    // SAFETY: this is the one peer-signed transmute exception for the fatal
+    // P4 work (TRANSMUTE_CEILING 6 -> 7, pid f70ad89b). `sa_sigaction` is an
+    // integer by ABI and there is no safe route from an integer to a function
+    // pointer. The value was read back from a sigaction this process
+    // installed; SIG_DFL/SIG_IGN are filtered above and SA_SIGINFO fixes the
+    // three-argument signature, so the bits name a valid callback.
+    Some(unsafe { std::mem::transmute::<usize, FaultHandler>(action) })
+}
+
+/// Die by `sig` the way GNU's `terminate_due_to_signal` ends: unblock it,
+/// restore the default action, raise it (src/emacs.c:471-483).
+#[cfg(unix)]
+unsafe fn raise_fault_now(sig: libc::c_int) -> ! {
+    // SAFETY: signal-set manipulation on a local set, then this thread's mask;
+    // signal()/raise() are async-signal-safe.
+    unsafe {
+        let mut unblocked: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut unblocked);
+        libc::sigaddset(&mut unblocked, sig);
+        libc::pthread_sigmask(libc::SIG_UNBLOCK, &unblocked, std::ptr::null_mut());
+        libc::signal(sig, libc::SIG_DFL);
+        libc::raise(sig);
+        // GNU's `exit (1)` after emacs_raise is unreachable (emacs.c:482-483);
+        // a handler must not return to a faulting instruction, so end here if
+        // raise did not.
+        libc::abort()
+    }
+}
+
+/// The handler Rust std's stack-overflow detector is chained from.
+///
+/// P4 scope: a synthetic delivery (kill-sent) and a real fault the previous
+/// handler did not claim both report with the async-signal-safe subset and
+/// die by the signal here. P3 replaces this with the FatalPhase latch plus
+/// the safe-point `shut_down_emacs` (auto-save), which needs threadsig's A1
+/// entry first.
+///
+/// # Safety
+///
+/// Installed with SA_SIGINFO; only the kernel calls it, with a valid
+/// `siginfo_t` and ucontext for `sig`. It must never be called from safe
+/// Rust: its pointers are raw and its body touches process-global signal
+/// state.
+#[cfg(unix)]
+unsafe extern "C" fn deliver_fatal_fault(
+    sig: libc::c_int,
+    info: *mut libc::siginfo_t,
+    context: *mut libc::c_void,
+) {
+    // SAFETY: `info` is the kernel-provided siginfo_t for this delivery.
+    let synchronous = unsafe { fault_is_synchronous(siginfo_code(info)) };
+    if synchronous {
+        // Give Rust std's stack-overflow detector first refusal. It aborts
+        // when the address is inside its recorded guard range and otherwise
+        // resets SIG_DFL and returns; returning is safe only from the std
+        // handler's own frame, so our continuation must not return to the
+        // faulting instruction.
+        if let Some(previous) = previous_fault_handler(sig) {
+            // SAFETY: the saved action carries SA_SIGINFO, so this is the
+            // three-argument signature the kernel would have used, and the
+            // kernel's own siginfo/context are still live.
+            unsafe { previous(sig, info, context) };
+        }
+    }
+    // SAFETY: async-signal-safe subset only: backtrace (warmed), the tty
+    // diagnostic, the frame dump, then SIG_DFL + raise.
+    unsafe {
+        capture_fault_backtrace();
+        write_fatal_error_line(sig);
+        write_fault_backtrace();
+        raise_fault_now(sig);
+    }
+}
+
+/// Install our SIGSEGV/SIGBUS actions after Rust std's, saving the previous
+/// action per signal. Idempotent; called by [`install_termination`], which
+/// runs from `main` after the Rust runtime has installed its handler.
+#[cfg(unix)]
+fn install_fault_dispositions() {
+    FAULT_INSTALL.get_or_init(|| {
+        // GNU initializes the backtrace tables before any handler can run
+        // (`emacs_backtrace (-1)`, src/emacs.c:1627) because the first
+        // `backtrace` call may allocate.
+        let mut warm = [std::ptr::null_mut::<libc::c_void>(); 1];
+        // SAFETY: a one-element stack buffer.
+        unsafe { libc::backtrace(warm.as_mut_ptr(), 1) };
+
+        for (sig, previous_action, previous_flags) in [
+            (libc::SIGSEGV, &PREVIOUS_SEGV_ACTION, &PREVIOUS_SEGV_FLAGS),
+            (libc::SIGBUS, &PREVIOUS_BUS_ACTION, &PREVIOUS_BUS_FLAGS),
+        ] {
+            let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+            action.sa_sigaction = deliver_fatal_fault as usize;
+            action.sa_flags = libc::SA_SIGINFO | libc::SA_ONSTACK;
+            let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+            // SAFETY: both pointers are to initialised locals and `sig` is a
+            // valid signal number.
+            let installed = unsafe {
+                libc::sigfillset(&mut action.sa_mask);
+                libc::sigaction(sig, &action, &mut old)
+            };
+            if installed == 0 {
+                previous_action.store(old.sa_sigaction, Ordering::Release);
+                previous_flags.store(old.sa_flags, Ordering::Release);
+            }
+        }
+    });
 }
 
 #[cfg(unix)]
