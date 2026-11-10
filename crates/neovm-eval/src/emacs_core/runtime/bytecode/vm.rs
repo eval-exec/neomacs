@@ -969,7 +969,12 @@ struct InterpreterFrameCleanup {
 }
 
 impl InterpreterFrameCleanup {
-    #[inline(always)]
+    // Outlined, NOT inlined into `run_loop`: the checked conversions are
+    // invariant guards, not hot work, and inlining them changed the hot
+    // computed-goto dispatch's code shape enough to cost inclist ~18% cycles
+    // at identical instructions (lead #1590). The call happens once per frame
+    // install; the checked conversion stays in every build.
+    #[inline(never)]
     #[doc(hidden)]
     fn new(condition_stack_base: usize, specpdl_base: usize) -> Self {
         // Checked in every build: a base that does not fit the packed word
@@ -2708,6 +2713,21 @@ pub(crate) fn release_bytecode_frame(
     saved_position: usize,
 ) {
     ctx.bytecode_stack_position = saved_position;
+}
+
+/// Publish the active frame's position before a primitive that can re-enter
+/// Lisp (buffer-change hooks, `word-boundary-function`, callbacks).
+///
+/// Outlined `#[cold] #[inline(never)]` on purpose: inlining this publish into
+/// `run_loop`'s primitive arms moved the hot computed-goto dispatch's code
+/// shape and cost inclist ~18% cycles at IDENTICAL instruction counts (the
+/// peer-hold fix's conservative publish; lead #1590). The registration-time
+/// [`crate::emacs_core::eval::PrimitiveReentry`] decision keeps the call off
+/// every audited-pure primitive's path.
+#[cold]
+#[inline(never)]
+fn publish_primitive_position(ctx: &mut crate::emacs_core::eval::Context, position: usize) {
+    release_bytecode_frame(ctx, position);
 }
 
 impl<'a> crate::emacs_core::hook_runtime::HookRuntime for Vm<'a> {
@@ -7143,8 +7163,14 @@ impl<'a> Vm<'a> {
                         // change runs before/after-change-functions, a word
                         // motion runs word-boundary-function, ...): publish
                         // the active frame's position before the primitive,
-                        // as GNU's bc->fp still names this frame.
-                        release_bytecode_frame(self.ctx, bc_position);
+                        // as GNU's bc->fp still names this frame. The
+                        // decision is the registration-time reentry policy;
+                        // the publish itself is outlined cold code.
+                        if crate::emacs_core::eval::inline_subr_reentry(name_id)
+                            == crate::emacs_core::eval::PrimitiveReentry::MayRunLisp
+                        {
+                            publish_primitive_position(self.ctx, bc_position);
+                        }
                         let result = vm_try!(
                             self.dispatch_vm_builtin_by_id_from_stack(func, name_id, args_start, n)
                         );
@@ -7179,7 +7205,11 @@ impl<'a> Vm<'a> {
                             // position first, as GNU's bc->fp still names this
                             // frame when the primitive runs.
                             InlineSubrKind::Direct => {
-                                release_bytecode_frame(self.ctx, bc_position);
+                                if inline.reentry
+                                    == crate::emacs_core::eval::PrimitiveReentry::MayRunLisp
+                                {
+                                    publish_primitive_position(self.ctx, bc_position);
+                                }
                                 vm_try!(Self::call_fixed_builtin_direct(
                                     self.ctx,
                                     inline.function,
@@ -7189,7 +7219,11 @@ impl<'a> Vm<'a> {
                                 ))
                             }
                             InlineSubrKind::Generic => {
-                                release_bytecode_frame(self.ctx, bc_position);
+                                if inline.reentry
+                                    == crate::emacs_core::eval::PrimitiveReentry::MayRunLisp
+                                {
+                                    publish_primitive_position(self.ctx, bc_position);
+                                }
                                 vm_try!(self.dispatch_call_builtin_sym(func, *sym, args_start, n))
                             }
                         };

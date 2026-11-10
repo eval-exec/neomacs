@@ -28,6 +28,9 @@ const _: () = {
     assert!(align_of::<InlineSubr>() == 8);
     assert!(offset_of!(InlineSubr, function) == 0);
     assert!(offset_of!(InlineSubr, kind) == 16);
+    // The registration-time reentry policy rides in the tail padding the
+    // size-24 shape already had; the frozen serial layout is unchanged.
+    assert!(offset_of!(InlineSubr, reentry) == 17);
     assert!(slot_size(&super::GLOBAL_SUBR_TABLE) == 32);
     assert!(slot_align(&super::GLOBAL_SUBR_TABLE) == 8);
     assert!(slot_size(&super::INLINE_SUBR_TABLE) == 32);

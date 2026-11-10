@@ -164,6 +164,7 @@ always	emacs_core/runtime/bytecode/vm.rs	fixnum_gt	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	fixnum_le	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	fixnum_lt	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	release_bytecode_frame	run_loop,inline
+never	emacs_core/runtime/bytecode/vm.rs	publish_primitive_position	run_loop	# outlined #[cold] publish before a reentrant primitive; never inlined into run_loop's hot body (lead #1590)
 always	emacs_core/runtime/bytecode/vm.rs	vm_stack_return_after_push_enabled	run_loop,inline
 always	emacs_core/runtime/debug_on_call/mod.rs	Context::debug_on_next_call_is_armed	run_loop,inline
 always	emacs_core/runtime/error/flow_word.rs	Flow::tag	run_loop,inline
@@ -241,7 +242,7 @@ exempt	emacs_core/runtime/bytecode/chunk.rs	<ByteCodeFunction as ByteCodeFunctio
 exempt	emacs_core/runtime/bytecode/chunk.rs	<ByteCodeFunction as ByteCodeFunctionExt>::executes_verified_ops	run_loop	# inlined at the protected site, called out of line by 2 other functions: always would re-tune them
 exempt	emacs_core/runtime/bytecode/chunk.rs	<ByteCodeFunction as ByteCodeFunctionExt>::verifier_entry_depth	run_loop,apply1	# called at the protected site, inlined at 2 other sites: never would re-tune them
 exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerReturn::new	run_loop	# called by Vm::install_iterative_interpreter_frame, but leaves no code at the protected site (folded, cfg-gated or debug-only)
-exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterFrameCleanup::new	run_loop	# called by Vm::install_iterative_interpreter_frame; new frame-layout constructor, not yet in the protected pre-LTO census
+never	emacs_core/runtime/bytecode/vm.rs	InterpreterFrameCleanup::new	run_loop	# outlined frame-layout constructor: the checked packing stays out of run_loop's hot body (lead #1590)
 exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerStack::with_storage	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
 exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterDriverDepth::from_suspended_callers	run_loop	# called by Vm::complete_interpreter_frame_value, but leaves no code at the protected site (folded, cfg-gated or debug-only)
 exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterFrameAux::empty	run_loop	# called by InterpreterFrameAuxStack::take_entry, but leaves no code at the protected site (folded, cfg-gated or debug-only)

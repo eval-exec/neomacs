@@ -444,3 +444,90 @@ fn memq_scan_answers_as_the_exact_algorithm() {
     }
     assert_eq!(checked, 12 * 15 * 2 + 15 * 15 * 2 * 2);
 }
+
+/// Lead #1590: the "can run Lisp" decision is a REGISTRATION property, and it
+/// is exhaustive over the canonical registry. Every registered primitive
+/// resolves to a policy; a NoLisp answer can only come from the audited pure
+/// list (so a new primitive cannot silently skip the publish - it keeps the
+/// safe MayRunLisp default); every audited row names a registered primitive.
+#[test]
+fn primitive_reentry_policy_is_registry_complete() {
+    use crate::emacs_core::eval::{
+        AUDITED_PURE_PRIMITIVES, AUDITED_REENTRANT_PRIMITIVES, InlineSubrKind, PrimitiveReentry,
+        inline_subr, inline_subr_reentry, primitive_reentry,
+    };
+    crate::test_utils::init_test_tracing();
+    let _eval = Context::new(crate::test_utils::unit_runtime());
+
+    let names: Vec<&'static str> = crate::test_utils::canonical_host_active_trace_for_test()
+        .into_iter()
+        .filter_map(|registration| match registration {
+            crate::emacs_core::subr::SubrRegistration::Subr { name, .. } => Some(name),
+            crate::emacs_core::subr::SubrRegistration::EventSymbolProperties => None,
+        })
+        .collect();
+    assert!(
+        !names.is_empty(),
+        "the canonical registry must not be empty"
+    );
+
+    // Every registered primitive has a decided policy, and the only way to
+    // answer NoLisp is an explicit audit row.
+    for name in &names {
+        let policy = primitive_reentry(name);
+        if policy == PrimitiveReentry::NoLisp {
+            assert!(
+                AUDITED_PURE_PRIMITIVES.contains(name),
+                "{name} skips the publish without an audited-pure row"
+            );
+        }
+    }
+
+    // The audited lists are REGISTERED subsets: a stale audit row fails here.
+    for name in AUDITED_PURE_PRIMITIVES
+        .iter()
+        .chain(AUDITED_REENTRANT_PRIMITIVES.iter())
+    {
+        assert!(
+            names.contains(name),
+            "audited primitive {name} is not registered"
+        );
+    }
+    for name in AUDITED_PURE_PRIMITIVES {
+        assert!(
+            !AUDITED_REENTRANT_PRIMITIVES.contains(name),
+            "{name} is both audited pure and audited reentrant"
+        );
+    }
+
+    // The registration projection carries the policy: the pure sample is
+    // NoLisp, the audited reentrant sample publishes, the four inline buffer
+    // reads never reach a call at all, and an unclassified primitive keeps
+    // the safe answer.
+    assert_eq!(primitive_reentry("setcar"), PrimitiveReentry::NoLisp);
+    assert_eq!(
+        inline_subr_reentry(intern("setcar")),
+        PrimitiveReentry::NoLisp
+    );
+    assert_eq!(inline_subr(intern("setcar")).kind, InlineSubrKind::Direct);
+    assert_eq!(primitive_reentry("insert"), PrimitiveReentry::MayRunLisp);
+    assert_eq!(
+        inline_subr_reentry(intern("insert")),
+        PrimitiveReentry::MayRunLisp
+    );
+    assert_eq!(
+        primitive_reentry("forward-word"),
+        PrimitiveReentry::MayRunLisp
+    );
+    assert_eq!(
+        primitive_reentry("a-future-primitive"),
+        PrimitiveReentry::MayRunLisp
+    );
+    for name in ["point", "point-min", "point-max", "current-buffer"] {
+        assert_eq!(
+            inline_subr(intern(name)).reentry,
+            PrimitiveReentry::NoLisp,
+            "{name}"
+        );
+    }
+}

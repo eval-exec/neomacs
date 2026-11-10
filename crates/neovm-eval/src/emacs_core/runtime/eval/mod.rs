@@ -834,10 +834,59 @@ pub(crate) enum InlineSubrKind {
     CurrentBuffer,
 }
 
+/// Whether a registered primitive can run Lisp from its normal path (a
+/// buffer-change hook, `word-boundary-function`, a callback variable,
+/// redisplay), in which case the interpreter must publish its active frame
+/// position before the call — GNU's `bc->fp` still names that frame while the
+/// primitive runs.
+///
+/// The decision is a property of the REGISTRATION projection below, never a
+/// hand-kept list at a call site, and it defaults to the SAFE answer: a
+/// primitive nobody classified publishes, so a new primitive can never
+/// silently skip the publish (the exhaustiveness test additionally requires
+/// the audited lists to be registered subsets).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) enum PrimitiveReentry {
+    /// The implementation may evaluate Lisp: publish the frame position.
+    #[default]
+    MayRunLisp,
+    /// Audited unable to evaluate Lisp: no publish needed.
+    NoLisp,
+}
+
+/// Primitives audited (by reading their Rust entry point and every path it
+/// reaches) as unable to run Lisp. Deliberately small: each name is verified
+/// against its implementation, and anything absent keeps the safe default.
+pub(crate) const AUDITED_PURE_PRIMITIVES: &[&str] = &["setcar", "setcdr"];
+
+/// Primitives the #1346 audit found CAN run Lisp from their normal path
+/// (buffer-change hooks, `word-boundary-function`, ...). Kept next to the
+/// pure list so both are one registration-time source of truth for the
+/// exhaustiveness test.
+pub(crate) const AUDITED_REENTRANT_PRIMITIVES: &[&str] =
+    &["insert", "delete-region", "indent-to", "forward-word"];
+
+/// The registration-time answer for one plain builtin name.
+#[inline]
+pub(crate) fn primitive_reentry(name: &str) -> PrimitiveReentry {
+    if AUDITED_PURE_PRIMITIVES.contains(&name) {
+        PrimitiveReentry::NoLisp
+    } else {
+        PrimitiveReentry::MayRunLisp
+    }
+}
+
+/// `repr(C)` here is byte-identical to the previously asserted `repr(Rust)`
+/// layout (`function`@0, `kind`@16, size 24, align 8): the new `reentry` byte
+/// takes the pre-existing tail padding at offset 17, so the frozen 64-bit
+/// serial layout in `subr_layout.rs` is unchanged. It is spelled explicitly
+/// because adding the byte let `repr(Rust)` reorder the two older fields.
+#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(crate) struct InlineSubr {
     pub(crate) function: Option<SubrFn>,
     pub(crate) kind: InlineSubrKind,
+    pub(crate) reentry: PrimitiveReentry,
 }
 
 impl InlineSubr {
@@ -858,9 +907,20 @@ impl InlineSubr {
             }
             _ => InlineSubrKind::Generic,
         };
+        // The four pure buffer reads execute without any call at all, so
+        // their reentry answer never gates a publish; keep it explicit rather
+        // than routed through the audited name list.
+        let reentry = match kind {
+            InlineSubrKind::Point
+            | InlineSubrKind::PointMin
+            | InlineSubrKind::PointMax
+            | InlineSubrKind::CurrentBuffer => PrimitiveReentry::NoLisp,
+            InlineSubrKind::Direct | InlineSubrKind::Generic => primitive_reentry(name),
+        };
         Self {
             function: entry.function,
             kind,
+            reentry,
         }
     }
 }
@@ -883,6 +943,13 @@ pub(crate) fn inline_subr(sym_id: SymId) -> InlineSubr {
 #[inline]
 pub(crate) fn inline_subr_function(sym_id: SymId) -> Option<SubrFn> {
     inline_subr(sym_id).function
+}
+
+/// The registration-time reentry answer for `sym_id`; unregistered symbols
+/// carry the safe default (`MayRunLisp`).
+#[inline]
+pub(crate) fn inline_subr_reentry(sym_id: SymId) -> PrimitiveReentry {
+    inline_subr(sym_id).reentry
 }
 
 /// Whether `sym_id` names a REGISTERED builtin — the opcode-like test the
