@@ -10,7 +10,7 @@ mod factory;
 use crate::emacs_core::eval::green::GreenStartError;
 #[cfg(any(test, feature = "test-support"))]
 use factory::ProofPlan;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use factory::WeakProofPlan;
 use factory::{AdmissionPlan, ProductionPlan};
 use neovm_value::tagged::gc::{
@@ -89,7 +89,7 @@ struct AdmissionScope<'heap>(std::marker::PhantomData<&'heap mut ()>);
 impl Context {
     /// Keep private keeper minting within the Context module. Fence negatives
     /// borrow the real serial keeper for one scope; no Baton can escape it.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn with_weak_sweep_keeper_for_test<R>(
         &mut self,
         body: impl FnOnce(&mut Context, &super::Baton) -> R,
@@ -100,7 +100,7 @@ impl Context {
 
     /// Explicit closed-fixture weak sweep admission. Production keeps its
     /// strict weak-table fence and GEN1-only capability boundary.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn admit_owned_parallel_with_weak_tables_for_test<R>(
         &mut self,
         tables: &[TaggedValue],

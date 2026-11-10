@@ -224,6 +224,18 @@ pub mod authority {
     /// `&mut Context`; the projection is lifetime-bound and consumed by finish.
     /// The projection/error types gain A' `make(pub)` only in this build; no
     /// field or constructor is exposed.
+    /// FENCE: enter the real serial keeper scope. The original stays
+    /// `pub(crate)`; `Baton` is !Clone and !Copy, and the keeper is borrowed
+    /// only for the scope, so no keeper escapes.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn with_weak_sweep_keeper_for_test<R>(
+        context: &mut Context,
+        body: impl FnOnce(&mut Context, &Baton) -> R,
+    ) -> R {
+        context.with_weak_sweep_keeper_for_test(body)
+    }
+
     #[doc(hidden)]
     pub fn admit_owned_proof_parallel_for_test<R>(
         context: &mut Context,
@@ -233,6 +245,24 @@ pub mod authority {
             -> (neovm_value::tagged::gc::QuiescentCollector<'heap>, Baton, R),
     ) -> Result<R, crate::emacs_core::eval::world::OwnedParallelError> {
         context.admit_owned_proof_parallel(body)
+    }
+
+    /// FENCE (oracleb value-tables re-home): weak-table proof admission for
+    /// the re-homed B8 table tests. Delegates ONLY to the closed-fixture
+    /// `Context::admit_owned_parallel_with_weak_tables_for_test`
+    /// (WeakProofPlan); the original stays `pub(crate)`. The real admission
+    /// transaction runs under `&mut Context` and the projection is consumed
+    /// by finish, exactly as in the owned-proof fence.
+    #[doc(hidden)]
+    pub fn admit_owned_weak_tables_parallel_for_test<R>(
+        context: &mut Context,
+        tables: &[neovm_value::tagged::value::TaggedValue],
+        body: impl for<'heap> FnOnce(
+            crate::emacs_core::eval::world::OwnedProofProjection<'heap>,
+        )
+            -> (neovm_value::tagged::gc::QuiescentCollector<'heap>, Baton, R),
+    ) -> Result<R, crate::emacs_core::eval::world::OwnedParallelError> {
+        context.admit_owned_parallel_with_weak_tables_for_test(tables, body)
     }
 
     /// FENCE (oracleb worker re-home): the Context-free puthash builtin used

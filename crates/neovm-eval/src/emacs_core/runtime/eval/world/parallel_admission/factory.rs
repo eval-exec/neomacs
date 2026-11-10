@@ -6,14 +6,10 @@ use super::super::{Baton, FrozenLegacyRoots};
 use super::OwnedProofProjection;
 use super::{OwnedParallelError, OwnedParallelProjection, map_registration};
 use crate::emacs_core::eval::world::ParallelHeapEraWorldExt;
-#[cfg(test)]
-use crate::emacs_core::eval::world::WorldProofEra as ProofEra;
-#[cfg(test)]
-use crate::emacs_core::eval::world::WorldProofEraExt;
 use neovm_value::tagged::gc::{
     Gen1Admission, Gen1AdmissionError, ParallelHeapEra, QuiescentCollector,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use neovm_value::tagged::value::TaggedValue;
 
 mod sealed {
@@ -118,13 +114,13 @@ impl AdmissionPlan for ProofPlan {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) struct WeakProofPlan<'tables> {
     pub(super) tables: &'tables [TaggedValue],
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl sealed::Sealed for WeakProofPlan<'_> {}
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl AdmissionPlan for WeakProofPlan<'_> {
     type Projection<'heap> = OwnedProofProjection<'heap>;
 
@@ -134,8 +130,20 @@ impl AdmissionPlan for WeakProofPlan<'_> {
         keeper: Baton,
         roots: FrozenLegacyRoots,
     ) -> Result<Self::Projection<'heap>, AdmissionFailure<'heap>> {
-        ProofEra::admit_rooted_with_weak_tables_for_test(collector, keeper, roots, self.tables)
-            .map(|era| OwnedProofProjection { era })
+        // SAFETY: the fixture retains the same original World and checked
+        // keeper; the lower admission validates actual table catalog
+        // membership and exclusive stopped weak-table authority. This is the
+        // same call the world-keeper ext method makes.
+        unsafe {
+            crate::emacs_core::eval::world::WorldProofEra::admit_rooted_with_weak_tables_for_test_inner(
+                collector,
+                keeper,
+                roots,
+                self.tables,
+                crate::emacs_core::eval::world::prepare_keeper_backing,
+            )
+        }
+        .map(|era| OwnedProofProjection { era })
             .map_err(|failure| {
                 let (reason, collector, keeper) = failure.into_parts();
                 AdmissionFailure {

@@ -191,3 +191,10 @@ mod symbol_authority_tests;
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 #[path = "../../../core_tests/tagged/gc/mutator_registration/combined_inputs_tests.rs"]
 mod combined_inputs_tests;
+
+/// Weak-policy rows re-homed out of the value lib test. The shell owns the
+/// Context construction, the keeper scopes and the owned weak-table
+/// projection; the bodies and assertions stay in value.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/weak_policy_tests.rs"]
+mod weak_policy_tests;

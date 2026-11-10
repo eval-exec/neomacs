@@ -9,9 +9,17 @@ use super::image::{CollectionHistory, CollectionWork, ResponsePacing};
 use super::rendezvous::entry_state;
 use super::*;
 
-#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
 #[path = "weak_policy_tests.rs"]
 mod weak_policy_tests;
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+pub(crate) use weak_policy_tests::{WeakPolicyCase, WeakPolicyHost, run_weak_policy_case};
 
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 mod threading_payload_tests {

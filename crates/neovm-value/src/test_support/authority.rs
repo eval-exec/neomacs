@@ -249,6 +249,22 @@ pub type SymbolAuthorityCase = crate::tagged::gc::mutator_registration::SymbolAu
 ))]
 pub type CombinedInputsCase = crate::tagged::gc::mutator_registration::CombinedInputsCase;
 
+/// Case selector for the weak-policy family.
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+pub type WeakPolicyCase = crate::tagged::gc::mutator_registration::WeakPolicyCase;
+
+/// Host shape for the weak-policy family: the core shell builds it from the
+/// real Context entry points; value never sees a Context.
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+pub type WeakPolicyHost<'a, 'heap, K> =
+    crate::tagged::gc::mutator_registration::WeakPolicyHost<'a, 'heap, K>;
+
 /// C5 intern-growth AUTHORITY fence (LEAD 05:3xZ; peer B2 host ruling).
 ///
 /// The real two-actor intern-growth transaction is value's test-support
@@ -2238,7 +2254,6 @@ pub fn run_rooted_mutator_test_for_test<K>(
 #[doc(hidden)]
 pub fn install_rooted_mapping_runner_for_test(runner: fn(&'static str)) {
     crate::tagged::gc::mutator_registration::install_rooted_mapping_runner(runner)
-
 }
 
 /// FENCE: run one symbol-authority row. The core shell owns the Context entry
@@ -2289,4 +2304,28 @@ pub fn run_combined_inputs_case_for_test<K>(
         case,
         symbol_functions_init_era,
     );
+}
+
+/// FENCE: run one weak-policy row.
+///
+/// # Safety
+///
+/// For the `Stopped` host, `world_roots` must return only slots that satisfy
+/// `TaggedHeap::set_marker_chain_head_slots`: each slot points to a valid
+/// `*mut MarkerObj` living inside a live `BufferText`'s storage, remains valid
+/// for the GC cycle, and the caller holds exclusive access to the heap and the
+/// buffer manager for that cycle. The core shell passes the real baton walker
+/// from the real `OwnedProofProjection`, not a synthetic slot list.
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+#[doc(hidden)]
+pub unsafe fn run_weak_policy_case_for_test<K>(
+    case: WeakPolicyCase,
+    host: WeakPolicyHost<'_, '_, K>,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper + std::fmt::Debug + 'static,
+{
+    unsafe { crate::tagged::gc::mutator_registration::run_weak_policy_case(case, host) }
 }

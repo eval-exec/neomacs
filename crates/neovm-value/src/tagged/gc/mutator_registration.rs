@@ -1049,19 +1049,24 @@ pub(crate) use cons_allocation_tests::{
     ConsAllocationCase, CreditsFixture, CreditsResult, RootsFixture, run_cons_allocation_test,
 };
 
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+pub(crate) use collection::{WeakPolicyCase, WeakPolicyHost, run_weak_policy_case};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use rendezvous::fixture_helpers::RootedRendezvousCase;
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) use rendezvous::run_rooted_mutator_case;
-#[cfg(any(test, feature = "test-support"))]
 pub(crate) use rendezvous::rooted_tests::install_rooted_mapping_runner;
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) use symbol_authority::{SymbolAuthorityCase, run_symbol_authority_case};
+pub(crate) use rendezvous::run_rooted_mutator_case;
 #[cfg(all(
     any(test, feature = "test-support"),
     not(feature = "gc-memory-telemetry")
 ))]
 pub(crate) use symbol_authority::combined_inputs::{CombinedInputsCase, run_combined_inputs_case};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use symbol_authority::{SymbolAuthorityCase, run_symbol_authority_case};
 
 #[cfg(all(test, not(feature = "test-support")))]
 mod a8_probes;
