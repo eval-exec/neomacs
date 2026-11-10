@@ -31,6 +31,7 @@ use neovm_value::error::LispCondition;
 use neovm_value::error::expect_min_args;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::intern::{SymId, resolve_sym};
+use neovm_value::list_scan::GnuTailCycle;
 use neovm_value::tagged::value::SymbolMode;
 use neovm_value::value::*;
 use rustc_hash::FxHashMap;
@@ -449,64 +450,62 @@ fn serialize_cons_object(
     opts: &SerializeOpts,
     depth: usize,
 ) -> Result<(), Flow> {
-    let items = list_to_vec(value).ok_or_else(|| {
+    let is_alist = matches!(value.cons_car().kind(), ValueKind::Cons);
+    let wrong_type = |predicate: &str, object: Value| {
         signal(
             LispCondition::WrongTypeArgument,
-            vec![Value::symbol("listp"), *value],
+            vec![Value::symbol(predicate), object],
         )
-    })?;
-    let is_alist = matches!(items.first().map(|v| v.kind()), Some(ValueKind::Cons));
+    };
 
     let mut seen: SmallVec<[SymId; 16]> = SmallVec::new();
     let mut wrote_any = false;
     out.push('{');
 
-    if is_alist {
-        for item in &items {
-            if !matches!(item.kind(), ValueKind::Cons) {
-                return Err(signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("consp"), *item],
-                ));
+    // Walk like GNU's FOR_EACH_TAIL: element errors come before the end check,
+    // and a cycle signals `circular-list` rather than `listp`.
+    let mut tail = *value;
+    let mut cycle = GnuTailCycle::new(tail);
+    while matches!(tail.kind(), ValueKind::Cons) {
+        let (key, val) = if is_alist {
+            let pair = tail.cons_car();
+            if !matches!(pair.kind(), ValueKind::Cons) {
+                return Err(wrong_type("consp", pair));
             }
-            let key = item.cons_car();
-            let val = item.cons_cdr();
-            // Alist keys are emitted verbatim (no colon stripping).
-            let (symbol, name) = symbol_object_key(&key, opts.symbol_mode)?;
-            if push_unique(&mut seen, symbol) {
-                if wrote_any {
-                    out.push(',');
-                }
-                wrote_any = true;
-                json_encode_string_into(out, name);
-                out.push(':');
-                serialize_into(out, &val, opts, depth + 1)?;
-            }
-        }
-    } else {
-        let mut i = 0;
-        while i < items.len() {
-            let (symbol, name) = symbol_object_key(&items[i], opts.symbol_mode)?;
+            (pair.cons_car(), pair.cons_cdr())
+        } else {
+            let key = tail.cons_car();
             // A plist must supply a value for every key.
-            let val = *items.get(i + 1).ok_or_else(|| {
-                signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("consp"), Value::NIL],
-                )
-            })?;
-            i += 2;
-            // Dedup on the raw symbol name (symbol identity, like GNU's
-            // symset) but emit the colon-stripped form.
-            if push_unique(&mut seen, symbol) {
-                if wrote_any {
-                    out.push(',');
-                }
-                wrote_any = true;
-                json_encode_string_into(out, strip_plist_colon(name));
-                out.push(':');
-                serialize_into(out, &val, opts, depth + 1)?;
+            tail = tail.cons_cdr();
+            if !matches!(tail.kind(), ValueKind::Cons) {
+                return Err(wrong_type("consp", tail));
             }
+            (key, tail.cons_car())
+        };
+        let (symbol, name) = symbol_object_key(&key, opts.symbol_mode)?;
+        // Dedup on the symbol itself (like GNU's symset). Alist keys are
+        // emitted verbatim, plist keys without their leading colon.
+        if push_unique(&mut seen, symbol) {
+            if wrote_any {
+                out.push(',');
+            }
+            wrote_any = true;
+            json_encode_string_into(
+                out,
+                if is_alist {
+                    name
+                } else {
+                    strip_plist_colon(name)
+                },
+            );
+            out.push(':');
+            serialize_into(out, &val, opts, depth + 1)?;
         }
+        tail = tail.cons_cdr();
+        cycle.check(tail)?;
+    }
+    if !tail.is_nil() {
+        return Err(wrong_type("listp", *value));
     }
     out.push('}');
     Ok(())
