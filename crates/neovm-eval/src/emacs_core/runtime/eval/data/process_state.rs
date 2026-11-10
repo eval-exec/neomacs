@@ -962,6 +962,30 @@ impl std::io::Write for SerialPort {
     }
 }
 
+// Off Unix, `Device` is uninhabited (`unsupported_backend::open` never returns
+// `Ok`). The call sites still name `Read`/`Write`; these bodies are the same
+// `match *device {}` the backend uses, so Windows type-checks without a fd.
+#[cfg(not(unix))]
+impl std::io::Read for SerialPort {
+    fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+        let device = &self.0;
+        match *device {}
+    }
+}
+
+#[cfg(not(unix))]
+impl std::io::Write for SerialPort {
+    fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
+        let device = &self.0;
+        match *device {}
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let device = &self.0;
+        match *device {}
+    }
+}
+
 pub struct ChildStatusSource(pub Source);
 
 // Self-contained state impls (A3b-1).
