@@ -1,46 +1,108 @@
 //! True majors, ordinary old reclamation, and P-all promotion.
 
 use super::*;
-use crate::emacs_core::eval::{
-    push_scratch_gc_root_slot, restore_scratch_gc_roots, save_scratch_gc_roots, set_scratch_gc_root,
-};
 use crate::heap_types::{LispMarker, LispString};
 use crate::tagged::bytecode::chunk::ByteCodeFunction;
 use crate::tagged::bytecode::opcode::Op;
 use crate::tagged::header::LispByteVec;
 use crate::value::{HashTableTest, LambdaParams, LispHashTable};
 
+/// Adapters the core shell installs for one re-homed test. Scratch roots are
+/// the eval TLS, the cons stores are the JIT shims, and the marker chain is
+/// the edit buffer text. This module does not name those crates.
+#[derive(Clone, Copy)]
+struct MajorHost {
+    save: fn() -> usize,
+    push: fn(TaggedValue) -> usize,
+    set: fn(usize, TaggedValue),
+    restore: fn(usize),
+    jit_setcar: unsafe extern "C" fn(*mut u8, i64, i64) -> i64,
+    jit_setcdr: unsafe extern "C" fn(*mut u8, i64, i64) -> i64,
+    new_marker_state: fn() -> *mut (),
+    marker_splice: unsafe fn(*mut (), *mut MarkerObj),
+    marker_head: unsafe fn(*mut ()) -> *mut *mut MarkerObj,
+    marker_walk: unsafe fn(*mut ()) -> Vec<*mut MarkerObj>,
+    marker_drop: unsafe fn(*mut ()),
+}
+
+std::thread_local! {
+    static MAJOR_HOST: std::cell::Cell<Option<MajorHost>> = const { std::cell::Cell::new(None) };
+}
+
+fn major_host() -> MajorHost {
+    MAJOR_HOST.with(|cell| {
+        cell.get()
+            .expect("generational major host is installed by the core shell")
+    })
+}
+
+struct MarkerText {
+    state: *mut (),
+}
+
+impl MarkerText {
+    fn new() -> Self {
+        Self {
+            state: (major_host().new_marker_state)(),
+        }
+    }
+
+    fn chain_splice_at_head(&self, pointer: *mut MarkerObj) {
+        // SAFETY: the shell's splice adapter upholds the edit fence contract.
+        unsafe { (major_host().marker_splice)(self.state, pointer) }
+    }
+
+    unsafe fn markers_head_slot_raw(&self) -> *mut *mut MarkerObj {
+        // SAFETY: the caller holds the same exclusive serial fixture as the
+        // original `BufferText::markers_head_slot_raw` call.
+        unsafe { (major_host().marker_head)(self.state) }
+    }
+
+    fn chain_walk_collect(&self) -> Vec<*mut MarkerObj> {
+        // SAFETY: the shell walks the chain the splice adapter installed.
+        unsafe { (major_host().marker_walk)(self.state) }
+    }
+}
+
+impl Drop for MarkerText {
+    fn drop(&mut self) {
+        // SAFETY: `state` is the shell's box, dropped once with the text.
+        unsafe { (major_host().marker_drop)(self.state) }
+    }
+}
+
 struct Roots(usize);
 
 impl Roots {
     fn new() -> Self {
-        Self(save_scratch_gc_roots())
+        Self((major_host().save)())
     }
 
     fn keep(&self, value: TaggedValue) -> usize {
-        push_scratch_gc_root_slot(value)
+        (major_host().push)(value)
     }
 
     fn clear(&self, slot: usize) {
-        set_scratch_gc_root(slot, TaggedValue::NIL);
+        (major_host().set)(slot, TaggedValue::NIL);
     }
 }
 
 impl Drop for Roots {
     fn drop(&mut self) {
-        restore_scratch_gc_roots(self.0);
+        (major_host().restore)(self.0);
     }
 }
 
-fn heap(on: bool) -> TaggedHeap {
-    let mut heap = TaggedHeap::new();
+fn heap(on: bool) -> TestHeap {
+    let mut raw = TaggedHeap::new();
     // SAFETY: serial fixture heap; the caller holds the only heap view and no
     // collector or compiled leaf runs.
-    unsafe { heap.set_generational_enabled(on) };
+    unsafe { raw.set_generational_enabled(on) };
     // SAFETY: serial fixture; the heap is exclusively borrowed by the test
     // thread and no other mutator or compiled leaf runs across the publication.
-    unsafe { heap.publish_barrier_window() };
-    heap
+    unsafe { raw.publish_barrier_window() };
+    // Install from the allocation root. `from_heap` publishes that root.
+    TestHeap::from_heap(raw)
 }
 
 fn minor(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
@@ -107,10 +169,9 @@ fn insert(owner: TaggedValue, key: TaggedValue, value: TaggedValue) {
     });
 }
 
-#[test]
 fn major_reclaims_dead_old_cons_box_and_bytecode_payload() {
     let mut heap = heap(true);
-    set_tagged_heap(&mut heap);
+    heap.install();
     let roots = Roots::new();
     let cons = heap.alloc_cons(TaggedValue::fixnum(101), TaggedValue::NIL);
     let cons_root = roots.keep(cons);
@@ -148,10 +209,9 @@ fn major_reclaims_dead_old_cons_box_and_bytecode_payload() {
     heap.assert_object_arenas_coherent();
 }
 
-#[test]
 fn major_keeps_permanent_payload_and_its_ordinary_old_child() {
     let mut heap = heap(true);
-    set_tagged_heap(&mut heap);
+    heap.install();
     let roots = Roots::new();
     let image = fake_image::FakeImage::leak(false);
     let mapped = image.register_vector(&mut heap);
@@ -188,10 +248,9 @@ fn major_keeps_permanent_payload_and_its_ordinary_old_child() {
     );
 }
 
-#[test]
 fn major_drops_an_unrooted_old_weak_key_after_minor_retention() {
     let mut heap = heap(true);
-    set_tagged_heap(&mut heap);
+    heap.install();
     let roots = Roots::new();
     let table = weak_key_table(&mut heap);
     roots.keep(table);
@@ -213,10 +272,9 @@ fn major_drops_an_unrooted_old_weak_key_after_minor_retention() {
     assert_eq!(table.as_hash_table().unwrap().data.len(), 0);
 }
 
-#[test]
 fn major_queues_an_unrooted_old_finalizer_once() {
     let mut heap = heap(true);
-    set_tagged_heap(&mut heap);
+    heap.install();
     let roots = Roots::new();
     let function = heap.alloc_cons(TaggedValue::T, TaggedValue::NIL);
     roots.keep(function);
@@ -238,10 +296,9 @@ fn major_queues_an_unrooted_old_finalizer_once() {
     assert!(heap.take_doomed_finalizer_functions().is_empty());
 }
 
-#[test]
 fn major_unchains_an_unrooted_old_marker() {
     let mut heap = heap(true);
-    set_tagged_heap(&mut heap);
+    heap.install();
     let roots = Roots::new();
     let marker = heap.alloc_marker(LispMarker::new(
         crate::heap_types::MarkerBuffer::DETACHED,
@@ -252,7 +309,7 @@ fn major_unchains_an_unrooted_old_marker() {
     ));
     let marker_root = roots.keep(marker);
     minor(&mut heap, &[marker]);
-    let text = crate::buffer::buffer_text::BufferText::new();
+    let text = MarkerText::new();
     let pointer = marker.as_veclike_ptr().unwrap().cast::<MarkerObj>() as *mut MarkerObj;
     text.chain_splice_at_head(pointer);
     unsafe { heap.set_marker_chain_head_slots(vec![text.markers_head_slot_raw()]) };
@@ -268,10 +325,9 @@ fn major_unchains_an_unrooted_old_marker() {
     assert!(!heap.marker_arena.owns(pointer.cast()));
 }
 
-#[test]
 fn major_retraces_old_children_when_mark_parity_repeats() {
     let mut heap = heap(true);
-    set_tagged_heap(&mut heap);
+    heap.install();
     let roots = Roots::new();
     let child = heap.alloc_string(LispString::from_utf8("reachable then dead"));
     let child_root = roots.keep(child);
@@ -306,13 +362,12 @@ fn major_retraces_old_children_when_mark_parity_repeats() {
     assert_header_at_rest(&heap, boxed);
 }
 
-#[test]
 fn major_retraces_old_uninterned_symbol_owner_without_recent_r() {
     use crate::intern::{intern_uninterned, is_canonical_id};
 
     for positioned in [false, true] {
         let mut heap = heap(true);
-        set_tagged_heap(&mut heap);
+        heap.install();
         let roots = Roots::new();
         let id = intern_uninterned("u34b-major-old-owner-symbol");
         assert!(!is_canonical_id(id));
@@ -343,10 +398,9 @@ fn major_retraces_old_uninterned_symbol_owner_without_recent_r() {
     }
 }
 
-#[test]
 fn late_dump_partition_visits_old_objects_and_consumes_stale_r_safely() {
     let mut heap = heap(true);
-    set_tagged_heap(&mut heap);
+    heap.install();
     let roots = Roots::new();
     let live = heap.alloc_hash_table(LispHashTable::new(HashTableTest::Eq));
     let live_root = roots.keep(live);
@@ -428,14 +482,13 @@ fn late_dump_partition_visits_old_objects_and_consumes_stale_r_safely() {
     );
 }
 
-#[test]
 fn concurrent_major_promotes_worker_claims_black_births_before_deferred_sweep() {
     use super::knobs::{VecScanMode, set_vec_scan_mode_for_test};
 
     set_vec_scan_mode_for_test(Some(VecScanMode::Snapshot));
     let mut heap = heap(true);
     set_vec_scan_mode_for_test(None);
-    set_tagged_heap(&mut heap);
+    heap.install();
     let roots = Roots::new();
     let target = heap.alloc_vector(vec![TaggedValue::NIL]);
     let target_root = roots.keep(target);
@@ -488,7 +541,8 @@ fn concurrent_major_promotes_worker_claims_black_births_before_deferred_sweep() 
     heap.reseed_runtime_and_remembered_roots();
     heap.seed_root(owner);
     heap.incremental_drain_all();
-    heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
+    let live_bytes = heap.live_bytes();
+    heap.incremental_finish(live_bytes, std::time::Instant::now());
     assert!(heap.sweep_in_progress());
     for value in [
         owner,
@@ -554,18 +608,17 @@ fn concurrent_major_promotes_worker_claims_black_births_before_deferred_sweep() 
     assert_ordinary_old(&heap, sweep_born);
 }
 
-#[test]
 fn major_and_minor_do_not_change_exact_allocation_counter_snapshots() {
     fn script(on: bool) -> Vec<[u64; MEMORY_USE_COUNT_LEN]> {
         let mut heap = heap(on);
-        set_tagged_heap(&mut heap);
+        heap.install();
         let roots = Roots::new();
         let accumulator = roots.keep(TaggedValue::NIL);
         let mut tail = TaggedValue::NIL;
         let mut checkpoints = Vec::new();
         for index in 0..=CONS_BLOCK_SIZE {
             tail = heap.alloc_cons(TaggedValue::fixnum(index as i64), tail);
-            set_scratch_gc_root(accumulator, tail);
+            (major_host().set)(accumulator, tail);
             if index == 0 || index == CONS_BLOCK_SIZE - 1 {
                 checkpoints.push(heap.memory_use_counts_snapshot());
             }
@@ -626,15 +679,14 @@ impl Drop for FirstPartitionCancelCleanup {
         heap.concurrent_mark_running = false;
         heap.mark_in_progress = false;
         heap.generational.major_in_progress = false;
-        set_tagged_heap(heap);
+        set_tagged_heap_root(std::ptr::NonNull::new(self.0).expect("partition cleanup heap"));
         clear_tagged_heap_if_installed(heap);
     }
 }
 
-#[test]
 fn major_explicit_first_partition_disarm_drops_completed_black_birth_logs() {
     let mut heap = heap(true);
-    set_tagged_heap(&mut heap);
+    heap.install();
     let roots = Roots::new();
     let image = fake_image::FakeImage::leak(false);
     let mapped = image.register_vector(&mut heap);
@@ -642,7 +694,7 @@ fn major_explicit_first_partition_disarm_drops_completed_black_birth_logs() {
     heap.arm_first_cycle_concurrent();
     heap.concurrent_begin();
     heap.launch_concurrent_mark();
-    let _cleanup = FirstPartitionCancelCleanup(&mut heap);
+    let _cleanup = FirstPartitionCancelCleanup(heap.root().as_ptr());
 
     // The first job may already be idle, but publication stays active until
     // join. These births have no snapshot root and retain only allocate-black
@@ -703,7 +755,7 @@ struct SymbolInsertionWorkerGuard(*mut TaggedHeap);
 
 impl Drop for SymbolInsertionWorkerGuard {
     fn drop(&mut self) {
-        // The heap remains at its stable stack address until this guard drops.
+        // The heap remains at its allocation root until this guard drops.
         // An assertion failure still joins the real worker before teardown.
         let heap = unsafe { &mut *self.0 };
         if heap.concurrent_mark_running() {
@@ -716,7 +768,7 @@ fn claimed_old_cons_symbol_insertion_case(fresh: bool, table_old: bool, car: boo
     use crate::intern::{intern_uninterned, is_canonical_id};
 
     let mut heap = heap(true);
-    set_tagged_heap(&mut heap);
+    heap.install();
     let roots = Roots::new();
     let owner = heap.alloc_cons(TaggedValue::fixnum(173), TaggedValue::NIL);
     roots.keep(owner);
@@ -759,7 +811,7 @@ fn claimed_old_cons_symbol_insertion_case(fresh: bool, table_old: bool, car: boo
     heap.seed_root(owner);
     heap.seed_root(table);
     heap.launch_concurrent_mark();
-    let _worker = SymbolInsertionWorkerGuard(&mut heap);
+    let _worker = SymbolInsertionWorkerGuard(heap.root().as_ptr());
     while !heap.concurrent_mark_done() {
         std::thread::yield_now();
     }
@@ -785,14 +837,15 @@ fn claimed_old_cons_symbol_insertion_case(fresh: bool, table_old: bool, car: boo
     if jit {
         #[cfg(feature = "jit")]
         {
-            use crate::emacs_core::jit::compile::{neovm_jit_setcar, neovm_jit_setcdr};
+            let jit_setcar = major_host().jit_setcar;
+            let jit_setcdr = major_host().jit_setcdr;
             // Inspected adapters return from the successful cons store before
             // accessing ctx. The valid owned cons guarantees that fast arm.
             // This tests the JIT slow-store adapter, not generated machine code.
             let result = if car {
                 // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
                 unsafe {
-                    neovm_jit_setcar(
+                    jit_setcar(
                         std::ptr::null_mut(),
                         owner.bits() as i64,
                         symbol.bits() as i64,
@@ -801,7 +854,7 @@ fn claimed_old_cons_symbol_insertion_case(fresh: bool, table_old: bool, car: boo
             } else {
                 // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
                 unsafe {
-                    neovm_jit_setcdr(
+                    jit_setcdr(
                         std::ptr::null_mut(),
                         owner.bits() as i64,
                         symbol.bits() as i64,
@@ -811,7 +864,10 @@ fn claimed_old_cons_symbol_insertion_case(fresh: bool, table_old: bool, car: boo
             assert_eq!(result, symbol.bits() as i64);
         }
         #[cfg(not(feature = "jit"))]
-        panic!("the JIT fixture is only selected with feature=jit");
+        {
+            let _ = (major_host().jit_setcar, major_host().jit_setcdr);
+            panic!("the JIT fixture is only selected with feature=jit");
+        }
     } else if car {
         assert!(crate::tagged::mutate::set_cons_car(owner, symbol));
     } else {
@@ -829,7 +885,8 @@ fn claimed_old_cons_symbol_insertion_case(fresh: bool, table_old: bool, car: boo
     heap.seed_root(owner);
     heap.seed_root(table);
     heap.incremental_drain_all();
-    heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
+    let live_bytes = heap.live_bytes();
+    heap.incremental_finish(live_bytes, std::time::Instant::now());
     assert!(
         heap.marked_symbols.contains(id),
         "fresh={fresh}/old={table_old}/car={car}/jit={jit}"
@@ -855,7 +912,6 @@ fn claimed_old_cons_symbol_insertion_case(fresh: bool, table_old: bool, car: boo
     );
 }
 
-#[test]
 fn concurrent_major_keeps_fresh_symbol_inserted_into_claimed_old_cons() {
     for table_old in [false, true] {
         for car in [false, true] {
@@ -866,7 +922,6 @@ fn concurrent_major_keeps_fresh_symbol_inserted_into_claimed_old_cons() {
     }
 }
 
-#[test]
 fn concurrent_major_keeps_existing_weak_symbol_inserted_into_claimed_old_cons() {
     for table_old in [false, true] {
         for car in [false, true] {
@@ -895,7 +950,7 @@ fn claimed_old_cons_heap_insertion_case(
     // Isolate insertion liveness from the all-vector snapshot's conservative
     // tracing of children belonging to an otherwise-white weak vector key.
     heap.vec_scan = knobs::VecScanMode::Defer;
-    set_tagged_heap(&mut heap);
+    heap.install();
     let roots = Roots::new();
     let owner = heap.alloc_cons(TaggedValue::fixnum(191), TaggedValue::NIL);
     roots.keep(owner);
@@ -960,7 +1015,7 @@ fn claimed_old_cons_heap_insertion_case(
     heap.seed_root(owner);
     heap.seed_root(table);
     heap.launch_concurrent_mark();
-    let _worker = SymbolInsertionWorkerGuard(&mut heap);
+    let _worker = SymbolInsertionWorkerGuard(heap.root().as_ptr());
     while !heap.concurrent_mark_done() {
         std::thread::yield_now();
     }
@@ -1014,13 +1069,14 @@ fn claimed_old_cons_heap_insertion_case(
     } else if jit {
         #[cfg(feature = "jit")]
         {
-            use crate::emacs_core::jit::compile::{neovm_jit_setcar, neovm_jit_setcdr};
+            let jit_setcar = major_host().jit_setcar;
+            let jit_setcdr = major_host().jit_setcdr;
             // Valid-cons adapters return before touching ctx. This checks their
             // ordinary slow-store hook, not generated machine-code execution.
             let result = if car {
                 // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
                 unsafe {
-                    neovm_jit_setcar(
+                    jit_setcar(
                         std::ptr::null_mut(),
                         owner.bits() as i64,
                         inserted.bits() as i64,
@@ -1029,7 +1085,7 @@ fn claimed_old_cons_heap_insertion_case(
             } else {
                 // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
                 unsafe {
-                    neovm_jit_setcdr(
+                    jit_setcdr(
                         std::ptr::null_mut(),
                         owner.bits() as i64,
                         inserted.bits() as i64,
@@ -1039,7 +1095,10 @@ fn claimed_old_cons_heap_insertion_case(
             assert_eq!(result, inserted.bits() as i64);
         }
         #[cfg(not(feature = "jit"))]
-        panic!("the JIT fixture requires feature=jit");
+        {
+            let _ = (major_host().jit_setcar, major_host().jit_setcdr);
+            panic!("the JIT fixture requires feature=jit");
+        }
     } else if car {
         assert!(crate::tagged::mutate::set_cons_car(owner, inserted));
     } else {
@@ -1069,7 +1128,8 @@ fn claimed_old_cons_heap_insertion_case(
     }
     // This assertion fails before reclamation on the unfixed source. With the
     // repair, weak sweep keeps the inserted key and drops the unrelated control.
-    heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
+    let live_bytes = heap.live_bytes();
+    heap.incremental_finish(live_bytes, std::time::Instant::now());
     assert_eq!(table.as_hash_table().unwrap().data.len(), 1);
     heap.finish_incremental_sweep_now();
     assert!(heap.owns_heap_value_for_test(inserted));
@@ -1096,7 +1156,6 @@ fn claimed_old_cons_heap_insertion_case(
     );
 }
 
-#[test]
 fn concurrent_major_keeps_existing_weak_cons_inserted_into_claimed_old_cons() {
     for table_old in [false, true] {
         for car in [false, true] {
@@ -1113,7 +1172,6 @@ fn concurrent_major_keeps_existing_weak_cons_inserted_into_claimed_old_cons() {
     }
 }
 
-#[test]
 fn concurrent_major_keeps_existing_weak_vector_inserted_into_claimed_old_cons() {
     for table_old in [false, true] {
         for car in [false, true] {
@@ -1136,7 +1194,6 @@ fn concurrent_major_keeps_existing_weak_vector_inserted_into_claimed_old_cons() 
     }
 }
 
-#[test]
 fn concurrent_major_keeps_existing_weak_string_inserted_into_claimed_old_cons() {
     for table_old in [false, true] {
         for car in [false, true] {
@@ -1159,7 +1216,6 @@ fn concurrent_major_keeps_existing_weak_string_inserted_into_claimed_old_cons() 
     }
 }
 
-#[test]
 fn concurrent_major_generic_cons_hook_keeps_existing_weak_heap_objects() {
     for kind in [
         OldWeakHeapKey::Cons,
@@ -1176,10 +1232,9 @@ fn concurrent_major_generic_cons_hook_keeps_existing_weak_heap_objects() {
 
 /// Remembered membership is owner identity, even when two live payloads
 /// compare structurally equal. A claim without its append must be rejected.
-#[test]
 fn major_remembered_membership_requires_owner_identity() {
     let mut heap = heap(true);
-    set_tagged_heap(&mut heap);
+    heap.install();
     let roots = Roots::new();
     let first = heap.alloc_vector(vec![TaggedValue::NIL; 2]);
     roots.keep(first);
@@ -1215,4 +1270,96 @@ fn major_remembered_membership_requires_owner_identity() {
         "remembered claim without this owner's log must violate the invariant",
     );
     heap.assert_remembered_membership_for_test(second);
+}
+
+pub(crate) fn run_generational_major_test(
+    name: &str,
+    save: fn() -> usize,
+    push: fn(TaggedValue) -> usize,
+    set: fn(usize, TaggedValue),
+    restore: fn(usize),
+    jit_setcar: unsafe extern "C" fn(*mut u8, i64, i64) -> i64,
+    jit_setcdr: unsafe extern "C" fn(*mut u8, i64, i64) -> i64,
+    new_marker_state: fn() -> *mut (),
+    marker_splice: unsafe fn(*mut (), *mut MarkerObj),
+    marker_head: unsafe fn(*mut ()) -> *mut *mut MarkerObj,
+    marker_walk: unsafe fn(*mut ()) -> Vec<*mut MarkerObj>,
+    marker_drop: unsafe fn(*mut ()),
+) {
+    let host = MajorHost {
+        save,
+        push,
+        set,
+        restore,
+        jit_setcar,
+        jit_setcdr,
+        new_marker_state,
+        marker_splice,
+        marker_head,
+        marker_walk,
+        marker_drop,
+    };
+    MAJOR_HOST.with(|cell| cell.set(Some(host)));
+    struct Clear;
+    impl Drop for Clear {
+        fn drop(&mut self) {
+            MAJOR_HOST.with(|cell| cell.set(None));
+        }
+    }
+    let _clear = Clear;
+    match name {
+        "major_reclaims_dead_old_cons_box_and_bytecode_payload" => {
+            major_reclaims_dead_old_cons_box_and_bytecode_payload()
+        }
+        "major_keeps_permanent_payload_and_its_ordinary_old_child" => {
+            major_keeps_permanent_payload_and_its_ordinary_old_child()
+        }
+        "major_drops_an_unrooted_old_weak_key_after_minor_retention" => {
+            major_drops_an_unrooted_old_weak_key_after_minor_retention()
+        }
+        "major_queues_an_unrooted_old_finalizer_once" => {
+            major_queues_an_unrooted_old_finalizer_once()
+        }
+        "major_unchains_an_unrooted_old_marker" => major_unchains_an_unrooted_old_marker(),
+        "major_retraces_old_children_when_mark_parity_repeats" => {
+            major_retraces_old_children_when_mark_parity_repeats()
+        }
+        "major_retraces_old_uninterned_symbol_owner_without_recent_r" => {
+            major_retraces_old_uninterned_symbol_owner_without_recent_r()
+        }
+        "late_dump_partition_visits_old_objects_and_consumes_stale_r_safely" => {
+            late_dump_partition_visits_old_objects_and_consumes_stale_r_safely()
+        }
+        "concurrent_major_promotes_worker_claims_black_births_before_deferred_sweep" => {
+            concurrent_major_promotes_worker_claims_black_births_before_deferred_sweep()
+        }
+        "major_and_minor_do_not_change_exact_allocation_counter_snapshots" => {
+            major_and_minor_do_not_change_exact_allocation_counter_snapshots()
+        }
+        "major_explicit_first_partition_disarm_drops_completed_black_birth_logs" => {
+            major_explicit_first_partition_disarm_drops_completed_black_birth_logs()
+        }
+        "concurrent_major_keeps_fresh_symbol_inserted_into_claimed_old_cons" => {
+            concurrent_major_keeps_fresh_symbol_inserted_into_claimed_old_cons()
+        }
+        "concurrent_major_keeps_existing_weak_symbol_inserted_into_claimed_old_cons" => {
+            concurrent_major_keeps_existing_weak_symbol_inserted_into_claimed_old_cons()
+        }
+        "concurrent_major_keeps_existing_weak_cons_inserted_into_claimed_old_cons" => {
+            concurrent_major_keeps_existing_weak_cons_inserted_into_claimed_old_cons()
+        }
+        "concurrent_major_keeps_existing_weak_vector_inserted_into_claimed_old_cons" => {
+            concurrent_major_keeps_existing_weak_vector_inserted_into_claimed_old_cons()
+        }
+        "concurrent_major_keeps_existing_weak_string_inserted_into_claimed_old_cons" => {
+            concurrent_major_keeps_existing_weak_string_inserted_into_claimed_old_cons()
+        }
+        "concurrent_major_generic_cons_hook_keeps_existing_weak_heap_objects" => {
+            concurrent_major_generic_cons_hook_keeps_existing_weak_heap_objects()
+        }
+        "major_remembered_membership_requires_owner_identity" => {
+            major_remembered_membership_requires_owner_identity()
+        }
+        other => panic!("unknown generational major test {other}"),
+    }
 }

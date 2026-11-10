@@ -45,6 +45,12 @@ pub use neovm_value::value::HashTableWeakness;
 #[cfg(test)]
 #[path = "../../core_tests/tagged/gc/tests/chartable_contract_test.rs"]
 mod chartable_contract_tests;
+/// Generational major tests re-homed out of value. The shell installs the
+/// eval scratch-root adapters, the JIT cons stores, and the edit marker-chain
+/// host. Assertions stay in the value bodies.
+#[cfg(test)]
+#[path = "../../core_tests/tagged/gc/tests/generational_major_tests.rs"]
+mod generational_major_tests;
 #[cfg(test)]
 #[path = "../../core_tests/tagged/gc/tests/generational_marker_unchain_test.rs"]
 mod generational_marker_unchain_tests;

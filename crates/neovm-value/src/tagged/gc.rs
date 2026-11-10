@@ -2911,9 +2911,11 @@ mod generational_tests;
 #[path = "gc/tests/birth_logs_test.rs"]
 mod birth_logs_tests;
 
-#[cfg(test)]
+#[cfg(feature = "test-support")]
 #[path = "gc/tests/generational_major_test.rs"]
 mod generational_major_tests;
+#[cfg(feature = "test-support")]
+pub(crate) use generational_major_tests::run_generational_major_test;
 
 #[cfg(test)]
 #[path = "gc/tests/generational_pacing_test.rs"]

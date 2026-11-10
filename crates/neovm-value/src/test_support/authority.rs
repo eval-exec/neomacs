@@ -1490,6 +1490,40 @@ pub fn run_mutator_registration_era_test_for_test<K>(
     );
 }
 
+/// FENCE: one re-homed generational major test. The core shell installs the
+/// eval scratch-root adapters, the JIT cons stores, and the edit marker-chain
+/// host. The original dispatcher stays `pub(crate)`.
+#[doc(hidden)]
+pub fn run_generational_major_test_for_test(
+    name: &str,
+    save: fn() -> usize,
+    push: fn(crate::value::Value) -> usize,
+    set: fn(usize, crate::value::Value),
+    restore: fn(usize),
+    jit_setcar: unsafe extern "C" fn(*mut u8, i64, i64) -> i64,
+    jit_setcdr: unsafe extern "C" fn(*mut u8, i64, i64) -> i64,
+    new_marker_state: fn() -> *mut (),
+    marker_splice: unsafe fn(*mut (), *mut crate::tagged::header::MarkerObj),
+    marker_head: unsafe fn(*mut ()) -> *mut *mut crate::tagged::header::MarkerObj,
+    marker_walk: unsafe fn(*mut ()) -> Vec<*mut crate::tagged::header::MarkerObj>,
+    marker_drop: unsafe fn(*mut ()),
+) {
+    crate::tagged::gc::run_generational_major_test(
+        name,
+        save,
+        push,
+        set,
+        restore,
+        jit_setcar,
+        jit_setcdr,
+        new_marker_state,
+        marker_splice,
+        marker_head,
+        marker_walk,
+        marker_drop,
+    );
+}
+
 /// FENCE: process collection-read configuration. The original stays
 /// `pub(crate)`. This is the only public path; it writes the process gate.
 #[cfg(any(test, feature = "test-support"))]
