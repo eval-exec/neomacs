@@ -2546,13 +2546,33 @@ mod once_survived_young_cons_tests;
 #[path = "tests/concurrent_major_worker_test.rs"]
 mod concurrent_major_worker_tests;
 
-#[cfg(test)]
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
 #[path = "tests/chartable_concurrent_write_test.rs"]
 mod chartable_concurrent_write_tests;
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+pub(crate) use chartable_concurrent_write_tests::{
+    ChartableConcurrentWriteCase, run_chartable_concurrent_write_test,
+};
 
-#[cfg(test)]
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
 #[path = "tests/concurrent_leaf_claim_tests.rs"]
 mod concurrent_leaf_claim_tests;
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+pub(crate) use concurrent_leaf_claim_tests::{
+    ConcurrentLeafClaimCase, run_concurrent_leaf_claim_test,
+};
 
 #[cfg(any(test, feature = "test-support"))]
 #[path = "tests/concurrent_hash_worker_tests.rs"]

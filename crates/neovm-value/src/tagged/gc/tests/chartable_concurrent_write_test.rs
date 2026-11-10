@@ -2,9 +2,13 @@
 //!
 //! The fixture sends ordinary heap objects through the actual mapped-veclike
 //! scan path. It never needs a pdump file, Lisp evaluation, or a timing sleep.
+#![cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
 
 use super::*;
-use crate::emacs_core::chartable::{builtin_char_table_range, builtin_set_char_table_range};
+use crate::error::EvalResult;
 use crate::intern::intern_uninterned;
 use crate::tagged::gc::mapped_veclike_scan::{MappedVeclikeScanItem, MappedVeclikeScanSnapshot};
 use crate::tagged::header::LispValueVec;
@@ -13,9 +17,61 @@ use std::sync::{Arc, Barrier, Condvar, Mutex};
 
 const REPEATS: usize = 4096;
 
+/// Adapters the core shell installs for the range seam. This module does not
+/// name the text crate.
+#[derive(Clone, Copy)]
+struct ChartableHost {
+    range: fn(Vec<TaggedValue>) -> EvalResult,
+    set_range: fn(Vec<TaggedValue>) -> EvalResult,
+}
+
+std::thread_local! {
+    static CHARTABLE_HOST: std::cell::Cell<Option<ChartableHost>> =
+        const { std::cell::Cell::new(None) };
+}
+
+fn chartable_host() -> ChartableHost {
+    CHARTABLE_HOST.with(|cell| {
+        cell.get()
+            .expect("chartable host is installed by the core shell")
+    })
+}
+
+/// One row per former value lib-test.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ChartableConcurrentWriteCase {
+    ConcurrentMappedChartableScanAndBuiltinRangeWritesAreAtomic,
+    ConcurrentSubchartableSnapshotRetainsMappedSpanAfterBuiltinCow,
+}
+
+impl ChartableConcurrentWriteCase {
+    pub const ALL: &'static [Self] = &[
+        Self::ConcurrentMappedChartableScanAndBuiltinRangeWritesAreAtomic,
+        Self::ConcurrentSubchartableSnapshotRetainsMappedSpanAfterBuiltinCow,
+    ];
+}
+
+/// Dispatcher for the core shell: the caller supplies the text crate's range
+/// builtins; the bodies and their assertions stay here.
+pub(crate) fn run_chartable_concurrent_write_test(
+    case: ChartableConcurrentWriteCase,
+    range: fn(Vec<TaggedValue>) -> EvalResult,
+    set_range: fn(Vec<TaggedValue>) -> EvalResult,
+) {
+    CHARTABLE_HOST.with(|cell| cell.set(Some(ChartableHost { range, set_range })));
+    match case {
+        ChartableConcurrentWriteCase::ConcurrentMappedChartableScanAndBuiltinRangeWritesAreAtomic => {
+            concurrent_mapped_chartable_scan_and_builtin_range_writes_are_atomic();
+        }
+        ChartableConcurrentWriteCase::ConcurrentSubchartableSnapshotRetainsMappedSpanAfterBuiltinCow => {
+            concurrent_subchartable_snapshot_retains_mapped_span_after_builtin_cow();
+        }
+    }
+}
+
 fn set_range(table: TaggedValue, range: TaggedValue, value: TaggedValue) {
     assert_eq!(
-        builtin_set_char_table_range(vec![table, range, value], None).unwrap(),
+        (chartable_host().set_range)(vec![table, range, value]).unwrap(),
         value,
     );
 }
@@ -80,7 +136,6 @@ fn finish_fixture_epoch(heap: &mut TestHeap, table: TaggedValue, completed: Conc
     );
 }
 
-#[test]
 fn concurrent_mapped_chartable_scan_and_builtin_range_writes_are_atomic() {
     let mut heap = TestHeap::new();
     heap.install();
@@ -207,21 +262,20 @@ fn concurrent_mapped_chartable_scan_and_builtin_range_writes_are_atomic() {
             .contains(&leaf_bits)
     );
     assert_eq!(
-        builtin_char_table_range(vec![table, TaggedValue::fixnum(0)], None).unwrap(),
+        (chartable_host().range)(vec![table, TaggedValue::fixnum(0)]).unwrap(),
         TaggedValue::fixnum((REPEATS - 1) as i64),
     );
     assert_eq!(
-        builtin_char_table_range(vec![table, TaggedValue::NIL], None).unwrap(),
+        (chartable_host().range)(vec![table, TaggedValue::NIL]).unwrap(),
         TaggedValue::fixnum((REPEATS - 1) as i64),
     );
     assert_eq!(
-        builtin_char_table_range(vec![table, TaggedValue::fixnum(1)], None).unwrap(),
+        (chartable_host().range)(vec![table, TaggedValue::fixnum(1)]).unwrap(),
         sentinel,
     );
     finish_fixture_epoch(&mut heap, table, result);
 }
 
-#[test]
 fn concurrent_subchartable_snapshot_retains_mapped_span_after_builtin_cow() {
     // This simulates a pdump slot span without a pdump dependency. Declaring
     // the image first also keeps it alive beyond the heap's ordinary teardown.
@@ -307,7 +361,7 @@ fn concurrent_subchartable_snapshot_retains_mapped_span_after_builtin_cow() {
     // its live storage metadata; builtin COW must have detached this header.
     assert!(unsafe { (*leaf).contents.is_owned() });
     assert_eq!(
-        builtin_char_table_range(vec![table, TaggedValue::fixnum(0)], None).unwrap(),
+        (chartable_host().range)(vec![table, TaggedValue::fixnum(0)]).unwrap(),
         TaggedValue::fixnum(100 + (REPEATS - 1) as i64),
     );
     assert_eq!(original[0], TaggedValue::fixnum(70));

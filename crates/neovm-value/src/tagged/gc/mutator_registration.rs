@@ -13,8 +13,19 @@
 #![allow(dead_code)]
 
 mod admission;
-#[cfg(test)]
+#[cfg(any(
+    test,
+    all(feature = "test-support", not(feature = "gc-memory-telemetry"))
+))]
 mod admission_probe;
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+pub(crate) use admission_probe::{
+    AdmissionProbeCase, install_admission_probe_runner, run_admission_probe_control,
+    run_admission_probe_test,
+};
 mod authority_word;
 mod collection;
 mod cons_allocation;

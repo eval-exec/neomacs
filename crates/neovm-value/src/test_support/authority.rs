@@ -198,6 +198,15 @@ pub fn reset_bytecode_data_access_count_for_test() {
 /// `cfg(any(test, feature = "test-support"))` + `pub(crate)`.
 pub type ProofEra<'heap, K> = crate::tagged::gc::ProofEra<'heap, K>;
 
+/// Case selectors for the three singleton families. The variants are value
+/// items; the core shells only name them.
+#[cfg(all(any(test, feature = "test-support"), not(feature = "gc-memory-telemetry")))]
+pub type ChartableConcurrentWriteCase = crate::tagged::gc::ChartableConcurrentWriteCase;
+#[cfg(all(any(test, feature = "test-support"), not(feature = "gc-memory-telemetry")))]
+pub type ConcurrentLeafClaimCase = crate::tagged::gc::ConcurrentLeafClaimCase;
+#[cfg(all(any(test, feature = "test-support"), not(feature = "gc-memory-telemetry")))]
+pub type AdmissionProbeCase = crate::tagged::gc::mutator_registration::AdmissionProbeCase;
+
 /// Finish refusal of [`ProofEra`]; same item as
 /// `tagged::gc::GenericProofEraFinishFailure`.
 pub type ProofEraFinishFailure<'heap, K> = crate::tagged::gc::ProofEraFinishFailure<'heap, K>;
@@ -1885,4 +1894,81 @@ pub fn with_bytecode_data_mut_for_test<R>(
     f: impl FnOnce(&mut crate::tagged::bytecode::chunk::ByteCodeFunction) -> R,
 ) -> Option<R> {
     value.with_bytecode_data_mut_for_test(f)
+}
+
+/// FENCE: the admission-probe body. The core shell admits the symbol era and
+/// passes it in; the body and its assertions stay in value. The original
+/// dispatcher stays `pub(crate)`.
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[doc(hidden)]
+pub fn run_admission_probe_test_for_test<K, W>(
+    case: AdmissionProbeCase,
+    era: crate::tagged::gc::ProofEra<'_, K>,
+    world_roots: W,
+) where
+    K: crate::tagged::gc::mutator_registration::EraKeeper,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut crate::tagged::gc::mutator_registration::AllStopped<'e>,
+            &'o mut Vec<crate::tagged::value::TaggedValue>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            crate::tagged::gc::mutator_registration::RendezvousError,
+        >,
+{
+    crate::tagged::gc::mutator_registration::run_admission_probe_test(case, era, world_roots);
+}
+
+/// FENCE: install the era-backed admission-probe runner for the legacy 0-arg
+/// control row (rendezvous::mapping_tests' `Option<fn()>`). The runner opens
+/// the real era in core and executes the value body.
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[doc(hidden)]
+pub fn install_admission_probe_runner_for_test(runner: fn()) {
+    crate::tagged::gc::mutator_registration::install_admission_probe_runner(runner);
+}
+
+/// FENCE: execute the legacy 0-arg admission-probe control row. Panics loudly
+/// at setup if no runner is installed on this thread.
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[doc(hidden)]
+pub fn run_admission_probe_control_for_test() {
+    crate::tagged::gc::mutator_registration::run_admission_probe_control();
+}
+
+/// FENCE: the chartable concurrent-write bodies. The core shell supplies the
+/// text crate's char-table range builtins; the bodies and their assertions
+/// stay in value. The original dispatcher stays `pub(crate)`.
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[doc(hidden)]
+pub fn run_chartable_concurrent_write_test_for_test(
+    case: ChartableConcurrentWriteCase,
+    range: fn(Vec<crate::tagged::value::TaggedValue>) -> crate::error::EvalResult,
+    set_range: fn(Vec<crate::tagged::value::TaggedValue>) -> crate::error::EvalResult,
+) {
+    crate::tagged::gc::run_chartable_concurrent_write_test(case, range, set_range);
+}
+
+/// FENCE: the concurrent leaf-claim bodies. The core shell supplies the edit
+/// marker-chain adapters; the bodies and their assertions stay in value. The
+/// original dispatcher stays `pub(crate)`.
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[doc(hidden)]
+pub fn run_concurrent_leaf_claim_test_for_test(
+    case: ConcurrentLeafClaimCase,
+    new_marker_state: fn() -> *mut (),
+    marker_splice: unsafe fn(*mut (), *mut crate::tagged::header::MarkerObj),
+    marker_head: unsafe fn(*mut ()) -> *mut *mut crate::tagged::header::MarkerObj,
+    marker_walk: unsafe fn(*mut ()) -> Vec<*mut crate::tagged::header::MarkerObj>,
+    marker_drop: unsafe fn(*mut ()),
+) {
+    crate::tagged::gc::run_concurrent_leaf_claim_test(
+        case,
+        new_marker_state,
+        marker_splice,
+        marker_head,
+        marker_walk,
+        marker_drop,
+    );
 }

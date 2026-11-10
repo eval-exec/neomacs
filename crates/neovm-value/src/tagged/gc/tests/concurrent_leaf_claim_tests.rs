@@ -1,10 +1,151 @@
 //! U3.5 leaf claims, ownership refusals, parity/promotion and symbol handoff.
+#![cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
 
 use super::*;
 use crate::heap_types::LispMarker;
 use crate::intern::intern_uninterned;
 use crate::tagged::header::ImageResident;
 use std::sync::Arc;
+
+/// Adapters the core shell installs for the edit marker chain. This module
+/// does not name the edit crate.
+#[derive(Clone, Copy)]
+struct LeafHost {
+    new_marker_state: fn() -> *mut (),
+    marker_splice: unsafe fn(*mut (), *mut MarkerObj),
+    marker_head: unsafe fn(*mut ()) -> *mut *mut MarkerObj,
+    marker_walk: unsafe fn(*mut ()) -> Vec<*mut MarkerObj>,
+    marker_drop: unsafe fn(*mut ()),
+}
+
+std::thread_local! {
+    static LEAF_HOST: std::cell::Cell<Option<LeafHost>> = const { std::cell::Cell::new(None) };
+}
+
+fn leaf_host() -> LeafHost {
+    LEAF_HOST.with(|cell| {
+        cell.get()
+            .expect("leaf-claim host is installed by the core shell")
+    })
+}
+
+/// Marker-chain view the shell's edit adapters back. This mirrors the
+/// historical `BufferText` call surface used by the fixture.
+struct MarkerText {
+    state: *mut (),
+}
+
+impl MarkerText {
+    fn new() -> Self {
+        Self {
+            state: (leaf_host().new_marker_state)(),
+        }
+    }
+
+    fn chain_splice_at_head(&self, pointer: *mut MarkerObj) {
+        // SAFETY: the shell's splice adapter upholds the edit fence contract.
+        unsafe { (leaf_host().marker_splice)(self.state, pointer) }
+    }
+
+    unsafe fn markers_head_slot_raw(&self) -> *mut *mut MarkerObj {
+        // SAFETY: the caller holds the same exclusive serial fixture as the
+        // original `BufferText::markers_head_slot_raw` call.
+        unsafe { (leaf_host().marker_head)(self.state) }
+    }
+
+    fn chain_walk_collect(&self) -> Vec<*mut MarkerObj> {
+        // SAFETY: the shell walks the chain the splice adapter installed.
+        unsafe { (leaf_host().marker_walk)(self.state) }
+    }
+}
+
+impl Drop for MarkerText {
+    fn drop(&mut self) {
+        // SAFETY: `state` is the shell's box, dropped once with the text.
+        unsafe { (leaf_host().marker_drop)(self.state) }
+    }
+}
+
+/// One row per former value lib-test.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ConcurrentLeafClaimCase {
+    ConcurrentLeafClaimsOffKeepsTheOriginalDeferPathAndAllocatesNoCounter,
+    ConcurrentLeafClaimsObeyGenerationParityAndOnceOnlyPromotion,
+    ConcurrentLeafClaimsRefusePostStartPagesWithoutTouchingTheHeader,
+    ConcurrentLeafClaimsKeepMappedAndResidualBoxSymbolPositionsDeferred,
+    ConcurrentLeafSymbolPositionsRouteBothFieldsAndSkipBornBlackPayloads,
+    ConcurrentLeafClaimsPreserveWeakSymbolLivenessAndReclaimDeadObjects,
+    ConcurrentLeafClaimsDoNotReadMarkerChainPayloads,
+    ConcurrentLeafClaimRmwHasOneWinnerAcrossThreads,
+    ConcurrentLeafClaimsLostWorkerResultFailsClosedWithGenerationsOff,
+}
+
+impl ConcurrentLeafClaimCase {
+    pub const ALL: &'static [Self] = &[
+        Self::ConcurrentLeafClaimsOffKeepsTheOriginalDeferPathAndAllocatesNoCounter,
+        Self::ConcurrentLeafClaimsObeyGenerationParityAndOnceOnlyPromotion,
+        Self::ConcurrentLeafClaimsRefusePostStartPagesWithoutTouchingTheHeader,
+        Self::ConcurrentLeafClaimsKeepMappedAndResidualBoxSymbolPositionsDeferred,
+        Self::ConcurrentLeafSymbolPositionsRouteBothFieldsAndSkipBornBlackPayloads,
+        Self::ConcurrentLeafClaimsPreserveWeakSymbolLivenessAndReclaimDeadObjects,
+        Self::ConcurrentLeafClaimsDoNotReadMarkerChainPayloads,
+        Self::ConcurrentLeafClaimRmwHasOneWinnerAcrossThreads,
+        Self::ConcurrentLeafClaimsLostWorkerResultFailsClosedWithGenerationsOff,
+    ];
+}
+
+/// Dispatcher for the core shell: the caller supplies the edit marker-chain
+/// adapters; the bodies and their assertions stay here.
+pub(crate) fn run_concurrent_leaf_claim_test(
+    case: ConcurrentLeafClaimCase,
+    new_marker_state: fn() -> *mut (),
+    marker_splice: unsafe fn(*mut (), *mut MarkerObj),
+    marker_head: unsafe fn(*mut ()) -> *mut *mut MarkerObj,
+    marker_walk: unsafe fn(*mut ()) -> Vec<*mut MarkerObj>,
+    marker_drop: unsafe fn(*mut ()),
+) {
+    LEAF_HOST.with(|cell| {
+        cell.set(Some(LeafHost {
+            new_marker_state,
+            marker_splice,
+            marker_head,
+            marker_walk,
+            marker_drop,
+        }))
+    });
+    match case {
+        ConcurrentLeafClaimCase::ConcurrentLeafClaimsOffKeepsTheOriginalDeferPathAndAllocatesNoCounter => {
+            concurrent_leaf_claims_off_keeps_the_original_defer_path_and_allocates_no_counter();
+        }
+        ConcurrentLeafClaimCase::ConcurrentLeafClaimsObeyGenerationParityAndOnceOnlyPromotion => {
+            concurrent_leaf_claims_obey_generation_parity_and_once_only_promotion();
+        }
+        ConcurrentLeafClaimCase::ConcurrentLeafClaimsRefusePostStartPagesWithoutTouchingTheHeader => {
+            concurrent_leaf_claims_refuse_post_start_pages_without_touching_the_header();
+        }
+        ConcurrentLeafClaimCase::ConcurrentLeafClaimsKeepMappedAndResidualBoxSymbolPositionsDeferred => {
+            concurrent_leaf_claims_keep_mapped_and_residual_box_symbol_positions_deferred();
+        }
+        ConcurrentLeafClaimCase::ConcurrentLeafSymbolPositionsRouteBothFieldsAndSkipBornBlackPayloads => {
+            concurrent_leaf_symbol_positions_route_both_fields_and_skip_born_black_payloads();
+        }
+        ConcurrentLeafClaimCase::ConcurrentLeafClaimsPreserveWeakSymbolLivenessAndReclaimDeadObjects => {
+            concurrent_leaf_claims_preserve_weak_symbol_liveness_and_reclaim_dead_objects();
+        }
+        ConcurrentLeafClaimCase::ConcurrentLeafClaimsDoNotReadMarkerChainPayloads => {
+            concurrent_leaf_claims_do_not_read_marker_chain_payloads();
+        }
+        ConcurrentLeafClaimCase::ConcurrentLeafClaimRmwHasOneWinnerAcrossThreads => {
+            concurrent_leaf_claim_rmw_has_one_winner_across_threads();
+        }
+        ConcurrentLeafClaimCase::ConcurrentLeafClaimsLostWorkerResultFailsClosedWithGenerationsOff => {
+            concurrent_leaf_claims_lost_worker_result_fails_closed_with_generations_off();
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Leaf {
@@ -150,7 +291,6 @@ fn claim(
     }
 }
 
-#[test]
 fn concurrent_leaf_claims_off_keeps_the_original_defer_path_and_allocates_no_counter() {
     for chunk_map in [false, true] {
         let mut heap = heap(false, chunk_map, false);
@@ -174,7 +314,6 @@ fn concurrent_leaf_claims_off_keeps_the_original_defer_path_and_allocates_no_cou
     }
 }
 
-#[test]
 fn concurrent_leaf_claims_obey_generation_parity_and_once_only_promotion() {
     for chunk_map in [false, true] {
         for major in [false, true] {
@@ -228,7 +367,6 @@ fn concurrent_leaf_claims_obey_generation_parity_and_once_only_promotion() {
     }
 }
 
-#[test]
 fn concurrent_leaf_claims_refuse_post_start_pages_without_touching_the_header() {
     for chunk_map in [false, true] {
         for kind in Leaf::ALL {
@@ -263,7 +401,6 @@ fn concurrent_leaf_claims_refuse_post_start_pages_without_touching_the_header() 
     }
 }
 
-#[test]
 fn concurrent_leaf_claims_keep_mapped_and_residual_box_symbol_positions_deferred() {
     for mapped in [false, true] {
         let mut heap = heap(true, true, false);
@@ -301,7 +438,6 @@ fn concurrent_leaf_claims_keep_mapped_and_residual_box_symbol_positions_deferred
     }
 }
 
-#[test]
 fn concurrent_leaf_symbol_positions_route_both_fields_and_skip_born_black_payloads() {
     for major in [false, true] {
         let mut heap = heap(true, true, major);
@@ -363,7 +499,6 @@ fn concurrent_cycle(heap: &mut TestHeap, roots: &[TaggedValue]) {
     heap.finish_incremental_sweep_now();
 }
 
-#[test]
 fn concurrent_leaf_claims_preserve_weak_symbol_liveness_and_reclaim_dead_objects() {
     use crate::value::{HashTableTest, LispHashTable};
     for generational in [false, true] {
@@ -407,11 +542,10 @@ fn concurrent_leaf_claims_preserve_weak_symbol_liveness_and_reclaim_dead_objects
     }
 }
 
-#[test]
 fn concurrent_leaf_claims_do_not_read_marker_chain_payloads() {
     for generational in [false, true] {
         let mut heap = heap(true, true, generational);
-        let text = crate::buffer::buffer_text::BufferText::new();
+        let text = MarkerText::new();
         let live = Leaf::Marker.allocate(&mut heap);
         let dead = Leaf::Marker.allocate(&mut heap);
         let live_ptr = live
@@ -434,7 +568,6 @@ fn concurrent_leaf_claims_do_not_read_marker_chain_payloads() {
     }
 }
 
-#[test]
 fn concurrent_leaf_claim_rmw_has_one_winner_across_threads() {
     let mut heap = heap(true, true, true);
     let value = Leaf::Marker.allocate(&mut heap);
@@ -472,7 +605,6 @@ fn concurrent_leaf_claim_rmw_has_one_winner_across_threads() {
     );
 }
 
-#[test]
 fn concurrent_leaf_claims_lost_worker_result_fails_closed_with_generations_off() {
     let mut heap = heap(true, true, false);
     let (sender, receiver) = std::sync::mpsc::channel::<ConcurrentMarkResult>();

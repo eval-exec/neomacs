@@ -75,6 +75,18 @@ mod ownership_obarray_claim_tests;
 #[path = "../../core_tests/tagged/gc/tests/concurrent_hash_builtin_test.rs"]
 mod concurrent_hash_builtin_test;
 
+/// Chartable concurrent-write rows re-homed out of value. The shell supplies
+/// the text crate's char-table range builtins. Assertions stay in the value
+/// bodies.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "../../core_tests/tagged/gc/tests/chartable_concurrent_write_tests.rs"]
+mod chartable_concurrent_write_tests;
 #[cfg(test)]
 #[path = "../../core_tests/tagged/gc/tests/concurrent_hash_user_guard_test.rs"]
 mod concurrent_hash_user_guard_test;
+
+/// Concurrent leaf-claim rows re-homed out of value. The shell supplies the
+/// edit marker-chain host. Assertions stay in the value bodies.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "../../core_tests/tagged/gc/tests/concurrent_leaf_claim_tests.rs"]
+mod concurrent_leaf_claim_tests;

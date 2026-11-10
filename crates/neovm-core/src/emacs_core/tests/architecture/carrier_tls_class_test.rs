@@ -643,6 +643,14 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
         "IN_FLIGHT_ROOTS",
         TlsClass::OwnerCarried,
     ),
+    // Test-support instrumentation: the admission-probe runner slot holds a
+    // cfg(any(test, feature)) fn pointer, no Lisp Values, and is absent from
+    // the shipped binary.
+    (
+        "neovm-value/src/tagged/gc/mutator_registration/admission_probe.rs",
+        "PROBE_RUNNER",
+        TlsClass::SourceOnly,
+    ),
     // Invariant flag: the real deferred GC boundary rejects a live mutation
     // closure before zeroing it; never silently hide a leaked extent.
     // MustReset: gc_thread::reset_carrier_tls calls mutate::reset_carrier_tls
