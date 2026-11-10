@@ -482,6 +482,7 @@ pub(crate) fn retire_green_inline_dependents() {
 /// pending jobs are included conservatively. No hot native-depth counter is
 /// needed, and cached relocation tracing is never skipped on this basis.
 #[cold]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn green_has_native_state() -> bool {
     COMPILED.with(|cache| {
         let cache = cache.borrow();

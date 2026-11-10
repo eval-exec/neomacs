@@ -590,6 +590,18 @@ pub fn new_context() -> Context {
     crate::emacs_core::eval_hook_installers::new_context()
 }
 
+/// Create the canonical bare evaluator with its World's threading mode fixed
+/// to Green at construction.
+///
+/// Widening hub (#1871/#1877(2)): this is the ONE explicit green constructor
+/// for cross-crate tests. `ThreadingMode` and `new_with_threading` stay
+/// private; core tests never mint a Context of their own.
+pub fn new_green_context() -> Context {
+    let mut context = new_context();
+    context.set_green_threading_mode_at_construction_for_test();
+    context
+}
+
 /// Create a cached runtime-startup evaluator for tests that need the full
 /// GNU bootstrap surface.
 ///

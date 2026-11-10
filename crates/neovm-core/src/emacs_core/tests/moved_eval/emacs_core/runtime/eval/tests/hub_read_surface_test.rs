@@ -102,6 +102,22 @@ fn hub_jit_read_surface_observes_the_canonical_knobs() {
     assert_eq!(census.results(), 0);
     assert_eq!(census.escape_boxes(), 0);
     assert_eq!(census.cold_boxes(), 0);
+
+    // A fresh serial process holds no Green native state, and evicting an id
+    // that was never assigned is a no-op through the signed fence.
+    assert!(!neovm_eval::emacs_core::jit::cache::green_has_native_state());
+    neovm_eval::test_support::authority::evict_compiled_for_test(u64::MAX);
+}
+
+/// The one explicit green constructor (#1877(2)): a canonical Context whose
+/// World threading mode is Green at construction, with ThreadingMode and
+/// new_with_threading staying private.
+#[cfg(feature = "jit")]
+#[test]
+fn hub_green_constructor_builds_a_green_context() {
+    crate::test_utils::init_test_tracing();
+    let ctx = crate::test_utils::new_green_context();
+    assert!(ctx.threading_mode_is_green_for_test());
 }
 
 #[cfg(feature = "jit")]

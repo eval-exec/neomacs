@@ -1920,6 +1920,13 @@ pub mod authority {
         crate::emacs_core::jit::cache::drain_ready_pending(ctx);
     }
 
+    /// FENCE: evict one compiled cache id and its retired/OSR stores. The
+    /// cache structures stay crate-private; only the id crosses.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    pub fn evict_compiled_for_test(id: u64) {
+        crate::emacs_core::jit::cache::evict_compiled(id);
+    }
+
     /// Whether resolving this function installs or finds a compiled leaf.
     #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
     pub fn compiled_leaf_resolved_for_test(
