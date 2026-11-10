@@ -4288,21 +4288,46 @@ impl<'a> Vm<'a> {
         is_entry: bool,
         result: EvalResult,
     ) -> EvalResult {
+        self.finish_interpreter_frame_at(frame, is_entry, result, None)
+    }
+
+    /// [`Self::finish_interpreter_frame`] with the position a NONLOCAL exit
+    /// must publish for this frame's cleanup.
+    ///
+    /// A normal return publishes the caller's position (the frame's own
+    /// position minus its own immutable cost), which is what GNU's `Breturn`
+    /// restores.  A nonlocal exit must instead keep `bc->fp` naming the
+    /// INNERMOST frame through every cleanup: `unwind_to_catch` runs all
+    /// `unbind_to` calls first and collapses `bc->fp`/`lisp_eval_depth` to the
+    /// catch's saved state only afterwards (eval.c:1423-1462), so the let/
+    /// unlet watcher and unwind forms of ANY frame in the chain are charged
+    /// from that one position.  [`Self::complete_interpreter_frame_chain`]
+    /// carries it.
+    fn finish_interpreter_frame_at(
+        &mut self,
+        frame: &InterpreterFrame,
+        is_entry: bool,
+        result: EvalResult,
+        unwind_position: Option<usize>,
+    ) -> EvalResult {
         if is_entry {
             return result;
         }
         let cleanup = frame.cleanup;
-        // Publish the caller's position before the cleanup below can run Lisp
-        // (unwind forms and handlers re-enter bytecode through the mirror, and
-        // they charge from the state GNU's `Breturn` would have restored).
-        // The frame's own position minus its own immutable cost is exactly the
-        // caller's position; the subtraction cannot drift in a LIFO chain.
-        // The entry frame's charge belongs to the caller that entered the
-        // driver through execute_from_stack_args.
         let own_position = frame.bytecode_position;
-        let frame_cost = bytecode_frame_bytes(frame.function.code().max_stack.get());
-        debug_assert!(own_position >= frame_cost);
-        release_bytecode_frame(self.ctx, own_position - frame_cost);
+        let published = match unwind_position {
+            Some(position) => position,
+            None => {
+                // The subtraction cannot drift in a LIFO chain.
+                let frame_cost = bytecode_frame_bytes(frame.function.code().max_stack.get());
+                debug_assert!(own_position >= frame_cost);
+                own_position - frame_cost
+            }
+        };
+        // Publish before the cleanup below can run Lisp: unwind forms and
+        // handlers re-enter bytecode through the mirror and charge from the
+        // state GNU's `bc->fp` holds at that moment.
+        release_bytecode_frame(self.ctx, published);
         #[cfg(debug_assertions)]
         debug_assert!(
             lexenv_tail_reachable(self.ctx.lexenv, frame.entry_lexenv),
@@ -4328,9 +4353,23 @@ impl<'a> Vm<'a> {
         aux_stack: &mut InterpreterFrameAuxStack,
         mut result: EvalResult,
     ) -> InterpreterFrameCompletion {
+        // One nonlocal exit runs every frame's cleanup with GNU's `bc->fp`
+        // still naming the INNERMOST frame (eval.c:1423-1462): capture that
+        // frame's own position once, before the first finish, and publish it
+        // for every cleanup in the chain.  A normal return keeps `None` and
+        // publishes each frame's caller position as before.
+        let mut unwind_position: Option<usize> = None;
         loop {
             let outermost = callers.has_no_suspended_callers();
-            result = self.finish_interpreter_frame(callers.active_mut(), outermost, result);
+            if unwind_position.is_none() && matches!(result, Err(_)) {
+                unwind_position = Some(callers.active().bytecode_position);
+            }
+            result = self.finish_interpreter_frame_at(
+                callers.active_mut(),
+                outermost,
+                result,
+                unwind_position,
+            );
 
             let Some(continuation) = callers.leave_callee() else {
                 return InterpreterFrameCompletion::Exit(result);

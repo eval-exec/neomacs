@@ -484,6 +484,11 @@ fn recorded_answer(label: &str) -> (String, String, u64) {
         // arm (Op::Unbind), the two opcodes that inline a Lisp evaluation.
         "watcher-let" => 4_884,
         "watcher-unlet" => 4_884,
+        // The NONLOCAL-EXIT unbind of a dynamic binding runs while GNU's
+        // unwind_to_catch still has bc->fp naming the innermost frame
+        // (eval.c:1423-1462), so the watcher's nested recursion starts from
+        // that frame's own position, exactly like the normal unlet row.
+        "watcher-unlet-unwind" => 4_884,
         // A buffer-changing primitive opcode runs after-change-functions,
         // so the helper's K charged frames must remain in the base the hook
         // recurses from (K=1000 loses about 999 frames when they are not).
@@ -764,7 +769,7 @@ fn assert_reentry_matches_gnu(event: &str, label: &str) {
 #[test]
 #[cfg(feature = "release-pdump-tests")]
 fn batch_bytecode_stack_depth_matches_gnu_through_reentry_boundaries() {
-    let events: [(&str, &str); 10] = [
+    let events: [(&str, &str); 11] = [
         (
             "funcall",
             "(funcall (byte-compile (lambda (n) (neovm--sg-deep n))) 100000000)",
@@ -803,6 +808,19 @@ fn batch_bytecode_stack_depth_matches_gnu_through_reentry_boundaries() {
                  (byte-compile (lambda (_sym _val op _where)
                    (when (eq op 'unlet) (neovm--sg-deep 100000000)))))
                (progn (let ((neovm--sg-watched 1)) (neovm--sg-deep 0)) nil))",
+        ),
+        // The same binding unbound by a NONLOCAL exit: the body calls the
+        // watched variable as a function, so a void-function error unwinds
+        // the let and the unlet watcher runs while the error is in flight.
+        // GNU runs that cleanup with bc->fp still naming the innermost
+        // frame; neomacs used to publish the CALLER's position here.
+        (
+            "watcher-unlet-unwind",
+            "(progn
+               (add-variable-watcher 'neovm--sg-watched
+                 (byte-compile (lambda (_sym _val op _where)
+                   (when (eq op 'unlet) (neovm--sg-deep 100000000)))))
+               (let ((neovm--sg-watched 1)) (neovm--sg-watched)))",
         ),
         // A primitive opcode that runs Lisp inline: `insert` runs
         // after-change-functions, and the helper's 1,000 iterative frames
