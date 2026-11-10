@@ -67,7 +67,7 @@ pub(crate) fn w32_shell_execute(ctx: &mut Context, args: Vec<Value>) -> EvalResu
         &[],
         &ctx.buffers,
     )
-    .map(|directory| crate::emacs_core::emacs_char::to_utf8_lossy(directory.as_bytes()))
+    .map(|directory| neovm_value::emacs_char::to_utf8_lossy(directory.as_bytes()))
     .unwrap_or_default();
 
     let document_text = rewrite_file_url_document(&document_text);
@@ -109,7 +109,7 @@ pub(crate) fn w32_shell_execute(ctx: &mut Context, args: Vec<Value>) -> EvalResu
             .collect::<Vec<u16>>()
     });
     let parameters_wide = parameters.as_lisp_string().map(|text| {
-        let utf8 = crate::emacs_core::emacs_char::to_utf8_lossy(text.as_bytes());
+        let utf8 = neovm_value::emacs_char::to_utf8_lossy(text.as_bytes());
         let mut wide: Vec<u16> = utf8.encode_utf16().take(32767).collect();
         wide.push(0);
         wide
