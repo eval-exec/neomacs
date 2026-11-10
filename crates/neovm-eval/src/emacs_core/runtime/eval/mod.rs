@@ -7383,6 +7383,9 @@ pub(crate) use var_fast::{
 #[cfg(all(feature = "vm-profile", not(test)))]
 pub(crate) use var_fast::{reset_var_cache_events, var_cache_census_report};
 
+#[cfg(all(feature = "test-support", feature = "vm-profile"))]
+pub(crate) use var_fast::var_cache_carrier_reset_probe_for_test;
+
 mod special_forms;
 
 mod apply;
@@ -7617,11 +7620,13 @@ pub(crate) fn park_carrier_tls() {
     neovm_value::quit::clear_quit_requested_tls();
 }
 
-/// Deferred carrier reset: drop the owner-installed subr tables and scratch GC
-/// roots. They are native containers of `Copy` `Value`s; clearing them never
-/// dereferences a heap object. The next owner's `install_native_tables`
-/// repopulates the tables.
+/// Deferred carrier reset: clear the owner-installed subr tables, scratch GC
+/// roots, and profiling counters. Clearing the native containers of `Copy`
+/// `Value`s never dereferences a heap object. The next owner's
+/// `install_native_tables` repopulates the tables.
 pub(crate) fn reset_carrier_tls() {
+    #[cfg(any(test, feature = "vm-profile"))]
+    var_fast::reset_carrier_tls();
     cconv_memo::reset_carrier_tls();
     GLOBAL_SUBR_TABLE.with(|table| table.borrow_mut().clear());
     INLINE_SUBR_TABLE.with(|table| table.borrow_mut().clear());

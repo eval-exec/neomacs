@@ -1445,6 +1445,84 @@ pub mod authority {
     pub fn disarm_resumed_chain_probe_for_test(context: &Context) -> ChainObservation {
         crate::emacs_core::bytecode::vm::resumed_chain_probe::disarm(context).observation()
     }
+
+    /// Copied observations of the producer's actual deferred native-depth reset.
+    #[cfg(all(feature = "test-support", feature = "jit"))]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct DepthResetProbe {
+        panicked: bool,
+        retained_depth: u32,
+        normal_reset_depth: u32,
+    }
+
+    #[cfg(all(feature = "test-support", feature = "jit"))]
+    impl DepthResetProbe {
+        /// Read the producer-captured value from this owned observation.
+        pub fn panicked(&self) -> bool {
+            self.panicked
+        }
+
+        /// Read the producer-captured value from this owned observation.
+        pub fn retained_depth(&self) -> u32 {
+            self.retained_depth
+        }
+
+        /// Read the producer-captured value from this owned observation.
+        pub fn normal_reset_depth(&self) -> u32 {
+            self.normal_reset_depth
+        }
+    }
+
+    /// FENCE: run the producer's real leaked-native-guard/reset probe on a
+    /// fresh joined OS thread. Guard construction, the writable TLS key, and
+    /// cleanup after capturing the observations stay private to the producer.
+    #[cfg(all(feature = "test-support", feature = "jit"))]
+    pub fn native_depth_reset_leak_probe_for_test() -> DepthResetProbe {
+        let observation = crate::emacs_core::jit::cache::native_depth_reset_leak_probe_for_test();
+        DepthResetProbe {
+            panicked: observation.panicked,
+            retained_depth: observation.retained_depth,
+            normal_reset_depth: observation.normal_reset_depth,
+        }
+    }
+    /// C1 copied observations of the real variable-cache carrier boundaries.
+    #[cfg(all(feature = "test-support", feature = "vm-profile"))]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct VarCacheCarrierResetObservation {
+        seeded_count: u64,
+        parked_count: u64,
+        reset_counts: [u64; 16],
+    }
+
+    #[cfg(all(feature = "test-support", feature = "vm-profile"))]
+    impl VarCacheCarrierResetObservation {
+        /// Read the producer-captured value from this owned observation.
+        pub fn seeded_count(&self) -> u64 {
+            self.seeded_count
+        }
+
+        /// Read the producer-captured value from this owned observation.
+        pub fn parked_count(&self) -> u64 {
+            self.parked_count
+        }
+
+        /// Read the producer-captured value from this owned observation.
+        pub fn reset_counts(&self) -> [u64; 16] {
+            self.reset_counts
+        }
+    }
+
+    /// C1 regression executed from core because the eval unit target is red
+    /// at the base. The producer joins its fresh OS thread before returning.
+    #[cfg(all(feature = "test-support", feature = "vm-profile"))]
+    pub fn var_cache_carrier_reset_probe_for_test() -> VarCacheCarrierResetObservation {
+        let observation = crate::emacs_core::eval::var_cache_carrier_reset_probe_for_test();
+        VarCacheCarrierResetObservation {
+            seeded_count: observation.seeded_count,
+            parked_count: observation.parked_count,
+            reset_counts: observation.reset_counts,
+        }
+    }
 }
 
 /// Re-homed jit switch_dispatch BOOT-FULL batch: copied inline-switch census.

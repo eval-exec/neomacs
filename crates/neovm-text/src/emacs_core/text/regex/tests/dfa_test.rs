@@ -24,6 +24,56 @@ use crate::emacs_core::regex_emacs::{
 use crate::emacs_core::regex_emacs::{matcher_entry_count, re_search};
 
 #[test]
+fn dfa_overrides_restore_nested_and_unwound_state() {
+    let original_mode = DFA_MODE_OVERRIDE.with(std::cell::Cell::get);
+    with_dfa_mode(DfaMode::Off, || {
+        assert_eq!(dfa_mode(), DfaMode::Off);
+        with_dfa_mode(DfaMode::On, || assert_eq!(dfa_mode(), DfaMode::On));
+        assert_eq!(dfa_mode(), DfaMode::Off);
+        let unwind = std::panic::catch_unwind(|| {
+            with_dfa_mode(DfaMode::Verify, || {
+                assert_eq!(dfa_mode(), DfaMode::Verify);
+                panic!("exercise DFA mode override unwinding");
+            });
+        });
+        assert!(unwind.is_err());
+        assert_eq!(dfa_mode(), DfaMode::Off);
+    });
+    assert_eq!(DFA_MODE_OVERRIDE.with(std::cell::Cell::get), original_mode);
+
+    let original_cold = DFA_COLD_OVERRIDE.with(std::cell::Cell::get);
+    with_cold_path(false, || {
+        assert!(!cold_path_enabled());
+        let unwind = std::panic::catch_unwind(|| {
+            with_cold_path(true, || {
+                assert!(cold_path_enabled());
+                panic!("exercise DFA cold-path override unwinding");
+            });
+        });
+        assert!(unwind.is_err());
+        assert!(!cold_path_enabled());
+    });
+    assert_eq!(DFA_COLD_OVERRIDE.with(std::cell::Cell::get), original_cold);
+
+    let original_first_step = DFA_FIRST_STEP_OVERRIDE.with(std::cell::Cell::get);
+    with_first_step(false, || {
+        assert!(!first_step_enabled());
+        let unwind = std::panic::catch_unwind(|| {
+            with_first_step(true, || {
+                assert!(first_step_enabled());
+                panic!("exercise DFA first-step override unwinding");
+            });
+        });
+        assert!(unwind.is_err());
+        assert!(!first_step_enabled());
+    });
+    assert_eq!(
+        DFA_FIRST_STEP_OVERRIDE.with(std::cell::Cell::get),
+        original_first_step
+    );
+}
+
+#[test]
 fn literal_positions_step_one_pattern_character_at_a_time() {
     let nfa = nfa_of("abca");
     assert_eq!(nfa.positions.len(), 4);

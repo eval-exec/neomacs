@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn anchor_override_restores_nested_and_unwound_state() {
+    let original = ANCHOR_ALT_OVERRIDE.with(std::cell::Cell::get);
+    with_anchor_alt(false, || {
+        assert!(!anchor_alt_enabled());
+        with_anchor_alt(true, || assert!(anchor_alt_enabled()));
+        assert!(!anchor_alt_enabled());
+        let unwind = std::panic::catch_unwind(|| {
+            with_anchor_alt(true, || {
+                assert!(anchor_alt_enabled());
+                panic!("exercise anchor override unwinding");
+            });
+        });
+        assert!(unwind.is_err());
+        assert!(!anchor_alt_enabled());
+    });
+    assert_eq!(ANCHOR_ALT_OVERRIDE.with(std::cell::Cell::get), original);
+}
+
+#[test]
 fn differential_overrides_restore_nested_and_unwound_state() {
     assert!(!force_backtrack());
     assert!(!force_pike());

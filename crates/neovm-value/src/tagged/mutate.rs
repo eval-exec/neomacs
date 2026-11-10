@@ -127,6 +127,20 @@ pub fn debug_assert_no_heap_mut_closure() {
     });
 }
 
+/// A reused carrier must have finished every previous mutation extent.
+/// Diagnose a leaked guard before changing its flag so the failed boundary
+/// leaves the invariant available for diagnosis and the guard's own cleanup.
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
+pub(super) fn reset_carrier_tls() {
+    IN_HEAP_MUT_CLOSURE.with(|active| {
+        assert!(
+            !active.get(),
+            "carrier reuse with a live heap mutation closure (GEN-5)"
+        );
+        active.set(false);
+    });
+}
+
 /// Mutate packed bits through the same collection journal as other mutable
 /// values. Bool-vectors have no Lisp children, so they need no pointer write
 /// barrier, but layout observations can depend on their contents.

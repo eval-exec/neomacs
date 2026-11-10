@@ -3961,10 +3961,19 @@ pub(crate) fn prepare_upgrade_for_test(ctx: *mut Context, func: &ByteCodeFunctio
     }
 }
 
-/// Carrier park: drop the compiled-leaf caches. The world's heap stays alive,
-/// but the cached leaves' reloc Values are unrooted while the carrier is idle,
-/// so the cache must not survive into the next job.
+/// Deferred between-jobs reset of compiled-leaf caches and native depth.
+/// Runs when an idle carrier is reused, after the previous job returned and
+/// before the new owner's prologue. Ordinary Green waits retain native frames
+/// on their blocked carrier and must not call this reset. Cached relocation
+/// Values are unrooted while idle, so the cache cannot enter the next job.
 pub(crate) fn reset_carrier_tls() {
+    debug_assert_eq!(
+        native_depth(),
+        0,
+        "a reused carrier must have no native leaf guards from its completed job"
+    );
+    #[cfg(any(test, debug_assertions))]
+    NATIVE_DEPTH.with(|depth| depth.set(0));
     clear();
     COMPILED_HEAP.with(|slot| slot.set(None));
     DROPPED_LEAF_TOTALS.with(|totals| {
@@ -3976,6 +3985,50 @@ pub(crate) fn reset_carrier_tls() {
             signals: 0,
         })
     });
+}
+
+/// Producer-private copied observations. The authority fence maps these
+/// into its public observation type without the producer naming the fence.
+#[cfg(feature = "test-support")]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NativeDepthResetObservation {
+    pub(crate) panicked: bool,
+    pub(crate) retained_depth: u32,
+    pub(crate) normal_reset_depth: u32,
+}
+
+/// Observe the actual deferred reset with a deliberately leaked native guard.
+/// The core test host owns the assertions on the copied observations; the
+/// producer retains the private TLS cleanup and never exposes a writable key.
+/// The fresh OS thread is joined before returning, so the leaked guard never
+/// inhabits the caller's native stack or TLS. Other panics propagate via join.
+#[cfg(feature = "test-support")]
+pub(crate) fn native_depth_reset_leak_probe_for_test() -> NativeDepthResetObservation {
+    std::thread::spawn(|| {
+        assert_eq!(native_depth(), 0, "the probe starts outside native code");
+        let guard = NativeDepthGuard::enter();
+        assert_eq!(
+            native_depth(),
+            u32::from(cfg!(any(test, debug_assertions))),
+            "the real guard establishes the configured native extent"
+        );
+        std::mem::forget(guard);
+
+        let reset = std::panic::catch_unwind(reset_carrier_tls);
+        let retained_depth = native_depth();
+        // Only the fixture repairs the deliberately leaked TLS, after observing
+        // whether the failed reset preserved it. A normal reset must then finish.
+        #[cfg(any(test, debug_assertions))]
+        NATIVE_DEPTH.with(|depth| depth.set(0));
+        reset_carrier_tls();
+        NativeDepthResetObservation {
+            panicked: reset.is_err(),
+            retained_depth,
+            normal_reset_depth: native_depth(),
+        }
+    })
+    .join()
+    .unwrap()
 }
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.

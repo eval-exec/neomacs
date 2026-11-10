@@ -290,6 +290,50 @@ pub(crate) fn reset_var_cache_events() {
     VAR_CACHE_EVENTS.with(|events| events.iter().for_each(|cell| cell.set(0)));
 }
 
+/// Start a reused carrier's next measurement interval. Ordinary parks keep
+/// the running job's counters intact.
+#[cfg(any(test, feature = "vm-profile"))]
+pub(super) fn reset_carrier_tls() {
+    reset_var_cache_events();
+}
+
+// The public Copy snapshot has a concrete array width. Keep this assertion
+// beside the private event enum so the fence needs no visibility widening.
+#[cfg(all(feature = "test-support", feature = "vm-profile"))]
+const _: () = assert!(VarCacheEvent::COUNT == 16);
+
+/// Producer-private copied observations, converted by the authority fence.
+#[cfg(all(feature = "test-support", feature = "vm-profile"))]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct VarCacheCarrierResetObservation {
+    pub(crate) seeded_count: u64,
+    pub(crate) parked_count: u64,
+    pub(crate) reset_counts: [u64; VarCacheEvent::COUNT],
+}
+
+/// Observe the real carrier boundaries on an isolated OS thread. The caller
+/// receives copied counters only after the thread and its TLS have retired.
+#[cfg(all(feature = "test-support", feature = "vm-profile"))]
+pub(crate) fn var_cache_carrier_reset_probe_for_test() -> VarCacheCarrierResetObservation {
+    std::thread::spawn(|| {
+        reset_var_cache_events();
+        note(VarCacheEvent::ReadLocalized);
+        let seeded_count = var_cache_event_count(VarCacheEvent::ReadLocalized);
+        super::park_carrier_tls();
+        let parked_count = var_cache_event_count(VarCacheEvent::ReadLocalized);
+        super::reset_carrier_tls();
+        let reset_counts: [u64; VarCacheEvent::COUNT] =
+            std::array::from_fn(|index| var_cache_event_count(VarCacheEvent::ALL[index]));
+        VarCacheCarrierResetObservation {
+            seeded_count,
+            parked_count,
+            reset_counts,
+        }
+    })
+    .join()
+    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
 /// The `VAR-CACHE` section of the VM profile dump: every event's count.
 #[cfg(any(test, feature = "vm-profile"))]
 pub(crate) fn var_cache_census_report(label: &str) -> String {

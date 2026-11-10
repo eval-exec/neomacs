@@ -518,6 +518,14 @@ mod architecture_inline_boundary_test;
 #[path = "tests/architecture/carrier_tls_class_test.rs"]
 mod architecture_carrier_tls_class_test;
 
+#[cfg(all(test, feature = "jit"))]
+#[path = "tests/architecture/native_depth_reset_guard_test.rs"]
+mod architecture_native_depth_reset_guard_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/carrier_tls_reset_probe_test.rs"]
+mod architecture_carrier_tls_reset_probe_test;
+
 #[cfg(test)]
 #[path = "tests/architecture/thread_local_owner_guard_test.rs"]
 mod architecture_thread_local_owner_guard_test;

@@ -8,6 +8,12 @@
 
 use std::path::Path;
 
+#[path = "tls_cfg_policy.rs"]
+mod cfg_policy;
+
+#[path = "tls_source_orphan_guard_test.rs"]
+mod source_orphan_guard;
+
 use super::architecture_production_source_roots::{
     crates_dir as workspace_crates_dir, production_file,
 };
@@ -26,10 +32,9 @@ enum TlsClass {
 /// One entry per production `static NAME` inside a `thread_local!` block of
 /// the workspace. Classes come from the 226-record classification; extra
 /// source-only statics are `SourceOnly`.
-/// Sentinel module for a classified record that the production source
-/// scan does not find: a shipped-binary census record (linker TLS,
-/// macro-generated `{closure}` slots) or a cfg(test)-gated block the
-/// scan deliberately skips.
+/// Sentinel module for nonworkspace shipped-binary records (third-party,
+/// linker, or compiler TLS). Workspace statics use their actual source key,
+/// including fixture statics whose enclosing module gates are proved below.
 const BINARY_CENSUS: &str = "<binary-census-or-test-gated>";
 
 /// One entry per (defining module, `static NAME`) pair inside a
@@ -45,6 +50,142 @@ const BINARY_CENSUS: &str = "<binary-census-or-test-gated>";
 /// rejected by `duplicate_classification_keys` in
 /// `every_production_thread_local_has_a_carrier_tls_class`.
 const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
+    // Value-free per-thread debug emission observations; instrumentation only.
+    // SourceOnly: no Lisp Value; a Cell<usize> emission count compiled only
+    // under cfg(any(test, debug_assertions)), not owner or heap state.
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/direct_call.rs",
+        "DIRECT_SITES_EMITTED_HERE",
+        TlsClass::SourceOnly,
+    ),
+    // SourceOnly: no Lisp Value; a debug/test-only Cell<usize> emission count
+    // under cfg(any(test, debug_assertions)), not owner or heap state.
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/lowering.rs",
+        "TAIL_CALLS_UNROOTED",
+        TlsClass::SourceOnly,
+    ),
+    // SourceOnly: no Lisp Value; a Cell<usize> engagement count compiled only
+    // under cfg(any(test, debug_assertions)), not owner or heap state.
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/stack_guard.rs",
+        "STACK_GUARDS_EMITTED",
+        TlsClass::SourceOnly,
+    ),
+    // Ordinary waits retain the native stack on the same Running carrier
+    // (eval/green/scheduler.rs wait_for_wake recv; carrier.rs Running slot,
+    // carrier_loop accepts the next job only after run_carrier_job returns).
+    // switch.rs retires/parks the old job before the NEXT job's deferred reset.
+    // Deferred reuse asserts zero before clearing; PARK must preserve depth.
+    // MustReset: cache::reset_carrier_tls asserts zero before its zero store
+    // at deferred reuse. Static and store share cfg(any(test, debug_assertions));
+    // ordinary Green waits retain the live native frame on the same carrier.
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/cache.rs",
+        "NATIVE_DEPTH",
+        TlsClass::MustReset,
+    ),
+    // Profiling observations belong to one job; eval deferred reset clears them.
+    // MustReset: var_fast::reset_carrier_tls, called by the eval deferred reset,
+    // clears every event. Static and reset share cfg(any(test, feature = "vm-profile"));
+    // variable_cache_events_survive_park_but_reset_between_jobs verifies the interval.
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/var_fast.rs",
+        "VAR_CACHE_EVENTS",
+        TlsClass::MustReset,
+    ),
+    // Fuzzing-enabled lexical overrides hold no Lisp Values. Each real setter
+    // restores the previous value with a private Drop guard, including unwind.
+    // CarrierIntrinsic: value-free mode; with_dfa_mode owns a lexical Drop guard.
+    // dfa_overrides_restore_nested_and_unwound_state proves normal/unwind restoration.
+    (
+        "neovm-text/src/emacs_core/text/regex/dfa.rs",
+        "DFA_MODE_OVERRIDE",
+        TlsClass::CarrierIntrinsic,
+    ),
+    // CarrierIntrinsic: value-free boolean; with_cold_path restores its saved slot.
+    // dfa_overrides_restore_nested_and_unwound_state proves normal/unwind restoration.
+    (
+        "neovm-text/src/emacs_core/text/regex/dfa.rs",
+        "DFA_COLD_OVERRIDE",
+        TlsClass::CarrierIntrinsic,
+    ),
+    // CarrierIntrinsic: value-free boolean; with_first_step restores its saved slot.
+    // dfa_overrides_restore_nested_and_unwound_state proves normal/unwind restoration.
+    (
+        "neovm-text/src/emacs_core/text/regex/dfa.rs",
+        "DFA_FIRST_STEP_OVERRIDE",
+        TlsClass::CarrierIntrinsic,
+    ),
+    // CarrierIntrinsic: value-free engine enum; with_regex_engine_override uses TlsScope.
+    // differential_overrides_restore_nested_and_unwound_state proves lexical restoration.
+    (
+        "neovm-text/src/emacs_core/text/regex/emacs.rs",
+        "REGEX_ENGINE_OVERRIDE",
+        TlsClass::CarrierIntrinsic,
+    ),
+    // CarrierIntrinsic: value-free search policy; with_fastmap_disabled uses TlsScope.
+    // differential_overrides_restore_nested_and_unwound_state proves lexical restoration.
+    (
+        "neovm-text/src/emacs_core/text/regex/emacs.rs",
+        "SEARCH_OPTIMIZATION_OVERRIDE",
+        TlsClass::CarrierIntrinsic,
+    ),
+    // CarrierIntrinsic: value-free boolean; with_anchor_alt restores with TlsScope.
+    // anchor_override_restores_nested_and_unwound_state proves normal/unwind restoration.
+    (
+        "neovm-text/src/emacs_core/text/regex/emacs.rs",
+        "ANCHOR_ALT_OVERRIDE",
+        TlsClass::CarrierIntrinsic,
+    ),
+    // Enclosing-module fixture gates are checked by
+    // source_only_fixture_gates_still_enclose_their_tls below. These rows do
+    // not exempt a production static when a gate is removed or a fixture moves.
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/aot.rs",
+        "FORCE_ENABLED",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/aot.rs",
+        "INJECTED",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/aot.rs",
+        "INJECTED_PRELOAD",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/aot.rs",
+        "INJECTED_PREKEYS",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/aot.rs",
+        "HASH_CALLS",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/aot.rs",
+        "FORCED_PREWARM_POLICY",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-value/src/tls_scope.rs",
+        "SCALAR",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-value/src/tls_scope.rs",
+        "VALUES",
+        TlsClass::SourceOnly,
+    ),
+    (
+        "neovm-value/src/tls_scope.rs",
+        "STACK",
+        TlsClass::SourceOnly,
+    ),
     // CarrierIntrinsic: `Capture::begin` installs the observation and its Drop
     // guard (and `pause`) restores the previous value on every exit path,
     // including unwind, so the slot is empty between jobs and never carries
@@ -211,7 +352,12 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
         "CHARSET_REGISTRY",
         TlsClass::OwnerCarried,
     ),
-    (BINARY_CENSUS, "CHAR_TABLE_ASCII_FOLD", TlsClass::MustReset),
+    // regex/emacs.rs:10773/10774 reset_carrier_tls clears the memo.
+    (
+        "neovm-text/src/emacs_core/text/regex/emacs.rs",
+        "CHAR_TABLE_ASCII_FOLD",
+        TlsClass::MustReset,
+    ),
     (
         "neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs",
         "CHAR_TABLE_LAYOUT_MUTATION_EPOCH",
@@ -281,7 +427,12 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
     ),
     (BINARY_CENSUS, "CURRENT_PARKER", TlsClass::CarrierIntrinsic),
     (BINARY_CENSUS, "CURRENT_PASS", TlsClass::CarrierIntrinsic),
-    (BINARY_CENSUS, "DB_HANDLES", TlsClass::CarrierIntrinsic),
+    // sqlite/mod.rs:71/80 world_state_placeholder + swap_world_state (both maps).
+    (
+        "neovm-system/src/emacs_core/system/sqlite/mod.rs",
+        "DB_HANDLES",
+        TlsClass::CarrierIntrinsic,
+    ),
     (
         "neovm-eval/src/emacs_core/runtime/jit/bg.rs",
         "DEFERRED",
@@ -433,7 +584,12 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
         TlsClass::MustReset,
     ),
     (BINARY_CENSUS, "ID", TlsClass::CarrierIntrinsic),
-    (BINARY_CENSUS, "IMM_POOL", TlsClass::MustReset),
+    // lowering.rs:9249/9258 reset_carrier_tls via jit_compile.
+    (
+        "neovm-eval/src/emacs_core/runtime/jit/compile/lowering.rs",
+        "IMM_POOL",
+        TlsClass::MustReset,
+    ),
     (
         "neovm-eval/src/emacs_core/runtime/jit/stats.rs",
         "INLINE_CENSUS",
@@ -487,7 +643,17 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
         "IN_FLIGHT_ROOTS",
         TlsClass::OwnerCarried,
     ),
-    (BINARY_CENSUS, "IN_HEAP_MUT_CLOSURE", TlsClass::SourceOnly),
+    // Invariant flag: the real deferred GC boundary rejects a live mutation
+    // closure before zeroing it; never silently hide a leaked extent.
+    // MustReset: gc_thread::reset_carrier_tls calls mutate::reset_carrier_tls
+    // at deferred reuse, asserting GEN-5 before zeroing. Static, reset and call share
+    // cfg(any(test, debug_assertions, feature = "test-support")); plain optimized
+    // production without test-support contains neither the flag nor this reset.
+    (
+        "neovm-value/src/tagged/mutate.rs",
+        "IN_HEAP_MUT_CLOSURE",
+        TlsClass::MustReset,
+    ),
     (
         "neovm-eval/src/emacs_core/runtime/jit/compile/reg_abi.rs",
         "LAMBDA_LIST",
@@ -869,7 +1035,12 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
         "RELEASE_REVALIDATION_EMITTED",
         TlsClass::SourceOnly,
     ),
-    (BINARY_CENSUS, "RESULT_SETS", TlsClass::CarrierIntrinsic),
+    // sqlite/mod.rs:80/85 swap_world_state swaps the result-set map.
+    (
+        "neovm-system/src/emacs_core/system/sqlite/mod.rs",
+        "RESULT_SETS",
+        TlsClass::CarrierIntrinsic,
+    ),
     (
         "neovm-eval/src/emacs_core/runtime/jit/compile/lowering.rs",
         "RETAG_COUNT",
@@ -1313,10 +1484,1559 @@ fn same_file_occurrence_violations(
     violations
 }
 
-fn is_test_only_block(before: &str) -> bool {
-    before.contains("#[cfg(test)]")
-        || before.contains("cfg(all(test")
-        || before.contains("cfg(any(test")
+/// Closed interim spellings. Exact source text and an owned parsed cfg
+/// attribute are both required; a later cfg evaluator may replace this list.
+const ACCEPTED_TEST_ONLY_GATES: &[&str] = &[
+    "#[cfg(test)]",
+    "#[cfg(any(test, feature = \"test-support\"))]",
+];
+
+/// A source-root-to-TLS module route. Every module load is pinned, including
+/// inline modules (which repeat their declaring file). `file:line` names the
+/// actual gated declaration along this route, not an inferred surrounding cfg.
+struct EnclosingTestGate {
+    root_file: &'static str,
+    file: &'static str,
+    line: usize,
+    cfg: &'static str,
+    module: &'static str,
+    resolved_files: &'static [&'static str],
+    names: &'static [&'static str],
+    reason: &'static str,
+}
+
+const ENCLOSING_TEST_GATES: &[EnclosingTestGate] = &[
+    EnclosingTestGate {
+        root_file: "neovm-eval/src/lib.rs",
+        file: "neovm-eval/src/emacs_core/runtime/jit/aot.rs",
+        line: 5789,
+        cfg: "#[cfg(any(test, feature = \"test-support\"))]",
+        module: "emacs_core::jit::aot::test_support",
+        resolved_files: &[
+            "neovm-eval/src/emacs_core/mod.rs",
+            "neovm-eval/src/emacs_core/runtime/jit/mod.rs",
+            "neovm-eval/src/emacs_core/runtime/jit/aot.rs",
+            "neovm-eval/src/emacs_core/runtime/jit/aot.rs",
+        ],
+        names: &[
+            "FORCE_ENABLED",
+            "INJECTED",
+            "INJECTED_PRELOAD",
+            "INJECTED_PREKEYS",
+            "HASH_CALLS",
+            "FORCED_PREWARM_POLICY",
+        ],
+        reason: "Per-test AOT knobs (LoadedUnit holds code/descriptor pointers, no Lisp Values), \
+                 absent from shipped dependency graphs; a carrier reset must not clear them \
+                 mid-test. The manifest provenance guard and normal/build feature graphs \
+                 establish that the allowlisted feature is not enabled in production.",
+    },
+    EnclosingTestGate {
+        root_file: "neovm-value/src/lib.rs",
+        file: "neovm-value/src/tls_scope.rs",
+        line: 163,
+        cfg: "#[cfg(test)]",
+        module: "tls_scope::tests",
+        resolved_files: &[
+            "neovm-value/src/tls_scope.rs",
+            "neovm-value/src/tls_scope.rs",
+        ],
+        names: &["SCALAR", "VALUES", "STACK"],
+        reason: "cfg(test)-only u32 Cell/Vec fixtures for lexical TLS scope restoration; \
+                 no Lisp Values or production carrier state.",
+    },
+];
+
+fn normalized_path(path: &Path) -> Result<std::path::PathBuf, String> {
+    let mut result = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !result.pop() {
+                    return Err("path escapes its root".into());
+                }
+            }
+            component => result.push(component.as_os_str()),
+        }
+    }
+    Ok(result)
+}
+
+fn gate_route_has_no_symlinks(root: &Path, path: &Path) -> Result<(), String> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| "module route is outside the source root")?;
+    let mut cursor = root.to_path_buf();
+    for component in relative.components() {
+        cursor.push(component.as_os_str());
+        let metadata = std::fs::symlink_metadata(&cursor).map_err(|error| error.to_string())?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "symlink module routes are unmodelled: {}",
+                cursor.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Check the raw path exists before normalization: erasing a nonexistent
+/// `directory/..` component would otherwise invent a Rust module candidate.
+fn pinned_gate_file(
+    root: &Path,
+    actual: &Path,
+    expected: &str,
+) -> Result<std::path::PathBuf, String> {
+    if !actual.is_file() {
+        return Err(format!("missing module file {}", actual.display()));
+    }
+    gate_route_has_no_symlinks(root, actual)?;
+    let actual_normal = normalized_path(actual)?;
+    if actual_normal != normalized_path(&root.join(expected))? {
+        return Err(format!(
+            "module retarget: {} != {expected}",
+            actual.display()
+        ));
+    }
+    let canonical = actual.canonicalize().map_err(|error| error.to_string())?;
+    if !canonical.starts_with(root) {
+        return Err("module resolves outside the source root".into());
+    }
+    let expected_canonical = root
+        .join(expected)
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if canonical != expected_canonical {
+        return Err("module traversal resolves to another pinned file".into());
+    }
+    Ok(actual_normal)
+}
+
+/// All library/bin roots of the owner, including automatic src/bin/name.rs
+/// and src/bin/name/main.rs targets. Unmodelled target forms fail closed.
+fn gate_owner_roots(root: &Path, file: &Path) -> Result<Vec<std::path::PathBuf>, String> {
+    let mut directory = file.parent().ok_or("source root has no parent")?;
+    let manifest = loop {
+        let candidate = directory.join("Cargo.toml");
+        if candidate.is_file() {
+            break candidate;
+        }
+        if directory == root {
+            return Err("module route has no owning Cargo.toml".into());
+        }
+        directory = directory
+            .parent()
+            .filter(|path| path.starts_with(root))
+            .ok_or("module route has no owning Cargo.toml")?;
+    };
+    gate_route_has_no_symlinks(root, &manifest)?;
+    let source = std::fs::read_to_string(&manifest).map_err(|error| error.to_string())?;
+    let cargo: toml::Value =
+        toml::from_str(&source).map_err(|error| format!("root manifest: {error}"))?;
+    let package = cargo
+        .get("package")
+        .and_then(toml::Value::as_table)
+        .ok_or("module source does not belong to a Cargo package")?;
+    let enabled = |name: &str| -> Result<bool, String> {
+        package.get(name).map_or(Ok(true), |value| {
+            value
+                .as_bool()
+                .ok_or_else(|| format!("nonboolean package.{name}"))
+        })
+    };
+    let mut roots = Vec::new();
+    match cargo.get("lib") {
+        Some(toml::Value::Table(library)) => {
+            let path = library.get("path").map_or(Ok("src/lib.rs"), |value| {
+                value.as_str().ok_or("nonstring lib.path")
+            })?;
+            roots.push(directory.join(path));
+        }
+        Some(_) => return Err("lib must be a table".into()),
+        None if enabled("autolib")? && directory.join("src/lib.rs").is_file() => {
+            roots.push(directory.join("src/lib.rs"))
+        }
+        None => {}
+    }
+    if enabled("autobins")? {
+        if directory.join("src/main.rs").is_file() {
+            roots.push(directory.join("src/main.rs"));
+        }
+        let bins = directory.join("src/bin");
+        if bins.exists() {
+            gate_route_has_no_symlinks(root, &bins)?;
+            for entry in std::fs::read_dir(&bins).map_err(|error| error.to_string())? {
+                let entry = entry.map_err(|error| error.to_string())?;
+                let path = entry.path();
+                if entry
+                    .file_type()
+                    .map_err(|error| error.to_string())?
+                    .is_symlink()
+                {
+                    return Err("symlink automatic Cargo targets are unmodelled".into());
+                }
+                if path.is_file() && path.extension().is_some_and(|extension| extension == "rs") {
+                    roots.push(path);
+                } else if path.is_dir() && path.join("main.rs").is_file() {
+                    roots.push(path.join("main.rs"));
+                }
+            }
+        }
+    }
+    if let Some(binaries) = cargo.get("bin") {
+        for binary in binaries
+            .as_array()
+            .ok_or("bin must be an array of tables")?
+        {
+            let table = binary.as_table().ok_or("bin must be a table")?;
+            let path = table
+                .get("path")
+                .and_then(toml::Value::as_str)
+                .ok_or("explicit Cargo bin without a literal path is unmodelled")?;
+            roots.push(directory.join(path));
+        }
+    }
+    let mut unique = std::collections::BTreeSet::new();
+    for path in roots {
+        let normal = normalized_path(&path)?;
+        let relative = normal
+            .strip_prefix(root)
+            .map_err(|_| "Cargo root leaves the source root")?
+            .to_str()
+            .ok_or("non-UTF8 Cargo root")?;
+        unique.insert(pinned_gate_file(root, &path, relative)?);
+    }
+    Ok(unique.into_iter().collect())
+}
+
+/// Arbitrary foo.rs files cannot claim crate-root mounting semantics.
+fn verified_gate_root(root: &Path, relative: &str) -> Result<std::path::PathBuf, String> {
+    let file = pinned_gate_file(root, &root.join(relative), relative)?;
+    if !gate_owner_roots(root, &file)?.contains(&file) {
+        return Err(format!(
+            "{} is not a declared library/bin root",
+            file.display()
+        ));
+    }
+    Ok(file)
+}
+
+struct GateModuleScope {
+    file: std::path::PathBuf,
+    module_dir: std::path::PathBuf,
+    inside_inline: bool,
+    source: String,
+    items: Vec<syn::Item>,
+    attributes: Vec<syn::Attribute>,
+}
+
+impl GateModuleScope {
+    fn read(file: std::path::PathBuf, module_dir: std::path::PathBuf) -> Result<Self, String> {
+        let source = std::fs::read_to_string(&file).map_err(|error| error.to_string())?;
+        let syntax =
+            syn::parse_file(&source).map_err(|error| format!("{}: {error}", file.display()))?;
+        Ok(Self {
+            file,
+            module_dir,
+            inside_inline: false,
+            source,
+            items: syntax.items,
+            attributes: syntax.attrs,
+        })
+    }
+}
+
+fn gate_attribute_text(source: &str, attr: &syn::Attribute) -> Option<String> {
+    use syn::spanned::Spanned;
+    let span = attr.span();
+    let offset = |point: proc_macro2::LineColumn| -> Option<usize> {
+        let index = point.line.checked_sub(1)?;
+        let prefix: usize = source.split_inclusive('\n').take(index).map(str::len).sum();
+        let line = source.split_inclusive('\n').nth(index)?;
+        // proc_macro2 columns count Unicode characters, not UTF-8 bytes.
+        let column = line
+            .char_indices()
+            .map(|(at, _)| at)
+            .chain(std::iter::once(line.len()))
+            .nth(point.column)?;
+        Some(prefix + column)
+    };
+    source
+        .get(offset(span.start())?..offset(span.end())?)
+        .map(str::to_owned)
+}
+
+fn gate_module_path(module: &syn::ItemMod) -> Result<Option<std::path::PathBuf>, String> {
+    let mut path = None;
+    for attr in &module.attrs {
+        if attr.path().is_ident("cfg_attr") {
+            return Err("cfg_attr module resolution is unmodelled".into());
+        }
+        if attr.path().is_ident("path") {
+            if path.is_some() {
+                return Err("multiple module path attributes".into());
+            }
+            let syn::Meta::NameValue(value) = &attr.meta else {
+                return Err("unmodelled module path".into());
+            };
+            let syn::Expr::Lit(expr) = &value.value else {
+                return Err("nonliteral module path".into());
+            };
+            let syn::Lit::Str(value) = &expr.lit else {
+                return Err("nonstring module path".into());
+            };
+            path = Some(std::path::PathBuf::from(value.value()));
+        } else if ![
+            "cfg",
+            "doc",
+            "allow",
+            "warn",
+            "deny",
+            "forbid",
+            "expect",
+            "deprecated",
+        ]
+        .iter()
+        .any(|name| attr.path().is_ident(name))
+        {
+            return Err("unknown module attribute can alter its contents".into());
+        }
+    }
+    Ok(path)
+}
+
+fn accepted_test_gate_attribute(source: &str, attr: &syn::Attribute) -> bool {
+    use syn::parse::Parser;
+    if !attr.path().is_ident("cfg") {
+        return false;
+    }
+    let Some(text) = gate_attribute_text(source, attr) else {
+        return false;
+    };
+    if !ACCEPTED_TEST_ONLY_GATES.contains(&text.as_str()) {
+        return false;
+    }
+    let Ok(accepted) = syn::Attribute::parse_outer.parse_str(&text) else {
+        return false;
+    };
+    let Ok(predicate) = attr.parse_args::<syn::Meta>() else {
+        return false;
+    };
+    cfg_policy::interim_cfg_is_test_only(&predicate)
+        && matches!(accepted.as_slice(), [accepted] if accepted.meta == attr.meta)
+}
+
+/// One model for both the pinned route and the production-alias audit. An
+/// explicitly path-loaded file owns its parent directory, while a normal
+/// foo.rs mount owns parent/foo. Inline path bases preserve this distinction.
+fn descend_gate_module(
+    root: &Path,
+    scope: &GateModuleScope,
+    module: &syn::ItemMod,
+    expected: Option<&str>,
+) -> Result<GateModuleScope, String> {
+    let path = gate_module_path(module)?;
+    let base = if scope.inside_inline {
+        &scope.module_dir
+    } else {
+        scope.file.parent().ok_or("declaring file parent")?
+    };
+    let check = |actual: &Path| -> Result<std::path::PathBuf, String> {
+        if let Some(expected) = expected {
+            return pinned_gate_file(root, actual, expected);
+        }
+        let normal = normalized_path(actual)?;
+        let relative = normal
+            .strip_prefix(root)
+            .map_err(|_| "module leaves the source root")?;
+        pinned_gate_file(
+            root,
+            actual,
+            relative.to_str().ok_or("non-UTF8 module path")?,
+        )
+    };
+    if let Some((_, items)) = &module.content {
+        let file = check(&scope.file)?;
+        let module_dir = match path {
+            Some(path) => base.join(path),
+            None => scope.module_dir.join(module.ident.to_string()),
+        };
+        if !normalized_path(&module_dir)?.starts_with(root) {
+            return Err("inline module directory escapes the source root".into());
+        }
+        // A purely inline module needs no on-disk child directory. Still
+        // reject every existing symlink prefix before a later child is used.
+        let mut existing = module_dir.as_path();
+        while !existing.exists() {
+            if std::fs::symlink_metadata(existing).is_ok_and(|meta| meta.file_type().is_symlink()) {
+                return Err("symlink inline module directory is unmodelled".into());
+            }
+            existing = existing
+                .parent()
+                .ok_or("inline module directory has no parent")?;
+        }
+        gate_route_has_no_symlinks(root, existing)?;
+        return Ok(GateModuleScope {
+            file,
+            module_dir,
+            inside_inline: true,
+            source: scope.source.clone(),
+            items: items.clone(),
+            attributes: scope.attributes.clone(),
+        });
+    }
+    let (file, module_dir) = if let Some(path) = path {
+        let file = base.join(path);
+        let parent = file.parent().ok_or("path module parent")?.to_path_buf();
+        (file, parent)
+    } else {
+        let name = module.ident.to_string();
+        let plain = scope.module_dir.join(format!("{name}.rs"));
+        let directory = scope.module_dir.join(&name).join("mod.rs");
+        match (plain.is_file(), directory.is_file()) {
+            (true, false) => (plain, scope.module_dir.join(&name)),
+            (false, true) => (directory, scope.module_dir.join(&name)),
+            _ => return Err(format!("missing/ambiguous default module {name}")),
+        }
+    };
+    GateModuleScope::read(check(&file)?, module_dir)
+}
+
+/// External-file claims need a complete production-capable ownership graph.
+/// A module with a closed, parsed test gate cannot mount production aliases.
+/// Everything else is inspected; opaque expansions and block-local module
+/// declarations are refused rather than guessed to be module-free.
+fn reject_production_gate_aliases(
+    root: &Path,
+    root_file: &Path,
+    target: &Path,
+) -> Result<(), String> {
+    use syn::visit::Visit;
+    struct HiddenMount(Option<&'static str>);
+    impl<'ast> Visit<'ast> for HiddenMount {
+        fn visit_item_mod(&mut self, _: &'ast syn::ItemMod) {
+            self.0 = Some("block-local module mounts are unmodelled");
+        }
+        fn visit_macro(&mut self, _: &'ast syn::Macro) {
+            self.0 = Some("opaque production macros can mount the claimed file");
+        }
+        fn visit_attribute(&mut self, attr: &'ast syn::Attribute) {
+            if ![
+                "cfg",
+                "doc",
+                "allow",
+                "warn",
+                "deny",
+                "forbid",
+                "expect",
+                "deprecated",
+                "inline",
+                "cold",
+                "must_use",
+                "no_mangle",
+                "export_name",
+            ]
+            .iter()
+            .any(|name| attr.path().is_ident(name))
+            {
+                self.0 = Some("opaque production attributes can mount the claimed file");
+            }
+        }
+    }
+    let target = target.canonicalize().map_err(|error| error.to_string())?;
+    let roots = gate_owner_roots(root, root_file)?;
+    let mut pending = roots
+        .iter()
+        .map(|file| GateModuleScope::read(file.clone(), file.parent().ok_or("root parent")?.into()))
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut mounted: std::collections::BTreeSet<_> = roots.into_iter().collect();
+    while let Some(scope) = pending.pop() {
+        if scope
+            .file
+            .canonicalize()
+            .map_err(|error| error.to_string())?
+            == target
+        {
+            return Err(format!(
+                "production-capable mount of claimed file {}",
+                target.display()
+            ));
+        }
+        let mut inner = HiddenMount(None);
+        for attr in &scope.attributes {
+            inner.visit_attribute(attr);
+        }
+        if let Some(problem) = inner.0 {
+            return Err(problem.into());
+        }
+        for item in &scope.items {
+            if let syn::Item::Mod(module) = item {
+                if module
+                    .attrs
+                    .iter()
+                    .any(|attr| accepted_test_gate_attribute(&scope.source, attr))
+                {
+                    continue;
+                }
+                let child = descend_gate_module(root, &scope, module, None)?;
+                if module.content.is_none()
+                    && !mounted.insert(
+                        child
+                            .file
+                            .canonicalize()
+                            .map_err(|error| error.to_string())?,
+                    )
+                {
+                    return Err("duplicate/cyclic production file mounts are unmodelled".into());
+                }
+                pending.push(child);
+                continue;
+            }
+            let mut hidden = HiddenMount(None);
+            if let syn::Item::Macro(item) = item {
+                for attr in &item.attrs {
+                    hidden.visit_attribute(attr);
+                }
+                if !item
+                    .mac
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|part| part.ident == "thread_local")
+                {
+                    return Err("opaque production item macro can mount the claimed file".into());
+                }
+                let body = syn::parse2::<syn::File>(item.mac.tokens.clone())
+                    .map_err(|error| error.to_string())?;
+                for item in &body.items {
+                    hidden.visit_item(item);
+                }
+            } else {
+                hidden.visit_item(item);
+            }
+            if let Some(problem) = hidden.0 {
+                return Err(problem.into());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Check literal path aliases throughout the source tree, including foreign
+/// packages. Foreign opaque macro-generated mounts are deliberately outside
+/// this bounded audit; owner-package opaque expansions are refused above.
+fn reject_literal_gate_aliases(
+    root: &Path,
+    targets: &std::collections::BTreeSet<std::path::PathBuf>,
+    route_paths: &std::collections::BTreeSet<(std::path::PathBuf, usize, usize)>,
+) -> Result<(), String> {
+    use syn::{spanned::Spanned, visit::Visit};
+    fn paths(meta: &syn::Meta, found: &mut Vec<std::path::PathBuf>) -> Result<(), String> {
+        match meta {
+            syn::Meta::NameValue(value) if value.path.is_ident("path") => {
+                let syn::Expr::Lit(expr) = &value.value else {
+                    return Err("nonliteral module path".into());
+                };
+                let syn::Lit::Str(value) = &expr.lit else {
+                    return Err("nonstring module path".into());
+                };
+                found.push(value.value().into());
+            }
+            syn::Meta::List(list) if list.path.is_ident("cfg_attr") => {
+                for meta in list
+                    .parse_args_with(
+                        syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+                    )
+                    .map_err(|error| error.to_string())?
+                {
+                    paths(&meta, found)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    struct LiteralPaths<'a> {
+        file: &'a Path,
+        dirs: Vec<std::path::PathBuf>,
+        inside_inline: bool,
+        block_depth: usize,
+        targets: &'a std::collections::BTreeSet<std::path::PathBuf>,
+        route: &'a std::collections::BTreeSet<(std::path::PathBuf, usize, usize)>,
+        error: Option<String>,
+    }
+    impl<'ast> Visit<'ast> for LiteralPaths<'_> {
+        fn visit_block(&mut self, block: &'ast syn::Block) {
+            self.block_depth += 1;
+            syn::visit::visit_block(self, block);
+            self.block_depth -= 1;
+        }
+        fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+            if self.error.is_some() {
+                return;
+            }
+            let Some(parent) = self.file.parent() else {
+                self.error = Some("literal-path source has no parent".into());
+                return;
+            };
+            let bases = if self.block_depth != 0 {
+                let mut bases = self.dirs.clone();
+                bases.push(parent.into());
+                bases
+            } else if self.inside_inline {
+                self.dirs.clone()
+            } else {
+                vec![parent.into()]
+            };
+            let mut literal = Vec::new();
+            let mut conditional = false;
+            for attr in &module.attrs {
+                let mut values = Vec::new();
+                if let Err(error) = paths(&attr.meta, &mut values) {
+                    self.error = Some(error);
+                    return;
+                }
+                if !values.is_empty() && attr.path().is_ident("cfg_attr") {
+                    conditional = true;
+                }
+                for path in values {
+                    for base in &bases {
+                        let candidate = base.join(&path);
+                        if !candidate.is_file()
+                            && normalized_path(&candidate)
+                                .is_ok_and(|path| self.targets.contains(&path))
+                        {
+                            self.error = Some(format!(
+                                "unresolved literal path can name protected file {}",
+                                candidate.display()
+                            ));
+                            return;
+                        }
+                        if candidate.is_file() {
+                            match candidate.canonicalize() {
+                                Ok(target) if self.targets.contains(&target) => {
+                                    let span = attr.span().start();
+                                    let key = (self.file.to_path_buf(), span.line, span.column);
+                                    if !self.route.contains(&key) {
+                                        self.error = Some(format!(
+                                            "literal path alias of protected file {} at {}:{}",
+                                            target.display(),
+                                            self.file.display(),
+                                            span.line
+                                        ));
+                                        return;
+                                    }
+                                }
+                                Ok(_) => {}
+                                Err(error) => {
+                                    self.error = Some(error.to_string());
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    literal.push(path);
+                }
+            }
+            if module.content.is_none() {
+                return;
+            }
+            let mut dirs = Vec::new();
+            if literal.is_empty() || conditional {
+                dirs.extend(
+                    self.dirs
+                        .iter()
+                        .map(|dir| dir.join(module.ident.to_string())),
+                );
+            }
+            for path in literal {
+                dirs.extend(bases.iter().map(|base| base.join(&path)));
+            }
+            let previous_dirs = std::mem::replace(&mut self.dirs, dirs);
+            let previous_inline = std::mem::replace(&mut self.inside_inline, true);
+            syn::visit::visit_item_mod(self, module);
+            self.dirs = previous_dirs;
+            self.inside_inline = previous_inline;
+        }
+    }
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(directory).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let path = entry.path();
+            let kind = entry.file_type().map_err(|error| error.to_string())?;
+            if kind.is_symlink() {
+                return Err("symlink source entries are unmodelled in literal-path audit".into());
+            }
+            if kind.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.file_name().is_some_and(|name| name == "Cargo.toml") {
+                let source = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
+                let cargo: toml::Value =
+                    toml::from_str(&source).map_err(|error| error.to_string())?;
+                if cargo.get("package").is_some() {
+                    for source_root in gate_owner_roots(root, &path)? {
+                        let canonical = source_root
+                            .canonicalize()
+                            .map_err(|error| error.to_string())?;
+                        if targets.contains(&canonical) {
+                            return Err(format!(
+                                "Cargo source-root alias of protected file {} in {}",
+                                canonical.display(),
+                                path.display()
+                            ));
+                        }
+                    }
+                }
+                continue;
+            }
+            if path.extension().is_none_or(|extension| extension != "rs") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
+            let syntax = syn::parse_file(&source)
+                .map_err(|error| format!("literal alias scan {}: {error}", path.display()))?;
+            let parent = path.parent().ok_or("literal-path source has no parent")?;
+            // A foreign non-mod.rs file may have been mounted normally, by
+            // #[path], or as a Cargo root. Consider every possible directory.
+            let mut dirs = vec![parent.to_path_buf()];
+            if let Some(stem) = path.file_stem() {
+                dirs.push(parent.join(stem));
+            }
+            let mut visitor = LiteralPaths {
+                file: &path,
+                dirs,
+                inside_inline: false,
+                block_depth: 0,
+                targets,
+                route: route_paths,
+                error: None,
+            };
+            visitor.visit_file(&syntax);
+            if let Some(error) = visitor.error {
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn resolve_enclosing_test_gate(
+    root: &Path,
+    gate: &EnclosingTestGate,
+) -> Result<Vec<String>, String> {
+    use syn::spanned::Spanned;
+    let root = root.canonicalize().map_err(|error| error.to_string())?;
+    let root_file = verified_gate_root(&root, gate.root_file)?;
+    let mut scope = GateModuleScope::read(
+        root_file.clone(),
+        root_file.parent().ok_or("root parent")?.into(),
+    )?;
+    let parts: Vec<_> = gate.module.split("::").collect();
+    if parts.len() != gate.resolved_files.len() || parts.iter().any(|part| part.is_empty()) {
+        return Err("every module route step needs one pinned resolved file".into());
+    }
+    let mut gate_seen = false;
+    let mut gate_owns_definition_text = false;
+    let mut protected_files = std::collections::BTreeSet::new();
+    let mut route_paths = std::collections::BTreeSet::new();
+    let mut evidence = Vec::new();
+    for (part, expected) in parts.iter().zip(gate.resolved_files) {
+        let matches: Vec<_> = scope
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                syn::Item::Mod(module) if module.ident == *part => Some(module),
+                _ => None,
+            })
+            .collect();
+        let [module] = matches.as_slice() else {
+            return Err(format!(
+                "missing/ambiguous explicit module {part}; include/macro mounts are unmodelled"
+            ));
+        };
+        let module = (**module).clone();
+        if scope.file == normalized_path(&root.join(gate.file))? {
+            for attr in &module.attrs {
+                if attr.path().is_ident("cfg") && attr.span().start().line == gate.line {
+                    if gate_attribute_text(&scope.source, attr).as_deref() != Some(gate.cfg) {
+                        return Err("cited gate text changed".into());
+                    }
+                    if !ACCEPTED_TEST_ONLY_GATES.contains(&gate.cfg) {
+                        return Err("cited cfg is not an accepted test-only spelling".into());
+                    }
+                    if !accepted_test_gate_attribute(&scope.source, attr) {
+                        return Err("actual parsed cfg differs from the accepted gate".into());
+                    }
+                    gate_seen = true;
+                    gate_owns_definition_text = true;
+                }
+            }
+        }
+        let external_after_gate = gate_seen && module.content.is_none();
+        if gate_seen {
+            for attr in &module.attrs {
+                if attr.path().is_ident("path") {
+                    let span = attr.span().start();
+                    route_paths.insert((scope.file.clone(), span.line, span.column));
+                }
+            }
+        }
+        if external_after_gate {
+            gate_owns_definition_text = false;
+        }
+        scope = descend_gate_module(&root, &scope, &module, Some(expected))?;
+        if external_after_gate {
+            protected_files.insert(
+                scope
+                    .file
+                    .canonicalize()
+                    .map_err(|error| error.to_string())?,
+            );
+        }
+        evidence.push(format!(
+            "{part} -> {}",
+            scope
+                .file
+                .strip_prefix(&root)
+                .map_err(|error| error.to_string())?
+                .display()
+        ));
+    }
+    if !gate_seen {
+        return Err("cited cfg no longer gates this module route".into());
+    }
+    if !gate_owns_definition_text {
+        for target in &protected_files {
+            reject_production_gate_aliases(&root, &root_file, target)?;
+        }
+        reject_literal_gate_aliases(&root, &protected_files, &route_paths)?;
+        evidence.push("ownership: all owner lib/bin roots plus workspace literal path/Cargo-root aliases; foreign opaque macro mounts are outside this bounded audit".into());
+    } else {
+        evidence.push(
+            "ownership: same-file inline cfg remains attached under every physical-file mount"
+                .into(),
+        );
+    }
+    let mut names = std::collections::BTreeSet::new();
+    for item in &scope.items {
+        let syn::Item::Macro(item) = item else {
+            continue;
+        };
+        if !item
+            .mac
+            .path
+            .segments
+            .last()
+            .is_some_and(|part| part.ident == "thread_local")
+        {
+            return Err("include/macro-generated TLS contents are unmodelled".into());
+        }
+        let body = syn::parse2::<syn::File>(item.mac.tokens.clone())
+            .map_err(|error| format!("unmodelled thread_local body: {error}"))?;
+        for item in body.items {
+            let syn::Item::Static(item) = item else {
+                return Err("thread_local body must declare statics".into());
+            };
+            names.insert(item.ident.to_string());
+        }
+    }
+    if !gate.names.iter().all(|name| names.contains(*name)) {
+        return Err("cited statics no longer belong to the resolved gated module".into());
+    }
+    Ok(evidence)
+}
+
+#[test]
+fn source_only_fixture_gates_still_enclose_their_tls() {
+    for gate in ENCLOSING_TEST_GATES {
+        let evidence =
+            resolve_enclosing_test_gate(&workspace_crates_dir(), gate).unwrap_or_else(|error| {
+                panic!(
+                    "SourceOnly gate {}:{} {} ({}): {error}",
+                    gate.file, gate.line, gate.cfg, gate.reason
+                )
+            });
+        eprintln!("verified {}: {}", gate.module, evidence.join("; "));
+        let file = gate.resolved_files.last().expect("gate has a module route");
+        for name in gate.names {
+            assert!(matches!(classify(file, name), Some(TlsClass::SourceOnly)));
+        }
+    }
+}
+
+fn gate_fixture(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let tmp = workspace_crates_dir()
+        .parent()
+        .expect("workspace root")
+        .join("tmp");
+    std::fs::create_dir_all(&tmp).expect("workspace fixture directory");
+    let fixture = tempfile::tempdir_in(tmp).expect("module fixture tree");
+    std::fs::write(
+        fixture.path().join("Cargo.toml"),
+        "[package]\nname='gate-fixture'\nversion='0.0.0'\n[lib]\npath='lib.rs'\n",
+    )
+    .expect("fixture manifest");
+    for (path, source) in files {
+        let path = fixture.path().join(path);
+        std::fs::create_dir_all(path.parent().expect("fixture parent"))
+            .expect("fixture directories");
+        std::fs::write(path, source).expect("fixture source");
+    }
+    fixture
+}
+
+fn fixture_gate(
+    module: &'static str,
+    resolved_files: &'static [&'static str],
+) -> EnclosingTestGate {
+    EnclosingTestGate {
+        root_file: "lib.rs",
+        file: "lib.rs",
+        line: 1,
+        cfg: "#[cfg(test)]",
+        module,
+        resolved_files,
+        names: &["SCALAR"],
+        reason: "test fixture",
+    }
+}
+
+const FIXTURE_TLS: &str = "std::thread_local! { static SCALAR: u32 = 0; }\n";
+
+#[test]
+fn planted_removed_fixture_gate_turns_the_surface_red() {
+    let gate = fixture_gate("tests", &["lib.rs"]);
+    let fixture = gate_fixture(&[(
+        "lib.rs",
+        "#[cfg(test)]\nmod tests { std::thread_local! { static SCALAR: u32 = 0; } }\n",
+    )]);
+    assert!(resolve_enclosing_test_gate(fixture.path(), &gate).is_ok());
+    for source in [
+        "// gate removed\nmod tests { std::thread_local! { static SCALAR: u32 = 0; } }\n",
+        "#[cfg(test)]\nmod tests {}\nstd::thread_local! { static SCALAR: u32 = 0; }\n",
+        "#[cfg(test)]\nmod tests { const TEXT: &str = \"static SCALAR: u32 = 0;\"; }\n",
+    ] {
+        std::fs::write(fixture.path().join("lib.rs"), source).expect("mutated fixture");
+        assert!(resolve_enclosing_test_gate(fixture.path(), &gate).is_err());
+    }
+}
+
+#[test]
+fn fixture_gate_resolves_inline_default_path_and_nested_modules() {
+    let cases: &[(&str, &[&str], &[(&str, &str)])] = &[
+        (
+            "tests",
+            &["lib.rs"],
+            &[(
+                "lib.rs",
+                "#[cfg(test)]\nmod tests { std::thread_local! { static SCALAR: u32 = 0; } }\n",
+            )],
+        ),
+        (
+            "tests",
+            &["tests.rs"],
+            &[
+                ("lib.rs", "#[cfg(test)]\nmod tests;\n"),
+                ("tests.rs", FIXTURE_TLS),
+            ],
+        ),
+        (
+            "tests",
+            &["tests/mod.rs"],
+            &[
+                ("lib.rs", "#[cfg(test)]\nmod tests;\n"),
+                ("tests/mod.rs", FIXTURE_TLS),
+            ],
+        ),
+        (
+            "tests",
+            &["other/custom.rs"],
+            &[
+                (
+                    "lib.rs",
+                    "#[cfg(test)]\n#[path=\"other/custom.rs\"] mod tests;\n",
+                ),
+                ("other/custom.rs", FIXTURE_TLS),
+            ],
+        ),
+        (
+            "tests::child",
+            &["tests.rs", "tests/child.rs"],
+            &[
+                ("lib.rs", "#[cfg(test)]\nmod tests;\n"),
+                ("tests.rs", "mod child;\n"),
+                ("tests/child.rs", FIXTURE_TLS),
+            ],
+        ),
+        (
+            "tests::child",
+            &["tests/mod.rs", "tests/child/mod.rs"],
+            &[
+                ("lib.rs", "#[cfg(test)]\nmod tests;\n"),
+                ("tests/mod.rs", "mod child;\n"),
+                ("tests/child/mod.rs", FIXTURE_TLS),
+            ],
+        ),
+        (
+            "tests::child",
+            &["other/custom.rs", "other/child.rs"],
+            &[
+                (
+                    "lib.rs",
+                    "#[cfg(test)]\n#[path=\"other/custom.rs\"] mod tests;\n",
+                ),
+                ("other/custom.rs", "mod child;\n"),
+                ("other/child.rs", FIXTURE_TLS),
+            ],
+        ),
+        (
+            "tests::inline::child",
+            &["tests.rs", "tests.rs", "tests/inline/payload.rs"],
+            &[
+                ("lib.rs", "#[cfg(test)]\nmod tests;\n"),
+                (
+                    "tests.rs",
+                    "mod inline { #[path=\"payload.rs\"] mod child; }\n",
+                ),
+                ("tests/inline/payload.rs", FIXTURE_TLS),
+            ],
+        ),
+        (
+            "tests::child",
+            &["lib.rs", "redirect/payload.rs"],
+            &[
+                (
+                    "lib.rs",
+                    "#[cfg(test)]\n#[path=\"redirect\"] mod tests { #[path=\"payload.rs\"] mod child; }\n",
+                ),
+                ("redirect/payload.rs", FIXTURE_TLS),
+            ],
+        ),
+    ];
+    for &(module, files, sources) in cases {
+        let fixture = gate_fixture(sources);
+        let evidence = resolve_enclosing_test_gate(fixture.path(), &fixture_gate(module, files))
+            .unwrap_or_else(|error| panic!("{module} {files:?}: {error}"));
+        eprintln!("positive {module}: {}", evidence.join("; "));
+    }
+}
+
+#[test]
+fn fixture_gate_checks_the_actual_external_declaring_context() {
+    let fixture = gate_fixture(&[
+        ("lib.rs", "mod owner;\n"),
+        ("owner.rs", "#[cfg(test)]\nmod tests;\n"),
+        ("owner/tests.rs", FIXTURE_TLS),
+    ]);
+    let gate = EnclosingTestGate {
+        file: "owner.rs",
+        ..fixture_gate("owner::tests", &["owner.rs", "owner/tests.rs"])
+    };
+    assert!(resolve_enclosing_test_gate(fixture.path(), &gate).is_ok());
+    let fixture = gate_fixture(&[
+        ("lib.rs", "#[path=\"custom.rs\"] mod owner;\n"),
+        ("custom.rs", "#[cfg(test)]\nmod tests;\n"),
+        ("tests.rs", FIXTURE_TLS),
+    ]);
+    let gate = EnclosingTestGate {
+        file: "custom.rs",
+        ..fixture_gate("owner::tests", &["custom.rs", "tests.rs"])
+    };
+    assert!(resolve_enclosing_test_gate(fixture.path(), &gate).is_ok());
+}
+
+#[test]
+fn fixture_gate_resolves_path_relative_to_a_non_mod_declaring_file() {
+    let fixture = gate_fixture(&[
+        ("lib.rs", "#[cfg(test)]\nmod tests;\n"),
+        ("tests.rs", "#[path=\"payload.rs\"] mod child;\n"),
+        ("payload.rs", FIXTURE_TLS),
+    ]);
+    let gate = fixture_gate("tests::child", &["tests.rs", "payload.rs"]);
+    assert!(resolve_enclosing_test_gate(fixture.path(), &gate).is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn fixture_gate_rejects_symlink_parent_traversal_to_another_file() {
+    let fixture = gate_fixture(&[
+        (
+            "lib.rs",
+            "#[cfg(test)]\n#[path=\"alias/../chosen.rs\"] mod tests;\n",
+        ),
+        ("chosen.rs", FIXTURE_TLS),
+        ("other/chosen.rs", "// Rust loads this other file.\n"),
+    ]);
+    std::fs::create_dir_all(fixture.path().join("other/deep")).expect("symlink target");
+    std::os::unix::fs::symlink("other/deep", fixture.path().join("alias")).expect("module symlink");
+    assert!(
+        resolve_enclosing_test_gate(fixture.path(), &fixture_gate("tests", &["chosen.rs"]))
+            .is_err()
+    );
+}
+
+#[test]
+fn fixture_gate_rejects_unmodelled_or_retargeted_module_routes() {
+    let cases: &[(&str, &[&str], &[(&str, &str)])] = &[
+        (
+            "tests",
+            &["tests.rs"],
+            &[("lib.rs", "#[cfg(test)]\nmod tests;\n")],
+        ),
+        (
+            "tests",
+            &["tests.rs"],
+            &[
+                ("lib.rs", "#[cfg(test)]\nmod tests;\n"),
+                ("tests.rs", FIXTURE_TLS),
+                ("tests/mod.rs", FIXTURE_TLS),
+            ],
+        ),
+        (
+            "tests",
+            &["original.rs"],
+            &[
+                (
+                    "lib.rs",
+                    "#[cfg(test)]\n#[path=\"changed.rs\"] mod tests;\n",
+                ),
+                ("original.rs", FIXTURE_TLS),
+                ("changed.rs", FIXTURE_TLS),
+            ],
+        ),
+        (
+            "tests",
+            &["tests.rs"],
+            &[
+                (
+                    "lib.rs",
+                    "#[cfg(test)]\n#[cfg_attr(probe,path=\"other.rs\")] mod tests;\n",
+                ),
+                ("tests.rs", FIXTURE_TLS),
+            ],
+        ),
+        (
+            "tests",
+            &["mounted.rs"],
+            &[
+                ("lib.rs", "include!(\"declarations.rs\");\n"),
+                (
+                    "declarations.rs",
+                    "#[cfg(test)]\n#[path=\"mounted.rs\"] mod tests;\n",
+                ),
+                ("mounted.rs", FIXTURE_TLS),
+            ],
+        ),
+        (
+            "tests",
+            &["tests.rs"],
+            &[
+                (
+                    "lib.rs",
+                    "macro_rules! declare { () => { #[cfg(test)] mod tests; } }\ndeclare!();\n",
+                ),
+                ("tests.rs", FIXTURE_TLS),
+            ],
+        ),
+        (
+            "tests",
+            &["lib.rs"],
+            &[
+                (
+                    "lib.rs",
+                    "#[cfg(test)]\nmod tests { include!(\"payload.rs\"); }\n",
+                ),
+                ("payload.rs", FIXTURE_TLS),
+            ],
+        ),
+        (
+            "tests::child",
+            &["original.rs", "shared.rs"],
+            &[
+                (
+                    "lib.rs",
+                    "#[cfg(test)]\n#[path=\"changed.rs\"] mod tests;\n",
+                ),
+                ("original.rs", "#[path=\"shared.rs\"] mod child;\n"),
+                ("changed.rs", "#[path=\"shared.rs\"] mod child;\n"),
+                ("shared.rs", FIXTURE_TLS),
+            ],
+        ),
+    ];
+    for &(module, files, sources) in cases {
+        let fixture = gate_fixture(sources);
+        assert!(
+            resolve_enclosing_test_gate(fixture.path(), &fixture_gate(module, files)).is_err(),
+            "{module} {files:?}"
+        );
+    }
+}
+
+#[test]
+fn external_fixture_gate_rejects_other_mounts_and_opaque_owner_code() {
+    for live in [
+        "#[path=\"shared.rs\"] mod live;\n",
+        "fn f() { #[path=\"shared.rs\"] mod live; }\n",
+        "opaque_module!();\n",
+        "fn f() { opaque_module!(); }\n",
+        "#[opaque_attribute] fn f() {}\n",
+    ] {
+        let source = format!("#[cfg(test)]\n#[path=\"shared.rs\"] mod tests;\n{live}");
+        let fixture = gate_fixture(&[("lib.rs", &source), ("shared.rs", FIXTURE_TLS)]);
+        assert!(
+            resolve_enclosing_test_gate(fixture.path(), &fixture_gate("tests", &["shared.rs"]))
+                .is_err(),
+            "{live}"
+        );
+    }
+}
+
+#[test]
+fn external_fixture_gate_checks_second_and_automatic_bin_roots() {
+    for bin in ["runner.rs", "src/bin/runner.rs", "src/bin/runner/main.rs"] {
+        let prefix = if bin == "runner.rs" {
+            ""
+        } else if bin.ends_with("/main.rs") {
+            "../../../"
+        } else {
+            "../../"
+        };
+        let live = format!("#[path=\"{prefix}shared.rs\"] mod live;\nfn main() {{}}\n");
+        let fixture = gate_fixture(&[
+            ("lib.rs", "#[cfg(test)]\n#[path=\"shared.rs\"] mod tests;\n"),
+            ("shared.rs", FIXTURE_TLS),
+            (bin, &live),
+        ]);
+        if bin == "runner.rs" {
+            std::fs::write(fixture.path().join("Cargo.toml"), "[package]\nname='gate-fixture'\nversion='0.0.0'\n[lib]\npath='lib.rs'\n[[bin]]\nname='runner'\npath='runner.rs'\n").expect("second bin manifest");
+        }
+        assert!(
+            resolve_enclosing_test_gate(fixture.path(), &fixture_gate("tests", &["shared.rs"]))
+                .is_err(),
+            "{bin}"
+        );
+    }
+}
+
+#[test]
+fn external_fixture_gate_rejects_cross_package_literal_paths() {
+    for source in [
+        "#[path=\"../../shared.rs\"] mod live;\n",
+        "#[path=\"missing/../../../shared.rs\"] mod live;\n",
+        "mod nested { #[path=\"../../../shared.rs\"] mod live; }\n",
+    ] {
+        let fixture = gate_fixture(&[
+            ("lib.rs", "#[cfg(test)]\n#[path=\"shared.rs\"] mod tests;\n"),
+            ("shared.rs", FIXTURE_TLS),
+            (
+                "foreign/Cargo.toml",
+                "[package]\nname='foreign'\nversion='0.0.0'\n",
+            ),
+            ("foreign/src/lib.rs", source),
+            ("foreign/src/nested/unused.rs", ""),
+        ]);
+        assert!(
+            resolve_enclosing_test_gate(fixture.path(), &fixture_gate("tests", &["shared.rs"]))
+                .is_err(),
+            "{source}"
+        );
+    }
+    // A foreign alias of an intermediate file also bypasses the owner gate.
+    let fixture = gate_fixture(&[
+        ("lib.rs", "#[cfg(test)]\n#[path=\"entry.rs\"] mod tests;\n"),
+        ("entry.rs", "mod payload;\n"),
+        ("payload.rs", FIXTURE_TLS),
+        (
+            "foreign/src/lib.rs",
+            "#[path=\"../../entry.rs\"] mod live;\n",
+        ),
+    ]);
+    assert!(
+        resolve_enclosing_test_gate(
+            fixture.path(),
+            &fixture_gate("tests::payload", &["entry.rs", "payload.rs"])
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn external_fixture_gate_rejects_foreign_cargo_source_root_aliases() {
+    for target in [
+        "[lib]\npath='../shared.rs'\n",
+        "[[bin]]\nname='foreign'\npath='../shared.rs'\n",
+    ] {
+        let manifest = format!("[package]\nname='foreign'\nversion='0.0.0'\n{target}");
+        let fixture = gate_fixture(&[
+            ("lib.rs", "#[cfg(test)]\n#[path=\"shared.rs\"] mod tests;\n"),
+            ("shared.rs", FIXTURE_TLS),
+            ("foreign/Cargo.toml", &manifest),
+        ]);
+        assert!(
+            resolve_enclosing_test_gate(fixture.path(), &fixture_gate("tests", &["shared.rs"]))
+                .is_err(),
+            "{target}"
+        );
+    }
+}
+
+#[test]
+fn fixture_gate_uses_character_spans_and_the_actual_cfg_ast() {
+    let spoof = format!(
+        "/*{} #[cfg(test)] */ #[cfg(unix)] mod tests {{ {FIXTURE_TLS} }}\n",
+        "é".repeat(16)
+    );
+    let fixture = gate_fixture(&[("lib.rs", &spoof)]);
+    let gate = fixture_gate("tests", &["lib.rs"]);
+    assert!(resolve_enclosing_test_gate(fixture.path(), &gate).is_err());
+    std::fs::write(
+        fixture.path().join("lib.rs"),
+        format!("/* é🦀 */ #[cfg(test)] mod tests {{ {FIXTURE_TLS} }}\n"),
+    )
+    .expect("Unicode gate fixture");
+    assert!(resolve_enclosing_test_gate(fixture.path(), &gate).is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn fixture_gate_rejects_a_manifest_root_that_traverses_a_symlink() {
+    let fixture = gate_fixture(&[
+        (
+            "lib.rs",
+            "#[cfg(test)]\nmod tests { std::thread_local! { static SCALAR: u32 = 0; } }\n",
+        ),
+        (
+            "other/lib.rs",
+            "// Cargo loads this different crate root.\n",
+        ),
+    ]);
+    std::fs::create_dir_all(fixture.path().join("other/deep")).expect("symlink target");
+    std::os::unix::fs::symlink("other/deep", fixture.path().join("alias")).expect("root symlink");
+    std::fs::write(
+        fixture.path().join("Cargo.toml"),
+        "[package]\nname='gate-fixture'\nversion='0.0.0'\n[lib]\npath='alias/../lib.rs'\n",
+    )
+    .expect("mutated manifest root");
+    assert!(
+        resolve_enclosing_test_gate(fixture.path(), &fixture_gate("tests", &["lib.rs"])).is_err()
+    );
+}
+
+#[test]
+fn fixture_gate_rejects_duplicate_named_declarations() {
+    let fixture = gate_fixture(&[(
+        "lib.rs",
+        "#[cfg(test)]\nmod tests { std::thread_local! { static SCALAR: u32 = 0; } }\n#[cfg(not(test))]\nmod tests {}\n",
+    )]);
+    assert!(
+        resolve_enclosing_test_gate(fixture.path(), &fixture_gate("tests", &["lib.rs"])).is_err()
+    );
+}
+
+#[test]
+fn fixture_gate_requires_a_proven_test_cfg_and_real_crate_root() {
+    for cfg in [
+        "#[cfg(any(test,feature=\"jit\"))]",
+        "#[cfg(not(test))]",
+        "#[cfg(neomacs_have_dbus)]",
+        "#[cfg(all(test,neomacs_have_dbus))]",
+    ] {
+        let fixture =
+            gate_fixture(&[("lib.rs", &format!("{cfg}\nmod tests {{ {FIXTURE_TLS} }}\n"))]);
+        let gate = EnclosingTestGate {
+            cfg,
+            ..fixture_gate("tests", &["lib.rs"])
+        };
+        assert!(
+            resolve_enclosing_test_gate(fixture.path(), &gate).is_err(),
+            "{cfg}"
+        );
+    }
+    for cfg in [
+        "#[cfg(test)]",
+        "#[cfg(any(test, feature = \"test-support\"))]",
+    ] {
+        let fixture =
+            gate_fixture(&[("lib.rs", &format!("{cfg}\nmod tests {{ {FIXTURE_TLS} }}\n"))]);
+        let gate = EnclosingTestGate {
+            cfg,
+            ..fixture_gate("tests", &["lib.rs"])
+        };
+        assert!(
+            resolve_enclosing_test_gate(fixture.path(), &gate).is_ok(),
+            "{cfg}"
+        );
+    }
+    let fixture = gate_fixture(&[
+        ("lib.rs", ""),
+        (
+            "unused.rs",
+            "#[cfg(test)]\nmod tests { std::thread_local! { static SCALAR: u32 = 0; } }\n",
+        ),
+    ]);
+    let gate = EnclosingTestGate {
+        root_file: "unused.rs",
+        file: "unused.rs",
+        resolved_files: &["unused.rs"],
+        ..fixture_gate("tests", &["lib.rs"])
+    };
+    assert!(resolve_enclosing_test_gate(fixture.path(), &gate).is_err());
+}
+
+/// Only attributes attached to this item can make it test-only. A nearby
+/// method's cfg must not hide production carrier state after the method ends.
+fn is_test_only_block(mut before: &str) -> bool {
+    use syn::parse::Parser;
+    let mut test_only = false;
+    loop {
+        before = before.trim_end();
+        let line_start = before.rfind('\n').map_or(0, |at| at + 1);
+        let line = before[line_start..].trim_start();
+        if line.starts_with("//") {
+            before = &before[..line_start];
+            continue;
+        }
+        if before.ends_with("*/") {
+            let Some(open) = before.rfind("/*") else {
+                return false;
+            };
+            before = &before[..open];
+            continue;
+        }
+        if !before.ends_with(']') {
+            return test_only;
+        }
+
+        // Walk an entire attribute, including multiline cfgs and nested [].
+        let mut depth = 0;
+        let open = before.char_indices().rev().find_map(|(at, ch)| {
+            match ch {
+                ']' => depth += 1,
+                '[' => depth -= 1,
+                _ => {}
+            }
+            (ch == '[' && depth == 0).then_some(at)
+        });
+        let Some(open) = open.and_then(|at| at.checked_sub(1)) else {
+            return false;
+        };
+        if before.as_bytes()[open] != b'#' {
+            return false;
+        }
+        let Ok(attributes) = syn::Attribute::parse_outer.parse_str(&before[open..]) else {
+            return false;
+        };
+        let [attribute] = attributes.as_slice() else {
+            return false;
+        };
+        // Conditional attributes need the complete evaluator in the next
+        // member. Keep them visible even beside another recognized cfg.
+        if attribute.path().is_ident("cfg_attr") {
+            return false;
+        }
+        if attribute.path().is_ident("cfg") {
+            let Ok(predicate) = attribute.parse_args::<syn::Meta>() else {
+                return false;
+            };
+            test_only |= cfg_policy::interim_cfg_is_test_only(&predicate);
+        }
+        before = &before[..open];
+    }
+}
+
+#[test]
+fn tls_scan_keeps_production_blocks_after_test_only_items() {
+    let before = r#"
+impl Census {
+    #[cfg(any(test, feature = "test-support"))]
+    fn count(&self) -> usize { self.count }
+}
+
+// Production carrier state.
+"#;
+    for before in [
+        before,
+        "// The preceding item used #[cfg(test)].\n",
+        "#[allow(dead_code)]\n// Not #[cfg(test)].\n",
+    ] {
+        assert!(
+            !is_test_only_block(before),
+            "a preceding item's test cfg must not hide a production TLS block: {before}"
+        );
+    }
+}
+
+#[test]
+fn tls_scan_skips_blocks_with_attached_test_attributes() {
+    for before in [
+        "#[cfg(test)]\n",
+        "#[cfg(test)]\n\n// Test fixture.\n",
+        "#[cfg(all(test, feature = \"probe\"))]\n",
+        "#[cfg(any(test, feature = \"test-support\"))]\n",
+        "#[cfg(\n    test\n)]\n#[allow(dead_code)]\n",
+        "#[cfg(test)]\n/* Test fixture. */\n",
+        "#[cfg(test)]\n/* Multiline\n   test fixture. */\n",
+    ] {
+        assert!(is_test_only_block(before), "attached test cfg: {before}");
+    }
+}
+
+#[test]
+fn planted_production_alternatives_are_scanned_as_tls() {
+    let source = r#"
+#[cfg(any(test, debug_assertions))]
+thread_local! { static DEBUG_COUNTER: u32 = 0; }
+#[cfg(any(test, feature = "vm-profile"))]
+std::thread_local! { static PROFILE_COUNTER: u32 = 0; }
+#[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
+thread_local! { static FUZZ_OVERRIDE: u32 = 0; }
+#[cfg_attr(test, cfg(test))]
+thread_local! { static UNKNOWN_CFG_ATTR: u32 = 0; }
+#[cfg(test)]
+#[cfg_attr(test, cfg(test))]
+thread_local! { static INNER_UNKNOWN_ATTRIBUTE: u32 = 0; }
+#[cfg_attr(test, cfg(test))]
+#[cfg(test)]
+thread_local! { static OUTER_UNKNOWN_ATTRIBUTE: u32 = 0; }
+"#;
+    let mut found = Vec::new();
+    scan_tls_source(source, "fixture.rs", &mut found);
+    assert_eq!(
+        found.into_iter().map(|(name, _)| name).collect::<Vec<_>>(),
+        [
+            "DEBUG_COUNTER",
+            "PROFILE_COUNTER",
+            "FUZZ_OVERRIDE",
+            "UNKNOWN_CFG_ATTR",
+            "INNER_UNKNOWN_ATTRIBUTE",
+            "OUTER_UNKNOWN_ATTRIBUTE"
+        ],
+        "a production-capable or unmodelled alternative must not disappear from the census"
+    );
+}
+
+#[test]
+fn planted_required_test_and_allowlisted_alternatives_are_skipped() {
+    let source = r#"
+#[cfg(test)]
+thread_local! { static UNIT_ONLY: u32 = 0; }
+#[cfg(all(test, feature = "x"))]
+thread_local! { static REQUIRED_TEST: u32 = 0; }
+#[cfg(any(test, feature = "test-support"))]
+thread_local! { static SUPPORT_ONLY: u32 = 0; }
+#[cfg(any(test, feature = "redisplay-test-policy"))]
+std::thread_local! { static REDISPLAY_ONLY: u32 = 0; }
+"#;
+    let mut found = Vec::new();
+    scan_tls_source(source, "fixture.rs", &mut found);
+    assert!(
+        found.is_empty(),
+        "only proven test-only alternatives are excluded: {found:?}"
+    );
 }
 
 fn scanned_tls_names() -> Vec<(String, String)> {
@@ -1348,48 +3068,55 @@ fn visit(root: &Path, dir: &Path, found: &mut Vec<(String, String)>) {
         if rel.contains("/tests/") {
             continue;
         }
-        let mut search = 0;
-        while let Some(pos) = text[search..].find("thread_local!") {
-            let start = search + pos;
-            let Some(open) = text[start..].find('{') else {
-                break;
-            };
-            let open = start + open;
-            let mut depth = 0usize;
-            let mut end = open;
-            for (offset, ch) in text[open..].char_indices() {
-                match ch {
-                    '{' => depth += 1,
-                    '}' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            end = open + offset;
-                            break;
-                        }
+        scan_tls_source(&text, &rel, found);
+    }
+}
+
+fn scan_tls_source(text: &str, rel: &str, found: &mut Vec<(String, String)>) {
+    let mut search = 0;
+    while let Some(pos) = text[search..].find("thread_local!") {
+        let start = search + pos;
+        let Some(open) = text[start..].find('{') else {
+            break;
+        };
+        let open = start + open;
+        let mut depth = 0usize;
+        let mut end = open;
+        for (offset, ch) in text[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = open + offset;
+                        break;
                     }
-                    _ => {}
                 }
+                _ => {}
             }
-            let before = &text[start.saturating_sub(200)..start];
-            if !is_test_only_block(before) {
-                let block = &text[open..=end];
-                let mut cursor = 0;
-                while let Some(sp) = block[cursor..].find("static ") {
-                    let at = cursor + sp + "static ".len();
-                    let rest = &block[at..];
-                    let name: String = rest
-                        .chars()
-                        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-                        .collect();
-                    let name_len = name.len();
-                    if name_len != 0 && rest[name_len..].trim_start().starts_with(':') {
-                        found.push((name, rel.clone()));
-                    }
-                    cursor = at + name_len;
-                }
-            }
-            search = end.max(start + 1);
         }
+        // Attributes precede the item's line, including qualified
+        // std::thread_local! invocations.
+        let line_start = text[..start].rfind('\n').map_or(0, |at| at + 1);
+        let before = &text[..line_start];
+        if !is_test_only_block(before) {
+            let block = &text[open..=end];
+            let mut cursor = 0;
+            while let Some(sp) = block[cursor..].find("static ") {
+                let at = cursor + sp + "static ".len();
+                let rest = &block[at..];
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                let name_len = name.len();
+                if name_len != 0 && rest[name_len..].trim_start().starts_with(':') {
+                    found.push((name, rel.to_owned()));
+                }
+                cursor = at + name_len;
+            }
+        }
+        search = end.max(start + 1);
     }
 }
 
@@ -1518,6 +3245,8 @@ fn planted_same_file_occurrence_drift_turns_the_surface_red() {
 /// `every_must_reset_record_is_covered_by_a_real_carrier_reset`; removing or
 /// renaming a reset step fails it too.
 const MUST_RESET_MODULE_COVERAGE: &[(&str, &str)] = &[
+    ("neovm-eval/src/emacs_core/runtime/eval/var_fast.rs", "eval"),
+    ("neovm-value/src/tagged/mutate.rs", "gc"),
     ("neovm-core/src/emacs_core/display/xdisp/mod.rs", "xdisp"),
     ("neovm-core/src/emacs_core/editing/indent/mod.rs", "indent"),
     ("neovm-core/src/emacs_core/lisp/load/mod.rs", "load"),
@@ -1705,13 +3434,7 @@ const MUST_RESET_MODULE_COVERAGE: &[(&str, &str)] = &[
 /// `MustReset` records the source scan cannot see (they come from the binary
 /// TLS census or a cfg-gated block the scan skips); each still needs an
 /// explicit reset-step claim.
-const MUST_RESET_EXTRA_COVERAGE: &[(&str, &str)] = &[
-    ("IMM_POOL", "jit_compile"),
-    // The record sits directly below a cfg(test)/test-support const, so the
-    // source scanner's test-only window skips its thread_local! block; the
-    // regex reset step clears it (regex/emacs.rs reset_carrier_tls).
-    ("CHAR_TABLE_ASCII_FOLD", "regex_emacs"),
-];
+const MUST_RESET_EXTRA_COVERAGE: &[(&str, &str)] = &[];
 
 /// Deferred reset steps whose records the name-keyed classification does not
 /// (and should not) call `MustReset`: each entry names a record the step's
