@@ -717,7 +717,7 @@ fn obarray_treesit_query_error_matches_gnu_c_defined_hierarchy() {
     let message = ob
         .get_property("treesit-query-error", "error-message")
         .expect("treesit-query-error should have error-message");
-    assert_eq!(message.to_string(), r#""Query pattern is malformed""#);
+    assert_eq!(message.as_utf8_str(), Some("Query pattern is malformed"));
 
     let conds = ob
         .get_property("treesit-query-error", "error-conditions")
