@@ -5,7 +5,6 @@
 
 use super::*;
 use neovm_value::intern::intern;
-use strum::IntoEnumIterator;
 
 /// The legacy `(op, kind, nargs, builtin)` table, verbatim.
 const LEGACY: &[(Op, i64, usize, &str)] = &[

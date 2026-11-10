@@ -230,17 +230,17 @@ pub(crate) fn force_profit_gate_for_test(on: bool) {
 }
 
 /// Exact owner-local test policy, including restoration of an unset override.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProfitGateTestPolicy {
     Runtime,
     Enforce,
     Bypass,
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static_assertions::assert_impl_all!(ProfitGateTestPolicy: Send, Sync);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn replace_profit_gate_for_test(policy: ProfitGateTestPolicy) -> ProfitGateTestPolicy {
     let override_value = match policy {
         ProfitGateTestPolicy::Runtime => None,
@@ -554,7 +554,7 @@ impl FlonumMode {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static FLONUM_MODE_TEST_OVERRIDE: std::cell::Cell<Option<FlonumMode>> =
         const { std::cell::Cell::new(None) };
@@ -562,14 +562,14 @@ std::thread_local! {
 
 /// Force the flonum mode for compiles on the current thread (tests only);
 /// `None` returns to the environment's.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_flonum_mode_for_test(mode: Option<FlonumMode>) {
     FLONUM_MODE_TEST_OVERRIDE.with(|c| c.set(mode));
 }
 
 /// The [`FlonumMode`] compiles use (`NEOVM_JIT_FLONUM`, read once).
 pub(crate) fn jit_flonum_mode() -> FlonumMode {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(mode) = FLONUM_MODE_TEST_OVERRIDE.with(|c| c.get()) {
         return mode;
     }

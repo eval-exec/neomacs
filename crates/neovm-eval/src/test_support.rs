@@ -3057,6 +3057,132 @@ pub mod authority {
         }
     }
 
+    /// Widening-hub token (#1871/#1877(1)): the flonum compile mode.
+    #[cfg(feature = "jit")]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum TestFlonumMode {
+        #[default]
+        Off,
+        OpLocal,
+        Resident,
+    }
+
+    #[cfg(feature = "jit")]
+    fn to_flonum(mode: TestFlonumMode) -> crate::emacs_core::jit::compile::FlonumMode {
+        use crate::emacs_core::jit::compile::FlonumMode;
+        match mode {
+            TestFlonumMode::Off => FlonumMode::Off,
+            TestFlonumMode::OpLocal => FlonumMode::OpLocal,
+            TestFlonumMode::Resident => FlonumMode::Resident,
+        }
+    }
+
+    /// FENCE: force the flonum compile mode for this thread; the private
+    /// `FlonumMode` stays crate-private.
+    #[cfg(feature = "jit")]
+    pub fn force_flonum_mode_token_for_test(mode: Option<TestFlonumMode>) {
+        crate::emacs_core::jit::compile::force_flonum_mode_for_test(mode.map(to_flonum));
+    }
+
+    /// Widening-hub token (#1871/#1877(1)): the profit-gate test policy.
+    #[cfg(feature = "jit")]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum TestProfitPolicy {
+        #[default]
+        Runtime,
+        Enforce,
+        Bypass,
+    }
+
+    #[cfg(feature = "jit")]
+    fn to_profit_policy(
+        policy: TestProfitPolicy,
+    ) -> crate::emacs_core::jit::compile::ProfitGateTestPolicy {
+        use crate::emacs_core::jit::compile::ProfitGateTestPolicy;
+        match policy {
+            TestProfitPolicy::Runtime => ProfitGateTestPolicy::Runtime,
+            TestProfitPolicy::Enforce => ProfitGateTestPolicy::Enforce,
+            TestProfitPolicy::Bypass => ProfitGateTestPolicy::Bypass,
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    fn from_profit_policy(
+        policy: crate::emacs_core::jit::compile::ProfitGateTestPolicy,
+    ) -> TestProfitPolicy {
+        use crate::emacs_core::jit::compile::ProfitGateTestPolicy;
+        match policy {
+            ProfitGateTestPolicy::Runtime => TestProfitPolicy::Runtime,
+            ProfitGateTestPolicy::Enforce => TestProfitPolicy::Enforce,
+            ProfitGateTestPolicy::Bypass => TestProfitPolicy::Bypass,
+        }
+    }
+
+    /// FENCE: replace the profit-gate test policy and return the previous
+    /// one, the caller's restore token. The private enum stays crate-private.
+    #[cfg(feature = "jit")]
+    #[must_use = "the previous policy is the caller's restore token"]
+    pub fn replace_profit_gate_token_for_test(policy: TestProfitPolicy) -> TestProfitPolicy {
+        from_profit_policy(
+            crate::emacs_core::jit::compile::replace_profit_gate_for_test(to_profit_policy(policy)),
+        )
+    }
+
+    #[cfg(feature = "jit")]
+    fn from_inline2(mode: crate::emacs_core::jit::compile::Inline2Mode) -> TestInline2Mode {
+        use crate::emacs_core::jit::compile::Inline2Mode;
+        match mode {
+            Inline2Mode::Off => TestInline2Mode::Off,
+            Inline2Mode::Named => TestInline2Mode::Named,
+            Inline2Mode::Closure => TestInline2Mode::Closure,
+            Inline2Mode::Hof => TestInline2Mode::Hof,
+            Inline2Mode::All => TestInline2Mode::All,
+        }
+    }
+
+    /// FENCE: the current inline-v2 mode as the signed token. `Inline2Mode`
+    /// stays crate-private.
+    #[cfg(feature = "jit")]
+    pub fn jit_inline2_mode_token_for_test() -> TestInline2Mode {
+        from_inline2(crate::emacs_core::jit::compile::jit_inline2_mode())
+    }
+
+    /// FENCE: force the interpreter-only tier policy on a borrowed VM. The
+    /// VM is exclusively borrowed for the call; the policy field never
+    /// crosses the fence.
+    #[cfg(feature = "jit")]
+    pub fn force_interpreter_only_for_test(vm: &mut crate::emacs_core::bytecode::Vm) {
+        vm.force_interpreter_only_for_test();
+    }
+
+    /// Opaque handle holding the numeric-feedback TLS scope alive for the
+    /// test's lifetime. The scope type stays crate-private and no field is
+    /// reachable.
+    #[cfg(feature = "jit")]
+    pub struct NumericFeedbackScopeHandle(
+        #[allow(dead_code)] crate::emacs_core::jit::compile::NumericFeedbackScope,
+    );
+
+    /// FENCE: publish the numeric feedback `f` observed for the handle's
+    /// lifetime; the TLS scope type never crosses the fence.
+    #[cfg(feature = "jit")]
+    pub fn publish_numeric_feedback_scope_for_test(
+        f: &crate::emacs_core::bytecode::ByteCodeFunction,
+    ) -> NumericFeedbackScopeHandle {
+        NumericFeedbackScopeHandle(crate::emacs_core::jit::compile::publish_numeric_feedback(f))
+    }
+
+    /// FENCE: prepare the cache entry for `f`. The internal entry point takes
+    /// a raw Context pointer and uses it only for the duration of the call;
+    /// the caller's exclusive borrow keeps it valid.
+    #[cfg(feature = "jit")]
+    pub fn prepare_entry_for_test(
+        ctx: &mut crate::emacs_core::eval::Context,
+        f: &crate::emacs_core::bytecode::ByteCodeFunction,
+    ) {
+        crate::emacs_core::jit::cache::prepare_entry_for_test(ctx as *mut _, f);
+    }
+
     /// FENCE: cold-exit counter. The atomic stays pub(crate).
     #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
     pub fn direct_cold_exits_for_test() -> u64 {

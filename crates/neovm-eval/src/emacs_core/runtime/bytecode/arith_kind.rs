@@ -18,7 +18,12 @@ use crate::emacs_core::builtins::{IntegerBinaryOp, IntegerOp, IntegerUnaryOp, Nu
 
 /// One arithmetic opcode's generic slow arm (see the module doc).
 #[repr(i64)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, strum::EnumIter, num_enum::TryFromPrimitive)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, num_enum::TryFromPrimitive)]
+// No strum::EnumIter: its derived iterator type is crate-private, which is
+// E0446 once this enum is published, and gating the derive would make the
+// test-support feature non-additive (peer C-W1). The inherent `iter` below
+// yields the same dense discriminant order in every build that needs it.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum ArithGenericKind {
     /// `Bplus` → `+`
     Add = 0,
@@ -53,6 +58,16 @@ pub(crate) enum ArithGenericKind {
 }
 
 impl ArithGenericKind {
+    /// Every kind in discriminant order. There is no strum iterator: its
+    /// derived type is crate-private and cannot exist beside a published
+    /// enum, and gating the derive would make the test-support feature
+    /// non-additive (peer C-W1). Test builds iterate through this;
+    /// production does not need the iterator.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn iter() -> impl Iterator<Item = Self> {
+        (0i64..).map_while(|raw| Self::try_from(raw).ok())
+    }
+
     /// The kind of an arithmetic opcode with a generic fallback, `None` for
     /// any other opcode.
     #[inline]

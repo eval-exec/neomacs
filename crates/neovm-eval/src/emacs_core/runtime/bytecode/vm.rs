@@ -489,12 +489,21 @@ thread_local! {
     static GENERIC_BYTECODE_CLEANUP_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static OPCODE_DISPATCH_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static INLINE_BUILTIN_DIRECT_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+// Widening-hub read (#1888): the arithmetic engagement counter also exists in
+// the test-support build, where the moved tests read it. It stays out of the
+// shipped binary because neovm-eval/test-support is absent from the product
+// feature graph (see the batch commit's unification proof).
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
     static ARITH_INTEGER_FAST_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// TEST-ONLY: direct all-integer answers `Vm::arith_integer_fast` has given
 /// on this thread (engagement evidence for the interpreter and JIT tests).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn arith_integer_fast_count() -> usize {
     ARITH_INTEGER_FAST_COUNT.with(std::cell::Cell::get)
 }
@@ -9330,7 +9339,7 @@ impl<'a> Vm<'a> {
             (IntegerOp::Unary(op), &[a]) => crate::emacs_core::builtins::integer_unary_fast(op, a),
             _ => None,
         };
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if value.is_some() {
             ARITH_INTEGER_FAST_COUNT.with(|count| count.set(count.get() + 1));
         }

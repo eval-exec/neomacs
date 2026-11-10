@@ -56,6 +56,16 @@ fn hub_jit_read_surface_observes_the_canonical_knobs() {
     use neovm_eval::emacs_core::bytecode::ByteCodeFunctionExt as _;
     use neovm_eval::emacs_core::jit::RuntimeStateTieringExt as _;
 
+    // The arithmetic kind table is nameable and iterates in its dense
+    // discriminant order.
+    let kinds: Vec<neovm_eval::emacs_core::bytecode::ArithGenericKind> =
+        neovm_eval::emacs_core::bytecode::ArithGenericKind::iter().collect();
+    assert!(!kinds.is_empty());
+    assert_eq!(
+        kinds[0],
+        neovm_eval::emacs_core::bytecode::ArithGenericKind::Add
+    );
+
     crate::test_utils::init_test_tracing();
     let _ctx = crate::test_utils::new_context();
 
@@ -92,4 +102,53 @@ fn hub_jit_read_surface_observes_the_canonical_knobs() {
     assert_eq!(census.results(), 0);
     assert_eq!(census.escape_boxes(), 0);
     assert_eq!(census.cold_boxes(), 0);
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn hub_token_surface_saves_and_restores_the_private_knobs() {
+    use neovm_eval::test_support::authority::{
+        TestFlonumMode, TestInline2Mode, TestProfitPolicy, force_flonum_mode_token_for_test,
+        jit_inline2_mode_token_for_test, replace_profit_gate_token_for_test,
+    };
+
+    crate::test_utils::init_test_tracing();
+
+    // The profit-gate token round-trips: the return value is the previous
+    // policy, so a test can restore exactly what it found.
+    let previous = replace_profit_gate_token_for_test(TestProfitPolicy::Bypass);
+    assert_eq!(previous, TestProfitPolicy::Runtime);
+    let previous = replace_profit_gate_token_for_test(TestProfitPolicy::Runtime);
+    assert_eq!(previous, TestProfitPolicy::Bypass);
+
+    // The inline-v2 read token names the private enum through its mirror.
+    let mode = jit_inline2_mode_token_for_test();
+    assert!(matches!(
+        mode,
+        TestInline2Mode::Off
+            | TestInline2Mode::Named
+            | TestInline2Mode::Closure
+            | TestInline2Mode::Hof
+            | TestInline2Mode::All
+    ));
+
+    // The flonum token writes each private mode and then restores the
+    // environment's answer.
+    force_flonum_mode_token_for_test(Some(TestFlonumMode::Resident));
+    force_flonum_mode_token_for_test(Some(TestFlonumMode::Off));
+    force_flonum_mode_token_for_test(None);
+
+    // The handle-taking fences name their public shapes; constructing a VM
+    // or a bytecode function is the slice's job, not the hub smoke test's.
+    let _ = neovm_eval::test_support::authority::force_interpreter_only_for_test
+        as fn(&mut neovm_eval::emacs_core::bytecode::Vm);
+    let _ = neovm_eval::test_support::authority::publish_numeric_feedback_scope_for_test
+        as fn(
+            &neovm_eval::emacs_core::bytecode::ByteCodeFunction,
+        ) -> neovm_eval::test_support::authority::NumericFeedbackScopeHandle;
+    let _ = neovm_eval::test_support::authority::prepare_entry_for_test
+        as fn(
+            &mut neovm_eval::emacs_core::eval::Context,
+            &neovm_eval::emacs_core::bytecode::ByteCodeFunction,
+        );
 }

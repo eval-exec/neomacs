@@ -1,5 +1,4 @@
 use super::*;
-use strum::IntoEnumIterator;
 
 #[test]
 fn derived_arithmetic_decode_accepts_each_kind_and_reports_unknown_codes() {

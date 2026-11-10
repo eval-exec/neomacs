@@ -4295,6 +4295,9 @@ pub(crate) mod resumed_chain;
 pub(crate) mod snapshot;
 pub(crate) mod source_slots;
 pub(crate) mod t2_profile;
+/// Widening-hub: the numeric-feedback TLS scope type held by the authority
+/// handle; the scope itself never crosses the fence.
+pub(crate) use snapshot::NumericFeedbackScope;
 pub(crate) use snapshot::{
     active_numeric_feedback, arith_site_takes_generic, call_site_inlinable_at,
     publish_numeric_feedback, publish_numeric_feedback_vec,

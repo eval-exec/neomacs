@@ -8,7 +8,6 @@
 use super::*;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
-use strum::IntoEnumIterator;
 
 fn rooted(eval: &mut Context, v: Value) -> Value {
     eval.push_specpdl_root(v);

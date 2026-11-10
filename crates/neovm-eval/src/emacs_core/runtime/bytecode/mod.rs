@@ -23,6 +23,7 @@ pub mod vm;
 
 // Re-export main types
 #[cfg(any(feature = "jit", test))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use arith_kind::ArithGenericKind;
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use chunk::ByteCodeFunctionExt;
