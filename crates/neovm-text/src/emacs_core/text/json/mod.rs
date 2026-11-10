@@ -401,12 +401,19 @@ fn serialize_into(
             // the parse order (`json_roundtrip` in the oracle suite).
             let entries = table.data.keyed_entries_in_slot_order();
             out.push('{');
-            for (index, (key, entry)) in entries.iter().enumerate() {
+            for (index, (_, entry)) in entries.iter().enumerate() {
                 if index > 0 {
                     out.push(',');
                 }
-                let key_str = hash_key_to_string(key)?;
-                json_encode_string_into(out, &key_str);
+                // GNU does `CHECK_STRING (k)` whatever the table's test is,
+                // then writes the key through `json_out_string`.
+                if !entry.key.is_string() {
+                    return Err(signal(
+                        LispCondition::WrongTypeArgument,
+                        vec![Value::symbol("stringp"), entry.key],
+                    ));
+                }
+                serialize_into(out, &entry.key, opts, depth + 1)?;
                 out.push(':');
                 serialize_into(out, &entry.value, opts, depth + 1)?;
             }
@@ -535,38 +542,6 @@ fn strip_plist_colon(name: &str) -> &str {
     match name.strip_prefix(':') {
         Some(rest) if !rest.is_empty() => rest,
         _ => name,
-    }
-}
-
-/// Convert a HashKey to a string suitable as a JSON object key.
-fn hash_key_to_string(key: &HashKey) -> Result<String, Flow> {
-    match key {
-        HashKey::Text(s) => Ok(s.to_string()),
-        HashKey::StringContent(content) => String::from_utf8(content.0.to_vec()).map_err(|_| {
-            signal(
-                "json-serialize",
-                vec![Value::string("invalid UTF-8 in key")],
-            )
-        }),
-        HashKey::Symbol(id) => Ok(resolve_sym(*id).to_owned()),
-        HashKey::Keyword(id) => {
-            let s = resolve_sym(*id);
-            // Strip leading colon if present.
-            if let Some(stripped) = s.strip_prefix(':') {
-                Ok(stripped.to_string())
-            } else {
-                Ok(s.to_owned())
-            }
-        }
-        HashKey::Int(n) => Ok(n.to_string()),
-        HashKey::Nil => Ok("nil".to_string()),
-        HashKey::True => Ok("t".to_string()),
-        _ => Err(signal(
-            JsonError::Serialize.symbol(),
-            vec![Value::string(
-                "Hash table key cannot be converted to JSON object key",
-            )],
-        )),
     }
 }
 

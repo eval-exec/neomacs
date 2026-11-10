@@ -44,6 +44,47 @@ fn json_control_escapes_use_uppercase_hex_digits() {
 }
 
 #[test]
+fn json_serialize_hash_table_keys_follow_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU `json_out_object_hash` (src/json.c) does `CHECK_STRING (k)`, whatever
+    // the table's test is, then writes the key with `json_out_string`.
+    let mut eval = crate::test_utils::new_context();
+    let mut serialize_with_key = |test: &str, key: &str| {
+        neovm_eval::emacs_core::print::format_eval_result(&eval.eval_str(&format!(
+            r#"(let ((table (make-hash-table :test '{test})))
+                 (puthash {key} 2 table)
+                 (condition-case err
+                     (json-serialize table)
+                   (error err)))"#
+        )))
+    };
+
+    for (key, printed) in [
+        ("1", "1"),
+        ("'a", "a"),
+        (":k", ":k"),
+        ("nil", "nil"),
+        ("t", "t"),
+    ] {
+        assert_eq!(
+            serialize_with_key("eq", key),
+            format!("OK (wrong-type-argument stringp {printed})")
+        );
+    }
+    assert_eq!(
+        serialize_with_key("equal", "1"),
+        "OK (wrong-type-argument stringp 1)"
+    );
+    for test in ["eq", "eql", "equal"] {
+        assert_eq!(serialize_with_key(test, "\"k\""), r#"OK "{\"k\":2}""#);
+    }
+    assert_eq!(
+        serialize_with_key("equal", r#""\xCC""#),
+        r#"OK (wrong-type-argument json-value-p "\314")"#
+    );
+}
+
+#[test]
 fn json_parse_buffer_advances_point_after_value() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
