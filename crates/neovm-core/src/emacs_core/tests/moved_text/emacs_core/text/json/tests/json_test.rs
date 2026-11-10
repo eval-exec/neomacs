@@ -250,3 +250,49 @@ fn json_insert_uses_the_buffer_state_left_by_before_change_hooks() {
         "OK ((91 34 195 169 239 191 191 240 157 148 184 34 93 97 122) 14 nil (1 14 0))"
     );
 }
+
+#[test]
+fn json_insert_targets_the_buffer_selected_by_before_change_hooks() {
+    crate::test_utils::init_test_tracing();
+    // GNU lets a before-change hook's `set-buffer` persist, and `Fjson_insert`
+    // then inserts into, and reports the change for, that current buffer.
+    let insert_after_switch = |other_multibyte: &str| {
+        let mut eval = crate::test_utils::new_context();
+        neovm_eval::emacs_core::print::format_eval_result(&eval.eval_str(&format!(
+            r#"(let ((origin (current-buffer))
+                     (other (get-buffer-create " *json-insert-other*")))
+                 (set-buffer other)
+                 (erase-buffer)
+                 (set-buffer-multibyte {other_multibyte})
+                 (set-buffer origin)
+                 (erase-buffer)
+                 (insert "az")
+                 (goto-char 2)
+                 (setq json-insert-test-change nil)
+                 (setq before-change-functions
+                       (list (lambda (_beg _end) (set-buffer other))))
+                 (setq after-change-functions
+                       (list (lambda (beg end len)
+                               (setq json-insert-test-change
+                                     (list (buffer-name) beg end len)))))
+                 (json-insert ["é￿\U0001D538"])
+                 (setq before-change-functions nil)
+                 (setq after-change-functions nil)
+                 (let ((result (list (eq (current-buffer) other)
+                                     (append (buffer-string) nil)
+                                     (point)
+                                     json-insert-test-change)))
+                   (set-buffer origin)
+                   (list result (buffer-string) (point))))"#
+        )))
+    };
+
+    assert_eq!(
+        insert_after_switch("t"),
+        "OK ((t (91 34 233 65535 120120 34 93) 8 (\" *json-insert-other*\" 1 8 0)) \"az\" 2)"
+    );
+    assert_eq!(
+        insert_after_switch("nil"),
+        "OK ((t (91 34 195 169 239 191 191 240 157 148 184 34 93) 14 (\" *json-insert-other*\" 1 14 0)) \"az\" 2)"
+    );
+}

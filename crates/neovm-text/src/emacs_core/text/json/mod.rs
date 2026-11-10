@@ -1542,6 +1542,12 @@ pub fn builtin_json_parse_buffer<H: EditHost>(host: &mut H, args: Vec<Value>) ->
     Ok(result)
 }
 
+fn json_insert_target(buffers: &BufferManager) -> Result<BufferId, Flow> {
+    buffers
+        .current_buffer_id()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))
+}
+
 /// Measure inserting `json` at the live point of `buffer_id`, and report
 /// whether that buffer is multibyte.
 fn json_insertion_at_point(
@@ -1570,22 +1576,19 @@ pub fn builtin_json_insert<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalR
     expect_min_args("json-insert", &args, 1)?;
     let opts = parse_serialize_kwargs(&args, 1, host.symbol_mode())?;
     let json = serialize_to_json(&args[0], &opts, 0)?;
-    let (current_id, before_change) = {
+    let before_change = {
         let (edit, _vars) = host.edit_and_vars();
-        let buffers = &mut edit.buffers;
-        let current_id = buffers
-            .current_buffer_id()
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        let (change, _) = json_insertion_at_point(buffers, current_id, &json)?;
-        (current_id, change)
+        let current_id = json_insert_target(&edit.buffers)?;
+        json_insertion_at_point(&edit.buffers, current_id, &json)?.0
     };
     signal_before_text_change(host, before_change)?;
-    // GNU `Fjson_insert` reads point and the buffer's multibyte flag after
-    // `prepare_to_modify_buffer`, so measure again: a hook may have changed
-    // either. The serialized UTF-8 goes in unchanged: as characters in a
+    // GNU `Fjson_insert` works on the current buffer, point and multibyte flag
+    // left by `prepare_to_modify_buffer`, so a hook may have changed any of
+    // them. The serialized UTF-8 goes in unchanged: as characters in a
     // multibyte buffer and as raw bytes in a unibyte one.
     let change = {
         let (edit, _vars) = host.edit_and_vars();
+        let current_id = json_insert_target(&edit.buffers)?;
         let (change, multibyte) = json_insertion_at_point(&edit.buffers, current_id, &json)?;
         if multibyte {
             let _ = edit.buffers.insert_into_buffer(current_id, &json);
