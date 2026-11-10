@@ -478,17 +478,6 @@ pub fn registry_first_chunk_word_for_test<'heap, K: crate::tagged::gc::EraKeeper
         .map(|chunk| chunk.as_ptr().addr())
 }
 
-/// FENCE (copied read): the activation-side address word of the published
-/// table's first chunk, for the consumer's identity-retained assertion. The
-/// private chunk-address type and the view never cross; only the word does.
-pub fn table_first_chunk_word_for_test(
-    activation: &crate::tagged::gc::mutator_registration::ExecutionActivation<'_, '_, '_>,
-) -> Option<usize> {
-    let view = activation.table_view();
-    let table = view.table();
-    table.chunk(0.into()).map(|chunk| chunk.as_ptr().addr())
-}
-
 /// Counter reset for the A8 driver (peer MEMQ-TAIL-SHAPES (5)): a write, so
 /// an unsafe fence.
 ///

@@ -431,30 +431,6 @@ pub fn registry_first_chunk_word_for_test<'heap, K: crate::tagged::gc::EraKeeper
     crate::tagged::gc::mutator_registration::test_fences::registry_first_chunk_word_for_test(era)
 }
 
-/// FENCE (copied read; peer #1482 hold 00:57Z item 1): the activation-side
-/// address word of the published table's first chunk. The consumer compares
-/// this copied word; the private chunk-address type, the view and the
-/// descriptor never cross.
-pub fn table_first_chunk_word_for_test(
-    activation: &crate::tagged::gc::mutator_registration::ExecutionActivation<'_, '_, '_>,
-) -> Option<usize> {
-    crate::tagged::gc::mutator_registration::test_fences::table_first_chunk_word_for_test(
-        activation,
-    )
-}
-
-/// FENCE (copied read; peer #1482 design note B7): a run's initial
-/// published-table statistics as a Copy snapshot. The original
-/// `RunAccess::initial_table_statistics_for_test` stays `pub(crate)`.
-pub fn run_initial_table_statistics_for_test(
-    run: &crate::tagged::gc::mutator_registration::RunAccess<'_, '_>,
-) -> Result<
-    crate::tagged::gc::symbol_table::publication::TableStatistics,
-    crate::tagged::gc::mutator_registration::RegistrationError,
-> {
-    run.initial_table_statistics_for_test()
-}
-
 /// FENCE (peer-signed A composite; peer #1482 condition 3 audit): wait on
 /// the registry's resume-debt event, then run `body` with a run admitted
 /// under the predicate gate. The Mutator registry field, park ticket,
