@@ -202,3 +202,51 @@ fn json_insert_writes_utf8_bytes_into_unibyte_buffers() {
         "OK ((97 91 34 233 65535 120120 34 93 122) 9 t (2 9 0))"
     );
 }
+
+#[test]
+fn json_insert_uses_the_buffer_state_left_by_before_change_hooks() {
+    crate::test_utils::init_test_tracing();
+    // GNU `Fjson_insert` (src/json.c) reads point and the buffer's multibyte
+    // flag after `prepare_to_modify_buffer`, so a hook can change where the
+    // text goes and whether it lands as characters or UTF-8 bytes.
+    let insert_after_hook = |multibyte: &str, hook_form: &str| {
+        let mut eval = crate::test_utils::new_context();
+        neovm_eval::emacs_core::print::format_eval_result(&eval.eval_str(&format!(
+            r#"(progn
+                 (erase-buffer)
+                 (set-buffer-multibyte {multibyte})
+                 (insert "az")
+                 (goto-char 2)
+                 (setq json-insert-test-change nil)
+                 (setq before-change-functions
+                       (list (lambda (_beg _end) {hook_form})))
+                 (setq after-change-functions
+                       (list (lambda (beg end len)
+                               (setq json-insert-test-change (list beg end len)))))
+                 (json-insert ["é￿\U0001D538"])
+                 (setq before-change-functions nil)
+                 (setq after-change-functions nil)
+                 (list (append (buffer-string) nil)
+                       (point)
+                       enable-multibyte-characters
+                       json-insert-test-change))"#
+        )))
+    };
+
+    assert_eq!(
+        insert_after_hook("nil", "(set-buffer-multibyte t)"),
+        "OK ((97 91 34 233 65535 120120 34 93 122) 9 t (2 9 0))"
+    );
+    assert_eq!(
+        insert_after_hook("t", "(set-buffer-multibyte nil)"),
+        "OK ((97 91 34 195 169 239 191 191 240 157 148 184 34 93 122) 15 nil (2 15 0))"
+    );
+    assert_eq!(
+        insert_after_hook("t", "(goto-char 1)"),
+        "OK ((91 34 233 65535 120120 34 93 97 122) 8 t (1 8 0))"
+    );
+    assert_eq!(
+        insert_after_hook("nil", "(goto-char 1)"),
+        "OK ((91 34 195 169 239 191 191 240 157 148 184 34 93 97 122) 14 nil (1 14 0))"
+    );
+}

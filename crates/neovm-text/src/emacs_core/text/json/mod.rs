@@ -19,7 +19,9 @@
 //! are implemented from scratch with simple recursive descent.
 
 use crate::emacs_core::text_host::TextHost;
-use neovm_edit::buffer::{EmacsByteLen, EmacsBytePos, EmacsByteRange, TextExtent};
+use neovm_edit::buffer::{
+    BufferId, BufferManager, EmacsByteLen, EmacsBytePos, EmacsByteRange, TextChange, TextExtent,
+};
 use neovm_edit::emacs_core::edit_host::EditHost;
 use neovm_edit::emacs_core::editfns::{
     signal_after_text_change, signal_before_text_change,
@@ -1540,6 +1542,26 @@ pub fn builtin_json_parse_buffer<H: EditHost>(host: &mut H, args: Vec<Value>) ->
     Ok(result)
 }
 
+/// Measure inserting `json` at the live point of `buffer_id`, and report
+/// whether that buffer is multibyte.
+fn json_insertion_at_point(
+    buffers: &BufferManager,
+    buffer_id: BufferId,
+    json: &str,
+) -> Result<(TextChange, bool), Flow> {
+    let (insert_pos, multibyte) = buffers
+        .get(buffer_id)
+        .map(|b| (b.point_emacs_byte_pos(), b.get_multibyte()))
+        .unwrap_or((EmacsBytePos::ZERO, true));
+    let change = text_change_for_empty_insertion_at_emacs_byte_pos(
+        buffers,
+        buffer_id,
+        insert_pos,
+        TextExtent::from_emacs_bytes(json.as_bytes(), multibyte),
+    )?;
+    Ok((change, multibyte))
+}
+
 /// `(json-insert VALUE &rest ARGS)` — insert JSON text at point.
 ///
 /// Keyword arguments mirror `json-serialize` (`:null-object`, `:false-object`).
@@ -1548,30 +1570,24 @@ pub fn builtin_json_insert<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalR
     expect_min_args("json-insert", &args, 1)?;
     let opts = parse_serialize_kwargs(&args, 1, host.symbol_mode())?;
     let json = serialize_to_json(&args[0], &opts, 0)?;
-    let (current_id, change, target_multibyte) = {
+    let (current_id, before_change) = {
         let (edit, _vars) = host.edit_and_vars();
         let buffers = &mut edit.buffers;
         let current_id = buffers
             .current_buffer_id()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        let (insert_pos, target_multibyte) = buffers
-            .get(current_id)
-            .map(|b| (b.point_emacs_byte_pos(), b.get_multibyte()))
-            .unwrap_or((EmacsBytePos::ZERO, true));
-        let change = text_change_for_empty_insertion_at_emacs_byte_pos(
-            buffers,
-            current_id,
-            insert_pos,
-            TextExtent::from_emacs_bytes(json.as_bytes(), target_multibyte),
-        )?;
-        (current_id, change, target_multibyte)
+        let (change, _) = json_insertion_at_point(buffers, current_id, &json)?;
+        (current_id, change)
     };
-    signal_before_text_change(host, change)?;
-    {
+    signal_before_text_change(host, before_change)?;
+    // GNU `Fjson_insert` reads point and the buffer's multibyte flag after
+    // `prepare_to_modify_buffer`, so measure again: a hook may have changed
+    // either. The serialized UTF-8 goes in unchanged: as characters in a
+    // multibyte buffer and as raw bytes in a unibyte one.
+    let change = {
         let (edit, _vars) = host.edit_and_vars();
-        // GNU `Fjson_insert` copies the serialized UTF-8 into the gap unchanged:
-        // characters in a multibyte buffer, raw UTF-8 bytes in a unibyte one.
-        if target_multibyte {
+        let (change, multibyte) = json_insertion_at_point(&edit.buffers, current_id, &json)?;
+        if multibyte {
             let _ = edit.buffers.insert_into_buffer(current_id, &json);
         } else {
             let bytes = neovm_value::heap_types::LispString::from_unibyte_slice(json.as_bytes());
@@ -1579,7 +1595,8 @@ pub fn builtin_json_insert<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalR
                 .buffers
                 .insert_lisp_string_into_buffer(current_id, &bytes);
         }
-    }
+        change
+    };
     signal_after_text_change(host, change)?;
     Ok(Value::NIL)
 }
