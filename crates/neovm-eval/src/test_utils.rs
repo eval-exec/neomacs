@@ -457,11 +457,34 @@ mod unit_runtime {
         s::sqlite_reset,
     );
 
+    /// Scheduler lib tests register a manager wake without a `Context`.
+    /// Unknown tokens still hit the absent-layer panic. The product
+    /// `select_nudge` / `select_control_source` functions do not branch.
+    fn select_nudge(
+        token: crate::emacs_core::eval::process_hooks::SelectHandleToken,
+        destination: crate::host_effect::wake::ControlDestination,
+        reason: crate::host_effect::wake::ControlNudge,
+    ) {
+        if crate::emacs_core::eval::process_hooks::test_select_nudge(token, destination, reason) {
+            return;
+        }
+        s::select_nudge(token, destination, reason);
+    }
+
+    fn select_control_source(
+        token: crate::emacs_core::eval::process_hooks::SelectHandleToken,
+    ) -> Option<std::sync::Arc<crate::host_effect::wake::ControlWake>> {
+        if let Some(wake) = crate::emacs_core::eval::process_hooks::test_select_wake(token) {
+            return Some(wake);
+        }
+        s::select_control_source(token)
+    }
+
     static SELECT: SelectHooks = SelectHooks::new(
         s::select_handle,
         s::select_notify,
-        s::select_nudge,
-        s::select_control_source,
+        select_nudge,
+        select_control_source,
         s::select_wait_until,
         s::select_arm,
         s::select_wait_registered,

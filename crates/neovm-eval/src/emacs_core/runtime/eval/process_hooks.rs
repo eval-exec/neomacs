@@ -371,6 +371,107 @@ pub fn select_control_source(token: SelectHandleToken) -> Option<Arc<ControlWake
     (process_hooks().select.control_source)(token)
 }
 
+/// Test seam: register a manager's select wake without a `Context`.
+///
+/// The scheduler tests name this as `crate::emacs_core::process_hooks`.
+/// Core's copy is `pub(crate)` in another crate, and eval cannot call it.
+/// The wake it registers is this backend's `ControlWake`. Tokens use the
+/// high half of the id space so they do not collide with a hook-table
+/// registry. The unit-runtime select hooks are the only readers of that
+/// map; this function installs that runtime because the scheduler tests
+/// never construct a `Context`, and a missing table panics at the dispatch.
+#[cfg(test)]
+pub(crate) fn select_handle_for_manager(
+    manager: &crate::emacs_core::eval::data::process_state::ProcessManager,
+) -> Option<SelectHandleToken> {
+    let _ = crate::test_utils::unit_runtime();
+    test_select::register(manager)
+}
+
+/// True when TOKEN names a wake [`select_handle_for_manager`] registered.
+/// The unit-runtime select hook calls this. The product dispatcher does not.
+#[cfg(test)]
+pub(crate) fn test_select_nudge(
+    token: SelectHandleToken,
+    destination: ControlDestination,
+    reason: ControlNudge,
+) -> bool {
+    test_select::nudge(token, destination, reason)
+}
+
+/// The wake registered for TOKEN, when this test registry issued it.
+#[cfg(test)]
+pub(crate) fn test_select_wake(token: SelectHandleToken) -> Option<Arc<ControlWake>> {
+    test_select::wake(token)
+}
+
+#[cfg(test)]
+mod test_select {
+    use super::{
+        Arc, ControlDestination, ControlNudge, ControlWake, NonZeroU64, SelectHandleToken,
+    };
+    use crate::host_effect::wake::ControlNudgeOutcome;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Core's registry starts at 1. Test tokens stay in the high half so a
+    /// nudge does not steal a live hook-table id.
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1_u64 << 63);
+    static WAKES: OnceLock<Mutex<HashMap<u64, Arc<ControlWake>>>> = OnceLock::new();
+
+    fn wakes() -> &'static Mutex<HashMap<u64, Arc<ControlWake>>> {
+        WAKES.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    pub(super) fn register(
+        manager: &crate::emacs_core::eval::data::process_state::ProcessManager,
+    ) -> Option<SelectHandleToken> {
+        let wake = manager
+            .wait_backend
+            .notification_pending
+            .attach_native(manager.wait_backend.poller.as_ref().map(Arc::clone))
+            .require_native()
+            .ok()
+            .cloned()?;
+        let raw = NonZeroU64::new(NEXT_ID.fetch_add(1, Ordering::Relaxed))?;
+        wakes()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(raw.get(), wake);
+        Some(SelectHandleToken::from_raw(raw))
+    }
+
+    /// Clone the wake out of the map. A nudge must not hold this mutex.
+    pub(super) fn wake(token: SelectHandleToken) -> Option<Arc<ControlWake>> {
+        wakes()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .get(&token.raw().get())
+            .cloned()
+    }
+
+    pub(super) fn nudge(
+        token: SelectHandleToken,
+        destination: ControlDestination,
+        reason: ControlNudge,
+    ) -> bool {
+        let Some(wake) = wake(token) else {
+            return false;
+        };
+        match wake.handle().nudge(destination, reason) {
+            ControlNudgeOutcome::Notified
+            | ControlNudgeOutcome::AlreadyPending
+            | ControlNudgeOutcome::RetiredSession => {}
+            ControlNudgeOutcome::WakeFailedAfterPublication(error) => {
+                tracing::warn!(%error, "control wake failed after publication");
+            }
+        }
+        true
+    }
+}
+
 /// Recheck select readiness without arming (a registered wait is live).
 pub fn select_wait_until(token: SelectHandleToken, deadline: Instant) -> bool {
     (process_hooks().select.wait_until)(token, deadline)
