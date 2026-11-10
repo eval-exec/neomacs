@@ -86,7 +86,8 @@ test-support = ["dep:visibility"]
 # unified `cargo nextest archive --workspace` build enables every dev-dep
 # feature for every dependent.  Only the six split crates'
 # [dev-dependencies] enable the feature; no product crate does.
-test-thread-fallback-heap = []
+# Implies test-support so the existing thread_exit_leak cfg arm compiles; no second #[path] mount.
+test-thread-fallback-heap = ["test-support"]
 
 [lints.rust]
 # Split-wave class guard (LEAD 11:5xZ): deny accidental self-recursion.
