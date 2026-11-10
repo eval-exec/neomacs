@@ -798,6 +798,7 @@ impl Drop for FusedScope {
 /// Splice constant-bytecode callees into their caller before lowering. On by
 /// default; `NEOVM_JIT_INLINE=off` (or `0`/`false`/`no`) disables it, which is
 /// the A/B switch the measurements use.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn jit_inline_on() -> bool {
     // Same rule as the override's own gate: the re-homed tests set this
     // through the test-support surface, so the read must exist there too.

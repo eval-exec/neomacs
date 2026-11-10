@@ -779,6 +779,7 @@ pub fn force_jit_off_for_test(off: bool) {
 }
 
 #[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn jit_forced_off_for_test() -> bool {
     JIT_OFF_FOR_TEST.with(|c| c.get())
 }
@@ -896,6 +897,7 @@ pub(crate) fn force_osr_for_test(on: bool) {
 }
 
 /// Upper extension trait for the moved runtime state.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) trait RuntimeStateTieringExt {
     /// Number of leading constant slots that are per-instance (`make-closure`
     /// patched) for this source; 0 for a plain function.

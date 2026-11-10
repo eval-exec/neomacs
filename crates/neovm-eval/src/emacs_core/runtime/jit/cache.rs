@@ -424,6 +424,7 @@ pub(crate) fn leaf_report_rows() -> (Vec<LeafRow>, LeafTotals) {
 static LEAF_SLOT_EPOCH: AtomicU64 = AtomicU64::new(1);
 
 #[inline(always)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn leaf_slot_epoch() -> u64 {
     LEAF_SLOT_EPOCH.load(Ordering::Relaxed)
 }
@@ -2113,7 +2114,8 @@ pub(crate) fn cached_leaf_is_aot_for_func(func: &ByteCodeFunction) -> Option<boo
 }
 
 /// Test-only: how many callers are recorded as inlining `sym`.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn inline_dependent_count_for_test(sym: SymId) -> usize {
     INLINE_DEPS.with(|m| m.borrow().get(&sym).map_or(0, |s| s.len()))
 }

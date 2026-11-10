@@ -6196,6 +6196,7 @@ impl SlotRep {
 /// What the flonum lowering did in the function being lowered: the census
 /// its tests assert and its `compile` trace event reports.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct FlonumCensus {
     /// Float-site results left unboxed.
     pub(crate) results: u32,
@@ -6204,6 +6205,30 @@ pub(crate) struct FlonumCensus {
     pub(crate) escape_boxes: u32,
     /// Boxes made in deopt exits and handler-dispatch blocks.
     pub(crate) cold_boxes: u32,
+}
+
+impl FlonumCensus {
+    /// Unboxed float-site results (widening-hub observed read; the field
+    /// stays pub(crate)).
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) const fn results(&self) -> u32 {
+        self.results
+    }
+
+    /// Ordinary-path escape boxes (widening-hub observed read).
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) const fn escape_boxes(&self) -> u32 {
+        self.escape_boxes
+    }
+
+    /// Deopt/handler-path cold boxes (widening-hub observed read).
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) const fn cold_boxes(&self) -> u32 {
+        self.cold_boxes
+    }
 }
 
 thread_local! {
@@ -6217,6 +6242,7 @@ pub(crate) fn flonum_census_reset() {
 }
 
 /// The flonum census since the last [`flonum_census_reset`].
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn flonum_census() -> FlonumCensus {
     FLONUM_CENSUS.with(|c| c.get())
 }

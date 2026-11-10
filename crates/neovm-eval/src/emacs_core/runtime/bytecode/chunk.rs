@@ -115,6 +115,7 @@ const _: () = assert!(
 /// sealing, GNU-policy restoration and the JIT handle accessors stay upper.
 /// These are ordinary statically dispatched methods: no vtable, no boxing and
 /// no duplicate struct. Callers import the trait (`as _` is enough).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) trait ByteCodeFunctionExt {
     /// The tiering/profiling handle (JIT builds only).
     #[cfg(feature = "jit")]

@@ -1157,6 +1157,20 @@ pub mod authority {
         crate::emacs_core::jit::bg::TestModeScope::enter(mode)
     }
 
+    /// FENCE: whether inline-arith lowering is on (widening hub, #1871). The
+    /// knobs module stays private; this copies the boolean out.
+    #[cfg(feature = "jit")]
+    pub fn jit_inline_arith_on_for_test() -> bool {
+        crate::emacs_core::jit::compile::jit_inline_arith_on()
+    }
+
+    /// FENCE: the current JIT background-compile mode (widening hub, #1871).
+    /// The `bg` module stays private; `BgMode` is the public plain enum.
+    #[cfg(feature = "jit")]
+    pub fn bg_mode_for_test() -> crate::emacs_core::jit::BgMode {
+        crate::emacs_core::jit::bg::mode()
+    }
+
     /// FENCE delegate: publish a Rust-local fixture value as a GC root.
     ///
     /// # Safety

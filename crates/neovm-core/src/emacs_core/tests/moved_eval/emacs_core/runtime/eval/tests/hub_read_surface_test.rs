@@ -47,3 +47,49 @@ fn hub_context_read_surface_observes_a_canonical_context() {
         assert!(!name.is_empty());
     }
 }
+
+#[cfg(feature = "jit")]
+#[test]
+fn hub_jit_read_surface_observes_the_canonical_knobs() {
+    // The extension traits are imported through their post-split paths; `as _`
+    // is the documented spelling (a caller never names the trait otherwise).
+    use neovm_eval::emacs_core::bytecode::ByteCodeFunctionExt as _;
+    use neovm_eval::emacs_core::jit::RuntimeStateTieringExt as _;
+
+    crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
+
+    // Plain boolean knob reads, direct and behind the private-module fence.
+    let _ = neovm_eval::emacs_core::jit::jit_forced_off_for_test();
+    let _ = neovm_eval::emacs_core::jit::inline::jit_inline_on();
+    let _ = neovm_eval::test_support::authority::jit_inline_arith_on_for_test();
+
+    // The background mode is a public plain enum, and the canonical default
+    // is one of its variants.
+    let mode = neovm_eval::test_support::authority::bg_mode_for_test();
+    assert!(matches!(
+        mode,
+        neovm_eval::emacs_core::jit::BgMode::Legacy
+            | neovm_eval::emacs_core::jit::BgMode::Sync
+            | neovm_eval::emacs_core::jit::BgMode::Threaded
+    ));
+
+    // The leaf-slot epoch starts nonzero; inline-dependent counts are empty
+    // on a fresh process.
+    assert!(neovm_eval::emacs_core::jit::cache::leaf_slot_epoch() >= 1);
+    assert_eq!(
+        neovm_eval::emacs_core::jit::cache::inline_dependent_count_for_test(intern("car")),
+        0
+    );
+
+    // The flonum census type and its observed reads are nameable, and a
+    // fresh process starts at the default census.
+    let census = neovm_eval::emacs_core::jit::compile::flonum_census();
+    assert_eq!(
+        census,
+        neovm_eval::emacs_core::jit::compile::FlonumCensus::default()
+    );
+    assert_eq!(census.results(), 0);
+    assert_eq!(census.escape_boxes(), 0);
+    assert_eq!(census.cold_boxes(), 0);
+}
