@@ -166,3 +166,39 @@ fn json_insert_writes_at_point_and_advances() {
     assert_eq!(buf.buffer_string(), "a[1,true]b");
     assert_eq!(buf.point_emacs_byte_pos().get(), 9);
 }
+
+#[test]
+fn json_insert_writes_utf8_bytes_into_unibyte_buffers() {
+    crate::test_utils::init_test_tracing();
+    // GNU `Fjson_insert` (src/json.c) inserts Unicode characters "as UTF-8 byte
+    // sequences into unibyte buffers", so point and the change hook count bytes.
+    let insert_between_a_and_z = |multibyte: &str| {
+        let mut eval = crate::test_utils::new_context();
+        neovm_eval::emacs_core::print::format_eval_result(&eval.eval_str(&format!(
+            r#"(progn
+                 (erase-buffer)
+                 (set-buffer-multibyte {multibyte})
+                 (insert "az")
+                 (goto-char 2)
+                 (setq json-insert-test-change nil)
+                 (setq after-change-functions
+                       (list (lambda (beg end len)
+                               (setq json-insert-test-change (list beg end len)))))
+                 (json-insert ["\u00E9\uFFFF\U0001D538"])
+                 (setq after-change-functions nil)
+                 (list (append (buffer-string) nil)
+                       (point)
+                       enable-multibyte-characters
+                       json-insert-test-change))"#
+        )))
+    };
+
+    assert_eq!(
+        insert_between_a_and_z("nil"),
+        "OK ((97 91 34 195 169 239 191 191 240 157 148 184 34 93 122) 15 nil (2 15 0))"
+    );
+    assert_eq!(
+        insert_between_a_and_z("t"),
+        "OK ((97 91 34 233 65535 120120 34 93 122) 9 t (2 9 0))"
+    );
+}

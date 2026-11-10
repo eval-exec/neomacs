@@ -1548,7 +1548,7 @@ pub fn builtin_json_insert<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalR
     expect_min_args("json-insert", &args, 1)?;
     let opts = parse_serialize_kwargs(&args, 1, host.symbol_mode())?;
     let json = serialize_to_json(&args[0], &opts, 0)?;
-    let (current_id, change) = {
+    let (current_id, change, target_multibyte) = {
         let (edit, _vars) = host.edit_and_vars();
         let buffers = &mut edit.buffers;
         let current_id = buffers
@@ -1564,12 +1564,21 @@ pub fn builtin_json_insert<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalR
             insert_pos,
             TextExtent::from_emacs_bytes(json.as_bytes(), target_multibyte),
         )?;
-        (current_id, change)
+        (current_id, change, target_multibyte)
     };
     signal_before_text_change(host, change)?;
     {
         let (edit, _vars) = host.edit_and_vars();
-        let _ = edit.buffers.insert_into_buffer(current_id, &json);
+        // GNU `Fjson_insert` copies the serialized UTF-8 into the gap unchanged:
+        // characters in a multibyte buffer, raw UTF-8 bytes in a unibyte one.
+        if target_multibyte {
+            let _ = edit.buffers.insert_into_buffer(current_id, &json);
+        } else {
+            let bytes = neovm_value::heap_types::LispString::from_unibyte_slice(json.as_bytes());
+            let _ = edit
+                .buffers
+                .insert_lisp_string_into_buffer(current_id, &bytes);
+        }
     }
     signal_after_text_change(host, change)?;
     Ok(Value::NIL)
