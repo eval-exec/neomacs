@@ -53,6 +53,8 @@ use super::wait::ProcessOutputWaitOutcome;
 /// the child-status wait source). See `process/sys/mod.rs`.
 #[cfg(not(feature = "test-support"))]
 pub(crate) mod sys;
+/// Platform abstraction layer for OS-specific subprocess facilities (currently
+/// the child-status wait source). See `process/sys/mod.rs`.
 #[cfg(feature = "test-support")]
 pub mod sys;
 use sys::ChildStatusSource;
@@ -78,6 +80,10 @@ use status_notify::ProcessStatusNotification;
 /// `process/child_status.rs`.
 #[cfg(not(feature = "test-support"))]
 pub(crate) mod child_status;
+/// GNU `handle_child_signal`'s ASYNCHRONOUS child-status recording
+/// (src/process.c:7691), and the type that keeps a Lisp-visible status from
+/// being read before the recording has been made.  See
+/// `process/child_status.rs`.
 #[cfg(feature = "test-support")]
 pub mod child_status;
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
