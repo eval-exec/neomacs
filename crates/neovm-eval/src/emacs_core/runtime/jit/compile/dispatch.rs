@@ -233,6 +233,9 @@ pub unsafe extern "C" fn neovm_jit_builtin1(ctx: *mut u8, idx: i64, a: i64, out:
         if let Some(pure) = JIT_BUILTIN1_PURE[idx as usize] {
             // No collection can run (see `JitBuiltin2Pure`): no scratch roots.
             // SAFETY: see neovm_jit_call's function-level contract.
+            // SAFETY (owner chain): Context work here uses this owner or its
+            // typed reborrows; no older-raw callback intervenes before its last use
+            // (condition b absent).
             let ctx = unsafe { &*(ctx as *const Context) };
             return match pure(ctx, a) {
                 Ok(value) => {
@@ -249,6 +252,9 @@ pub unsafe extern "C" fn neovm_jit_builtin1(ctx: *mut u8, idx: i64, a: i64, out:
         let saved = save_scratch_gc_roots();
         push_scratch_gc_root(a);
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         let status = match JIT_BUILTIN1[idx as usize](ctx, a) {
             Ok(value) => {
@@ -290,6 +296,9 @@ pub unsafe extern "C" fn neovm_jit_builtin2(
         if let Some(pure) = JIT_BUILTIN2_PURE[idx as usize] {
             // No collection can run (see `JitBuiltin2Pure`): no scratch roots.
             // SAFETY: see neovm_jit_call's function-level contract.
+            // SAFETY (owner chain): Context work here uses this owner or its
+            // typed reborrows; no older-raw callback intervenes before its last use
+            // (condition b absent).
             let ctx = unsafe { &*(ctx as *const Context) };
             return match pure(ctx, a, b) {
                 Ok(value) => {
@@ -307,6 +316,9 @@ pub unsafe extern "C" fn neovm_jit_builtin2(
         push_scratch_gc_root(a);
         push_scratch_gc_root(b);
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         let status = match JIT_BUILTIN2[idx as usize](ctx, a, b) {
             Ok(value) => {
@@ -415,6 +427,9 @@ fn aref_slow(ctx: *mut u8, array: Value, index: Value) -> i64 {
     ARRAY_SHIM_SLOW_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, VALUE_SHIM_SIGNAL, {
         // SAFETY: live dormant Context supplied by the JIT shim contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let context = unsafe { &*(ctx as *const Context) };
         match b::builtin_aref_values_in_state(context, array, index) {
             Ok(value) => value.bits() as i64,
@@ -732,6 +747,8 @@ pub unsafe extern "C" fn neovm_jit_memq(ctx: *mut u8, elt: i64, list: i64) -> i6
         Value::from_bits(list as usize)
     };
     // SAFETY: seam-provided dormant Context; read-only access.
+    // SAFETY (owner chain): this typed owner is not used after the raw
+    // fallback/continuation; its last access ends first (condition c absent).
     let ctx_ref = unsafe { &*(ctx as *const Context) };
     match memq_fast(ctx_ref, elt, list) {
         Ok(value) => value.bits() as i64,
@@ -756,6 +773,8 @@ pub unsafe extern "C" fn neovm_jit_assq(ctx: *mut u8, key: i64, list: i64) -> i6
         Value::from_bits(list as usize)
     };
     // SAFETY: seam-provided dormant Context; read-only access.
+    // SAFETY (owner chain): this typed owner is not used after the raw
+    // fallback/continuation; its last access ends first (condition c absent).
     let ctx_ref = unsafe { &*(ctx as *const Context) };
     match assq_fast(ctx_ref, key, list) {
         Some(value) => value.bits() as i64,
@@ -916,6 +935,9 @@ fn list_slow(ctx: *mut u8, builtin: JitBuiltin2Pure, a: Value, b_: Value) -> i64
     ARRAY_SHIM_SLOW_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, VALUE_SHIM_SIGNAL, {
         // SAFETY: seam-provided dormant Context; read-only access.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx_ref = unsafe { &*(ctx as *const Context) };
         match builtin(ctx_ref, a, b_) {
             Ok(value) => value.bits() as i64,
@@ -939,6 +961,9 @@ fn list_slow_memq_from(ctx: *mut u8, elt: Value, list: Value, tail: Value) -> i6
     ARRAY_SHIM_SLOW_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, VALUE_SHIM_SIGNAL, {
         // SAFETY: seam-provided dormant Context; read-only access.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx_ref = unsafe { &*(ctx as *const Context) };
         match b::builtin_memq_values_from(elt, list, tail, ctx_ref.symbols_with_pos_enabled) {
             Ok(value) => value.bits() as i64,
@@ -1184,6 +1209,9 @@ fn aset_slow(ctx: *mut u8, array: Value, index: Value, value: Value) -> i64 {
     ARRAY_SHIM_SLOW_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, VALUE_SHIM_SIGNAL, {
         // SAFETY: live dormant Context supplied by the JIT shim contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let context = unsafe { &*(ctx as *const Context) };
         match b::builtin_aset_args_in_context(context, &[array, index, value]) {
             Ok(value) => value.bits() as i64,
@@ -1228,6 +1256,9 @@ pub unsafe extern "C" fn neovm_jit_builtin3(
         push_scratch_gc_root(b);
         push_scratch_gc_root(c);
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         let status = match JIT_BUILTIN3[idx as usize](ctx, a, b, c) {
             Ok(value) => {
@@ -1342,6 +1373,9 @@ pub unsafe extern "C" fn neovm_jit_named_builtin(
             args.push(v);
         }
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         let mut vm = Vm::from_context(ctx);
         let result = match variant {
@@ -1387,6 +1421,9 @@ pub unsafe extern "C" fn neovm_jit_save_window_excursion(
             Value::from_bits(body as usize)
         };
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         let root_scope = save_scratch_gc_roots();
         push_scratch_gc_root(body);
@@ -1547,6 +1584,9 @@ macro_rules! spec_call_body {
         SPEC_CALL_COUNT.fetch_add(1, Ordering::Relaxed);
         // SAFETY: see neovm_jit_call's function-level contract; `slot` points
         // into the executing leaf's spec_slots.
+        // SAFETY (owner chain): callbacks followed by owner reuse derive
+        // fresh raw reborrows from this owner, dormant until they return.
+        // Any remaining older-raw fallback follows this owner's last use.
         let ctx_ref = unsafe { &mut *($ctx as *mut Context) };
         let slot_ref = unsafe { &*($slot as *const SpecSlot) };
         let direct_consts = slot_ref.direct_consts.load(Ordering::Relaxed);
@@ -1667,8 +1707,14 @@ macro_rules! spec_call_body {
                 // SAFETY: `frame_args` addresses `arity` live words for the
                 // call (the slot or this frame's buffer) of a frameless
                 // memory-ABI leaf; `ctx` is the dormant seam Context.
-                let status =
-                    unsafe { leaf.entry_call_raw_memory($ctx, consts, frame_args, &mut bits) };
+                let status = unsafe {
+                    leaf.entry_call_raw_memory(
+                        std::ptr::from_mut(ctx_ref).cast::<u8>(),
+                        consts,
+                        frame_args,
+                        &mut bits,
+                    )
+                };
                 if status == STATUS_OK {
                     #[cfg(any(test, debug_assertions))]
                     crate::emacs_core::jit::cache::NATIVE_OK_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -1696,7 +1742,14 @@ macro_rules! spec_call_body {
                     );
                 }
                 // SAFETY: as above, for a frameless register-ABI leaf.
-                let ret = unsafe { call_spec_register_run($ctx, frame_args, leaf, direct_consts) };
+                let ret = unsafe {
+                    call_spec_register_run(
+                        std::ptr::from_mut(ctx_ref).cast::<u8>(),
+                        frame_args,
+                        leaf,
+                        direct_consts,
+                    )
+                };
                 if ret.status == STATUS_OK {
                     #[cfg(any(test, debug_assertions))]
                     crate::emacs_core::jit::cache::NATIVE_OK_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -1723,7 +1776,12 @@ macro_rules! spec_call_body {
                         true,
                     );
                 }
-                match call_spec_framed_run($ctx, leaf, direct_consts, frame_args) {
+                match call_spec_framed_run(
+                    std::ptr::from_mut(ctx_ref).cast::<u8>(),
+                    leaf,
+                    direct_consts,
+                    frame_args,
+                ) {
                     NativeRun::Ok(bits) => {
                         #[cfg(any(test, debug_assertions))]
                         crate::emacs_core::jit::cache::NATIVE_OK_COUNT
@@ -1975,9 +2033,11 @@ pub(super) fn call_spec_finish(
 ) -> i64 {
     jit_shim_contain!(detach args_ptr, ctx, STATUS_SIGNAL, {
         use crate::emacs_core::jit::cache::{self, NativeCallOutcome};
-        let ctx_ptr = ctx as *mut Context;
         // SAFETY: the dormant seam Context (the shim contract).
-        let ctx = unsafe { &mut *ctx_ptr };
+        // SAFETY (owner chain): callbacks followed by owner reuse derive
+        // fresh raw reborrows from this owner, dormant until they return.
+        // Any remaining older-raw fallback follows this owner's last use.
+        let ctx = unsafe { &mut *(ctx as *mut Context) };
         // SAFETY: the slot's leaf was resolved from this object's data
         // (`call_armed_callee_native`), which materialized it.
         let bc = unsafe { callee.bytecode_data_materialized_by_caller() };
@@ -1986,10 +2046,10 @@ pub(super) fn call_spec_finish(
             FastRun::Raw(status) => {
                 #[cfg(any(test, debug_assertions))]
                 cache::count_native_status(status);
-                cache::direct_call_cold(ctx_ptr, bc, callee, leaf, status)
+                cache::direct_call_cold(std::ptr::from_mut(ctx), bc, callee, leaf, status)
             }
             FastRun::Framed(outcome) => {
-                cache::finish_framed_run(ctx_ptr, bc, callee, leaf, outcome)
+                cache::finish_framed_run(std::ptr::from_mut(ctx), bc, callee, leaf, outcome)
             }
         };
         // The native run is over, including any precise-deopt resume it
@@ -2004,7 +2064,7 @@ pub(super) fn call_spec_finish(
         }
         let outcome = match outcome {
             NativeCallOutcome::Fallback => {
-                Vm::interp_fallback_native(ctx_ptr, bc, callee, args_ptr, nargs)
+                Vm::interp_fallback_native(std::ptr::from_mut(ctx), bc, callee, args_ptr, nargs)
             }
             o => o,
         };
@@ -2081,6 +2141,9 @@ fn call_spec_slow(
         // scratch-root scope. The native-to-native fast path passes `args_ptr`
         // straight through and touches no scratch-root state at all.
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         // Same split as the interpreter's Op::Call poll: the loads-only fast
         // condition runs first; the full poll only when it has work.
@@ -2614,6 +2677,9 @@ pub unsafe extern "C" fn neovm_jit_leaf_signal_frame(
             return STATUS_SIGNAL;
         }
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         // The raw take: no panic materialization (checked above).
         let Some(flow) = PENDING_FLOW.with(|p| p.borrow_mut().take()) else {
@@ -2696,6 +2762,9 @@ pub unsafe extern "C" fn neovm_jit_call_subr_spec(
         SUBR_SPEC_COUNT.fetch_add(1, Ordering::Relaxed);
         let nargs = nargs as usize;
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         // SAFETY: slot points into the executing leaf's spec_slots.
         let slot = unsafe { &*(slot as *const SpecSlot) };
@@ -2921,6 +2990,9 @@ pub unsafe extern "C" fn neovm_jit_pred_spec(
         #[cfg(any(test, debug_assertions, feature = "test-support"))]
         SUBR_SPEC_COUNT.fetch_add(1, Ordering::Relaxed);
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         if let Err(flow) = ctx.maybe_quit() {
             stash_pending_flow(flow);
@@ -3046,6 +3118,9 @@ pub unsafe extern "C" fn neovm_jit_fboundp_spec(
             FBOUNDP_SPEC_COUNT.fetch_add(1, Ordering::Relaxed);
         }
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         if let Err(flow) = ctx.maybe_quit() {
             stash_pending_flow(flow);
@@ -3150,6 +3225,9 @@ pub unsafe extern "C" fn neovm_jit_eq_incl_props_spec(
         #[cfg(any(test, debug_assertions, feature = "test-support"))]
         SUBR_SPEC_COUNT.fetch_add(1, Ordering::Relaxed);
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         if let Err(flow) = ctx.maybe_quit() {
             stash_pending_flow(flow);
@@ -3228,6 +3306,9 @@ pub unsafe extern "C" fn neovm_jit_arith_generic(
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
         use crate::emacs_core::bytecode::{ArithGenericKind, Vm};
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         let Some(kind) = ArithGenericKind::from_raw(kind) else {
             stash_pending_flow(signal(
@@ -3327,6 +3408,9 @@ pub unsafe extern "C" fn neovm_jit_arith_spec(
         #[cfg(any(test, debug_assertions, feature = "test-support"))]
         SUBR_SPEC_COUNT.fetch_add(1, Ordering::Relaxed);
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         if let Err(flow) = ctx.maybe_quit() {
             stash_pending_flow(flow);
@@ -3458,6 +3542,9 @@ pub unsafe extern "C" fn neovm_jit_cbsym_spec(
         CBSYM_SPEC_COUNT.fetch_add(1, Ordering::Relaxed);
         let nargs = nargs as usize;
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         // SAFETY: round-trip of interned ids stored in dispatch descriptors (peer seal N8).
         let sym_id = unsafe { SymId::from_raw(sym as u32) };
@@ -3585,6 +3672,8 @@ pub unsafe extern "C" fn neovm_jit_cbsym_read(
     out: *mut i64,
 ) -> i64 {
     // SAFETY: see neovm_jit_call's function-level contract.
+    // SAFETY (owner chain): this typed owner is not used after the raw
+    // fallback/continuation; its last access ends first (condition c absent).
     let ctx_ref = unsafe { &mut *(ctx as *mut Context) };
     let which = which as u8;
     // Advice/fset/override-immune: NO epoch guard. Bounce (general path) when
@@ -3684,6 +3773,9 @@ unsafe fn cbsym_read_contained(
         #[cfg(any(test, debug_assertions, feature = "test-support"))]
         CBSYM_SPEC_COUNT.fetch_add(1, Ordering::Relaxed);
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         // current-buffer: NEVER allocate. Read the already-materialized buffer value;
         // bounce when it was never made (general path -> make_buffer, rooted).
@@ -3776,6 +3868,8 @@ pub unsafe extern "C" fn neovm_jit_throw_with_symbols(ctx: *mut u8, tag: i64, va
     jit_shim_contain!(ctx, (), {
         // SAFETY: this read cannot collect or call Lisp while the generated
         // leaf's operand slots are unrooted.
+        // SAFETY (owner chain): this typed owner is not used after the raw
+        // fallback/continuation; its last access ends first (condition c absent).
         let symbol_mode = unsafe { &*(ctx as *const Context) }.symbol_mode();
         stash_pending_flow(Flow::throw_with_symbols(
             unsafe {
@@ -3830,6 +3924,9 @@ pub extern "C" fn neovm_jit_numberp_slow(v: i64) -> i64 {
 pub unsafe extern "C" fn neovm_jit_save_current_buffer(ctx: *mut u8) {
     use crate::emacs_core::eval::SpecBinding;
     // SAFETY: see neovm_jit_call's function-level contract.
+    // SAFETY (owner chain): Context work here uses this owner or its
+    // typed reborrows; no older-raw callback intervenes before its last use
+    // (condition b absent).
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     if let Some(buffer_id) = ctx.edit.buffers.current_buffer().map(|buffer| buffer.id()) {
         ctx.jit_bind_stack.push(ctx.specpdl.len());
@@ -3846,6 +3943,9 @@ pub unsafe extern "C" fn neovm_jit_save_current_buffer(ctx: *mut u8) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn neovm_jit_save_excursion(ctx: *mut u8) {
     // SAFETY: see neovm_jit_call's function-level contract.
+    // SAFETY (owner chain): Context work here uses this owner or its
+    // typed reborrows; no older-raw callback intervenes before its last use
+    // (condition b absent).
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     if let Some(count) = ctx.record_save_excursion() {
         ctx.jit_bind_stack.push(count);
@@ -3860,6 +3960,9 @@ pub unsafe extern "C" fn neovm_jit_save_excursion(ctx: *mut u8) {
 pub unsafe extern "C" fn neovm_jit_save_restriction(ctx: *mut u8) {
     use crate::emacs_core::eval::SpecBinding;
     // SAFETY: see neovm_jit_call's function-level contract.
+    // SAFETY (owner chain): Context work here uses this owner or its
+    // typed reborrows; no older-raw callback intervenes before its last use
+    // (condition b absent).
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     if let Some(saved) = ctx.edit.buffers.save_current_restriction_state() {
         ctx.jit_bind_stack.push(ctx.specpdl.len());
@@ -3882,6 +3985,9 @@ pub unsafe extern "C" fn neovm_jit_unwind_protect(ctx: *mut u8, forms: i64) {
         Value::from_bits(forms as usize)
     };
     // SAFETY: see neovm_jit_call's function-level contract.
+    // SAFETY (owner chain): Context work here uses this owner or its
+    // typed reborrows; no older-raw callback intervenes before its last use
+    // (condition b absent).
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     ctx.jit_bind_stack.push(ctx.specpdl.len());
     let lexenv = ctx.lexenv;
@@ -3900,6 +4006,9 @@ pub unsafe extern "C" fn neovm_jit_unwind_protect(ctx: *mut u8, forms: i64) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn neovm_jit_push_cc(ctx: *mut u8, target: i64, stack_len: i64) {
     // SAFETY: see neovm_jit_call's function-level contract.
+    // SAFETY (owner chain): Context work here uses this owner or its
+    // typed reborrows; no older-raw callback intervenes before its last use
+    // (condition b absent).
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     let resume_id = ctx.allocate_resume_id();
     let bind_stack_len = ctx.jit_bind_stack.len();
@@ -3933,6 +4042,9 @@ pub unsafe extern "C" fn neovm_jit_push_cc_raw(
         Value::from_bits(conditions as usize)
     };
     // SAFETY: see neovm_jit_call's function-level contract.
+    // SAFETY (owner chain): Context work here uses this owner or its
+    // typed reborrows; no older-raw callback intervenes before its last use
+    // (condition b absent).
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     let resume_id = ctx.allocate_resume_id();
     let bind_stack_len = ctx.jit_bind_stack.len();
@@ -3960,6 +4072,9 @@ pub unsafe extern "C" fn neovm_jit_push_catch(ctx: *mut u8, target: i64, stack_l
         Value::from_bits(tag as usize)
     };
     // SAFETY: see neovm_jit_call's function-level contract.
+    // SAFETY (owner chain): Context work here uses this owner or its
+    // typed reborrows; no older-raw callback intervenes before its last use
+    // (condition b absent).
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     let resume_id = ctx.allocate_resume_id();
     let bind_stack_len = ctx.jit_bind_stack.len();
@@ -3983,6 +4098,9 @@ pub unsafe extern "C" fn neovm_jit_push_catch(ctx: *mut u8, target: i64, stack_l
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn neovm_jit_pop_handler(ctx: *mut u8) {
     // SAFETY: see neovm_jit_call's function-level contract.
+    // SAFETY (owner chain): Context work here uses this owner or its
+    // typed reborrows; no older-raw callback intervenes before its last use
+    // (condition b absent).
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     ctx.pop_condition_frame();
 }
@@ -4017,6 +4135,9 @@ pub unsafe extern "C" fn neovm_jit_pop_handler(ctx: *mut u8) {
 pub unsafe extern "C" fn neovm_jit_match_handler(ctx: *mut u8, ours: i64, out: *mut i64) -> i64 {
     jit_shim_contain!(ctx, -1, {
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         let ours = ours as usize;
         // A contained panic skipped the panicked extent's cleanup; heal its
@@ -4201,6 +4322,9 @@ pub unsafe extern "C" fn neovm_jit_switch(ctx: *mut u8, dispatch: i64, table: i6
             Value::from_bits(dispatch as usize)
         };
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         let Some(ht) = table.as_hash_table() else {
             // Statically verified a hash table; only runtime mutation of the
@@ -4256,6 +4380,9 @@ pub extern "C" fn neovm_jit_switch_stale() {
 pub unsafe extern "C" fn neovm_jit_backedge(ctx: *mut u8) -> i64 {
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         match ctx.bytecode_branch_maybe_gc_and_quit() {
             Ok(()) => STATUS_OK,

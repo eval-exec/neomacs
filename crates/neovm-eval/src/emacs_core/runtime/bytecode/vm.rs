@@ -8693,6 +8693,9 @@ impl<'a> Vm<'a> {
                 // arguments (the scope and a `LispArgVec` copy of the tail
                 // were most of this function's ~240 instructions).
                 // SAFETY: the seam-provided dormant Context.
+                // SAFETY (owner chain): (c) fails: this WorldView<TaggedHeap> field loan is last used
+                // by alloc_cons in the rest-building loop. Only copied rest bits reach slots
+                // afterward; neither the raw native call nor fallback below reuses this field owner.
                 let heap = unsafe { &mut (*ctx_ptr).tagged_heap };
                 let mut rest = Value::NIL;
                 for i in (nonrest..nargs).rev() {
@@ -8799,6 +8802,9 @@ impl<'a> Vm<'a> {
             });
         }
         // SAFETY: the seam-provided dormant Context.
+        // SAFETY (owner chain): (b) fails: ctx_ptr is never used again after this formation. Vm stores
+        // the current typed &mut Context (not a raw pointer), and only that Vm owner is used for
+        // execution; no older ctx_ptr is captured or forwarded across it.
         let mut vm = Vm::from_context(unsafe { &mut *ctx_ptr });
         crate::emacs_core::jit::cache::NativeCallOutcome::from_result(
             vm.execute_with_func_value(bc, args, callee),

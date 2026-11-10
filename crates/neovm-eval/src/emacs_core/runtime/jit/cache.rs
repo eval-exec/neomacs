@@ -959,6 +959,9 @@ pub(crate) unsafe fn try_run_osr_probe(
     // No Lisp or GC can run between this seed and the native entry.
     let bind_frame = if leaf.has_binds {
         // SAFETY: dormant seam-provided Context; length reads and Vec writes only.
+        // SAFETY (owner chain): (c) fails: this mutable seed owner ends with the bind_frame block
+        // after extend_from_slice; invoke_osr receives the outer raw pointer only after that block,
+        // and never reuses this reference.
         let ctx = unsafe { &mut *ctx };
         let spec_base = ctx.specpdl.len();
         if binds.last().is_some_and(|&base| base >= spec_base)
@@ -982,6 +985,9 @@ pub(crate) unsafe fn try_run_osr_probe(
     );
     if let Some((_, stack_base)) = bind_frame {
         // SAFETY: native execution has returned; only a dormant Context length read.
+        // SAFETY (owner chain): (c) fails: the Vec::len receiver is a statement-local shared borrow;
+        // only its copied length escapes the debug assertion, so subsequent raw deopt-hook calls do
+        // not overlap a later use of that borrow.
         debug_assert_eq!(unsafe { (*ctx).jit_bind_stack.len() }, stack_base);
     }
     // The deopt hook runs before the interpreter installs the resume state
@@ -1060,6 +1066,9 @@ pub(crate) unsafe fn try_run_osr_probe(
 fn osr_lookup(ctx: *mut Context, func: &ByteCodeFunction, osr_pc: usize, id: u64) -> OsrLookup {
     let key = (id, osr_pc);
     // SAFETY: dormant seam-provided Context (as try_run_compiled); shared reads.
+    // SAFETY (owner chain): (b) fails: the older ctx pointer reaches only callee_name_hint and
+    // CompileEnvScope::enter shared reads; compilation/install take shared Context/Obarray metadata
+    // and execute no native body. live is therefore not reused after an ancestor-pointer write.
     let live = unsafe { &*ctx };
     if super::bg::pending_count() != 0
         && let Some(lookup) = probe_osr_pending(key, Some(live))
@@ -1593,6 +1602,9 @@ fn callee_name_hint(ctx: *const Context, id: u64) -> Option<SymId> {
     }
     // SAFETY: the dormant seam-provided Context (the same contract as
     // try_run_compiled); shared reads of the specpdl and obarray only.
+    // SAFETY (owner chain): (b) fails: ctx now names the shared owner, and names_this_leaf captures
+    // that owner; the incoming raw pointer is not retained or forwarded. Every later use reads
+    // obarray/backtrace metadata.
     let ctx = unsafe { &*ctx };
     let names_this_leaf = |sym: SymId| {
         ctx.obarray
@@ -2519,6 +2531,9 @@ fn request_upgrade(
     rt.disarm_leaf_slot();
     unlink_spec_slots_in(cache, Rc::as_ptr(&old));
     // SAFETY: the dormant Context provided by the native dispatch seam.
+    // SAFETY (owner chain): (b) fails: later raw ctx uses are the shared naming/environment readers;
+    // compile_cache_entry receives only the typed obarray. Cache and runtime-state updates do not
+    // write the borrowed Context/Obarray allocation through an older ctx pointer.
     let obarray = (!ctx.is_null()).then(|| unsafe { &*(*ctx).obarray });
     let name_hint = stats::naming_enabled()
         .then(|| callee_name_hint(ctx, id))
@@ -2619,6 +2634,9 @@ fn probe_tier2_upgrade(
     match cache.get(id) {
         Some(CacheEntry::CompiledUpgrading(_)) => {
             // SAFETY: the dispatch seam provides a dormant Context.
+            // SAFETY (owner chain): (b) fails: this match arm forwards only live to the shared
+            // installation path; the raw request_upgrade call belongs to the other arm. (c) also fails
+            // because live is not used after probe_upgrade returns.
             let live = (!ctx.is_null()).then(|| unsafe { &*ctx });
             Some(probe_upgrade(cache, id, live))
         }
@@ -2842,6 +2860,9 @@ pub unsafe fn try_run_compiled(
         // dispatch (see neovm_jit_call's contract); a shared read of its obarray
         // for compile-time speculation. A null ctx (shim-free test bodies) just
         // disables speculation.
+        // SAFETY (owner chain): (b) fails during this owner lifetime: upgrade/probe/naming/environment
+        // operations only read Context metadata; AOT/JIT compilation takes typed obarray. The COMPILED
+        // closure and this borrow end before run_resolved_leaf executes native code.
         let obarray = (!ctx.is_null()).then(|| unsafe { &*(*ctx).obarray });
         // A countdown upgrade keeps its T1 live until the replacement
         // really installs. The legacy heat-driven re-tier below is unchanged.
@@ -2875,6 +2896,9 @@ pub unsafe fn try_run_compiled(
             Some(CacheEntry::CompiledUpgrading(_)) => unreachable!("handled above"),
             Some(CacheEntry::Pending(_)) => {
                 // SAFETY: the dormant seam-provided Context (shared reads).
+                // SAFETY (owner chain): (b) fails: the pending arm passes only live into
+                // probe_pending/install. It returns that result immediately, so (c) also fails; no
+                // owner from this arm survives to raw native dispatch.
                 let live = (!ctx.is_null()).then(|| unsafe { &*ctx });
                 return probe_pending(&mut cache, id, func, live)
                     .filter(|leaf| leaf.accepts(args.len()));
@@ -2884,6 +2908,10 @@ pub unsafe fn try_run_compiled(
                 // A miss compiles below: install what finished meanwhile.
                 if super::bg::pending_count() != 0 {
                     // SAFETY: as above.
+                    // SAFETY (owner chain): (c) fails: the shared Context temporary is consumed by
+                    // drain_ready_in and is not returned or used afterward. Its install/probe
+                    // callbacks carry typed shared metadata; no older ctx writer runs inside this
+                    // temporary extent.
                     drain_ready_in(&mut cache, (!ctx.is_null()).then(|| unsafe { &*ctx }));
                 }
                 (None, false, false)
@@ -3075,6 +3103,9 @@ pub(crate) fn armed_leaf_for_stack_call(
     // SAFETY: armed from a live `COMPILED` entry under the current epoch;
     // every retire/clear bumps the epoch, and retired leaves stay allocated.
     let (has_rest, arity, accepts) =
+        // SAFETY (owner chain): (b) fails: accepts only reads the leaf arity flags; the other tuple
+        // members copy scalars. (c) also fails because its temporary receiver is gone before
+        // RuntimeState heat updates or returning the raw identity.
         unsafe { ((*leaf).has_rest, (*leaf).arity, (*leaf).accepts(nargs)) };
     if !accepts {
         return None;
@@ -3116,6 +3147,9 @@ pub(crate) fn armed_leaf_for_native_call(
     }
     // SAFETY: armed from a live `COMPILED` entry under the current epoch — see
     // `armed_leaf_for_stack_call`.
+    // SAFETY (owner chain): (b) fails: accepts only reads required/arity/rest flags and returns a
+    // bool. Its temporary shared receiver ends with this test, so (c) fails before later heat
+    // bookkeeping and raw identity return.
     if !unsafe { (*leaf).accepts(nargs) } {
         return None;
     }
@@ -3139,6 +3173,9 @@ pub(crate) fn run_armed_leaf(
     args_ptr: *const i64,
 ) -> Result<Option<usize>, Flow> {
     // SAFETY: see armed_leaf_for_stack_call.
+    // SAFETY (owner chain): (b) fails for this owner: the incoming raw leaf is shadowed and only
+    // &CompiledLeaf is forwarded. Native writes to Context target a different allocation; leaf
+    // counters/spec cells use interior mutability, not an older mutable leaf pointer.
     let leaf = unsafe { &*leaf };
     super::stats::record_native_entry();
     match run_resolved_leaf_native(ctx, func, func_value, leaf, args_ptr) {
@@ -3210,6 +3247,9 @@ pub(crate) unsafe fn resolve_spec_call_leaf(
     COMPILED.with(|cache| {
         let mut cache = cache.borrow_mut();
         // SAFETY: same dormant-Context contract as try_run_compiled.
+        // SAFETY (owner chain): (c) fails: live is last used by install_pending; the following raw
+        // upgrade probe and insertion closure never use it again. The installation itself receives
+        // only shared Context metadata, with no ancestor-pointer writer.
         let live = (!ctx.is_null()).then(|| unsafe { &*ctx });
         if matches!(cache.get(id), Some(CacheEntry::Pending(job)) if job.is_ready()) {
             install_pending(&mut cache, id, Some(func.jit_runtime()), live);
@@ -3223,6 +3263,9 @@ pub(crate) unsafe fn resolve_spec_call_leaf(
         }
         match cache.get_or_insert_with(id, || {
             // SAFETY: same dormant-Context contract as try_run_compiled.
+            // SAFETY (owner chain): (b) fails: the insertion closure passes raw ctx only to the shared
+            // naming/environment readers, then passes typed obarray to compilation. It performs no
+            // native execution or ancestor-pointer write to this borrowed allocation.
             let obarray = (!ctx.is_null()).then(|| unsafe { &*(*ctx).obarray });
             let name_hint = stats::naming_enabled()
                 .then(|| callee_name_hint(ctx, id))
@@ -3335,6 +3378,9 @@ pub(crate) fn run_resolved_leaf(
     }
     // SAFETY: the seam-provided Context is dormant for this native call.
     let charged = {
+        // SAFETY (owner chain): (c) fails: this charge owner ends with the charged block. Raw native
+        // dispatch begins afterward; the release reference below is newly formed after dispatch
+        // returns, not a reuse of this earlier owner.
         let ctx_ref = unsafe { &mut *ctx };
         crate::emacs_core::bytecode::vm::charge_bytecode_frame_bytes(
             ctx_ref,
@@ -3348,6 +3394,9 @@ pub(crate) fn run_resolved_leaf(
         run_resolved_leaf_inner(ctx, func, func_value, leaf, args)
     });
     // SAFETY: as above; valid for this whole call.
+    // SAFETY (owner chain): (b) fails: native dispatch has already returned, and
+    // release_bytecode_frame writes through this current typed owner. No older ctx call follows; this
+    // owner is not used after any such write, so (c) fails too.
     let ctx_ref = unsafe { &mut *ctx };
     crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, saved_budget);
     outcome
@@ -3398,6 +3447,9 @@ pub(crate) fn run_resolved_leaf_native(
     }
     // SAFETY: the seam-provided Context is dormant for this native call.
     let charged = {
+        // SAFETY (owner chain): (c) fails: the charge reference ends in its own block before raw
+        // stack-probed native dispatch. Release forms a fresh post-dispatch reference, so the charge
+        // owner is never reused after native writes.
         let ctx_ref = unsafe { &mut *ctx };
         crate::emacs_core::bytecode::vm::charge_bytecode_frame_bytes(
             ctx_ref,
@@ -3418,6 +3470,9 @@ pub(crate) fn run_resolved_leaf_native(
         run_resolved_leaf_native_inner(ctx, func, func_value, leaf, args_ptr)
     });
     // SAFETY: as above; valid for this whole call.
+    // SAFETY (owner chain): (b) fails: dispatch has finished and release writes through this new typed
+    // owner, not the older pointer. The function returns immediately afterward, leaving no later owner
+    // use across an ancestor write.
     let ctx_ref = unsafe { &mut *ctx };
     crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx_ref, saved_budget);
     outcome
@@ -3462,6 +3517,10 @@ fn run_with_bytecode_stack_probe_sampled<R>(
 ) -> R {
     // SAFETY: as above; `maybe_grow_tracking_jit_limit` keeps the Context's
     // guard limit on the segment the callback runs on.
+    // SAFETY (owner chain): (b) fails: maybe_grow_tracking_jit_limit supplies the callback a current
+    // &mut Context; the callback casts that parameter, not a captured outer ctx pointer. Its native
+    // writes are through a descendant of the active owner, including the helper post-callback limit
+    // restoration.
     let ctx_ref = unsafe { &mut *ctx };
     crate::emacs_core::eval::native_stack::maybe_grow_tracking_jit_limit(
         ctx_ref,
@@ -3611,6 +3670,9 @@ fn deopt_resume_outcome(
     }
     // SAFETY: the seam-provided &mut Context is dormant during the
     // native call — the same contract every runtime shim uses.
+    // SAFETY (owner chain): (b) fails: the raw ctx binding is shadowed by this mutable owner and
+    // resume_deopt receives the typed owner. Cache retains no older pointer for a callback; subsequent
+    // match arms use only the returned value/flow.
     let ctx = unsafe { &mut *ctx };
     match super::compile::resumed_chain::resume_deopt(ctx, func, func_value, leaf, resume) {
         Ok(v) => NativeCallOutcome::Value(v),
@@ -3704,6 +3766,9 @@ pub(crate) fn direct_call_cold(
 #[inline(never)]
 fn dispatch_raw_signal(ctx: *mut Context, flow: Flow) -> NativeCallOutcome {
     // SAFETY: the native call's dormant seam Context, as in the runner.
+    // SAFETY (owner chain): (b) fails: the incoming raw ctx is shadowed; dispatch_signal_flow_cold
+    // borrows this current owner. No cache closure or later call carries an older ctx pointer, and
+    // only the returned outcome is converted.
     let ctx = unsafe { &mut *ctx };
     NativeCallOutcome::from_result(ctx.dispatch_signal_flow_cold(flow))
 }
@@ -3835,6 +3900,9 @@ fn finish_native_run(
             // the live stack and the (still registered) frame state.
             // SAFETY: the seam-provided &mut Context is dormant during the
             // native call — the same contract every runtime shim uses.
+            // SAFETY (owner chain): (b) fails: this DeoptAt arm shadows the raw ctx and forwards only
+            // its typed owner to resume_deopt. The raw note_deopt call is in a different match arm and
+            // cannot execute while this owner exists.
             let ctx = unsafe { &mut *ctx };
             super::compile::resumed_chain::resume_deopt(ctx, func, func_value, leaf, *resume)
                 .map(|v| Some(v.bits()))
@@ -3906,6 +3974,9 @@ pub(crate) fn prepare_entry_for_test(ctx: *mut Context, func: &ByteCodeFunction)
         let mut cache = cache.borrow_mut();
         if cache.get(id).is_none() {
             // SAFETY: the fixture owns this dormant Context (null means no speculation).
+            // SAFETY (owner chain): (b) fails: as_ref supplies the map closure its current shared
+            // owner, from which obarray is reborrowed. The later raw ctx use is the read-only
+            // CompileEnvScope::enter; compilation gets typed obarray and no native body runs.
             let obarray = unsafe { ctx.as_ref() }.map(|ctx| &*ctx.obarray);
             let _vars = super::compile::inline_vars::CompileEnvScope::enter(ctx);
             let entry = compile_cache_entry(
@@ -3932,6 +4003,9 @@ pub(crate) fn prepare_entry_for_test(ctx: *mut Context, func: &ByteCodeFunction)
         if matches!(cache.get(id), Some(CacheEntry::Pending(job)) if job.is_ready()) {
             // SAFETY: the fixture still owns the same dormant Context.
             install_pending(&mut cache, id, Some(func.jit_runtime()), unsafe {
+                // SAFETY (owner chain): (b) fails: this temporary goes only to the shared
+                // installation/validation path, not a raw Context writer. It is not returned or used
+                // after install_pending, so (c) also fails before later RuntimeState bookkeeping.
                 ctx.as_ref()
             });
         }
@@ -3985,6 +4059,9 @@ pub(crate) fn prepare_upgrade_for_test(ctx: *mut Context, func: &ByteCodeFunctio
             "upgrade backend readiness timed out"
         );
         // SAFETY: the fixture owns this dormant Context, or uses no shims.
+        // SAFETY (owner chain): (b) fails: the earlier raw upgrade probe and worker wait already
+        // finished; drain_ready_pending carries only this shared metadata reference into installation.
+        // No reference escapes this tail call, so (c) fails as well.
         drain_ready_pending(unsafe { ctx.as_ref() });
     }
 }

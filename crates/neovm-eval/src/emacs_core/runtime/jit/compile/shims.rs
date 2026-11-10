@@ -111,6 +111,9 @@ pub extern "C" fn neovm_jit_make_float(value: f64) -> i64 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn neovm_jit_rootwin_grow(ctx: *mut u8, need: i64) {
     // SAFETY: see neovm_jit_call's function-level contract.
+    // SAFETY (owner chain): Context work here uses this owner or its
+    // typed reborrows; no older-raw callback intervenes before its last use
+    // (condition b absent).
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     ctx.jit_root_stack_grow(need as usize);
 }
@@ -503,6 +506,8 @@ pub(crate) fn contain_jit_shim_panic(
     } else {
         // SAFETY: seam-provided dormant Context (the shim's own vmctx
         // contract); the probe only reads two flags.
+        // SAFETY (owner chain): this typed owner is not used after the raw
+        // fallback/continuation; its last access ends first (condition c absent).
         unsafe { (*(ctx as *const Context)).module_panic_recovery_blocked() }
     };
     if blocked {
@@ -589,6 +594,9 @@ macro_rules! jit_shim_contain {
                     // vmctx contract), and `args_raw` is the shim's own
                     // call-args slot, live until it returns.
                     unsafe {
+                        // SAFETY (owner chain): Context work here uses this owner or its
+                        // typed reborrows; no older-raw callback intervenes before its last use
+                        // (condition b absent).
                         (*(ctx_raw as *mut crate::emacs_core::eval::Context))
                             .detach_native_frames_into(args_raw)
                     };
@@ -677,6 +685,8 @@ pub unsafe extern "C" fn neovm_jit_call(
         // path 4-6 instructions (elb flet +1.0%, then +1.7%).
         {
             // SAFETY: seam-provided dormant Context (fn-level contract).
+            // SAFETY (owner chain): this typed owner is not used after the raw
+            // fallback/continuation; its last access ends first (condition c absent).
             let ctx_ref = unsafe { &mut *(ctx as *mut Context) };
             if func_val.is_bytecode()
                 && ctx_ref.maybe_quit_hot_ok()
@@ -736,6 +746,8 @@ fn neovm_jit_call_general(
         // which is what the slow path below had to do when this block
         // owned its own push/truncate pair.
         // SAFETY: seam-provided dormant Context (fn-level contract).
+        // SAFETY (owner chain): this typed owner is not used after the raw
+        // fallback/continuation; its last access ends first (condition c absent).
         let ctx_ref = unsafe { &mut *(ctx as *mut Context) };
         if ctx_ref.maybe_quit_hot_ok() {
             // `(apply F ...)` into a compiled F, also without leaving native
@@ -783,6 +795,9 @@ fn neovm_jit_call_general(
     push_scratch_gc_root(func_val);
     // SAFETY: see the function-level contract — seam-provided, dormant, single
     // mutator thread.
+    // SAFETY (owner chain): Context work here uses this owner or its
+    // typed reborrows; no older-raw callback intervenes before its last use
+    // (condition b absent).
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     let status = match ctx.maybe_quit() {
         Err(flow) => {
@@ -868,6 +883,9 @@ pub unsafe extern "C" fn neovm_jit_apply(
             args.push(v);
         }
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         let status = match ctx.maybe_quit() {
             Err(flow) => {
@@ -1259,6 +1277,9 @@ pub unsafe extern "C" fn neovm_jit_eq_slow(ctx: *mut u8, a: i64, b: i64) -> i64 
         Value::from_bits(b as usize)
     };
     // SAFETY: seam-provided dormant Context; read-only access.
+    // SAFETY (owner chain): Context work here uses this owner or its
+    // typed reborrows; no older-raw callback intervenes before its last use
+    // (condition b absent).
     let ctx = unsafe { &*(ctx as *const Context) };
     let eq = ctx.symbols_with_pos_enabled && neovm_value::value::eq_value_swp(&a, &b, true);
     // The inline prefilter's premise: two differing values neither of which
@@ -1289,6 +1310,9 @@ pub unsafe extern "C" fn neovm_jit_symbolp_slow(ctx: *mut u8, v: i64) -> i64 {
         Value::from_bits(v as usize)
     };
     // SAFETY: seam-provided dormant Context; read-only access.
+    // SAFETY (owner chain): Context work here uses this owner or its
+    // typed reborrows; no older-raw callback intervenes before its last use
+    // (condition b absent).
     let ctx = unsafe { &*(ctx as *const Context) };
     let is_sym = ctx.symbols_with_pos_enabled && v.is_symbol_with_pos();
     (if is_sym {
@@ -1327,6 +1351,9 @@ pub unsafe extern "C" fn neovm_jit_varref(ctx: *mut u8, sym: i64, out: *mut i64)
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
         use neovm_value::intern::SymId;
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         // SAFETY: round-trip of interned ids stored in shim descriptors (peer seal N8).
         let sym_id = unsafe { SymId::from_raw(sym as u32) };
@@ -1389,6 +1416,8 @@ pub unsafe extern "C" fn neovm_jit_varset_collection(ctx: *mut u8, sym: i64, val
         };
         {
             // SAFETY: see neovm_jit_call's function-level contract.
+            // SAFETY (owner chain): this typed owner is not used after the raw
+            // fallback/continuation; its last access ends first (condition c absent).
             let ctx = unsafe { &mut *(ctx as *mut Context) };
             // A plain cell: one store, no safe point, so no scratch roots and
             // no `Vm` (see `Context::try_set_plain_variable`); likewise a
@@ -1404,6 +1433,9 @@ pub unsafe extern "C" fn neovm_jit_varset_collection(ctx: *mut u8, sym: i64, val
         let saved = save_scratch_gc_roots();
         push_scratch_gc_root(value);
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         let mut vm = Vm::from_context(ctx);
         // SAFETY: round-trip of interned ids stored in shim descriptors (peer seal N8).
@@ -1438,6 +1470,8 @@ pub unsafe extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i
         };
         {
             // SAFETY: see neovm_jit_call's function-level contract.
+            // SAFETY (owner chain): this typed owner is not used after the raw
+            // fallback/continuation; its last access ends first (condition c absent).
             let ctx = unsafe { &mut *(ctx as *mut Context) };
             // A plain cell: one store, no safe point, so no scratch roots and
             // no `Vm` (see `Context::try_set_plain_variable`); likewise a
@@ -1453,6 +1487,9 @@ pub unsafe extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i
         let saved = save_scratch_gc_roots();
         push_scratch_gc_root(value);
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         let mut vm = Vm::from_context(ctx);
         // SAFETY: round-trip of interned ids stored in shim descriptors (peer seal N8).
@@ -1484,6 +1521,9 @@ pub unsafe extern "C" fn neovm_jit_varbind_collection(ctx: *mut u8, sym: i64, va
             Value::from_bits(val as usize)
         };
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         let bind_depth = ctx.specpdl.len();
         // GNU `specbind`'s plain arm first: one swap and a specpdl push, no
@@ -1537,6 +1577,9 @@ pub unsafe extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> 
             Value::from_bits(val as usize)
         };
         // SAFETY: see neovm_jit_call's function-level contract.
+        // SAFETY (owner chain): Context work here uses this owner or its
+        // typed reborrows; no older-raw callback intervenes before its last use
+        // (condition b absent).
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         let bind_depth = ctx.specpdl.len();
         // GNU `specbind`'s plain arm first: one swap and a specpdl push, no
@@ -1587,6 +1630,9 @@ pub unsafe extern "C" fn neovm_jit_unbind_collection(ctx: *mut u8, n: i64) -> i6
     #[cfg(test)]
     UNBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     // SAFETY: see neovm_jit_call's function-level contract.
+    // SAFETY (owner chain): Context work here uses this owner or its
+    // typed reborrows; no older-raw callback intervenes before its last use
+    // (condition b absent).
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     let target = {
         let s = &mut ctx.jit_bind_stack;
@@ -1635,6 +1681,9 @@ pub unsafe extern "C" fn neovm_jit_unbind(ctx: *mut u8, n: i64) -> i64 {
     #[cfg(test)]
     UNBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     // SAFETY: see neovm_jit_call's function-level contract.
+    // SAFETY (owner chain): Context work here uses this owner or its
+    // typed reborrows; no older-raw callback intervenes before its last use
+    // (condition b absent).
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     let target = {
         let s = &mut ctx.jit_bind_stack;

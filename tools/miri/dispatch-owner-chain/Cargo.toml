@@ -1,0 +1,17 @@
+[package]
+name = "neomacs-dispatch-owner-chain-model"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Deliberately independent: interpreting the production JIT/FFI is unsupported.
+[workspace]
+
+[features]
+owner-chain-model = []
+baseline-ancestor = []
+
+[[test]]
+name = "owner_chain"
+path = "tests/owner_chain.rs"
+required-features = ["owner-chain-model"]

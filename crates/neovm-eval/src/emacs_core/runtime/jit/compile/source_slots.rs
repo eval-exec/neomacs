@@ -342,6 +342,9 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
     out: *mut i64,
 ) -> i64 {
     // SAFETY: the seam's dormant Context (the shim contract).
+    // SAFETY (owner chain): callbacks followed by owner reuse derive
+    // fresh raw reborrows from this owner, dormant until they return.
+    // Any remaining older-raw fallback follows this owner's last use.
     let ctx_ref = unsafe { &mut *(ctx as *mut Context) };
     let callee = unsafe {
         /* SAFETY: JIT constant-pool word */
@@ -425,11 +428,24 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
         // pass-through) of a direct-eligible leaf; `ctx` is the dormant
         // seam Context. The leaf's entry shape picks its raw entry.
         let status = if leaf.entry_shape == super::leaf::EntryShape::RawRegister {
-            let ret = unsafe { leaf.entry_call_raw_register(ctx, consts, args_ptr) };
+            let ret = unsafe {
+                leaf.entry_call_raw_register(
+                    std::ptr::from_mut(ctx_ref).cast::<u8>(),
+                    consts,
+                    args_ptr,
+                )
+            };
             bits = ret.value;
             ret.status
         } else {
-            unsafe { leaf.entry_call_raw_memory(ctx, consts, args_ptr, &mut bits) }
+            unsafe {
+                leaf.entry_call_raw_memory(
+                    std::ptr::from_mut(ctx_ref).cast::<u8>(),
+                    consts,
+                    args_ptr,
+                    &mut bits,
+                )
+            }
         };
         if status == STATUS_OK {
             if ctx_ref.pop_native_backtrace_frame(bt_count) {
@@ -449,7 +465,12 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
     } else {
         // A framed entry is always a memory entry; the key is the bare
         // constant base (no flags).
-        match call_spec_framed_run(ctx, leaf, consts as usize as u64, args_ptr) {
+        match call_spec_framed_run(
+            std::ptr::from_mut(ctx_ref).cast::<u8>(),
+            leaf,
+            consts as usize as u64,
+            args_ptr,
+        ) {
             NativeRun::Ok(bits) => {
                 if ctx_ref.pop_native_backtrace_frame(bt_count) {
                     ctx_ref.depth -= 1;

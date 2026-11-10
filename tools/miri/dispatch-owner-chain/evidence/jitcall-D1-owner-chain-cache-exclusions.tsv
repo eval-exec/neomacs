@@ -1,0 +1,19 @@
+line	actual_receiver_or_expression	why_not_raw_owner_formation
+149	Option<CacheEntry> reached through Vec<Option<CacheEntry>>::get	DenseCache::slots has explicit Vec<Option<CacheEntry>> declaration; s is a typed Option reference
+248	Option<CacheEntry>::as_mut	slot is &mut self.slots[idx], not a raw pointer; typed mutable reference returns typed entry
+257	Option<CacheEntry>::as_ref	typed iterator over self.slots; receiver is Option entry
+262	Option<CacheEntry>::as_ref	typed iterator over self.slots; receiver is Option entry
+315	Option<Rc<CompiledLeaf>>::as_ref	tier1_fallback is RefCell<Option<Rc<CompiledLeaf>>>; borrow() guard dereferences to typed Option
+391	Option<Rc<CompiledLeaf>>::as_ref	same declared fallback type under leaf-report traversal
+400	Option<Rc<CompiledLeaf>>::as_ref	same declared fallback type under leaf-report traversal
+674	Option<Box<front_diag::Attempt>>::as_ref	front_diag::begin has explicit return Option<Box<Attempt>>
+784	LispValueVec::as_ref	ByteCodeFunction.constants is LispValueVec (chunk.rs202), a typed constants owner
+810	Option<Rc<FusedBody>>::as_ref	fused is returned by fuse_calls_v2(...).map(Rc::new)
+811	LispValueVec::as_ref	ByteCodeFunction.constants is LispValueVec, not a raw pointer receiver
+823	Option<Rc<FusedBody>>::as_ref	same typed fused Option
+1005	Option<Box<InlinedResume>>::as_ref	DeoptResume.inlined is explicitly Option<Box<InlinedResume>> (leaf.rs935)
+1488	Option<Box<front_diag::Attempt>>::as_ref	front_diag::begin explicit return type
+2061	Option<OsrEntry>::as_ref	OSR_CACHE lookup returns typed optional OsrEntry; extraction produces Rc::as_ptr identity only
+3290	typed &*Box<LeafObs> from a typed &Rc<CompiledLeaf>	CacheEntry::live_leaf returns Option<&Rc<CompiledLeaf>>; CompiledLeaf.obs is Box<LeafObs> (leaf.rs787); no raw pointer conversion
+3418	copied usize (*ctx).depth	raw scalar place read only; no method receiver/reference into Context is constructed
+434	std::ptr::from_ref(&LEAF_SLOT_EPOCH)	address creation from an already typed static AtomicU64 reference; direction is owner->raw, not raw->owner
