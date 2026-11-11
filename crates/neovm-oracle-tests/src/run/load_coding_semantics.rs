@@ -220,7 +220,7 @@ fn oracle_info_reads_utf8_footer_in_a_file_just_over_four_kib() {
 fn oracle_nonempty_auto_coding_probe_preserves_physical_file_bounds() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[
-        r#""OK ((1928 1928 nil) (4096 4096 t) (4096 4096 t) (4096 4096 nil) (30 30 nil))""#
+        r#""OK ((1928 1928 nil) (4096 4096 t) (4096 4096 t) (4096 4096 nil) (30 30 nil) (1024 1024 nil) (4096 4096 t) (1024 1024 nil) (1024 1024 nil))""#
     ]];
     crate::common::assert_oracle_parity_with_shared_tempdir_expect(
         r#"(let ((file (expand-file-name "bounded-probe.txt"
@@ -249,7 +249,84 @@ fn oracle_nonempty_auto_coding_probe_preserves_physical_file_bounds() {
                         (insert-file-contents file nil (nth 1 case) (nth 2 case))
                         observed)))
                   '((5000 0 5000) (20000 0 5000) (20000 500 5500)
-                    (20000 0 20000) (20000 50 80)))
+                    (20000 0 20000) (20000 50 80)
+                    (4096 0 nil) (4096 0 4096) (4096 0 5000)
+                    (8192 4096 nil)))
+               (when (file-exists-p file) (delete-file file))))"#,
+        expect,
+    );
+}
+
+#[test]
+fn oracle_empty_auto_coding_decodes_callback_mutations() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[
+        r#""OK ((replace 6000 6000 89 120 t 1) (insert 6002 6002 89 90 t 1) (delete 5998 5998 120 120 t 1) (nil 6000 6000 89 120 t 1) (error error 0 t t 1))""#
+    ]];
+    crate::common::assert_oracle_parity_with_shared_tempdir_expect(
+        r#"(let ((file (expand-file-name "mutating-probe.txt" (getenv "NEOVM_ORACLE_TEST_TMPDIR"))))
+             (unwind-protect
+                 (progn
+                   (let ((coding-system-for-write 'utf-8-unix))
+                     (write-region (make-string 6000 ?x) nil file nil 'silent))
+                   (mapcar
+                    (lambda (action)
+                      (with-temp-buffer
+                        (let ((coding-system-for-read nil)
+                              (file-coding-system-alist '(("." . utf-8-unix)))
+                              (set-auto-coding-function
+                               (lambda (_ size)
+                                 (goto-char 3501)
+                                 (cond ((eq action 'replace) (delete-char 1) (insert "Y"))
+                                       ((eq action 'insert) (insert "YZ"))
+                                       ((eq action 'delete) (delete-char 2))
+                                       ((eq action 'nil) (delete-char 1) (insert "Y"))
+                                       ((eq action 'error) (insert "YZ") (error "probe failed")))
+                                 (unless (eq action 'nil) 'utf-8-unix))))
+                          (condition-case err
+                              (let ((result (insert-file-contents file)))
+                                (list action (cadr result) (buffer-size)
+                                      (char-after 3501) (char-after 3502)
+                                      enable-multibyte-characters (point)))
+                            (error (list action (car err) (buffer-size)
+                                         enable-multibyte-characters buffer-undo-list (point)))))))
+                    '(replace insert delete nil error)))
+               (when (file-exists-p file) (delete-file file))))"#,
+        expect,
+    );
+}
+
+#[test]
+fn oracle_empty_filename_coding_can_change_the_staged_raw_source() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[
+        r#""OK ((((0 nil t) 1 1 89 t 1) ((0 nil t) 1 1 89 t 1)) (((6000 nil t) 6001 6001 89 t 1) ((6000 nil t) 6001 6001 89 t 1)))""#
+    ]];
+    crate::common::assert_oracle_parity_with_shared_tempdir_expect(
+        r#"(let ((file (expand-file-name "filename-probe.txt" (getenv "NEOVM_ORACLE_TEST_TMPDIR"))))
+             (unwind-protect
+                 (mapcar
+                  (lambda (length)
+                    (let ((coding-system-for-write 'utf-8-unix))
+                      (write-region (make-string length ?x) nil file nil 'silent))
+                    (mapcar
+                     (lambda (use-auto)
+                       (with-temp-buffer
+                         (let* (observed
+                                (coding-system-for-read nil)
+                                (set-auto-coding-function (and use-auto (lambda (_ size) nil)))
+                                (file-coding-system-alist '(("." . neovm-mutating-filename-coding))))
+                           (fset 'neovm-mutating-filename-coding
+                                 (lambda (_args)
+                                   (setq observed (list (buffer-size) enable-multibyte-characters
+                                                        (eq buffer-undo-list t)))
+                                   (goto-char (point-min)) (insert "Y") 'utf-8-unix))
+                           (let ((result (insert-file-contents file)))
+                             (list observed (cadr result) (buffer-size) (char-after 1)
+                                   enable-multibyte-characters (point))))))
+                     '(nil t)))
+                  '(0 6000))
+               (fmakunbound 'neovm-mutating-filename-coding)
                (when (file-exists-p file) (delete-file file))))"#,
         expect,
     );
