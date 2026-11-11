@@ -8303,6 +8303,183 @@ fn insert_file_contents_empty_auto_coding_error_restores_state_after_gc() {
     );
 }
 
+fn panicking_empty_file_coding_probe(eval: &mut Context, _args: Vec<Value>) -> EvalResult {
+    let buffer = eval.edit.buffers.current_buffer().expect("staged source");
+    assert!(!buffer.get_multibyte());
+    assert_eq!(buffer.total_char_len().get(), 6000);
+    assert!(buffer.get_undo_list().is_t());
+    eval.eval_str("(goto-char 3501) (insert \"YZ\")")
+        .expect("callback mutation");
+    eval.gc_collect_exact();
+    let target = eval
+        .edit
+        .buffers
+        .find_buffer_by_name(" *coding-panic-other*")
+        .expect("callback target");
+    eval.set_current_buffer_unrecorded(target)
+        .expect("callback buffer switch");
+    panic!("native empty-file coding probe panic fixture");
+}
+
+fn assert_empty_file_coding_panic_restores_source(filename_fallback: bool) {
+    use neovm_eval::emacs_core::eval::SpecBinding;
+    use neovm_eval::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("coding-panic.txt");
+    fs::write(&path, vec![b'x'; 6000]).unwrap();
+    let multibyte = true;
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let source = eval.edit.buffers.current_buffer_id().expect("source");
+    eval.edit.buffers.create_buffer(" *coding-panic-other*");
+    eval.edit
+        .buffers
+        .set_buffer_multibyte_flag(source, multibyte)
+        .expect("source mode");
+    eval.register_subr(SubrSpec::new(
+        "neovm-panicking-file-coding",
+        NativeFn::ContextVec(panicking_empty_file_coding_probe),
+        SubrArity::new(1, Some(2)),
+    ));
+    eval.eval_str("(defalias 'undo-auto-amalgamate (lambda (&rest _) nil)) (setq buffer-undo-list (list (cons 8 9)) coding-system-for-read nil)").unwrap();
+    eval.eval_str(if filename_fallback {
+            "(setq set-auto-coding-function nil file-coding-system-alist '((\".\" . neovm-panicking-file-coding)))"
+        } else {
+            "(setq set-auto-coding-function 'neovm-panicking-file-coding)"
+        }).unwrap();
+    let original_undo = eval.edit.buffers.get(source).unwrap().get_undo_list();
+    let root_count = |eval: &Context| {
+        eval.specpdl()
+            .iter()
+            .filter(|binding| matches!(binding, SpecBinding::GcRoot { .. }))
+            .count()
+    };
+    let initial_roots = root_count(&eval);
+    let boundary = eval.module_boundary_snapshot();
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ =
+            builtin_insert_file_contents(&mut eval, vec![Value::string(path.to_str().unwrap())]);
+    }))
+    .expect_err("native callback must propagate its panic");
+    assert_eq!(
+        panic.downcast_ref::<&str>(),
+        Some(&"native empty-file coding probe panic fixture")
+    );
+    // Inspect the probe's roots before the containing module boundary
+    // retires evaluator frames: outer containment must not mask a leak.
+    assert_eq!(
+        root_count(&eval),
+        initial_roots,
+        "probe roots must retire before outer containment"
+    );
+    assert_eq!(eval.edit.buffers.current_buffer_id(), Some(source));
+    let buffer = eval.edit.buffers.get(source).expect("restored source");
+    assert!(
+        buffer.is_text_empty(),
+        "staged and callback bytes must retire"
+    );
+    assert_eq!(buffer.get_multibyte(), multibyte);
+    assert_eq!(buffer.get_undo_list(), original_undo);
+    assert_eq!(buffer.point_lisp_char_pos().as_i64(), 1);
+    eval.restore_module_boundary(&boundary);
+    let actual = eval.eval_str("(list buffer-undo-list (point))").unwrap();
+    let expected = eval.eval_str("'(((8 . 9)) 1)").unwrap();
+    assert!(
+        crate::emacs_core::value::equal_value(&actual, &expected, 0),
+        "{actual:?}"
+    );
+}
+
+#[test]
+fn empty_auto_coding_native_panic_restores_source() {
+    assert_empty_file_coding_panic_restores_source(false);
+}
+
+#[test]
+fn empty_filename_coding_native_panic_restores_source() {
+    assert_empty_file_coding_panic_restores_source(true);
+}
+
+fn panicking_nonempty_file_coding_probe(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("probe work buffer");
+    assert!(!buffer.get_multibyte());
+    assert_eq!(
+        buffer.total_char_len().get() as i64,
+        args[1].as_fixnum().expect("probe byte count")
+    );
+    eval.eval_str("(goto-char 2) (insert \"YZ\")")
+        .expect("work buffer mutation");
+    eval.gc_collect_exact();
+    let target = eval
+        .edit
+        .buffers
+        .find_buffer_by_name(" *coding-panic-other*")
+        .expect("callback target");
+    eval.set_current_buffer_unrecorded(target)
+        .expect("callback buffer switch");
+    panic!("native nonempty-file coding probe panic fixture");
+}
+
+#[test]
+fn nonempty_auto_coding_native_panic_restores_current_buffer() {
+    use neovm_eval::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nonempty-coding-panic.txt");
+    let bytes = vec![b'x'; 6000];
+    fs::write(&path, &bytes).unwrap();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let source = eval.edit.buffers.current_buffer_id().expect("source");
+    eval.edit.buffers.create_buffer(" *coding-panic-other*");
+    eval.register_subr(SubrSpec::new(
+        "neovm-panicking-file-coding",
+        NativeFn::ContextVec(panicking_nonempty_file_coding_probe),
+        SubrArity::new(2, Some(2)),
+    ));
+    eval.eval_str("(defalias 'undo-auto-amalgamate (lambda (&rest _) nil)) (insert \"original\") (goto-char 3) (setq buffer-undo-list (list (cons 8 9)) coding-system-for-read nil set-auto-coding-function 'neovm-panicking-file-coding)").unwrap();
+    let original_undo = eval.edit.buffers.get(source).unwrap().get_undo_list();
+    let boundary = eval.module_boundary_snapshot();
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ =
+            builtin_insert_file_contents(&mut eval, vec![Value::string(path.to_str().unwrap())]);
+    }))
+    .expect_err("native callback must propagate its panic");
+    assert_eq!(
+        panic.downcast_ref::<&str>(),
+        Some(&"native nonempty-file coding probe panic fixture")
+    );
+    assert_eq!(eval.edit.buffers.current_buffer_id(), Some(source));
+    let buffer = eval.edit.buffers.get(source).expect("unchanged source");
+    assert_eq!(buffer.dump_text_bytes(), b"original");
+    assert!(buffer.get_multibyte());
+    assert_eq!(buffer.get_undo_list(), original_undo);
+    assert_eq!(buffer.point_lisp_char_pos().as_i64(), 3);
+    eval.restore_module_boundary(&boundary);
+    let actual = eval
+        .eval_str("(list (buffer-string) enable-multibyte-characters buffer-undo-list (point))")
+        .unwrap();
+    let expected = eval.eval_str("'(\"original\" t ((8 . 9)) 3)").unwrap();
+    assert!(
+        crate::emacs_core::value::equal_value(&actual, &expected, 0),
+        "{actual:?}"
+    );
+    let work = eval
+        .edit
+        .buffers
+        .find_buffer_by_name(" *code-converting-work*")
+        .expect("retained work buffer");
+    let work = eval.edit.buffers.get(work).unwrap();
+    assert!(work.dump_text_bytes().starts_with(b"xYZx"));
+    assert_eq!(
+        work.total_char_len().get(),
+        auto_coding_probe_bytes(&bytes, 0..bytes.len(), None).len() + 2
+    );
+}
+
 #[test]
 fn insert_file_contents_empty_filename_coding_sees_and_can_change_raw_source() {
     crate::test_utils::init_test_tracing();
