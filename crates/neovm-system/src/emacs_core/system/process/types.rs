@@ -806,12 +806,16 @@ impl ProcessOutputDecoding {
     /// GNU's `CODING_MODE_LAST_BLOCK`, and with it the detector can tell a
     /// truncated tail from a malformed one without knowing the answer first
     /// (src/coding.c:1215).
+    ///
+    /// GLOBAL_NULL_INHIBITION is the evaluator's dynamic C-level flag at this
+    /// detection, or its default false when no evaluator is available.
     pub(crate) fn detected(
         self,
         coding_systems: &neovm_text::emacs_core::coding::CodingSystemManager,
         bytes: &[u8],
         block: neovm_text::emacs_core::coding::SourceBlock,
         mode: SymbolMode,
+        global_null_inhibition: bool,
     ) -> ResolvedProcessDecoding {
         match self {
             Self::Bytes(name) => ResolvedProcessDecoding::Bytes(name),
@@ -820,12 +824,13 @@ impl ProcessOutputDecoding {
                 // A nil `found` leaves the coding system exactly as it was,
                 // decoder included -- and it will be offered the NEXT chunk
                 // again, because the name it keeps still requires detection.
-                let found = neovm_text::encoding::detected_coding_name(
+                let found = neovm_text::encoding::detected_coding_name_with_null_policy(
                     coding_systems,
                     requested,
                     bytes,
                     block,
                     mode,
+                    global_null_inhibition,
                 )
                 .unwrap_or(requested);
                 if process_coding_name_converts_nothing(found) {
@@ -1364,7 +1369,7 @@ pub(super) fn pending_process_output_run(
     // character" (src/coding.c:1215), and the decode needs it to decide what to
     // do with the tail -- so the one flag is spent twice here exactly as GNU
     // spends its one flag twice.
-    let resolved = decoding.detected(coding_systems, &combined, block, mode);
+    let resolved = decoding.detected(coding_systems, &combined, block, mode, false);
     PendingProcessRun {
         coding: resolved,
         bytes: combined,

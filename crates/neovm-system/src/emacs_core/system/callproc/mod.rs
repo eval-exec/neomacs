@@ -16,7 +16,7 @@ use super::process::ProcessOutputDecoding;
 use neovm_edit::buffer::BufferManager;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::heap_types::LispString;
-use neovm_value::intern::resolve_sym;
+use neovm_value::intern::{intern, resolve_sym};
 use neovm_value::value::{Value, ValueKind, VecLikeType};
 
 mod spawn;
@@ -583,6 +583,10 @@ fn write_output_target_in_state(
             // 31.0.90, `(let ((coding-system-for-read 'undecided))
             // (call-process "sh" nil t nil "-c" "printf 'caf\\303\\251\\r\\n'"))`
             // leaves `last-coding-system-used' at `utf-8-dos'.
+            let inhibit_null = eval
+                .forwarded_variable_value(intern("inhibit-null-byte-detection"))
+                .unwrap_or(Value::NIL)
+                .is_truthy();
             let resolved = decoding.detected(
                 &eval.coding_systems(),
                 output,
@@ -591,6 +595,7 @@ fn write_output_target_in_state(
                 // end of `Fcall_process`'s read loop (src/callproc.c:796).
                 neovm_text::emacs_core::coding::SourceBlock::Last,
                 eval.symbol_mode(),
+                inhibit_null,
             );
             // And then decodes through `decode_coding_c_string`
             // (src/callproc.c:856) -- the same macro, and so the same

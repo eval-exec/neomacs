@@ -557,11 +557,25 @@ pub fn detected_coding_name(
     block: crate::emacs_core::coding::SourceBlock,
     mode: neovm_value::tagged::SymbolMode,
 ) -> Option<&'static str> {
+    detected_coding_name_with_null_policy(coding_systems, coding_system, bytes, block, mode, false)
+}
+
+/// Detect before a subprocess decoder runs, using the dynamic NUL flag read by
+/// its evaluator. Definition-time coding attributes still override this flag.
+#[doc(hidden)]
+pub fn detected_coding_name_with_null_policy(
+    coding_systems: &crate::emacs_core::coding::CodingSystemManager,
+    coding_system: &str,
+    bytes: &[u8],
+    block: crate::emacs_core::coding::SourceBlock,
+    mode: neovm_value::tagged::SymbolMode,
+    global: bool,
+) -> Option<&'static str> {
     let base = coding_system_base(coding_system);
     let found = match crate::emacs_core::coding::undecided_null_byte_inhibition(
         coding_systems,
         coding_system,
-        false,
+        global,
     ) {
         Some(inhibit_null) => {
             let detected = resolve_sym(detect_undecided_coding(
@@ -4887,7 +4901,8 @@ fn builtin_coding_string_in_context<H: TextHost>(
         if let Some(inhibit_null) = crate::emacs_core::coding::undecided_null_byte_inhibition(
             ctx.coding_systems(),
             &coding,
-            ctx.visible_variable_value_or_nil(intern("inhibit-null-byte-detection"))
+            ctx.forwarded_variable_value(intern("inhibit-null-byte-detection"))
+                .unwrap_or(Value::NIL)
                 .is_truthy(),
         ) && let Some(src) = ctx.lisp_string(args[0])
         {
