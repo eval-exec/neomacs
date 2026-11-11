@@ -470,7 +470,10 @@ pub(crate) fn finish_autoload_do_load_in_state(
     mode: SymbolMode,
 ) -> EvalResult {
     if let Some(name) = funname
-        && let Some(func) = obarray.indirect_function_id(name)
+        && let Some((_, func)) =
+            super::eval::keymap_lookup::resolve_indirect_function_by_id_in_obarray(
+                obarray, name, mode,
+            )
     {
         // Resolve aliases before comparing, and reject a structurally equal
         // replacement too: neither case made progress toward a definition.

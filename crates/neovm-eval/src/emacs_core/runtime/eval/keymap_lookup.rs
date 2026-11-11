@@ -3707,13 +3707,13 @@ pub fn get_keymap_in_runtime(
     error_if_not_keymap: bool,
     autoload: bool,
 ) -> EvalResult {
-    let symbol_mode = eval.symbol_mode();
     let original = *value;
     let root_scope = eval.save_specpdl_roots();
     let result = (|| {
         let mut current = original;
 
         loop {
+            let symbol_mode = eval.symbol_mode();
             if current.is_nil() {
                 break;
             }
@@ -3751,14 +3751,21 @@ pub fn get_keymap_in_runtime(
                     let updated = resolve_indirect_function_by_id_in_obarray(
                         eval.obarray(),
                         symbol,
-                        symbol_mode,
+                        eval.symbol_mode(),
                     )
                     .map(|(_, definition)| definition);
-                    current = if updated == Some(function) {
-                        loaded
-                    } else {
-                        original
-                    };
+                    match updated {
+                        Some(updated) if updated.bits() == function.bits() => {
+                            // An override can return this same autoloaded
+                            // symbol without updating its function cell. Stop
+                            // once following it would repeat this resolution.
+                            if keymap_symbol_id(&loaded, eval.symbol_mode()) == Some(symbol) {
+                                break;
+                            }
+                            current = loaded;
+                        }
+                        _ => current = original,
+                    }
                     continue;
                 }
                 if !error_if_not_keymap {
@@ -3783,9 +3790,8 @@ pub fn get_keymap_in_runtime(
 }
 
 pub fn maybe_keymap_in_runtime(eval: &mut Context, value: &Value, autoload: bool) -> EvalResult {
-    let symbol_mode = eval.symbol_mode();
     let resolved = get_keymap_in_runtime(eval, value, false, autoload)?;
-    if is_list_keymap(&resolved, symbol_mode) {
+    if is_list_keymap(&resolved, eval.symbol_mode()) {
         Ok(resolved)
     } else {
         Ok(Value::NIL)
@@ -4071,6 +4077,7 @@ pub fn list_keymap_define_seq_runtime_ex(
     let result = (|| {
         let mut current_map = keymap;
         for (i, event) in events.iter().enumerate() {
+            let symbol_mode = ctx.symbol_mode();
             if i == events.len() - 1 {
                 if remove {
                     list_keymap_remove(current_map, *event, symbol_mode);
@@ -4093,6 +4100,7 @@ pub fn list_keymap_define_seq_runtime_ex(
             // GNU Fdefine_key resolves intermediate bindings with autoload
             // enabled, including symbols that name unloaded prefix keymaps.
             let prefix_map = maybe_keymap_in_runtime(ctx, &binding, true)?;
+            let symbol_mode = ctx.symbol_mode();
             if !prefix_map.is_nil() {
                 current_map = prefix_map;
             } else if binding.is_nil() {

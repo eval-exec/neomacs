@@ -581,3 +581,81 @@ fn oracle_autoload_keymap_filter_prefix_survives_load_collection() {
         expect,
     );
 }
+
+/// Positioned aliases to the original autoload must fail after a single load.
+#[test]
+fn oracle_autoload_keymap_positioned_alias_without_progress() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"
+(let ((symbols-with-pos-enabled t))
+  (mapcar
+   (lambda (operation)
+     (setq neovm--autoload-positioned-repeat-count 0)
+     (fmakunbound 'neovm--autoload-positioned-repeat-prefix)
+     (autoload 'neovm--autoload-positioned-repeat-prefix
+               "autoload-keymap-positioned-no-progress-probe" nil t 'keymap)
+     (let ((cell (symbol-function 'neovm--autoload-positioned-repeat-prefix))
+           (map (make-sparse-keymap)))
+       (fset 'neovm--autoload-positioned-repeat-target cell)
+       (define-key map [f2] 'neovm--autoload-positioned-repeat-prefix)
+       (list
+        (condition-case err
+            (progn
+              (if (eq operation 'direct)
+                  (autoload-do-load cell 'neovm--autoload-positioned-repeat-prefix)
+                (lookup-key map [f2 ?x]))
+              'unexpected-success)
+          (error
+           (cond
+            ((string-match-p "failed to define function" (error-message-string err))
+             'no-progress)
+            ((string-match-p "positioned alias repeated" (error-message-string err))
+             'repeat-limit)
+            (t (car err)))))
+        neovm--autoload-positioned-repeat-count
+        (symbol-with-pos-p
+         (symbol-function 'neovm--autoload-positioned-repeat-prefix)))))
+   '(direct lookup)))
+"#;
+    let expect = expect_test::expect![[r#""OK ((no-progress 1 t) (no-progress 1 t))""#]];
+    crate::common::assert_oracle_parity_with_load_root_expect(
+        form,
+        &[],
+        &autoload_fixture_root(),
+        expect,
+    );
+}
+
+/// Prefix retries and post-load keymap checks observe a newly enabled symbol mode.
+#[test]
+fn oracle_autoload_keymap_load_changes_positioned_symbol_mode() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"
+(mapcar
+ (lambda (operation)
+   (let ((symbols-with-pos-enabled nil)
+         (map (make-sparse-keymap)))
+     (fmakunbound 'neovm--autoload-positioned-mode-prefix)
+     (fmakunbound 'neovm--autoload-positioned-mode-target)
+     (autoload 'neovm--autoload-positioned-mode-prefix
+               "autoload-keymap-positioned-mode-probe" nil t 'keymap)
+     (define-key map [f2] 'neovm--autoload-positioned-mode-prefix)
+     (list
+      (condition-case err
+          (if (eq operation 'lookup)
+              (lookup-key map [f2 ?x])
+            (define-key map [f2 ?y] 'ignore)
+            (lookup-key map [f2 ?y]))
+        (error (car err)))
+      symbols-with-pos-enabled)))
+ '(lookup define))
+"#;
+    let expect =
+        expect_test::expect![[r#""OK ((neovm--autoload-positioned-mode-command t) (ignore t))""#]];
+    crate::common::assert_oracle_parity_with_load_root_expect(
+        form,
+        &[],
+        &autoload_fixture_root(),
+        expect,
+    );
+}
