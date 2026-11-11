@@ -896,6 +896,103 @@ const CCL_KEY_ENCODER: i64 = i64::MIN + 7;
 const CCL_KEY_VALIDS: i64 = i64::MIN + 8;
 // GNU encodes this definition-time attribute separately from the mutable plist.
 const UNDECIDED_KEY_INHIBIT_NULL: i64 = i64::MIN + 9;
+// Definition-time `coding_attr_utf_bom` retains the original Lisp object, so
+// mutations of its cons remain shared with the compiled attribute. Only the
+// bootstrap registry uses two symbol slots, avoiding allocation before Lisp
+// initialization has supplied the real BOM object.
+const UTF_BOM_KEY_FIRST: i64 = i64::MIN + 10;
+const UTF_BOM_KEY_SECOND: i64 = i64::MIN + 11;
+const UNDECIDED_KEY_PREFER_UTF8: i64 = i64::MIN + 12;
+
+fn definition_property(info: &CodingSystemInfo, key: SymId) -> Option<Value> {
+    let mut plist = *info.int_properties.get(&PLIST_VERBATIM_KEY)?;
+    while plist.is_cons() {
+        let property = plist.cons_car();
+        let rest = plist.cons_cdr();
+        if !rest.is_cons() {
+            return None;
+        }
+        let value = rest.cons_car();
+        if property == Value::from_sym_id(key) {
+            return Some(value);
+        }
+        plist = rest.cons_cdr();
+    }
+    None
+}
+
+pub(crate) enum BomAutoCoding {
+    Utf8 {
+        signature: Value,
+        without_signature: Value,
+    },
+    Utf16 {
+        little: Value,
+        big: Value,
+    },
+}
+
+/// Resolve GNU's compiled UTF type/BOM pair, independently of the public plist.
+pub(crate) fn bom_auto_coding(mgr: &CodingSystemManager, name: &str) -> Option<BomAutoCoding> {
+    let resolved = resolve_runtime_name(mgr, name)?;
+    let info = mgr.get(&resolved)?;
+    let attrs = if info.int_properties.contains_key(&UTF_BOM_KEY_FIRST)
+        || info.int_properties.contains_key(&PLIST_VERBATIM_KEY)
+    {
+        info
+    } else {
+        mgr.get(strip_eol_suffix(&resolved)).unwrap_or(info)
+    };
+    let pair = if let Some(first) = attrs.int_properties.get(&UTF_BOM_KEY_FIRST) {
+        if first.is_cons() {
+            (first.cons_car(), first.cons_cdr())
+        } else {
+            (*first, *attrs.int_properties.get(&UTF_BOM_KEY_SECOND)?)
+        }
+    } else {
+        // Older dumps already retain the original definition plist separately
+        // from put-time overrides. Recover its BOM without trusting a mutable
+        // coding-system-put value or changing the dump format.
+        let bom = definition_property(attrs, intern(":bom"))?;
+        if !bom.is_cons() {
+            return None;
+        }
+        (bom.cons_car(), bom.cons_cdr())
+    };
+    match resolve_sym(info.coding_type) {
+        "utf-8" => Some(BomAutoCoding::Utf8 {
+            signature: pair.0,
+            without_signature: pair.1,
+        }),
+        "utf-16" => Some(BomAutoCoding::Utf16 {
+            little: pair.0,
+            big: pair.1,
+        }),
+        _ => None,
+    }
+}
+
+pub(crate) fn undecided_prefers_utf8(mgr: &CodingSystemManager, name: &str) -> bool {
+    let Some(resolved) = resolve_runtime_name(mgr, name) else {
+        return false;
+    };
+    let Some(info) = mgr.get(&resolved) else {
+        return false;
+    };
+    let attrs = if info.int_properties.contains_key(&UNDECIDED_KEY_PREFER_UTF8)
+        || info.int_properties.contains_key(&PLIST_VERBATIM_KEY)
+    {
+        info
+    } else {
+        mgr.get(strip_eol_suffix(&resolved)).unwrap_or(info)
+    };
+    attrs
+        .int_properties
+        .get(&UNDECIDED_KEY_PREFER_UTF8)
+        .copied()
+        .or_else(|| definition_property(attrs, intern(":prefer-utf-8")))
+        .is_some_and(|value| value.is_truthy())
+}
 
 /// The compiled-program designators and byte-validity table carried by a CCL
 /// coding system. These are the three type-specific attributes GNU's
@@ -1342,14 +1439,21 @@ impl CodingSystemManager {
             ("utf-8-auto-dos", EolType::Dos),
             ("utf-8-auto-mac", EolType::Mac),
         ] {
-            mgr.register(CodingSystemInfo::new(name, "utf-8", 'U', eol));
+            let mut info = CodingSystemInfo::new(name, "utf-8", 'U', eol);
+            info.int_properties
+                .insert(UTF_BOM_KEY_FIRST, Value::symbol("utf-8-with-signature"));
+            info.int_properties
+                .insert(UTF_BOM_KEY_SECOND, Value::symbol("utf-8"));
+            mgr.register(info);
         }
-        mgr.register(CodingSystemInfo::new(
-            "utf-16",
-            "utf-16",
-            'U',
-            EolType::Undecided,
-        ));
+        let mut utf16 = CodingSystemInfo::new("utf-16", "utf-16", 'U', EolType::Undecided);
+        utf16
+            .int_properties
+            .insert(UTF_BOM_KEY_FIRST, Value::symbol("utf-16le-with-signature"));
+        utf16
+            .int_properties
+            .insert(UTF_BOM_KEY_SECOND, Value::symbol("utf-16be-with-signature"));
+        mgr.register(utf16);
         mgr.register(CodingSystemInfo::new(
             "utf-16be",
             "utf-16",
@@ -1380,7 +1484,10 @@ impl CodingSystemManager {
             ("prefer-utf-8-dos", EolType::Dos),
             ("prefer-utf-8-mac", EolType::Mac),
         ] {
-            mgr.register(CodingSystemInfo::new(name, "undecided", '-', eol));
+            let mut info = CodingSystemInfo::new(name, "undecided", '-', eol);
+            info.int_properties
+                .insert(UNDECIDED_KEY_PREFER_UTF8, Value::T);
+            mgr.register(info);
         }
         for (name, eol) in [
             ("chinese-iso-8bit", EolType::Undecided),
@@ -2281,9 +2388,7 @@ fn coding_mime_charset_for_base(base: &str) -> Option<&'static str> {
 
 /// Whether the coding system carries a byte-order mark (`:bom` non-nil).
 fn coding_has_bom(info: &CodingSystemInfo) -> bool {
-    info.properties
-        .get(&intern(":bom"))
-        .is_some_and(|v| v.is_truthy())
+    !matches!(coding_bom_kind(info), BomKind::None)
 }
 
 /// `:bom` shape, mirroring GNU's `CONSP(bom)` / `NILP(bom)` discrimination in
@@ -2297,7 +2402,21 @@ enum BomKind {
 }
 
 fn coding_bom_kind(info: &CodingSystemInfo) -> BomKind {
-    match info.properties.get(&intern(":bom")).copied() {
+    if info.int_properties.contains_key(&UTF_BOM_KEY_SECOND) {
+        return BomKind::Auto;
+    }
+    let bom = info
+        .int_properties
+        .get(&UTF_BOM_KEY_FIRST)
+        .copied()
+        .or_else(|| {
+            if info.int_properties.contains_key(&PLIST_VERBATIM_KEY) {
+                Some(definition_property(info, intern(":bom")).unwrap_or(Value::NIL))
+            } else {
+                info.properties.get(&intern(":bom")).copied()
+            }
+        });
+    match bom {
         Some(v) if v.is_cons() => BomKind::Auto,
         Some(v) if v.is_truthy() => BomKind::Sig,
         _ => BomKind::None,
@@ -3785,11 +3904,27 @@ pub fn builtin_define_coding_system_internal(
     info.for_unibyte = for_unibyte;
     info.properties = properties;
 
+    if matches!(resolve_sym(coding_type), "utf-8" | "utf-16") {
+        let bom = mode.unwrap(args.get(13).copied().unwrap_or(Value::NIL));
+        info.int_properties.insert(UTF_BOM_KEY_FIRST, bom);
+    }
+
     if resolve_sym(coding_type) == "undecided" {
         let flag = mode.unwrap(args.get(13).copied().unwrap_or(Value::NIL));
         info.int_properties.insert(
             UNDECIDED_KEY_INHIBIT_NULL,
             NullByteInhibition::from_definition(flag).into_stored(),
+        );
+        info.int_properties.insert(
+            UNDECIDED_KEY_PREFER_UTF8,
+            if mode
+                .unwrap(args.get(15).copied().unwrap_or(Value::NIL))
+                .is_truthy()
+            {
+                Value::T
+            } else {
+                Value::NIL
+            },
         );
     }
 
@@ -5531,17 +5666,14 @@ fn coding_bom_auto_pair(
     name: SymId,
     mode: SymbolMode,
 ) -> Option<(SymId, SymId)> {
-    let bom = *mgr
-        .get(resolve_sym(name))?
-        .properties
-        .get(&intern(":bom"))?;
-    if !bom.is_cons() {
-        return None;
-    }
-    Some((
-        bom.cons_car().as_symbol_id(mode)?,
-        bom.cons_cdr().as_symbol_id(mode)?,
-    ))
+    let pair = match bom_auto_coding(mgr, resolve_sym(name))? {
+        BomAutoCoding::Utf8 {
+            signature,
+            without_signature,
+        } => (signature, without_signature),
+        BomAutoCoding::Utf16 { little, big } => (little, big),
+    };
+    Some((pair.0.as_symbol_id(mode)?, pair.1.as_symbol_id(mode)?))
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]

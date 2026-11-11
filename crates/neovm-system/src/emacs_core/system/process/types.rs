@@ -857,7 +857,10 @@ impl ProcessOutputDecoding {
     /// writing CR LF under `utf-8-dos` still lands as bare LF, while the same
     /// child under `utf-8-unix` keeps its CR — so dropping the EOL half here
     /// would be as wrong as keeping the character half.
-    pub(crate) fn without_character_conversion(self) -> Self {
+    pub(crate) fn without_character_conversion(
+        self,
+        coding_systems: &neovm_text::emacs_core::coding::CodingSystemManager,
+    ) -> Self {
         let coding = match self {
             // Already byte-faithful.
             Self::Bytes(_) => return self,
@@ -869,16 +872,9 @@ impl ProcessOutputDecoding {
         // detection question rather than carrying it: measured under GNU
         // 31.0.90, a subprocess with a unibyte buffer and a nil chain reports
         // `raw-text-dos` for `caf <c3> <a9> CR LF`, not `utf-8-dos`.
-        Self::Coding(if coding == "dos" || coding.ends_with("-dos") {
-            "raw-text-dos"
-        } else if coding == "mac" || coding.ends_with("-mac") {
-            "raw-text-mac"
-        } else if coding == "unix" || coding.ends_with("-unix") {
-            "raw-text-unix"
-        } else {
-            // No EOL type of its own: GNU's `raw-text`, whose EOL is undecided.
-            "raw-text"
-        })
+        Self::Coding(resolve_sym(
+            neovm_text::emacs_core::coding::raw_text_coding_system(coding_systems, intern(coding)),
+        ))
     }
 
     /// GNU's `setup_process_coding_systems` (src/process.c:8380-8409): turn the
@@ -900,7 +896,9 @@ impl ProcessOutputDecoding {
             ProcessOutputSink::DecodedText => decoding,
             // src/process.c:8398-8399, the same `raw_text_coding_system` call
             // `Fcall_process` makes inline at src/callproc.c:757-759.
-            ProcessOutputSink::UnibyteProcessBuffer => decoding.without_character_conversion(),
+            ProcessOutputSink::UnibyteProcessBuffer => {
+                decoding.without_character_conversion(coding_systems)
+            }
         }
     }
 }

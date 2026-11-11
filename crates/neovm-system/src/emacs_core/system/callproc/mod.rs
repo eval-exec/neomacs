@@ -1139,7 +1139,7 @@ fn resolve_call_process_output_decoding(
     // raw-text or one of the subsidiary according to the information just
     // setup."  `Fset_buffer (buffer)` at :722-723 means the buffer this asks
     // about is the DESTINATION buffer, not the caller's.
-    Ok(decoding.without_character_conversion())
+    Ok(decoding.without_character_conversion(&eval.coding_systems()))
 }
 
 /// Whether the buffer a synchronous subprocess's stdout lands in is multibyte.

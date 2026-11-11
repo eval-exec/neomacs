@@ -363,6 +363,15 @@ pub(crate) fn coding_name_eol(coding_system: &str) -> EolType {
     }
 }
 
+fn runtime_coding_eol(
+    systems: &crate::emacs_core::coding::CodingSystemManager,
+    name: &str,
+) -> EolType {
+    RuntimeCodingSystem::from_symbol(intern(name))
+        .metadata(systems)
+        .map_or_else(|| coding_name_eol(name), |metadata| metadata.eol_type)
+}
+
 /// The `&str` twin of `expand_source_eol`: the single EOL pass for the
 /// `encode_string` entry point.  Same rule, same GNU reference
 /// (`consume_chars`, src/coding.c:7607) -- convert the SOURCE once, above the
@@ -526,16 +535,11 @@ pub fn coding_name_requires_detection(
     coding_systems: &crate::emacs_core::coding::CodingSystemManager,
     coding_system: &str,
 ) -> bool {
-    // The undecided TYPE, rather than a spelling, controls detection. Reuse
-    // the definition-attribute resolver so custom names, aliases, and EOL
-    // subsidiaries follow the same registry lookup as detection itself. The
-    // policy's value is irrelevant here; Some means the type is undecided.
+    // The registered type and compiled BOM attributes control detection, so
+    // aliases and EOL subsidiaries use the same metadata as detection itself.
     crate::emacs_core::coding::undecided_null_byte_inhibition(coding_systems, coding_system, false)
         .is_some()
-        || matches!(
-            coding_system_base(coding_system),
-            "undecided" | "prefer-utf-8" | "utf-8-auto" | "utf-16"
-        )
+        || crate::emacs_core::coding::bom_auto_coding(coding_systems, coding_system).is_some()
 }
 
 /// GNU's `detect_coding` (src/coding.c:6503-6759) reduced to its one lasting
@@ -580,7 +584,6 @@ pub fn detected_coding_name_with_null_policy(
     mode: neovm_value::tagged::SymbolMode,
     global: bool,
 ) -> Option<&'static str> {
-    let base = coding_system_base(coding_system);
     let found = match crate::emacs_core::coding::undecided_null_byte_inhibition(
         coding_systems,
         coding_system,
@@ -590,7 +593,7 @@ pub fn detected_coding_name_with_null_policy(
             let detected = resolve_sym(detect_undecided_coding(
                 coding_systems,
                 bytes,
-                base == "prefer-utf-8",
+                crate::emacs_core::coding::undecided_prefers_utf8(coding_systems, coding_system),
                 inhibit_null,
                 block,
                 mode,
@@ -604,9 +607,10 @@ pub fn detected_coding_name_with_null_policy(
         }
         // The two arms that are keyed on a byte-order mark rather than on the
         // category priority list (:6702-6742).
-        None => detect_bom_auto_coding(base, bytes, block)?,
+        None => detect_bom_auto_coding(coding_systems, coding_system, bytes, block, mode)?,
     };
-    let name = apply_explicit_eol_suffix(found, coding_name_eol(coding_system));
+    let eol = runtime_coding_eol(coding_systems, coding_system);
+    let name = apply_explicit_eol_suffix(found, eol);
     Some(resolve_sym(intern(&name)))
 }
 
@@ -690,7 +694,10 @@ pub fn coding_inherit_unix_eol_type(
     coding_systems: &crate::emacs_core::coding::CodingSystemManager,
     coding_system: &str,
 ) -> String {
-    if !matches!(coding_name_eol(coding_system), EolType::Undecided) {
+    if !matches!(
+        runtime_coding_eol(coding_systems, coding_system),
+        EolType::Undecided
+    ) {
         return coding_system.to_owned();
     }
     coding_systems
@@ -3655,7 +3662,7 @@ fn coding_ascii_identity_fast_path<H: TextHost>(
     if eol_conversion == crate::emacs_core::coding::EolConversion::Inhibited {
         return true;
     }
-    match coding_name_eol(coding) {
+    match runtime_coding_eol(ctx.coding_systems(), coding) {
         EolType::Unix => true,
         _ => {
             let needle = if encode { b'\n' } else { b'\r' };
@@ -4730,46 +4737,56 @@ fn utf8_or_truncated_utf8(bytes: &[u8], block: crate::emacs_core::coding::Source
 ///
 /// Returns `None` when GNU's `found` would be nil, i.e. when nothing re-bases.
 fn detect_bom_auto_coding(
-    base: &str,
+    coding_systems: &crate::emacs_core::coding::CodingSystemManager,
+    coding_system: &str,
     bytes: &[u8],
     block: crate::emacs_core::coding::SourceBlock,
+    mode: neovm_value::tagged::SymbolMode,
 ) -> Option<&'static str> {
-    match base {
+    use crate::emacs_core::coding::BomAutoCoding;
+    let found = match crate::emacs_core::coding::bom_auto_coding(coding_systems, coding_system)? {
         // src/coding.c:6724-6742.  `coding->head_ascii = 0` and then
         // `detect_coding_utf_16`, which REFUSES an odd-length last block
         // outright (src/coding.c:1501-1507) before it looks at a signature --
         // measured, `(decode-coding-string "\xfe\xff\0" 'utf-16)` answers
         // `utf-16` and keeps U+FEFF as a character.
-        "utf-16"
+        BomAutoCoding::Utf16 { .. }
             if bytes.len() % 2 == 1
                 && matches!(block, crate::emacs_core::coding::SourceBlock::Last) =>
         {
             None
         }
-        "utf-16" => match bytes {
-            [0xFF, 0xFE, ..] => Some("utf-16le-with-signature"),
-            [0xFE, 0xFF, ..] => Some("utf-16be-with-signature"),
+        BomAutoCoding::Utf16 { little, big } => match bytes {
+            [0xFF, 0xFE, ..] => Some(little),
+            [0xFE, 0xFF, ..] => Some(big),
             _ => None,
         },
         // src/coding.c:6702-6722.  All-ASCII takes `XCDR` without even running
         // the detector; otherwise `detect_coding_utf_8` decides, and a BOM
         // takes `XCAR`.  Either way `found` is non-nil whenever the text is
         // valid UTF-8, so `utf-8-auto` re-bases to a system that is not `auto`.
-        "utf-8-auto" => {
+        BomAutoCoding::Utf8 {
+            signature,
+            without_signature,
+        } => {
             if bytes.iter().all(|byte| byte.is_ascii()) {
-                return Some("utf-8");
-            }
-            if std::str::from_utf8(bytes).is_err() {
-                return None;
-            }
-            if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
-                Some("utf-8-with-signature")
+                Some(without_signature)
+            } else if std::str::from_utf8(bytes).is_err_and(|error| {
+                error.error_len().is_some()
+                    || matches!(block, crate::emacs_core::coding::SourceBlock::Last)
+            }) {
+                None
+            } else if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+                Some(signature)
             } else {
-                Some("utf-8")
+                Some(without_signature)
             }
         }
-        _ => None,
+    }?;
+    if found.is_nil() {
+        return None;
     }
+    found.as_symbol_id(mode).map(resolve_sym)
 }
 
 /// Re-attach an explicit (concrete) eol_type to a detected base coding system,
@@ -4838,18 +4855,23 @@ fn builtin_coding_string_in_context<H: TextHost>(
     // user-defined alias falls straight through, leaving no codec and encoding
     // non-ASCII as `?`.
     //
-    // Resolve only in that fall-through case: when the static table does not
-    // recognise the name but the runtime manager does.  Built-in aliases that
-    // the static table already handles keep their current path, and `coding`
-    // itself is left alone because `last-coding-system-used' must report the
-    // alias exactly as the caller wrote it (see
-    // `canonical_context_coding_name`), which GNU also does.
-    if coding_system_base(&coding) == coding.as_str()
-        && let Some(canonical) = ctx.coding_systems().resolve(&coding)
-    {
-        let canonical = resolve_sym(canonical);
-        if canonical != coding.as_str() {
-            coding = canonical.to_owned();
+    // Resolve subsidiaries too: an auto-coding detector can leave an alias
+    // unchanged when there is no BOM, but its decoder is still the target's
+    // decoder. Keep reported_coding separate so this lookup preserves GNU's
+    // alias reporting when detection and EOL resolution do not replace it.
+    let canonical = RuntimeCodingSystem::from_symbol(intern(&coding))
+        .metadata(ctx.coding_systems())
+        .map(|metadata| {
+            let name = resolve_sym(metadata.info.name);
+            if metadata.eol_type == metadata.info.eol_type {
+                name.to_owned()
+            } else {
+                apply_explicit_eol_suffix(name, metadata.eol_type)
+            }
+        });
+    if let Some(canonical) = canonical {
+        if canonical != coding {
+            coding = canonical;
             // Downstream helpers re-read `args[1]` rather than `coding` (see the
             // `undecided` rewrite below), so the resolved system has to be put
             // back there too or the codec still selects on the alias name.
@@ -4906,7 +4928,7 @@ fn builtin_coding_string_in_context<H: TextHost>(
     // the whole block is skipped: its detector has run, at the read, on the
     // carryover plus the read and with the read's own `CODING_MODE_LAST_BLOCK`.
     if let (false, EntryDetection::Here(block)) = (encode, entry.detection()) {
-        let base = coding_system_base(&coding).to_owned();
+        let detection_coding = coding.clone();
         if let Some(inhibit_null) = crate::emacs_core::coding::undecided_null_byte_inhibition(
             ctx.coding_systems(),
             &coding,
@@ -4919,7 +4941,7 @@ fn builtin_coding_string_in_context<H: TextHost>(
             let detected = detect_undecided_coding(
                 ctx.coding_systems(),
                 &bytes,
-                base == *"prefer-utf-8",
+                crate::emacs_core::coding::undecided_prefers_utf8(ctx.coding_systems(), &coding),
                 inhibit_null,
                 // `CODING_MODE_LAST_BLOCK` is the entry's to state, not this
                 // function's: `code_convert_string` and `code_convert_region`
@@ -4934,7 +4956,10 @@ fn builtin_coding_string_in_context<H: TextHost>(
                     vec![Value::symbol(&coding)],
                 )
             })?;
-            coding = apply_explicit_eol_suffix(resolve_sym(detected), coding_name_eol(&coding));
+            coding = apply_explicit_eol_suffix(
+                resolve_sym(detected),
+                runtime_coding_eol(ctx.coding_systems(), &coding),
+            );
             // Rewrite the coding argument too, so the fallback decode path
             // (which re-reads args[1]) uses the detected system rather than the
             // original `undecided`/`prefer-utf-8`.
@@ -4961,10 +4986,18 @@ fn builtin_coding_string_in_context<H: TextHost>(
         // on the ORIGINAL base: a `undecided` decode that detected `utf-16`
         // above does not then get re-based a second time.
         if let Some(src) = ctx.lisp_string(args[0])
-            && let Some(found) =
-                detect_bom_auto_coding(&base, &lisp_string_coding_source_bytes(src), block)
+            && let Some(found) = detect_bom_auto_coding(
+                ctx.coding_systems(),
+                &detection_coding,
+                &lisp_string_coding_source_bytes(src),
+                block,
+                ctx.symbol_mode(),
+            )
         {
-            coding = apply_explicit_eol_suffix(found, coding_name_eol(&coding));
+            coding = apply_explicit_eol_suffix(
+                found,
+                runtime_coding_eol(ctx.coding_systems(), &detection_coding),
+            );
             args[1] = Value::symbol(&coding);
             reported_coding = coding.clone();
         }
@@ -5186,9 +5219,9 @@ fn builtin_coding_string_in_context<H: TextHost>(
     let decoded_eol = if encode {
         EolType::Unix
     } else {
-        coding_name_eol(&coding)
+        runtime_coding_eol(ctx.coding_systems(), &coding)
     };
-    if !encode && !matches!(decoded_eol, EolType::Unix) {
+    if !encode {
         let spent = coding_name_with_eol_spent(&coding);
         if spent != coding.as_str() {
             coding = spent.into_owned();
