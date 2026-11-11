@@ -4,6 +4,27 @@ use neovm_value::error::{FlowKind, FlowResultExt as _};
 
 use neovm_value::intern::{intern, resolve_sym};
 
+/// Invalid persisted policy values fall back to the built-in inherited policy.
+#[test]
+fn undecided_null_policy_invalid_storage_inherits_global() {
+    crate::test_utils::init_test_tracing();
+    for stored in [Value::fixnum(2), Value::fixnum(-2), Value::T] {
+        let mut manager = mgr();
+        manager
+            .get_mut("undecided")
+            .unwrap()
+            .int_properties
+            .insert(UNDECIDED_KEY_INHIBIT_NULL, stored);
+        for global in [false, true] {
+            assert_eq!(
+                undecided_null_byte_inhibition(&manager, "undecided", global),
+                Some(global),
+                "stored={stored:?}, global={global}",
+            );
+        }
+    }
+}
+
 #[test]
 fn eol_type_domain_matches_gnu_symbols_and_codes() {
     assert_eq!(

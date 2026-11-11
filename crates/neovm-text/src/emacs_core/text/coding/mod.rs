@@ -1886,30 +1886,74 @@ fn property_lookup(info: &CodingSystemInfo, prop: SymId) -> Option<Value> {
     None
 }
 
-/// Resolve an undecided coding's definition-time NUL policy against the live
-/// global. GNU's nil/t/other values mean never/always/inherit respectively.
+/// GNU's definition-time nil/t/other NUL attributes mean never/always/inherit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NullByteInhibition {
+    Never,
+    Inherit,
+    Always,
+}
+
+impl NullByteInhibition {
+    fn from_definition(flag: Value) -> Self {
+        if flag.is_nil() {
+            Self::Never
+        } else if flag.is_t() {
+            Self::Always
+        } else {
+            Self::Inherit
+        }
+    }
+
+    /// Preserve GNU's encoded attribute in the existing serialized map.
+    fn into_stored(self) -> Value {
+        Value::fixnum(match self {
+            Self::Never => -1,
+            Self::Inherit => 0,
+            Self::Always => 1,
+        })
+    }
+
+    /// Missing or invalid persisted attributes retain the built-in default.
+    fn from_stored(value: Option<&Value>) -> Self {
+        match value.and_then(|value| value.as_fixnum()) {
+            Some(-1) => Self::Never,
+            Some(1) => Self::Always,
+            Some(0) => Self::Inherit,
+            Some(_) | None => Self::Inherit,
+        }
+    }
+
+    fn resolve(self, global: bool) -> bool {
+        match self {
+            Self::Never => false,
+            Self::Inherit => global,
+            Self::Always => true,
+        }
+    }
+}
+
+/// Resolve aliases and derived EOL names before applying the compiled policy
+/// to the current dynamic global flag.
 pub(crate) fn undecided_null_byte_inhibition(
     mgr: &CodingSystemManager,
     coding: &str,
     global: bool,
 ) -> Option<bool> {
-    let resolved = resolve_sym(mgr.resolve(coding)?);
-    let info = mgr.get(resolved)?;
+    let resolved = resolve_runtime_name(mgr, coding)?;
+    let info = mgr.get(&resolved)?;
     if resolve_sym(info.coding_type) != "undecided" {
         return None;
     }
-    let encoded = info
+    let stored = info
         .int_properties
         .get(&UNDECIDED_KEY_INHIBIT_NULL)
         .or_else(|| {
-            mgr.get(strip_eol_suffix(resolved))?
+            mgr.get(strip_eol_suffix(&resolved))?
                 .int_properties
                 .get(&UNDECIDED_KEY_INHIBIT_NULL)
-        })
-        .and_then(|value| value.as_fixnum())
-        // GNU's C-defined undecided coding inherits the global (attribute 0).
-        .unwrap_or(0);
-    Some(encoded > 0 || (encoded == 0 && global))
+        });
+    Some(NullByteInhibition::from_stored(stored).resolve(global))
 }
 
 fn plist_push_key(plist: &mut Vec<Value>, key: SymId, value: Value) {
@@ -3743,15 +3787,10 @@ pub fn builtin_define_coding_system_internal(
 
     if resolve_sym(coding_type) == "undecided" {
         let flag = mode.unwrap(args.get(13).copied().unwrap_or(Value::NIL));
-        let encoded = if flag.is_nil() {
-            -1
-        } else if flag.is_t() {
-            1
-        } else {
-            0
-        };
-        info.int_properties
-            .insert(UNDECIDED_KEY_INHIBIT_NULL, Value::fixnum(encoded));
+        info.int_properties.insert(
+            UNDECIDED_KEY_INHIBIT_NULL,
+            NullByteInhibition::from_definition(flag).into_stored(),
+        );
     }
 
     // Stash the verbatim plist (arg 11) so coding-system-plist can reproduce

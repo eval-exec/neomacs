@@ -4636,6 +4636,7 @@ fn process_output_read_errors_remain_distinct_from_clean_eof() {
         &[],
         1,
         neovm_value::tagged::value::SymbolMode::Bare,
+        false,
     );
     assert!(matches!(result, ProcessBytesRead::Failed));
 
@@ -4661,6 +4662,7 @@ fn process_output_read_errors_remain_distinct_from_clean_eof() {
         &[],
         1,
         neovm_value::tagged::value::SymbolMode::Bare,
+        false,
     );
     assert!(matches!(pty_result, ProcessBytesRead::Eof));
     assert!(
