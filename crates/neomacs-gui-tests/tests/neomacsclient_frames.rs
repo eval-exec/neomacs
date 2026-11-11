@@ -27,6 +27,7 @@ const FIND_VISIBLE_GUI: &str = r#"
 struct OwnedChild(Child);
 
 impl OwnedChild {
+    /// Bound child completion while retaining ownership for panic cleanup.
     fn wait(&mut self, description: &str, artifacts: &Path) -> ExitStatus {
         let deadline = Instant::now() + DEADLINE;
         loop {
@@ -44,6 +45,7 @@ impl OwnedChild {
 }
 
 impl Drop for OwnedChild {
+    /// Reap every owned child, including when an assertion unwinds the fixture.
     fn drop(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
@@ -59,6 +61,8 @@ struct Client {
 }
 
 impl Client {
+    /// Attach both standard streams to a sized PTY so client mode selection
+    /// follows the terminal invocation reported in issue #688.
     fn spawn(mut command: PinnedCommand, stderr: &Path) -> Self {
         let mut master = -1;
         let mut slave = -1;
@@ -124,6 +128,8 @@ struct Fixture<'a> {
 }
 
 impl<'a> Fixture<'a> {
+    /// Start a foreground daemon with an inherited private display and isolated
+    /// server paths, retaining logs after the temporary home is removed.
     fn new(display: &'a DisplaySession, isolation: &Path, artifacts: PathBuf) -> Self {
         let root = neomacs_infra::workspace_root();
         for name in ["home", "tmp", "runtime", "config", "data", "cache"] {
@@ -172,6 +178,8 @@ impl<'a> Fixture<'a> {
         }
     }
 
+    /// Share one display/socket namespace among the daemon and its clients
+    /// without leaking ambient user server selection or overriding locale pins.
     fn isolate(
         command: &mut PinnedCommand,
         display: &DisplaySession,
@@ -205,6 +213,7 @@ impl<'a> Fixture<'a> {
             .env_remove("ALTERNATE_EDITOR");
     }
 
+    /// Target this fixture's named server with the matching client executable.
     fn client_command(&self) -> PinnedCommand {
         let mut command = self.environment.command(&self.client_binary);
         Self::isolate(
@@ -218,6 +227,8 @@ impl<'a> Fixture<'a> {
         command
     }
 
+    /// Evaluate through the real server protocol, preserving diagnostics on
+    /// failure and bounding both the protocol reply and child lifetime.
     fn evaluate(&self, form: &str) -> String {
         let mut command = self.client_command();
         let stdout = self.artifacts.join("eval.stdout");
@@ -241,6 +252,8 @@ impl<'a> Fixture<'a> {
         fs::read_to_string(stdout).unwrap().trim().to_owned()
     }
 
+    /// Await an observable condition while treating an exited daemon as an
+    /// immediate failure rather than consuming the whole timeout.
     fn wait_for(&mut self, description: &str, mut condition: impl FnMut(&Self) -> bool) {
         let deadline = Instant::now() + DEADLINE;
         loop {
@@ -261,6 +274,8 @@ impl<'a> Fixture<'a> {
         }
     }
 
+    /// Find mapped X11 windows by the owned daemon's PID, independent of Lisp's
+    /// frame registry, to detect missing or retained native windows.
     fn native_window_ids(&self) -> Vec<String> {
         let mut command = Command::new("xdotool");
         command
@@ -279,10 +294,13 @@ impl<'a> Fixture<'a> {
             .collect()
     }
 
+    /// Count this daemon's mapped native windows on the private display.
     fn native_windows(&self) -> usize {
         self.native_window_ids().len()
     }
 
+    /// Reject a reopened native window sized from the initial terminal's
+    /// synthetic one-pixel character metrics.
     fn has_normal_native_geometry(&self) -> bool {
         let windows = self.native_window_ids();
         let [window] = windows.as_slice() else {
@@ -307,6 +325,7 @@ impl<'a> Fixture<'a> {
         dimension("WIDTH=") >= 300 && dimension("HEIGHT=") >= 100
     }
 
+    /// Submit a real graphical client request with either server lifetime mode.
     fn open_frame(&self, nowait: bool, name: &str) -> Client {
         let mut command = self.client_command();
         command.args(["-a", "", "--create-frame"]);
@@ -316,6 +335,8 @@ impl<'a> Fixture<'a> {
         Client::spawn(command, &self.artifacts.join(format!("{name}.stderr")))
     }
 
+    /// Require agreement between Lisp visibility/font metrics and native size
+    /// before testing client lifetime or frame deletion.
     fn wait_for_gui(&mut self) {
         self.wait_for(
             "visible client GUI frame with graphical font metrics",
@@ -330,6 +351,8 @@ impl<'a> Fixture<'a> {
         );
     }
 
+    /// Delete the client frame and require native retirement, a responsive
+    /// server, and preservation of the initial frame and graphical connection.
     fn delete_gui(&mut self) {
         self.evaluate("(delete-frame neomacsclient-test-frame t)");
         self.wait_for("native client window deletion", |fixture| {
@@ -348,6 +371,8 @@ impl<'a> Fixture<'a> {
         );
     }
 
+    /// Ensure an unsupported display fails before either frame registry gains
+    /// a phantom window, including after graphical initialization.
     fn assert_invalid_display_refused(&self) {
         let before_frames = self.evaluate("(length (frame-list))");
         let before_windows = self.native_windows();
@@ -364,6 +389,8 @@ impl<'a> Fixture<'a> {
     }
 }
 
+/// Exercise both client lifetimes and repeated native close/reopen cycles on
+/// one daemon while its initial terminal frame remains usable.
 #[test]
 // Prerequisites: fresh-built editor/client, Xvfb, xauth, xdotool and Vulkan.
 fn neomacsclient_creates_gui_frames_from_a_daemon_with_display() {

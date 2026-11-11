@@ -417,6 +417,8 @@ struct GuiConnectionStartup {
     font_observer: neomacs_display_runtime::font_defaults::FontDefaultsObserver,
 }
 
+/// Prepare native hosting without creating a frame, using the backend Winit
+/// actually opened to resolve display identity, scale, and desktop fonts.
 fn prepare_gui_connection(interactivity: Interactivity) -> Result<GuiConnectionStartup, String> {
     // Wayland can consume WAYLAND_SOCKET while opening the connection.
     let resolver =
@@ -1655,6 +1657,8 @@ fn render_fullscreen_mode(fullscreen: FrameFullscreen) -> WindowFullscreenMode {
 }
 
 impl DisplayHost for PrimaryWindowDisplayHost {
+    /// Validate daemon admission against the connection owned by this host;
+    /// accepting a name never opens a second native connection.
     fn graphical_connection_identity(
         &self,
         display: Option<&str>,
@@ -1687,6 +1691,8 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         true
     }
 
+    /// Resolve graphical defaults even when a daemon's surviving selected
+    /// frame belongs to the initial terminal after the primary GUI closes.
     fn prepare_initial_gui_frame(
         &mut self,
     ) -> Result<Option<neovm_core::emacs_core::display_host::InitialGuiFrameDefaults>, String> {
@@ -3891,6 +3897,8 @@ fn load_neomacs_gui_term_layer(evaluator: &mut Context) {
     }
 }
 
+/// Run native dispatch on its owning thread, join the evaluator on shutdown,
+/// and preserve daemon re-exec semantics when Lisp requests a restart.
 fn run_gui_main_thread(
     event_loop: RenderEventLoop,
     mode: RuntimeMode,
@@ -4041,6 +4049,8 @@ fn exit_cancelled_gui_startup(status: i32) -> ! {
     std::process::exit(status)
 }
 
+/// Give the evaluator its own stack while the OS main thread hosts Winit;
+/// publish startup failure to the native owner if evaluator preparation panics.
 fn spawn_gui_evaluator_worker(
     mode: RuntimeMode,
     startup: StartupOptions,
@@ -4189,6 +4199,8 @@ fn maybe_report_jit_stats(evaluator: &Context) {
 #[cfg(not(feature = "jit"))]
 fn maybe_report_jit_stats(_evaluator: &Context) {}
 
+/// Own the Lisp context for the graphical connection's lifetime. Daemons keep
+/// their initial terminal state until a client requests a graphical frame.
 fn run_gui_evaluator_worker(
     mode: RuntimeMode,
     startup: StartupOptions,
@@ -4652,6 +4664,8 @@ fn maybe_start_diagnostics(
     }
 }
 
+/// Bootstrap the requested runtime and retain native hosting when graphical
+/// clients may need it, independently of the initial Lisp frame's frontend.
 pub fn run(mode: RuntimeMode) {
     let process_started_at = Instant::now();
     let process_args = std::env::args_os().collect::<Vec<_>>();

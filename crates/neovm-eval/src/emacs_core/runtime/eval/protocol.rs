@@ -328,7 +328,9 @@ pub trait DisplayHost {
 
     fn set_gui_resource_database(&mut self, _resources: &str) {}
 
-    /// Admit a logical connection to the graphical display hosted by this process.
+    /// Return the identity of the graphical connection hosted by this process.
+    /// `Ok(None)` means no graphical connection is hosted, so a daemon refuses
+    /// graphical frame requests. An error rejects an unsupported display name.
     /// An explicit display must name that connection; None selects the host default.
     fn graphical_connection_identity(
         &self,

@@ -254,6 +254,59 @@ fn initial_gui_default_face_starts_from_its_opened_font_before_lisp_finalization
 }
 
 #[test]
+/// A reopened GUI owns an opened default font independently of terminal faces
+/// and of the renderer's one-shot primary-window adoption.
+fn reopened_gui_default_face_starts_from_its_opened_font_after_primary_adoption() {
+    let mut eval = terminal_startup_context();
+    eval.eval_str(
+        "(setq issue688-terminal (selected-frame))
+         (internal-set-lisp-face-attribute 'default :family \"default\" issue688-terminal)
+         (internal-set-lisp-face-attribute 'default :height 1 issue688-terminal)",
+    )
+    .unwrap();
+    let host = initial_host();
+    let realized = host.realized.clone();
+    eval.set_display_host(Box::new(host));
+    eval.eval_str(
+        "(setq issue688-first (x-create-frame nil))
+         (delete-frame issue688-first t)
+         (select-frame issue688-terminal)
+         (setq issue688-reopened (x-create-frame nil))",
+    )
+    .unwrap();
+    assert_eq!(realized.borrow().len(), 2);
+    let frame_id = FrameId(
+        eval.eval_str("issue688-reopened")
+            .unwrap()
+            .as_frame_id()
+            .unwrap(),
+    );
+    let frame = eval.frame_manager().get(frame_id).unwrap();
+    assert_eq!((frame.char_width, frame.char_height), (9.0, 18.0));
+
+    // GNU initializes each new graphical frame's default face from its
+    // opened font (xfns.c:init_frame_faces, xfaces.c:realize_default_face).
+    // The retained daemon terminal's synthetic default/1 face is unrelated
+    // to the GUI font, including after the first native window was adopted.
+    let family = eval
+        .eval_str("(internal-get-lisp-face-attribute 'default :family issue688-reopened)")
+        .unwrap();
+    let height = eval
+        .eval_str("(internal-get-lisp-face-attribute 'default :height issue688-reopened)")
+        .unwrap();
+    assert_eq!(family.as_utf8_str(), Some("Initial Mono"));
+    assert_eq!(height, Value::fixnum(130));
+    assert_eq!(
+        eval.eval_str(
+            "(fontp (internal-get-lisp-face-attribute 'default :font issue688-reopened))",
+        )
+        .unwrap(),
+        Value::T,
+        "a reopened GUI default face must retain its opened font object",
+    );
+}
+
+#[test]
 fn initial_gui_font_seeding_preserves_early_init_new_frame_overrides() {
     let mut eval = terminal_startup_context();
     eval.eval_str("(internal-set-lisp-face-attribute 'default :family \"Configured Mono\" t)")

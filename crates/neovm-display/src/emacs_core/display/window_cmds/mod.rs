@@ -7610,6 +7610,14 @@ pub fn builtin_x_create_frame(
         .display_host
         .as_ref()
         .is_some_and(|host| host.opening_gui_frame_pending());
+    // Reopening a daemon GUI from its retained terminal uses native font
+    // defaults even after the one-shot primary window was adopted. Its Lisp
+    // default face needs the same font initialization as the opening frame.
+    let needs_graphical_face_defaults = opening_gui_frame
+        || eval
+            .frame_manager()
+            .selected_frame()
+            .is_some_and(|frame| frame.effective_window_system().is_none());
     let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
     let result = x_create_frame_impl(frames, buffers, display_host, args);
     eval.sync_keyboard_terminal_owner();
@@ -7617,7 +7625,7 @@ pub fn builtin_x_create_frame(
         && let Some(id) = value.as_frame_id()
     {
         let frame_id = FrameId(id);
-        if opening_gui_frame
+        if needs_graphical_face_defaults
             && eval.frame_manager().get(frame_id).is_some_and(|frame| {
                 frame.parent_frame.is_nil()
                     && frame
@@ -7674,6 +7682,9 @@ pub fn builtin_x_create_frame(
     result
 }
 
+/// Create and realize a GUI frame using its parent or native host defaults.
+/// The evaluator wrapper subsequently initializes Lisp faces and publishes
+/// the opening frame after its creation-time parameters have been installed.
 pub(crate) fn x_create_frame_impl(
     frames: &mut FrameManager,
     buffers: &mut BufferManager,

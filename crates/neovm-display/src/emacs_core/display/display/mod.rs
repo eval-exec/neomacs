@@ -5,7 +5,7 @@
 //! sensible defaults for a modern graphical display.
 
 use super::terminal::pure::{
-    builtin_terminal_live_p, is_terminal_handle, make_alist, terminal_designator_p,
+    TERMINAL_ID, builtin_terminal_live_p, is_terminal_handle, make_alist, terminal_designator_p,
     terminal_handle_id, terminal_runtime_color_cells, terminal_runtime_supports_color,
 };
 use crate::window::DisplayFrameExt;
@@ -3222,6 +3222,8 @@ pub fn builtin_x_display_set_last_user_time(
     x_optional_display_query_error_eval(eval, "x-display-set-last-user-time", query_args)
 }
 
+/// Open Lisp-visible display state only after the daemon's native host admits
+/// the requested connection and all resource arguments have been validated.
 #[doc(hidden)]
 pub fn builtin_x_open_connection(
     eval: &mut neovm_eval::emacs_core::eval::Context,
@@ -3322,14 +3324,14 @@ pub(crate) fn ensure_daemon_graphical_connection(
             signal(
                 "error",
                 vec![Value::string(
-                    "Graphical frames are not yet supported by the headless Neomacs daemon; use a TTY client",
+                    "Graphical frames require a display-connected Neomacs daemon; use a TTY client",
                 )],
             )
         })?;
     // Reopening frames must not reset a live graphical keyboard's forwarded
     // variables. The initial terminal remains selected while its daemon opens
     // the first real display connection, as it does in GNU x_term_init.
-    if super::terminal::pure::live_terminal_output_method_for_id(0)
+    if super::terminal::pure::live_terminal_output_method_for_id(TERMINAL_ID)
         != Some(super::terminal::pure::TerminalOutputMethod::WindowSystem)
     {
         eval.initialize_graphical_terminal(identity);
