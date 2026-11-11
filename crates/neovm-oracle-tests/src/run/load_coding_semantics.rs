@@ -331,3 +331,186 @@ fn oracle_empty_filename_coding_can_change_the_staged_raw_source() {
         expect,
     );
 }
+
+/// Temporary file exposure and its cleanup preserve the callback's observable
+/// modification state, including when the filename callback exits with an error.
+#[test]
+fn oracle_empty_auto_coding_staging_preserves_modified_state() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    crate::common::assert_oracle_parity_with_shared_tempdir_expect(
+        r#"(let ((file (expand-file-name "staging-modified.txt"
+                                        (getenv "NEOVM_ORACLE_TEST_TMPDIR"))))
+             (unwind-protect
+                 (progn
+                   (let ((coding-system-for-write 'no-conversion))
+                     (write-region (make-string 6000 ?x) nil file nil 'silent))
+                   (mapcar
+                    (lambda (initial)
+                      (mapcar
+                       (lambda (action)
+                         (with-temp-buffer
+                           (set-buffer-modified-p initial)
+                           (let* ((before (list (buffer-modified-tick)
+                                                (buffer-chars-modified-tick)))
+                                  seen final
+                                  (coding-system-for-read nil)
+                                  (set-auto-coding-function nil)
+                                  (file-coding-system-alist
+                                   '(("." . neovm--staging-error-coding))))
+                             (fset 'neovm--staging-error-coding
+                                   (lambda (_args)
+                                     (setq seen
+                                           (list (buffer-modified-p)
+                                                 (equal before
+                                                        (list (buffer-modified-tick)
+                                                              (buffer-chars-modified-tick)))))
+                                     (cond ((eq action 'mark) (set-buffer-modified-p t))
+                                           ((eq action 'clean) (set-buffer-modified-p nil))
+                                           ((eq action 'edit) (insert "Y"))
+                                           ((eq action 'edit-clean)
+                                            (insert "Y") (set-buffer-modified-p nil))
+                                           ((eq action 'props)
+                                            (put-text-property 1 2 'face 'bold)))
+                                     (setq final (list (buffer-modified-tick)
+                                                       (buffer-chars-modified-tick)))
+                                     (error "coding probe error")))
+                             (condition-case nil (insert-file-contents file) (error nil))
+                             (list action seen (buffer-size) (buffer-modified-p)
+                                   (equal final (list (buffer-modified-tick)
+                                                      (buffer-chars-modified-tick)))
+                                   enable-multibyte-characters))))
+                       '(none mark clean edit edit-clean props)))
+                    '(nil t)))
+               (fmakunbound 'neovm--staging-error-coding)
+               (when (file-exists-p file) (delete-file file))))"#,
+        expect_test::expect![[
+            r#""OK (((none (nil t) 0 nil t t) (mark (nil t) 0 t t t) (clean (nil t) 0 nil t t) (edit (nil t) 0 t t t) (edit-clean (nil t) 0 nil t t) (props (nil t) 0 t t t)) ((none (t t) 0 t t t) (mark (t t) 0 t t t) (clean (t t) 0 nil t t) (edit (t t) 0 t t t) (edit-clean (t t) 0 nil t t) (props (t t) 0 t t t)))""#
+        ]],
+    );
+}
+
+/// Existing markers and overlays stay put during raw exposure; the final
+/// decoded insertion then applies their ordinary insertion behavior.
+#[test]
+fn oracle_empty_auto_coding_staging_preserves_markers_and_overlays() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    crate::common::assert_oracle_parity_with_shared_tempdir_expect(
+        r#"(let ((file (expand-file-name "staging-markers.txt"
+                                        (getenv "NEOVM_ORACLE_TEST_TMPDIR"))))
+             (unwind-protect
+                 (progn
+                   (let ((coding-system-for-write 'no-conversion))
+                     (write-region (make-string 6000 ?x) nil file nil 'silent))
+                   (with-temp-buffer
+                     (let* ((after-marker (copy-marker (point-min) t))
+                            (overlay (make-overlay 1 1 nil t t))
+                            seen
+                            (coding-system-for-read nil)
+                            (set-auto-coding-function
+                             (lambda (_name _size)
+                               (setq seen (list (marker-position after-marker)
+                                                (overlay-start overlay) (overlay-end overlay)
+                                                (point) (buffer-size)))
+                               'utf-8-unix)))
+                       (insert-file-contents file)
+                       (list seen (marker-position after-marker)
+                             (overlay-start overlay) (overlay-end overlay)))))
+               (when (file-exists-p file) (delete-file file))))"#,
+        expect_test::expect![[r#""OK ((1 1 1 1 6000) 6001 6001 6001)""#]],
+    );
+}
+
+/// Raw bytes change the shared physical size, while only the destination's
+/// accessible end grows, whether that destination is the base or indirect view.
+#[test]
+fn oracle_empty_auto_coding_staging_preserves_indirect_views() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    crate::common::assert_oracle_parity_with_shared_tempdir_expect(
+        r#"(let ((file (expand-file-name "staging-indirect.txt"
+                                        (getenv "NEOVM_ORACLE_TEST_TMPDIR"))))
+             (unwind-protect
+                 (progn
+                   (let ((coding-system-for-write 'no-conversion))
+                     (write-region "ABC" nil file nil 'silent))
+                   (mapcar
+                    (lambda (use-indirect)
+                      (let* ((base (generate-new-buffer " *staging-base*"))
+                             (view (make-indirect-buffer base " *staging-view*" t))
+                             (base-marker (with-current-buffer base (copy-marker 1 t)))
+                             (view-marker (with-current-buffer view (copy-marker 1 t)))
+                             observed)
+                        (unwind-protect
+                            (with-current-buffer (if use-indirect view base)
+                              (let ((coding-system-for-read nil)
+                                    (set-auto-coding-function
+                                     (lambda (_name _size)
+                                       (setq observed
+                                             (list
+                                              (with-current-buffer base
+                                                (list (point-min) (point-max) (buffer-size)
+                                                      (point) (marker-position base-marker)))
+                                              (with-current-buffer view
+                                                (list (point-min) (point-max) (buffer-size)
+                                                      (point) (marker-position view-marker)))))
+                                       'utf-8-unix)))
+                                (let ((result (insert-file-contents file nil)))
+                                  (list use-indirect observed (cadr result)))))
+                          (set-marker base-marker nil)
+                          (set-marker view-marker nil)
+                          (when (buffer-live-p view) (kill-buffer view))
+                          (when (buffer-live-p base) (kill-buffer base)))))
+                    '(nil t)))
+               (when (file-exists-p file) (delete-file file))))"#,
+        expect_test::expect![[
+            r#""OK ((nil ((1 4 3 1 1) (1 1 3 1 1)) 3) (t ((1 1 3 1 1) (1 4 3 1 1)) 3))""#
+        ]],
+    );
+}
+
+/// Fresh and previously swapped destinations can collide with a donor's
+/// character tick; the decoder must consume the callback's resulting owner.
+#[test]
+fn oracle_empty_auto_coding_staging_honors_historical_text_swap() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    crate::common::assert_oracle_parity_with_shared_tempdir_expect(
+        r#"(let ((file (expand-file-name "staging-swap.txt"
+                                        (getenv "NEOVM_ORACLE_TEST_TMPDIR"))))
+             (unwind-protect
+                 (progn
+                   (let ((coding-system-for-write 'no-conversion))
+                     (write-region "A" nil file nil 'silent))
+                   (mapcar
+                    (lambda (history)
+                      (let ((donor (generate-new-buffer " *staging-swap-donor*"))
+                            observed)
+                        (unwind-protect
+                            (progn
+                              (with-current-buffer donor (set-buffer-multibyte nil))
+                              (with-temp-buffer
+                                (when history
+                                  (let ((empty (generate-new-buffer " *staging-swap-history*")))
+                                    (unwind-protect (buffer-swap-text empty)
+                                      (kill-buffer empty))))
+                                (set-buffer-modified-p nil)
+                                (let ((coding-system-for-read nil)
+                                      (set-auto-coding-function
+                                       (lambda (_name _size)
+                                         (setq observed
+                                               (list (buffer-chars-modified-tick)
+                                                     (with-current-buffer donor
+                                                       (buffer-chars-modified-tick))))
+                                         (buffer-swap-text donor)
+                                         (setq observed
+                                               (append observed
+                                                       (list (buffer-chars-modified-tick)
+                                                             (buffer-size))))
+                                         'utf-8-unix)))
+                                  (let ((result (insert-file-contents file)))
+                                    (list history observed (cadr result) (buffer-string)
+                                          (with-current-buffer donor (buffer-string)))))))
+                          (when (buffer-live-p donor) (kill-buffer donor)))))
+                    '(nil t)))
+               (when (file-exists-p file) (delete-file file))))"#,
+        expect_test::expect![[r#""OK ((nil (1 1 2 0) 0 \"\" \"A\") (t (2 1 2 0) 0 \"\" \"A\"))""#]],
+    );
+}

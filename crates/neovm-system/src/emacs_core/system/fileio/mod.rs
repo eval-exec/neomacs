@@ -6167,10 +6167,15 @@ fn restore_empty_buffer_after_auto_coding_probe(
         .map(|buf| buf.full_emacs_byte_range())
         .unwrap_or(EmacsByteRange::EMPTY);
     if !delete_range.is_empty() {
+        // GNU moves the bytes into the gap without recording a new change.
+        // Preserve the callback's state, including explicit mark/clean calls,
+        // while deletion still collapses callback-created markers/overlays.
         let _ = eval
             .edit
             .buffers
-            .delete_buffer_emacs_byte_range(buffer_id, delete_range);
+            .with_preserved_modification_state(buffer_id, |buffers| {
+                buffers.delete_buffer_emacs_byte_range(buffer_id, delete_range)
+            });
     }
     let _ = eval
         .edit
@@ -6259,19 +6264,19 @@ fn decide_auto_coding_for_empty_insert_file_contents<'a>(
         // omit a coding footer in a file just over 4 KiB and changes callback SIZE.
         eval.edit
             .buffers
-            .insert_unibyte_bytes_into_buffer(current_id, bytes)
+            .expose_empty_unibyte_buffer_bytes(current_id, bytes)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
         let _ = eval
             .edit
             .buffers
             .goto_buffer_emacs_byte_pos(current_id, EmacsBytePos::new(0));
 
-        let staged_tick = eval
+        let staged_revision = eval
             .edit
             .buffers
             .get(current_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
-            .chars_modified_tick();
+            .capture_content_revision();
         let auto = if !function.is_nil() && !bytes.is_empty() {
             let value = eval.apply(
                 function,
@@ -6309,7 +6314,9 @@ fn decide_auto_coding_for_empty_insert_file_contents<'a>(
         // decide_coding_unwind moves the callback's resulting bytes back to the
         // gap and reports their new length. Borrow the original when text did
         // not change; property-only fontification must not force a full copy.
-        let bytes = if buffer.chars_modified_tick() == staged_tick && !buffer.get_multibyte() {
+        // Lisp modification ticks can collide after buffer-swap-text, so only
+        // the actual text owner and byte-content epoch can prove this reuse.
+        let bytes = if staged_revision.matches_buffer(buffer) && !buffer.get_multibyte() {
             std::borrow::Cow::Borrowed(bytes)
         } else {
             std::borrow::Cow::Owned(buffer.dump_text_bytes())

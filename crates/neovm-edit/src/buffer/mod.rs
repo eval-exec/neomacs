@@ -48,7 +48,7 @@ pub use buffer::{
 pub(crate) use buffer_text::BufferText;
 #[cfg(any(test, feature = "test-support"))]
 pub use buffer_text::BufferText;
-pub use buffer_text::{BufferSourceAuthority, BufferSourceReadLease};
+pub use buffer_text::{BufferContentRevision, BufferSourceAuthority, BufferSourceReadLease};
 pub use edit_runtime::EditRuntime;
 pub use edit_transaction::TranspositionAnchorPolicy;
 #[doc(hidden)]

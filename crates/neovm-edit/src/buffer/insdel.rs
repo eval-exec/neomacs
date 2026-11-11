@@ -4,7 +4,7 @@
 //! `insdel.c`-style boundary. It rehomes the existing `Buffer` edit core
 //! without changing behavior.
 
-use super::{Buffer, BufferId, BufferManager};
+use super::{Buffer, BufferId, BufferManager, BufferText};
 use crate::buffer::edit_transaction::{
     DeletionString, InsertMarkerAdjustment, InsertMarkerPlacement, InsertTextPlan,
     MeasuredDeleteEdit, MeasuredInsertEdit, MeasuredReplaceEdit, MeasuredSameLenEdit,
@@ -19,6 +19,23 @@ use crate::buffer::{
     TextReplacement, TextTransposition,
 };
 use neovm_value::heap_types::LispString;
+
+/// Preserve only GNU's MODIFF, CHARS_MODIFF and SAVE_MODIFF. Actual content,
+/// property and cache revisions continue to advance during physical edits.
+struct PreservedModificationState<'a> {
+    buffers: &'a mut BufferManager,
+    text: BufferText,
+    modified: i64,
+    chars_modified: i64,
+    saved: i64,
+}
+
+impl Drop for PreservedModificationState<'_> {
+    fn drop(&mut self) {
+        self.text
+            .set_modification_state(self.modified, self.chars_modified, self.saved);
+    }
+}
 
 impl Buffer {
     fn edit_range_at_emacs_byte_pos(&self, byte_pos: EmacsBytePos) -> TextEditRange {
@@ -82,29 +99,6 @@ impl Buffer {
 
     pub fn insert_before_markers(&mut self, text: &str) -> TextInsertion {
         self.insert_internal(text, InsertMarkerPlacement::BeforeMarkers)
-    }
-
-    /// Insert unibyte text without constructing an intermediate Lisp string.
-    /// An unibyte destination borrows the bytes directly; a multibyte
-    /// destination promotes high bytes to Emacs raw-byte characters.
-    pub fn insert_unibyte_bytes(&mut self, bytes: &[u8]) -> TextInsertion {
-        if bytes.is_empty() {
-            return TextInsertion::at_anchor(self.point_anchor(), TextExtent::ZERO);
-        }
-        let multibyte = self.get_multibyte();
-        let payload = if multibyte {
-            std::borrow::Cow::Owned(neovm_value::emacs_char::str_to_multibyte(bytes))
-        } else {
-            std::borrow::Cow::Borrowed(bytes)
-        };
-        let plan = InsertTextPlan::for_bytes(
-            &payload,
-            multibyte,
-            self.point_anchor(),
-            InsertMarkerPlacement::AfterMarkers,
-            InsertMarkerAdjustment::ByInsertionType,
-        );
-        self.execute_insert_text_plan(&payload, plan)
     }
 
     pub fn insert_lisp_string(&mut self, text: &LispString) -> TextInsertion {
@@ -321,6 +315,47 @@ impl Buffer {
 /// Structural text mutation entry points for buffers and indirect-buffer
 /// siblings. This is the closest Rust ownership boundary to GNU `insdel.c`.
 impl BufferManager {
+    /// GNU `insert_from_gap_1`: temporarily expose raw bytes in an empty,
+    /// unibyte buffer without recording an edit or moving markers/overlays.
+    /// Only this view's accessible end grows; the physical text and its cache
+    /// revisions are shared, while sibling views retain their restrictions.
+    pub fn expose_empty_unibyte_buffer_bytes(&mut self, id: BufferId, bytes: &[u8]) -> Option<()> {
+        let buffer = self.get_mut(id)?;
+        if buffer.get_multibyte() || !buffer.is_text_empty() {
+            return None;
+        }
+        let extent = TextExtent::from_emacs_bytes(bytes, false);
+        buffer
+            .text
+            .insert_measured_emacs_bytes(EmacsBytePos::ZERO, bytes, extent);
+        buffer.widen();
+        Some(())
+    }
+
+    /// Perform native bookkeeping without changing GNU's MODIFF, CHARS_MODIFF
+    /// or SAVE_MODIFF. The mutable manager borrow keeps evaluator callbacks outside
+    /// this scope. A private guard restores the same text owner even on panic;
+    /// this never rewinds the independent content/property cache revisions.
+    pub fn with_preserved_modification_state<R>(
+        &mut self,
+        id: BufferId,
+        operation: impl FnOnce(&mut Self) -> R,
+    ) -> Option<R> {
+        let buffer = self.get(id)?;
+        let text = buffer.text.shared_clone();
+        let modified = buffer.modified_tick();
+        let chars_modified = buffer.chars_modified_tick();
+        let saved = buffer.save_modified_tick();
+        let guard = PreservedModificationState {
+            buffers: self,
+            text,
+            modified,
+            chars_modified,
+            saved,
+        };
+        Some(operation(&mut *guard.buffers))
+    }
+
     /// Acquire an exclusive live physical edit lease. Numeric character
     /// bounds may lie outside narrowing, but must fit the actual text.
     /// Returns None for a missing buffer, inverted range, or end beyond text.
@@ -395,25 +430,6 @@ impl BufferManager {
         text: &LispString,
     ) -> Option<()> {
         self.insert_lisp_string_into_buffer_full(id, text, InsertMarkerAdjustment::ByInsertionType)
-    }
-
-    /// Insert borrowed unibyte text through the normal shared-buffer edit
-    /// transaction, preserving point, markers, undo and indirect-buffer state.
-    pub fn insert_unibyte_bytes_into_buffer(&mut self, id: BufferId, bytes: &[u8]) -> Option<()> {
-        if bytes.is_empty() {
-            return Some(());
-        }
-        self.execute_shared_text_edit(id, |buffer| {
-            let insertion = buffer.insert_unibyte_bytes(bytes);
-            let edit = MeasuredInsertEdit::by_insertion_type(
-                insertion,
-                InsertMarkerPlacement::AfterMarkers,
-            );
-            Some(SharedTextEditOutcome::edited(
-                (),
-                SharedTextEditMetadata::Insert(edit),
-            ))
-        })
     }
 
     /// GNU-equivalent replace path: like `insert_lisp_string_into_buffer`
