@@ -20,7 +20,8 @@ pub fn is_runtime_root(path: &Path) -> bool {
     path.join("lisp").is_dir() && path.join("etc").is_dir()
 }
 
-/// Runtime-root candidates for a running executable, nearest first.
+/// Runtime-root candidates for a running executable, package data before the
+/// legacy parent-directory fallback.
 ///
 /// Ports GNU's dual layout support:
 ///
@@ -45,33 +46,38 @@ pub fn is_runtime_root(path: &Path) -> bool {
 ///   `<prefix>/bin/neomacs` + `<prefix>/share/neomacs`) and
 ///   `<grandparent>/Resources/neomacs` (macOS app bundle:
 ///   `Contents/MacOS/neomacs` + `Contents/Resources/neomacs`).
+///   These package-specific directories precede the generic parent: extracting
+///   a current package over a legacy flat tree must use the new runtime data.
 pub fn runtime_root_candidates(exe: &Path) -> Vec<PathBuf> {
     let mut candidates = Vec::with_capacity(4);
     if let Some(dir) = exe.parent() {
         candidates.push(dir.to_path_buf());
         if let Some(parent) = dir.parent() {
-            candidates.push(parent.to_path_buf());
             candidates.push(parent.join("share/neomacs"));
             candidates.push(parent.join("Resources/neomacs"));
+            candidates.push(parent.to_path_buf());
         }
     }
     candidates
 }
 
+/// Probe the executable's layouts before source and remapped test fallbacks.
 pub fn runtime_project_root_from_paths(
     compile_root: &Path,
     exe: Option<&Path>,
     nextest_root: Option<&Path>,
 ) -> Option<PathBuf> {
-    if is_runtime_root(compile_root) {
-        return Some(compile_root.to_path_buf());
-    }
     if let Some(exe) = exe {
         for candidate in runtime_root_candidates(exe) {
             if is_runtime_root(&candidate) {
                 return Some(candidate);
             }
         }
+    }
+    // A surviving build checkout must not shadow an installed executable's
+    // own data. Development binaries still fall back to their source tree.
+    if is_runtime_root(compile_root) {
+        return Some(compile_root.to_path_buf());
     }
     // nextest archives retain the producer's compile-time workspace path,
     // but run under target/debug/deps in the consumer's remapped checkout.
@@ -81,6 +87,9 @@ pub fn runtime_project_root_from_paths(
         .map(Path::to_path_buf)
 }
 
+/// Locate runtime data, preferring a valid environment override and then the
+/// running executable's installation over a surviving build checkout.
+/// Panics when no candidate contains the required Lisp and data directories.
 pub fn runtime_project_root() -> PathBuf {
     if let Ok(root) = std::env::var(RUNTIME_ROOT_ENV) {
         let path = PathBuf::from(root);
@@ -94,9 +103,6 @@ pub fn runtime_project_root() -> PathBuf {
     }
 
     let compile_root = compile_time_project_root();
-    if is_runtime_root(&compile_root) {
-        return compile_root;
-    }
     let exe = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.canonicalize().ok());

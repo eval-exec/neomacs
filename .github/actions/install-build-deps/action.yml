@@ -1,8 +1,8 @@
 name: 'Install build dependencies'
 description: >-
   Install the system build dependencies for the runner's OS: the apt `build`
-  profile on Linux, the single Homebrew package on macOS. That is all a job
-  that only compiles or runs Rust tests needs.
+  profile on Linux, Homebrew tooling on macOS, and native Windows Texinfo
+  host tools. Texinfo supplies makeinfo and install-info for fresh-build.
 
   Jobs that spawn the GNU oracle need more, and get it from elsewhere:
   scripts/ci/setup-linux.sh oracle plus the setup-gnu-emacs action, which
@@ -31,4 +31,36 @@ runs:
     - name: Install macOS system dependencies
       if: runner.os == 'macOS'
       shell: bash
-      run: brew install pkg-config
+      run: |
+        brew install pkg-config texinfo
+        # Texinfo is keg-only; prefer its tools over Apple's older makeinfo.
+        echo "$(brew --prefix texinfo)/bin" >> "$GITHUB_PATH"
+
+    - name: Install native Windows Texinfo host tools
+      if: runner.os == 'Windows'
+      id: texinfo
+      uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+      with:
+        msystem: MINGW64
+        install: mingw-w64-x86_64-texinfo
+
+    - name: Expose native Windows Texinfo to Rust commands
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        TEXINFO_ROOT: ${{ steps.texinfo.outputs.msys2-location }}
+      run: |
+        $tools = Join-Path $env:TEXINFO_ROOT 'mingw64/bin'
+        $env:PATH = "$tools;$env:PATH"
+        # These are host tools, including on ARM64 runners with x64 emulation.
+        # The .bat suffix is explicit so Rust Command can invoke makeinfo.
+        $makeinfo = Join-Path $tools 'makeinfo.bat'
+        $installInfo = Join-Path $tools 'install-info.exe'
+        & $makeinfo --version
+        if ($LASTEXITCODE -ne 0) { throw 'makeinfo failed' }
+        & $installInfo --version
+        if ($LASTEXITCODE -ne 0) { throw 'install-info failed' }
+        # Keep MinGW tools out of later MSVC build steps. xtask supplies their
+        # directory on PATH only while running the Texinfo child processes.
+        "MAKEINFO=$makeinfo" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        "INSTALL_INFO=$installInfo" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8

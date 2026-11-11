@@ -77,6 +77,7 @@ jobs:
             scripts/test-dispatch-release-event.sh \
             scripts/test-docker-runtime-context.sh \
             scripts/test-generate-release-notes.sh \
+            scripts/test-info-manuals.sh \
             scripts/check-native-font-boundaries.sh \
             scripts/lib/macos-macho.sh \
             scripts/vendor-macos-runtime.sh \
@@ -95,6 +96,7 @@ jobs:
             scripts/test-dispatch-release-event.sh \
             scripts/test-docker-runtime-context.sh \
             scripts/test-generate-release-notes.sh \
+            scripts/test-info-manuals.sh \
             scripts/check-native-font-boundaries.sh \
             scripts/lib/macos-macho.sh \
             scripts/vendor-macos-runtime.sh \
@@ -108,6 +110,9 @@ jobs:
 
       - name: Test release-note generation contract
         run: ./scripts/test-generate-release-notes.sh
+
+      - name: Test Info manual packaging contracts
+        run: ./scripts/test-info-manuals.sh
 
       - name: Check native font dependency boundaries
         run: ./scripts/check-native-font-boundaries.sh

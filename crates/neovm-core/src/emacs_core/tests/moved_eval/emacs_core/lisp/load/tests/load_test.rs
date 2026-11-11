@@ -16175,8 +16175,8 @@ fn runtime_loader_state_reset_matches_gnu_init_lread() {
 }
 
 /// Each shipped layout must resolve to its own tree through
-/// `runtime_root_candidates` + `is_runtime_root`, nearest-first, mirroring
-/// GNU `init_cmdargs`' walk-up from the (symlink-resolved) executable.
+/// `runtime_root_candidates` + `is_runtime_root`, discovering data relative to
+/// the (symlink-resolved) executable as GNU `init_cmdargs` does.
 #[test]
 fn runtime_root_candidates_cover_every_shipped_layout() {
     let make_tree = |root: &std::path::Path| {
@@ -16241,6 +16241,28 @@ fn runtime_root_candidates_cover_every_shipped_layout() {
 }
 
 #[test]
+fn packaged_runtime_roots_override_legacy_prefix_data() {
+    let dir = tempdir().unwrap();
+    for (layout, executable, runtime) in [
+        ("prefix", "bin/neomacs", "share/neomacs"),
+        ("bundle", "MacOS/neomacs", "Resources/neomacs"),
+    ] {
+        let prefix = dir.path().join(layout);
+        let packaged = prefix.join(runtime);
+        for root in [&prefix, &packaged] {
+            fs::create_dir_all(root.join("lisp")).unwrap();
+            fs::create_dir_all(root.join("etc")).unwrap();
+        }
+        let exe = prefix.join(executable);
+        assert_eq!(
+            runtime_project_root_from_paths(&dir.path().join("missing-checkout"), Some(&exe), None),
+            Some(packaged),
+            "{layout}: legacy prefix data must not shadow the packaged runtime"
+        );
+    }
+}
+
+#[test]
 fn archived_tests_resolve_the_remapped_runtime_tree() {
     let dir = tempdir().unwrap();
     let missing_producer = dir.path().join("producer/workspace");
@@ -16262,6 +16284,45 @@ fn archived_tests_resolve_the_remapped_runtime_tree() {
         runtime_project_root_from_paths(&missing_producer, Some(&installed_exe), Some(&consumer)),
         Some(installed),
         "the test runner's workspace must not override a packaged runtime tree"
+    );
+}
+
+/// A packaged editor must use its own data even on a machine that still has
+/// the checkout from which it was built (GNU init_cmdargs/load_path_default).
+#[test]
+fn installed_runtime_roots_override_existing_build_checkout() {
+    let dir = tempdir().unwrap();
+    let compile_root = dir.path().join("build-checkout");
+    let remapped = dir.path().join("nextest-checkout");
+    for root in [&compile_root, &remapped] {
+        fs::create_dir_all(root.join("lisp")).unwrap();
+        fs::create_dir_all(root.join("etc")).unwrap();
+    }
+    for (name, executable, runtime) in [
+        ("flat", "neomacs", "."),
+        ("versioned", "bin/neomacs", "."),
+        ("prefix", "bin/neomacs", "share/neomacs"),
+        (
+            "bundle",
+            "Contents/MacOS/neomacs",
+            "Contents/Resources/neomacs",
+        ),
+    ] {
+        let prefix = dir.path().join(name);
+        let runtime = prefix.join(runtime);
+        fs::create_dir_all(runtime.join("lisp")).unwrap();
+        fs::create_dir_all(runtime.join("etc")).unwrap();
+        let exe = prefix.join(executable);
+        assert_eq!(
+            runtime_project_root_from_paths(&compile_root, Some(&exe), Some(&remapped)),
+            Some(runtime),
+            "{name}: a surviving source checkout must not shadow the package"
+        );
+    }
+    assert_eq!(
+        runtime_project_root_from_paths(&compile_root, None, Some(&remapped)),
+        Some(compile_root),
+        "uninstalled development binaries keep the checkout fallback"
     );
 }
 

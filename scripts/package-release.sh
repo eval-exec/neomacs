@@ -99,6 +99,8 @@ cd "$repo_root"
 
 # shellcheck source=./scripts/lib/archlib.sh
 source "$repo_root/scripts/lib/archlib.sh"
+# shellcheck source=./scripts/lib/info-manuals.sh
+source "$repo_root/scripts/lib/info-manuals.sh"
 
 if ((skip_build == 0)); then
   cargo xtask fresh-build --release
@@ -130,6 +132,8 @@ for required in "${required_artifacts[@]}"; do
     exit 1
   fi
 done
+
+neomacs_validate_info_manuals "$repo_root/info" "$release_dir/neomacs$binary_ext"
 
 # A skipped build is safe only when the artifact itself proves the product
 # boundary. Direct linkage makes this an authoritative ELF property: the Linux
@@ -174,7 +178,7 @@ install -m 0644 "$release_dir/neomacs.pdump" "$archlib_dir/neomacs.pdump"
 cp -a lisp "$package_dir/share/neomacs/"
 cp -a etc "$package_dir/share/neomacs/"
 cp -a leim "$package_dir/share/neomacs/"
-cp -a info "$package_dir/share/neomacs/" 2>/dev/null || true
+cp -a info "$package_dir/share/neomacs/"
 
 if [[ "$target_triple" == *-linux-* ]]; then
   scripts/install-linux-desktop-assets.sh "$package_dir"

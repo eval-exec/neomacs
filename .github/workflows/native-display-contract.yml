@@ -66,9 +66,9 @@ jobs:
       - name: Install Linux build and headless display dependencies
         if: runner.os == 'Linux'
         run: scripts/ci/setup-linux.sh ecosystem
-      - name: Install macOS build dependency
-        if: runner.os == 'macOS'
-        run: brew install pkg-config
+      - name: Install macOS or Windows build dependencies
+        if: runner.os != 'Linux'
+        uses: ./.github/actions/install-build-deps
       - uses: ./.github/actions/setup-rust
         with:
           cache-key: native-display-${{ matrix.target }}

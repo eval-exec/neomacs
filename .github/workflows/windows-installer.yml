@@ -4,6 +4,8 @@ on:
   push:
     paths:
       - .github/workflows/windows-installer.yml
+      - .github/actions/install-build-deps/**
+      - docs/**
       - assets/windows-installer.nsi
       - scripts/generate-nsis-uninstall-include.sh
       - scripts/compile-windows-installer.sh
@@ -22,6 +24,8 @@ on:
   pull_request:
     paths:
       - .github/workflows/windows-installer.yml
+      - .github/actions/install-build-deps/**
+      - docs/**
       - assets/windows-installer.nsi
       - scripts/generate-nsis-uninstall-include.sh
       - scripts/compile-windows-installer.sh
@@ -70,6 +74,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+
+      - name: Install build dependencies
+        uses: ./.github/actions/install-build-deps
 
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust

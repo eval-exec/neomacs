@@ -228,7 +228,7 @@ git clone https://github.com/eval-exec/neomacs && cd neomacs
 # Optional (recommended): repo dev shell with all dependencies
 nix develop --accept-flake-config
 
-# Compiles Rust, bootstraps Elisp, generates the portable dump
+# Compiles Rust, bootstraps Elisp, generates the portable dump and Info manuals
 cargo xtask fresh-build --release
 
 ./target/release/neomacs

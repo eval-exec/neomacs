@@ -2,6 +2,7 @@ mod canonical_subr_plan_command;
 mod compile_wave;
 mod dependency_coherence;
 mod gc_stress;
+mod info_manuals;
 mod oracle_preflight_command;
 mod pentry_inventory_command;
 mod pgo;
@@ -443,6 +444,10 @@ fn try_main() -> Result<()> {
 
 fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Result<()> {
     let mut args = args.into_iter().peekable();
+    if matches!(args.peek().and_then(|arg| arg.to_str()), Some("build-info")) {
+        args.next();
+        return info_manuals::run(&repo_root, args);
+    }
     if matches!(
         args.peek().and_then(|arg| arg.to_str()),
         Some("pentry-inventory")
@@ -1258,6 +1263,13 @@ fn run_fresh_build_pipeline(
     if !options.no_byte_compile {
         run_compile_main(options, &paths, &envs)?;
     }
+
+    info_manuals::build(
+        &options.repo_root,
+        &options.runtime_root,
+        &paths.final_bin,
+        options.dry_run,
+    )?;
 
     // Put the tracked bootstrap autoloads back BEFORE the stamp hashes the
     // tree.  The final dump above ran loadup with loaddefs.el present, so it
@@ -4648,6 +4660,7 @@ fn print_usage() {
 fn usage_text() -> &'static str {
     "\
 Usage: cargo xtask [fresh-build] (--release | --profile NAME) [--bin-dir DIR] [--runtime-root DIR] [--dry-run] [--low-memory|--jobs N] [--native-comp|--no-native-comp] [--skip-build] [--no-byte-compile] [--aot-preload|--no-aot-preload]
+       cargo xtask build-info --binary PATH [--runtime-root DIR] [--dry-run]
        cargo xtask check-dependency-coherence
        cargo xtask render-window-icon --out-dir DIR [--source PATH]
        cargo xtask perf list

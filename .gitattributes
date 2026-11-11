@@ -31,6 +31,9 @@ test/manual/etags/html-src/algrthms.html whitespace=cr-at-eol
 # utf-8-unix are malformed if their source bytes contain CRLF line endings.
 *.el text eol=lf
 
+# Shared Info inventory is consumed as LF-delimited artifact names by packagers.
+docs/info-manuals.list text eol=lf
+
 # The todo-mode file format includes trailing whitespace.
 *.tod[aorty] -whitespace=blank-at-eol
 
