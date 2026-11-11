@@ -65,6 +65,8 @@ jobs:
           command -v taskset
           command -v weston
           command -v Xwayland
+          command -v makeinfo
+          command -v install-info
 
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust

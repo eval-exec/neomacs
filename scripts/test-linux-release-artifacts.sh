@@ -23,6 +23,8 @@ USAGE
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=./scripts/lib/archlib.sh
 source "$repo_root/scripts/lib/archlib.sh"
+# shellcheck source=./scripts/lib/info-manuals.sh
+source "$repo_root/scripts/lib/info-manuals.sh"
 dist_dir="$repo_root/dist"
 target_triple="x86_64-unknown-linux-gnu"
 tar_version="*"
@@ -153,6 +155,8 @@ smoke_binary() {
   echo "smoke-testing $binary"
   NEOMACS_RUNTIME_ROOT="$runtime_root" \
     timeout 30s "$binary" --batch --eval "(kill-emacs 0)"
+  neomacs_validate_info_manuals "$runtime_root/info" "$binary"
+  "$repo_root/scripts/verify-info-manuals.sh" "$binary" "$runtime_root"
 }
 
 audit_linked_video_backend() {
@@ -260,6 +264,10 @@ test_appimage() {
   test -x "$extracted/AppRun"
   audit_archlib "$extracted/usr" "$extracted/usr/bin/neomacs" \
     "$extracted/usr/share/neomacs"
+  neomacs_validate_info_manuals \
+    "$extracted/usr/share/neomacs/info" "$extracted/usr/bin/neomacs"
+  "$repo_root/scripts/verify-info-manuals.sh" \
+    "$extracted/usr/bin/neomacs" "$extracted/usr/share/neomacs"
   audit_desktop_identity "$extracted/usr"
   audit_tree "$extracted"
   echo "smoke-testing $artifact"

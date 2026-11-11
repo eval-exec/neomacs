@@ -16265,6 +16265,45 @@ fn archived_tests_resolve_the_remapped_runtime_tree() {
     );
 }
 
+/// A packaged editor must use its own data even on a machine that still has
+/// the checkout from which it was built (GNU init_cmdargs/load_path_default).
+#[test]
+fn installed_runtime_roots_override_existing_build_checkout() {
+    let dir = tempdir().unwrap();
+    let compile_root = dir.path().join("build-checkout");
+    let remapped = dir.path().join("nextest-checkout");
+    for root in [&compile_root, &remapped] {
+        fs::create_dir_all(root.join("lisp")).unwrap();
+        fs::create_dir_all(root.join("etc")).unwrap();
+    }
+    for (name, executable, runtime) in [
+        ("flat", "neomacs", "."),
+        ("versioned", "bin/neomacs", "."),
+        ("prefix", "bin/neomacs", "share/neomacs"),
+        (
+            "bundle",
+            "Contents/MacOS/neomacs",
+            "Contents/Resources/neomacs",
+        ),
+    ] {
+        let prefix = dir.path().join(name);
+        let runtime = prefix.join(runtime);
+        fs::create_dir_all(runtime.join("lisp")).unwrap();
+        fs::create_dir_all(runtime.join("etc")).unwrap();
+        let exe = prefix.join(executable);
+        assert_eq!(
+            runtime_project_root_from_paths(&compile_root, Some(&exe), Some(&remapped)),
+            Some(runtime),
+            "{name}: a surviving source checkout must not shadow the package"
+        );
+    }
+    assert_eq!(
+        runtime_project_root_from_paths(&compile_root, None, Some(&remapped)),
+        Some(compile_root),
+        "uninstalled development binaries keep the checkout fallback"
+    );
+}
+
 /// GNU `load_pdump` (src/emacs.c:935-1120) searches four places in a fixed
 /// order.  Pin that order: the two beside-the-executable rungs first (GNU's
 /// rungs 2 and 3-in-the-uninstalled-case), then the two PATH_EXEC rungs.

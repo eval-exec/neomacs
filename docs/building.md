@@ -7,6 +7,7 @@ is only needed for development or unsupported platforms.
 ## Prerequisites
 
 - **Rust** (stable, pinned via `rust-toolchain.toml` — rustup installs it automatically)
+- **Texinfo** (`makeinfo` and `install-info`, needed to build the shipped manuals)
 - **GStreamer** (optional, for video playback)
 - **WPE WebKit** (optional, for the inline browser on Linux)
 - **WebKit.framework** (macOS: the inline browser uses the system
@@ -34,6 +35,18 @@ cargo xtask fresh-build --release --low-memory
 # Run
 ./target/release/neomacs
 ```
+
+The fresh build also generates all 66 Info manuals and their directory index
+under `info/`, using the built Neomacs to export the Org manuals. To regenerate
+just the manuals with an existing binary, run:
+
+```bash
+cargo xtask build-info --binary target/release/neomacs
+```
+
+Release packaging requires the complete generated manual set, including when
+using `--skip-build`. `MAKEINFO` and `INSTALL_INFO` can select alternate host
+tool paths.
 
 ## Testing
 
@@ -128,7 +141,7 @@ package manager.
 ```bash
 # Install dependencies
 sudo dnf install -y \
-  gcc gcc-c++ make binutils pkgconf-pkg-config gawk \
+  gcc gcc-c++ make binutils pkgconf-pkg-config gawk texinfo info \
   ncurses-devel fontconfig-devel freetype-devel glib2-devel \
   gstreamer1-devel gstreamer1-plugins-base-devel libdrm-devel \
   zlib-devel lcms2-devel
@@ -229,11 +242,14 @@ uploading a locally assembled app bundle.
 
 ```bash
 # Install dependencies (Homebrew)
-brew install pkgconf \
+brew install pkgconf texinfo \
   glib cairo \
   gstreamer gst-plugins-base gst-plugins-good \
   jpeg-turbo libtiff giflib libpng librsvg webp \
   gnutls libxml2 jansson tree-sitter gmp
+
+# Texinfo is keg-only; use its makeinfo and install-info.
+export PATH="$(brew --prefix texinfo)/bin:$PATH"
 
 # gmp-mpfr-sys is built with system GMP support. Its build script probes
 # GMP with the C compiler directly, so Homebrew's keg must be visible to

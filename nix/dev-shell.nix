@@ -26,6 +26,8 @@ pkgs.mkShell {
   nativeBuildInputs = [
     rustToolchain
     pkgs.pkg-config
+    # fresh-build generates the shipped Info manuals and their directory.
+    pkgs.texinfo
     pkgs.llvmPackages.clang
     # Frozen wall clock for date/time-sensitive oracle tests.
     pkgs.libfaketime

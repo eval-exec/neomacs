@@ -42,6 +42,7 @@ let
       rustToolchain
       pkgs.binutils
       pkgs.pkg-config
+      pkgs.texinfo
       pkgs.llvmPackages.clang
       pkgs.makeWrapper
     ]
@@ -120,6 +121,7 @@ craneLib.buildPackage (
       pkgs.llvmPackages.clang
       pkgs.pkg-config
       pkgs.binutils
+      pkgs.texinfo
     ];
 
     postBuild = ''
@@ -130,7 +132,11 @@ craneLib.buildPackage (
       mkdir -p "$out/share/neomacs"
       cp -r lisp "$out/share/neomacs/"
       cp -r etc "$out/share/neomacs/"
+      cp -r info "$out/share/neomacs/"
       chmod -R u+w "$out/share/neomacs"
+      # Standard Info readers discover the same package-owned manuals that
+      # Neomacs loads through NEOMACS_RUNTIME_ROOT.
+      ln -s neomacs/info "$out/share/info"
 
       # GNU Emacs installs this version-independent site-lisp root.
       # Nixpkgs' emacsPackagesFor wrapper composes its generated site-start
@@ -150,7 +156,6 @@ craneLib.buildPackage (
       mkdir -p \
         "$out/share/applications" \
         "$out/share/icons" \
-        "$out/share/info" \
         "$out/share/man"
       ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
         bash scripts/install-linux-desktop-assets.sh "$out"

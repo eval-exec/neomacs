@@ -71,6 +71,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install build dependencies
+        uses: ./.github/actions/install-build-deps
+
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:

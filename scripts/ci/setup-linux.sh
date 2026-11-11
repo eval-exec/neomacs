@@ -21,6 +21,9 @@ readonly -a build_packages=(
     pkg-config
     cmake
     m4
+    # makeinfo builds the shipped manuals; install-info generates info/dir.
+    texinfo
+    install-info
     libssl-dev
     fontconfig
     libfontconfig1-dev
@@ -184,6 +187,8 @@ sudo apt-get install -y --no-install-recommends "${packages[@]}"
 # primitives and discovering the mismatch much later in an oracle test.
 pkg-config --modversion lcms2
 pkg-config --modversion gstreamer-1.0
+makeinfo --version >/dev/null
+install-info --version >/dev/null
 
 if $requires_libfaketime; then
     dpkg -L libfaketime | grep -q '/libfaketime\.so\.1$'

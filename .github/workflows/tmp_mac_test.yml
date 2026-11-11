@@ -22,7 +22,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install system dependencies (brew)
-        run: brew install pkg-config
+        uses: ./.github/actions/install-build-deps
 
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust

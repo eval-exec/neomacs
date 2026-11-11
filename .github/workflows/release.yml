@@ -281,7 +281,7 @@ jobs:
           dnf install -y dnf-plugins-core
           dnf config-manager --set-enabled crb || echo "crb: not enabled (not needed for this list)"
           dnf install -y \
-            make binutils cpio diffutils file gcc gcc-c++ pkgconf-pkg-config \
+            make binutils cpio diffutils file gcc gcc-c++ pkgconf-pkg-config texinfo info \
             gawk ncurses-devel fontconfig-devel freetype-devel glib2-devel \
             gstreamer1-devel gstreamer1-plugins-base-devel libdrm-devel \
             dbus-devel \
@@ -434,6 +434,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install build dependencies
+        uses: ./.github/actions/install-build-deps
+
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
@@ -523,6 +526,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install build dependencies
+        uses: ./.github/actions/install-build-deps
+
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
@@ -608,6 +614,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install build dependencies
+        uses: ./.github/actions/install-build-deps
+
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
@@ -655,6 +664,8 @@ jobs:
       - name: Package zip
         shell: bash
         run: |
+          source scripts/lib/info-manuals.sh
+          neomacs_validate_info_manuals info target/release/neomacs.exe
           TARGET="$NEOMACS_RELEASE_TARGET"
           STAGING="neomacs-${VERSION}-${TARGET}"
           mkdir -p "$STAGING"
@@ -665,6 +676,8 @@ jobs:
           cp target/release/neomacs.pdump "$STAGING/"
           cp -r lisp "$STAGING/"
           cp -r etc "$STAGING/"
+          cp -r info "$STAGING/"
+          neomacs_validate_info_manuals "$STAGING/info" "$STAGING/neomacs.exe"
           cp COPYING "$STAGING/"
           mkdir -p dist
           7z a -tzip "dist/${STAGING}.zip" "$STAGING"
