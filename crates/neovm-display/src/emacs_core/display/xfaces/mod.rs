@@ -2561,9 +2561,12 @@ fn face_inheritance_cycle(
     visited: &mut Vec<Value>,
 ) -> bool {
     let members = if face.is_cons() {
+        // Stop at a cons already seen, so that a circular list ends.
         let mut members = Vec::new();
+        let mut conses = Vec::new();
         let mut tail = face;
-        while tail.is_cons() {
+        while tail.is_cons() && !conses.contains(&tail) {
+            conses.push(tail);
             members.push(tail.cons_car());
             tail = tail.cons_cdr();
         }
@@ -3361,21 +3364,30 @@ pub fn builtin_internal_set_lisp_face_attribute(
             }
 
             if attr_name == SetFaceAttr::LFace(LFaceAttr::Inherit) {
-                // The frame whose face vectors GNU reads: the new-frame
-                // defaults, or the target (by default the selected) frame.
-                let domain = if defaults_frame {
-                    Value::T
+                // The face vectors GNU checks: the new-frame defaults, or each
+                // frame the value is stored in. For FRAME 0, GNU calls the
+                // setter once per live frame, so each frame is checked.
+                let domains = if defaults_frame {
+                    vec![Value::T]
                 } else {
                     match args.get(3) {
+                        Some(v) if v.as_fixnum() == Some(0) => eval
+                            .frame_manager()
+                            .frame_list()
+                            .into_iter()
+                            .map(|frame_id| Value::make_frame(frame_id.0))
+                            .collect(),
                         Some(frame)
                             if live_frame_designator_in_state(&eval.frame_manager(), frame) =>
                         {
-                            *frame
+                            vec![*frame]
                         }
-                        _ => Value::NIL,
+                        _ => vec![Value::NIL],
                     }
                 };
-                check_face_inheritance_cycle(eval, domain, face_symbol, value)?;
+                for domain in domains {
+                    check_face_inheritance_cycle(eval, domain, face_symbol, value)?;
+                }
             }
             let (canonical_attr, mut canonical_value) =
                 normalize_face_attr_for_set_with_eval(Some(eval), &face_name, attr_name, value)?;

@@ -7,7 +7,7 @@
 #[test]
 fn set_face_attribute_rejects_inheritance_cycles_like_gnu() {
     let form = r#"(progn
-      (dolist (face '(cyc-self cyc-a cyc-b cyc-x cyc-y cyc-z cyc-t1 cyc-t2 cyc-ok))
+      (dolist (face '(cyc-self cyc-a cyc-b cyc-x cyc-y cyc-z cyc-t1 cyc-t2 cyc-ok cyc-list cyc-circ))
         (make-face face))
       (let ((try (lambda (face frame value)
                    (condition-case err
@@ -35,7 +35,16 @@ fn set_face_attribute_rejects_inheritance_cycles_like_gnu() {
          ;; Resetting the attribute is always allowed.
          (funcall try 'cyc-a nil 'unspecified)
          (funcall try 'cyc-b nil 'cyc-a)
-         (funcall try 'cyc-ok nil nil))))"#;
+         (funcall try 'cyc-ok nil nil)
+         ;; GNU compares the parents of the list members with the face, not
+         ;; the members themselves, so this is accepted.
+         (funcall try 'cyc-list nil '(cyc-list))
+         ;; A circular list does not hang the check.
+         (let ((parents (list 'bold)))
+           (setcdr parents parents)
+           (condition-case err
+               (progn (set-face-attribute 'cyc-circ t :inherit parents) 'ok)
+             (error err))))))"#;
     assert_eq!(
         crate::test_utils::runtime_startup_eval_one(form),
         concat!(
@@ -52,7 +61,9 @@ fn set_face_attribute_rejects_inheritance_cycles_like_gnu() {
             r#" (error "Face inheritance results in inheritance cycle" cyc-t1)"#,
             r#" (ok unspecified)"#,
             r#" (ok cyc-a)"#,
-            r#" (ok nil))"#,
+            r#" (ok nil)"#,
+            r#" (ok (cyc-list))"#,
+            r#" ok)"#,
         )
     );
 }
