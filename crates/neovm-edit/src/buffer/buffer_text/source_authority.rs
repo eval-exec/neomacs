@@ -6,6 +6,30 @@ use crate::buffer::Buffer;
 use std::cell::{Ref, RefCell};
 use std::rc::{Rc, Weak};
 
+/// Identity and byte-content revision, independent of Lisp modification
+/// counters and text properties. This may survive Lisp: it retains only a
+/// Weak text owner, with no bytes, Lisp values or active storage borrow.
+/// Property-only changes intentionally do not invalidate it, unlike motion
+/// authority. Callers must still check the buffer's required storage mode.
+#[derive(Clone, Debug)]
+pub struct BufferContentRevision {
+    owner: Weak<RefCell<BufferTextStorage>>,
+    content_epoch: u64,
+}
+
+impl BufferContentRevision {
+    /// Whether this is still the same text owner with unchanged actual content.
+    /// This ignores property-only changes and does not certify a storage mode.
+    pub fn matches_buffer(&self, buffer: &Buffer) -> bool {
+        self.owner.as_ptr() == Rc::as_ptr(&buffer.text.storage)
+            && buffer
+                .text
+                .storage
+                .try_borrow()
+                .is_ok_and(|storage| storage.content_epoch == self.content_epoch)
+    }
+}
+
 #[cfg(not(any(test, feature = "test-support")))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,6 +125,15 @@ pub struct BufferSourceReadLease<'source> {
 }
 
 impl Buffer {
+    /// Capture a content-only witness that can be checked after Lisp runs,
+    /// without retaining a byte snapshot or a read lease across the callback.
+    pub fn capture_content_revision(&self) -> BufferContentRevision {
+        BufferContentRevision {
+            owner: Rc::downgrade(&self.text.storage),
+            content_epoch: self.text.storage.borrow().content_epoch,
+        }
+    }
+
     /// Capture existing text/property authority; performs no mutation.
     pub fn capture_motion_source_authority(&self) -> Option<BufferSourceAuthority> {
         if self.name_value().is_nil() {

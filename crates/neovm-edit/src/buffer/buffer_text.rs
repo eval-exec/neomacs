@@ -669,7 +669,7 @@ impl Clone for BufferTextStorage {
 mod source_authority;
 #[cfg(any(test, feature = "test-support"))]
 pub mod source_authority;
-pub use source_authority::{BufferSourceAuthority, BufferSourceReadLease};
+pub use source_authority::{BufferContentRevision, BufferSourceAuthority, BufferSourceReadLease};
 
 #[cfg(not(any(test, feature = "test-support")))]
 pub struct BufferText {

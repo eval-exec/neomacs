@@ -8347,6 +8347,139 @@ fn insert_file_contents_empty_filename_coding_sees_and_can_change_raw_source() {
     }
 }
 
+#[test]
+fn empty_coding_probe_preserves_callback_modified_state_and_ticks_on_error() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("probe-modification.txt");
+    fs::write(&path, vec![b'x'; 6000]).unwrap();
+    for initial in [false, true] {
+        for (action, expected_modified) in [
+            ("nil", initial),
+            ("(set-buffer-modified-p t)", true),
+            ("(set-buffer-modified-p nil)", false),
+            ("(insert \"Y\")", true),
+            ("(progn (insert \"Y\") (set-buffer-modified-p nil))", false),
+            ("(put-text-property 1 2 'face 'bold)", true),
+        ] {
+            let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+            let id = eval.edit.buffers.current_buffer_id().unwrap();
+            eval.edit
+                .buffers
+                .set_buffer_modified_flag(id, initial)
+                .unwrap();
+            eval.eval_str(&format!(r#"
+                (defalias 'undo-auto-amalgamate (lambda (&rest _) nil))
+                (setq neovm-probe-before (list (buffer-modified-tick) (buffer-chars-modified-tick)))
+                (defalias 'neovm-error-filename-coding
+                  (lambda (_args)
+                    (setq neovm-probe-seen
+                          (list (buffer-modified-p)
+                                (equal neovm-probe-before (list (buffer-modified-tick) (buffer-chars-modified-tick)))))
+                    {action}
+                    (setq neovm-probe-after (list (buffer-modified-tick) (buffer-chars-modified-tick)))
+                    (error "coding probe error")))
+                (setq coding-system-for-read nil set-auto-coding-function nil
+                      file-coding-system-alist '(("." . neovm-error-filename-coding)))
+            "#)).unwrap();
+            assert!(
+                builtin_insert_file_contents(
+                    &mut eval,
+                    vec![Value::string(path.to_str().unwrap())]
+                )
+                .is_err()
+            );
+            let actual = eval.eval_str("(list neovm-probe-seen (buffer-size) (buffer-modified-p) (equal neovm-probe-after (list (buffer-modified-tick) (buffer-chars-modified-tick))) enable-multibyte-characters)").unwrap();
+            let expected = Value::list(vec![
+                Value::list(vec![if initial { Value::T } else { Value::NIL }, Value::T]),
+                Value::fixnum(0),
+                if expected_modified {
+                    Value::T
+                } else {
+                    Value::NIL
+                },
+                Value::T,
+                Value::T,
+            ]);
+            assert!(
+                crate::emacs_core::value::equal_value(&actual, &expected, 0),
+                "initial={initial} action={action} {actual:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn empty_coding_probe_exposes_raw_text_without_moving_existing_markers_or_overlays() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("probe-markers.txt");
+    fs::write(&path, vec![b'x'; 6000]).unwrap();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"
+        (setq neovm-probe-marker (copy-marker 1 t)
+              neovm-probe-overlay (make-overlay 1 1 nil t t)
+              coding-system-for-read nil
+              set-auto-coding-function
+              (lambda (_name _size)
+                (setq neovm-probe-seen
+                      (list (marker-position neovm-probe-marker)
+                            (overlay-start neovm-probe-overlay) (overlay-end neovm-probe-overlay)
+                            (point) (buffer-size)))
+                'utf-8-unix))
+    "#,
+    )
+    .unwrap();
+    builtin_insert_file_contents(&mut eval, vec![Value::string(path.to_str().unwrap())]).unwrap();
+    let actual = eval.eval_str("(list neovm-probe-seen (marker-position neovm-probe-marker) (overlay-start neovm-probe-overlay) (overlay-end neovm-probe-overlay))").unwrap();
+    let expected = eval.eval_str("'((1 1 1 1 6000) 6001 6001 6001)").unwrap();
+    assert!(
+        crate::emacs_core::value::equal_value(&actual, &expected, 0),
+        "{actual:?}"
+    );
+}
+
+#[test]
+fn empty_coding_probe_rejects_a_swapped_text_owner_even_when_char_ticks_collide() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("probe-swapped.txt");
+    fs::write(&path, b"A").unwrap();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let donor = eval.edit.buffers.create_buffer("probe-donor");
+    eval.edit
+        .buffers
+        .set_buffer_multibyte_flag(donor, false)
+        .unwrap();
+    let history = eval.edit.buffers.create_buffer("probe-history");
+    eval.set_variable("neovm-probe-donor", Value::make_buffer(donor));
+    eval.set_variable("neovm-probe-history", Value::make_buffer(history));
+    eval.eval_str(
+        r#"
+        (buffer-swap-text neovm-probe-history)
+        (set-buffer-modified-p nil)
+        (setq coding-system-for-read nil set-auto-coding-function
+              (lambda (_name _size)
+                (let ((before (buffer-chars-modified-tick)))
+                  (buffer-swap-text neovm-probe-donor)
+                  (setq neovm-probe-collided (= before (buffer-chars-modified-tick))))
+                'utf-8-unix))
+    "#,
+    )
+    .unwrap();
+    let result =
+        builtin_insert_file_contents(&mut eval, vec![Value::string(path.to_str().unwrap())])
+            .unwrap();
+    assert_eq!(result.cons_cdr().cons_car().as_fixnum(), Some(0));
+    assert!(eval.eval_str("neovm-probe-collided").unwrap().is_t());
+    assert!(eval.edit.buffers.current_buffer().unwrap().is_text_empty());
+    assert_eq!(
+        eval.edit.buffers.get(donor).unwrap().dump_text_bytes(),
+        b"A"
+    );
+}
+
 // Native panic fixture: exercises Rust unwinding through the actual
 // format-decode callback path of the insert-file pipeline.
 fn p410_panicking_format_decode(eval: &mut Context, _args: Vec<Value>) -> EvalResult {

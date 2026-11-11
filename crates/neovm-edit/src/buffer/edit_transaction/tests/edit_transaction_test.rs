@@ -340,57 +340,121 @@ fn transposition_storage_plan_swaps_outer_regions_over_full_span() {
     assert_eq!(plan.edit(), MeasuredSameLenEdit::covering(span));
 }
 
-#[test]
-fn borrowed_unibyte_insertion_preserves_raw_bytes_and_shared_buffer_metadata() {
-    crate::test_utils::init_test_tracing();
-    let mut buffers = BufferManager::new();
-    let id = buffers.create_buffer("borrowed-unibyte");
-    buffers.set_buffer_multibyte_flag(id, false).unwrap();
-    buffers.get_mut(id).unwrap().set_undo_list(Value::T);
-    let indirect = buffers
-        .create_indirect_buffer(id, "borrowed-indirect", false)
-        .unwrap();
-    let bytes = b"a\0\xff\x80\nz";
-    buffers.insert_unibyte_bytes_into_buffer(id, bytes).unwrap();
-    for buffer_id in [id, indirect] {
-        let buffer = buffers.get(buffer_id).unwrap();
-        assert_eq!(buffer.dump_text_bytes(), bytes);
-        assert_eq!(buffer.point_max_char_pos().get(), bytes.len());
-        assert_eq!(buffer.point_max_emacs_byte_pos().get(), bytes.len());
-        assert!(buffer.is_modified());
-    }
-    let buffer = buffers.get(id).unwrap();
-    assert_eq!(buffer.point_char_pos().get(), bytes.len());
-    assert_eq!(buffer.point_emacs_byte_pos().get(), bytes.len());
-    assert!(buffer.get_undo_list().is_t());
-    let tick = buffer.modified_tick();
-    buffers.insert_unibyte_bytes_into_buffer(id, &[]).unwrap();
-    assert_eq!(buffers.get(id).unwrap().modified_tick(), tick);
+fn probe_modification_state(buffer: &Buffer) -> (i64, i64, i64, Value) {
+    (
+        buffer.modified_tick(),
+        buffer.chars_modified_tick(),
+        buffer.save_modified_tick(),
+        buffer.get_undo_list(),
+    )
 }
 
 #[test]
-fn borrowed_unibyte_insertion_matches_string_conversion_into_multibyte_buffer() {
+fn raw_probe_exposure_keeps_metadata_and_sibling_restrictions() {
+    crate::test_utils::init_test_tracing();
+    for target_indirect in [false, true] {
+        let mut buffers = BufferManager::new();
+        assert!(
+            buffers
+                .expose_empty_unibyte_buffer_bytes(BufferId(u64::MAX), b"x")
+                .is_none()
+        );
+        let id = buffers.create_buffer("raw-probe");
+        assert!(
+            buffers
+                .expose_empty_unibyte_buffer_bytes(id, b"x")
+                .is_none()
+        );
+        buffers.set_buffer_multibyte_flag(id, false).unwrap();
+        buffers.get_mut(id).unwrap().set_undo_list(Value::T);
+        let indirect = buffers
+            .create_indirect_buffer(id, "raw-probe-indirect", false)
+            .unwrap();
+        let (id, sibling_id) = if target_indirect {
+            (indirect, id)
+        } else {
+            (id, indirect)
+        };
+        let before = probe_modification_state(buffers.get(id).unwrap());
+        let revision = buffers.get(id).unwrap().capture_content_revision();
+        let bytes = b"a\0\xff\x80\nz";
+        buffers
+            .expose_empty_unibyte_buffer_bytes(id, bytes)
+            .unwrap();
+        let buffer = buffers.get(id).unwrap();
+        assert_eq!(buffer.dump_text_bytes(), bytes);
+        assert_eq!(buffer.point_char_pos(), CharPos0::ZERO);
+        assert_eq!(buffer.point_max_char_pos().get(), bytes.len());
+        assert_eq!(probe_modification_state(buffer), before);
+        assert!(!revision.matches_buffer(buffer));
+        let sibling = buffers.get(sibling_id).unwrap();
+        assert_eq!(sibling.dump_text_bytes(), bytes);
+        assert_eq!(sibling.point_max_char_pos(), CharPos0::ZERO);
+        assert_eq!(sibling.point_char_pos(), CharPos0::ZERO);
+        assert!(
+            buffers
+                .expose_empty_unibyte_buffer_bytes(id, b"more")
+                .is_none()
+        );
+        assert_eq!(buffers.get(id).unwrap().dump_text_bytes(), bytes);
+    }
+}
+
+#[test]
+fn native_cleanup_preserves_callback_metadata_even_on_panic_but_advances_content_revision() {
     crate::test_utils::init_test_tracing();
     let mut buffers = BufferManager::new();
-    let borrowed = buffers.create_buffer("borrowed-multibyte");
-    let owned = buffers.create_buffer("owned-multibyte");
-    let bytes = b"a\0\xff\xc3\xa9\nz";
-    buffers
-        .insert_unibyte_bytes_into_buffer(borrowed, bytes)
+    let id = buffers.create_buffer("raw-probe-cleanup");
+    buffers.set_buffer_multibyte_flag(id, false).unwrap();
+    buffers.get_mut(id).unwrap().set_undo_list(Value::T);
+    let base = id;
+    let id = buffers
+        .create_indirect_buffer(base, "raw-probe-cleanup-indirect", false)
         .unwrap();
+    buffers.get_mut(base).unwrap().autosave_modified_tick = 30;
+    buffers.get_mut(id).unwrap().autosave_modified_tick = 40;
     buffers
-        .insert_lisp_string_into_buffer(owned, &LispString::from_unibyte(bytes.to_vec()))
+        .expose_empty_unibyte_buffer_bytes(id, b"raw\xff")
         .unwrap();
-    let actual = buffers.get(borrowed).unwrap();
-    let expected = buffers.get(owned).unwrap();
-    assert_eq!(actual.dump_text_bytes(), expected.dump_text_bytes());
-    assert_eq!(actual.point_anchor(), expected.point_anchor());
-    assert_eq!(actual.point_max_anchor(), expected.point_max_anchor());
-    assert!(neovm_value::value::equal_value(
-        &actual.get_undo_list(),
-        &expected.get_undo_list(),
-        0,
-    ));
+    buffers.set_buffer_modified_flag(id, true).unwrap();
+    let before = probe_modification_state(buffers.get(id).unwrap());
+    let revision = buffers.get(id).unwrap().capture_content_revision();
+    let range = buffers.get(id).unwrap().full_emacs_byte_range();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        buffers.with_preserved_modification_state(id, |buffers| {
+            buffers.delete_buffer_emacs_byte_range(id, range).unwrap();
+            panic!("native bookkeeping panic");
+        });
+    }));
+    assert!(result.is_err());
+    let buffer = buffers.get(id).unwrap();
+    assert!(buffer.is_text_empty());
+    assert!(buffer.is_modified());
+    assert_eq!(probe_modification_state(buffer), before);
+    assert!(!revision.matches_buffer(buffer));
+    assert_eq!(buffers.get(base).unwrap().autosave_modified_tick, 30);
+    assert_eq!(buffers.get(id).unwrap().autosave_modified_tick, 40);
+}
+
+#[test]
+fn content_revision_ignores_properties_and_rejects_swapped_text_owners() {
+    crate::test_utils::init_test_tracing();
+    let mut buffers = BufferManager::new();
+    let id = buffers.create_buffer("content-revision");
+    buffers.insert_into_buffer(id, "A").unwrap();
+    let revision = buffers.get(id).unwrap().capture_content_revision();
+    buffers
+        .set_buffer_text_properties_in_emacs_byte_range(
+            id,
+            EmacsByteRange::new(EmacsBytePos::ZERO, EmacsBytePos::new(1)),
+            vec![(Value::symbol("fontified"), Value::T)],
+        )
+        .unwrap();
+    assert!(revision.matches_buffer(buffers.get(id).unwrap()));
+    let other = buffers.create_buffer("content-revision-donor");
+    buffers.insert_into_buffer(other, "B").unwrap();
+    buffers.swap_buffer_text(id, other).unwrap();
+    assert!(!revision.matches_buffer(buffers.get(id).unwrap()));
 }
 
 #[test]
