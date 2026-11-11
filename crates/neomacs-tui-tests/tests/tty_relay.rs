@@ -17,6 +17,10 @@ const RESPONSE: &[u8] = b"\x1b]777;tty-relay-response=1,quit=1\x07";
 const AUX_READY: &[u8] = b"\x1b]777;tty-relay-aux-ready\x07";
 const AUX_RESPONSE: &[u8] = b"\x1b]777;tty-relay-aux-target-and-live\x07";
 const AUX_CLOSED: &[u8] = b"\x1b]777;tty-relay-aux-closed\x07";
+const AUX_RESIZED: &[u8] = b"\x1b]777;tty-relay-aux-width=120\x07";
+/// Drawn past the opening width; the Lisp below builds it with `concat` so
+/// only the redrawn buffer text can put it on the auxiliary terminal.
+const PAST_OLD_EDGE: &[u8] = b"PASTOLDEDGE";
 
 // OSC markers are checked on the raw stream. Their escaped spellings in the
 // minibuffer cannot satisfy the check by merely being echoed while typed.
@@ -215,6 +219,23 @@ impl AuxiliaryTty {
         }
     }
 
+    /// Resize the terminal the way a terminal emulator does: on its master.
+    fn resize(&self, columns: u16, rows: u16) {
+        let size = libc::winsize {
+            ws_row: rows,
+            ws_col: columns,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: the master is a live owned PTY descriptor and size is valid.
+        assert_eq!(
+            unsafe { libc::ioctl(self.master.as_raw_fd(), libc::TIOCSWINSZ as _, &size) },
+            0,
+            "resize auxiliary PTY: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+
     fn send(&mut self, bytes: &[u8]) {
         self.master
             .write_all(bytes)
@@ -287,5 +308,62 @@ fn auxiliary_input_survives_busy_primary() {
 
     editor.send(b"\x03d");
     wait_primary_marker(&mut editor, AUX_CLOSED, Some(&mut auxiliary));
+    finish(editor);
+}
+
+#[test]
+fn auxiliary_frame_draws_past_its_opening_width_after_resize() {
+    let mut auxiliary = AuxiliaryTty::new();
+    let mut editor = boot();
+    evaluate(
+        &mut editor,
+        &format!(
+            r#"(progn {BUSY_SETUP}
+          (setq tty-relay-aux-frame
+                (make-terminal-frame (list (cons 'tty {:?}) '(tty-type . "screen-256color"))))
+          (defun tty-relay-aux-wide-line-command ()
+            (interactive)
+            (switch-to-buffer (get-buffer-create "tty-relay-wide"))
+            (erase-buffer)
+            (insert (make-string 100 ?-) (concat "PASTOLD" "EDGE"))
+            (send-string-to-terminal
+             (format "\e]777;tty-relay-aux-width=%d\a" (frame-width))
+             tty-relay-primary-terminal))
+          (global-set-key (kbd "C-c w") #'tty-relay-aux-wide-line-command)
+          (send-string-to-terminal "\e]777;tty-relay-aux-ready\a" (frame-terminal tty-relay-aux-frame))
+          (select-frame tty-relay-primary-frame)
+          (send-string-to-terminal "\e]777;tty-relay-setup\a" tty-relay-primary-terminal))"#,
+            auxiliary.name
+        ),
+    );
+    wait_primary_marker(&mut editor, SETUP_READY, Some(&mut auxiliary));
+    let deadline = Instant::now() + DEADLOCK_CAP;
+    while occurrences(&auxiliary.output, AUX_READY) == 0 {
+        auxiliary.drain_output();
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "auxiliary terminal did not become ready"
+        );
+        editor.read(remaining.min(READ_SLICE));
+    }
+
+    // Opened at 80x24. The input reader observes the new size before it reads
+    // the key bytes, so the command runs on a frame that is already 120 wide.
+    auxiliary.resize(120, 30);
+    auxiliary.output.clear();
+    auxiliary.send(b"\x03w");
+    wait_primary_marker(&mut editor, AUX_RESIZED, Some(&mut auxiliary));
+    // A grid left at 80 columns clips the marker at column 100 on every redraw.
+    let deadline = Instant::now() + DEADLOCK_CAP;
+    while occurrences(&auxiliary.output, PAST_OLD_EDGE) == 0 {
+        auxiliary.drain_output();
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "auxiliary frame never drew past its opening width"
+        );
+        editor.read(remaining.min(READ_SLICE));
+    }
     finish(editor);
 }

@@ -52,6 +52,8 @@ impl SecondaryTtyRegistry {
 
     #[cfg(unix)]
     fn render_selected_unix(&self, eval: &mut neovm_core::emacs_core::Context) -> bool {
+        use std::os::fd::AsRawFd;
+
         let Some((terminal_id, is_tty)) = eval
             .frame_manager()
             .selected_frame()
@@ -80,6 +82,14 @@ impl SecondaryTtyRegistry {
         if session.device.is_active()
             && let Some((root, children)) = presentations
         {
+            // Track the terminal's live size like the primary TTY does; a grid
+            // left at the size seen at open clips every cell past it.
+            if let Some(size) = query_size(session.device.file.as_raw_fd()) {
+                let (cols, rows) = (size.columns() as usize, size.rows() as usize);
+                if session.rif.width() != cols || session.rif.height() != rows {
+                    session.rif.resize(cols, rows);
+                }
+            }
             // This terminal's session mutex protects only its native renderer;
             // Lisp redraw obligations stay on the exclusively borrowed Context.
             let mut full_redraw = eval.gnu_take_tty_frame_redraw(neovm_core::window::FrameId(
@@ -521,11 +531,30 @@ fn set_raw_mode(file: &std::fs::File, original: &rustix::termios::Termios) -> Re
         .map_err(|error| format!("cannot set raw terminal modes: {error}"))
 }
 
+/// Most cells one client terminal may make the daemon allocate. A PTY accepts
+/// any 16-bit winsize, and each renderer grid holds `columns * rows` cells, so
+/// an unbounded 65535x65535 report from one client would exhaust the daemon
+/// every other frame lives in. 2^20 cells still covers an 8K display at a
+/// 5x10-pixel font (1536x432).
+#[cfg(unix)]
+const MAX_SECONDARY_TTY_CELLS: u32 = 1 << 20;
+
+/// The size one client terminal is driven at: its reported winsize, with rows
+/// reduced until the grid fits [`MAX_SECONDARY_TTY_CELLS`]. Opening, resize
+/// events, and the renderer all read sizes through here, so the frame and its
+/// grid always agree.
+#[cfg(unix)]
+fn bounded_tty_size(columns: u32, rows: u32) -> Option<TtyFrameSize> {
+    let columns = columns.min(MAX_SECONDARY_TTY_CELLS);
+    let rows = rows.min(MAX_SECONDARY_TTY_CELLS / columns.max(1));
+    TtyFrameSize::new(columns, rows)
+}
+
 #[cfg(unix)]
 fn query_size(fd: std::os::fd::RawFd) -> Option<TtyFrameSize> {
     let mut size = unsafe { std::mem::zeroed::<libc::winsize>() };
     (unsafe { libc::ioctl(fd, libc::TIOCGWINSZ as _, &mut size) } == 0)
-        .then(|| TtyFrameSize::new(u32::from(size.ws_col), u32::from(size.ws_row)))
+        .then(|| bounded_tty_size(u32::from(size.ws_col), u32::from(size.ws_row)))
         .flatten()
 }
 
