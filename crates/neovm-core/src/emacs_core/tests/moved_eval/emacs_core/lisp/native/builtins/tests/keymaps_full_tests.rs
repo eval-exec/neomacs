@@ -164,3 +164,35 @@ fn single_key_description_distinguishes_event_payloads_ranges_and_lucid_lists() 
         [r#"OK ("<mouse-1>" "<drag-mouse-1>" "<mouse-movement>" error "M-S-<up>" "a..z")"#]
     );
 }
+
+#[test]
+fn string_vector_keys_go_through_key_parse_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU `possibly_translate_key_sequence' (src/keymap.c), used by
+    // `define-key' and `lookup-key': a vector holding one string is parsed
+    // with `key-parse' when `key-valid-p' accepts the string.
+    let result = crate::test_utils::runtime_startup_eval_all(
+        r#"(let ((map (make-sparse-keymap)))
+             (list
+              ;; GNU's keymap-test-lookups.
+              (lookup-key (current-global-map) ["C-x C-f"])
+              (define-key map ["C-c a"] 'cyc-command)
+              map
+              (lookup-key map ["C-c a"])
+              (lookup-key map "\C-ca")
+              (lookup-key map ["C-c"])
+              (let ((valid (symbol-function 'key-valid-p)))
+                (fmakunbound 'key-valid-p)
+                (unwind-protect
+                    (condition-case err (lookup-key map ["C-c a"]) (error err))
+                  (fset 'key-valid-p valid)))))"#,
+    );
+    assert_eq!(
+        result,
+        [concat!(
+            r#"OK (find-file cyc-command (keymap (3 keymap (97 . cyc-command)))"#,
+            r#" cyc-command cyc-command (keymap (97 . cyc-command))"#,
+            r#" (error "`key-valid-p' is not defined, so this syntax can't be used: %s" ["C-c a"]))"#,
+        )]
+    );
+}
