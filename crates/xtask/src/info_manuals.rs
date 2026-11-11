@@ -10,13 +10,9 @@ use std::process::Command;
 use crate::Result;
 
 const MANIFEST: &str = ".neomacs-info-manifest";
-// INFO_COMMON plus efaq-w32: GNU builds all targets for release distributions.
-const MISC: &str = "auth autotype bovine calc ccmode cl dbus dired-x ebrowse ede ediff edt \
-    efaq eglot eieio emacs-gnutls emacs-mime epa erc ert eshell eudc eww flymake forms \
-    gnus htmlfontify idlwave ido info mairix-el message mh-e modus-themes newsticker \
-    nxml-mode octave-mode org pcl-cvs pgg rcirc reftex remember sasl sc semantic ses \
-    sieve smtpmail speedbar srecode todo-mode tramp transient url use-package \
-    vhdl-mode viper vtable widget wisent woman efaq-w32";
+// GNU INFO_COMMON plus the three principal manuals and efaq-w32.
+// Packaging reads this same inventory rather than trusting a partial manifest.
+const INFO_FILES: &str = include_str!("../../../docs/info-manuals.list");
 
 struct Manual {
     source: PathBuf,
@@ -61,40 +57,48 @@ pub(crate) fn run(repo: &Path, args: impl IntoIterator<Item = OsString>) -> Resu
 }
 
 /// Follow GNU's entry-point names and the Elisp manual's auxiliary image files.
-fn inventory(docs: &Path, generated: &Path) -> Vec<Manual> {
-    let mut manuals = vec![
-        Manual {
-            source: docs.join("emacs/emacs.texi"),
-            name: "emacs".into(),
-            assets: Vec::new(),
-        },
-        Manual {
-            source: docs.join("lispref/elisp.texi"),
-            name: "elisp".into(),
-            assets: vec![
-                docs.join("lispref/elisp_type_hierarchy.jpg"),
-                docs.join("lispref/elisp_type_hierarchy.txt"),
-            ],
-        },
-        Manual {
-            source: docs.join("lispintro/emacs-lisp-intro.texi"),
-            name: "eintr".into(),
-            assets: Vec::new(),
-        },
-    ];
-    manuals.extend(MISC.split_whitespace().map(|name| {
-        let source = match name {
-            "ccmode" => docs.join("misc/cc-mode.texi"),
-            "org" | "modus-themes" => generated.join(format!("{name}.texi")),
-            _ => docs.join("misc").join(format!("{name}.texi")),
-        };
-        Manual {
-            source,
-            name: name.into(),
-            assets: Vec::new(),
-        }
-    }));
-    manuals
+fn inventory(docs: &Path, generated: &Path) -> Result<Vec<Manual>> {
+    let mut seen = std::collections::BTreeSet::new();
+    INFO_FILES
+        .lines()
+        .map(|filename| {
+            let name = filename
+                .strip_suffix(".info")
+                .filter(|name| {
+                    name.bytes()
+                        .next()
+                        .is_some_and(|byte| byte.is_ascii_alphanumeric())
+                        && name
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || b"._+-".contains(&byte))
+                })
+                .ok_or_else(|| format!("invalid canonical Info filename: {filename}"))?;
+            if !seen.insert(filename) {
+                return Err(format!("duplicate canonical Info filename: {filename}").into());
+            }
+            let source = match name {
+                "emacs" => docs.join("emacs/emacs.texi"),
+                "elisp" => docs.join("lispref/elisp.texi"),
+                "eintr" => docs.join("lispintro/emacs-lisp-intro.texi"),
+                "ccmode" => docs.join("misc/cc-mode.texi"),
+                "org" | "modus-themes" => generated.join(format!("{name}.texi")),
+                _ => docs.join("misc").join(format!("{name}.texi")),
+            };
+            let assets = if name == "elisp" {
+                vec![
+                    docs.join("lispref/elisp_type_hierarchy.jpg"),
+                    docs.join("lispref/elisp_type_hierarchy.txt"),
+                ]
+            } else {
+                Vec::new()
+            };
+            Ok(Manual {
+                source,
+                name: name.into(),
+                assets,
+            })
+        })
+        .collect()
 }
 
 /// Generate into a private staging directory and publish only a complete set.
@@ -108,7 +112,7 @@ pub(crate) fn build(repo: &Path, runtime: &Path, binary: &Path, dry_run: bool) -
         println!(
             "  export Org manuals with {}; compile {} unsplit manuals with makeinfo/install-info",
             binary.display(),
-            inventory(&repo.join("docs"), Path::new("generated")).len()
+            inventory(&repo.join("docs"), Path::new("generated"))?.len()
         );
         return Ok(());
     }
@@ -119,11 +123,15 @@ pub(crate) fn build(repo: &Path, runtime: &Path, binary: &Path, dry_run: bool) -
     let generated = stage.path().join("generated");
     fs::create_dir(&generated)?;
     let docs = repo.join("docs");
+    let manuals = inventory(&docs, &generated)?;
     let version_file = generated.join("emacs-version");
     let mut export = Command::new(binary);
     export.current_dir(docs.join("misc"))
         .env("NEOMACS_RUNTIME_ROOT", runtime)
         .env_remove("EMACSLOADPATH")
+        .env_remove("EMACSDATA")
+        .env_remove("EMACSDOC")
+        .env_remove("EMACSPATH")
         .args(["--batch", "-Q", "-l", "ox-texinfo", "--eval",
             "(setq gc-cons-threshold 50000000 org-confirm-babel-evaluate nil org-id-track-globally nil)"])
         .arg("--eval").arg(format!("(with-temp-file {} (insert emacs-version))", crate::elisp_string_literal(&version_file)));
@@ -146,7 +154,7 @@ pub(crate) fn build(repo: &Path, runtime: &Path, binary: &Path, dry_run: bool) -
     let (makeinfo, install_info) = host_tools()?;
     let staged_info = stage.path().join("info");
     compile_and_publish(
-        &inventory(&docs, &generated),
+        &manuals,
         &generated,
         &docs,
         &staged_info,
@@ -154,10 +162,7 @@ pub(crate) fn build(repo: &Path, runtime: &Path, binary: &Path, dry_run: bool) -
         &makeinfo,
         &install_info,
     )?;
-    println!(
-        "  INFO  published {} manuals and info/dir",
-        inventory(&docs, &generated).len()
-    );
+    println!("  INFO  published {} manuals and info/dir", manuals.len());
     Ok(())
 }
 
@@ -193,6 +198,23 @@ fn host_tools() -> Result<(OsString, OsString)> {
     ))
 }
 
+/// Give a Texinfo executable its sibling tools and DLLs without exposing that
+/// directory to later compiler invocations (especially MinGW versus MSVC).
+fn texinfo_command(program: &OsString) -> Result<Command> {
+    let mut command = Command::new(program);
+    if let Some(directory) = Path::new(program)
+        .parent()
+        .filter(|directory| !directory.as_os_str().is_empty())
+    {
+        let mut paths = vec![directory.to_path_buf()];
+        if let Some(inherited) = std::env::var_os("PATH") {
+            paths.extend(std::env::split_paths(&inherited));
+        }
+        command.env("PATH", std::env::join_paths(paths)?);
+    }
+    Ok(command)
+}
+
 /// Compile and index every artifact before replacing the installed tree.
 fn compile_and_publish(
     manuals: &[Manual],
@@ -207,7 +229,7 @@ fn compile_and_publish(
     let mut manifest = String::new();
     for manual in manuals {
         let file = output.join(format!("{}.info", manual.name));
-        let mut command = Command::new(makeinfo);
+        let mut command = texinfo_command(makeinfo)?;
         command
             .current_dir(
                 manual
@@ -241,7 +263,7 @@ fn compile_and_publish(
             return Err(format!("makeinfo produced an empty manual: {}", file.display()).into());
         }
         checked(
-            Command::new(install_info)
+            texinfo_command(install_info)?
                 .arg("--dir-file")
                 .arg(output.join("dir"))
                 .arg(&file),
@@ -288,7 +310,7 @@ mod tests {
 
     #[test]
     fn info_inventory_matches_gnu_release_targets() {
-        let all = inventory(Path::new("docs"), Path::new("generated"));
+        let all = inventory(Path::new("docs"), Path::new("generated")).unwrap();
         assert_eq!(all.len(), 66);
         assert_eq!(
             all.iter().find(|m| m.name == "ccmode").unwrap().source,
@@ -301,6 +323,10 @@ mod tests {
         assert_eq!(
             all.iter().find(|m| m.name == "semantic").unwrap().source,
             Path::new("docs/misc/semantic.texi")
+        );
+        assert_eq!(
+            all.iter().find(|m| m.name == "gnus").unwrap().source,
+            Path::new("docs/misc/gnus.texi")
         );
         assert_eq!(
             all.iter()

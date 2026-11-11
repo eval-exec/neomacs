@@ -16175,8 +16175,8 @@ fn runtime_loader_state_reset_matches_gnu_init_lread() {
 }
 
 /// Each shipped layout must resolve to its own tree through
-/// `runtime_root_candidates` + `is_runtime_root`, nearest-first, mirroring
-/// GNU `init_cmdargs`' walk-up from the (symlink-resolved) executable.
+/// `runtime_root_candidates` + `is_runtime_root`, discovering data relative to
+/// the (symlink-resolved) executable as GNU `init_cmdargs` does.
 #[test]
 fn runtime_root_candidates_cover_every_shipped_layout() {
     let make_tree = |root: &std::path::Path| {
@@ -16238,6 +16238,28 @@ fn runtime_root_candidates_cover_every_shipped_layout() {
         Some(contents.join("Resources/neomacs").as_path()),
         "app bundle Resources layout"
     );
+}
+
+#[test]
+fn packaged_runtime_roots_override_legacy_prefix_data() {
+    let dir = tempdir().unwrap();
+    for (layout, executable, runtime) in [
+        ("prefix", "bin/neomacs", "share/neomacs"),
+        ("bundle", "MacOS/neomacs", "Resources/neomacs"),
+    ] {
+        let prefix = dir.path().join(layout);
+        let packaged = prefix.join(runtime);
+        for root in [&prefix, &packaged] {
+            fs::create_dir_all(root.join("lisp")).unwrap();
+            fs::create_dir_all(root.join("etc")).unwrap();
+        }
+        let exe = prefix.join(executable);
+        assert_eq!(
+            runtime_project_root_from_paths(&dir.path().join("missing-checkout"), Some(&exe), None),
+            Some(packaged),
+            "{layout}: legacy prefix data must not shadow the packaged runtime"
+        );
+    }
 }
 
 #[test]

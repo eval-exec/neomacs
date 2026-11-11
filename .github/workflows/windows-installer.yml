@@ -4,6 +4,8 @@ on:
   push:
     paths:
       - .github/workflows/windows-installer.yml
+      - .github/actions/install-build-deps/**
+      - docs/**
       - assets/windows-installer.nsi
       - scripts/generate-nsis-uninstall-include.sh
       - scripts/compile-windows-installer.sh
@@ -22,6 +24,8 @@ on:
   pull_request:
     paths:
       - .github/workflows/windows-installer.yml
+      - .github/actions/install-build-deps/**
+      - docs/**
       - assets/windows-installer.nsi
       - scripts/generate-nsis-uninstall-include.sh
       - scripts/compile-windows-installer.sh

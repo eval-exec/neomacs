@@ -24,6 +24,29 @@
      (expand-file-name Info-current-subfile directory) directory))
   (princ (format "Info (%s)%s: %s\n" manual node Info-current-file)))
 
+(defun neomacs-artifact-info-manuals (directory)
+  "Read DIRECTORY's generated inventory, or use the GNU comparison subset."
+  (let ((manifest (expand-file-name ".neomacs-info-manifest" directory)))
+    (if (file-exists-p manifest)
+        (progn
+          (neomacs-artifact-info-owned-file manifest directory)
+          (let ((entries (with-temp-buffer
+                           (insert-file-contents manifest)
+                           (split-string (buffer-string) "\n"))))
+            ;; A final newline terminates the last entry; interior blank
+            ;; lines are invalid rather than silently skipped.
+            (when (equal (car (last entries)) "")
+              (setq entries (butlast entries)))
+            (unless entries
+              (error "Artifact Info manifest is empty: %s" manifest))
+            (dolist (entry entries)
+              (unless (string-match-p
+                       "\\`[A-Za-z0-9][A-Za-z0-9._+-]*\\.info\\'" entry)
+                (error "Invalid manual basename in artifact manifest: %S" entry)))
+            (mapcar #'file-name-sans-extension entries)))
+      ;; The pinned GNU source tree has no Neomacs-generated manifest.
+      '("emacs" "elisp" "eintr" "cl" "org" "modus-themes"))))
+
 (let* ((expected (getenv "NEOMACS_EXPECTED_INFO_DIRECTORY"))
        (directory (and expected
                        (file-name-as-directory (file-truename expected)))))
@@ -53,12 +76,14 @@
              Info-dir-file-attributes)))
   (neomacs-artifact-info-node (expand-file-name "dir" directory) "Top" directory)
 
-  (dolist (manual '("emacs" "elisp" "eintr" "cl" "org" "modus-themes"))
-    (let ((file (expand-file-name (concat manual ".info") directory)))
-      (unless (file-readable-p file)
-        (error "Artifact manual missing or unreadable: %s" file))
-      (neomacs-artifact-info-owned-file file directory))
-    (neomacs-artifact-info-node manual "Top" directory))
+  (let ((manuals (neomacs-artifact-info-manuals directory)))
+    (dolist (manual manuals)
+      (let ((file (expand-file-name (concat manual ".info") directory)))
+        (unless (file-readable-p file)
+          (error "Artifact manual missing or unreadable: %s" file))
+        (neomacs-artifact-info-owned-file file directory))
+      (neomacs-artifact-info-node manual "Top" directory))
+    (princ (format "Info Top nodes verified: %d\n" (length manuals))))
   (neomacs-artifact-info-node "elisp" "Hooks" directory)
   (princ "NEOMACS_INFO_MANUALS_OK\n"))
 

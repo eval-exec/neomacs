@@ -20,7 +20,8 @@ pub fn is_runtime_root(path: &Path) -> bool {
     path.join("lisp").is_dir() && path.join("etc").is_dir()
 }
 
-/// Runtime-root candidates for a running executable, nearest first.
+/// Runtime-root candidates for a running executable, package data before the
+/// legacy parent-directory fallback.
 ///
 /// Ports GNU's dual layout support:
 ///
@@ -45,14 +46,16 @@ pub fn is_runtime_root(path: &Path) -> bool {
 ///   `<prefix>/bin/neomacs` + `<prefix>/share/neomacs`) and
 ///   `<grandparent>/Resources/neomacs` (macOS app bundle:
 ///   `Contents/MacOS/neomacs` + `Contents/Resources/neomacs`).
+///   These package-specific directories precede the generic parent: extracting
+///   a current package over a legacy flat tree must use the new runtime data.
 pub fn runtime_root_candidates(exe: &Path) -> Vec<PathBuf> {
     let mut candidates = Vec::with_capacity(4);
     if let Some(dir) = exe.parent() {
         candidates.push(dir.to_path_buf());
         if let Some(parent) = dir.parent() {
-            candidates.push(parent.to_path_buf());
             candidates.push(parent.join("share/neomacs"));
             candidates.push(parent.join("Resources/neomacs"));
+            candidates.push(parent.to_path_buf());
         }
     }
     candidates

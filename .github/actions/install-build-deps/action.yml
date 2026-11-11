@@ -60,6 +60,7 @@ runs:
         if ($LASTEXITCODE -ne 0) { throw 'makeinfo failed' }
         & $installInfo --version
         if ($LASTEXITCODE -ne 0) { throw 'install-info failed' }
-        $tools | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+        # Keep MinGW tools out of later MSVC build steps. xtask supplies their
+        # directory on PATH only while running the Texinfo child processes.
         "MAKEINFO=$makeinfo" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
         "INSTALL_INFO=$installInfo" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
