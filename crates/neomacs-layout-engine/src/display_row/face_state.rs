@@ -1253,16 +1253,11 @@ impl DisplayRowActiveFaceState {
         } else {
             EmacsTextStorage::Unibyte
         };
-        // Only the first displayed character sizes this cursor slot. Raw-byte
-        // strings are valid replacements; their octal escape starts with '\\'.
+        // Only the first displayed character sizes this cursor slot. The source
+        // renders raw-byte and other non-Unicode characters as octal escapes,
+        // whose first glyph is '\\'.
         decode_emacs_char(replacement.as_bytes(), storage)
-            .and_then(|(character, _)| {
-                if character.is_byte8() {
-                    Some('\\')
-                } else {
-                    character.as_rust_char()
-                }
-            })
+            .map(|(character, _)| character.as_rust_char().unwrap_or('\\'))
             .map(|ch| self.advance_for_char(font_metrics, ch, face_metrics.char_width()))
             .unwrap_or_else(|| face_metrics.char_width().max(1.0))
     }
