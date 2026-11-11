@@ -1337,6 +1337,7 @@ pub(super) fn pending_process_output_run(
     bytes: &[u8],
     block: neovm_text::emacs_core::coding::SourceBlock,
     mode: SymbolMode,
+    global_null_inhibition: bool,
 ) -> PendingProcessRun {
     let decoding = ProcessOutputDecoding::for_process(proc.coding_decode, sink);
     // GNU's `p->decoding_carryover = 0` (src/process.c:6312) followed by
@@ -1369,7 +1370,13 @@ pub(super) fn pending_process_output_run(
     // character" (src/coding.c:1215), and the decode needs it to decide what to
     // do with the tail -- so the one flag is spent twice here exactly as GNU
     // spends its one flag twice.
-    let resolved = decoding.detected(coding_systems, &combined, block, mode, false);
+    let resolved = decoding.detected(
+        coding_systems,
+        &combined,
+        block,
+        mode,
+        global_null_inhibition,
+    );
     PendingProcessRun {
         coding: resolved,
         bytes: combined,
@@ -1515,6 +1522,7 @@ pub(super) fn process_output_read_from_io_result(
     bytes: &[u8],
     full_read_len: usize,
     mode: SymbolMode,
+    global_null_inhibition: bool,
 ) -> ProcessBytesRead {
     match outcome {
         ProcessReadOutcome::EndOfStream => match proc.coding_state.reach_last_block() {
@@ -1541,6 +1549,7 @@ pub(super) fn process_output_read_from_io_result(
                             &[],
                             neovm_text::emacs_core::coding::SourceBlock::Last,
                             mode,
+                            global_null_inhibition,
                         );
                         if bytes_read > 0 {
                             ProcessBytesRead::Data { run, bytes_read }
@@ -1553,7 +1562,14 @@ pub(super) fn process_output_read_from_io_result(
         },
         ProcessReadOutcome::Bytes(n) => {
             update_process_adaptive_read_buffering(proc, n, n == full_read_len);
-            process_run_from_bytes(proc, coding_systems, destination, &bytes[..n], mode)
+            process_run_from_bytes(
+                proc,
+                coding_systems,
+                destination,
+                &bytes[..n],
+                mode,
+                global_null_inhibition,
+            )
         }
         ProcessReadOutcome::WouldBlock => ProcessBytesRead::WouldBlock,
         ProcessReadOutcome::PtyClosed => ProcessBytesRead::Eof,
@@ -1592,6 +1608,7 @@ pub(super) fn process_run_from_bytes(
     destination: ProcessOutputDestination,
     bytes: &[u8],
     mode: SymbolMode,
+    global_null_inhibition: bool,
 ) -> ProcessBytesRead {
     let bytes_read = bytes.len();
     // GNU's `nread`: this read plus the carryover it is prepended to
@@ -1610,6 +1627,7 @@ pub(super) fn process_run_from_bytes(
                 bytes,
                 neovm_text::emacs_core::coding::SourceBlock::More,
                 mode,
+                global_null_inhibition,
             ),
             bytes_read,
         },
@@ -4087,6 +4105,7 @@ pub trait SystemProcessExt {
         destination: ProcessOutputDestination,
         coding_systems: &neovm_text::emacs_core::coding::CodingSystemManager,
         mode: SymbolMode,
+        global_null_inhibition: bool,
     ) -> ProcessBytesRead;
     fn read_serial_output_result(
         &mut self,
@@ -4094,6 +4113,7 @@ pub trait SystemProcessExt {
         destination: ProcessOutputDestination,
         coding_systems: &neovm_text::emacs_core::coding::CodingSystemManager,
         mode: SymbolMode,
+        global_null_inhibition: bool,
     ) -> ProcessBytesRead;
     fn read_pty_output_result(
         &mut self,
@@ -4101,6 +4121,7 @@ pub trait SystemProcessExt {
         destination: ProcessOutputDestination,
         coding_systems: &neovm_text::emacs_core::coding::CodingSystemManager,
         mode: SymbolMode,
+        global_null_inhibition: bool,
     ) -> ProcessBytesRead;
     fn read_network_output_result(
         &mut self,
@@ -4108,6 +4129,7 @@ pub trait SystemProcessExt {
         destination: ProcessOutputDestination,
         coding_systems: &neovm_text::emacs_core::coding::CodingSystemManager,
         mode: SymbolMode,
+        global_null_inhibition: bool,
     ) -> ProcessBytesRead;
     fn wait_for_process_events(&self, timeout: std::time::Duration) -> ProcessWaitEvents;
     fn has_wait_notification_backend(&self) -> bool;
@@ -4204,6 +4226,7 @@ pub trait SystemProcessExt {
         destination: ProcessOutputDestination,
         coding_systems: &neovm_text::emacs_core::coding::CodingSystemManager,
         mode: SymbolMode,
+        global_null_inhibition: bool,
     ) -> ProcessBytesRead;
     #[cfg(any(test, feature = "test-support"))]
     fn read_process_output_without_decoding(
@@ -5285,6 +5308,7 @@ impl SystemProcessExt for ProcessManager {
         destination: ProcessOutputDestination,
         coding_systems: &neovm_text::emacs_core::coding::CodingSystemManager,
         mode: SymbolMode,
+        global_null_inhibition: bool,
     ) -> ProcessBytesRead {
         let Some(proc) = self.processes.get_mut(&id) else {
             return ProcessBytesRead::NoSource;
@@ -5328,6 +5352,7 @@ impl SystemProcessExt for ProcessManager {
             &buf,
             full_read_len,
             mode,
+            global_null_inhibition,
         )
     }
 
@@ -5343,6 +5368,7 @@ impl SystemProcessExt for ProcessManager {
         destination: ProcessOutputDestination,
         coding_systems: &neovm_text::emacs_core::coding::CodingSystemManager,
         mode: SymbolMode,
+        global_null_inhibition: bool,
     ) -> ProcessBytesRead {
         let Some(proc) = self.processes.get_mut(&id) else {
             return ProcessBytesRead::NoSource;
@@ -5363,6 +5389,7 @@ impl SystemProcessExt for ProcessManager {
             &buf,
             full_read_len,
             mode,
+            global_null_inhibition,
         )
     }
 
@@ -5375,6 +5402,7 @@ impl SystemProcessExt for ProcessManager {
         destination: ProcessOutputDestination,
         coding_systems: &neovm_text::emacs_core::coding::CodingSystemManager,
         mode: SymbolMode,
+        global_null_inhibition: bool,
     ) -> ProcessBytesRead {
         let Some(proc) = self.processes.get_mut(&id) else {
             return ProcessBytesRead::NoSource;
@@ -5395,6 +5423,7 @@ impl SystemProcessExt for ProcessManager {
             &buf,
             full_read_len,
             mode,
+            global_null_inhibition,
         )
     }
 
@@ -5404,6 +5433,7 @@ impl SystemProcessExt for ProcessManager {
         destination: ProcessOutputDestination,
         coding_systems: &neovm_text::emacs_core::coding::CodingSystemManager,
         mode: SymbolMode,
+        global_null_inhibition: bool,
     ) -> ProcessBytesRead {
         let Some(proc) = self.processes.get_mut(&id) else {
             return ProcessBytesRead::NoSource;
@@ -5425,6 +5455,7 @@ impl SystemProcessExt for ProcessManager {
                 &buf,
                 full_read_len,
                 mode,
+                global_null_inhibition,
             );
             return read;
         }
@@ -5465,13 +5496,21 @@ impl SystemProcessExt for ProcessManager {
                     &buf,
                     full_read_len,
                     mode,
+                    global_null_inhibition,
                 ),
                 RawNetworkRead::Udp(result) => match result {
                     Ok((n, addr)) => {
                         update_process_adaptive_read_buffering(proc, n, n == full_read_len);
                         proc.datagram_socket_addr = Some(addr);
                         proc.datagram_address = socket_addr_to_lisp_value(addr);
-                        process_run_from_bytes(proc, coding_systems, destination, &buf[..n], mode)
+                        process_run_from_bytes(
+                            proc,
+                            coding_systems,
+                            destination,
+                            &buf[..n],
+                            mode,
+                            global_null_inhibition,
+                        )
                     }
                     Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                         ProcessBytesRead::WouldBlock
@@ -5489,7 +5528,14 @@ impl SystemProcessExt for ProcessManager {
                                 crate::emacs_core::fileio::path_to_lisp_file_name(&path),
                             );
                         }
-                        process_run_from_bytes(proc, coding_systems, destination, &buf[..n], mode)
+                        process_run_from_bytes(
+                            proc,
+                            coding_systems,
+                            destination,
+                            &buf[..n],
+                            mode,
+                            global_null_inhibition,
+                        )
                     }
                     Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                         ProcessBytesRead::WouldBlock
@@ -7051,6 +7097,7 @@ impl SystemProcessExt for ProcessManager {
         destination: ProcessOutputDestination,
         coding_systems: &neovm_text::emacs_core::coding::CodingSystemManager,
         mode: SymbolMode,
+        global_null_inhibition: bool,
     ) -> ProcessBytesRead {
         if self
             .processes
@@ -7062,18 +7109,34 @@ impl SystemProcessExt for ProcessManager {
         let source = self.processes.get(&id).and_then(process_output_source);
 
         match source {
-            Some(ProcessOutputSource::Pty) => {
-                self.read_pty_output_result(id, destination, coding_systems, mode)
-            }
-            Some(ProcessOutputSource::ChildStdout) => {
-                self.read_child_stdout_result(id, destination, coding_systems, mode)
-            }
-            Some(ProcessOutputSource::Network) => {
-                self.read_network_output_result(id, destination, coding_systems, mode)
-            }
-            Some(ProcessOutputSource::Serial) => {
-                self.read_serial_output_result(id, destination, coding_systems, mode)
-            }
+            Some(ProcessOutputSource::Pty) => self.read_pty_output_result(
+                id,
+                destination,
+                coding_systems,
+                mode,
+                global_null_inhibition,
+            ),
+            Some(ProcessOutputSource::ChildStdout) => self.read_child_stdout_result(
+                id,
+                destination,
+                coding_systems,
+                mode,
+                global_null_inhibition,
+            ),
+            Some(ProcessOutputSource::Network) => self.read_network_output_result(
+                id,
+                destination,
+                coding_systems,
+                mode,
+                global_null_inhibition,
+            ),
+            Some(ProcessOutputSource::Serial) => self.read_serial_output_result(
+                id,
+                destination,
+                coding_systems,
+                mode,
+                global_null_inhibition,
+            ),
             None => ProcessBytesRead::NoSource,
         }
     }
@@ -7106,7 +7169,13 @@ impl SystemProcessExt for ProcessManager {
         destination: ProcessOutputDestination,
         coding_systems: &neovm_text::emacs_core::coding::CodingSystemManager,
     ) -> Option<PendingProcessRun> {
-        match self.read_process_output_result(id, destination, coding_systems, SymbolMode::Bare) {
+        match self.read_process_output_result(
+            id,
+            destination,
+            coding_systems,
+            SymbolMode::Bare,
+            false,
+        ) {
             ProcessBytesRead::Data { run, .. } | ProcessBytesRead::EofAfterLastBlock { run } => {
                 Some(run)
             }
@@ -7992,6 +8061,12 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         destination: ProcessOutputDestination,
     ) -> Result<ProcessOutputRead, Flow> {
         let symbol_mode = self.symbol_mode();
+        // GNU detect_coding reads the live DEFVAR_BOOL when output arrives,
+        // independently of the binding at process creation or any lexenv.
+        let global_null_inhibition = self
+            .forwarded_variable_value(intern("inhibit-null-byte-detection"))
+            .unwrap_or(Value::NIL)
+            .is_truthy();
         // Stage one: the read.  It borrows the `ProcessManager` mutably out of
         // `self` and gives it back with a [`PendingProcessRun`] -- bytes and a
         // settled coding system, no text.  It no longer needs
@@ -8004,6 +8079,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
             destination,
             coding_systems,
             symbol_mode,
+            global_null_inhibition,
         ) {
             ProcessBytesRead::Data { run, bytes_read } => (run, bytes_read, false),
             ProcessBytesRead::EofAfterLastBlock { run } => (run, 0, true),

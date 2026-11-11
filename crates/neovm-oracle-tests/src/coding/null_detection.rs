@@ -117,6 +117,9 @@ fn coding_null_byte_inhibition_definition_overrides_and_aliases() {
                  :coding-type 'undecided :mnemonic ?N :charset-list '(emacs)
                  :inhibit-null-byte-detection (cdr entry)))
              (define-coding-system-alias 'neovm-null-alias 'neovm-null-follow-dos)
+             (define-coding-system-alias 'neovm-null-never-alias 'neovm-null-never)
+             (define-coding-system-alias 'neovm-null-always-alias 'neovm-null-always)
+             (define-coding-system-alias 'neovm-null-follow-alias 'neovm-null-follow)
              (let ((bytes (unibyte-string 231 161 172 0 13 10)))
                (mapcar
                 (lambda (flag)
@@ -127,10 +130,57 @@ fn coding_null_byte_inhibition_definition_overrides_and_aliases() {
                               (used last-coding-system-used))
                          (list coding (equal decoded "硬\0\n") used)))
                      '(neovm-null-never neovm-null-always neovm-null-follow
-                       neovm-null-follow-dos neovm-null-alias))))
+                       neovm-null-follow-dos neovm-null-alias
+                       neovm-null-never-alias-dos neovm-null-always-alias-dos
+                       neovm-null-follow-alias-dos))))
                 '(nil t))))"#,
         expect_test::expect![[
-            r#""OK (((neovm-null-never nil no-conversion) (neovm-null-always t utf-8-dos) (neovm-null-follow nil no-conversion) (neovm-null-follow-dos nil no-conversion) (neovm-null-alias nil no-conversion)) ((neovm-null-never nil no-conversion) (neovm-null-always t utf-8-dos) (neovm-null-follow t utf-8-dos) (neovm-null-follow-dos t utf-8-dos) (neovm-null-alias t utf-8-dos)))""#
+            r#""OK (((neovm-null-never nil no-conversion) (neovm-null-always t utf-8-dos) (neovm-null-follow nil no-conversion) (neovm-null-follow-dos nil no-conversion) (neovm-null-alias nil no-conversion) (neovm-null-never-alias-dos nil no-conversion) (neovm-null-always-alias-dos t utf-8-dos) (neovm-null-follow-alias-dos nil no-conversion)) ((neovm-null-never nil no-conversion) (neovm-null-always t utf-8-dos) (neovm-null-follow t utf-8-dos) (neovm-null-follow-dos t utf-8-dos) (neovm-null-alias t utf-8-dos) (neovm-null-never-alias-dos nil no-conversion) (neovm-null-always-alias-dos t utf-8-dos) (neovm-null-follow-alias-dos t utf-8-dos)))""#
+        ]],
+    );
+}
+
+/// Async buffers and filters detect under the binding active when output is
+/// read, rather than the opposite binding used when the process was created.
+#[test]
+fn coding_null_byte_inhibition_asynchronous_process_output() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    crate::common::assert_oracle_parity_expect(
+        r#"(mapcar
+             (lambda (use-filter)
+               (mapcar
+                (lambda (flag)
+                  (let* ((inhibit-null-byte-detection (not flag))
+                         (buffer (generate-new-buffer " *null-policy-output*"))
+                         (pieces nil)
+                         (process
+                          (make-process
+                           :name "null-policy-output" :buffer buffer
+                           :command '("cat") :connection-type 'pipe :noquery t
+                           :coding '(undecided . no-conversion) :sentinel #'ignore
+                           :filter (and use-filter
+                                        (lambda (_ chunk) (push chunk pieces))))))
+                    (unwind-protect
+                        (let ((inhibit-null-byte-detection flag)
+                              (deadline (+ (float-time) 5)))
+                          (process-send-string process (unibyte-string 0 231 161 172 10))
+                          (process-send-eof process)
+                          (while (and (process-live-p process)
+                                      (< (float-time) deadline))
+                            (accept-process-output process 0.01))
+                          (when (process-live-p process) (error "Process output timeout"))
+                          (accept-process-output process 0.01)
+                          (let ((output (if use-filter
+                                            (apply #'concat (nreverse pieces))
+                                          (with-current-buffer buffer (buffer-string)))))
+                            (list (equal output "\0硬\n")
+                                  (car (process-coding-system process)))))
+                      (when (process-live-p process) (delete-process process))
+                      (kill-buffer buffer))))
+                '(nil t)))
+             '(nil t))"#,
+        expect_test::expect![[
+            r#""OK (((nil no-conversion) (t utf-8-unix)) ((nil no-conversion) (t utf-8-unix)))""#
         ]],
     );
 }
