@@ -4956,25 +4956,17 @@ fn builtin_coding_string_in_context<H: TextHost>(
                     vec![Value::symbol(&coding)],
                 )
             })?;
-            coding = apply_explicit_eol_suffix(
-                resolve_sym(detected),
-                runtime_coding_eol(ctx.coding_systems(), &coding),
-            );
-            // Rewrite the coding argument too, so the fallback decode path
-            // (which re-reads args[1]) uses the detected system rather than the
-            // original `undecided`/`prefer-utf-8`.
-            args[1] = Value::symbol(&coding);
-            // GNU stores the DETECTED system when the argument was not fully
-            // specified (`undecided`/`prefer-utf-8`), so this rewrite does
-            // reach `last-coding-system-used' -- but only when detection found
-            // one.  `detect_coding` guards the rewrite with `if (! NILP
-            // (found))` (src/coding.c:6743-6754), and leaving `found` nil is
-            // the normal outcome for pure-ASCII text; the coding system then
-            // keeps the caller's name, which is why GNU answers
-            // `prefer-utf-8-dos' rather than `undecided-dos' for
-            // `(decode-coding-string "a\r\nb\r\n" 'prefer-utf-8)'.  A detection
-            // result of `undecided` is this engine's spelling of GNU's nil.
-            if coding_system_base(&coding) != "undecided" {
+            // `undecided` (including an EOL subsidiary) represents GNU's nil
+            // found: no coding-system replacement. Keep the requested coding
+            // and its attributes, including conversion hooks, until the EOL
+            // pass. GNU re-reads those attributes after detection, and only a
+            // concrete result replaces them (coding.c:6743-6754, 8129-8131).
+            if coding_system_base(resolve_sym(detected)) != "undecided" {
+                coding = apply_explicit_eol_suffix(
+                    resolve_sym(detected),
+                    runtime_coding_eol(ctx.coding_systems(), &coding),
+                );
+                args[1] = Value::symbol(&coding);
                 reported_coding = coding.clone();
             }
         }
@@ -5127,15 +5119,9 @@ fn builtin_coding_string_in_context<H: TextHost>(
                 Value::heap_string(neovm_value::heap_types::LispString::from_emacs_bytes(bytes))
             }
         } else {
-            let (converted, resolution) = run_coding_with_conversion_hook(
-                ctx,
-                &args,
-                &base_type,
-                hook,
-                encode,
-                coding_name_eol(&coding),
-                run,
-            )?;
+            let eol = runtime_coding_eol(ctx.coding_systems(), &coding);
+            let (converted, resolution) =
+                run_coding_with_conversion_hook(ctx, &args, &base_type, hook, encode, eol, run)?;
             if let Some(resolution) = resolution {
                 // GNU `adjust_coding_eol_type` (src/coding.c:6471) rewrites
                 // `coding->id`, and the id is what every door but the string

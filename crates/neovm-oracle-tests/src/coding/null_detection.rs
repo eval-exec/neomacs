@@ -545,3 +545,61 @@ fn coding_priority_detection_preserves_compiled_bom_attributes() {
         ]],
     );
 }
+
+/// GNU retains custom decoding attributes when detection has no concrete
+/// result; string identity fast paths and concrete rebases still skip hooks.
+#[test]
+fn coding_unchanged_detection_preserves_custom_hook_and_eol() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    crate::common::assert_oracle_parity_expect(
+        r#"(progn
+ (defvar neovm-detection-hook-calls nil)
+ (defun neovm-detection-hook (length)
+  (push length neovm-detection-hook-calls)
+  (goto-char (point-max)) (insert "!")
+  (1+ length))
+ (dolist (entry '((neovm-hook-undecided nil nil)
+                  (neovm-hook-fixed-lf unix nil)
+                  (neovm-hook-fixed-crlf dos nil)
+                  (neovm-hook-fast nil t)
+                  (neovm-hook-fast-lf unix t)))
+  (define-coding-system (car entry) "Unchanged detection preserves hooks"
+    :coding-type 'undecided :mnemonic ?N :charset-list '(emacs)
+    :eol-type (cadr entry) :ascii-compatible-p (caddr entry)
+    :post-read-conversion 'neovm-detection-hook
+    :inhibit-null-byte-detection 0))
+ (define-coding-system-alias 'neovm-hook-alias 'neovm-hook-undecided)
+ (define-coding-system-alias 'neovm-hook-fixed-alias 'neovm-hook-fixed-lf)
+ (mapcar
+  (lambda (door)
+   (mapcar
+    (lambda (coding)
+     (mapcar
+      (lambda (bytes)
+       (let ((neovm-detection-hook-calls nil) output used)
+        (if (eq door 'string)
+         (setq output (decode-coding-string bytes coding)
+               used last-coding-system-used)
+         (with-temp-buffer
+          (if (eq door 'region)
+           (progn (insert bytes)
+            (decode-coding-region (point-min) (point-max) coding))
+           (let ((destination (current-buffer))
+                 (coding-system-for-read coding)
+                 (coding-system-for-write 'no-conversion))
+            (with-temp-buffer
+             (set-buffer-multibyte nil) (insert bytes)
+             (call-process-region (point-min) (point-max) "cat" nil destination nil))))
+          (setq output (buffer-string) used last-coding-system-used)))
+        (list (string-to-list output) used (nreverse neovm-detection-hook-calls))))
+      (list (unibyte-string 65 66) (unibyte-string 65 13 10)
+            (unibyte-string 231 161 172 13 10))))
+    '(neovm-hook-undecided neovm-hook-alias-dos
+      neovm-hook-fixed-lf neovm-hook-fixed-alias neovm-hook-fixed-crlf
+      neovm-hook-fast neovm-hook-fast-lf)))
+  '(string region process)))"#,
+        expect_test::expect![[
+            r#""OK (((((65 66 33) neovm-hook-undecided (2)) ((65 10 33) neovm-hook-undecided-dos (2)) ((30828 10) utf-8-dos nil)) (((65 66 33) neovm-hook-alias-dos (2)) ((65 10 33) neovm-hook-alias-dos (2)) ((30828 10) utf-8-dos nil)) (((65 66 33) neovm-hook-fixed-lf (2)) ((65 13 10 33) neovm-hook-fixed-lf (3)) ((30828 13 10) utf-8-unix nil)) (((65 66 33) neovm-hook-fixed-alias (2)) ((65 13 10 33) neovm-hook-fixed-alias (3)) ((30828 13 10) utf-8-unix nil)) (((65 66 33) neovm-hook-fixed-crlf (2)) ((65 10 33) neovm-hook-fixed-crlf (2)) ((30828 10) utf-8-dos nil)) (((65 66) neovm-hook-fast nil) ((65 10 33) neovm-hook-fast-dos (2)) ((30828 10) utf-8-dos nil)) (((65 66) neovm-hook-fast-lf nil) ((65 13 10) neovm-hook-fast-lf nil) ((30828 13 10) utf-8-unix nil))) ((((65 66 33) neovm-hook-undecided (2)) ((65 10 33) neovm-hook-undecided-dos (2)) ((30828 10) utf-8-dos nil)) (((65 66 33) neovm-hook-alias-dos (2)) ((65 10 33) neovm-hook-alias-dos (2)) ((30828 10) utf-8-dos nil)) (((65 66 33) neovm-hook-fixed-lf (2)) ((65 13 10 33) neovm-hook-fixed-lf (3)) ((30828 13 10) utf-8-unix nil)) (((65 66 33) neovm-hook-fixed-alias (2)) ((65 13 10 33) neovm-hook-fixed-alias (3)) ((30828 13 10) utf-8-unix nil)) (((65 66 33) neovm-hook-fixed-crlf (2)) ((65 10 33) neovm-hook-fixed-crlf (2)) ((30828 10) utf-8-dos nil)) (((65 66 33) neovm-hook-fast (2)) ((65 10 33) neovm-hook-fast-dos (2)) ((30828 10) utf-8-dos nil)) (((65 66 33) neovm-hook-fast-lf (2)) ((65 13 10 33) neovm-hook-fast-lf (3)) ((30828 13 10) utf-8-unix nil))) ((((65 66 33) neovm-hook-undecided (2)) ((65 10 33) neovm-hook-undecided-dos (2)) ((30828 10) utf-8-dos nil)) (((65 66 33) neovm-hook-alias-dos (2)) ((65 10 33) neovm-hook-alias-dos (2)) ((30828 10) utf-8-dos nil)) (((65 66 33) neovm-hook-fixed-lf (2)) ((65 13 10 33) neovm-hook-fixed-lf (3)) ((30828 13 10) utf-8-unix nil)) (((65 66 33) neovm-hook-fixed-alias (2)) ((65 13 10 33) neovm-hook-fixed-alias (3)) ((30828 13 10) utf-8-unix nil)) (((65 66 33) neovm-hook-fixed-crlf (2)) ((65 10 33) neovm-hook-fixed-crlf (2)) ((30828 10) utf-8-dos nil)) (((65 66 33) neovm-hook-fast (2)) ((65 10 33) neovm-hook-fast-dos (2)) ((30828 10) utf-8-dos nil)) (((65 66 33) neovm-hook-fast-lf (2)) ((65 13 10 33) neovm-hook-fast-lf (3)) ((30828 13 10) utf-8-unix nil))))""#
+        ]],
+    );
+}

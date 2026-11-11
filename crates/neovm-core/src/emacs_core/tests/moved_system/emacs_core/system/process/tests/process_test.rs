@@ -18016,3 +18016,50 @@ fn coding_priority_detection_keeps_compiled_bom_category_and_pair() {
         "OK ((coding-category-utf-8-auto ((65 10) utf-8-with-signature-dos) ((65 10) utf-8-with-signature-dos)) (coding-category-utf-16-auto ((65 10) utf-16le-with-signature-dos) ((65 10) utf-16le-with-signature-dos)))"
     );
 }
+
+/// GNU retains the requested definition when detection has no concrete answer.
+/// Hooks observe registered EOL conversion; a real UTF-8 rebase drops the hook.
+#[test]
+fn unchanged_coding_detection_keeps_custom_hook_and_registered_eol() {
+    crate::test_utils::init_test_tracing();
+    let cat = find_bin("cat");
+    let result = eval_one(&format!(
+        r#"(progn
+ (defvar neovm-hook-unreplaced-calls nil)
+ (defun neovm-hook-unreplaced (length)
+  (push length neovm-hook-unreplaced-calls)
+  (goto-char (point-max)) (insert "!") (1+ length))
+ (define-coding-system 'neovm-hook-keep "Unchanged decoder retains hook and EOL"
+  :coding-type 'undecided :mnemonic ?N :charset-list '(emacs)
+  :eol-type 'unix :post-read-conversion 'neovm-hook-unreplaced)
+ (define-coding-system-alias 'neovm-hook-keep-alias 'neovm-hook-keep)
+ (mapcar
+  (lambda (door)
+   (mapcar
+    (lambda (coding)
+     (mapcar
+      (lambda (bytes)
+       (let ((neovm-hook-unreplaced-calls nil) output used)
+        (if (eq door 'string)
+         (setq output (decode-coding-string bytes coding) used last-coding-system-used)
+         (with-temp-buffer
+          (if (eq door 'region)
+           (progn (insert bytes) (decode-coding-region (point-min) (point-max) coding))
+           (let ((destination (current-buffer))
+                 (coding-system-for-read coding)
+                 (coding-system-for-write 'no-conversion))
+            (with-temp-buffer
+             (set-buffer-multibyte nil) (insert bytes)
+             (call-process-region (point-min) (point-max) "{cat}" nil destination nil))))
+          (setq output (buffer-string) used last-coding-system-used)))
+        (list (string-to-list output) used neovm-hook-unreplaced-calls)))
+      (list (unibyte-string 65 66) (unibyte-string 65 13 10)
+            (unibyte-string 231 161 172 13 10))))
+    '(neovm-hook-keep neovm-hook-keep-alias)))
+  '(string region process)))"#
+    ));
+    assert_eq!(
+        result,
+        "OK (((((65 66 33) neovm-hook-keep (2)) ((65 13 10 33) neovm-hook-keep (3)) ((30828 13 10) utf-8-unix nil)) (((65 66 33) neovm-hook-keep-alias (2)) ((65 13 10 33) neovm-hook-keep-alias (3)) ((30828 13 10) utf-8-unix nil))) ((((65 66 33) neovm-hook-keep (2)) ((65 13 10 33) neovm-hook-keep (3)) ((30828 13 10) utf-8-unix nil)) (((65 66 33) neovm-hook-keep-alias (2)) ((65 13 10 33) neovm-hook-keep-alias (3)) ((30828 13 10) utf-8-unix nil))) ((((65 66 33) neovm-hook-keep (2)) ((65 13 10 33) neovm-hook-keep (3)) ((30828 13 10) utf-8-unix nil)) (((65 66 33) neovm-hook-keep-alias (2)) ((65 13 10 33) neovm-hook-keep-alias (3)) ((30828 13 10) utf-8-unix nil))))"
+    );
+}
