@@ -376,3 +376,47 @@ fn json_insert_targets_the_buffer_selected_by_before_change_hooks() {
         "OK ((t (91 34 195 169 239 191 191 240 157 148 184 34 93) 14 (\" *json-insert-other*\" 1 14 0)) \"az\" 2)"
     );
 }
+
+#[test]
+fn json_serialize_cons_objects_report_list_errors_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU `json_out_object_cons` (src/json.c) checks each element while it
+    // walks with FOR_EACH_TAIL, then does CHECK_LIST_END on the final tail.
+    let mut eval = crate::test_utils::new_context();
+    let mut outcome = |form: &str| {
+        neovm_eval::emacs_core::print::format_eval_result(&eval.eval_str(&format!(
+            r#"(condition-case err (json-serialize {form}) (error err))"#
+        )))
+    };
+
+    assert_eq!(
+        outcome("'((a . 1) . b)"),
+        "OK (wrong-type-argument listp ((a . 1) . b))"
+    );
+    assert_eq!(
+        outcome("'((1 . 2) . b)"),
+        "OK (wrong-type-argument symbolp 1)"
+    );
+    assert_eq!(outcome("'((a . 1) 2)"), "OK (wrong-type-argument consp 2)");
+    assert_eq!(outcome("'(:a . 1)"), "OK (wrong-type-argument consp 1)");
+    assert_eq!(outcome("'(:a 1 :b)"), "OK (wrong-type-argument consp nil)");
+    assert_eq!(
+        outcome("'((a . 1) (a . 2) (b . 3))"),
+        r#"OK "{\"a\":1,\"b\":3}""#
+    );
+    assert_eq!(outcome("'(:a 1 :a 2 :b 3)"), r#"OK "{\"a\":1,\"b\":3}""#);
+
+    let mut signal_of = |form: &str| {
+        neovm_eval::emacs_core::print::format_eval_result(&eval.eval_str(&format!(
+            r#"(let ((items {form}))
+                 (setcdr (nthcdr (1- (length items)) items) items)
+                 (condition-case err (json-serialize items) (error (car err))))"#
+        )))
+    };
+    assert_eq!(signal_of("(list (cons 'a 1))"), "OK circular-list");
+    assert_eq!(
+        signal_of("(list (cons 'a 1) (cons 'b 2))"),
+        "OK circular-list"
+    );
+    assert_eq!(signal_of("(list :a 1)"), "OK circular-list");
+}
