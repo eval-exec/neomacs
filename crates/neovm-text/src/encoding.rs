@@ -490,8 +490,8 @@ pub(crate) fn decode_eol_text(
     )
 }
 
-/// GNU `CODING_REQUIRE_DETECTION` (src/coding.h:553-554) for a coding-system
-/// NAME.
+/// GNU `CODING_REQUIRE_DETECTION` (src/coding.h:553-554) for a registered
+/// coding system.
 ///
 /// `setup_coding_system` raises the mask for exactly three kinds of coding
 /// system, and for nothing else:
@@ -522,11 +522,20 @@ pub(crate) fn decode_eol_text(
 /// the `raw_text_coding_system` downgrade, reports `raw-text-dos` for
 /// `caf <c3> <a9> CR LF`, never `utf-8-dos`.
 #[doc(hidden)]
-pub fn coding_name_requires_detection(coding_system: &str) -> bool {
-    matches!(
-        coding_system_base(coding_system),
-        "undecided" | "prefer-utf-8" | "utf-8-auto" | "utf-16"
-    )
+pub fn coding_name_requires_detection(
+    coding_systems: &crate::emacs_core::coding::CodingSystemManager,
+    coding_system: &str,
+) -> bool {
+    // The undecided TYPE, rather than a spelling, controls detection. Reuse
+    // the definition-attribute resolver so custom names, aliases, and EOL
+    // subsidiaries follow the same registry lookup as detection itself. The
+    // policy's value is irrelevant here; Some means the type is undecided.
+    crate::emacs_core::coding::undecided_null_byte_inhibition(coding_systems, coding_system, false)
+        .is_some()
+        || matches!(
+            coding_system_base(coding_system),
+            "undecided" | "prefer-utf-8" | "utf-8-auto" | "utf-16"
+        )
 }
 
 /// GNU's `detect_coding` (src/coding.c:6503-6759) reduced to its one lasting

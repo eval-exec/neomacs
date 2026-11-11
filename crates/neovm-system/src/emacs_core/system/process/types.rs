@@ -767,24 +767,30 @@ impl ProcessOutputDecoding {
     /// i.e. DETECT the coding — it does NOT mean "copy the bytes".  Measured,
     /// `(let ((default-process-coding-system nil)) (call-process "printf" nil t
     /// nil "caf\\303\\251"))` leaves GNU with four characters, not five.
-    pub(crate) fn for_coding(coding: Value) -> Self {
+    pub(crate) fn for_coding(
+        coding_systems: &neovm_text::emacs_core::coding::CodingSystemManager,
+        coding: Value,
+    ) -> Self {
         if coding.is_nil() {
-            return Self::for_name("undecided");
+            return Self::for_name(coding_systems, "undecided");
         }
-        Self::for_name(process_coding_symbol_name(coding))
+        Self::for_name(coding_systems, process_coding_symbol_name(coding))
     }
 
     /// The three states `setup_coding_system` can leave a `struct coding_system`
-    /// in, as a function of the coding system's NAME.
+    /// in, from the coding system's registered type and attributes.
     ///
     /// This is the one place the "does it still detect?" question is answered,
     /// which is what keeps the answer from drifting between the slot a process
     /// was created with and the slot the write-back later replaced it with:
     /// both go through here.
-    pub(crate) fn for_name(name: &'static str) -> Self {
+    pub(crate) fn for_name(
+        coding_systems: &neovm_text::emacs_core::coding::CodingSystemManager,
+        name: &'static str,
+    ) -> Self {
         if process_coding_name_converts_nothing(name) {
             Self::Bytes(name)
-        } else if neovm_text::encoding::coding_name_requires_detection(name) {
+        } else if neovm_text::encoding::coding_name_requires_detection(coding_systems, name) {
             Self::Detect(name)
         } else {
             Self::Coding(name)
@@ -884,8 +890,12 @@ impl ProcessOutputDecoding {
     /// comment (src/process.c:1942-1944): "Here we don't setup the structure
     /// coding_system nor pay attention to unibyte mode.  They are done in
     /// create_process."
-    pub(crate) fn for_process(decode_coding: Value, sink: ProcessOutputSink) -> Self {
-        let decoding = Self::for_coding(decode_coding);
+    pub(crate) fn for_process(
+        coding_systems: &neovm_text::emacs_core::coding::CodingSystemManager,
+        decode_coding: Value,
+        sink: ProcessOutputSink,
+    ) -> Self {
+        let decoding = Self::for_coding(coding_systems, decode_coding);
         match sink {
             ProcessOutputSink::DecodedText => decoding,
             // src/process.c:8398-8399, the same `raw_text_coding_system` call
@@ -1339,7 +1349,7 @@ pub(super) fn pending_process_output_run(
     mode: SymbolMode,
     global_null_inhibition: bool,
 ) -> PendingProcessRun {
-    let decoding = ProcessOutputDecoding::for_process(proc.coding_decode, sink);
+    let decoding = ProcessOutputDecoding::for_process(coding_systems, proc.coding_decode, sink);
     // GNU's `p->decoding_carryover = 0` (src/process.c:6312) followed by
     // `memcpy (chars, SDATA (p->decoding_buf), carryover)` (:6255) and
     // `nbytes += carryover` (:6331).  Taking the tail rather than copying it is

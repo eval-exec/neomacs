@@ -17821,3 +17821,56 @@ fn backend_retirement_closes_surviving_green_control_observers() {
     );
     assert!(matches!(selector.arm(), Err(HostClosure::RetiredSession)));
 }
+
+/// GNU31.1 `setup_coding_system` classifies registered undecided types by
+/// metadata. ASCII-only output must keep detecting after EOL writeback; the
+/// next read chooses either byte-faithful output or a UTF-8 decoder carrying
+/// the incomplete character into the last read.
+#[test]
+fn custom_undecided_process_detection_survives_eol_writeback_and_partial_reads() {
+    crate::test_utils::init_test_tracing();
+    let cat = find_bin("cat");
+    let result = eval_one(&format!(
+        r#"(progn
+  (define-coding-system 'neovm-process-partial "Partial output probe"
+    :coding-type 'undecided :mnemonic ?N :charset-list '(emacs)
+    :inhibit-null-byte-detection 0)
+  (mapcar
+   (lambda (flag)
+    (let* ((inhibit-null-byte-detection flag)
+           (buffer (generate-new-buffer " *custom-partial*"))
+           (process (make-process :name "custom-partial" :buffer buffer
+                     :command '("{cat}") :connection-type 'pipe :noquery t
+                     :coding '(neovm-process-partial . no-conversion)
+                     :sentinel #'ignore))
+           (deadline (+ (float-time) 5)) first second)
+     (unwind-protect
+      (progn
+       (process-send-string process (unibyte-string 65 13 10))
+       (while (and (< (with-current-buffer buffer (buffer-size)) 2)
+                   (< (float-time) deadline))
+        (accept-process-output process 0.01))
+       (setq first (car (process-coding-system process)))
+       (process-send-string process (unibyte-string 0 231 161))
+       (while (and (<= (with-current-buffer buffer (buffer-size)) 2)
+                   (< (float-time) deadline))
+        (accept-process-output process 0.01))
+       (setq second (car (process-coding-system process)))
+       (process-send-string process (unibyte-string 172 13 10))
+       (process-send-eof process)
+       (while (and (process-live-p process) (< (float-time) deadline))
+        (accept-process-output process 0.01))
+       (when (process-live-p process) (error "Process output timeout"))
+       (accept-process-output process 0.01)
+       (list first second
+             (with-current-buffer buffer (string-to-list (buffer-string)))
+             (car (process-coding-system process))))
+      (when (process-live-p process) (delete-process process))
+      (kill-buffer buffer))))
+   '(nil t)))"#
+    ));
+    assert_eq!(
+        result,
+        "OK ((neovm-process-partial-dos no-conversion (65 10 0 4194279 4194209 4194220 13 10) no-conversion) (neovm-process-partial-dos utf-8-dos (65 10 0 30828 10) utf-8-dos))"
+    );
+}

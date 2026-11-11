@@ -219,3 +219,75 @@ fn coding_null_byte_inhibition_ignores_plist_only_mutation() {
         ]],
     );
 }
+
+/// Registered undecided types use detection for sync output, async buffers, and
+/// filters. The invalid byte must survive a NUL-selected no-conversion result;
+/// aliases, EOL variants, definition attributes, and explicit decoders agree.
+#[test]
+fn coding_custom_undecided_process_output_preserves_null_selected_bytes() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    crate::common::assert_oracle_parity_expect(
+        r#"(let ((rows (progn
+  (dolist (entry '((neovm-process-null-follow . 0)
+                   (neovm-process-null-on . t)
+                   (neovm-process-null-off . nil)))
+    (define-coding-system (car entry) "Custom process detection probe"
+      :coding-type 'undecided :mnemonic ?N :charset-list '(emacs)
+      :inhibit-null-byte-detection (cdr entry)))
+  (define-coding-system-alias 'neovm-process-null-alias 'neovm-process-null-follow)
+  (mapcar
+   (lambda (sink)
+    (mapcar
+     (lambda (flag)
+      (let ((inhibit-null-byte-detection flag))
+       (mapcar
+        (lambda (coding)
+         (mapcar
+          (lambda (bytes)
+           (let ((buffer (generate-new-buffer " *custom-null-process*"))
+                 (pieces nil) process output used)
+            (unwind-protect
+             (progn
+              (if (eq sink 'sync)
+               (with-current-buffer buffer
+                (let ((coding-system-for-read coding)
+                      (coding-system-for-write 'no-conversion))
+                 (with-temp-buffer
+                  (set-buffer-multibyte nil)
+                  (insert bytes)
+                  (call-process-region (point-min) (point-max) "cat" nil buffer nil)))
+                (setq used last-coding-system-used))
+               (setq process
+                (make-process :name "custom-null-process" :buffer buffer
+                 :command '("cat") :connection-type 'pipe :noquery t
+                 :coding (cons coding 'no-conversion) :sentinel #'ignore
+                 :filter (and (eq sink 'filter)
+                           (lambda (_ chunk) (push chunk pieces)))))
+               (let ((deadline (+ (float-time) 5)))
+                (process-send-string process bytes)
+                (process-send-eof process)
+                (while (and (process-live-p process) (< (float-time) deadline))
+                 (accept-process-output process 0.01))
+                (when (process-live-p process) (error "Process output timeout"))
+                (accept-process-output process 0.01))
+               (setq used (car (process-coding-system process))))
+              (setq output (if (eq sink 'filter)
+                            (apply #'concat (nreverse pieces))
+                            (with-current-buffer buffer (buffer-string))))
+              (list (string-to-list output) used))
+             (when (and process (process-live-p process)) (delete-process process))
+             (kill-buffer buffer))))
+          (list (unibyte-string 0 231 161 172 13 10)
+                (unibyte-string 0 255 13 10))))
+        '(neovm-process-null-follow neovm-process-null-alias-dos
+          neovm-process-null-on-dos neovm-process-null-off
+          undecided utf-8-dos no-conversion))))
+     '(nil t)))
+   '(sync buffer filter)))))
+  (list (car rows) (equal (car rows) (cadr rows))
+        (caddr rows)))"#,
+        expect_test::expect![[
+            r#""OK ((((((0 4194279 4194209 4194220 13 10) no-conversion) ((0 4194303 13 10) no-conversion)) (((0 4194279 4194209 4194220 13 10) no-conversion) ((0 4194303 13 10) no-conversion)) (((0 30828 10) utf-8-dos) ((0 255 10) iso-latin-1-dos)) (((0 4194279 4194209 4194220 13 10) no-conversion) ((0 4194303 13 10) no-conversion)) (((0 4194279 4194209 4194220 13 10) no-conversion) ((0 4194303 13 10) no-conversion)) (((0 30828 10) utf-8-dos) ((0 4194303 10) utf-8-dos)) (((0 4194279 4194209 4194220 13 10) no-conversion) ((0 4194303 13 10) no-conversion))) ((((0 30828 10) utf-8-dos) ((0 255 10) iso-latin-1-dos)) (((0 30828 10) utf-8-dos) ((0 255 10) iso-latin-1-dos)) (((0 30828 10) utf-8-dos) ((0 255 10) iso-latin-1-dos)) (((0 4194279 4194209 4194220 13 10) no-conversion) ((0 4194303 13 10) no-conversion)) (((0 30828 10) utf-8-dos) ((0 255 10) iso-latin-1-dos)) (((0 30828 10) utf-8-dos) ((0 4194303 10) utf-8-dos)) (((0 4194279 4194209 4194220 13 10) no-conversion) ((0 4194303 13 10) no-conversion)))) t (((((0 231 161 172 13 10) no-conversion) ((0 255 13 10) no-conversion)) (((0 231 161 172 13 10) no-conversion) ((0 255 13 10) no-conversion)) (((0 30828 10) utf-8-dos) ((0 255 10) iso-latin-1-dos)) (((0 231 161 172 13 10) no-conversion) ((0 255 13 10) no-conversion)) (((0 231 161 172 13 10) no-conversion) ((0 255 13 10) no-conversion)) (((0 30828 10) utf-8-dos) ((0 4194303 10) utf-8-dos)) (((0 231 161 172 13 10) no-conversion) ((0 255 13 10) no-conversion))) ((((0 30828 10) utf-8-dos) ((0 255 10) iso-latin-1-dos)) (((0 30828 10) utf-8-dos) ((0 255 10) iso-latin-1-dos)) (((0 30828 10) utf-8-dos) ((0 255 10) iso-latin-1-dos)) (((0 231 161 172 13 10) no-conversion) ((0 255 13 10) no-conversion)) (((0 30828 10) utf-8-dos) ((0 255 10) iso-latin-1-dos)) (((0 30828 10) utf-8-dos) ((0 4194303 10) utf-8-dos)) (((0 231 161 172 13 10) no-conversion) ((0 255 13 10) no-conversion)))))""#
+        ]],
+    );
+}
