@@ -894,6 +894,8 @@ const PUT_OVERRIDES_KEY: i64 = i64::MIN + 5;
 const CCL_KEY_DECODER: i64 = i64::MIN + 6;
 const CCL_KEY_ENCODER: i64 = i64::MIN + 7;
 const CCL_KEY_VALIDS: i64 = i64::MIN + 8;
+// GNU encodes this definition-time attribute separately from the mutable plist.
+const UNDECIDED_KEY_INHIBIT_NULL: i64 = i64::MIN + 9;
 
 /// The compiled-program designators and byte-validity table carried by a CCL
 /// coding system. These are the three type-specific attributes GNU's
@@ -1882,6 +1884,32 @@ fn property_lookup(info: &CodingSystemInfo, prop: SymId) -> Option<Value> {
         return info.properties.get(&colon_key).copied();
     }
     None
+}
+
+/// Resolve an undecided coding's definition-time NUL policy against the live
+/// global. GNU's nil/t/other values mean never/always/inherit respectively.
+pub(crate) fn undecided_null_byte_inhibition(
+    mgr: &CodingSystemManager,
+    coding: &str,
+    global: bool,
+) -> Option<bool> {
+    let resolved = resolve_sym(mgr.resolve(coding)?);
+    let info = mgr.get(resolved)?;
+    if resolve_sym(info.coding_type) != "undecided" {
+        return None;
+    }
+    let encoded = info
+        .int_properties
+        .get(&UNDECIDED_KEY_INHIBIT_NULL)
+        .or_else(|| {
+            mgr.get(strip_eol_suffix(resolved))?
+                .int_properties
+                .get(&UNDECIDED_KEY_INHIBIT_NULL)
+        })
+        .and_then(|value| value.as_fixnum())
+        // GNU's C-defined undecided coding inherits the global (attribute 0).
+        .unwrap_or(0);
+    Some(encoded > 0 || (encoded == 0 && global))
 }
 
 fn plist_push_key(plist: &mut Vec<Value>, key: SymId, value: Value) {
@@ -3713,6 +3741,19 @@ pub fn builtin_define_coding_system_internal(
     info.for_unibyte = for_unibyte;
     info.properties = properties;
 
+    if resolve_sym(coding_type) == "undecided" {
+        let flag = mode.unwrap(args.get(13).copied().unwrap_or(Value::NIL));
+        let encoded = if flag.is_nil() {
+            -1
+        } else if flag.is_t() {
+            1
+        } else {
+            0
+        };
+        info.int_properties
+            .insert(UNDECIDED_KEY_INHIBIT_NULL, Value::fixnum(encoded));
+    }
+
     // Stash the verbatim plist (arg 11) so coding-system-plist can reproduce
     // GNU's stored plist order exactly: GNU prepends `:ascii-compatible-p` and
     // `:category` onto this list (which mule.el already led with :name and
@@ -4997,6 +5038,7 @@ fn detect_coding_systems(
     highest: bool,
     block: SourceBlock,
     mode: SymbolMode,
+    inhibit_null: bool,
 ) -> Value {
     let bindings = coding_category_bindings(mgr, mode);
     let bytes = text.as_bytes();
@@ -5008,6 +5050,7 @@ fn detect_coding_systems(
         text.is_multibyte(),
         highest,
         block,
+        inhibit_null,
     );
 
     // GNU `detect_coding_system` finishes by detecting the end-of-line format
@@ -5040,6 +5083,7 @@ pub(crate) fn detect_highest_coding_system_for_unibyte_bytes(
     bytes: &[u8],
     block: SourceBlock,
     mode: SymbolMode,
+    inhibit_null: bool,
 ) -> Option<SymId> {
     let bindings = coding_category_bindings(mgr, mode);
     let scan = scan_undecided(
@@ -5049,6 +5093,7 @@ pub(crate) fn detect_highest_coding_system_for_unibyte_bytes(
         false,
         block,
         WalkStop::AtFirstFound,
+        inhibit_null,
     );
     let base = match detect_coding_found(mgr, &bindings.priorities, &bindings.systems, &scan, mode)
     {
@@ -5248,6 +5293,7 @@ fn scan_undecided(
     multibytep: bool,
     block: SourceBlock,
     stop: WalkStop,
+    inhibit_null: bool,
 ) -> UndecidedScan {
     let priorities = &bindings.priorities;
     let cat_system = &bindings.systems;
@@ -5276,7 +5322,7 @@ fn scan_undecided(
                     di.rejected |= !(MASK_ISO_7BIT | MASK_ISO_ELSE);
                     break;
                 }
-            } else if c == 0 {
+            } else if c == 0 && !inhibit_null {
                 null_byte_found = true;
                 if eight_bit_found {
                     break;
@@ -5471,6 +5517,7 @@ fn detect_categories(
     multibytep: bool,
     highest: bool,
     block: SourceBlock,
+    inhibit_null: bool,
 ) -> Value {
     let priorities = &bindings.priorities;
     let cat_system = &bindings.systems;
@@ -5489,6 +5536,7 @@ fn detect_categories(
         } else {
             WalkStop::RunEveryDetector
         },
+        inhibit_null,
     );
 
     // Result construction (coding.c:8838).
@@ -5585,6 +5633,29 @@ pub fn builtin_detect_coding_string(
     args: Vec<Value>,
     mode: SymbolMode,
 ) -> EvalResult {
+    detect_coding_string_with_null_policy(mgr, args, mode, false)
+}
+
+/// Detect with the evaluator's current dynamic NUL-inhibition binding.
+pub fn builtin_detect_coding_string_in_context<H: TextHost>(
+    ctx: &H,
+    args: Vec<Value>,
+) -> EvalResult {
+    detect_coding_string_with_null_policy(
+        ctx.coding_systems(),
+        args,
+        ctx.symbol_mode(),
+        ctx.visible_variable_value_or_nil(intern("inhibit-null-byte-detection"))
+            .is_truthy(),
+    )
+}
+
+fn detect_coding_string_with_null_policy(
+    mgr: &CodingSystemManager,
+    args: Vec<Value>,
+    mode: SymbolMode,
+    global: bool,
+) -> EvalResult {
     expect_min_args("detect-coding-string", &args, 1)?;
     expect_max_args("detect-coding-string", &args, 2)?;
     let Some(s) = args[0].as_lisp_string() else {
@@ -5602,6 +5673,7 @@ pub fn builtin_detect_coding_string(
         highest,
         SourceBlock::Last,
         mode,
+        undecided_null_byte_inhibition(mgr, "undecided", global).unwrap_or(false),
     ))
 }
 
@@ -5636,6 +5708,31 @@ pub fn builtin_detect_coding_region(
     args: Vec<Value>,
     mode: SymbolMode,
 ) -> EvalResult {
+    detect_coding_region_with_null_policy(mgr, buffers, args, mode, false)
+}
+
+/// Detect a region using the evaluator's current dynamic NUL-inhibition binding.
+pub fn builtin_detect_coding_region_in_context<H: TextHost>(
+    ctx: &H,
+    args: Vec<Value>,
+) -> EvalResult {
+    detect_coding_region_with_null_policy(
+        ctx.coding_systems(),
+        ctx.buffers(),
+        args,
+        ctx.symbol_mode(),
+        ctx.visible_variable_value_or_nil(intern("inhibit-null-byte-detection"))
+            .is_truthy(),
+    )
+}
+
+fn detect_coding_region_with_null_policy(
+    mgr: &CodingSystemManager,
+    buffers: &BufferManager,
+    args: Vec<Value>,
+    mode: SymbolMode,
+    global: bool,
+) -> EvalResult {
     expect_min_args("detect-coding-region", &args, 2)?;
     expect_max_args("detect-coding-region", &args, 3)?;
     validate_detect_coding_region(buffers, &args)?;
@@ -5663,6 +5760,7 @@ pub fn builtin_detect_coding_region(
         highest,
         SourceBlock::Last,
         mode,
+        undecided_null_byte_inhibition(mgr, "undecided", global).unwrap_or(false),
     ))
 }
 

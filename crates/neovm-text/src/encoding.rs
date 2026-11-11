@@ -547,6 +547,8 @@ pub fn coding_name_requires_detection(coding_system: &str) -> bool {
 /// whose first chunk is `a CRLF b CRLF` reports `undecided-dos` -- the eol half
 /// moved and the character half did not -- and a later non-ASCII chunk still
 /// moves it on to `utf-8-dos`.
+/// This context-free entry uses the default nil global NUL-inhibition setting;
+/// evaluator-driven conversions read their dynamic binding at detection time.
 #[doc(hidden)]
 pub fn detected_coding_name(
     coding_systems: &crate::emacs_core::coding::CodingSystemManager,
@@ -556,12 +558,17 @@ pub fn detected_coding_name(
     mode: neovm_value::tagged::SymbolMode,
 ) -> Option<&'static str> {
     let base = coding_system_base(coding_system);
-    let found = match base {
-        "undecided" | "prefer-utf-8" => {
+    let found = match crate::emacs_core::coding::undecided_null_byte_inhibition(
+        coding_systems,
+        coding_system,
+        false,
+    ) {
+        Some(inhibit_null) => {
             let detected = resolve_sym(detect_undecided_coding(
                 coding_systems,
                 bytes,
                 base == "prefer-utf-8",
+                inhibit_null,
                 block,
                 mode,
             )?);
@@ -574,7 +581,7 @@ pub fn detected_coding_name(
         }
         // The two arms that are keyed on a byte-order mark rather than on the
         // category priority list (:6702-6742).
-        _ => detect_bom_auto_coding(base, bytes, block)?,
+        None => detect_bom_auto_coding(base, bytes, block)?,
     };
     let name = apply_explicit_eol_suffix(found, coding_name_eol(coding_system));
     Some(resolve_sym(intern(&name)))
@@ -4628,6 +4635,7 @@ fn detect_undecided_coding(
     coding_systems: &crate::emacs_core::coding::CodingSystemManager,
     bytes: &[u8],
     prefer_utf_8: bool,
+    inhibit_null: bool,
     block: crate::emacs_core::coding::SourceBlock,
     mode: neovm_value::tagged::SymbolMode,
 ) -> Option<neovm_value::intern::SymId> {
@@ -4636,7 +4644,11 @@ fn detect_undecided_coding(
     // (src/coding.c:6619-6620), which is the same detector as everywhere else
     // and therefore tolerates a trailing partial character when this is not the
     // last block.
-    if prefer_utf_8 && utf8_or_truncated_utf8(bytes, block) && bytes.iter().any(|&b| b >= 0x80) {
+    if prefer_utf_8
+        && (inhibit_null || !bytes.contains(&0))
+        && utf8_or_truncated_utf8(bytes, block)
+        && bytes.iter().any(|&b| b >= 0x80)
+    {
         return Some(intern("utf-8"));
     }
 
@@ -4645,6 +4657,7 @@ fn detect_undecided_coding(
         bytes,
         block,
         mode,
+        inhibit_null,
     )
 }
 
@@ -4871,14 +4884,19 @@ fn builtin_coding_string_in_context<H: TextHost>(
     // carryover plus the read and with the read's own `CODING_MODE_LAST_BLOCK`.
     if let (false, EntryDetection::Here(block)) = (encode, entry.detection()) {
         let base = coding_system_base(&coding).to_owned();
-        if (base == "undecided" || base == "prefer-utf-8")
-            && let Some(src) = ctx.lisp_string(args[0])
+        if let Some(inhibit_null) = crate::emacs_core::coding::undecided_null_byte_inhibition(
+            ctx.coding_systems(),
+            &coding,
+            ctx.visible_variable_value_or_nil(intern("inhibit-null-byte-detection"))
+                .is_truthy(),
+        ) && let Some(src) = ctx.lisp_string(args[0])
         {
             let bytes = lisp_string_coding_source_bytes(src);
             let detected = detect_undecided_coding(
                 ctx.coding_systems(),
                 &bytes,
                 base == *"prefer-utf-8",
+                inhibit_null,
                 // `CODING_MODE_LAST_BLOCK` is the entry's to state, not this
                 // function's: `code_convert_string` and `code_convert_region`
                 // raise it before converting, `decode_coding_gap` detects

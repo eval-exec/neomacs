@@ -2025,6 +2025,31 @@ fn detect_matches_gnu_utf16be_bom_null() {
     assert_eq!(detect_list(&[254, 255, 0, 65]), vec!["no-conversion"]);
 }
 
+/// NUL may precede or follow UTF-8; suppressing its binary classification
+/// preserves the character detector's ordinary priority in either position.
+#[test]
+fn detect_null_byte_inhibition_preserves_utf8() {
+    crate::test_utils::init_test_tracing();
+    let bindings = gnu_detect_state();
+    for bytes in [
+        b"\0\xe7\xa1\xac\n".as_slice(),
+        b"\xe7\xa1\xac\0\n".as_slice(),
+    ] {
+        for (inhibit_null, expected) in [(false, "no-conversion"), (true, "utf-8")] {
+            let detected = detect_categories(
+                &bindings,
+                bytes,
+                bytes.len(),
+                false,
+                true,
+                SourceBlock::Last,
+                inhibit_null,
+            );
+            assert!(detected.is_bare_symbol_named(expected));
+        }
+    }
+}
+
 #[test]
 fn detect_matches_gnu_lone_high_byte() {
     crate::test_utils::init_test_tracing();
@@ -2656,6 +2681,7 @@ fn detect_list_mb(bytes: &[u8], src_chars: usize, multibytep: bool) -> Vec<Strin
         multibytep,
         false,
         SourceBlock::Last,
+        false,
     );
     list_to_vec(&v)
         .unwrap()

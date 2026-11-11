@@ -888,6 +888,7 @@ fn undecided_decode_uses_the_shared_iso_2022_detector() {
             eval.coding_systems(),
             b"\x1b$B$3$s\x1b(B",
             false,
+            false,
             neovm_text::emacs_core::coding::SourceBlock::Last,
             neovm_value::tagged::value::SymbolMode::Bare
         ),
