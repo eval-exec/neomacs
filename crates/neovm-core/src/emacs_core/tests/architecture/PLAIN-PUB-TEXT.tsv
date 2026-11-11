@@ -104,6 +104,8 @@ crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	Iso2022Spec field flag
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	Iso2022Spec field initial
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	Iso2022Spec field reg_usage
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	field	Iso2022Spec field request
+crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn builtin_detect_coding_region_in_context
+crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn builtin_detect_coding_string_in_context
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl CodingSystemManager::add_alias
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl CodingSystemManager::aliases_for
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	fn	fn impl CodingSystemManager::get

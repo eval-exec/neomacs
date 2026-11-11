@@ -604,10 +604,14 @@ crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl SyntaxSafePositions::poin
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl SyntaxSafePositions::points_mut
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl SyntaxSafePositions::set_key
 crates/neovm-edit/src/buffer/buffer_text.rs	struct	struct BufferText
+crates/neovm-edit/src/buffer/buffer_text.rs	use	use BufferContentRevision
 crates/neovm-edit/src/buffer/buffer_text.rs	use	use BufferSourceAuthority
 crates/neovm-edit/src/buffer/buffer_text.rs	use	use BufferSourceReadLease
+crates/neovm-edit/src/buffer/buffer_text/source_authority.rs	fn	fn impl Buffer::capture_content_revision
 crates/neovm-edit/src/buffer/buffer_text/source_authority.rs	fn	fn impl Buffer::capture_motion_source_authority
+crates/neovm-edit/src/buffer/buffer_text/source_authority.rs	fn	fn impl BufferContentRevision::matches_buffer
 crates/neovm-edit/src/buffer/buffer_text/source_authority.rs	fn	fn impl BufferSourceAuthority::validate
+crates/neovm-edit/src/buffer/buffer_text/source_authority.rs	struct	struct BufferContentRevision
 crates/neovm-edit/src/buffer/buffer_text/source_authority.rs	struct	struct BufferSourceAuthority
 crates/neovm-edit/src/buffer/buffer_text/source_authority.rs	struct	struct BufferSourceReadLease
 crates/neovm-edit/src/buffer/composition.rs	const	const MAX_AUTO_COMPOSITION_LOOKBACK
@@ -675,6 +679,7 @@ crates/neovm-edit/src/buffer/insdel.rs	fn	fn impl BufferManager::delete_buffer_e
 crates/neovm-edit/src/buffer/insdel.rs	fn	fn impl BufferManager::delete_buffer_measured_region
 crates/neovm-edit/src/buffer/insdel.rs	fn	fn impl BufferManager::edit_range_for_buffer_char_range
 crates/neovm-edit/src/buffer/insdel.rs	fn	fn impl BufferManager::edit_range_for_buffer_emacs_byte_range
+crates/neovm-edit/src/buffer/insdel.rs	fn	fn impl BufferManager::expose_empty_unibyte_buffer_bytes
 crates/neovm-edit/src/buffer/insdel.rs	fn	fn impl BufferManager::insert_into_buffer
 crates/neovm-edit/src/buffer/insdel.rs	fn	fn impl BufferManager::insert_into_buffer_before_markers
 crates/neovm-edit/src/buffer/insdel.rs	fn	fn impl BufferManager::insert_lisp_string_into_buffer
@@ -684,6 +689,7 @@ crates/neovm-edit/src/buffer/insdel.rs	fn	fn impl BufferManager::replace_buffer_
 crates/neovm-edit/src/buffer/insdel.rs	fn	fn impl BufferManager::replace_buffer_measured_region_lisp_string
 crates/neovm-edit/src/buffer/insdel.rs	fn	fn impl BufferManager::subst_char_in_buffer_region
 crates/neovm-edit/src/buffer/insdel.rs	fn	fn impl BufferManager::transpose_buffer_regions
+crates/neovm-edit/src/buffer/insdel.rs	fn	fn impl BufferManager::with_preserved_modification_state
 crates/neovm-edit/src/buffer/mod.rs	mod	mod buffer
 crates/neovm-edit/src/buffer/mod.rs	mod	mod overlay
 crates/neovm-edit/src/buffer/mod.rs	mod	mod position
@@ -696,6 +702,7 @@ crates/neovm-edit/src/buffer/mod.rs	mod	mod visited_file_modtime
 crates/neovm-edit/src/buffer/mod.rs	use	use AccessibleCharRange
 crates/neovm-edit/src/buffer/mod.rs	use	use AccessibleEmacsByteRange
 crates/neovm-edit/src/buffer/mod.rs	use	use Buffer
+crates/neovm-edit/src/buffer/mod.rs	use	use BufferContentRevision
 crates/neovm-edit/src/buffer/mod.rs	use	use BufferId
 crates/neovm-edit/src/buffer/mod.rs	use	use BufferManager
 crates/neovm-edit/src/buffer/mod.rs	use	use BufferSourceAuthority
