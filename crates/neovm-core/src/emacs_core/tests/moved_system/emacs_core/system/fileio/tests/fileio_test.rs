@@ -8115,32 +8115,38 @@ fn set_visited_file_modtime_asks_the_file_name_handler_before_it_stats() {
     );
 }
 
-/// For a nonempty destination, GNU shows `set-auto-coding-function` the head
-/// and tail only (fileio.c `Finsert_file_contents`, BEG < Z): the whole file up
-/// to 4 KiB, otherwise its first 1 KiB followed by its tail from
-/// max(len - 3 KiB, 4 KiB).
+/// GNU keeps a full 4 KiB head only when it reaches explicit END. Otherwise
+/// the nonempty-destination probe retains its first 1 KiB and physical tail.
 #[test]
 fn auto_coding_probe_shows_the_head_and_tail_like_gnu() {
     let small: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
     assert_eq!(
-        &*auto_coding_probe_bytes(&small, 0..small.len()),
+        &*auto_coding_probe_bytes(&small, 0..small.len(), Some(small.len())),
         &small[..]
     );
     // 5 KiB: 1 KiB of head, then everything past the 4 KiB head read.
     let mid: Vec<u8> = (0..5120u32).map(|i| (i % 253) as u8).collect();
-    let probe = auto_coding_probe_bytes(&mid, 0..mid.len());
+    assert_eq!(
+        &*auto_coding_probe_bytes(&small, 0..small.len(), None),
+        &small[..1024]
+    );
+    assert_eq!(
+        &*auto_coding_probe_bytes(&small, 0..small.len(), Some(5000)),
+        &small[..1024]
+    );
+    let probe = auto_coding_probe_bytes(&mid, 0..mid.len(), None);
     assert_eq!(probe.len(), 1024 + 1024);
     assert_eq!(&probe[..1024], &mid[..1024]);
     assert_eq!(&probe[1024..], &mid[4096..]);
     // 20 KiB: 1 KiB of head plus the last 3 KiB.
     let big: Vec<u8> = (0..20480u32).map(|i| (i % 241) as u8).collect();
-    let probe = auto_coding_probe_bytes(&big, 0..big.len());
+    let probe = auto_coding_probe_bytes(&big, 0..big.len(), None);
     assert_eq!(probe.len(), 1024 + 3072);
     assert_eq!(&probe[..1024], &big[..1024]);
     assert_eq!(&probe[1024..], &big[20480 - 3072..]);
     // A partial read seeks against physical EOF before clamping to END.
     for range in [0..5000, 500..5500] {
-        let probe = auto_coding_probe_bytes(&big, range.clone());
+        let probe = auto_coding_probe_bytes(&big, range.clone(), Some(range.end));
         assert_eq!(probe.len(), 4096);
         assert_eq!(&probe[..1024], &big[range.start..range.start + 1024]);
         assert_eq!(&probe[1024..], &big[range.end - 3072..range.end]);
@@ -8233,6 +8239,113 @@ fn insert_file_contents_empty_auto_coding_keeps_the_full_source() {
 #[cfg(test)]
 #[path = "time_boundary.rs"]
 mod time_boundary;
+
+#[test]
+fn insert_file_contents_empty_auto_coding_decodes_callback_mutations() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mutating-auto-coding.txt");
+    fs::write(&path, vec![b'x'; 6000]).unwrap();
+    for (action, count, first, second) in [
+        ("(delete-char 1) (insert \"Y\") 'utf-8-unix", 6000, 89, 120),
+        ("(insert \"YZ\") 'utf-8-unix", 6002, 89, 90),
+        ("(delete-char 2) 'utf-8-unix", 5998, 120, 120),
+        ("(delete-char 1) (insert \"Y\") nil", 6000, 89, 120),
+    ] {
+        let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+        eval.eval_str("(defalias 'undo-auto-amalgamate (lambda (&rest _) nil))")
+            .unwrap();
+        eval.eval_str(&format!(
+            "(setq coding-system-for-read nil set-auto-coding-function
+                   (lambda (_name _size) (goto-char 3501) {action}))"
+        ))
+        .unwrap();
+        let result =
+            builtin_insert_file_contents(&mut eval, vec![Value::string(path.to_str().unwrap())])
+                .unwrap();
+        assert_eq!(result.cons_cdr().cons_car().as_fixnum(), Some(count));
+        let actual = eval.eval_str("(list (buffer-size) (char-after 3501) (char-after 3502) enable-multibyte-characters (point))").unwrap();
+        let expected = Value::list(vec![
+            Value::fixnum(count),
+            Value::fixnum(first),
+            Value::fixnum(second),
+            Value::T,
+            Value::fixnum(1),
+        ]);
+        assert!(
+            crate::emacs_core::value::equal_value(&actual, &expected, 0),
+            "action {action}: {actual:?}"
+        );
+    }
+}
+
+#[test]
+fn insert_file_contents_empty_auto_coding_error_restores_state_after_gc() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("auto-coding-error.txt");
+    fs::write(&path, vec![b'x'; 6000]).unwrap();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str("(defalias 'undo-auto-amalgamate (lambda (&rest _) nil))")
+        .unwrap();
+    eval.eval_str("(setq buffer-undo-list (list (cons 8 9)) coding-system-for-read nil set-auto-coding-function (lambda (_name _size) (goto-char 3501) (insert \"YZ\") (garbage-collect) (error \"probe failed\")))").unwrap();
+    assert!(
+        builtin_insert_file_contents(&mut eval, vec![Value::string(path.to_str().unwrap())])
+            .is_err()
+    );
+    let actual = eval
+        .eval_str("(list (buffer-size) enable-multibyte-characters buffer-undo-list (point))")
+        .unwrap();
+    let expected = eval.eval_str("'(0 t ((8 . 9)) 1)").unwrap();
+    assert!(
+        crate::emacs_core::value::equal_value(&actual, &expected, 0),
+        "{actual:?}"
+    );
+}
+
+#[test]
+fn insert_file_contents_empty_filename_coding_sees_and_can_change_raw_source() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("filename-probe.txt");
+    for length in [0, 6000] {
+        fs::write(&path, vec![b'x'; length]).unwrap();
+        for auto in ["nil", "(lambda (_name _size) nil)"] {
+            let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+            eval.eval_str(&format!(
+                r#"
+                (defalias 'undo-auto-amalgamate (lambda (&rest _) nil))
+                (defalias 'neovm-mutating-filename-coding
+                  (lambda (_args)
+                    (setq neovm-filename-probe
+                          (list (buffer-size) enable-multibyte-characters (eq buffer-undo-list t)))
+                    (goto-char (point-min)) (insert "Y") 'utf-8-unix))
+                (setq coding-system-for-read nil set-auto-coding-function {auto}
+                      file-coding-system-alist '(("." . neovm-mutating-filename-coding)))
+            "#
+            ))
+            .unwrap();
+            let result = builtin_insert_file_contents(
+                &mut eval,
+                vec![Value::string(path.to_str().unwrap())],
+            )
+            .unwrap();
+            assert_eq!(
+                result.cons_cdr().cons_car().as_fixnum(),
+                Some(length as i64 + 1)
+            );
+            let observed = eval.eval_str("neovm-filename-probe").unwrap();
+            let expected = Value::list(vec![Value::fixnum(length as i64), Value::NIL, Value::T]);
+            assert!(crate::emacs_core::value::equal_value(
+                &observed, &expected, 0
+            ));
+            assert_eq!(
+                eval.eval_str("(char-after 1)").unwrap().as_fixnum(),
+                Some(89)
+            );
+        }
+    }
+}
 
 // Native panic fixture: exercises Rust unwinding through the actual
 // format-decode callback path of the insert-file pipeline.

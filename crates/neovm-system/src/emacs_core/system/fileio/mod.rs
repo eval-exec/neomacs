@@ -6055,6 +6055,7 @@ fn decide_auto_coding_for_insert_file_contents(
     filename: neovm_value::heap_types::LispString,
     bytes: &[u8],
     requested: std::ops::Range<usize>,
+    requested_end: Option<usize>,
 ) -> Result<Option<String>, Flow> {
     let function = eval.visible_variable_value_or_nil("set-auto-coding-function");
     if function.is_nil() || requested.is_empty() {
@@ -6094,7 +6095,7 @@ fn decide_auto_coding_for_insert_file_contents(
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     // GNU's nonempty-buffer path probes the head and tail in a work buffer
     // (src/fileio.c, BEG < Z), unlike its whole-file empty-buffer path.
-    let probe = auto_coding_probe_bytes(bytes, requested);
+    let probe = auto_coding_probe_bytes(bytes, requested, requested_end);
     let raw = neovm_value::heap_types::LispString::from_unibyte(probe.to_vec());
     eval.edit
         .buffers
@@ -6187,18 +6188,21 @@ fn restore_empty_buffer_after_auto_coding_probe(
 /// GNU's nonempty-destination probe, retaining the validated requested range
 /// and physical file extent. Its seek starts at physical EOF minus 3 KiB,
 /// then adjusts to the requested end (fileio.c `Finsert_file_contents`).
+/// `requested_end` retains the original optional END, before the range was
+/// clamped to EOF: a full 4 KiB head read only remains whole if it reached END.
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn auto_coding_probe_bytes(
     bytes: &[u8],
     requested: std::ops::Range<usize>,
+    requested_end: Option<usize>,
 ) -> std::borrow::Cow<'_, [u8]> {
     const HEAD_READ: usize = 4 * 1024;
     const HEAD_KEEP: usize = 1024;
     const TAIL: usize = 3 * 1024;
-    if requested.len() <= HEAD_READ {
+    let head_end = requested.start + requested.len().min(HEAD_READ);
+    if requested.len() < HEAD_READ || requested_end.is_some_and(|end| head_end >= end) {
         return std::borrow::Cow::Borrowed(&bytes[requested]);
     }
-    let head_end = requested.start + HEAD_READ;
     let physical_tail = bytes.len() - TAIL;
     let tail_start = if physical_tail <= head_end {
         head_end
@@ -6211,16 +6215,19 @@ pub(crate) fn auto_coding_probe_bytes(
     std::borrow::Cow::Owned(probe)
 }
 
-fn decide_auto_coding_for_empty_insert_file_contents(
+struct EmptyFileCodingProbe<'a> {
+    decision: ReadCodingDecision,
+    bytes: std::borrow::Cow<'a, [u8]>,
+}
+
+fn decide_auto_coding_for_empty_insert_file_contents<'a>(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     filename: neovm_value::heap_types::LispString,
-    bytes: &[u8],
+    bytes: &'a [u8],
     current_id: neovm_edit::buffer::BufferId,
-) -> Result<Option<String>, Flow> {
+    args: &[Value],
+) -> Result<EmptyFileCodingProbe<'a>, Flow> {
     let function = eval.visible_variable_value_or_nil("set-auto-coding-function");
-    if function.is_nil() || bytes.is_empty() {
-        return Ok(None);
-    }
 
     let (saved_multibyte, saved_undo_list) = {
         let buf = eval
@@ -6231,54 +6238,92 @@ fn decide_auto_coding_for_empty_insert_file_contents(
         (buf.get_multibyte(), buf.get_undo_list())
     };
 
-    eval.set_current_buffer_unrecorded(current_id)?;
-    eval.edit
-        .buffers
-        .set_buffer_multibyte_flag(current_id, false)
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    if let Some(buf) = eval.edit.buffers.get_mut(current_id) {
-        buf.set_undo_list(Value::T);
+    // GNU keeps the saved undo list in unwind_data across arbitrary Lisp and
+    // GC while the buffer's own undo slot is temporarily t.
+    let roots = eval.save_specpdl_roots();
+    eval.push_specpdl_root(saved_undo_list);
+    for arg in args {
+        eval.push_specpdl_root(*arg);
     }
-    // GNU temporarily exposes the complete inserted file in the otherwise
-    // empty destination (src/fileio.c:5023-5077). A head/tail probe here can
-    // omit a coding footer in a file just over 4 KiB and changes callback SIZE.
-    eval.edit
-        .buffers
-        .insert_unibyte_bytes_into_buffer(current_id, bytes)
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let _ = eval
-        .edit
-        .buffers
-        .goto_buffer_emacs_byte_pos(current_id, EmacsBytePos::new(0));
+    let result = (|| -> Result<EmptyFileCodingProbe<'a>, Flow> {
+        eval.set_current_buffer_unrecorded(current_id)?;
+        eval.edit
+            .buffers
+            .set_buffer_multibyte_flag(current_id, false)
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        if let Some(buf) = eval.edit.buffers.get_mut(current_id) {
+            buf.set_undo_list(Value::T);
+        }
+        // GNU temporarily exposes the complete inserted file in the otherwise
+        // empty destination (src/fileio.c:5023-5077). A head/tail probe here can
+        // omit a coding footer in a file just over 4 KiB and changes callback SIZE.
+        eval.edit
+            .buffers
+            .insert_unibyte_bytes_into_buffer(current_id, bytes)
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let _ = eval
+            .edit
+            .buffers
+            .goto_buffer_emacs_byte_pos(current_id, EmacsBytePos::new(0));
 
-    let result = eval.apply(
-        function,
-        vec![
-            Value::heap_string(filename),
-            Value::fixnum(bytes.len() as i64),
-        ],
+        let staged_tick = eval
+            .edit
+            .buffers
+            .get(current_id)
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
+            .chars_modified_tick();
+        let auto = if !function.is_nil() && !bytes.is_empty() {
+            let value = eval.apply(
+                function,
+                vec![
+                    Value::heap_string(filename.clone()),
+                    Value::fixnum(bytes.len() as i64),
+                ],
+            )?;
+            auto_coding_system_name(eval, value)?
+        } else {
+            None
+        };
+        // GNU calls the filename fallback while the raw text is still staged,
+        // even when there was no auto-coding callback (fileio.c:5056-5070).
+        let decision = if let Some(name) = auto {
+            ReadCodingDecision::AutoCoding(name)
+        } else {
+            match decide_file_name_coding_for_insert_file_contents(
+                eval,
+                filename,
+                args.get(1).copied().unwrap_or(Value::NIL),
+                args.get(2).copied().unwrap_or(Value::NIL),
+                args.get(3).copied().unwrap_or(Value::NIL),
+                Value::NIL,
+            )? {
+                Some(name) => ReadCodingDecision::FileNameAlist(name),
+                None => ReadCodingDecision::Undecided,
+            }
+        };
+        let buffer = eval
+            .edit
+            .buffers
+            .get(current_id)
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        // decide_coding_unwind moves the callback's resulting bytes back to the
+        // gap and reports their new length. Borrow the original when text did
+        // not change; property-only fontification must not force a full copy.
+        let bytes = if buffer.chars_modified_tick() == staged_tick && !buffer.get_multibyte() {
+            std::borrow::Cow::Borrowed(bytes)
+        } else {
+            std::borrow::Cow::Owned(buffer.dump_text_bytes())
+        };
+        Ok(EmptyFileCodingProbe { decision, bytes })
+    })();
+    restore_empty_buffer_after_auto_coding_probe(
+        eval,
+        current_id,
+        saved_multibyte,
+        saved_undo_list,
     );
-    let value = match result {
-        Ok(value) => {
-            restore_empty_buffer_after_auto_coding_probe(
-                eval,
-                current_id,
-                saved_multibyte,
-                saved_undo_list,
-            );
-            value
-        }
-        Err(flow) => {
-            restore_empty_buffer_after_auto_coding_probe(
-                eval,
-                current_id,
-                saved_multibyte,
-                saved_undo_list,
-            );
-            return Err(flow);
-        }
-    };
-    auto_coding_system_name(eval, value)
+    eval.restore_specpdl_roots(roots);
+    result
 }
 
 /// `(insert-file-contents FILENAME &optional VISIT BEG END REPLACE)`
@@ -6447,6 +6492,12 @@ pub fn builtin_insert_file_contents(
     } else {
         file_len
     };
+    // GNU tests the original END against its first read before clamping at
+    // physical EOF; an omitted END therefore differs from END == file size.
+    let requested_end = args
+        .get(3)
+        .filter(|value| !value.is_nil())
+        .map(|_| end_off as usize);
 
     if begin > file_len {
         return Err(signal(
@@ -6466,6 +6517,7 @@ pub fn builtin_insert_file_contents(
     }
 
     let slice = &contents_bytes[begin as usize..end_off as usize];
+    let mut coding_source = std::borrow::Cow::Borrowed(slice);
     let multibyte = eval
         .edit
         .buffers
@@ -6482,40 +6534,35 @@ pub fn builtin_insert_file_contents(
     let decision = match coding_system_for_read.clone() {
         Some(name) => ReadCodingDecision::ForRead(name),
         None if !multibyte => ReadCodingDecision::Undecided,
+        None if current_buffer_was_empty => {
+            let probe = decide_auto_coding_for_empty_insert_file_contents(
+                eval,
+                resolved.clone(),
+                slice,
+                current_id,
+                &args,
+            )?;
+            coding_source = probe.bytes;
+            probe.decision
+        }
         None => {
-            let auto = if current_buffer_was_empty {
-                decide_auto_coding_for_empty_insert_file_contents(
-                    eval,
-                    resolved.clone(),
-                    slice,
-                    current_id,
-                )?
-            } else {
-                decide_auto_coding_for_insert_file_contents(
-                    eval,
-                    resolved.clone(),
-                    &contents_bytes,
-                    begin as usize..end_off as usize,
-                )?
-            };
+            let auto = decide_auto_coding_for_insert_file_contents(
+                eval,
+                resolved.clone(),
+                &contents_bytes,
+                begin as usize..end_off as usize,
+                requested_end,
+            )?;
             match auto {
                 Some(name) => ReadCodingDecision::AutoCoding(name),
                 None => {
-                    // GNU passes REPLACE through on the non-empty-buffer path
-                    // and nil on the empty-buffer one (src/fileio.c:4417 vs
-                    // :5063).
-                    let replace_arg = if current_buffer_was_empty {
-                        Value::NIL
-                    } else {
-                        args.get(4).copied().unwrap_or(Value::NIL)
-                    };
                     match decide_file_name_coding_for_insert_file_contents(
                         eval,
                         resolved.clone(),
                         args.get(1).copied().unwrap_or(Value::NIL),
                         args.get(2).copied().unwrap_or(Value::NIL),
                         args.get(3).copied().unwrap_or(Value::NIL),
-                        replace_arg,
+                        args.get(4).copied().unwrap_or(Value::NIL),
                     )? {
                         Some(name) => ReadCodingDecision::FileNameAlist(name),
                         None => ReadCodingDecision::Undecided,
@@ -6524,7 +6571,8 @@ pub fn builtin_insert_file_contents(
             }
         }
     };
-    let contents = decode_insert_file_contents(eval, slice, multibyte, decision.coding_system())?;
+    let contents =
+        decode_insert_file_contents(eval, &coding_source, multibyte, decision.coding_system())?;
     let decoded_char_count = contents.char_count();
 
     let signal_change_hooks = !visit || replace_requested;
