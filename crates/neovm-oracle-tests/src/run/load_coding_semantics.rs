@@ -145,3 +145,73 @@ fn oracle_nested_source_load_restores_the_outer_reader() {
         expect,
     );
 }
+
+#[test]
+fn oracle_insert_file_contents_auto_coding_source_extent_depends_on_destination() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[r#""OK ((4100 4100 nil t t) (1028 1028 nil nil nil))""#]];
+    crate::common::assert_oracle_parity_with_shared_tempdir_expect(
+        r#"(let* ((file (expand-file-name "coding-extent.txt"
+                                          (getenv "NEOVM_ORACLE_TEST_TMPDIR")))
+                  (footer "\n;; Local Variables:\n;; coding: utf-8\n;; End:\n")
+                  (contents (concat (make-string (- 4100 (length footer)) ?x) footer)))
+             (unwind-protect
+                 (progn
+                   (let ((coding-system-for-write 'utf-8-unix))
+                     (write-region contents nil file nil 'silent))
+                   (mapcar
+                    (lambda (nonempty)
+                      (with-temp-buffer
+                        (when nonempty (insert "prefix"))
+                        (let* ((target (current-buffer))
+                               observed
+                               (coding-system-for-read nil)
+                               (set-auto-coding-function
+                                (lambda (_filename size)
+                                  (setq observed
+                                        (list size (buffer-size)
+                                              enable-multibyte-characters
+                                              (eq target (current-buffer))
+                                              (and (save-excursion
+                                                     (goto-char (point-min))
+                                                     (search-forward "coding: utf-8" nil t)) t)))
+                                  'utf-8)))
+                          (insert-file-contents file)
+                          observed)))
+                    '(nil t)))
+               (when (file-exists-p file) (delete-file file))))"#,
+        expect,
+    );
+}
+
+#[test]
+fn oracle_info_reads_utf8_footer_in_a_file_just_over_four_kib() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[r#""OK (\"Top\" utf-8-unix t t)""#]];
+    crate::common::assert_oracle_parity_with_shared_tempdir_expect(
+        r#"(progn
+             (require 'info)
+             (let* ((file (expand-file-name "coding-footer.info"
+                                           (getenv "NEOVM_ORACLE_TEST_TMPDIR")))
+                    (prefix "\037\nFile: coding-footer.info, Node: Top\n\n标题内容\0\n")
+                    (footer "\n\f\nLocal Variables:\ncoding: utf-8\nEnd:\n")
+                    (contents (concat prefix
+                                      (make-string (- 4100 (string-bytes prefix)
+                                                      (length footer)) ?x)
+                                      footer)))
+               (unwind-protect
+                   (progn
+                     (let ((coding-system-for-write 'utf-8-unix))
+                       (write-region contents nil file nil 'silent))
+                     (let ((coding-system-for-read nil))
+                       (Info-find-node file "Top"))
+                     (list Info-current-node buffer-file-coding-system
+                           (and (save-excursion
+                                  (goto-char (point-min))
+                                  (search-forward "标题内容" nil t)) t)
+                           (= (buffer-size) (length contents))))
+                 (when (get-buffer "*info*") (kill-buffer "*info*"))
+                 (when (file-exists-p file) (delete-file file)))))"#,
+        expect,
+    );
+}

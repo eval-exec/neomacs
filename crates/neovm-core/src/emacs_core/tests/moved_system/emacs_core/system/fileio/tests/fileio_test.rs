@@ -8115,9 +8115,10 @@ fn set_visited_file_modtime_asks_the_file_name_handler_before_it_stats() {
     );
 }
 
-/// GNU shows `set-auto-coding-function` the head and tail only (fileio.c
-/// `Finsert_file_contents`): the whole file up to 4 KiB, otherwise its first
-/// 1 KiB followed by its tail from max(len - 3 KiB, 4 KiB).
+/// For a nonempty destination, GNU shows `set-auto-coding-function` the head
+/// and tail only (fileio.c `Finsert_file_contents`, BEG < Z): the whole file up
+/// to 4 KiB, otherwise its first 1 KiB followed by its tail from
+/// max(len - 3 KiB, 4 KiB).
 #[test]
 fn auto_coding_probe_shows_the_head_and_tail_like_gnu() {
     let small: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
@@ -8136,9 +8137,8 @@ fn auto_coding_probe_shows_the_head_and_tail_like_gnu() {
     assert_eq!(&probe[1024..], &big[20480 - 3072..]);
 }
 
-/// A coding cookie in the tail's `Local Variables` block is still seen when
-/// the file is far larger than the probe, and the function receives the
-/// probe's length as SIZE, not the file's.
+/// With a nonempty destination, a coding cookie in the tail is still seen
+/// when the file is larger than the probe, and SIZE is the probe's length.
 #[test]
 fn insert_file_contents_auto_coding_probe_size_is_the_probe_length() {
     crate::test_utils::init_test_tracing();
@@ -8149,6 +8149,8 @@ fn insert_file_contents_auto_coding_probe_size_is_the_probe_length() {
     fs::write(&path, content.as_bytes()).expect("write fixture");
     let path_str = path.to_string_lossy().to_string();
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str("(insert \"prefix\")")
+        .expect("make the destination nonempty for GNU's head/tail path");
     eval.eval_str(
         r#"(progn
              (defalias 'neovm-test-set-auto-coding-function
@@ -8175,6 +8177,46 @@ fn insert_file_contents_auto_coding_probe_size_is_the_probe_length() {
             .visible_variable_value_or_nil("neovm-test-auto-coding-saw-tail")
             .is_nil(),
         "the tail's coding cookie must be inside the probe"
+    );
+}
+
+/// GNU's empty-buffer path passes the complete inserted file, even when a
+/// file just over 4 KiB has its coding footer in the middle of a head/tail gap.
+#[test]
+fn insert_file_contents_empty_auto_coding_keeps_the_full_source() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("empty-auto-coding.txt");
+    let footer = b"\n;; Local Variables:\n;; coding: utf-8\n;; End:\n";
+    let mut content = vec![b'x'; 4100 - footer.len()];
+    content.extend_from_slice(footer);
+    fs::write(&path, &content).expect("write fixture");
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(progn
+             (defalias 'neovm-test-set-auto-coding-function
+               (lambda (_filename size)
+                 (setq neovm-test-auto-coding-size size
+                       neovm-test-auto-coding-saw-tail
+                       (save-excursion
+                         (goto-char (point-max))
+                         (search-backward "coding: utf-8" nil t)))
+                 nil))
+             (setq set-auto-coding-function
+                   'neovm-test-set-auto-coding-function))"#,
+    )
+    .expect("install auto-coding observer");
+    builtin_insert_file_contents(&mut eval, vec![Value::string(path.to_string_lossy())])
+        .expect("insert-file-contents should succeed");
+    assert_eq!(
+        eval.visible_variable_value_or_nil("neovm-test-auto-coding-size")
+            .as_fixnum(),
+        Some(4100)
+    );
+    assert!(
+        eval.visible_variable_value_or_nil("neovm-test-auto-coding-saw-tail")
+            .is_truthy(),
+        "the complete file's footer must be visible to the empty-buffer callback"
     );
 }
 
