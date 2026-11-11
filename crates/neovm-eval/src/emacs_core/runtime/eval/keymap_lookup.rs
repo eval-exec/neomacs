@@ -388,6 +388,9 @@ pub fn maybe_resolve_keyelt(
 pub trait KeyeltResolution {
     /// The obarray whose function cells a symbol keymap tail resolves through.
     fn lookup_obarray(&self) -> Option<&Obarray>;
+    /// Keep a walk value alive across callbacks until the runtime caller's
+    /// root scope ends. Structural walks cannot collect and need no roots.
+    fn retain_value(&mut self, _value: Value) {}
     /// GNU `get_keyelt (binding, autoload)`.  `resolve_keyelt` is Neo's
     /// existing "strip indirections at all" flag; runtime resolvers evaluate
     /// menu-item filters regardless of it.
@@ -421,13 +424,24 @@ impl KeyeltResolution for &mut Context {
         Some((**self).obarray())
     }
 
+    /// Retain heap objects in the runtime entrypoint's temporary root scope.
+    fn retain_value(&mut self, value: Value) {
+        if value.is_heap_object() {
+            self.push_specpdl_root(value);
+        }
+    }
+
+    /// Keep both the original binding and the filter result alive for the walk.
     fn resolve(
         &mut self,
         binding: Value,
         _resolve_keyelt: bool,
         _symbol_mode: SymbolMode,
     ) -> Result<Value, Flow> {
-        get_keyelt_runtime(*self, binding, true)
+        self.retain_value(binding);
+        let resolved = get_keyelt_runtime(*self, binding, true)?;
+        self.retain_value(resolved);
+        Ok(resolved)
     }
 }
 
@@ -471,6 +485,8 @@ impl KeymapLookupEvent {
     }
 }
 
+/// Scan one keymap level, retaining callback results and pending tails so
+/// filters may collect or detach bindings without invalidating the walk.
 pub fn lookup_in_keymap_level_impl(
     keymap: &Value,
     event: KeymapLookupEvent,
@@ -483,6 +499,7 @@ pub fn lookup_in_keymap_level_impl(
     let Some(mut cursor) = keymap_binding_spine(keymap, symbol_mode) else {
         return Ok(None);
     };
+    resolution.retain_value(*keymap);
     let mut entries = 0;
     let mut t_binding: Option<Value> = None;
     let mut prefix_binding: Option<Value> = None;
@@ -525,11 +542,13 @@ pub fn lookup_in_keymap_level_impl(
                         } else {
                             result
                         };
+                        resolution.retain_value(entry_cdr);
                         let val = resolution.resolve(val, resolve_keyelt, symbol_mode)?;
                         if val.is_nil() {
                             nil_binding_found = true;
                         } else if is_list_keymap(&val, symbol_mode) {
-                            prefix_binding = Some(accumulate_prefix_keymap(prefix_binding, val));
+                            prefix_binding =
+                                Some(accumulate_prefix_keymap(prefix_binding, val, resolution));
                         } else if prefix_binding.is_some() {
                             break;
                         } else {
@@ -553,11 +572,13 @@ pub fn lookup_in_keymap_level_impl(
                 let items = entry_car.as_vector_data().unwrap();
                 if idx < items.len() {
                     let val = items[idx];
+                    resolution.retain_value(entry_cdr);
                     let val = resolution.resolve(val, resolve_keyelt, symbol_mode)?;
                     if val.is_nil() {
                         nil_binding_found = true;
                     } else if is_list_keymap(&val, symbol_mode) {
-                        prefix_binding = Some(accumulate_prefix_keymap(prefix_binding, val));
+                        prefix_binding =
+                            Some(accumulate_prefix_keymap(prefix_binding, val, resolution));
                     } else if prefix_binding.is_some() {
                         break;
                     } else {
@@ -582,6 +603,7 @@ pub fn lookup_in_keymap_level_impl(
         // parent of the composed member `swiper-isearch-map` -- fell through to
         // the global `fill-paragraph`.
         if entry_car.is_cons() && is_list_keymap(&entry_car, symbol_mode) {
+            resolution.retain_value(entry_cdr);
             if let Some(found) = access_keymap_in_member(
                 &entry_car,
                 event,
@@ -594,7 +616,8 @@ pub fn lookup_in_keymap_level_impl(
                 if found.is_nil() {
                     nil_binding_found = true;
                 } else if is_list_keymap(&found, symbol_mode) {
-                    prefix_binding = Some(accumulate_prefix_keymap(prefix_binding, found));
+                    prefix_binding =
+                        Some(accumulate_prefix_keymap(prefix_binding, found, resolution));
                 } else if prefix_binding.is_some() {
                     break;
                 } else {
@@ -610,11 +633,14 @@ pub fn lookup_in_keymap_level_impl(
             let binding_car = entry_car.cons_car();
             let binding_cdr = entry_car.cons_cdr();
             if event.matches_stored_key(binding_car, symbol_mode) {
+                resolution.retain_value(entry_car);
+                resolution.retain_value(entry_cdr);
                 let val = resolution.resolve(binding_cdr, resolve_keyelt, symbol_mode)?;
                 if val.is_nil() {
                     nil_binding_found = true;
                 } else if is_list_keymap(&val, symbol_mode) {
-                    prefix_binding = Some(accumulate_prefix_keymap(prefix_binding, val));
+                    prefix_binding =
+                        Some(accumulate_prefix_keymap(prefix_binding, val, resolution));
                 } else if prefix_binding.is_some() {
                     break;
                 } else {
@@ -632,6 +658,7 @@ pub fn lookup_in_keymap_level_impl(
                     symbol_mode == SymbolMode::Positioned,
                 )
             {
+                resolution.retain_value(entry_cdr);
                 t_binding = Some(resolution.resolve(binding_cdr, resolve_keyelt, symbol_mode)?);
             }
         }
@@ -646,6 +673,7 @@ pub fn lookup_in_keymap_level_impl(
             && let Some(resolved) = resolve_keymap(cursor, resolution.lookup_obarray(), symbol_mode)
             && let Some(spine) = keymap_binding_spine(&resolved, symbol_mode)
         {
+            resolution.retain_value(resolved);
             cursor = spine;
         }
     }
@@ -694,6 +722,7 @@ pub fn access_keymap_in_member(
         // A prefix keymap merges with whatever the member's parent binds for the
         // same event, exactly as it would if the member were looked up directly.
         Some(binding) if is_list_keymap(&binding, symbol_mode) && !parent.is_nil() => {
+            resolution.retain_value(binding);
             let parent_binding = list_keymap_access_with_event(
                 &parent,
                 event,
@@ -704,11 +733,10 @@ pub fn access_keymap_in_member(
                 symbol_mode,
             )?;
             if is_list_keymap(&parent_binding, symbol_mode) {
-                Ok(Some(compose_prefix_with_parent_keymap(
-                    &binding,
-                    &parent_binding,
-                    symbol_mode,
-                )))
+                let composed =
+                    compose_prefix_with_parent_keymap(&binding, &parent_binding, symbol_mode);
+                resolution.retain_value(composed);
+                Ok(Some(composed))
             } else {
                 Ok(Some(binding))
             }
@@ -816,6 +844,8 @@ pub fn list_keymap_lookup_one_t_ok_in_obarray(
     list_keymap_access_in_obarray(keymap, event, false, true, obarray, symbol_mode)
 }
 
+/// Resolve a canonical event through member and parent chains, retaining
+/// prefix compositions while recursive lookups may execute Lisp callbacks.
 pub fn list_keymap_access_with_event(
     keymap: &Value,
     event: KeymapLookupEvent,
@@ -855,6 +885,7 @@ pub fn list_keymap_access_with_event(
                     // create a composed keymap: (keymap child-sub . parent-sub)
                     let parent = get_keymap_tail_parent(&current, symbol_mode);
                     if !parent.is_nil() {
+                        resolution.retain_value(binding);
                         let parent_binding = list_keymap_access_with_event(
                             &parent,
                             event,
@@ -865,11 +896,13 @@ pub fn list_keymap_access_with_event(
                             symbol_mode,
                         )?;
                         if is_list_keymap(&parent_binding, symbol_mode) {
-                            return Ok(compose_prefix_with_parent_keymap(
+                            let composed = compose_prefix_with_parent_keymap(
                                 &binding,
                                 &parent_binding,
                                 symbol_mode,
-                            ));
+                            );
+                            resolution.retain_value(composed);
+                            return Ok(composed);
                         }
                     }
                 }
@@ -963,11 +996,19 @@ pub fn list_keymap_lookup_one_noinherit(
     list_keymap_access(keymap, event, true, false, symbol_mode)
 }
 
-pub fn accumulate_prefix_keymap(existing: Option<Value>, next: Value) -> Value {
-    match existing {
+/// Accumulate same-level prefixes and retain the new composition until the
+/// runtime walk ends, including while later members evaluate their filters.
+pub fn accumulate_prefix_keymap(
+    existing: Option<Value>,
+    next: Value,
+    resolution: &mut dyn KeyeltResolution,
+) -> Value {
+    let accumulated = match existing {
         Some(current) => compose_prefix_keymaps(&current, &next),
         None => next,
-    }
+    };
+    resolution.retain_value(accumulated);
+    accumulated
 }
 
 /// Compose prefix keymaps found at the same keymap level.  GNU
@@ -1825,6 +1866,8 @@ impl From<bool> for DefaultBindingMode {
     }
 }
 
+/// Resolve one event with callback-safe roots bounded to this walk, including
+/// recursive members, inherited prefixes and nonlocal callback exits.
 pub fn list_keymap_lookup_one_runtime(
     ctx: &mut Context,
     keymap: &Value,
@@ -1832,16 +1875,23 @@ pub fn list_keymap_lookup_one_runtime(
     t_ok: bool,
 ) -> Result<Value, Flow> {
     let symbol_mode = ctx.symbol_mode();
-    let mut resolution: &mut Context = ctx;
-    list_keymap_access_with_event(
-        keymap,
-        KeymapLookupEvent::from_event(*event, symbol_mode),
-        false,
-        t_ok,
-        true,
-        &mut resolution,
-        symbol_mode,
-    )
+    let root_scope = ctx.save_specpdl_roots();
+    ctx.push_specpdl_root(*keymap);
+    ctx.push_specpdl_root(*event);
+    let result = {
+        let mut resolution: &mut Context = ctx;
+        list_keymap_access_with_event(
+            keymap,
+            KeymapLookupEvent::from_event(*event, symbol_mode),
+            false,
+            t_ok,
+            true,
+            &mut resolution,
+            symbol_mode,
+        )
+    };
+    ctx.restore_specpdl_roots(root_scope);
+    result
 }
 
 pub fn expand_meta_prefix_char_events_in_obarray(
@@ -1957,47 +2007,62 @@ pub fn lookup_key_in_keymaps_in_obarray(
     best
 }
 
+/// Resolve a sequence with GNU's final-binding semantics, keeping intermediate
+/// maps and events rooted across prefix autoloads and menu-item filters.
 pub fn lookup_key_in_obarray_runtime(
     ctx: &mut Context,
     keymap: Value,
     events: &[Value],
     t_ok: bool,
 ) -> EvalResult {
-    let symbol_mode = ctx.symbol_mode();
     if events.is_empty() {
         return Ok(keymap);
     }
 
-    let mut current_map = keymap;
-    for (i, event) in events.iter().enumerate() {
-        // GNU access_keymap resolves `get_keyelt (def, autoload)` inside the
-        // walk, so a menu-item's filter result is what the prefix decision
-        // sees, and a filter that returns a prefix keymap still composes with
-        // the parent chain's prefix for the same event.  The runtime step does
-        // both; the old order (compose raw, resolve after) dropped the parent
-        // branch every time a package rebinds a prefix through a filter.
-        let is_last = i == events.len() - 1;
-        let binding = list_keymap_lookup_one_runtime(ctx, &current_map, event, t_ok)?;
+    // Prefix autoloads and menu-item filters can run arbitrary Lisp. Keep
+    // intermediate maps alive even if a later load replaces their function
+    // cells or removes them from the original keymap.
+    let root_scope = ctx.save_specpdl_roots();
+    ctx.push_specpdl_root(keymap);
+    for event in events {
+        ctx.push_specpdl_root(*event);
+    }
+    let result = (|| {
+        let mut current_map = keymap;
+        for (i, event) in events.iter().enumerate() {
+            // GNU access_keymap resolves `get_keyelt (def, autoload)` inside the
+            // walk, so a menu-item's filter result is what the prefix decision
+            // sees, and a filter that returns a prefix keymap still composes with
+            // the parent chain's prefix for the same event.  The runtime step does
+            // both; the old order (compose raw, resolve after) dropped the parent
+            // branch every time a package rebinds a prefix through a filter.
+            let is_last = i == events.len() - 1;
+            let binding = list_keymap_lookup_one_runtime(ctx, &current_map, event, t_ok)?;
 
-        if is_last {
-            return Ok(binding);
-        }
+            if is_last {
+                return Ok(binding);
+            }
 
-        if binding.is_nil() {
+            if binding.is_nil() {
+                return Ok(Value::fixnum((i + 1) as i64));
+            }
+
+            // GNU lookup_key_1 returns a final binding unchanged, but resolves
+            // intermediate bindings with get_keymap(cmd, false, true).
+            let prefix_keymap = maybe_keymap_in_runtime(ctx, &binding, true)?;
+            if !prefix_keymap.is_nil() {
+                current_map = prefix_keymap;
+                ctx.push_specpdl_root(current_map);
+                continue;
+            }
+
             return Ok(Value::fixnum((i + 1) as i64));
         }
 
-        if let Some(prefix_keymap) =
-            resolve_prefix_keymap_binding_in_obarray(&ctx.obarray, &binding, symbol_mode)
-        {
-            current_map = prefix_keymap;
-            continue;
-        }
-
-        return Ok(Value::fixnum((i + 1) as i64));
-    }
-
-    Ok(Value::NIL)
+        Ok(Value::NIL)
+    })();
+    ctx.restore_specpdl_roots(root_scope);
+    result
 }
 
 pub fn lookup_key_in_keymaps_in_obarray_runtime(
@@ -3632,67 +3697,101 @@ pub fn make_list_keymap() -> Value {
     Value::list(vec![KeymapMarker::Keymap.symbol_value(), char_table])
 }
 
+/// Resolve keymap objects and function aliases, optionally loading prefix
+/// autoloads and retrying their updated definitions as GNU get_keymap does.
+/// Once autoloading begins, keep the original argument rooted through every
+/// retry until the operation returns, including nonlocal load exits.
 pub fn get_keymap_in_runtime(
     eval: &mut Context,
     value: &Value,
     error_if_not_keymap: bool,
     autoload: bool,
 ) -> EvalResult {
-    let symbol_mode = eval.symbol_mode();
     let original = *value;
-    let mut current = original;
+    let root_scope = eval.save_specpdl_roots();
+    let result = (|| {
+        let mut current = original;
 
-    loop {
-        if current.is_nil() {
-            break;
-        }
-        if is_list_keymap(&current, symbol_mode) {
-            return Ok(current);
-        }
-
-        let Some(symbol) = keymap_symbol_id(&current, symbol_mode) else {
-            break;
-        };
-        let Some((_, function)) =
-            resolve_indirect_function_by_id_in_obarray(eval.obarray(), symbol, symbol_mode)
-        else {
-            break;
-        };
-
-        if is_list_keymap(&function, symbol_mode) {
-            return Ok(function);
-        }
-
-        if is_keymap_autoload_form(&function, symbol_mode) {
-            if autoload {
-                current = crate::emacs_core::autoload::builtin_autoload_do_load(
-                    eval,
-                    vec![function, original, Value::NIL],
-                )?;
-                continue;
+        loop {
+            let symbol_mode = eval.symbol_mode();
+            if current.is_nil() {
+                break;
             }
-            if !error_if_not_keymap {
-                return Ok(original);
+            if is_list_keymap(&current, symbol_mode) {
+                return Ok(current);
             }
+
+            let Some(symbol) = keymap_symbol_id(&current, symbol_mode) else {
+                break;
+            };
+            let Some((_, function)) =
+                resolve_indirect_function_by_id_in_obarray(eval.obarray(), symbol, symbol_mode)
+            else {
+                break;
+            };
+
+            if is_list_keymap(&function, symbol_mode) {
+                return Ok(function);
+            }
+
+            if is_keymap_autoload_form(&function, symbol_mode) {
+                if autoload {
+                    // A filter may have returned an ephemeral positioned symbol.
+                    // Retain it for this operation once loading can run Lisp;
+                    // all subsequent retries must inspect that same argument.
+                    eval.push_specpdl_root(original);
+                    let loaded = crate::emacs_core::autoload::builtin_autoload_do_load(
+                        eval,
+                        vec![function, original, Value::NIL],
+                    )?;
+                    // Retry the original symbol after a definition changes: the
+                    // file may install another keymap autoload or an alias. An
+                    // internal compiler override can return without changing the
+                    // function cell, so keep its returned definition in that case.
+                    let updated = resolve_indirect_function_by_id_in_obarray(
+                        eval.obarray(),
+                        symbol,
+                        eval.symbol_mode(),
+                    )
+                    .map(|(_, definition)| definition);
+                    match updated {
+                        Some(updated) if updated.bits() == function.bits() => {
+                            // An override can return this same autoloaded
+                            // symbol without updating its function cell. Stop
+                            // once following it would repeat this resolution.
+                            if keymap_symbol_id(&loaded, eval.symbol_mode()) == Some(symbol) {
+                                break;
+                            }
+                            current = loaded;
+                        }
+                        _ => current = original,
+                    }
+                    continue;
+                }
+                if !error_if_not_keymap {
+                    return Ok(original);
+                }
+            }
+
+            break;
         }
 
-        break;
-    }
-
-    if error_if_not_keymap {
-        Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("keymapp"), original],
-        ))
-    } else {
-        Ok(Value::NIL)
-    }
+        if error_if_not_keymap {
+            Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("keymapp"), original],
+            ))
+        } else {
+            Ok(Value::NIL)
+        }
+    })();
+    eval.restore_specpdl_roots(root_scope);
+    result
 }
 
 pub fn maybe_keymap_in_runtime(eval: &mut Context, value: &Value, autoload: bool) -> EvalResult {
-    let symbol_mode = eval.symbol_mode();
     let resolved = get_keymap_in_runtime(eval, value, false, autoload)?;
-    if is_list_keymap(&resolved, symbol_mode) {
+    if is_list_keymap(&resolved, eval.symbol_mode()) {
         Ok(resolved)
     } else {
         Ok(Value::NIL)
@@ -3978,6 +4077,7 @@ pub fn list_keymap_define_seq_runtime_ex(
     let result = (|| {
         let mut current_map = keymap;
         for (i, event) in events.iter().enumerate() {
+            let symbol_mode = ctx.symbol_mode();
             if i == events.len() - 1 {
                 if remove {
                     list_keymap_remove(current_map, *event, symbol_mode);
@@ -3997,9 +4097,11 @@ pub fn list_keymap_define_seq_runtime_ex(
                 &mut &mut *ctx,
                 symbol_mode,
             )?;
-            if let Some(prefix_map) =
-                resolve_prefix_keymap_binding_in_obarray(ctx.obarray(), &binding, symbol_mode)
-            {
+            // GNU Fdefine_key resolves intermediate bindings with autoload
+            // enabled, including symbols that name unloaded prefix keymaps.
+            let prefix_map = maybe_keymap_in_runtime(ctx, &binding, true)?;
+            let symbol_mode = ctx.symbol_mode();
+            if !prefix_map.is_nil() {
                 current_map = prefix_map;
             } else if binding.is_nil() {
                 // No binding, create a new prefix keymap.

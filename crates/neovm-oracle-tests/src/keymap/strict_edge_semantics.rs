@@ -195,3 +195,65 @@ fn oracle_keymap_symbol_modifier_order_is_canonical() {
     );
     assert_ok_eq("(symbol-cmd symbol-cmd)", &o, &n);
 }
+
+/// Parent filter evaluation may collect a freshly resolved child prefix.
+#[test]
+fn oracle_keymap_parent_filter_collection_preserves_ephemeral_child_prefix() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"
+(let ((child (make-sparse-keymap))
+      (parent (make-sparse-keymap)))
+  (define-key child [f2]
+    '(menu-item "child" nil :filter
+                (lambda (_)
+                  (let ((prefix (make-sparse-keymap)))
+                    (define-key prefix [?q] 'neovm--child-filter-command)
+                    prefix))))
+  (define-key parent [f2]
+    '(menu-item "parent" nil :filter
+                (lambda (_)
+                  (make-list 32 nil)
+                  (garbage-collect)
+                  (let ((prefix (make-sparse-keymap)))
+                    (define-key prefix [?r] 'neovm--parent-filter-command)
+                    prefix))))
+  (set-keymap-parent child parent)
+  (list (lookup-key child [f2 ?q])
+        (lookup-key child [f2 ?r])))
+"#;
+    let expect = expect_test::expect![[
+        r#""OK (neovm--child-filter-command neovm--parent-filter-command)""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+/// A later composed member's filter may collect an earlier prefix result.
+#[test]
+fn oracle_keymap_composed_filter_collection_preserves_ephemeral_member_prefix() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"
+(let ((child (make-sparse-keymap))
+      (parent (make-sparse-keymap)))
+  (define-key child [f2]
+    '(menu-item "child" nil :filter
+                (lambda (_)
+                  (let ((prefix (make-sparse-keymap)))
+                    (define-key prefix [?q] 'neovm--child-filter-command)
+                    prefix))))
+  (define-key parent [f2]
+    '(menu-item "parent" nil :filter
+                (lambda (_)
+                  (make-list 32 nil)
+                  (garbage-collect)
+                  (let ((prefix (make-sparse-keymap)))
+                    (define-key prefix [?r] 'neovm--parent-filter-command)
+                    prefix))))
+  (let ((composed (make-composed-keymap (list child parent))))
+    (list (lookup-key composed [f2 ?q])
+          (lookup-key composed [f2 ?r]))))
+"#;
+    let expect = expect_test::expect![[
+        r#""OK (neovm--child-filter-command neovm--parent-filter-command)""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
