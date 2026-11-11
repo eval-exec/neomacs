@@ -411,19 +411,6 @@ pub(crate) fn plan_autoload_do_load_in_state(
     }
 
     let items = list_to_vec(fundef).unwrap_or_default();
-    // items[0] = 'autoload, items[1] = file, ...
-    let file = if items.len() > 1 {
-        match items[1].kind() {
-            ValueKind::String => items[1]
-                .as_lisp_string()
-                .cloned()
-                .expect("ValueKind::String must carry LispString payload"),
-            _ => return Ok(AutoloadDoLoadPlan::Return(*fundef)),
-        }
-    } else {
-        return Ok(AutoloadDoLoadPlan::Return(*fundef));
-    };
-
     // MACRO-ONLY check: if the third arg is `macro`, only autoload if the
     // autoload's TYPE field (5th element) is `t` or `macro`.
     // This matches GNU Emacs eval.c:Fautoload_do_load.
@@ -450,6 +437,16 @@ pub(crate) fn plan_autoload_do_load_in_state(
         return Ok(AutoloadDoLoadPlan::Return(override_value));
     }
 
+    // GNU checks the file through `load_with_autoload_queue`, after its
+    // macro-only and function-name checks (eval.c:Fautoload_do_load).
+    let file_value = items.get(1).copied().unwrap_or(Value::NIL);
+    let file = file_value.as_lisp_string().cloned().ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), file_value],
+        )
+    })?;
+
     Ok(AutoloadDoLoadPlan::Load { file, funname })
 }
 
@@ -462,39 +459,31 @@ pub(crate) fn resolve_autoload_load_path(
 }
 
 /// After loading an autoload file, check whether the function was defined.
-/// Matches GNU Emacs eval.c:Fautoload_do_load lines 2501-2508: if the
-/// function cell is still the same autoload, signal an error.
+/// GNU Emacs eval.c:Fautoload_do_load compares the indirect function with the
+/// original autoload using `equal`; an unchanged definition is a load failure.
 pub(crate) fn finish_autoload_do_load_in_state(
     obarray: &Obarray,
     funname: Option<SymId>,
     original_autoload: Option<&Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     if let Some(name) = funname
-        && let Some(func) = obarray.symbol_function_id(name)
+        && let Some(func) = obarray.indirect_function_id(name)
     {
-        // GNU Emacs: if function is still the same autoload form after
-        // loading, signal "Autoloading file failed to define function".
-        // GNU Emacs eval.c: if (!NILP (Fequal (fun, fundef)))
-        // Only error if the function cell is STILL the SAME autoload
-        // form (by identity, not by content, to avoid stale reference).
-        // A different autoload (re-registered by eval-after-load
-        // callbacks) is fine — the function was redefined.
-        if let Some(orig) = original_autoload {
-            let same_identity = match (func.kind(), orig.kind()) {
-                (ValueKind::Cons, ValueKind::Cons) => func.bits() == orig.bits(),
-                _ => false,
-            };
-            if same_identity {
-                return Err(signal(
-                    "error",
-                    vec![Value::string(format!(
-                        "Autoloading failed to define function {}",
-                        resolve_sym(name)
-                    ))],
-                ));
-            }
+        // Resolve aliases before comparing, and reject a structurally equal
+        // replacement too: neither case made progress toward a definition.
+        if let Some(orig) = original_autoload
+            && try_equal_value_swp(&func, orig, 0, mode == SymbolMode::Positioned)?
+        {
+            return Err(signal(
+                "error",
+                vec![Value::string(format!(
+                    "Autoloading failed to define function {}",
+                    resolve_sym(name)
+                ))],
+            ));
         }
-        return Ok(obarray.indirect_function_id(name).unwrap_or(func));
+        return Ok(func);
     }
     Ok(Value::NIL)
 }
@@ -548,7 +537,12 @@ fn execute_autoload_load(
         )
     });
     let result = match load_result {
-        Ok(_) => finish_autoload_do_load_in_state(&eval.obarray, funname, original_fundef.as_ref()),
+        Ok(_) => finish_autoload_do_load_in_state(
+            &eval.obarray,
+            funname,
+            original_fundef.as_ref(),
+            eval.symbol_mode(),
+        ),
         Err(flow) => Err(flow),
     };
 

@@ -1963,41 +1963,54 @@ pub fn lookup_key_in_obarray_runtime(
     events: &[Value],
     t_ok: bool,
 ) -> EvalResult {
-    let symbol_mode = ctx.symbol_mode();
     if events.is_empty() {
         return Ok(keymap);
     }
 
-    let mut current_map = keymap;
-    for (i, event) in events.iter().enumerate() {
-        // GNU access_keymap resolves `get_keyelt (def, autoload)` inside the
-        // walk, so a menu-item's filter result is what the prefix decision
-        // sees, and a filter that returns a prefix keymap still composes with
-        // the parent chain's prefix for the same event.  The runtime step does
-        // both; the old order (compose raw, resolve after) dropped the parent
-        // branch every time a package rebinds a prefix through a filter.
-        let is_last = i == events.len() - 1;
-        let binding = list_keymap_lookup_one_runtime(ctx, &current_map, event, t_ok)?;
+    // Prefix autoloads and menu-item filters can run arbitrary Lisp. Keep
+    // intermediate maps alive even if a later load replaces their function
+    // cells or removes them from the original keymap.
+    let root_scope = ctx.save_specpdl_roots();
+    ctx.push_specpdl_root(keymap);
+    for event in events {
+        ctx.push_specpdl_root(*event);
+    }
+    let result = (|| {
+        let mut current_map = keymap;
+        for (i, event) in events.iter().enumerate() {
+            // GNU access_keymap resolves `get_keyelt (def, autoload)` inside the
+            // walk, so a menu-item's filter result is what the prefix decision
+            // sees, and a filter that returns a prefix keymap still composes with
+            // the parent chain's prefix for the same event.  The runtime step does
+            // both; the old order (compose raw, resolve after) dropped the parent
+            // branch every time a package rebinds a prefix through a filter.
+            let is_last = i == events.len() - 1;
+            let binding = list_keymap_lookup_one_runtime(ctx, &current_map, event, t_ok)?;
 
-        if is_last {
-            return Ok(binding);
-        }
+            if is_last {
+                return Ok(binding);
+            }
 
-        if binding.is_nil() {
+            if binding.is_nil() {
+                return Ok(Value::fixnum((i + 1) as i64));
+            }
+
+            // GNU lookup_key_1 returns a final binding unchanged, but resolves
+            // intermediate bindings with get_keymap(cmd, false, true).
+            let prefix_keymap = maybe_keymap_in_runtime(ctx, &binding, true)?;
+            if !prefix_keymap.is_nil() {
+                current_map = prefix_keymap;
+                ctx.push_specpdl_root(current_map);
+                continue;
+            }
+
             return Ok(Value::fixnum((i + 1) as i64));
         }
 
-        if let Some(prefix_keymap) =
-            resolve_prefix_keymap_binding_in_obarray(&ctx.obarray, &binding, symbol_mode)
-        {
-            current_map = prefix_keymap;
-            continue;
-        }
-
-        return Ok(Value::fixnum((i + 1) as i64));
-    }
-
-    Ok(Value::NIL)
+        Ok(Value::NIL)
+    })();
+    ctx.restore_specpdl_roots(root_scope);
+    result
 }
 
 pub fn lookup_key_in_keymaps_in_obarray_runtime(
@@ -3665,10 +3678,22 @@ pub fn get_keymap_in_runtime(
 
         if is_keymap_autoload_form(&function, symbol_mode) {
             if autoload {
-                current = crate::emacs_core::autoload::builtin_autoload_do_load(
+                let loaded = crate::emacs_core::autoload::builtin_autoload_do_load(
                     eval,
                     vec![function, original, Value::NIL],
                 )?;
+                // Retry the original symbol after a definition changes: the
+                // file may install another keymap autoload or an alias. An
+                // internal compiler override can return without changing the
+                // function cell, so keep its returned definition in that case.
+                let updated =
+                    resolve_indirect_function_by_id_in_obarray(eval.obarray(), symbol, symbol_mode)
+                        .map(|(_, definition)| definition);
+                current = if updated == Some(function) {
+                    loaded
+                } else {
+                    original
+                };
                 continue;
             }
             if !error_if_not_keymap {
@@ -3997,9 +4022,10 @@ pub fn list_keymap_define_seq_runtime_ex(
                 &mut &mut *ctx,
                 symbol_mode,
             )?;
-            if let Some(prefix_map) =
-                resolve_prefix_keymap_binding_in_obarray(ctx.obarray(), &binding, symbol_mode)
-            {
+            // GNU Fdefine_key resolves intermediate bindings with autoload
+            // enabled, including symbols that name unloaded prefix keymaps.
+            let prefix_map = maybe_keymap_in_runtime(ctx, &binding, true)?;
+            if !prefix_map.is_nil() {
                 current_map = prefix_map;
             } else if binding.is_nil() {
                 // No binding, create a new prefix keymap.
