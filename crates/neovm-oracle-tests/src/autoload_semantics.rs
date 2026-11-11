@@ -3,7 +3,8 @@
 //! GNU implements `autoload` and `autoload-do-load` in `src/eval.c`;
 //! `autoloadp` is Lisp in `lisp/subr.el` and is exactly an `eq` check against
 //! `(car-safe OBJECT)`.  These tests cover the user-visible function-cell
-//! shape, keymap-prefix loading, and error ordering using local fixtures.
+//! shape, keymap-prefix loading, and error ordering using local fixtures and
+//! the startup F2 binding to the real `two-column` library's `2C-command`.
 
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
