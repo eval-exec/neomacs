@@ -6091,7 +6091,10 @@ fn decide_auto_coding_for_insert_file_contents(
         .buffers
         .set_buffer_multibyte_flag(work_buffer, false)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let raw = neovm_value::heap_types::LispString::from_unibyte(bytes.to_vec());
+    // GNU's nonempty-buffer path probes the head and tail in a work buffer
+    // (src/fileio.c, BEG < Z), unlike its whole-file empty-buffer path.
+    let probe = auto_coding_probe_bytes(bytes);
+    let raw = neovm_value::heap_types::LispString::from_unibyte(probe.to_vec());
     eval.edit
         .buffers
         .insert_lisp_string_into_buffer(work_buffer, &raw)
@@ -6105,7 +6108,7 @@ fn decide_auto_coding_for_insert_file_contents(
         function,
         vec![
             Value::heap_string(filename),
-            Value::fixnum(bytes.len() as i64),
+            Value::fixnum(probe.len() as i64),
         ],
     );
     let value = restore_and_finish(eval, result)?;
@@ -6180,7 +6183,8 @@ fn restore_empty_buffer_after_auto_coding_probe(
         .goto_buffer_emacs_byte_pos(buffer_id, EmacsBytePos::new(0));
 }
 
-/// The bytes GNU shows `set-auto-coding-function`: the whole file when it is
+/// The bytes GNU shows `set-auto-coding-function` for a nonempty destination:
+/// the whole file when it is
 /// at most 4 KiB, else its first 1 KiB followed by its tail from
 /// `max(len - 3 KiB, 4 KiB)` (fileio.c `Finsert_file_contents`).
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -6226,16 +6230,10 @@ fn decide_auto_coding_for_empty_insert_file_contents(
     if let Some(buf) = eval.edit.buffers.get_mut(current_id) {
         buf.set_undo_list(Value::T);
     }
-    // GNU probes the HEAD and TAIL only (fileio.c `Finsert_file_contents`,
-    // "Assume that the 1 KiB and 3 KiB for heading and tailing respectively
-    // are sufficient"): it reads up to 4 KiB, and when the file continues it
-    // keeps the first 1 KiB of that and appends the last ~3 KiB read from
-    // max(end - 3 KiB, 4 KiB), then hands `set-auto-coding-function` that
-    // concatenation and its length. Inserting the whole file here made
-    // insert-file-contents 6x GNU on an 876 KB org journal, and taxed every
-    // source .el load at startup the same way.
-    let probe = auto_coding_probe_bytes(bytes);
-    let raw = neovm_value::heap_types::LispString::from_unibyte(probe.to_vec());
+    // GNU temporarily exposes the complete inserted file in the otherwise
+    // empty destination (src/fileio.c:5023-5077). A head/tail probe here can
+    // omit a coding footer in a file just over 4 KiB and changes callback SIZE.
+    let raw = neovm_value::heap_types::LispString::from_unibyte(bytes.to_vec());
     eval.edit
         .buffers
         .insert_lisp_string_into_buffer(current_id, &raw)
@@ -6249,7 +6247,7 @@ fn decide_auto_coding_for_empty_insert_file_contents(
         function,
         vec![
             Value::heap_string(filename),
-            Value::fixnum(probe.len() as i64),
+            Value::fixnum(bytes.len() as i64),
         ],
     );
     let value = match result {
