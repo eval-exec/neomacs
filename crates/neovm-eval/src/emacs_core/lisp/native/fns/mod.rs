@@ -31,6 +31,7 @@ use neovm_value::strings_core::{
 use neovm_value::value::*;
 use sha1::Sha1;
 use sha2::{Digest, Sha224, Sha256, Sha384, Sha512};
+use sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512};
 use std::borrow::Cow;
 use std::ffi::CString;
 
@@ -810,6 +811,10 @@ fn secure_hash_digest_bytes(algo_name: &str, input: &[u8]) -> Result<Vec<u8>, Fl
             h.update(input);
             h.finalize().to_vec()
         }
+        "sha3-224" => Sha3_224::digest(input).to_vec(),
+        "sha3-256" => Sha3_256::digest(input).to_vec(),
+        "sha3-384" => Sha3_384::digest(input).to_vec(),
+        "sha3-512" => Sha3_512::digest(input).to_vec(),
         _ => {
             return Err(signal(
                 "error",
