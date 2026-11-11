@@ -884,15 +884,14 @@ fn undecided_decode_uses_the_shared_iso_2022_detector() {
     .unwrap();
 
     assert_eq!(
-        detect_undecided_coding(
+        detected_coding_name(
             eval.coding_systems(),
+            "undecided",
             b"\x1b$B$3$s\x1b(B",
-            false,
-            false,
             neovm_text::emacs_core::coding::SourceBlock::Last,
             neovm_value::tagged::value::SymbolMode::Bare
         ),
-        Some(neovm_value::intern::intern("iso-2022-7bit"))
+        Some("iso-2022-7bit")
     );
 }
 

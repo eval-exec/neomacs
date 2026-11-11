@@ -16,6 +16,8 @@
 //!   terminal-coding-system, set-keyboard-coding-system,
 //!   set-terminal-coding-system, coding-system-priority-list
 
+pub(crate) mod read_detection;
+
 use super::text_host::{TextHost, TextVariableStore};
 use neovm_edit::buffer::{BufferManager, EmacsByteRange, LispCharPos1};
 use neovm_edit::emacs_core::edit_host::EditVariableRead;
@@ -970,6 +972,24 @@ pub(crate) fn bom_auto_coding(mgr: &CodingSystemManager, name: &str) -> Option<B
         }),
         _ => None,
     }
+}
+
+/// GNU's compiled UTF-8 BOM requirement, independent of the mutable plist.
+pub(crate) fn utf8_uses_signature(mgr: &CodingSystemManager, name: &str) -> bool {
+    let Some(resolved) = resolve_runtime_name(mgr, name) else {
+        return false;
+    };
+    let Some(info) = mgr.get(&resolved) else {
+        return false;
+    };
+    let attrs = if info.int_properties.contains_key(&UTF_BOM_KEY_FIRST)
+        || info.int_properties.contains_key(&PLIST_VERBATIM_KEY)
+    {
+        info
+    } else {
+        mgr.get(strip_eol_suffix(&resolved)).unwrap_or(info)
+    };
+    resolve_sym(info.coding_type) == "utf-8" && coding_has_bom(attrs)
 }
 
 pub(crate) fn undecided_prefers_utf8(mgr: &CodingSystemManager, name: &str) -> bool {
@@ -4051,9 +4071,10 @@ pub fn builtin_set_coding_system_priority(
             .ok_or_else(|| signal(LispCondition::CodingSystemError, vec![*arg]))?;
         let category = coding_category_of(mgr, &name, mode)
             .ok_or_else(|| signal(LispCondition::CodingSystemError, vec![*arg]))?;
-        // GNU stores the coding system's *base* name in the priority list.
-        let base = coding_system_base_name(mgr, &name);
-        requested.push((category, intern(&base)));
+        // The category's live coding struct retains the requested coding,
+        // including a fixed EOL. Only coding-system-priority-list projects
+        // its base name (GNU coding.c:10904,10957).
+        requested.push((category, intern(&name)));
     }
 
     // Determine, per priority entry, the category it currently occupies.
@@ -5248,17 +5269,16 @@ fn detect_coding_systems(
 /// type -- this one answers ONE base coding system or GNU's nil, and the
 /// reporting one answers a Lisp list.
 ///
-/// `None` is GNU's `found == nil` after the end-of-line rewrite: nothing
-/// re-bases the coding system.  Callers spell that `undecided`, which is what
-/// `apply_detected_eol` turns into the `-dos` / `-mac` subsidiary GNU's
-/// `adjust_coding_eol_type` produces on the other axis.
+/// The result distinguishes full setup from a category-id change that retains
+/// the original decoder. EOL resolution belongs to the contextual decode after
+/// character conversion, so this result preserves the target's original EOL.
 pub(crate) fn detect_highest_coding_system_for_unibyte_bytes(
     mgr: &CodingSystemManager,
     bytes: &[u8],
     block: SourceBlock,
     mode: SymbolMode,
     inhibit_null: bool,
-) -> Option<SymId> {
+) -> DetectedBase {
     let bindings = coding_category_bindings(mgr, mode);
     let scan = scan_undecided(
         &bindings,
@@ -5269,20 +5289,9 @@ pub(crate) fn detect_highest_coding_system_for_unibyte_bytes(
         WalkStop::AtFirstFound,
         inhibit_null,
     );
-    let base = match detect_coding_found(mgr, &bindings.priorities, &bindings.systems, &scan, mode)
-    {
-        DetectedBase::Rebase(sym) => Value::symbol(resolve_sym(sym)),
-        // GNU leaves `coding` alone; this engine's spelling of that is the name
-        // the caller already holds, which for every caller of this function is
-        // `undecided`.
-        DetectedBase::Unchanged => Value::symbol("undecided"),
-    };
-    let detected = apply_detected_eol(mgr, base, bytes, true);
-    (!detected.is_nil()).then(|| {
-        detected
-            .as_symbol_id(mode)
-            .expect("a non-nil coding-system detection result is a symbol")
-    })
+    // A decoder resolves EOL after character conversion. Decorating the name
+    // from raw bytes here loses whether its EOL was fixed by the definition.
+    detect_coding_found(mgr, &bindings.priorities, &bindings.systems, &scan, mode)
 }
 
 /// GNU `EOL_SEEN_*` summary of the line terminators found in DATA.
@@ -5405,10 +5414,13 @@ enum WalkStop {
 /// were a detection result, the same lie entry 151 removed from
 /// `ProcessOutputDecoding`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum DetectedBase {
+pub(crate) enum DetectedBase {
     /// `setup_coding_system (found, coding)` replaces the whole object
     /// (src/coding.c:6751).
     Rebase(SymId),
+    /// The category walk changed `coding->id`, but nil `found` skipped setup.
+    /// Its reported identity changes while the original decoder remains.
+    IdentityOnly(SymId),
     /// `found` stayed nil: the decode keeps the coding system it was given.
     Unchanged,
 }
@@ -5601,7 +5613,7 @@ fn detect_coding_found(
         // (src/coding.c:6649-6680); only a non-cons `:bom` falls back to the
         // category's own name.
         if cat == CodingCat::Utf8Auto as usize {
-            return DetectedBase::Rebase(match coding_bom_auto_pair(mgr, this, mode) {
+            let selected = match coding_bom_auto_pair(mgr, this, mode) {
                 Some((sig, nosig)) => {
                     if scan.di.found & cat_mask(CodingCat::Utf8Sig) != 0 {
                         sig
@@ -5610,19 +5622,32 @@ fn detect_coding_found(
                     }
                 }
                 None => this,
-            });
+            };
+            return if selected == intern("nil") {
+                DetectedBase::IdentityOnly(this)
+            } else {
+                DetectedBase::Rebase(selected)
+            };
         }
         if cat == CodingCat::Utf16Auto as usize {
             return match coding_bom_auto_pair(mgr, this, mode) {
                 Some((le, be)) => {
                     if scan.di.found & cat_mask(CodingCat::Utf16Le) != 0 {
-                        DetectedBase::Rebase(le)
+                        if le == intern("nil") {
+                            DetectedBase::IdentityOnly(this)
+                        } else {
+                            DetectedBase::Rebase(le)
+                        }
                     } else if scan.di.found & cat_mask(CodingCat::Utf16Be) != 0 {
-                        DetectedBase::Rebase(be)
+                        if be == intern("nil") {
+                            DetectedBase::IdentityOnly(this)
+                        } else {
+                            DetectedBase::Rebase(be)
+                        }
                     } else {
                         // GNU's `found` stays nil: the cons was there and
                         // neither endianness was signalled.
-                        DetectedBase::Unchanged
+                        DetectedBase::IdentityOnly(this)
                     }
                 }
                 None => DetectedBase::Rebase(this),
@@ -6114,12 +6139,19 @@ pub fn builtin_coding_system_priority_list(
         // of the highest-priority category when HIGHESTP is non-nil
         // (`return CODING_ATTR_BASE_NAME (attrs)`), not a one-element list.
         if let Some(first) = mgr.priority.first() {
-            Ok(Value::symbol(*first))
+            Ok(Value::symbol(coding_system_base_name(
+                mgr,
+                resolve_sym(*first),
+            )))
         } else {
             Ok(Value::NIL)
         }
     } else {
-        let items: Vec<Value> = mgr.priority.iter().map(|id| Value::symbol(*id)).collect();
+        let items: Vec<Value> = mgr
+            .priority
+            .iter()
+            .map(|id| Value::symbol(coding_system_base_name(mgr, resolve_sym(*id))))
+            .collect();
         Ok(Value::list(items))
     }
 }

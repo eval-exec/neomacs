@@ -250,6 +250,7 @@ crates/neovm-text/src/emacs_core/text/syntax/mod.rs	struct	struct SyntaxFlags
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	struct	struct SyntaxTable
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	use	use SyntaxClass
 crates/neovm-text/src/encoding.rs	enum	enum CodingEncoderState
+crates/neovm-text/src/encoding.rs	enum	enum CodingReadSelection
 crates/neovm-text/src/encoding.rs	field	CodingSystemInfo field ascii_compatible_p
 crates/neovm-text/src/encoding.rs	field	CodingSystemInfo field charset_list
 crates/neovm-text/src/encoding.rs	field	CodingSystemInfo field coding_type

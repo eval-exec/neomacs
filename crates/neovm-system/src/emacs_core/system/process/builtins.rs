@@ -5129,8 +5129,15 @@ pub fn builtin_set_process_buffer(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let process = args.first().copied();
     let (processes, buffers) = eval.processes_and_buffers_mut();
-    builtin_set_process_buffer_impl(processes, buffers, args)
+    let result = builtin_set_process_buffer_impl(processes, buffers, args)?;
+    let id = resolve_process_object_or_wrong_type_any_in_manager(
+        &eval.processes(),
+        &process.expect("validated arguments"),
+    )?;
+    eval.setup_process_output_descriptor(id)?;
+    Ok(result)
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -5166,6 +5173,9 @@ pub(crate) fn builtin_set_process_buffer_impl(
         proc.childp =
             process_contact_plist_put(proc.childp, ProcessKeyword::Buffer.value(), args[1])?;
     }
+    // GNU reruns coding setup even when BUFFER is the same object.
+    proc.coding_state.reset();
+    proc.encoding_state = ProcessEncodingState::default();
     Ok(args[1])
 }
 
@@ -6246,7 +6256,14 @@ pub fn builtin_set_process_filter(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_set_process_filter_impl(eval.processes_mut(), args)
+    let process = args.first().copied();
+    let result = builtin_set_process_filter_impl(eval.processes_mut(), args)?;
+    let id = resolve_process_object_or_wrong_type_any_in_manager(
+        &eval.processes(),
+        &process.expect("validated arguments"),
+    )?;
+    eval.setup_process_output_descriptor(id)?;
+    Ok(result)
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -6270,6 +6287,9 @@ pub(crate) fn builtin_set_process_filter_impl(
         })?;
         let accepted_output_before = process_filter_accepts_output(proc);
         proc.filter = stored;
+        // Like set-process-buffer, GNU reruns setup on same-filter assignments.
+        proc.coding_state.reset();
+        proc.encoding_state = ProcessEncodingState::default();
         if process_uses_contact_plist(proc) {
             proc.childp =
                 process_contact_plist_put(proc.childp, ProcessKeyword::Filter.value(), stored)?;

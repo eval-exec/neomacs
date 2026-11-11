@@ -18244,3 +18244,125 @@ fn bom_target_aliases_keep_partial_output_and_raw_bytes() {
         "OK (((neovm-partial-target-u8 (65 30828 10) t utf-8-with-signature-dos) (neovm-partial-target-le (65 20013 10) t utf-16le-with-signature-dos) (neovm-partial-target-raw (4194287 4194235 4194239 65 4194279 4194209 4194220 13 10) t neovm-partial-target-raw)) ((neovm-partial-target-u8 (65 30828 10) t utf-8-with-signature-dos) (neovm-partial-target-le (65 20013 10) t utf-16le-with-signature-dos) (neovm-partial-target-raw (239 187 191 65 231 161 172 13 10) nil neovm-partial-target-raw)))"
     );
 }
+
+#[test]
+fn priority_coding_keeps_fixed_eol_before_decoded_eol_scan() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        eval_one(
+            r#"(progn
+      (set-coding-system-priority 'utf-8-dos)
+      (let* ((text (decode-coding-string (unibyte-string 231 161 172 13 65) 'undecided-mac))
+             (used last-coding-system-used))
+        (list (string-to-list text) used)))"#
+        ),
+        "OK ((30828 13 65) utf-8-dos)"
+    );
+}
+
+#[test]
+fn nil_priority_bom_target_keeps_raw_decoder_and_new_identity() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        eval_one(
+            r#"(progn
+      (define-coding-system 'neovm-native-nil-priority "Nil priority selection"
+        :coding-type 'utf-8 :mnemonic ?U :charset-list '(unicode)
+        :bom (cons 'utf-8-with-signature 'utf-8))
+      (setcdr (coding-system-get 'neovm-native-nil-priority :bom) nil)
+      (coding-system-put 'neovm-native-nil-priority :bom nil)
+      (set-coding-system-priority 'neovm-native-nil-priority)
+      (let* ((text (decode-coding-string (unibyte-string 231 161 172 13 10) 'undecided-unix))
+             (used last-coding-system-used))
+        (list (string-to-list text) used)))"#
+        ),
+        "OK ((4194279 4194209 4194220 10) neovm-native-nil-priority-dos)"
+    );
+}
+
+#[test]
+fn custom_utf8_signature_preserves_conversion_hooks() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        eval_one(
+            r#"(progn
+      (defun neovm-native-signature-post (size)
+        (goto-char (point-max)) (insert "!") (1+ size))
+      (defun neovm-native-signature-pre (_start _end)
+        (goto-char (point-max)) (insert "?") nil)
+      (define-coding-system 'neovm-native-signature "Signature with hooks"
+        :coding-type 'utf-8 :mnemonic ?U :charset-list '(unicode) :bom t
+        :post-read-conversion 'neovm-native-signature-post
+        :pre-write-conversion 'neovm-native-signature-pre)
+      (let* ((text (decode-coding-string (unibyte-string 239 187 191 65 13 10) 'neovm-native-signature))
+             (read-used last-coding-system-used)
+             (bytes (encode-coding-string "A\n" 'neovm-native-signature)))
+        (list (string-to-list text) read-used (string-to-list bytes) last-coding-system-used)))"#
+        ),
+        "OK ((65 10 33) neovm-native-signature-dos (239 187 191 65 10 63) neovm-native-signature)"
+    );
+}
+
+#[test]
+fn utf8_signature_process_continues_after_eol_writeback() {
+    crate::test_utils::init_test_tracing();
+    let cat = find_bin("cat");
+    let result = eval_one(&format!(
+        r#"(let* ((buffer (generate-new-buffer " *native-signature-state*"))
+       (process (make-process :name "native-signature-state" :buffer buffer
+          :command '("{cat}") :connection-type 'pipe :noquery t
+          :coding '(utf-8-with-signature . no-conversion) :sentinel #'ignore))
+       (deadline (+ (float-time) 5)))
+      (unwind-protect
+        (progn
+          (process-send-string process (unibyte-string 239 187 191 65 13 10))
+          (while (and (< (with-current-buffer buffer (buffer-size)) 2)
+                      (< (float-time) deadline))
+            (accept-process-output process 0.01))
+          (process-send-string process (unibyte-string 239 187 191 66))
+          (process-send-eof process)
+          (while (and (process-live-p process) (< (float-time) deadline))
+            (accept-process-output process 0.01))
+          (when (process-live-p process) (error "Signature process timeout"))
+          (list (with-current-buffer buffer (string-to-list (buffer-string)))
+                (car (process-coding-system process))))
+        (when (process-live-p process) (delete-process process))
+        (kill-buffer buffer)))"#
+    ));
+    assert_eq!(result, "OK ((65 10 65279 66) utf-8-with-signature-dos)");
+}
+
+#[test]
+fn custom_signature_post_hook_holds_trailing_dos_cr() {
+    crate::test_utils::init_test_tracing();
+    let cat = find_bin("cat");
+    let result = eval_one(&format!(
+        r#"(progn
+      (defun neovm-native-sig-observe (size) size)
+      (define-coding-system 'neovm-native-sig-fixed "Signature and DOS hook"
+        :coding-type 'utf-8 :mnemonic ?U :charset-list '(unicode) :bom t
+        :eol-type 'dos :post-read-conversion 'neovm-native-sig-observe)
+      (let* ((buffer (generate-new-buffer " *sig-hook-cr*"))
+             (process (make-process :name "sig-hook-cr" :buffer buffer
+               :command '("{cat}") :connection-type 'pipe :noquery t
+               :coding '(neovm-native-sig-fixed . no-conversion) :sentinel #'ignore))
+             (deadline (+ (float-time) 5)) first)
+       (unwind-protect
+         (progn
+           (process-send-string process (unibyte-string 239 187 191 65 13))
+           (while (and (< (with-current-buffer buffer (buffer-size)) 1)
+                       (< (float-time) deadline))
+             (accept-process-output process 0.01))
+           (setq first (with-current-buffer buffer (string-to-list (buffer-string))))
+           (process-send-string process (unibyte-string 10 66))
+           (process-send-eof process)
+           (while (and (process-live-p process) (< (float-time) deadline))
+             (accept-process-output process 0.01))
+           (when (process-live-p process) (error "Signature CR timeout"))
+           (list first (with-current-buffer buffer (string-to-list (buffer-string)))
+                 (car (process-coding-system process))))
+         (when (process-live-p process) (delete-process process))
+         (kill-buffer buffer))))"#
+    ));
+    assert_eq!(result, "OK ((65) (65 10 66) neovm-native-sig-fixed)");
+}

@@ -9,6 +9,9 @@
 //! | `NEOVM_EMACS_MULE_PREPARED` | off | Prepare emacs-mule encoder candidates once per conversion, honoring charset priority. |
 
 use crate::emacs_core::coding::EolType;
+use crate::emacs_core::coding::read_detection::{
+    adjusted_coding_name, runtime_codec_name, runtime_coding_eol,
+};
 use crate::emacs_core::text_host::TextHost;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{expect_args, expect_args_range, expect_min_args};
@@ -363,49 +366,6 @@ pub(crate) fn coding_name_eol(coding_system: &str) -> EolType {
     }
 }
 
-fn runtime_coding_eol(
-    systems: &crate::emacs_core::coding::CodingSystemManager,
-    name: &str,
-) -> EolType {
-    RuntimeCodingSystem::from_symbol(intern(name))
-        .metadata(systems)
-        .map_or_else(|| coding_name_eol(name), |metadata| metadata.eol_type)
-}
-
-/// The registered codec name, independent of the alias a conversion reports.
-fn runtime_codec_name(
-    systems: &crate::emacs_core::coding::CodingSystemManager,
-    name: &str,
-) -> Option<String> {
-    RuntimeCodingSystem::from_symbol(intern(name))
-        .metadata(systems)
-        .map(|metadata| {
-            let canonical = resolve_sym(metadata.info.name);
-            if metadata.eol_type == metadata.info.eol_type {
-                canonical.to_owned()
-            } else {
-                apply_explicit_eol_suffix(canonical, metadata.eol_type)
-            }
-        })
-}
-
-/// GNU adjusts the selected target only while its EOL remains undecided.
-/// A fixed target keeps both its EOL and its alias (coding.c:6471-6495).
-fn inherit_detection_eol(
-    systems: &crate::emacs_core::coding::CodingSystemManager,
-    selected: &str,
-    requested: EolType,
-) -> String {
-    if requested == EolType::Undecided
-        || runtime_coding_eol(systems, selected) != EolType::Undecided
-    {
-        return selected.to_owned();
-    }
-    systems
-        .canonical_name_for_detected_eol(selected, requested.suffix())
-        .unwrap_or_else(|| selected.to_owned())
-}
-
 /// The `&str` twin of `expand_source_eol`: the single EOL pass for the
 /// `encode_string` entry point.  Same rule, same GNU reference
 /// (`consume_chars`, src/coding.c:7607) -- convert the SOURCE once, above the
@@ -569,11 +529,7 @@ pub fn coding_name_requires_detection(
     coding_systems: &crate::emacs_core::coding::CodingSystemManager,
     coding_system: &str,
 ) -> bool {
-    // The registered type and compiled BOM attributes control detection, so
-    // aliases and EOL subsidiaries use the same metadata as detection itself.
-    crate::emacs_core::coding::undecided_null_byte_inhibition(coding_systems, coding_system, false)
-        .is_some()
-        || crate::emacs_core::coding::bom_auto_coding(coding_systems, coding_system).is_some()
+    crate::emacs_core::coding::read_detection::requires_detection(coding_systems, coding_system)
 }
 
 /// GNU's `detect_coding` (src/coding.c:6503-6759) reduced to its one lasting
@@ -605,6 +561,26 @@ pub fn detected_coding_name(
     mode: neovm_value::tagged::SymbolMode,
 ) -> Option<&'static str> {
     detected_coding_name_with_null_policy(coding_systems, coding_system, bytes, block, mode, false)
+        .map(|selection| selection.name())
+}
+
+/// One read's coding identity and the setup operation GNU performed on its decoder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CodingReadSelection {
+    /// Continue the previous decoder; only its ordinary EOL pass may change its name.
+    Existing(&'static str),
+    /// A non-nil detector result ran `setup_coding_system`.
+    Rebase(&'static str),
+    /// The priority walk changed the id, but nil `found` retained the original decoder.
+    IdentityOnly(&'static str),
+}
+
+impl CodingReadSelection {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Existing(name) | Self::Rebase(name) | Self::IdentityOnly(name) => name,
+        }
+    }
 }
 
 /// Detect before a subprocess decoder runs, using the dynamic NUL flag read by
@@ -617,39 +593,15 @@ pub fn detected_coding_name_with_null_policy(
     block: crate::emacs_core::coding::SourceBlock,
     mode: neovm_value::tagged::SymbolMode,
     global: bool,
-) -> Option<&'static str> {
-    let eol = runtime_coding_eol(coding_systems, coding_system);
-    let name = match crate::emacs_core::coding::undecided_null_byte_inhibition(
+) -> Option<CodingReadSelection> {
+    crate::emacs_core::coding::read_detection::select(
         coding_systems,
         coding_system,
+        bytes,
+        block,
+        mode,
         global,
-    ) {
-        Some(inhibit_null) => {
-            let detected = resolve_sym(detect_undecided_coding(
-                coding_systems,
-                bytes,
-                crate::emacs_core::coding::undecided_prefers_utf8(coding_systems, coding_system),
-                inhibit_null,
-                block,
-                mode,
-            )?);
-            // A detection result of `undecided` is this engine's spelling of
-            // GNU's nil `found`.
-            if coding_system_base(detected) == "undecided" {
-                return None;
-            }
-            // This detector already resolved EOL from the bytes; an explicit
-            // request overrides that detected EOL, as it did before rebasing.
-            apply_explicit_eol_suffix(detected, eol)
-        }
-        // The two arms that are keyed on a byte-order mark rather than on the
-        // category priority list (:6702-6742).
-        None => {
-            let found = detect_bom_auto_coding(coding_systems, coding_system, bytes, block, mode)?;
-            inherit_detection_eol(coding_systems, found, eol)
-        }
-    };
-    Some(resolve_sym(intern(&name)))
+    )
 }
 
 /// One run of a subprocess's output, decoded, together with the coding system
@@ -686,38 +638,6 @@ pub struct DecodedProcessRun {
     /// read that produced these bytes has already given the process record up,
     /// and would have had to guess.
     pub(crate) carryover: Vec<u8>,
-}
-
-/// GNU `CODING_ID_NAME (coding->id)` after a decode: the coding system the
-/// decode reports having used, read out of the resolution that ran it.
-///
-/// This is the name behind `last-coding-system-used` (src/coding.c:9497 for a
-/// region, :9644 for a string) and
-/// behind `(process-coding-system P)` (src/process.c:6421) alike, because in
-/// GNU they are one field of one object.  When `adjust_coding_eol_type` fired,
-/// it is the SUBSIDIARY that call rewrote the id to -- and the subsidiary comes
-/// out of the coding system's own eol vector, which holds canonical names, so
-/// an alias reports its base's subsidiary (measured under GNU 31.0.90:
-/// `coding-system-for-read` `latin-1` over a CR-only child answers
-/// `iso-latin-1-mac`).  When it did not fire -- a concrete eol type, no
-/// terminator in the text, or `inhibit-eol-conversion` -- the name is the one
-/// the coding system was set up with, verbatim.
-///
-/// Taking the [`DecodeEolResolution`](crate::emacs_core::coding::DecodeEolResolution)
-/// rather than re-scanning the text is what keeps the reported name and the
-/// conversion the same decision: GNU makes them one call, and every caller here
-/// has to make them one value.
-pub(crate) fn adjusted_coding_name(
-    coding_systems: &crate::emacs_core::coding::CodingSystemManager,
-    coding_system: &str,
-    eol: crate::emacs_core::coding::DecodeEolResolution,
-) -> String {
-    match eol.adjusted() {
-        Some(resolved) => coding_systems
-            .canonical_name_for_detected_eol(coding_system, resolved.suffix())
-            .unwrap_or_else(|| coding_system.to_owned()),
-        None => coding_system.to_owned(),
-    }
 }
 
 /// GNU `coding_inherit_eol_type (CODING_SYSTEM, Qnil)` (src/coding.c:5972-6008).
@@ -2234,17 +2154,51 @@ impl Iso2022DecodeState {
 /// GNU `coding->spec`: the decoder state a `struct coding_system` carries
 /// between calls.
 ///
-/// Only the ISO-2022 arm is here, and the reason is a measurement rather than
-/// an omission: it is the only decoder in this port whose state is observable
-/// across a read boundary.  Shift-JIS, EUC, the charset codings, `emacs-mule`
-/// and UTF-8 are stateless between characters -- everything they carry across a
-/// boundary is the incomplete character itself, which is `coding->carryover`
-/// and is handled by [`SourceConsumed`].  UTF-16's endianness and `emacs-mule`'s
-/// composition status are the two GNU also keeps here and this port does not;
-/// see the ledger entry.
+/// ISO-2022 retains its designations and UTF-8 retains its initial-signature
+/// decision. A priority walk can also change the reported id without replacing
+/// the original undecided decoder. Incomplete characters travel separately as
+/// `coding->carryover`, represented by [`SourceConsumed`]. UTF-16 endianness and
+/// `emacs-mule` composition status remain outside this continuation.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CodingDecoderState {
     iso_2022: Iso2022DecodeState,
+    utf8_signature: Utf8SignatureState,
+    effective_decoder: EffectiveDecoder,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Utf8SignatureState {
+    #[default]
+    Initial,
+    Started,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum EffectiveDecoder {
+    #[default]
+    Configured,
+    RetainedUndecided,
+}
+
+/// Consume the signature only at stream start. A truncated first character
+/// consumes nothing and leaves the decision pending for the next read.
+fn decode_utf8_signature_source(
+    bytes: &[u8],
+    state: &mut Utf8SignatureState,
+    dos_eol: DosEolLookahead,
+) -> DecodedSource {
+    let signature =
+        if *state == Utf8SignatureState::Initial && bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+            3
+        } else {
+            0
+        };
+    let mut decoded = decode_via_utf8(&bytes[signature..], dos_eol);
+    decoded.consumed = SourceConsumed(signature + decoded.consumed.bytes());
+    if decoded.consumed.bytes() > 0 {
+        *state = Utf8SignatureState::Started;
+    }
+    decoded
 }
 
 /// The encoder continuation retained between subprocess writes. A fresh
@@ -3867,10 +3821,17 @@ fn quote_value(value: Value) -> Value {
 /// hook first and then encodes the transformed text with the base
 /// `:coding-type`; decoding decodes with the base `:coding-type` first and then
 /// runs the post-read hook on the decoded text.
+#[derive(Clone, Copy)]
+enum HookCodec<'a> {
+    Base(&'a str),
+    Utf8Signature,
+    RetainedUndecided,
+}
+
 fn run_coding_with_conversion_hook<H: TextHost>(
     ctx: &mut H,
     args: &[Value],
-    base_type: &str,
+    codec: HookCodec<'_>,
     hook: SymId,
     encode: bool,
     eol: EolType,
@@ -3886,6 +3847,11 @@ fn run_coding_with_conversion_hook<H: TextHost>(
     // hook produces / consumes.  GNU's mnemonic codings are utf-8 based; map
     // any other base type by name and fall back to utf-8 (the universal
     // multibyte codec) when the type is not itself a usable coding-system name.
+    let base_type = match codec {
+        HookCodec::Base(name) => name,
+        HookCodec::Utf8Signature => "utf-8-with-signature",
+        HookCodec::RetainedUndecided => "raw-text",
+    };
     let base_coding = if known_coding_system(base_type) {
         base_type
     } else {
@@ -3945,6 +3911,52 @@ fn run_coding_with_conversion_hook<H: TextHost>(
         } else {
             DosEolLookahead::NotRequired
         };
+        if matches!(
+            codec,
+            HookCodec::Utf8Signature | HookCodec::RetainedUndecided
+        ) {
+            let mut scratch = CodingDecoderState::default();
+            let mut decoded = match codec {
+                HookCodec::Utf8Signature => {
+                    let signature_eol = if eol == EolType::Dos
+                        && ctx.eol_conversion() == crate::emacs_core::coding::EolConversion::Enabled
+                    {
+                        DosEolLookahead::Required
+                    } else {
+                        DosEolLookahead::NotRequired
+                    };
+                    decode_utf8_signature_source(
+                        &source_bytes,
+                        &mut run.decoder_state(&mut scratch).utf8_signature,
+                        signature_eol,
+                    )
+                }
+                HookCodec::RetainedUndecided => {
+                    DecodedSource::whole(decode_raw_text_multibyte(&source_bytes), &source_bytes)
+                }
+                HookCodec::Base(_) => unreachable!("the native hook codec was selected above"),
+            };
+            run.record(decoded.consumed);
+            if run.flushes_last_block() {
+                flush_last_block_into(
+                    &mut decoded.bytes,
+                    &source_bytes[decoded.consumed.bytes()..],
+                );
+            }
+            let decoded = decoded_string_with_charset_runs(decoded.bytes, decoded.runs);
+            let text = ctx.lisp_string(decoded).expect("decoder returned text");
+            let resolution = eol.resolve_for_decode(text.as_bytes(), ctx.eol_conversion());
+            let converted = match resolution.eol() {
+                crate::emacs_core::coding::ResolvedEol::Unix => decoded,
+                converting => {
+                    Value::heap_string(neovm_value::heap_types::LispString::from_emacs_bytes(
+                        decode_eol_bytes(text.as_bytes(), converting),
+                    ))
+                }
+            };
+            let converted = run_post_read_conversion(ctx, hook, converted)?;
+            return Ok((converted, Some(resolution)));
+        }
         let consumed = match decode_fallthrough_source(&source_bytes, &body, dos_eol) {
             Some(decoded) => decoded.consumed,
             None => SourceConsumed::all(&source_bytes),
@@ -4694,146 +4706,11 @@ fn decode_via_iso2022(
     })
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-/// Resolve `undecided` / `prefer-utf-8` to a concrete coding system by
-/// inspecting the byte pattern, mirroring GNU's `detect_coding`: walk the
-/// configured detection categories in priority order and return the first
-/// defined coding system whose category accepts the bytes.
-fn detect_undecided_coding(
-    coding_systems: &crate::emacs_core::coding::CodingSystemManager,
-    bytes: &[u8],
-    prefer_utf_8: bool,
-    inhibit_null: bool,
-    block: crate::emacs_core::coding::SourceBlock,
-    mode: neovm_value::tagged::SymbolMode,
-) -> Option<neovm_value::intern::SymId> {
-    // `prefer-utf-8` raises UTF-8 ahead of the configured category priority --
-    // GNU's `prefer_utf_8 && detect_coding_utf_8 (coding, &detect_info)`
-    // (src/coding.c:6619-6620), which is the same detector as everywhere else
-    // and therefore tolerates a trailing partial character when this is not the
-    // last block.
-    if prefer_utf_8
-        && (inhibit_null || !bytes.contains(&0))
-        && utf8_or_truncated_utf8(bytes, block)
-        && bytes.iter().any(|&b| b >= 0x80)
-    {
-        return Some(intern("utf-8"));
-    }
-
-    crate::emacs_core::coding::detect_highest_coding_system_for_unibyte_bytes(
-        coding_systems,
-        bytes,
-        block,
-        mode,
-        inhibit_null,
-    )
-}
-
-/// Valid UTF-8, or valid UTF-8 that stops in the middle of its last character
-/// when more bytes may still follow.
-///
-/// GNU has no separate predicate for this: `detect_coding_utf_8` walks the
-/// source and its `no_more_source:` tail rejects a partial trailing character
-/// only under `CODING_MODE_LAST_BLOCK` (src/coding.c:1215).  This is that one
-/// rule spelled for the `prefer-utf-8` shortcut, which does not go through the
-/// category walk.
-fn utf8_or_truncated_utf8(bytes: &[u8], block: crate::emacs_core::coding::SourceBlock) -> bool {
-    match std::str::from_utf8(bytes) {
-        Ok(_) => true,
-        Err(error) => {
-            !matches!(block, crate::emacs_core::coding::SourceBlock::Last)
-                && error.error_len().is_none()
-                && std::str::from_utf8(&bytes[..error.valid_up_to()]).is_ok()
-        }
-    }
-}
-
-/// The BOM-detecting arms of GNU's `detect_coding` (src/coding.c:6702-6742).
-///
-/// Two coding systems are "auto" in a way `undecided` is not: their `:bom`
-/// property is a CONS of the two concrete systems the byte-order mark chooses
-/// between, and their detection category is `coding_category_utf_8_auto` /
-/// `coding_category_utf_16_auto` rather than `coding_category_undecided`.
-/// `detect_coding` gives each its own arm, and each arm ends in
-/// `setup_coding_system (found, coding)` -- so the coding system a `utf-16`
-/// decode actually RUNS with, and reports, is one of the two concrete ones.
-/// Measured under GNU 31.0.90:
-///
-/// ```text
-/// (decode-coding-string "\xfe\xff\0a\0\r\0\n\0b" 'utf-16) => last-coding-system-used  utf-16be-with-signature-dos
-/// (decode-coding-string "\xff\xfe" ... 'utf-16)           => last-coding-system-used  utf-16le-with-signature-dos
-/// (decode-coding-string "\0a\0\r\0\n\0b" 'utf-16)         => last-coding-system-used  utf-16-dos
-/// ```
-///
-/// The third row is the one that says what "found" means: with no BOM,
-/// `detect_coding_utf_16` sets neither `CATEGORY_MASK_UTF_16_LE` nor `_BE` --
-/// those two flags come ONLY from the two BOM branches (src/coding.c:1513-1526)
-/// -- so `found` stays nil and the coding system keeps its own name and its own
-/// default (big-endian) byte order.  The `_NOSIG` categories that the pattern
-/// scan below those branches can set are a different pair of flags and the auto
-/// arm does not look at them.
-///
-/// Returns `None` when GNU's `found` would be nil, i.e. when nothing re-bases.
-fn detect_bom_auto_coding(
-    coding_systems: &crate::emacs_core::coding::CodingSystemManager,
-    coding_system: &str,
-    bytes: &[u8],
-    block: crate::emacs_core::coding::SourceBlock,
-    mode: neovm_value::tagged::SymbolMode,
-) -> Option<&'static str> {
-    use crate::emacs_core::coding::BomAutoCoding;
-    let found = match crate::emacs_core::coding::bom_auto_coding(coding_systems, coding_system)? {
-        // src/coding.c:6724-6742.  `coding->head_ascii = 0` and then
-        // `detect_coding_utf_16`, which REFUSES an odd-length last block
-        // outright (src/coding.c:1501-1507) before it looks at a signature --
-        // measured, `(decode-coding-string "\xfe\xff\0" 'utf-16)` answers
-        // `utf-16` and keeps U+FEFF as a character.
-        BomAutoCoding::Utf16 { .. }
-            if bytes.len() % 2 == 1
-                && matches!(block, crate::emacs_core::coding::SourceBlock::Last) =>
-        {
-            None
-        }
-        BomAutoCoding::Utf16 { little, big } => match bytes {
-            [0xFF, 0xFE, ..] => Some(little),
-            [0xFE, 0xFF, ..] => Some(big),
-            _ => None,
-        },
-        // src/coding.c:6702-6722.  All-ASCII takes `XCDR` without even running
-        // the detector; otherwise `detect_coding_utf_8` decides, and a BOM
-        // takes `XCAR`.  Either way `found` is non-nil whenever the text is
-        // valid UTF-8, so `utf-8-auto` re-bases to a system that is not `auto`.
-        BomAutoCoding::Utf8 {
-            signature,
-            without_signature,
-        } => {
-            if bytes.iter().all(|byte| byte.is_ascii()) {
-                Some(without_signature)
-            } else if std::str::from_utf8(bytes).is_err_and(|error| {
-                error.error_len().is_some()
-                    || matches!(block, crate::emacs_core::coding::SourceBlock::Last)
-            }) {
-                None
-            } else if bytes.len() > 3 && bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
-                // GNU's strict `src + 3 < src_end` requires a following byte.
-                // Exact three-byte input selects the other target, retaining U+FEFF.
-                Some(signature)
-            } else {
-                Some(without_signature)
-            }
-        }
-    }?;
-    if found.is_nil() {
-        return None;
-    }
-    found.as_symbol_id(mode).map(resolve_sym)
-}
-
 /// Re-attach an explicit (concrete) eol_type to a detected base coding system,
 /// so a bare EOL alias (`dos`/`mac`/`unix`) still forces its EOL after the
 /// character code has been detected (GNU forces the specified eol_type in
 /// `decode_eol`).  An undecided eol leaves the name untouched.
-fn apply_explicit_eol_suffix(base: &str, eol: EolType) -> String {
+pub(crate) fn apply_explicit_eol_suffix(base: &str, eol: EolType) -> String {
     let base = coding_system_base(base);
     // `no-conversion` is byte-faithful (raw-text-unix); GNU keeps it whole and
     // never appends a DOS/MAC subsidiary, so leave it alone.
@@ -4887,6 +4764,12 @@ fn builtin_coding_string_in_context<H: TextHost>(
     // `last-coding-system-used' reports the name the caller passed, not the
     // system the codec resolved to, so keep it before any rewriting below.
     let mut reported_coding = coding.clone();
+    let mut effective_decoder = run
+        .state
+        .as_deref()
+        .map_or(EffectiveDecoder::Configured, |state| {
+            state.effective_decoder
+        });
     // A coding system defined with `define-coding-system-alias' is, in GNU, a
     // KEY in the same hash table as its target pointing at the SAME spec
     // (`Fputhash (alias, spec, Vcoding_system_hash_table)`, src/coding.c), so
@@ -4959,73 +4842,33 @@ fn builtin_coding_string_in_context<H: TextHost>(
     // the whole block is skipped: its detector has run, at the read, on the
     // carryover plus the read and with the read's own `CODING_MODE_LAST_BLOCK`.
     if let (false, EntryDetection::Here(block)) = (encode, entry.detection()) {
-        let detection_coding = coding.clone();
-        if let Some(inhibit_null) = crate::emacs_core::coding::undecided_null_byte_inhibition(
+        let source = ctx.lisp_string(args[0]).expect("validated source string");
+        let bytes = lisp_string_coding_source_bytes(source);
+        let selection = detected_coding_name_with_null_policy(
             ctx.coding_systems(),
             &coding,
+            &bytes,
+            block,
+            ctx.symbol_mode(),
             ctx.forwarded_variable_value(intern("inhibit-null-byte-detection"))
                 .unwrap_or(Value::NIL)
                 .is_truthy(),
-        ) && let Some(src) = ctx.lisp_string(args[0])
-        {
-            let bytes = lisp_string_coding_source_bytes(src);
-            let detected = detect_undecided_coding(
-                ctx.coding_systems(),
-                &bytes,
-                crate::emacs_core::coding::undecided_prefers_utf8(ctx.coding_systems(), &coding),
-                inhibit_null,
-                // `CODING_MODE_LAST_BLOCK` is the entry's to state, not this
-                // function's: `code_convert_string` and `code_convert_region`
-                // raise it before converting, `decode_coding_gap` detects
-                // before raising it.  See `CodingEntry::detection`.
-                block,
-                ctx.symbol_mode(),
-            )
-            .ok_or_else(|| {
-                signal(
-                    LispCondition::CodingSystemError,
-                    vec![Value::symbol(&coding)],
-                )
-            })?;
-            // `undecided` (including an EOL subsidiary) represents GNU's nil
-            // found: no coding-system replacement. Keep the requested coding
-            // and its attributes, including conversion hooks, until the EOL
-            // pass. GNU re-reads those attributes after detection, and only a
-            // concrete result replaces them (coding.c:6743-6754, 8129-8131).
-            if coding_system_base(resolve_sym(detected)) != "undecided" {
-                let selected = apply_explicit_eol_suffix(
-                    resolve_sym(detected),
-                    runtime_coding_eol(ctx.coding_systems(), &coding),
-                );
-                reported_coding = selected.clone();
-                coding = runtime_codec_name(ctx.coding_systems(), &selected).unwrap_or(selected);
+        );
+        match selection {
+            None | Some(CodingReadSelection::Existing(_)) => {}
+            Some(CodingReadSelection::IdentityOnly(candidate)) => {
+                coding = candidate.to_owned();
+                reported_coding = coding.clone();
                 args[1] = Value::symbol(&coding);
+                effective_decoder = EffectiveDecoder::RetainedUndecided;
             }
-        }
-        // The other two "not fully specified" categories: `utf-16` and
-        // `utf-8-auto` pick a concrete BASE from the byte-order mark rather
-        // than from the category priority list, and they end in the same
-        // `setup_coding_system (found, coding)` (src/coding.c:6743-6754).
-        // `detect_coding` runs exactly ONE of its three arms, so this is keyed
-        // on the ORIGINAL base: a `undecided` decode that detected `utf-16`
-        // above does not then get re-based a second time.
-        if let Some(src) = ctx.lisp_string(args[0])
-            && let Some(found) = detect_bom_auto_coding(
-                ctx.coding_systems(),
-                &detection_coding,
-                &lisp_string_coding_source_bytes(src),
-                block,
-                ctx.symbol_mode(),
-            )
-        {
-            let selected = inherit_detection_eol(
-                ctx.coding_systems(),
-                found,
-                runtime_coding_eol(ctx.coding_systems(), &detection_coding),
-            );
-            reported_coding = selected.clone();
-            coding = runtime_codec_name(ctx.coding_systems(), &selected).unwrap_or(selected);
-            args[1] = Value::symbol(&coding);
+            Some(CodingReadSelection::Rebase(selected)) => {
+                reported_coding = selected.to_owned();
+                coding = runtime_codec_name(ctx.coding_systems(), selected)
+                    .unwrap_or_else(|| selected.to_owned());
+                args[1] = Value::symbol(&coding);
+                effective_decoder = EffectiveDecoder::Configured;
+            }
         }
     }
     // Charset-type coding systems (cp437, koi8-r, chinese-gbk, …) encode and
@@ -5039,10 +4882,8 @@ fn builtin_coding_string_in_context<H: TextHost>(
     let no_conv_multibyte = coding_system_base(&coding) == "no-conversion-multibyte";
     // utf-8-with-signature and utf-8-auto both write the BOM on encode and
     // strip an optional BOM on decode.
-    let utf8_signature = matches!(
-        coding_system_base(&coding),
-        "utf-8-with-signature" | "utf-8-auto"
-    );
+    let utf8_signature = effective_decoder == EffectiveDecoder::Configured
+        && crate::emacs_core::coding::utf8_uses_signature(ctx.coding_systems(), &coding);
     let full_iso = full_iso2022_spec(ctx, &coding);
     let ccl_coding = runtime_ccl_spec(ctx, &coding);
     let euc_coding = euc_iso2022_spec(ctx, &coding);
@@ -5109,7 +4950,7 @@ fn builtin_coding_string_in_context<H: TextHost>(
     // is handled entirely here; the generic family encoders below do not know
     // how to encode it (its family is "unknown") and would drop every
     // character.
-    if !dedicated_codec
+    if (!dedicated_codec || utf8_signature)
         && entry != CodingEntry::ProcessSend(ProcessPreWriteStage::Prepared)
         && let Some((hook, base_type)) = coding_conversion_hook(ctx, &coding, encode)
     {
@@ -5154,8 +4995,15 @@ fn builtin_coding_string_in_context<H: TextHost>(
             }
         } else {
             let eol = runtime_coding_eol(ctx.coding_systems(), &coding);
+            let codec = if effective_decoder == EffectiveDecoder::RetainedUndecided {
+                HookCodec::RetainedUndecided
+            } else if utf8_signature {
+                HookCodec::Utf8Signature
+            } else {
+                HookCodec::Base(&base_type)
+            };
             let (converted, resolution) =
-                run_coding_with_conversion_hook(ctx, &args, &base_type, hook, encode, eol, run)?;
+                run_coding_with_conversion_hook(ctx, &args, codec, hook, encode, eol, run)?;
             if let Some(resolution) = resolution {
                 // GNU `adjust_coding_eol_type` (src/coding.c:6471) rewrites
                 // `coding->id`, and the id is what every door but the string
@@ -5247,6 +5095,12 @@ fn builtin_coding_string_in_context<H: TextHost>(
             coding = spent.into_owned();
             args[1] = Value::symbol(&coding);
         }
+        if effective_decoder == EffectiveDecoder::RetainedUndecided {
+            // A nil priority target changed only coding->id. Its decoder is
+            // still the original undecided coding's raw-text decoder.
+            coding = "raw-text".to_owned();
+            args[1] = Value::symbol(&coding);
+        }
     }
     let source_string = || {
         args[0]
@@ -5333,7 +5187,12 @@ fn builtin_coding_string_in_context<H: TextHost>(
         };
         let mut scratch = CodingDecoderState::default();
         let source_bytes = lisp_string_coding_source_bytes(source_string());
-        let decoded = if let Some(imap) = utf7_coding {
+        let decoded = if effective_decoder == EffectiveDecoder::RetainedUndecided {
+            Some(DecodedSource::whole(
+                decode_raw_text_multibyte(&source_bytes),
+                &source_bytes,
+            ))
+        } else if let Some(imap) = utf7_coding {
             // GNU implements utf-7 in Lisp, as a `:post-read-conversion` over
             // `raw-text` (lisp/international/utf-7.el), so the C decoder under
             // it consumes every byte and each chunk is converted on its own.
@@ -5357,16 +5216,11 @@ fn builtin_coding_string_in_context<H: TextHost>(
                 &source_bytes,
             ))
         } else if utf8_signature {
-            let mut src = source_bytes.as_bytes().to_vec();
-            let signature = if src.starts_with(&[0xEF, 0xBB, 0xBF]) {
-                src.drain(..3);
-                3
-            } else {
-                0
-            };
-            let mut decoded = decode_via_utf8(&src, dos_eol);
-            decoded.consumed = SourceConsumed(signature + decoded.consumed.bytes());
-            Some(decoded)
+            Some(decode_utf8_signature_source(
+                &source_bytes,
+                &mut run.decoder_state(&mut scratch).utf8_signature,
+                dos_eol,
+            ))
         } else if let Some(spec) = ccl_coding {
             // A CCL program decides for itself how many bytes it reads, and
             // this port drives it to the end of the source; GNU's
@@ -5785,7 +5639,7 @@ pub fn decode_file_bytes_in_context<H: TextHost>(
 /// `:post-read-conversion` (src/coding.c:8180-8194), because there is nowhere
 /// else for those to live.
 ///
-/// CODING has already been through [`detected_coding_name`]; see
+/// SELECTION records the detection/setup operation for this read; see
 /// [`CodingEntry::ProcessRun`] for why detection cannot be deferred to here.
 ///
 /// This function takes a `&mut Context` and that is the whole point of the
@@ -5796,10 +5650,18 @@ pub fn decode_file_bytes_in_context<H: TextHost>(
 pub fn decode_process_run_in_context<H: TextHost>(
     ctx: &mut H,
     bytes: &[u8],
-    coding: &'static str,
+    selection: CodingReadSelection,
     state: &mut CodingDecoderState,
     block: crate::emacs_core::coding::SourceBlock,
 ) -> Result<DecodedProcessRun, neovm_value::error::Flow> {
+    match selection {
+        CodingReadSelection::Existing(_) => {}
+        CodingReadSelection::Rebase(_) => *state = CodingDecoderState::default(),
+        CodingReadSelection::IdentityOnly(_) => {
+            state.effective_decoder = EffectiveDecoder::RetainedUndecided;
+        }
+    }
+    let coding = selection.name();
     let source = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
         bytes.to_vec(),
     ));
