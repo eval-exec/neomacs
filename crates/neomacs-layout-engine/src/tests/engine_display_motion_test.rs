@@ -2755,6 +2755,57 @@ fn page_viewports_measure_their_pixel_extent_in_one_walk() {
 }
 
 #[test]
+fn raw_byte_display_replacement_covers_its_cookie_and_finishes_paging() {
+    use neovm_core::window::WindowLayoutQueryScope;
+    let (mut eval, frame, window) = position_query_fixture("", 400, 400);
+    // Like Info's broken-image fallback: both the hidden cookie and its
+    // display string contain raw bytes, so displaying the cookie as ordinary
+    // UTF-8 cannot conceal a failure to accept the replacement.
+    eval.eval_str(
+        r#"(insert "before\n")
+           (let ((start (point)))
+             (insert (string 0) (unibyte-string 255) "cookie")
+             (put-text-property
+              start (point) 'display
+              (propertize (concat "[broken image:" (unibyte-string 255) "]")
+                          'fontified nil)))
+           (insert "\nafter\n")
+           (goto-char 1) (set-window-start nil 1 t)"#,
+    )
+    .unwrap();
+    let end = LispCharPos1::new(eval.eval_str("(point-max)").unwrap().as_fixnum().unwrap());
+    let mut query = crate::font::metrics::test_catalog::query_engine();
+    let viewport = query
+        .query_window_layout(&mut eval, frame, window, WindowLayoutQueryScope::Viewport)
+        .unwrap();
+    assert_eq!(viewport.end(), end, "replacement stopped source coverage");
+    eval.install_window_layout_query(move |eval, frame, window, scope| {
+        // A regression must fail before the paging measurer can allocate
+        // geometrically larger glyph matrices for this three-row buffer.
+        if let WindowLayoutQueryScope::Pixels { height, .. } = scope {
+            assert!(height.get() <= 800, "paging did not reach the source end");
+        }
+        match query.query_window_layout(eval, frame, window, scope) {
+            Ok(query) => WindowLayoutQueryOutcome::Ready(query),
+            Err(error) => WindowLayoutQueryOutcome::Failed(error),
+        }
+    })
+    .unwrap();
+    assert_eq!(
+        eval.eval_str(
+            "(condition-case nil (let ((noninteractive nil)) (scroll-up)) (end-of-buffer 'at-end))"
+        )
+        .unwrap(),
+        Value::symbol("at-end"),
+    );
+    assert_eq!(
+        eval.eval_str("(list (window-start) (point) (window-vscroll nil t))")
+            .unwrap(),
+        Value::list(vec![Value::fixnum(1), Value::fixnum(1), Value::fixnum(0)])
+    );
+}
+
+#[test]
 fn pixel_extent_queries_match_complete_rows_with_mixed_heights_and_overlays() {
     use neovm_core::window::WindowLayoutQueryScope;
     use std::num::NonZeroUsize;

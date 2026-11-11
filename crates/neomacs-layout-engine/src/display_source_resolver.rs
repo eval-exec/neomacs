@@ -634,7 +634,7 @@ impl<'a, 'source> DisplayPropertyReplacementSourceResolveRequest<'a, 'source> {
         }
         let source_inputs = match display_property.replacement()? {
             DisplayReplacementProperty::String => {
-                let replacement = replacement_value.as_utf8_str()?;
+                let replacement = replacement_value.as_lisp_string()?;
                 let cursor_slot_width_px = self
                     .active_face_state
                     .display_replacement_string_cursor_slot_width(self.font_metrics, replacement);

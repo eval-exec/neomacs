@@ -11,6 +11,7 @@ use crate::display_text_run_measurement::{
 use crate::font::metrics::{FontMetrics, FontMetricsService};
 use crate::glyph_advance::GlyphAdvanceQuantization;
 use crate::neovm_bridge::ResolvedFace;
+use crate::unicode::{EmacsTextStorage, decode_emacs_char};
 use neomacs_display_protocol::DeviceScale;
 use neomacs_display_protocol::TerminalColor;
 use neomacs_display_protocol::face::{
@@ -1244,12 +1245,24 @@ impl DisplayRowActiveFaceState {
     pub(crate) fn display_replacement_string_cursor_slot_width(
         &self,
         font_metrics: &mut Option<FontMetricsService>,
-        replacement: &str,
+        replacement: &neovm_core::heap_types::LispString,
     ) -> f32 {
         let face_metrics = self.metrics();
-        replacement
-            .chars()
-            .next()
+        let storage = if replacement.is_multibyte() {
+            EmacsTextStorage::Multibyte
+        } else {
+            EmacsTextStorage::Unibyte
+        };
+        // Only the first displayed character sizes this cursor slot. Raw-byte
+        // strings are valid replacements; their octal escape starts with '\\'.
+        decode_emacs_char(replacement.as_bytes(), storage)
+            .and_then(|(character, _)| {
+                if character.is_byte8() {
+                    Some('\\')
+                } else {
+                    character.as_rust_char()
+                }
+            })
             .map(|ch| self.advance_for_char(font_metrics, ch, face_metrics.char_width()))
             .unwrap_or_else(|| face_metrics.char_width().max(1.0))
     }
