@@ -84,6 +84,29 @@ impl Buffer {
         self.insert_internal(text, InsertMarkerPlacement::BeforeMarkers)
     }
 
+    /// Insert unibyte text without constructing an intermediate Lisp string.
+    /// An unibyte destination borrows the bytes directly; a multibyte
+    /// destination promotes high bytes to Emacs raw-byte characters.
+    pub fn insert_unibyte_bytes(&mut self, bytes: &[u8]) -> TextInsertion {
+        if bytes.is_empty() {
+            return TextInsertion::at_anchor(self.point_anchor(), TextExtent::ZERO);
+        }
+        let multibyte = self.get_multibyte();
+        let payload = if multibyte {
+            std::borrow::Cow::Owned(neovm_value::emacs_char::str_to_multibyte(bytes))
+        } else {
+            std::borrow::Cow::Borrowed(bytes)
+        };
+        let plan = InsertTextPlan::for_bytes(
+            &payload,
+            multibyte,
+            self.point_anchor(),
+            InsertMarkerPlacement::AfterMarkers,
+            InsertMarkerAdjustment::ByInsertionType,
+        );
+        self.execute_insert_text_plan(&payload, plan)
+    }
+
     pub fn insert_lisp_string(&mut self, text: &LispString) -> TextInsertion {
         self.insert_lisp_string_full(
             text,
@@ -372,6 +395,25 @@ impl BufferManager {
         text: &LispString,
     ) -> Option<()> {
         self.insert_lisp_string_into_buffer_full(id, text, InsertMarkerAdjustment::ByInsertionType)
+    }
+
+    /// Insert borrowed unibyte text through the normal shared-buffer edit
+    /// transaction, preserving point, markers, undo and indirect-buffer state.
+    pub fn insert_unibyte_bytes_into_buffer(&mut self, id: BufferId, bytes: &[u8]) -> Option<()> {
+        if bytes.is_empty() {
+            return Some(());
+        }
+        self.execute_shared_text_edit(id, |buffer| {
+            let insertion = buffer.insert_unibyte_bytes(bytes);
+            let edit = MeasuredInsertEdit::by_insertion_type(
+                insertion,
+                InsertMarkerPlacement::AfterMarkers,
+            );
+            Some(SharedTextEditOutcome::edited(
+                (),
+                SharedTextEditMetadata::Insert(edit),
+            ))
+        })
     }
 
     /// GNU-equivalent replace path: like `insert_lisp_string_into_buffer`

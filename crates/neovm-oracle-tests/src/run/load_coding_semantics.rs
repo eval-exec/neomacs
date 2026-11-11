@@ -215,3 +215,42 @@ fn oracle_info_reads_utf8_footer_in_a_file_just_over_four_kib() {
         expect,
     );
 }
+
+#[test]
+fn oracle_nonempty_auto_coding_probe_preserves_physical_file_bounds() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[
+        r#""OK ((1928 1928 nil) (4096 4096 t) (4096 4096 t) (4096 4096 nil) (30 30 nil))""#
+    ]];
+    crate::common::assert_oracle_parity_with_shared_tempdir_expect(
+        r#"(let ((file (expand-file-name "bounded-probe.txt"
+                                        (getenv "NEOVM_ORACLE_TEST_TMPDIR"))))
+             (unwind-protect
+                 (mapcar
+                  (lambda (case)
+                    (let ((contents (make-string (nth 0 case) ?x)))
+                      (setq contents (concat (substring contents 0 3500)
+                                             "TAIL-MARKER"
+                                             (substring contents 3511)))
+                      (let ((coding-system-for-write 'utf-8-unix))
+                        (write-region contents nil file nil 'silent)))
+                    (with-temp-buffer
+                      (insert "prefix")
+                      (let* (observed
+                            (coding-system-for-read nil)
+                            (set-auto-coding-function
+                             (lambda (_filename size)
+                               (setq observed
+                                     (list size (buffer-size)
+                                           (and (save-excursion
+                                                  (goto-char (point-min))
+                                                  (search-forward "TAIL-MARKER" nil t)) t)))
+                               'utf-8)))
+                        (insert-file-contents file nil (nth 1 case) (nth 2 case))
+                        observed)))
+                  '((5000 0 5000) (20000 0 5000) (20000 500 5500)
+                    (20000 0 20000) (20000 50 80)))
+               (when (file-exists-p file) (delete-file file))))"#,
+        expect,
+    );
+}

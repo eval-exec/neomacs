@@ -341,6 +341,59 @@ fn transposition_storage_plan_swaps_outer_regions_over_full_span() {
 }
 
 #[test]
+fn borrowed_unibyte_insertion_preserves_raw_bytes_and_shared_buffer_metadata() {
+    crate::test_utils::init_test_tracing();
+    let mut buffers = BufferManager::new();
+    let id = buffers.create_buffer("borrowed-unibyte");
+    buffers.set_buffer_multibyte_flag(id, false).unwrap();
+    buffers.get_mut(id).unwrap().set_undo_list(Value::T);
+    let indirect = buffers
+        .create_indirect_buffer(id, "borrowed-indirect", false)
+        .unwrap();
+    let bytes = b"a\0\xff\x80\nz";
+    buffers.insert_unibyte_bytes_into_buffer(id, bytes).unwrap();
+    for buffer_id in [id, indirect] {
+        let buffer = buffers.get(buffer_id).unwrap();
+        assert_eq!(buffer.dump_text_bytes(), bytes);
+        assert_eq!(buffer.point_max_char_pos().get(), bytes.len());
+        assert_eq!(buffer.point_max_emacs_byte_pos().get(), bytes.len());
+        assert!(buffer.is_modified());
+    }
+    let buffer = buffers.get(id).unwrap();
+    assert_eq!(buffer.point_char_pos().get(), bytes.len());
+    assert_eq!(buffer.point_emacs_byte_pos().get(), bytes.len());
+    assert!(buffer.get_undo_list().is_t());
+    let tick = buffer.modified_tick();
+    buffers.insert_unibyte_bytes_into_buffer(id, &[]).unwrap();
+    assert_eq!(buffers.get(id).unwrap().modified_tick(), tick);
+}
+
+#[test]
+fn borrowed_unibyte_insertion_matches_string_conversion_into_multibyte_buffer() {
+    crate::test_utils::init_test_tracing();
+    let mut buffers = BufferManager::new();
+    let borrowed = buffers.create_buffer("borrowed-multibyte");
+    let owned = buffers.create_buffer("owned-multibyte");
+    let bytes = b"a\0\xff\xc3\xa9\nz";
+    buffers
+        .insert_unibyte_bytes_into_buffer(borrowed, bytes)
+        .unwrap();
+    buffers
+        .insert_lisp_string_into_buffer(owned, &LispString::from_unibyte(bytes.to_vec()))
+        .unwrap();
+    let actual = buffers.get(borrowed).unwrap();
+    let expected = buffers.get(owned).unwrap();
+    assert_eq!(actual.dump_text_bytes(), expected.dump_text_bytes());
+    assert_eq!(actual.point_anchor(), expected.point_anchor());
+    assert_eq!(actual.point_max_anchor(), expected.point_max_anchor());
+    assert!(neovm_value::value::equal_value(
+        &actual.get_undo_list(),
+        &expected.get_undo_list(),
+        0,
+    ));
+}
+
+#[test]
 fn physical_edit_lease_validates_live_geometry_and_cancellation() {
     crate::test_utils::init_test_tracing();
     let mut buffers = BufferManager::new();

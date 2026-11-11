@@ -8122,19 +8122,29 @@ fn set_visited_file_modtime_asks_the_file_name_handler_before_it_stats() {
 #[test]
 fn auto_coding_probe_shows_the_head_and_tail_like_gnu() {
     let small: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
-    assert_eq!(&*auto_coding_probe_bytes(&small), &small[..]);
+    assert_eq!(
+        &*auto_coding_probe_bytes(&small, 0..small.len()),
+        &small[..]
+    );
     // 5 KiB: 1 KiB of head, then everything past the 4 KiB head read.
     let mid: Vec<u8> = (0..5120u32).map(|i| (i % 253) as u8).collect();
-    let probe = auto_coding_probe_bytes(&mid);
+    let probe = auto_coding_probe_bytes(&mid, 0..mid.len());
     assert_eq!(probe.len(), 1024 + 1024);
     assert_eq!(&probe[..1024], &mid[..1024]);
     assert_eq!(&probe[1024..], &mid[4096..]);
     // 20 KiB: 1 KiB of head plus the last 3 KiB.
     let big: Vec<u8> = (0..20480u32).map(|i| (i % 241) as u8).collect();
-    let probe = auto_coding_probe_bytes(&big);
+    let probe = auto_coding_probe_bytes(&big, 0..big.len());
     assert_eq!(probe.len(), 1024 + 3072);
     assert_eq!(&probe[..1024], &big[..1024]);
     assert_eq!(&probe[1024..], &big[20480 - 3072..]);
+    // A partial read seeks against physical EOF before clamping to END.
+    for range in [0..5000, 500..5500] {
+        let probe = auto_coding_probe_bytes(&big, range.clone());
+        assert_eq!(probe.len(), 4096);
+        assert_eq!(&probe[..1024], &big[range.start..range.start + 1024]);
+        assert_eq!(&probe[1024..], &big[range.end - 3072..range.end]);
+    }
 }
 
 /// With a nonempty destination, a coding cookie in the tail is still seen
