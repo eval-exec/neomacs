@@ -662,7 +662,7 @@ fn write_output_target_in_state(
             // faithful case: a first run of pure ASCII leaves `undecided`,
             // which STILL requires detection, so the second run detects on its
             // own bytes exactly as GNU's does.
-            *decoding = ProcessOutputDecoding::for_name(used);
+            *decoding = ProcessOutputDecoding::for_name(&eval.coding_systems(), used);
             match decoded {
                 Some(run) => insert_process_output_in_state(eval, destination, &run.text),
                 None => Ok(()),
@@ -1130,7 +1130,7 @@ fn resolve_call_process_output_decoding(
         eval.symbol_mode(),
     )?;
 
-    let decoding = ProcessOutputDecoding::for_coding(resolved);
+    let decoding = ProcessOutputDecoding::for_coding(&eval.coding_systems(), resolved);
     if destination_buffer_is_multibyte(eval, &destination.stdout) {
         return Ok(decoding);
     }
