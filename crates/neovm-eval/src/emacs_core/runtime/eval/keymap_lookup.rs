@@ -3732,10 +3732,17 @@ pub fn get_keymap_in_runtime(
 
         if is_keymap_autoload_form(&function, symbol_mode) {
             if autoload {
+                // A filter may have returned an ephemeral positioned symbol.
+                // Keep the original argument alive while loading runs Lisp,
+                // since the retry below must inspect that same argument.
+                let root_scope = eval.save_specpdl_roots();
+                eval.push_specpdl_root(original);
                 let loaded = crate::emacs_core::autoload::builtin_autoload_do_load(
                     eval,
                     vec![function, original, Value::NIL],
-                )?;
+                );
+                eval.restore_specpdl_roots(root_scope);
+                let loaded = loaded?;
                 // Retry the original symbol after a definition changes: the
                 // file may install another keymap autoload or an alias. An
                 // internal compiler override can return without changing the

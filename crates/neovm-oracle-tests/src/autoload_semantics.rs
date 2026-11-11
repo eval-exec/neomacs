@@ -519,6 +519,41 @@ fn oracle_autoload_keymap_alias_without_definition_makes_no_progress() {
     );
 }
 
+/// A filter's positioned prefix symbol must survive GC in its autoload file.
+#[test]
+fn oracle_autoload_keymap_preserves_ephemeral_positioned_prefix_during_load() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"
+(progn
+  (setq neovm--autoload-keymap-gc t)
+  (autoload 'neovm--autoload-keymap-prefix "autoload-keymap-probe" nil t 'keymap)
+  (eval-after-load 'autoload-keymap-probe
+    (lambda ()
+      (dotimes (_ 3) (make-list 32 nil) (garbage-collect))
+      (setq neovm--autoload-positioned-scratch
+        (let ((scratch nil))
+          (dotimes (i 10000) (push (position-symbol 'ignore i) scratch))
+          scratch))))
+  (let ((symbols-with-pos-enabled t)
+        (map (make-sparse-keymap)))
+    (define-key map [f2]
+      '(menu-item "prefix" nil :filter
+        (lambda (_) (position-symbol 'neovm--autoload-keymap-prefix 7))))
+    (list (lookup-key map [f2 ?n ?x])
+          (featurep 'autoload-keymap-probe))))
+"#;
+    // The wrapper has no Lisp owner: it exists only as the filter result.
+    // Reuse collected positioned-symbol slots so a stale wrapper cannot pass
+    // merely because its old symbol payload remains in reclaimed storage.
+    let expect = expect_test::expect![[r#""OK (neovm--autoload-own-command t)""#]];
+    crate::common::assert_oracle_parity_with_load_root_expect(
+        form,
+        &[],
+        &autoload_fixture_root(),
+        expect,
+    );
+}
+
 /// A filter-created intermediate prefix spans an autoload's explicit collection.
 #[test]
 fn oracle_autoload_keymap_filter_prefix_survives_load_collection() {
