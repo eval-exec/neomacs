@@ -5,7 +5,7 @@
 //! sensible defaults for a modern graphical display.
 
 use super::terminal::pure::{
-    builtin_terminal_live_p, is_terminal_handle, make_alist, terminal_designator_p,
+    TERMINAL_ID, builtin_terminal_live_p, is_terminal_handle, make_alist, terminal_designator_p,
     terminal_handle_id, terminal_runtime_color_cells, terminal_runtime_supports_color,
 };
 use crate::window::DisplayFrameExt;
@@ -3222,12 +3222,43 @@ pub fn builtin_x_display_set_last_user_time(
     x_optional_display_query_error_eval(eval, "x-display-set-last-user-time", query_args)
 }
 
+/// Open Lisp-visible display state only after the daemon's native host admits
+/// the requested connection and all resource arguments have been validated.
 #[doc(hidden)]
 pub fn builtin_x_open_connection(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("x-open-connection", &args, 1, 3)?;
+    if eval.daemon().is_some() {
+        // GNU Fx_open_connection checks both strings before x_term_init can
+        // publish the connection or its keyboard (src/xfns.c:7645-7647).
+        if !args[0].is_string() {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("stringp"), args[0]],
+            ));
+        }
+        let resources = args
+            .get(1)
+            .filter(|value| !value.is_nil())
+            .map(|value| {
+                display_string_text(value).ok_or_else(|| {
+                    signal(
+                        LispCondition::WrongTypeArgument,
+                        vec![Value::symbol("stringp"), *value],
+                    )
+                })
+            })
+            .transpose()?;
+        ensure_daemon_graphical_connection(eval, Some(args[0]))?;
+        if let Some(resources) = resources
+            && let Some(host) = eval.display_host.as_mut()
+        {
+            host.set_gui_resource_database(&resources);
+        }
+        return Ok(Value::NIL);
+    }
     if x_window_system_active(eval) {
         if let Some(resources) = args.get(1).filter(|value| !value.is_nil()) {
             let resources = display_string_text(resources).ok_or_else(|| {
@@ -3259,6 +3290,55 @@ pub fn builtin_x_open_connection(
             vec![Value::symbol("stringp"), args[0]],
         )),
     }
+}
+
+/// Validate a daemon's requested native display before changing terminal state
+/// or allocating a frame. Ordinary GUI and batch contexts retain their existing
+/// connection behavior, including backend-specific display aliases.
+pub(crate) fn ensure_daemon_graphical_connection(
+    eval: &mut Context,
+    display: Option<Value>,
+) -> Result<(), Flow> {
+    if eval.daemon().is_none() {
+        return Ok(());
+    }
+    let display = display
+        .filter(|value| !value.is_nil())
+        .map(|value| {
+            display_string_text(&value).ok_or_else(|| {
+                signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("stringp"), value],
+                )
+            })
+        })
+        .transpose()?;
+    let identity = eval
+        .display_host
+        .as_ref()
+        .map(|host| host.graphical_connection_identity(display.as_deref()))
+        .transpose()
+        .map_err(|message| signal("error", vec![Value::string(message)]))?
+        .flatten()
+        .ok_or_else(|| {
+            signal(
+                "error",
+                vec![Value::string(
+                    "Graphical frames require a display-connected Neomacs daemon; use a TTY client",
+                )],
+            )
+        })?;
+    // Reopening frames must not reset a live graphical keyboard's forwarded
+    // variables. The initial terminal remains selected while its daemon opens
+    // the first real display connection, as it does in GNU x_term_init.
+    if super::terminal::pure::live_terminal_output_method_for_id(TERMINAL_ID)
+        != Some(super::terminal::pure::TerminalOutputMethod::WindowSystem)
+    {
+        eval.initialize_graphical_terminal(identity);
+        eval.set_variable("baud-rate", Value::fixnum(19200));
+        eval.sync_keyboard_terminal_owner();
+    }
+    Ok(())
 }
 
 /// Context-aware variant of `x-close-connection`.

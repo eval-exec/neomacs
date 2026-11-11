@@ -328,6 +328,17 @@ pub trait DisplayHost {
 
     fn set_gui_resource_database(&mut self, _resources: &str) {}
 
+    /// Return the identity of the graphical connection hosted by this process.
+    /// `Ok(None)` means no graphical connection is hosted, so a daemon refuses
+    /// graphical frame requests. An error rejects an unsupported display name.
+    /// An explicit display must name that connection; None selects the host default.
+    fn graphical_connection_identity(
+        &self,
+        _display: Option<&str>,
+    ) -> Result<Option<neomacs_display_protocol::GraphicalDisplayIdentity>, String> {
+        Ok(None)
+    }
+
     fn gui_resource(&self, _query: &GuiResourceQuery) -> Option<String> {
         None
     }

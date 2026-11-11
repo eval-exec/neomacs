@@ -145,6 +145,9 @@ mod native_menus;
 #[path = "native_scrolling.rs"]
 mod native_scrolling;
 
+#[path = "neomacsclient_frames.rs"]
+mod neomacsclient_frames;
+
 #[path = "org_line_spacing.rs"]
 mod org_line_spacing;
 
