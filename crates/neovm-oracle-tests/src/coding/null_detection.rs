@@ -291,3 +291,257 @@ fn coding_custom_undecided_process_output_preserves_null_selected_bytes() {
         ]],
     );
 }
+
+/// BOM auto-detection uses registered UTF type and compiled BOM-pair metadata,
+/// including aliases and EOL subsidiaries, across sync output and async sinks.
+#[test]
+fn coding_process_bom_detection_uses_registered_aliases_and_definitions() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    crate::common::assert_oracle_parity_expect(
+        r#"(let ((rows (progn
+  (define-coding-system-alias 'neovm-bom-u8 'utf-8-auto)
+  (define-coding-system-alias 'neovm-bom-u16 'utf-16)
+  (define-coding-system 'neovm-custom-u8-auto "Custom UTF-8 BOM detection"
+    :coding-type 'utf-8 :mnemonic ?U :charset-list '(unicode)
+    :bom '(utf-8-with-signature . utf-8))
+  (define-coding-system 'neovm-custom-u16-auto "Custom UTF-16 BOM detection"
+    :coding-type 'utf-16 :mnemonic ?U :charset-list '(unicode)
+    :bom '(utf-16le-with-signature . utf-16be-with-signature)
+    :endian 'big)
+  ;; These public plist edits do not change GNU's compiled BOM attribute.
+  (coding-system-put 'neovm-custom-u8-auto :bom nil)
+  (coding-system-put 'neovm-custom-u16-auto :bom nil)
+  (mapcar
+   (lambda (sink)
+    (mapcar
+     (lambda (flag)
+      (let ((inhibit-null-byte-detection flag))
+       (mapcar
+        (lambda (entry)
+         (let ((coding (car entry)))
+         (mapcar
+          (lambda (bytes)
+           (let ((buffer (generate-new-buffer " *custom-null-process*"))
+                 (pieces nil) process output used)
+            (unwind-protect
+             (progn
+              (if (eq sink 'sync)
+               (with-current-buffer buffer
+                (let ((coding-system-for-read coding)
+                      (coding-system-for-write 'no-conversion))
+                 (with-temp-buffer
+                  (set-buffer-multibyte nil)
+                  (insert bytes)
+                  (call-process-region (point-min) (point-max) "cat" nil buffer nil)))
+                (setq used last-coding-system-used))
+               (setq process
+                (make-process :name "custom-null-process" :buffer buffer
+                 :command '("cat") :connection-type 'pipe :noquery t
+                 :coding (cons coding 'no-conversion) :sentinel #'ignore
+                 :filter (and (eq sink 'filter)
+                           (lambda (_ chunk) (push chunk pieces)))))
+               (let ((deadline (+ (float-time) 5)))
+                (process-send-string process bytes)
+                (process-send-eof process)
+                (while (and (process-live-p process) (< (float-time) deadline))
+                 (accept-process-output process 0.01))
+                (when (process-live-p process) (error "Process output timeout"))
+                (accept-process-output process 0.01))
+               (setq used (car (process-coding-system process))))
+              (setq output (if (eq sink 'filter)
+                            (apply #'concat (nreverse pieces))
+                            (with-current-buffer buffer (buffer-string))))
+              (list (string-to-list output) used))
+             (when (and process (process-live-p process)) (delete-process process))
+             (kill-buffer buffer))))
+          (cdr entry))))
+        (append
+         (mapcar (lambda (coding)
+                   (list coding (unibyte-string 239 187 191 65 13 10)
+                                (unibyte-string 65 13 10)))
+                 '(utf-8-auto neovm-bom-u8 neovm-bom-u8-dos
+                   neovm-bom-u8-unix neovm-custom-u8-auto
+                   neovm-custom-u8-auto-dos utf-8 utf-8-with-signature))
+         (mapcar (lambda (coding)
+                   (list coding (unibyte-string 255 254 65 0 13 0 10 0)
+                                (unibyte-string 254 255 0 65 0 13 0 10)))
+                 '(utf-16 neovm-bom-u16 neovm-bom-u16-dos
+                   neovm-bom-u16-unix neovm-custom-u16-auto
+                   neovm-custom-u16-auto-dos utf-16le-with-signature
+                   utf-16le))
+         (mapcar (lambda (coding)
+                   (list coding (unibyte-string 0 65 0 13 0 10)
+                                (unibyte-string 78 45 0 13 0 10)))
+                 '(utf-16 neovm-bom-u16-dos neovm-bom-u16-unix))))))
+     '(nil)))
+   '(sync buffer filter)))))
+  (list (car rows) (equal (car rows) (cadr rows))
+        (equal (car rows) (caddr rows))))"#,
+        expect_test::expect![[
+            r#""OK ((((((65 10) utf-8-with-signature-dos) ((65 10) utf-8-dos)) (((65 10) utf-8-with-signature-dos) ((65 10) utf-8-dos)) (((65 10) utf-8-with-signature-dos) ((65 10) utf-8-dos)) (((65 13 10) utf-8-with-signature-unix) ((65 13 10) utf-8-unix)) (((65 10) utf-8-with-signature-dos) ((65 10) utf-8-dos)) (((65 10) utf-8-with-signature-dos) ((65 10) utf-8-dos)) (((65279 65 10) utf-8-dos) ((65 10) utf-8-dos)) (((65 10) utf-8-with-signature-dos) ((65 10) utf-8-with-signature-dos)) (((65 10) utf-16le-with-signature-dos) ((65 10) utf-16be-with-signature-dos)) (((65 10) utf-16le-with-signature-dos) ((65 10) utf-16be-with-signature-dos)) (((65 10) utf-16le-with-signature-dos) ((65 10) utf-16be-with-signature-dos)) (((65 13 10) utf-16le-with-signature-unix) ((65 13 10) utf-16be-with-signature-unix)) (((65 10) utf-16le-with-signature-dos) ((65 10) utf-16be-with-signature-dos)) (((65 10) utf-16le-with-signature-dos) ((65 10) utf-16be-with-signature-dos)) (((65 10) utf-16le-with-signature-dos) ((65534 16640 3328 2560) utf-16le-with-signature)) (((65279 65 10) utf-16le-dos) ((65534 16640 3328 2560) utf-16le)) (((65 10) utf-16-dos) ((20013 10) utf-16-dos)) (((65 10) neovm-bom-u16-dos) ((20013 10) neovm-bom-u16-dos)) (((65 13 10) neovm-bom-u16-unix) ((20013 13 10) neovm-bom-u16-unix)))) t t)""#
+        ]],
+    );
+}
+
+/// UTF-8 preference and fixed EOL are compiled definition attributes, including
+/// aliases and custom names that carry no descriptive EOL suffix.
+#[test]
+fn coding_process_detection_preserves_registered_preference_and_eol() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    crate::common::assert_oracle_parity_expect(
+        r#"(let ((rows (progn
+  (define-coding-system-alias 'neovm-prefer-alias 'prefer-utf-8)
+  (define-coding-system 'neovm-prefer-defined "Compiled UTF-8 preference"
+    :coding-type 'undecided :mnemonic ?U :charset-list '(emacs)
+    :prefer-utf-8 t :inhibit-null-byte-detection 0)
+  (coding-system-put 'neovm-prefer-defined :prefer-utf-8 nil)
+  (dolist (entry '((neovm-fixed-lf . unix)
+                   (neovm-fixed-crlf . dos)
+                   (neovm-fixed-cr . mac)))
+    (define-coding-system (car entry) "Registered EOL type"
+      :coding-type 'undecided :mnemonic ?N :charset-list '(emacs)
+      :eol-type (cdr entry) :inhibit-null-byte-detection 0))
+  (define-coding-system-alias 'neovm-fixed-alias 'neovm-fixed-lf)
+  (set-coding-system-priority 'iso-latin-1)
+  (mapcar
+   (lambda (sink)
+    (mapcar
+     (lambda (flag)
+      (let ((inhibit-null-byte-detection flag))
+       (mapcar
+        (lambda (entry)
+         (let ((coding (car entry)))
+         (mapcar
+          (lambda (bytes)
+           (let ((buffer (generate-new-buffer " *custom-null-process*"))
+                 (pieces nil) process output used)
+            (unwind-protect
+             (progn
+              (if (eq sink 'sync)
+               (with-current-buffer buffer
+                (let ((coding-system-for-read coding)
+                      (coding-system-for-write 'no-conversion))
+                 (with-temp-buffer
+                  (set-buffer-multibyte nil)
+                  (insert bytes)
+                  (call-process-region (point-min) (point-max) "cat" nil buffer nil)))
+                (setq used last-coding-system-used))
+               (setq process
+                (make-process :name "custom-null-process" :buffer buffer
+                 :command '("cat") :connection-type 'pipe :noquery t
+                 :coding (cons coding 'no-conversion) :sentinel #'ignore
+                 :filter (and (eq sink 'filter)
+                           (lambda (_ chunk) (push chunk pieces)))))
+               (let ((deadline (+ (float-time) 5)))
+                (process-send-string process bytes)
+                (process-send-eof process)
+                (while (and (process-live-p process) (< (float-time) deadline))
+                 (accept-process-output process 0.01))
+                (when (process-live-p process) (error "Process output timeout"))
+                (accept-process-output process 0.01))
+               (setq used (car (process-coding-system process))))
+              (setq output (if (eq sink 'filter)
+                            (apply #'concat (nreverse pieces))
+                            (with-current-buffer buffer (buffer-string))))
+              (list (string-to-list output) used))
+             (when (and process (process-live-p process)) (delete-process process))
+             (kill-buffer buffer))))
+          (cdr entry))))
+        (mapcar (lambda (coding)
+                  (list coding (unibyte-string 231 161 172 13 10)
+                               (unibyte-string 65 13 10)))
+                '(prefer-utf-8 neovm-prefer-alias neovm-prefer-alias-dos
+                  neovm-prefer-defined neovm-prefer-defined-unix
+                  undecided neovm-fixed-lf neovm-fixed-crlf
+                  neovm-fixed-cr neovm-fixed-alias)))))
+     '(nil)))
+   '(sync buffer filter)))))
+  (list (car rows) (equal (car rows) (cadr rows))
+        (equal (car rows) (caddr rows))))"#,
+        expect_test::expect![[
+            r#""OK ((((((30828 10) utf-8-dos) ((65 10) prefer-utf-8-dos)) (((30828 10) utf-8-dos) ((65 10) prefer-utf-8-dos)) (((30828 10) utf-8-dos) ((65 10) neovm-prefer-alias-dos)) (((30828 10) utf-8-dos) ((65 10) neovm-prefer-defined-dos)) (((30828 13 10) utf-8-unix) ((65 13 10) neovm-prefer-defined-unix)) (((231 161 172 10) iso-latin-1-dos) ((65 10) undecided-dos)) (((231 161 172 13 10) iso-latin-1-unix) ((65 13 10) neovm-fixed-lf)) (((231 161 172 10) iso-latin-1-dos) ((65 10) neovm-fixed-crlf)) (((231 161 172 10 10) iso-latin-1-mac) ((65 10 10) neovm-fixed-cr)) (((231 161 172 13 10) iso-latin-1-unix) ((65 13 10) neovm-fixed-alias)))) t t)""#
+        ]],
+    );
+}
+
+/// A complete BOM followed by a split character selects the concrete decoder
+/// before carryover is computed, including aliases with explicit EOL.
+#[test]
+fn coding_process_bom_alias_detection_preserves_partial_output() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    crate::common::assert_oracle_parity_expect(
+        r#"(progn
+ (define-coding-system-alias 'neovm-partial-u8 'utf-8-auto)
+ (define-coding-system-alias 'neovm-partial-u16 'utf-16)
+ (mapcar
+  (lambda (entry)
+   (let* ((buffer (generate-new-buffer " *bom-partial*"))
+          (process (make-process :name "bom-partial" :buffer buffer
+                    :command '("cat") :connection-type 'pipe :noquery t
+                    :coding (cons (car entry) 'no-conversion) :sentinel #'ignore))
+          (deadline (+ (float-time) 5)) first)
+    (unwind-protect
+     (progn
+      (process-send-string process (cadr entry))
+      (while (and (< (with-current-buffer buffer (buffer-size)) 1)
+                  (< (float-time) deadline))
+       (accept-process-output process 0.01))
+      (setq first (car (process-coding-system process)))
+      (process-send-string process (caddr entry))
+      (process-send-eof process)
+      (while (and (process-live-p process) (< (float-time) deadline))
+       (accept-process-output process 0.01))
+      (when (process-live-p process) (error "BOM partial process timeout"))
+      (accept-process-output process 0.01)
+      (list first (with-current-buffer buffer (string-to-list (buffer-string)))
+            (car (process-coding-system process))))
+     (when (process-live-p process) (delete-process process))
+     (kill-buffer buffer))))
+  (list (list 'neovm-partial-u8-dos (unibyte-string 239 187 191 65 231 161)
+                                  (unibyte-string 172 13 10))
+        (list 'neovm-partial-u16-dos (unibyte-string 255 254 65 0 45)
+                                   (unibyte-string 78 13 0 10 0)))))"#,
+        expect_test::expect![[
+            r#""OK ((utf-8-with-signature-dos (65 30828 10) utf-8-with-signature-dos) (utf-16le-with-signature-dos (65 20013 10) utf-16le-with-signature-dos))""#
+        ]],
+    );
+}
+
+/// Priority selection and direct detection read the same compiled BOM/category
+/// after plist edits.
+#[test]
+fn coding_priority_detection_preserves_compiled_bom_attributes() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    crate::common::assert_oracle_parity_expect(
+        r#"(progn
+ (define-coding-system 'neovm-priority-u8 "Compiled UTF-8 auto category"
+   :coding-type 'utf-8 :mnemonic ?U :charset-list '(unicode)
+   :bom '(utf-8-with-signature . utf-8))
+ (define-coding-system 'neovm-priority-u16 "Compiled UTF-16 auto category"
+   :coding-type 'utf-16 :mnemonic ?U :charset-list '(unicode)
+   :bom '(utf-16le-with-signature . utf-16be-with-signature) :endian 'big)
+ (let ((u8-bom (coding-system-get 'neovm-priority-u8 :bom)))
+  (coding-system-put 'neovm-priority-u8 :bom nil)
+  (coding-system-put 'neovm-priority-u16 :bom nil)
+  (let ((probe
+         (lambda (coding bytes)
+          (set-coding-system-priority coding)
+          (list (coding-system-get coding :category)
+                (let* ((decoded (decode-coding-string bytes 'undecided))
+                       (used last-coding-system-used))
+                  (list (string-to-list decoded) used))
+                (with-temp-buffer
+                 (let ((output (current-buffer))
+                       (coding-system-for-read 'undecided)
+                       (coding-system-for-write 'no-conversion))
+                  (with-temp-buffer
+                   (set-buffer-multibyte nil) (insert bytes)
+                   (call-process-region (point-min) (point-max) "cat" nil output nil)))
+                 (list (string-to-list (buffer-string)) last-coding-system-used))))))
+   (list (funcall probe 'neovm-priority-u8 (unibyte-string 239 187 191 65 13 10))
+         (funcall probe 'neovm-priority-u16 (unibyte-string 255 254 65 0 13 0 10 0))))))"#,
+        expect_test::expect![[
+            r#""OK ((coding-category-utf-8-auto ((65 10) utf-8-with-signature-dos) ((65 10) utf-8-with-signature-dos)) (coding-category-utf-16-auto ((65 10) utf-16le-with-signature-dos) ((65 10) utf-16le-with-signature-dos)))""#
+        ]],
+    );
+}
