@@ -20614,6 +20614,8 @@ fn secure_hash_and_md5_accept_iv_auto_like_gnu() {
         "(secure-hash 'sha1 'iv-auto 1.0)",
         "(md5 'iv-auto)",
         "(md5 'iv-auto \"4\")",
+        // GNU tests FIXNATP, so a bignum is not a length either.
+        "(secure-hash 'sha1 'iv-auto (1+ most-positive-fixnum))",
     ] {
         assert_eq!(eval_printed(form), no_length, "{form}");
     }
@@ -20621,5 +20623,19 @@ fn secure_hash_and_md5_accept_iv_auto_like_gnu() {
     assert_eq!(
         eval_printed("(secure-hash 'sha1 'iv)"),
         r#"OK (error "Invalid object argument" iv)"#
+    );
+    // GNU compares OBJECT with `EQ', so an uninterned `iv-auto' is not it.
+    assert_eq!(
+        eval_printed("(secure-hash 'sha1 (make-symbol \"iv-auto\") 4)"),
+        r#"OK (error "Invalid object argument" iv-auto)"#
+    );
+    assert_eq!(
+        eval_printed("(md5 (make-symbol \"iv-auto\") 4)"),
+        r#"OK (error "Invalid object argument" iv-auto)"#
+    );
+    // GNU only reads CODING-SYSTEM for strings and buffers.
+    assert_eq!(
+        eval_printed("(length (md5 'iv-auto 4 nil 'no-such-coding-system))"),
+        "OK 32"
     );
 }

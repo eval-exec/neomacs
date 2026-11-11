@@ -12,6 +12,7 @@
 
 use super::eval::Context;
 use crate::emacs_core::builtins::{FromValue, StringDesignator};
+use crate::emacs_core::eval::AllocationFailureContextExt;
 use neovm_value::emacs_char;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
@@ -552,8 +553,16 @@ pub fn builtin_base64_decode_region(
 #[doc(hidden)]
 pub fn builtin_md5(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args_range("md5", &args, 1, 5)?;
-    validate_md5_coding_system_arg(&args, eval.symbol_mode())?;
     let object = &args[0];
+    // GNU only reads CODING-SYSTEM for strings and buffers, so `iv-auto'
+    // ignores it.
+    if is_iv_auto(eval, object) {
+        return Ok(Value::string(md5_hash(&iv_auto_random_bytes(
+            eval,
+            args.get(1),
+        )?)));
+    }
+    validate_md5_coding_system_arg(&args, eval.symbol_mode())?;
     match object.kind() {
         ValueKind::String => Ok(Value::string(md5_hex_for_string(
             object,
@@ -572,9 +581,6 @@ pub fn builtin_md5(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalRes
             )?;
             Ok(Value::string(md5_hash(&input)))
         }
-        _ if object.as_symbol_name(eval.symbol_mode()) == Some("iv-auto") => {
-            Ok(Value::string(md5_hash(&iv_auto_random_bytes(args.get(1))?)))
-        }
         _ => Err(signal(
             "error",
             vec![
@@ -585,10 +591,18 @@ pub fn builtin_md5(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalRes
     }
 }
 
+/// Whether OBJECT is the canonical `iv-auto' symbol (GNU `EQ (object, Qiv_auto)').
+fn is_iv_auto(eval: &super::eval::Context, object: &Value) -> bool {
+    object.as_symbol_id(eval.symbol_mode()) == Some(intern("iv-auto"))
+}
+
 /// GNU `extract_data_from_object` (src/fns.c), shared by `md5' and
 /// `secure-hash': OBJECT `iv-auto' stands for START bytes from the system's
-/// random source, and START must then be a natural number.
-fn iv_auto_random_bytes(start: Option<&Value>) -> Result<Vec<u8>, Flow> {
+/// random source, and START must then be a fixnum >= 0 (`FIXNATP').
+fn iv_auto_random_bytes(
+    eval: &super::eval::Context,
+    start: Option<&Value>,
+) -> Result<Vec<u8>, Flow> {
     let length = match start.map(|value| value.kind()) {
         Some(ValueKind::Fixnum(length)) if length >= 0 => length as usize,
         _ => {
@@ -600,10 +614,12 @@ fn iv_auto_random_bytes(start: Option<&Value>) -> Result<Vec<u8>, Flow> {
             ));
         }
     };
+    // Like GNU's `make_uninit_string', a buffer that cannot be allocated
+    // signals through `memory-signal-data'.
     let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(length)
-        .map_err(|_| signal("memory-full", vec![]))?;
+    bytes.try_reserve_exact(length).map_err(|failure| {
+        neovm_value::alloc::AllocationFailure::from(failure).into_flow_in_context(eval)
+    })?;
     bytes.resize(length, 0);
     getrandom::fill(&mut bytes).map_err(|err| {
         signal(
@@ -873,9 +889,7 @@ pub fn builtin_secure_hash(eval: &mut super::eval::Context, args: Vec<Value>) ->
             args.get(3),
             None,
         )?,
-        _ if object.as_symbol_name(eval.symbol_mode()) == Some("iv-auto") => {
-            iv_auto_random_bytes(args.get(2))?
-        }
+        _ if is_iv_auto(eval, object) => iv_auto_random_bytes(eval, args.get(2))?,
         _ => {
             return Err(signal(
                 "error",
