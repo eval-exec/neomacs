@@ -448,4 +448,7 @@ well_known_table! {
     TabLineFormat = "tab-line-format",
     UndoAutoThisCommandAmalgamating = "undo-auto--this-command-amalgamating",
     VisibleCursor = "visible-cursor",
+
+    // GNU fns.c retains Qiv_auto even after Lisp uninterns its spelling.
+    IvAuto = "iv-auto",
 }

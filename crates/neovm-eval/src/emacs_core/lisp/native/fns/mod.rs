@@ -18,7 +18,7 @@ use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
 #[doc(hidden)]
 pub use neovm_value::error::{expect_args, expect_args_range, expect_min_args};
-use neovm_value::intern::{intern, resolve_sym};
+use neovm_value::intern::{WellKnown, intern, resolve_sym};
 use neovm_value::system_vocab::platform_facts::{STRING_COLLATION, StringCollation};
 // bytes_to_unibyte_storage_string and encode_nonunicode_char_for_storage
 // imports removed — using emacs_char + LispString directly
@@ -594,7 +594,7 @@ pub fn builtin_md5(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalRes
 
 /// Whether OBJECT is the canonical `iv-auto' symbol (GNU `EQ (object, Qiv_auto)').
 fn is_iv_auto(eval: &super::eval::Context, object: &Value) -> bool {
-    object.as_symbol_id(eval.symbol_mode()) == Some(intern("iv-auto"))
+    object.as_symbol_id(eval.symbol_mode()) == Some(WellKnown::IvAuto.id())
 }
 
 /// GNU `extract_data_from_object` (src/fns.c), shared by `md5' and
