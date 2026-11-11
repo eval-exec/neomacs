@@ -2445,7 +2445,9 @@ impl DisplayReplacementStringSourceItem {
         source_id: u64,
         cursor_slot_width_px: f32,
     ) -> Option<Self> {
-        let replacement = value.as_utf8_str()?;
+        // GNU display strings can contain raw bytes in either string storage
+        // form. The source cursor decodes Emacs characters, not just UTF-8.
+        let replacement = value.as_lisp_string()?;
         Some(Self {
             value,
             origin: DisplayOrigin::DisplayPropertyString {

@@ -10434,6 +10434,31 @@ impl DisplayRowRenderPolicy for SourceMappedTextWidthByFace {
 }
 
 #[test]
+fn display_replacement_string_accepts_raw_bytes_in_either_storage() {
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let bytes = b"[broken image:\xff]";
+    for string in [
+        neovm_core::heap_types::LispString::from_unibyte(bytes.to_vec()),
+        neovm_core::heap_types::LispString::from_emacs_bytes(
+            neovm_core::emacs_core::emacs_char::str_to_multibyte(bytes),
+        ),
+    ] {
+        let value = Value::heap_string(string);
+        assert!(value.as_utf8_str().is_none());
+        let item = DisplayReplacementStringSourceItem::display_property_string(
+            value,
+            CharPos0::new(4),
+            DisplayPropertySource::TextProperty,
+            9,
+            8.0,
+        )
+        .expect("every nonempty Lisp display string can be traversed");
+        assert!(!item.is_empty());
+        assert_eq!(item.value(), value);
+    }
+}
+
+#[test]
 fn display_replacement_string_append_item_names_cursor_and_source_policy() {
     let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let value = Value::string("ab");
@@ -10569,6 +10594,80 @@ fn display_property_replacement_append_item_resolves_string_replacement() {
     };
     assert_eq!(item.cursor_slot_width_px(), 8.0);
     assert!(!item.is_empty());
+}
+
+#[test]
+fn display_property_replacement_resolves_raw_byte_strings_in_either_storage() {
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let active_face = test_active_face_state(FaceId::new(7), 8.0);
+    let params = test_display_space_window_params();
+    for bytes in [
+        b"[broken image:\xff]".as_slice(),
+        b"\xffreplacement".as_slice(),
+    ] {
+        for string in [
+            neovm_core::heap_types::LispString::from_unibyte(bytes.to_vec()),
+            neovm_core::heap_types::LispString::from_emacs_bytes(
+                neovm_core::emacs_core::emacs_char::str_to_multibyte(bytes),
+            ),
+        ] {
+            let value = Value::heap_string(string);
+            let classification = classify_display_property(
+                value,
+                &crate::display_when::DisplayWhenConditions::structural(),
+                DisplayPropertyObject::Buffer,
+                crate::display_property::DisplayPropertyTarget::Graphical,
+            );
+            let mut font_metrics = None;
+            let item = test_display_property_replacement_resolve_context(
+                &classification,
+                &active_face,
+                &mut font_metrics,
+                &params,
+            )
+            .resolve()
+            .expect("raw-byte strings must reach the replacement source");
+            let DisplayPropertyReplacementSourceItem::String(item) = item else {
+                panic!("expected a string replacement");
+            };
+            assert_eq!(item.value(), value);
+            assert_eq!(item.cursor_slot_width_px(), 8.0);
+        }
+    }
+}
+
+#[test]
+fn display_property_replacement_keeps_non_unicode_first_char_face_width_fallback() {
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let character = neovm_core::emacs_core::emacs_char::EmacsChar::from_code(0x11_0000)
+        .expect("valid non-Unicode Emacs character");
+    assert!(!character.is_byte8());
+    assert!(character.as_rust_char().is_none());
+    let value = Value::heap_string(neovm_core::heap_types::LispString::from_emacs_bytes(
+        character.to_emacs_bytes(),
+    ));
+    let classification = classify_display_property(
+        value,
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+        crate::display_property::DisplayPropertyTarget::Graphical,
+    );
+    let active_face = test_active_face_state(FaceId::new(7), 8.0);
+    let mut font_metrics = Some(crate::font::metrics::test_catalog::metrics_service());
+    let params = test_display_space_window_params();
+    let item = test_display_property_replacement_resolve_context(
+        &classification,
+        &active_face,
+        &mut font_metrics,
+        &params,
+    )
+    .resolve()
+    .expect("non-Unicode characters do not invalidate the display string");
+    let DisplayPropertyReplacementSourceItem::String(item) = item else {
+        panic!("expected a string replacement");
+    };
+    assert_eq!(item.value(), value);
+    assert_eq!(item.cursor_slot_width_px(), 8.0);
 }
 
 /// Issue #556: a typed display-property replacement whose media is an image
