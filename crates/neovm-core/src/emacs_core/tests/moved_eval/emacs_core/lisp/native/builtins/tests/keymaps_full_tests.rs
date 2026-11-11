@@ -196,3 +196,31 @@ fn string_vector_keys_go_through_key_parse_like_gnu() {
         )]
     );
 }
+
+#[test]
+fn define_key_keeps_a_symbol_keymap_alive_while_parsing_the_key() {
+    crate::test_utils::init_test_tracing();
+    // The map below is only reachable through the symbol's function cell,
+    // which `key-valid-p' clears before collecting garbage. `define-key'
+    // resolved the map first, so it must still update that map.
+    let result = crate::test_utils::runtime_startup_eval_all(
+        r#"(let ((valid (symbol-function 'key-valid-p))
+                 (maps nil))
+             (fset 'cyc-prefix-map (make-sparse-keymap))
+             (setq maps (list (symbol-function 'cyc-prefix-map)))
+             (unwind-protect
+                 (progn
+                   (fset 'key-valid-p
+                         (lambda (key)
+                           (fset 'cyc-prefix-map nil)
+                           (garbage-collect)
+                           (funcall valid key)))
+                   (list (define-key 'cyc-prefix-map ["C-c b"] 'cyc-command)
+                         (car maps)))
+               (fset 'key-valid-p valid)))"#,
+    );
+    assert_eq!(
+        result,
+        [r#"OK (cyc-command (keymap (3 keymap (98 . cyc-command))))"#]
+    );
+}

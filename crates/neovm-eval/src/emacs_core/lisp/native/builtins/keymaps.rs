@@ -313,6 +313,22 @@ pub fn builtin_define_key(eval: &mut super::eval::Context, args: Vec<Value>) -> 
     expect_min_args("define-key", &args, 3)?;
     expect_max_args("define-key", &args, 4)?;
     let keymap = expect_keymap(eval, &args[0])?;
+    // KEYMAP may be a symbol whose function cell held the map, and the key
+    // translation runs Lisp (`key-valid-p', `key-parse'), so keep the
+    // resolved map rooted until it is updated.
+    let root_scope = eval.save_specpdl_roots();
+    eval.push_specpdl_root(keymap);
+    let result = define_key_in_rooted_keymap(eval, keymap, &args, symbol_mode);
+    eval.restore_specpdl_roots(root_scope);
+    result
+}
+
+fn define_key_in_rooted_keymap(
+    eval: &mut super::eval::Context,
+    keymap: Value,
+    args: &[Value],
+    symbol_mode: SymbolMode,
+) -> EvalResult {
     let key = possibly_translate_key_sequence(eval, args[1])?;
     let mut events = expect_key_events(&key, symbol_mode)?;
     cache_key_event_symbol_properties(eval, &events)?;
