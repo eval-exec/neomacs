@@ -6054,9 +6054,10 @@ fn decide_auto_coding_for_insert_file_contents(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     filename: neovm_value::heap_types::LispString,
     bytes: &[u8],
+    requested: std::ops::Range<usize>,
 ) -> Result<Option<String>, Flow> {
     let function = eval.visible_variable_value_or_nil("set-auto-coding-function");
-    if function.is_nil() || bytes.is_empty() {
+    if function.is_nil() || requested.is_empty() {
         return Ok(None);
     }
 
@@ -6093,7 +6094,7 @@ fn decide_auto_coding_for_insert_file_contents(
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     // GNU's nonempty-buffer path probes the head and tail in a work buffer
     // (src/fileio.c, BEG < Z), unlike its whole-file empty-buffer path.
-    let probe = auto_coding_probe_bytes(bytes);
+    let probe = auto_coding_probe_bytes(bytes, requested);
     let raw = neovm_value::heap_types::LispString::from_unibyte(probe.to_vec());
     eval.edit
         .buffers
@@ -6183,22 +6184,30 @@ fn restore_empty_buffer_after_auto_coding_probe(
         .goto_buffer_emacs_byte_pos(buffer_id, EmacsBytePos::new(0));
 }
 
-/// The bytes GNU shows `set-auto-coding-function` for a nonempty destination:
-/// the whole file when it is
-/// at most 4 KiB, else its first 1 KiB followed by its tail from
-/// `max(len - 3 KiB, 4 KiB)` (fileio.c `Finsert_file_contents`).
+/// GNU's nonempty-destination probe, retaining the validated requested range
+/// and physical file extent. Its seek starts at physical EOF minus 3 KiB,
+/// then adjusts to the requested end (fileio.c `Finsert_file_contents`).
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) fn auto_coding_probe_bytes(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+pub(crate) fn auto_coding_probe_bytes(
+    bytes: &[u8],
+    requested: std::ops::Range<usize>,
+) -> std::borrow::Cow<'_, [u8]> {
     const HEAD_READ: usize = 4 * 1024;
     const HEAD_KEEP: usize = 1024;
     const TAIL: usize = 3 * 1024;
-    if bytes.len() <= HEAD_READ {
-        return std::borrow::Cow::Borrowed(bytes);
+    if requested.len() <= HEAD_READ {
+        return std::borrow::Cow::Borrowed(&bytes[requested]);
     }
-    let tail_start = bytes.len().saturating_sub(TAIL).max(HEAD_READ);
-    let mut probe = Vec::with_capacity(HEAD_KEEP + (bytes.len() - tail_start));
-    probe.extend_from_slice(&bytes[..HEAD_KEEP]);
-    probe.extend_from_slice(&bytes[tail_start..]);
+    let head_end = requested.start + HEAD_READ;
+    let physical_tail = bytes.len() - TAIL;
+    let tail_start = if physical_tail <= head_end {
+        head_end
+    } else {
+        physical_tail.min(requested.end - TAIL)
+    };
+    let mut probe = Vec::with_capacity(HEAD_KEEP + (requested.end - tail_start));
+    probe.extend_from_slice(&bytes[requested.start..requested.start + HEAD_KEEP]);
+    probe.extend_from_slice(&bytes[tail_start..requested.end]);
     std::borrow::Cow::Owned(probe)
 }
 
@@ -6233,10 +6242,9 @@ fn decide_auto_coding_for_empty_insert_file_contents(
     // GNU temporarily exposes the complete inserted file in the otherwise
     // empty destination (src/fileio.c:5023-5077). A head/tail probe here can
     // omit a coding footer in a file just over 4 KiB and changes callback SIZE.
-    let raw = neovm_value::heap_types::LispString::from_unibyte(bytes.to_vec());
     eval.edit
         .buffers
-        .insert_lisp_string_into_buffer(current_id, &raw)
+        .insert_unibyte_bytes_into_buffer(current_id, bytes)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let _ = eval
         .edit
@@ -6483,7 +6491,12 @@ pub fn builtin_insert_file_contents(
                     current_id,
                 )?
             } else {
-                decide_auto_coding_for_insert_file_contents(eval, resolved.clone(), slice)?
+                decide_auto_coding_for_insert_file_contents(
+                    eval,
+                    resolved.clone(),
+                    &contents_bytes,
+                    begin as usize..end_off as usize,
+                )?
             };
             match auto {
                 Some(name) => ReadCodingDecision::AutoCoding(name),
