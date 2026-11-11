@@ -201,13 +201,14 @@ fn string_vector_keys_go_through_key_parse_like_gnu() {
 fn define_key_keeps_a_symbol_keymap_alive_while_parsing_the_key() {
     crate::test_utils::init_test_tracing();
     // The map below is only reachable through the symbol's function cell,
-    // which `key-valid-p' clears before collecting garbage. `define-key'
-    // resolved the map first, so it must still update that map.
+    // which `key-valid-p' clears before collecting garbage; the weak table
+    // only observes it. `define-key' resolved the map first, so it must keep
+    // it alive and still update it.
     let result = crate::test_utils::runtime_startup_eval_all(
         r#"(let ((valid (symbol-function 'key-valid-p))
-                 (maps nil))
+                 (weak (make-hash-table :test 'eq :weakness 'value)))
              (fset 'cyc-prefix-map (make-sparse-keymap))
-             (setq maps (list (symbol-function 'cyc-prefix-map)))
+             (puthash 'map (symbol-function 'cyc-prefix-map) weak)
              (unwind-protect
                  (progn
                    (fset 'key-valid-p
@@ -216,7 +217,7 @@ fn define_key_keeps_a_symbol_keymap_alive_while_parsing_the_key() {
                            (garbage-collect)
                            (funcall valid key)))
                    (list (define-key 'cyc-prefix-map ["C-c b"] 'cyc-command)
-                         (car maps)))
+                         (gethash 'map weak)))
                (fset 'key-valid-p valid)))"#,
     );
     assert_eq!(
