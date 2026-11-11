@@ -4450,6 +4450,7 @@ dependencies = [
  "errno",
  "flate2",
  "fs4",
+ "getrandom 0.4.3",
  "hashbrown 0.17.0",
  "hostname",
  "inotify",

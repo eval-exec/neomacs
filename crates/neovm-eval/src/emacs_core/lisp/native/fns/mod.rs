@@ -572,6 +572,9 @@ pub fn builtin_md5(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalRes
             )?;
             Ok(Value::string(md5_hash(&input)))
         }
+        _ if object.as_symbol_name(eval.symbol_mode()) == Some("iv-auto") => {
+            Ok(Value::string(md5_hash(&iv_auto_random_bytes(args.get(1))?)))
+        }
         _ => Err(signal(
             "error",
             vec![
@@ -580,6 +583,38 @@ pub fn builtin_md5(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalRes
             ],
         )),
     }
+}
+
+/// GNU `extract_data_from_object` (src/fns.c), shared by `md5' and
+/// `secure-hash': OBJECT `iv-auto' stands for START bytes from the system's
+/// random source, and START must then be a natural number.
+fn iv_auto_random_bytes(start: Option<&Value>) -> Result<Vec<u8>, Flow> {
+    let length = match start.map(|value| value.kind()) {
+        Some(ValueKind::Fixnum(length)) if length >= 0 => length as usize,
+        _ => {
+            return Err(signal(
+                "error",
+                vec![Value::string(
+                    "Without a length, `iv-auto' can't be used; see Elisp manual",
+                )],
+            ));
+        }
+    };
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(length)
+        .map_err(|_| signal("memory-full", vec![]))?;
+    bytes.resize(length, 0);
+    getrandom::fill(&mut bytes).map_err(|err| {
+        signal(
+            "file-error",
+            vec![
+                Value::string("Getting random data"),
+                Value::string(err.to_string()),
+            ],
+        )
+    })?;
+    Ok(bytes)
 }
 
 /// Compute an MD5 digest behind the GNU-compatible Lisp argument adapter.
@@ -838,6 +873,9 @@ pub fn builtin_secure_hash(eval: &mut super::eval::Context, args: Vec<Value>) ->
             args.get(3),
             None,
         )?,
+        _ if object.as_symbol_name(eval.symbol_mode()) == Some("iv-auto") => {
+            iv_auto_random_bytes(args.get(2))?
+        }
         _ => {
             return Err(signal(
                 "error",
