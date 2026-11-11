@@ -20710,3 +20710,52 @@ fn secure_hash_and_md5_accept_iv_auto_like_gnu() {
         "OK 32"
     );
 }
+
+/// Hashes retain GNU's original iv-auto identity after reinterning its name;
+/// a child process isolates the destructive change to the canonical name map.
+#[test]
+fn secure_hash_and_md5_keep_original_iv_auto_after_reinterning() {
+    // The canonical name map is process-global. Isolate this destructive
+    // probe even when a harness runs multiple tests in the same process.
+    const CHILD_ENV: &str = "NEOVM_HASH_IV_AUTO_UNINTERN_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let module = module_path!();
+        let test_path = format!(
+            "{}::secure_hash_and_md5_keep_original_iv_auto_after_reinterning",
+            module.strip_prefix("neovm_core::").unwrap_or(module)
+        );
+        let mut child = crate::test_utils::canonical_test_command(
+            std::env::current_exe().expect("test executable path"),
+        );
+        let status = child
+            .args(["--exact", &test_path, "--nocapture"])
+            .env(CHILD_ENV, "1")
+            .status()
+            .expect("spawn isolated iv-auto probe");
+        assert!(status.success(), "isolated iv-auto probe failed");
+        return;
+    }
+    // GNU fns.c retains Qiv_auto: uninterning its name never changes which
+    // symbol extract_data_from_object recognizes for either hash primitive.
+    let mut eval = crate::test_utils::new_context();
+    let result = eval.eval_str(
+        r#"(let* ((original 'iv-auto)
+                  (removed (unintern "iv-auto" obarray))
+                  (replacement (intern "iv-auto")))
+             (list removed (eq original replacement)
+                   (condition-case err (md5 original 0) (error err))
+                   (condition-case err (secure-hash 'sha256 original 0) (error err))
+                   (condition-case err (md5 replacement 0) (error err))
+                   (condition-case err (secure-hash 'sha256 replacement 0) (error err))))"#,
+    );
+    assert_eq!(
+        neovm_eval::emacs_core::print::format_eval_result(&result),
+        concat!(
+            "OK (t nil ",
+            r#""d41d8cd98f00b204e9800998ecf8427e" "#,
+            r#""e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" "#,
+            r#"(error "Invalid object argument" iv-auto) "#,
+            r#"(error "Invalid object argument" iv-auto))"#,
+        )
+    );
+}
