@@ -62,6 +62,7 @@ enum-map.workspace = true
 enumflags2.workspace = true
 errno.workspace = true
 fs4.workspace = true
+getrandom.workspace = true
 hashbrown.workspace = true
 hostname.workspace = true
 keysymdefs.workspace = true

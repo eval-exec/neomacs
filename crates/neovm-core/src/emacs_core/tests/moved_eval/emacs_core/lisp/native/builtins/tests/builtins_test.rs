@@ -20636,3 +20636,77 @@ mod printer_streams;
 #[cfg(test)]
 #[path = "continuous_numbering_gnu.rs"]
 mod continuous_numbering_gnu;
+
+#[test]
+fn secure_hash_and_md5_accept_iv_auto_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU `extract_data_from_object` (src/fns.c), shared by `md5' and
+    // `secure-hash': OBJECT `iv-auto' hashes START random bytes, and a START
+    // that is not a natural number is an error.
+    let mut eval = crate::test_utils::new_context();
+    let mut eval_printed = |form: &str| {
+        neovm_eval::emacs_core::print::format_eval_result(
+            &eval.eval_str(&format!("(condition-case err {form} (error err))")),
+        )
+    };
+
+    // Zero random bytes hash like the empty string.
+    assert_eq!(
+        eval_printed("(secure-hash 'sha256 'iv-auto 0)"),
+        r#"OK "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855""#
+    );
+    assert_eq!(
+        eval_printed("(md5 'iv-auto 0)"),
+        r#"OK "d41d8cd98f00b204e9800998ecf8427e""#
+    );
+    // The check from GNU's test-secure-hash, plus the binary digest length.
+    assert_eq!(
+        eval_printed(
+            r#"(and (string-match "\\`[0-9a-f]\\{128\\}\\'" (secure-hash 'sha512 'iv-auto 100)) t)"#
+        ),
+        "OK t"
+    );
+    assert_eq!(
+        eval_printed("(length (secure-hash 'sha1 'iv-auto 5 nil t))"),
+        "OK 20"
+    );
+    assert_eq!(eval_printed("(length (md5 'iv-auto 64))"), "OK 32");
+    // Each call draws new bytes.
+    assert_eq!(
+        eval_printed("(equal (secure-hash 'sha256 'iv-auto 32) (secure-hash 'sha256 'iv-auto 32))"),
+        "OK nil"
+    );
+
+    let no_length = r#"OK (error "Without a length, `iv-auto' can't be used; see Elisp manual")"#;
+    for form in [
+        "(secure-hash 'sha1 'iv-auto)",
+        "(secure-hash 'sha1 'iv-auto nil)",
+        "(secure-hash 'sha1 'iv-auto -1)",
+        "(secure-hash 'sha1 'iv-auto 1.0)",
+        "(md5 'iv-auto)",
+        "(md5 'iv-auto \"4\")",
+        // GNU tests FIXNATP, so a bignum is not a length either.
+        "(secure-hash 'sha1 'iv-auto (1+ most-positive-fixnum))",
+    ] {
+        assert_eq!(eval_printed(form), no_length, "{form}");
+    }
+    // Other symbols are still not hashable objects.
+    assert_eq!(
+        eval_printed("(secure-hash 'sha1 'iv)"),
+        r#"OK (error "Invalid object argument" iv)"#
+    );
+    // GNU compares OBJECT with `EQ', so an uninterned `iv-auto' is not it.
+    assert_eq!(
+        eval_printed("(secure-hash 'sha1 (make-symbol \"iv-auto\") 4)"),
+        r#"OK (error "Invalid object argument" iv-auto)"#
+    );
+    assert_eq!(
+        eval_printed("(md5 (make-symbol \"iv-auto\") 4)"),
+        r#"OK (error "Invalid object argument" iv-auto)"#
+    );
+    // GNU only reads CODING-SYSTEM for strings and buffers.
+    assert_eq!(
+        eval_printed("(length (md5 'iv-auto 4 nil 'no-such-coding-system))"),
+        "OK 32"
+    );
+}
