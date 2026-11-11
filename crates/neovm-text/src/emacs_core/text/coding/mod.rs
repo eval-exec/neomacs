@@ -5645,7 +5645,8 @@ pub fn builtin_detect_coding_string_in_context<H: TextHost>(
         ctx.coding_systems(),
         args,
         ctx.symbol_mode(),
-        ctx.visible_variable_value_or_nil(intern("inhibit-null-byte-detection"))
+        ctx.forwarded_variable_value(intern("inhibit-null-byte-detection"))
+            .unwrap_or(Value::NIL)
             .is_truthy(),
     )
 }
@@ -5721,7 +5722,8 @@ pub fn builtin_detect_coding_region_in_context<H: TextHost>(
         ctx.buffers(),
         args,
         ctx.symbol_mode(),
-        ctx.visible_variable_value_or_nil(intern("inhibit-null-byte-detection"))
+        ctx.forwarded_variable_value(intern("inhibit-null-byte-detection"))
+            .unwrap_or(Value::NIL)
             .is_truthy(),
     )
 }
