@@ -6068,14 +6068,6 @@ fn decide_auto_coding_for_insert_file_contents(
         .buffers
         .find_buffer_by_name(" *code-converting-work*")
         .unwrap_or_else(|| eval.edit.buffers.create_buffer(" *code-converting-work*"));
-    let restore_and_finish = |eval: &mut neovm_eval::emacs_core::eval::Context,
-                              result: EvalResult| {
-        if let Some(saved) = saved_current {
-            eval.restore_current_buffer_if_live(saved);
-        }
-        result
-    };
-
     eval.set_current_buffer_unrecorded(work_buffer)?;
     let old_range = eval
         .edit
@@ -6106,14 +6098,24 @@ fn decide_auto_coding_for_insert_file_contents(
         .buffers
         .goto_buffer_emacs_byte_pos(work_buffer, EmacsBytePos::new(0));
 
-    let result = eval.apply(
-        function,
-        vec![
-            Value::heap_string(filename),
-            Value::fixnum(probe.len() as i64),
-        ],
-    );
-    let value = restore_and_finish(eval, result)?;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        eval.apply(
+            function,
+            vec![
+                Value::heap_string(filename),
+                Value::fixnum(probe.len() as i64),
+            ],
+        )
+    }));
+    // GNU records an unwind of the current buffer before entering the work
+    // buffer (fileio.c:4386). Native containment must observe the same restore.
+    if let Some(saved) = saved_current {
+        eval.restore_current_buffer_if_live(saved);
+    }
+    let value = match result {
+        Ok(result) => result?,
+        Err(panic) => std::panic::resume_unwind(panic),
+    };
     auto_coding_system_name(eval, value)
 }
 
@@ -6250,7 +6252,7 @@ fn decide_auto_coding_for_empty_insert_file_contents<'a>(
     for arg in args {
         eval.push_specpdl_root(*arg);
     }
-    let result = (|| -> Result<EmptyFileCodingProbe<'a>, Flow> {
+    let probe = || -> Result<EmptyFileCodingProbe<'a>, Flow> {
         eval.set_current_buffer_unrecorded(current_id)?;
         eval.edit
             .buffers
@@ -6322,7 +6324,10 @@ fn decide_auto_coding_for_empty_insert_file_contents<'a>(
             std::borrow::Cow::Owned(buffer.dump_text_bytes())
         };
         Ok(EmptyFileCodingProbe { decision, bytes })
-    })();
+    };
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(probe));
+    // GNU's decide_coding_unwind runs even after a callback's nonlocal exit.
+    // Restore the staged buffer before an outer native boundary handles a panic.
     restore_empty_buffer_after_auto_coding_probe(
         eval,
         current_id,
@@ -6330,7 +6335,10 @@ fn decide_auto_coding_for_empty_insert_file_contents<'a>(
         saved_undo_list,
     );
     eval.restore_specpdl_roots(roots);
-    result
+    match result {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
 }
 
 /// `(insert-file-contents FILENAME &optional VISIT BEG END REPLACE)`
