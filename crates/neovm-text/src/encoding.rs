@@ -372,6 +372,40 @@ fn runtime_coding_eol(
         .map_or_else(|| coding_name_eol(name), |metadata| metadata.eol_type)
 }
 
+/// The registered codec name, independent of the alias a conversion reports.
+fn runtime_codec_name(
+    systems: &crate::emacs_core::coding::CodingSystemManager,
+    name: &str,
+) -> Option<String> {
+    RuntimeCodingSystem::from_symbol(intern(name))
+        .metadata(systems)
+        .map(|metadata| {
+            let canonical = resolve_sym(metadata.info.name);
+            if metadata.eol_type == metadata.info.eol_type {
+                canonical.to_owned()
+            } else {
+                apply_explicit_eol_suffix(canonical, metadata.eol_type)
+            }
+        })
+}
+
+/// GNU adjusts the selected target only while its EOL remains undecided.
+/// A fixed target keeps both its EOL and its alias (coding.c:6471-6495).
+fn inherit_detection_eol(
+    systems: &crate::emacs_core::coding::CodingSystemManager,
+    selected: &str,
+    requested: EolType,
+) -> String {
+    if requested == EolType::Undecided
+        || runtime_coding_eol(systems, selected) != EolType::Undecided
+    {
+        return selected.to_owned();
+    }
+    systems
+        .canonical_name_for_detected_eol(selected, requested.suffix())
+        .unwrap_or_else(|| selected.to_owned())
+}
+
 /// The `&str` twin of `expand_source_eol`: the single EOL pass for the
 /// `encode_string` entry point.  Same rule, same GNU reference
 /// (`consume_chars`, src/coding.c:7607) -- convert the SOURCE once, above the
@@ -584,7 +618,8 @@ pub fn detected_coding_name_with_null_policy(
     mode: neovm_value::tagged::SymbolMode,
     global: bool,
 ) -> Option<&'static str> {
-    let found = match crate::emacs_core::coding::undecided_null_byte_inhibition(
+    let eol = runtime_coding_eol(coding_systems, coding_system);
+    let name = match crate::emacs_core::coding::undecided_null_byte_inhibition(
         coding_systems,
         coding_system,
         global,
@@ -603,14 +638,17 @@ pub fn detected_coding_name_with_null_policy(
             if coding_system_base(detected) == "undecided" {
                 return None;
             }
-            detected
+            // This detector already resolved EOL from the bytes; an explicit
+            // request overrides that detected EOL, as it did before rebasing.
+            apply_explicit_eol_suffix(detected, eol)
         }
         // The two arms that are keyed on a byte-order mark rather than on the
         // category priority list (:6702-6742).
-        None => detect_bom_auto_coding(coding_systems, coding_system, bytes, block, mode)?,
+        None => {
+            let found = detect_bom_auto_coding(coding_systems, coding_system, bytes, block, mode)?;
+            inherit_detection_eol(coding_systems, found, eol)
+        }
     };
-    let eol = runtime_coding_eol(coding_systems, coding_system);
-    let name = apply_explicit_eol_suffix(found, eol);
     Some(resolve_sym(intern(&name)))
 }
 
@@ -4776,7 +4814,9 @@ fn detect_bom_auto_coding(
                     || matches!(block, crate::emacs_core::coding::SourceBlock::Last)
             }) {
                 None
-            } else if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+            } else if bytes.len() > 3 && bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+                // GNU's strict `src + 3 < src_end` requires a following byte.
+                // Exact three-byte input selects the other target, retaining U+FEFF.
                 Some(signature)
             } else {
                 Some(without_signature)
@@ -4859,16 +4899,7 @@ fn builtin_coding_string_in_context<H: TextHost>(
     // unchanged when there is no BOM, but its decoder is still the target's
     // decoder. Keep reported_coding separate so this lookup preserves GNU's
     // alias reporting when detection and EOL resolution do not replace it.
-    let canonical = RuntimeCodingSystem::from_symbol(intern(&coding))
-        .metadata(ctx.coding_systems())
-        .map(|metadata| {
-            let name = resolve_sym(metadata.info.name);
-            if metadata.eol_type == metadata.info.eol_type {
-                name.to_owned()
-            } else {
-                apply_explicit_eol_suffix(name, metadata.eol_type)
-            }
-        });
+    let canonical = runtime_codec_name(ctx.coding_systems(), &coding);
     if let Some(canonical) = canonical {
         if canonical != coding {
             coding = canonical;
@@ -4962,12 +4993,13 @@ fn builtin_coding_string_in_context<H: TextHost>(
             // pass. GNU re-reads those attributes after detection, and only a
             // concrete result replaces them (coding.c:6743-6754, 8129-8131).
             if coding_system_base(resolve_sym(detected)) != "undecided" {
-                coding = apply_explicit_eol_suffix(
+                let selected = apply_explicit_eol_suffix(
                     resolve_sym(detected),
                     runtime_coding_eol(ctx.coding_systems(), &coding),
                 );
+                reported_coding = selected.clone();
+                coding = runtime_codec_name(ctx.coding_systems(), &selected).unwrap_or(selected);
                 args[1] = Value::symbol(&coding);
-                reported_coding = coding.clone();
             }
         }
         // The other two "not fully specified" categories: `utf-16` and
@@ -4986,12 +5018,14 @@ fn builtin_coding_string_in_context<H: TextHost>(
                 ctx.symbol_mode(),
             )
         {
-            coding = apply_explicit_eol_suffix(
+            let selected = inherit_detection_eol(
+                ctx.coding_systems(),
                 found,
                 runtime_coding_eol(ctx.coding_systems(), &detection_coding),
             );
+            reported_coding = selected.clone();
+            coding = runtime_codec_name(ctx.coding_systems(), &selected).unwrap_or(selected);
             args[1] = Value::symbol(&coding);
-            reported_coding = coding.clone();
         }
     }
     // Charset-type coding systems (cp437, koi8-r, chinese-gbk, …) encode and

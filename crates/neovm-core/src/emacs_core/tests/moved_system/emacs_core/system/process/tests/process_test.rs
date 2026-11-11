@@ -18063,3 +18063,184 @@ fn unchanged_coding_detection_keeps_custom_hook_and_registered_eol() {
         "OK (((((65 66 33) neovm-hook-keep (2)) ((65 13 10 33) neovm-hook-keep (3)) ((30828 13 10) utf-8-unix nil)) (((65 66 33) neovm-hook-keep-alias (2)) ((65 13 10 33) neovm-hook-keep-alias (3)) ((30828 13 10) utf-8-unix nil))) ((((65 66 33) neovm-hook-keep (2)) ((65 13 10 33) neovm-hook-keep (3)) ((30828 13 10) utf-8-unix nil)) (((65 66 33) neovm-hook-keep-alias (2)) ((65 13 10 33) neovm-hook-keep-alias (3)) ((30828 13 10) utf-8-unix nil))) ((((65 66 33) neovm-hook-keep (2)) ((65 13 10 33) neovm-hook-keep (3)) ((30828 13 10) utf-8-unix nil)) (((65 66 33) neovm-hook-keep-alias (2)) ((65 13 10 33) neovm-hook-keep-alias (3)) ((30828 13 10) utf-8-unix nil))))"
     );
 }
+
+/// GNU keeps selected target aliases for reporting and uses their compiled
+/// codec/EOL attributes; a concrete target EOL survives conflicting requests.
+#[test]
+fn bom_target_aliases_decode_with_registered_codec_and_eol() {
+    crate::test_utils::init_test_tracing();
+    let cat = find_bin("cat");
+    let result = eval_one(&format!(
+        r#"(progn
+ (define-coding-system-alias 'neovm-target-u8-sig 'utf-8-with-signature)
+ (define-coding-system-alias 'neovm-target-u8-plain 'utf-8)
+ (define-coding-system-alias 'neovm-target-u8-fixed-sig 'utf-8-with-signature-unix)
+ (define-coding-system-alias 'neovm-target-u8-fixed-plain 'utf-8-unix)
+ (define-coding-system-alias 'neovm-target-u16-le 'utf-16le-with-signature)
+ (define-coding-system-alias 'neovm-target-u16-be 'utf-16be-with-signature)
+ (define-coding-system-alias 'neovm-target-raw 'no-conversion)
+ (dolist (entry '((neovm-target-auto-u8 utf-8 neovm-target-u8-sig . neovm-target-u8-plain)
+                  (neovm-target-auto-fixed utf-8 neovm-target-u8-fixed-sig . neovm-target-u8-fixed-plain)
+                  (neovm-target-auto-u16 utf-16 neovm-target-u16-le . neovm-target-u16-be)
+                  (neovm-target-auto-raw utf-8 neovm-target-raw . neovm-target-raw)))
+  (define-coding-system (car entry) "BOM target alias attributes"
+   :coding-type (cadr entry) :mnemonic ?U :charset-list '(unicode)
+   :bom (cddr entry) :endian 'big))
+ (defun neovm-target-probe (door coding bytes)
+  (condition-case error-data
+   (let (output used)
+    (if (eq door 'string)
+     (setq output (decode-coding-string bytes coding) used last-coding-system-used)
+     (with-temp-buffer
+      (let ((destination (current-buffer))
+            (coding-system-for-read coding) (coding-system-for-write 'no-conversion))
+       (with-temp-buffer
+        (set-buffer-multibyte nil) (insert bytes)
+        (call-process-region (point-min) (point-max) "{cat}" nil destination nil)))
+      (setq output (buffer-string) used last-coding-system-used)))
+    (list (string-to-list output) (multibyte-string-p output) used))
+   (error (list 'error error-data))))
+ (mapcar
+  (lambda (door)
+   (mapcar
+    (lambda (entry)
+     (mapcar (lambda (bytes) (neovm-target-probe door (car entry) bytes)) (cdr entry)))
+    (append
+     (mapcar (lambda (coding)
+               (list coding (unibyte-string 239 187 191 65)
+                            (unibyte-string 239 187 191 65 13 10)
+                            (unibyte-string 65 13 10)))
+             '(neovm-target-auto-u8 neovm-target-auto-u8-unix neovm-target-auto-u8-dos
+               neovm-target-auto-fixed-dos neovm-target-auto-fixed-mac
+               neovm-target-auto-raw neovm-target-auto-raw-dos neovm-target-auto-raw-mac
+               neovm-target-u8-sig neovm-target-raw))
+     (mapcar (lambda (coding)
+               (list coding (unibyte-string 255 254 65 0)
+                            (unibyte-string 255 254 65 0 13 0 10 0)
+                            (unibyte-string 254 255 0 65 0 13 0 10)))
+             '(neovm-target-auto-u16 neovm-target-auto-u16-unix neovm-target-auto-u16-dos
+               neovm-target-u16-le)))))
+  '(string process)))"#
+    ));
+    assert_eq!(
+        result,
+        "OK (((((65) t neovm-target-u8-sig) ((65 10) t utf-8-with-signature-dos) ((65 10) t utf-8-dos)) (((65) t utf-8-with-signature-unix) ((65 13 10) t utf-8-with-signature-unix) ((65 13 10) t utf-8-unix)) (((65) t utf-8-with-signature-dos) ((65 10) t utf-8-with-signature-dos) ((65 10) t utf-8-dos)) (((65) t neovm-target-u8-fixed-sig) ((65 13 10) t neovm-target-u8-fixed-sig) ((65 13 10) t neovm-target-u8-fixed-plain)) (((65) t neovm-target-u8-fixed-sig) ((65 13 10) t neovm-target-u8-fixed-sig) ((65 13 10) t neovm-target-u8-fixed-plain)) (((239 187 191 65) nil neovm-target-raw) ((239 187 191 65 13 10) nil neovm-target-raw) ((65 13 10) nil neovm-target-raw)) (((239 187 191 65) nil neovm-target-raw) ((239 187 191 65 13 10) nil neovm-target-raw) ((65 13 10) nil neovm-target-raw)) (((239 187 191 65) nil neovm-target-raw) ((239 187 191 65 13 10) nil neovm-target-raw) ((65 13 10) nil neovm-target-raw)) (((65) t neovm-target-u8-sig) ((65 10) t utf-8-with-signature-dos) ((65 10) t utf-8-with-signature-dos)) (((239 187 191 65) nil neovm-target-raw) ((239 187 191 65 13 10) nil neovm-target-raw) ((65 13 10) t neovm-target-raw)) (((65) t neovm-target-u16-le) ((65 10) t utf-16le-with-signature-dos) ((65 10) t utf-16be-with-signature-dos)) (((65) t utf-16le-with-signature-unix) ((65 13 10) t utf-16le-with-signature-unix) ((65 13 10) t utf-16be-with-signature-unix)) (((65) t utf-16le-with-signature-dos) ((65 10) t utf-16le-with-signature-dos) ((65 10) t utf-16be-with-signature-dos)) (((65) t neovm-target-u16-le) ((65 10) t utf-16le-with-signature-dos) ((65534 16640 3328 2560) t neovm-target-u16-le))) ((((65) t neovm-target-u8-sig) ((65 10) t utf-8-with-signature-dos) ((65 10) t utf-8-dos)) (((65) t utf-8-with-signature-unix) ((65 13 10) t utf-8-with-signature-unix) ((65 13 10) t utf-8-unix)) (((65) t utf-8-with-signature-dos) ((65 10) t utf-8-with-signature-dos) ((65 10) t utf-8-dos)) (((65) t neovm-target-u8-fixed-sig) ((65 13 10) t neovm-target-u8-fixed-sig) ((65 13 10) t neovm-target-u8-fixed-plain)) (((65) t neovm-target-u8-fixed-sig) ((65 13 10) t neovm-target-u8-fixed-sig) ((65 13 10) t neovm-target-u8-fixed-plain)) (((4194287 4194235 4194239 65) t neovm-target-raw) ((4194287 4194235 4194239 65 13 10) t neovm-target-raw) ((65 13 10) t neovm-target-raw)) (((4194287 4194235 4194239 65) t neovm-target-raw) ((4194287 4194235 4194239 65 13 10) t neovm-target-raw) ((65 13 10) t neovm-target-raw)) (((4194287 4194235 4194239 65) t neovm-target-raw) ((4194287 4194235 4194239 65 13 10) t neovm-target-raw) ((65 13 10) t neovm-target-raw)) (((65) t neovm-target-u8-sig) ((65 10) t utf-8-with-signature-dos) ((65 10) t utf-8-with-signature-dos)) (((4194287 4194235 4194239 65) t neovm-target-raw) ((4194287 4194235 4194239 65 13 10) t neovm-target-raw) ((65 13 10) t neovm-target-raw)) (((65) t neovm-target-u16-le) ((65 10) t utf-16le-with-signature-dos) ((65 10) t utf-16be-with-signature-dos)) (((65) t utf-16le-with-signature-unix) ((65 13 10) t utf-16le-with-signature-unix) ((65 13 10) t utf-16be-with-signature-unix)) (((65) t utf-16le-with-signature-dos) ((65 10) t utf-16le-with-signature-dos) ((65 10) t utf-16be-with-signature-dos)) (((65) t neovm-target-u16-le) ((65 10) t utf-16le-with-signature-dos) ((65534 16640 3328 2560) t neovm-target-u16-le))))"
+    );
+}
+
+#[test]
+fn utf8_bom_detection_requires_a_following_byte() {
+    crate::test_utils::init_test_tracing();
+    let cat = find_bin("cat");
+    let result = eval_one(&format!(
+        r#"(progn
+ (define-coding-system 'neovm-three-auto "Exact BOM length"
+   :coding-type 'utf-8 :mnemonic ?U :charset-list '(unicode)
+   :bom '(utf-8-with-signature . utf-8))
+ (define-coding-system-alias 'neovm-three-alias 'neovm-three-auto)
+ (mapcar
+  (lambda (door)
+   (mapcar
+    (lambda (coding)
+     (mapcar
+      (lambda (bytes)
+       (let (output used)
+        (cond
+         ((eq door 'string) (setq output (decode-coding-string bytes coding)
+                                 used last-coding-system-used))
+         ((eq door 'region)
+          (with-temp-buffer
+           (set-buffer-multibyte nil) (insert bytes)
+           (setq output (decode-coding-region (point-min) (point-max) coding t)
+                 used last-coding-system-used)))
+         ((eq door 'process)
+          (with-temp-buffer
+           (let ((destination (current-buffer))
+                 (coding-system-for-read coding) (coding-system-for-write 'no-conversion))
+            (with-temp-buffer
+             (set-buffer-multibyte nil) (insert bytes)
+             (call-process-region (point-min) (point-max) "{cat}" nil destination nil)))
+           (setq output (buffer-string) used last-coding-system-used)))
+         (t
+          (let ((file (make-temp-file "neovm-bom-length-")))
+           (unwind-protect
+            (progn
+             (let ((coding-system-for-write 'no-conversion))
+              (write-region bytes nil file nil 'silent))
+             (with-temp-buffer
+              (let ((coding-system-for-read coding)) (insert-file-contents file))
+              (setq output (buffer-string) used last-coding-system-used)))
+            (delete-file file)))))
+        (list (string-to-list output) used)))
+      (list (unibyte-string 239 187 191) (unibyte-string 239 187 191 65))))
+    '(utf-8-auto neovm-three-auto neovm-three-alias utf-8-with-signature)))
+  '(string region process file)))"#
+    ));
+    assert_eq!(
+        result,
+        "OK (((((65279) utf-8) ((65) utf-8-with-signature)) (((65279) utf-8) ((65) utf-8-with-signature)) (((65279) utf-8) ((65) utf-8-with-signature)) ((nil utf-8-with-signature) ((65) utf-8-with-signature))) ((((65279) utf-8) ((65) utf-8-with-signature)) (((65279) utf-8) ((65) utf-8-with-signature)) (((65279) utf-8) ((65) utf-8-with-signature)) ((nil utf-8-with-signature) ((65) utf-8-with-signature))) ((((65279) utf-8) ((65) utf-8-with-signature)) (((65279) utf-8) ((65) utf-8-with-signature)) (((65279) utf-8) ((65) utf-8-with-signature)) ((nil utf-8-with-signature) ((65) utf-8-with-signature))) ((((65279) utf-8) ((65) utf-8-with-signature)) (((65279) utf-8) ((65) utf-8-with-signature)) (((65279) utf-8) ((65) utf-8-with-signature)) ((nil utf-8-with-signature) ((65) utf-8-with-signature))))"
+    );
+}
+
+#[test]
+fn bom_target_aliases_keep_partial_output_and_raw_bytes() {
+    crate::test_utils::init_test_tracing();
+    let cat = find_bin("cat");
+    let result = eval_one(&format!(
+        r#"(progn
+ (define-coding-system-alias 'neovm-partial-target-u8 'utf-8-with-signature)
+ (define-coding-system-alias 'neovm-partial-target-le 'utf-16le-with-signature)
+ (define-coding-system-alias 'neovm-partial-target-be 'utf-16be-with-signature)
+ (define-coding-system-alias 'neovm-partial-target-raw 'no-conversion)
+ (define-coding-system 'neovm-partial-auto-u8 "Selected alias continuation"
+  :coding-type 'utf-8 :mnemonic ?U :charset-list '(unicode)
+  :bom '(neovm-partial-target-u8 . utf-8))
+ (define-coding-system 'neovm-partial-auto-u16 "UTF16 alias continuation"
+  :coding-type 'utf-16 :mnemonic ?U :charset-list '(unicode)
+  :bom '(neovm-partial-target-le . neovm-partial-target-be) :endian 'big)
+ (define-coding-system 'neovm-partial-auto-raw "Raw alias consumes every byte"
+  :coding-type 'utf-8 :mnemonic ?U :charset-list '(unicode)
+  :bom '(neovm-partial-target-raw . neovm-partial-target-raw))
+ (mapcar
+  (lambda (filter)
+   (mapcar
+    (lambda (entry)
+     (let* ((buffer (generate-new-buffer " *target-partial*")) (pieces nil)
+            (process (make-process :name "target-partial" :buffer buffer
+             :command '("{cat}") :connection-type 'pipe :noquery t
+             :coding (cons (car entry) 'no-conversion) :sentinel #'ignore
+             :filter (and filter (lambda (_ chunk) (push chunk pieces)))))
+            (deadline (+ (float-time) 5)) first)
+      (unwind-protect
+       (progn
+        (process-send-string process (cadr entry))
+        (while (and (< (if filter (length (apply #'concat pieces))
+                        (with-current-buffer buffer (buffer-size))) 1)
+                    (< (float-time) deadline))
+         (accept-process-output process 0.01))
+        (setq first (car (process-coding-system process)))
+        (process-send-string process (caddr entry))
+        (process-send-eof process)
+        (while (and (process-live-p process) (< (float-time) deadline))
+         (accept-process-output process 0.01))
+        (when (process-live-p process) (error "Target alias output timeout"))
+        (accept-process-output process 0.01)
+        (let ((output (if filter (apply #'concat (nreverse pieces))
+                       (with-current-buffer buffer (buffer-string)))))
+         (list first (string-to-list output) (multibyte-string-p output)
+               (car (process-coding-system process)))))
+       (when (process-live-p process) (delete-process process))
+       (kill-buffer buffer))))
+    (list (list 'neovm-partial-auto-u8 (unibyte-string 239 187 191 65 231 161)
+                                     (unibyte-string 172 13 10))
+          (list 'neovm-partial-auto-u16 (unibyte-string 255 254 65 0 45)
+                                      (unibyte-string 78 13 0 10 0))
+          (list 'neovm-partial-auto-raw-dos (unibyte-string 239 187 191 65 231)
+                                          (unibyte-string 161 172 13 10)))))
+  '(nil t)))"#
+    ));
+    assert_eq!(
+        result,
+        "OK (((neovm-partial-target-u8 (65 30828 10) t utf-8-with-signature-dos) (neovm-partial-target-le (65 20013 10) t utf-16le-with-signature-dos) (neovm-partial-target-raw (4194287 4194235 4194239 65 4194279 4194209 4194220 13 10) t neovm-partial-target-raw)) ((neovm-partial-target-u8 (65 30828 10) t utf-8-with-signature-dos) (neovm-partial-target-le (65 20013 10) t utf-16le-with-signature-dos) (neovm-partial-target-raw (239 187 191 65 231 161 172 13 10) nil neovm-partial-target-raw)))"
+    );
+}
