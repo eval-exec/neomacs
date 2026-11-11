@@ -47,6 +47,44 @@
       ;; The pinned GNU source tree has no Neomacs-generated manifest.
       '("emacs" "elisp" "eintr" "cl" "org" "modus-themes"))))
 
+(defun neomacs-artifact-info-check-manifest-parser ()
+  "Check manifest results and diagnostics in a private disposable directory."
+  (let* ((directory (file-name-as-directory
+                     (file-truename (make-temp-file "neomacs-info-manifest-" t))))
+         (manifest (expand-file-name ".neomacs-info-manifest" directory)))
+    (unwind-protect
+        (progn
+          (dolist (contents '("emacs.info\ncustom-name_1+2.info\n"
+                              "emacs.info\ncustom-name_1+2.info"))
+            (with-temp-file manifest (insert contents))
+            (unless (equal (neomacs-artifact-info-manuals directory)
+                           '("emacs" "custom-name_1+2"))
+              (error "Manifest parser rejected valid entries: %S" contents)))
+          (dolist (case '(("" . "Artifact Info manifest is empty")
+                          ("emacs.info\n\nelisp.info\n" . "Invalid manual basename")
+                          ("../outside.info\n" . "Invalid manual basename")
+                          ("/absolute.info\n" . "Invalid manual basename")
+                          ("-option.info\n" . "Invalid manual basename")
+                          ("bad name.info\n" . "Invalid manual basename")
+                          ("manual.txt\n" . "Invalid manual basename")))
+            (with-temp-file manifest (insert (car case)))
+            (let ((diagnostic
+                   (condition-case err
+                       (progn (neomacs-artifact-info-manuals directory) nil)
+                     (error (error-message-string err)))))
+              (unless (and diagnostic
+                           (string-match-p (regexp-quote (cdr case)) diagnostic))
+                (error "Manifest parser check for %S expected %S, got %S"
+                       (car case) (cdr case) diagnostic))))
+          (delete-file manifest)
+          (unless (equal (neomacs-artifact-info-manuals directory)
+                         '("emacs" "elisp" "eintr" "cl" "org" "modus-themes"))
+            (error "Missing manifest did not select the GNU comparison subset"))
+          (princ "Info manifest parser checks passed\n"))
+      (delete-directory directory t))))
+
+(neomacs-artifact-info-check-manifest-parser)
+
 (let* ((expected (getenv "NEOMACS_EXPECTED_INFO_DIRECTORY"))
        (directory (and expected
                        (file-name-as-directory (file-truename expected)))))
