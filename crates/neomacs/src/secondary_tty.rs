@@ -597,27 +597,30 @@ fn read_secondary_tty(
 
     let fd = input.as_raw_fd();
     let mut last_size = initial_size;
+    // Publish a size change ahead of anything read after it. False once the
+    // receiver is gone.
+    let publish_resize = |last_size: &mut TtyFrameSize| {
+        let Some(size) = query_size(fd).filter(|size| *size != *last_size) else {
+            return true;
+        };
+        *last_size = size;
+        publish_input(
+            &input_tx,
+            InputEvent::Resize {
+                width: size.columns(),
+                height: size.rows(),
+                scale_factor: 1.0,
+                emacs_frame_id: target.frame.0,
+            },
+        ) != super::input_bridge::HostInputDelivery::ReceiverClosed
+    };
     while !stop.load(Ordering::Acquire) {
         if paused.load(Ordering::Acquire) {
             std::thread::sleep(Duration::from_millis(50));
             continue;
         }
-        if let Some(size) = query_size(fd)
-            && size != last_size
-        {
-            last_size = size;
-            if publish_input(
-                &input_tx,
-                InputEvent::Resize {
-                    width: size.columns(),
-                    height: size.rows(),
-                    scale_factor: 1.0,
-                    emacs_frame_id: target.frame.0,
-                },
-            ) == super::input_bridge::HostInputDelivery::ReceiverClosed
-            {
-                return;
-            }
+        if !publish_resize(&mut last_size) {
+            return;
         }
 
         let mut pollfd = libc::pollfd {
@@ -645,6 +648,11 @@ fn read_secondary_tty(
                 return;
             }
             continue;
+        }
+        // A resize and the keys typed after it can land in one poll wait;
+        // re-query here so the frame has its new size before those keys run.
+        if !publish_resize(&mut last_size) {
+            return;
         }
         let mut bytes = [0u8; 4095];
         // SAFETY: input owns a readable fd; the initialized writable array
