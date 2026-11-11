@@ -3699,6 +3699,8 @@ pub fn make_list_keymap() -> Value {
 
 /// Resolve keymap objects and function aliases, optionally loading prefix
 /// autoloads and retrying their updated definitions as GNU get_keymap does.
+/// Once autoloading begins, keep the original argument rooted through every
+/// retry until the operation returns, including nonlocal load exits.
 pub fn get_keymap_in_runtime(
     eval: &mut Context,
     value: &Value,
@@ -3707,72 +3709,77 @@ pub fn get_keymap_in_runtime(
 ) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
     let original = *value;
-    let mut current = original;
+    let root_scope = eval.save_specpdl_roots();
+    let result = (|| {
+        let mut current = original;
 
-    loop {
-        if current.is_nil() {
-            break;
-        }
-        if is_list_keymap(&current, symbol_mode) {
-            return Ok(current);
-        }
-
-        let Some(symbol) = keymap_symbol_id(&current, symbol_mode) else {
-            break;
-        };
-        let Some((_, function)) =
-            resolve_indirect_function_by_id_in_obarray(eval.obarray(), symbol, symbol_mode)
-        else {
-            break;
-        };
-
-        if is_list_keymap(&function, symbol_mode) {
-            return Ok(function);
-        }
-
-        if is_keymap_autoload_form(&function, symbol_mode) {
-            if autoload {
-                // A filter may have returned an ephemeral positioned symbol.
-                // Keep the original argument alive while loading runs Lisp,
-                // since the retry below must inspect that same argument.
-                let root_scope = eval.save_specpdl_roots();
-                eval.push_specpdl_root(original);
-                let loaded = crate::emacs_core::autoload::builtin_autoload_do_load(
-                    eval,
-                    vec![function, original, Value::NIL],
-                );
-                eval.restore_specpdl_roots(root_scope);
-                let loaded = loaded?;
-                // Retry the original symbol after a definition changes: the
-                // file may install another keymap autoload or an alias. An
-                // internal compiler override can return without changing the
-                // function cell, so keep its returned definition in that case.
-                let updated =
-                    resolve_indirect_function_by_id_in_obarray(eval.obarray(), symbol, symbol_mode)
-                        .map(|(_, definition)| definition);
-                current = if updated == Some(function) {
-                    loaded
-                } else {
-                    original
-                };
-                continue;
+        loop {
+            if current.is_nil() {
+                break;
             }
-            if !error_if_not_keymap {
-                return Ok(original);
+            if is_list_keymap(&current, symbol_mode) {
+                return Ok(current);
             }
+
+            let Some(symbol) = keymap_symbol_id(&current, symbol_mode) else {
+                break;
+            };
+            let Some((_, function)) =
+                resolve_indirect_function_by_id_in_obarray(eval.obarray(), symbol, symbol_mode)
+            else {
+                break;
+            };
+
+            if is_list_keymap(&function, symbol_mode) {
+                return Ok(function);
+            }
+
+            if is_keymap_autoload_form(&function, symbol_mode) {
+                if autoload {
+                    // A filter may have returned an ephemeral positioned symbol.
+                    // Retain it for this operation once loading can run Lisp;
+                    // all subsequent retries must inspect that same argument.
+                    eval.push_specpdl_root(original);
+                    let loaded = crate::emacs_core::autoload::builtin_autoload_do_load(
+                        eval,
+                        vec![function, original, Value::NIL],
+                    )?;
+                    // Retry the original symbol after a definition changes: the
+                    // file may install another keymap autoload or an alias. An
+                    // internal compiler override can return without changing the
+                    // function cell, so keep its returned definition in that case.
+                    let updated = resolve_indirect_function_by_id_in_obarray(
+                        eval.obarray(),
+                        symbol,
+                        symbol_mode,
+                    )
+                    .map(|(_, definition)| definition);
+                    current = if updated == Some(function) {
+                        loaded
+                    } else {
+                        original
+                    };
+                    continue;
+                }
+                if !error_if_not_keymap {
+                    return Ok(original);
+                }
+            }
+
+            break;
         }
 
-        break;
-    }
-
-    if error_if_not_keymap {
-        Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("keymapp"), original],
-        ))
-    } else {
-        Ok(Value::NIL)
-    }
+        if error_if_not_keymap {
+            Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("keymapp"), original],
+            ))
+        } else {
+            Ok(Value::NIL)
+        }
+    })();
+    eval.restore_specpdl_roots(root_scope);
+    result
 }
 
 pub fn maybe_keymap_in_runtime(eval: &mut Context, value: &Value, autoload: bool) -> EvalResult {
