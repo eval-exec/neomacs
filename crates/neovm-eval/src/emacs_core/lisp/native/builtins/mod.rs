@@ -813,18 +813,11 @@ pub fn coding_system_eol_type(eval: &mut super::eval::Context, args: &[Value]) -
 }
 #[doc(hidden)]
 pub fn detect_coding_string(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    let mode = eval.symbol_mode();
-    neovm_text::emacs_core::coding::builtin_detect_coding_string(&eval.coding_systems, args, mode)
+    neovm_text::emacs_core::coding::builtin_detect_coding_string_in_context(eval, args)
 }
 #[doc(hidden)]
 pub fn detect_coding_region(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    let mode = eval.symbol_mode();
-    neovm_text::emacs_core::coding::builtin_detect_coding_region(
-        &eval.coding_systems,
-        &eval.edit.buffers,
-        args,
-        mode,
-    )
+    neovm_text::emacs_core::coding::builtin_detect_coding_region_in_context(eval, args)
 }
 #[doc(hidden)]
 pub fn keyboard_coding_system(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {

@@ -900,6 +900,7 @@ fn detect_list_mb(bytes: &[u8], src_chars: usize, multibytep: bool) -> Vec<Strin
         multibytep,
         false,
         SourceBlock::Last,
+        false,
     );
     list_to_vec(&v)
         .unwrap()
@@ -946,6 +947,7 @@ fn detect_highest_with_front(front: Option<CodingCat>) -> String {
         false,
         true,
         SourceBlock::Last,
+        false,
     );
     resolve_sym(v.as_bare_symbol_id().unwrap()).to_string()
 }
