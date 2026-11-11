@@ -207,6 +207,7 @@ crates/neovm-display/src/emacs_core/display/terminal/pure.rs	fn	fn configure_ter
 crates/neovm-display/src/emacs_core/display/terminal/pure.rs	fn	fn ensure_terminal_runtime_owner
 crates/neovm-display/src/emacs_core/display/terminal/pure.rs	fn	fn reset_terminal_host
 crates/neovm-display/src/emacs_core/display/terminal/pure.rs	fn	fn reset_terminal_runtime
+crates/neovm-display/src/emacs_core/display/terminal/pure.rs	fn	fn retire_unattached_initial_terminal
 crates/neovm-display/src/emacs_core/display/terminal/pure.rs	fn	fn set_terminal_host
 crates/neovm-display/src/emacs_core/display/terminal/pure.rs	use	use OpenedTtyFrameHost
 crates/neovm-display/src/emacs_core/display/terminal/pure.rs	use	use TerminalHost
