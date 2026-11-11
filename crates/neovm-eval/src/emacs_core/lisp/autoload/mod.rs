@@ -389,6 +389,8 @@ pub(crate) enum AutoloadDoLoadPlan {
     },
 }
 
+/// Check GNU's autoload argument order and choose a returned override or a
+/// deferred file load. Resolving the file and invoking Lisp happen afterward.
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn plan_autoload_do_load_in_state(
     vars: crate::emacs_core::eval::VariableView<'_>,
