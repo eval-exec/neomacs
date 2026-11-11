@@ -39,6 +39,9 @@ fn set_face_attribute_rejects_inheritance_cycles_like_gnu() {
          ;; GNU compares the parents of the list members with the face, not
          ;; the members themselves, so this is accepted.
          (funcall try 'cyc-list nil '(cyc-list))
+;; A long list of repeated parents is checked quickly.
+         (progn (set-face-attribute 'cyc-ok nil :inherit (make-list 2000 'bold))
+                (length (face-attribute 'cyc-ok :inherit)))
          ;; A circular list does not hang the check.
          (let ((parents (list 'bold)))
            (setcdr parents parents)
@@ -63,6 +66,7 @@ fn set_face_attribute_rejects_inheritance_cycles_like_gnu() {
             r#" (ok cyc-a)"#,
             r#" (ok nil)"#,
             r#" (ok (cyc-list))"#,
+            r#" 2000"#,
             r#" ok)"#,
         )
     );

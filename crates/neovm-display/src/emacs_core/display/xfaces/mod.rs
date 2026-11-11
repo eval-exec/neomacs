@@ -2536,8 +2536,8 @@ fn check_face_inheritance_cycle(
     face: Value,
     value: Value,
 ) -> Result<(), Flow> {
-    let mut visited = Vec::new();
-    if value == face || face_inheritance_cycle(eval, domain, value, face, &mut visited) {
+    let mut visited = HashSet::default();
+    if same_object(value, face) || face_inheritance_cycle(eval, domain, value, face, &mut visited) {
         return Err(signal(
             "error",
             vec![
@@ -2558,15 +2558,14 @@ fn face_inheritance_cycle(
     domain: Value,
     face: Value,
     child: Value,
-    visited: &mut Vec<Value>,
+    visited: &mut HashSet<usize>,
 ) -> bool {
     let members = if face.is_cons() {
         // Stop at a cons already seen, so that a circular list ends.
         let mut members = Vec::new();
-        let mut conses = Vec::new();
+        let mut conses = HashSet::default();
         let mut tail = face;
-        while tail.is_cons() && !conses.contains(&tail) {
-            conses.push(tail);
+        while tail.is_cons() && conses.insert(tail.bits()) {
             members.push(tail.cons_car());
             tail = tail.cons_cdr();
         }
@@ -2577,10 +2576,9 @@ fn face_inheritance_cycle(
         return false;
     };
     for member in members {
-        if visited.contains(&member) {
+        if !visited.insert(member.bits()) {
             continue;
         }
-        visited.push(member);
         // GNU stops at a member that is not a face (`get_lface_attributes'
         // failing).
         let Ok(parent) = builtin_internal_get_lisp_face_attribute(
@@ -2589,7 +2587,7 @@ fn face_inheritance_cycle(
         ) else {
             return false;
         };
-        if parent == member || parent == child {
+        if same_object(parent, member) || same_object(parent, child) {
             return true;
         }
         if !parent.is_nil()
@@ -2600,6 +2598,11 @@ fn face_inheritance_cycle(
         }
     }
     false
+}
+
+/// Lisp `eq', as GNU's `EQ' in the cycle check. `==` on `Value` is `equal'.
+fn same_object(a: Value, b: Value) -> bool {
+    a.bits() == b.bits()
 }
 
 fn is_reset_like_face_attr_value(value: &Value) -> bool {
