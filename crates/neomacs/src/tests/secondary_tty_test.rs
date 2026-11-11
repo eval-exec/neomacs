@@ -82,6 +82,72 @@ fn opened_secondary_tty_reads_bytes_for_its_own_frame_and_uses_device_size() {
 }
 
 #[cfg(unix)]
+#[test]
+fn secondary_tty_bounds_cells_from_an_extreme_winsize() {
+    use neovm_core::emacs_core::eval::QuitRequest;
+    use std::fs::File;
+
+    // Realistic sizes pass through untouched; only the cell count is bounded.
+    let ordinary = super::bounded_tty_size(119, 37).expect("non-zero size");
+    assert_eq!((ordinary.columns(), ordinary.rows()), (119, 37));
+    let wide = super::bounded_tty_size(65535, 65535).expect("non-zero size");
+    assert_eq!(wide.columns(), 65535);
+    assert!(wide.columns() * wide.rows() <= super::MAX_SECONDARY_TTY_CELLS);
+    assert!(super::bounded_tty_size(0, 24).is_none());
+
+    let master = File::from(
+        rustix::pty::openpt(rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY)
+            .expect("posix_openpt failed"),
+    );
+    rustix::pty::grantpt(&master).expect("grantpt failed");
+    rustix::pty::unlockpt(&master).expect("unlockpt failed");
+    let slave_name = rustix::pty::ptsname(&master, Vec::new())
+        .expect("ptsname_r failed")
+        .to_string_lossy()
+        .into_owned();
+    // macOS requires an open slave for PTY ioctls and retaining device state.
+    let slave = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&slave_name)
+        .expect("open slave");
+    rustix::termios::tcsetwinsize(
+        &slave,
+        rustix::termios::Winsize {
+            ws_row: u16::MAX,
+            ws_col: u16::MAX,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        },
+    )
+    .expect("set PTY size");
+    let request = neovm_core::emacs_core::terminal::pure::TtyFrameOpenRequest::new(
+        7,
+        neovm_core::window::FrameId(123),
+        slave_name,
+        "xterm-256color".to_string(),
+    )
+    .expect("valid request");
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let input = neovm_core::host_input::HostInputPublisher::install(&mut context);
+    let (session, opened_size, _) =
+        super::SecondaryTtySession::open(&request, input, QuitRequest::new())
+            .expect("open secondary TTY");
+
+    // The frame size and the renderer grid come from the same bounded query.
+    assert_eq!(
+        (opened_size.columns(), opened_size.rows()),
+        (wide.columns(), wide.rows())
+    );
+    assert_eq!(
+        (session.rif.width(), session.rif.height()),
+        (wide.columns() as usize, wide.rows() as usize)
+    );
+    drop(session);
+    drop(slave);
+}
+
+#[cfg(unix)]
 fn terminal_modes(fd: std::os::fd::RawFd) -> libc::termios {
     let mut modes = unsafe { std::mem::zeroed::<libc::termios>() };
     assert_eq!(unsafe { libc::tcgetattr(fd, &mut modes) }, 0, "tcgetattr");
