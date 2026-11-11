@@ -19,7 +19,7 @@ use super::architecture_production_source_roots::{crates_dir, production_source_
 /// the approved M1-M3 derivation. The row count is pinned and may only
 /// shrink; an unmapped item falls back to the current module model (M-b).
 const ITEM_MAP_TSV: &str = include_str!("layering_item_map.tsv");
-const ITEM_MAP_ROWS: usize = 129;
+const ITEM_MAP_ROWS: usize = 128;
 
 fn item_map() -> &'static BTreeMap<(String, String), String> {
     static MAP: std::sync::OnceLock<BTreeMap<(String, String), String>> =

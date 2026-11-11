@@ -825,11 +825,13 @@ impl ProcessOutputDecoding {
     ) -> ResolvedProcessDecoding {
         match self {
             Self::Bytes(name) => ResolvedProcessDecoding::Bytes(name),
-            Self::Coding(name) => ResolvedProcessDecoding::Coding(name),
+            Self::Coding(name) => ResolvedProcessDecoding::Coding(
+                neovm_text::encoding::CodingReadSelection::Existing(name),
+            ),
             Self::Detect(requested) => {
-                // A nil `found` leaves the coding system exactly as it was,
-                // decoder included -- and it will be offered the NEXT chunk
-                // again, because the name it keeps still requires detection.
+                // No selected category leaves the previous setup alone. A
+                // selected category with a nil target changes only its id;
+                // the typed selection preserves that distinction for decoding.
                 let found = neovm_text::encoding::detected_coding_name_with_null_policy(
                     coding_systems,
                     requested,
@@ -838,9 +840,16 @@ impl ProcessOutputDecoding {
                     mode,
                     global_null_inhibition,
                 )
-                .unwrap_or(requested);
-                if process_coding_name_converts_nothing(found) {
-                    ResolvedProcessDecoding::Bytes(found)
+                .unwrap_or(neovm_text::encoding::CodingReadSelection::Existing(
+                    requested,
+                ));
+                let name = match found {
+                    neovm_text::encoding::CodingReadSelection::Existing(name)
+                    | neovm_text::encoding::CodingReadSelection::Rebase(name)
+                    | neovm_text::encoding::CodingReadSelection::IdentityOnly(name) => name,
+                };
+                if process_coding_name_converts_nothing(name) {
+                    ResolvedProcessDecoding::Bytes(name)
                 } else {
                     ResolvedProcessDecoding::Coding(found)
                 }
@@ -903,7 +912,7 @@ impl ProcessOutputDecoding {
     }
 }
 
-/// A process decoding with nothing left to detect: GNU's `struct coding_system`
+/// A process decoding after detection for this read: GNU's `struct coding_system`
 /// at the moment `detect_coding` returns and the decoder is about to run.
 ///
 /// The type exists to make one thing unrepresentable: decoding, or reporting,
@@ -920,8 +929,8 @@ pub(crate) enum ResolvedProcessDecoding {
     /// unchanged.  Reachable from `Detect` too -- GNU answers `Qno_conversion`
     /// for a source with a null byte in it (src/coding.c:6688).
     Bytes(&'static str),
-    /// Decode under this coding system, which is now concrete.
-    Coding(&'static str),
+    /// The identity and setup operation left by this read's detection.
+    Coding(neovm_text::encoding::CodingReadSelection),
 }
 
 impl ResolvedProcessDecoding {
@@ -933,7 +942,12 @@ impl ResolvedProcessDecoding {
     /// the DECODER `detect_coding` selected.
     pub(crate) fn name(self) -> &'static str {
         match self {
-            Self::Bytes(name) | Self::Coding(name) => name,
+            Self::Bytes(name) => name,
+            Self::Coding(selection) => match selection {
+                neovm_text::encoding::CodingReadSelection::Existing(name)
+                | neovm_text::encoding::CodingReadSelection::Rebase(name)
+                | neovm_text::encoding::CodingReadSelection::IdentityOnly(name) => name,
+            },
         }
     }
 
@@ -1025,8 +1039,8 @@ pub(crate) struct PendingProcessRun {
     /// over as a residual and it was a table of byte-length rules keyed on the
     /// coding system's NAME.
     pub(super) bytes: Vec<u8>,
-    /// GNU `coding->spec`, carried across the hand-off so an ISO-2022
-    /// designation set by one read is still in force in the next; see
+    /// GNU `coding->spec`, including designation/signature state and a retained
+    /// undecided decoder, carried across the hand-off; see
     /// [`ProcessCodingState::store_decoder`].
     pub(super) decoder: neovm_text::encoding::CodingDecoderState,
     /// GNU `coding->mode & CODING_MODE_LAST_BLOCK` as this read left it, which

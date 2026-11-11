@@ -126,5 +126,4 @@ crates/neovm-text/src/encoding.rs	crate::emacs_core::coding::SourceBlock	ec:codi
 crates/neovm-text/src/encoding.rs	crate::emacs_core::coding::SourceBlock::Last	ec:coding
 crates/neovm-text/src/encoding.rs	crate::emacs_core::coding::SourceBlock::More	ec:coding
 crates/neovm-text/src/encoding.rs	crate::emacs_core::coding::ccl_coding_spec	ec:coding
-crates/neovm-text/src/encoding.rs	crate::emacs_core::coding::detect_highest_coding_system_for_unibyte_bytes	ec:coding
 crates/neovm-text/src/encoding.rs	crate::emacs_core::coding::iso2022_spec	ec:coding

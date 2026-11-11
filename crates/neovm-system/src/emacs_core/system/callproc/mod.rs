@@ -568,6 +568,7 @@ fn write_output_target_in_state(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     target: &OutputTarget,
     decoding: &mut ProcessOutputDecoding,
+    decoder: &mut neovm_text::encoding::CodingDecoderState,
     output: &[u8],
     append: bool,
 ) -> Result<(), Flow> {
@@ -632,16 +633,15 @@ fn write_output_target_in_state(
             let decoded = if output.is_empty() {
                 None
             } else {
-                // `Fcall_process` reads the child's output to the END before
-                // it decodes (src/callproc.c:786-795, which raises
-                // `CODING_MODE_LAST_BLOCK` on the read that returns zero), and
-                // it decodes through a `struct coding_system` of its own that
-                // no other run continues -- so the block is `Last` and there
-                // is no decoder state to carry in or out.
+                // These are Neomacs's completed captured blocks, so no more
+                // bytes can complete a character in this block. GNU decodes
+                // incrementally in its read loop and keeps one coding struct
+                // throughout; retain its decoder continuation between our
+                // stdout/stderr deliveries too.
                 Some(resolved.decode_in_context(
                     eval,
                     output,
-                    &mut neovm_text::encoding::CodingDecoderState::default(),
+                    decoder,
                     neovm_text::emacs_core::coding::SourceBlock::Last,
                 )?)
             };
@@ -707,12 +707,25 @@ fn route_captured_output_in_state(
     // ONE decoding for the whole call, carried by value from here down, because
     // GNU has one `struct coding_system` for the whole call.
     let mut decoding = decoding;
-    write_output_target_in_state(eval, &destination.stdout, &mut decoding, stdout, false)?;
+    let mut decoder = neovm_text::encoding::CodingDecoderState::default();
+    write_output_target_in_state(
+        eval,
+        &destination.stdout,
+        &mut decoding,
+        &mut decoder,
+        stdout,
+        false,
+    )?;
     match destination.stderr {
         StderrTarget::Discard => Ok(()),
-        StderrTarget::ToStdoutTarget => {
-            write_output_target_in_state(eval, &destination.stdout, &mut decoding, stderr, true)
-        }
+        StderrTarget::ToStdoutTarget => write_output_target_in_state(
+            eval,
+            &destination.stdout,
+            &mut decoding,
+            &mut decoder,
+            stderr,
+            true,
+        ),
         StderrTarget::File => {
             let path = destination
                 .stderr_file
@@ -723,6 +736,7 @@ fn route_captured_output_in_state(
                 eval,
                 &OutputTarget::File(path),
                 &mut decoding,
+                &mut decoder,
                 stderr,
                 false,
             )
