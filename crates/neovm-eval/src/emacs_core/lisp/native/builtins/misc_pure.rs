@@ -681,6 +681,10 @@ pub fn builtin_secure_hash_algorithms(args: Vec<Value>) -> EvalResult {
         Value::symbol("sha256"),
         Value::symbol("sha384"),
         Value::symbol("sha512"),
+        Value::symbol("sha3-224"),
+        Value::symbol("sha3-256"),
+        Value::symbol("sha3-384"),
+        Value::symbol("sha3-512"),
     ]))
 }
 

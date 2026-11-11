@@ -12826,6 +12826,77 @@ fn gap_position_and_size_use_current_buffer_storage() {
 }
 
 #[test]
+fn secure_hash_supports_the_sha3_algorithms_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU `secure_hash' (src/fns.c) maps sha3-224, sha3-256, sha3-384 and
+    // sha3-512 to Gnulib's SHA-3 functions, and `secure-hash-algorithms'
+    // lists them after the SHA-2 family. The digests are the ones GNU's
+    // test-secure-hash expects for "foobar".
+    let mut eval = crate::test_utils::new_context();
+    let mut eval_printed = |form: &str| {
+        neovm_eval::emacs_core::print::format_eval_result(
+            &eval.eval_str(&format!("(condition-case err {form} (error err))")),
+        )
+    };
+
+    for (algorithm, digest) in [
+        (
+            "sha3-224",
+            "1ad852ba147a715fe5a3df39a741fad08186c303c7d21cefb7be763b",
+        ),
+        (
+            "sha3-256",
+            "09234807e4af85f17c66b48ee3bca89dffd1f1233659f9f940a2b17b0b8c6bc5",
+        ),
+        (
+            "sha3-384",
+            "0fa8abfbdaf924ad307b74dd2ed183b9a4a398891a2f6bac8fd2db7041b77f068580f9c6c66f699b496c2da1cbcc7ed8",
+        ),
+        (
+            "sha3-512",
+            "ff32a30c3af5012ea395827a3e99a13073c3a8d8410a708568ff7e6eb85968fccfebaea039bc21411e9d43fdb9a851b529b9960ffea8679199781b8f45ca85e2",
+        ),
+    ] {
+        assert_eq!(
+            eval_printed(&format!("(secure-hash '{algorithm} \"foobar\")")),
+            format!("OK \"{digest}\""),
+            "{algorithm}"
+        );
+        // A buffer and a substring hash the same bytes.
+        assert_eq!(
+            eval_printed(&format!(
+                "(save-current-buffer (set-buffer (get-buffer-create \" *sha3*\")) (erase-buffer) (insert \"foobar\") (secure-hash '{algorithm} (current-buffer)))"
+            )),
+            format!("OK \"{digest}\""),
+            "{algorithm} on a buffer"
+        );
+        assert_eq!(
+            eval_printed(&format!("(secure-hash '{algorithm} \"xxfoobarxx\" 2 8)")),
+            format!("OK \"{digest}\""),
+            "{algorithm} on a substring"
+        );
+        // BINARY returns the raw digest, half as long as the hex form.
+        assert_eq!(
+            eval_printed(&format!(
+                "(length (secure-hash '{algorithm} \"foobar\" nil nil t))"
+            )),
+            format!("OK {}", digest.len() / 2),
+            "{algorithm} binary"
+        );
+    }
+
+    assert_eq!(
+        eval_printed("(secure-hash-algorithms)"),
+        "OK (md5 sha1 sha224 sha256 sha384 sha512 sha3-224 sha3-256 sha3-384 sha3-512)"
+    );
+    // Unknown algorithms are still rejected.
+    assert_eq!(
+        eval_printed("(secure-hash 'sha3-1024 \"foobar\")"),
+        r#"OK (error "Invalid algorithm arg: sha3-1024")"#
+    );
+}
+
+#[test]
 fn dispatch_builtin_pure_handles_gnutls_query_and_error_placeholders() {
     crate::test_utils::init_test_tracing();
     let available = dispatch_builtin_pure("gnutls-available-p", vec![])

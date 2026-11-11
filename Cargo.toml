@@ -166,6 +166,7 @@ aes = "0.9.1"
 cbc = { version = "0.2.1", features = ["alloc", "block-padding"] }
 sha1 = "0.11"
 sha2 = "0.11"
+sha3 = "0.11"
 hmac = "0.13"
 md-5 = "0.11"
 getrandom = "0.4"
