@@ -409,6 +409,43 @@ impl BootstrapDisplayConfig {
     }
 }
 
+/// Native hosting is independent of the initial Lisp frame: a daemon keeps
+/// its initial TTY frame while this connection waits for its first GUI client.
+struct GuiConnectionStartup {
+    event_loop: RenderEventLoop,
+    display: BootstrapDisplayConfig,
+    font_observer: neomacs_display_runtime::font_defaults::FontDefaultsObserver,
+}
+
+fn prepare_gui_connection(interactivity: Interactivity) -> Result<GuiConnectionStartup, String> {
+    // Wayland can consume WAYLAND_SOCKET while opening the connection.
+    let resolver =
+        neomacs_display_runtime::display_identity::DisplayIdentityResolver::capture_environment();
+    let event_loop = build_render_event_loop()
+        .map_err(|error| format!("failed to build GUI event loop: {error}"))?;
+    let observation = event_loop.display_observation();
+    let system_name = hostname::get()
+        .map(|name| name.to_string_lossy().replace([' ', '\t'], "-"))
+        .unwrap_or_else(|_| "localhost".into());
+    let identity = event_loop
+        .display_identity(resolver, &system_name)
+        .map_err(|error| format!("failed to resolve graphical display identity: {error:?}"))?;
+    let font_observer =
+        neomacs_display_runtime::font_defaults::observe_font_defaults(identity.backend())
+            .map_err(|error| format!("failed to observe desktop fonts: {error}"))?;
+    let mut display = bootstrap_gui_display_config(
+        interactivity,
+        gui_frame_font_scale_from_observation(observation),
+        identity,
+    );
+    display.font_defaults = font_observer.initial().clone();
+    Ok(GuiConnectionStartup {
+        event_loop,
+        display,
+        font_observer,
+    })
+}
+
 const EARLY_HELP_BODY: &str = concat!(
     "Run Neomacs, the extensible, customizable, self-documenting real-time\n",
     "display editor.  The recommended way to start Neomacs for normal editing\n",
@@ -1618,6 +1655,27 @@ fn render_fullscreen_mode(fullscreen: FrameFullscreen) -> WindowFullscreenMode {
 }
 
 impl DisplayHost for PrimaryWindowDisplayHost {
+    fn graphical_connection_identity(
+        &self,
+        display: Option<&str>,
+    ) -> Result<Option<neomacs_display_protocol::GraphicalDisplayIdentity>, String> {
+        let Some(startup) = &self.gui_startup else {
+            return Ok(None);
+        };
+        let BootstrapDisplayKind::Gui { identity, .. } = &startup.display.kind else {
+            return Ok(None);
+        };
+        if let Some(display) = display
+            && display != identity.terminal_name()
+        {
+            return Err(format!(
+                "Display {display} can’t be opened: daemon is connected to {}",
+                identity.terminal_name()
+            ));
+        }
+        Ok(Some(identity.clone()))
+    }
+
     fn fail_pending_gui_startup(&mut self, error: String) -> bool {
         let Some(startup) = self.gui_startup.as_ref() else {
             return false;
@@ -1632,11 +1690,10 @@ impl DisplayHost for PrimaryWindowDisplayHost {
     fn prepare_initial_gui_frame(
         &mut self,
     ) -> Result<Option<neovm_core::emacs_core::display_host::InitialGuiFrameDefaults>, String> {
-        let Some(startup) = self
-            .gui_startup
-            .as_ref()
-            .filter(|_| self.primary_frame.is_awaiting())
-        else {
+        // A client can reopen a GUI frame after the native primary has been
+        // retired. Its font and display still come from this connection,
+        // rather than the surviving initial TTY frame.
+        let Some(startup) = self.gui_startup.as_ref() else {
             return Ok(None);
         };
         let Some(font) =
@@ -3838,9 +3895,14 @@ fn run_gui_main_thread(
     event_loop: RenderEventLoop,
     mode: RuntimeMode,
     startup: StartupOptions,
+    daemon_notifier: Option<neovm_core::emacs_core::eval::DaemonNotifier>,
     bootstrap_display: BootstrapDisplayConfig,
     font_observer: neomacs_display_runtime::font_defaults::FontDefaultsObserver,
 ) {
+    let daemon_args = startup
+        .daemon
+        .as_ref()
+        .map(|_| std::env::args_os().collect::<Vec<_>>());
     let render_waker = GuiEventLoopWaker::new(event_loop.create_proxy());
     let image_decoder = neomacs_display_runtime::render_thread::ImageDecoder::new();
     let image_decode_client = image_decoder.client();
@@ -3860,6 +3922,7 @@ fn run_gui_main_thread(
     let evaluator_handle = spawn_gui_evaluator_worker(
         mode,
         startup,
+        daemon_notifier,
         startup_reply,
         bootstrap_display,
         font_observer,
@@ -3931,6 +3994,9 @@ fn run_gui_main_thread(
     };
 
     if evaluator_exit.restart {
+        if let Some(args) = &daemon_args {
+            daemon::restart(args);
+        }
         tracing::warn!("restart requested via kill-emacs, but restart is not implemented yet");
     }
     if matches!(
@@ -3978,6 +4044,7 @@ fn exit_cancelled_gui_startup(status: i32) -> ! {
 fn spawn_gui_evaluator_worker(
     mode: RuntimeMode,
     startup: StartupOptions,
+    daemon_notifier: Option<neovm_core::emacs_core::eval::DaemonNotifier>,
     startup_reply: neomacs_display_runtime::render_thread::InitialWindowReply,
     bootstrap_display: BootstrapDisplayConfig,
     font_observer: neomacs_display_runtime::font_defaults::FontDefaultsObserver,
@@ -4003,6 +4070,7 @@ fn spawn_gui_evaluator_worker(
                 run_gui_evaluator_worker(
                     mode,
                     startup,
+                    daemon_notifier,
                     startup_reply,
                     bootstrap_display,
                     font_observer,
@@ -4124,6 +4192,7 @@ fn maybe_report_jit_stats(_evaluator: &Context) {}
 fn run_gui_evaluator_worker(
     mode: RuntimeMode,
     startup: StartupOptions,
+    daemon_notifier: Option<neovm_core::emacs_core::eval::DaemonNotifier>,
     startup_reply: neomacs_display_runtime::render_thread::InitialWindowReply,
     bootstrap_display: BootstrapDisplayConfig,
     mut font_observer: neomacs_display_runtime::font_defaults::FontDefaultsObserver,
@@ -4136,6 +4205,9 @@ fn run_gui_evaluator_worker(
 ) -> EvaluatorExit {
     let mut evaluator = create_startup_evaluator_for_mode(mode, &startup);
     evaluator.setup_thread_locals();
+    if let Some(options) = &startup.daemon {
+        evaluator.configure_daemon(options.name.clone(), daemon_notifier);
+    }
     // The native event loop publishes connection metadata before it creates
     // any window. Install it synchronously so init.el can query the display
     // even before the command loop starts draining native input events.
@@ -4152,13 +4224,17 @@ fn run_gui_evaluator_worker(
     let BootstrapDisplayKind::Gui { identity, .. } = &bootstrap_display.kind else {
         unreachable!("GUI evaluator requires graphical bootstrap configuration");
     };
-    evaluator.initialize_graphical_terminal(identity.clone());
+    if startup.daemon.is_none() {
+        evaluator.initialize_graphical_terminal(identity.clone());
+    }
     let font_display = identity.clone();
     evaluator.set_variable("dump-mode", Value::NIL);
     // GNU's window-system terminal inits do not measure a line speed, they
     // assert one: `baud_rate = 19200' in `x_term_init' (src/xterm.c:32279) and
     // in `pgtk_term_init' (src/pgtkterm.c:7034). Same place, same constant.
-    evaluator.set_variable("baud-rate", Value::fixnum(19200));
+    if startup.daemon.is_none() {
+        evaluator.set_variable("baud-rate", Value::fixnum(19200));
+    }
     load_neomacs_gui_term_layer(&mut evaluator);
     tracing::info!("GUI evaluator context initialized");
 
@@ -4170,6 +4246,10 @@ fn run_gui_evaluator_worker(
         height: 0,
     }));
     let frame_id = bootstrap_gui_startup_terminal(&mut evaluator);
+    if startup.daemon.is_some() {
+        neovm_core::emacs_core::terminal::pure::retire_unattached_initial_terminal(&mut evaluator)
+            .expect("daemon bootstrap reserved the graphical terminal without attached frames");
+    }
     seed_gnu_default_gui_chrome_modes(&mut evaluator);
     configure_gnu_startup_state(&mut evaluator, frame_id, &startup);
     maybe_install_startup_phase_trace(&mut evaluator);
@@ -4336,9 +4416,15 @@ fn run_gui_evaluator_worker(
     // R2 increment C: persist this session's proven-hot JIT leaves before exit
     // (Context still alive on this eval thread; runs BEFORE the shutdown-request
     // early return so it fires on kill-emacs too). No-op unless NEOVM_AOT_PGO set.
-    maybe_drain_aot_pgo(mode, &evaluator);
+    if startup.daemon.is_none() {
+        maybe_drain_aot_pgo(mode, &evaluator);
+    }
 
     if let Some(request) = evaluator.shutdown_request() {
+        if startup.daemon.is_some() {
+            secondary_ttys.close_all();
+            evaluator.close_processes_for_exit();
+        }
         let exit = EvaluatorExit {
             exit_code: request.exit_code,
             restart: request.restart,
@@ -4719,50 +4805,34 @@ pub fn run(mode: RuntimeMode) {
         );
     }
 
-    // Winit can fall back from the environment's preferred Linux backend.
-    // Construct it before font metrics so the bootstrap frame follows the
-    // backend that was actually selected, not a DISPLAY/WAYLAND_DISPLAY guess.
-    let display_identity_resolver =
-        neomacs_display_runtime::display_identity::DisplayIdentityResolver::capture_environment();
-    let gui_event_loop = if startup.frontend == FrontendKind::Gui {
-        Some(build_render_event_loop().unwrap_or_else(|err| {
-            eprintln!("neomacs: failed to build GUI event loop: {err}");
-            std::process::exit(1);
-        }))
-    } else {
-        None
-    };
     let interactivity =
         Interactivity::from_noninteractive(startup.noninteractive || startup.daemon.is_some());
-    let mut gui_font_observer = None;
-    let bootstrap_display = if let Some(event_loop) = gui_event_loop.as_ref() {
-        let observation = event_loop.display_observation();
-        let system_name: String = hostname::get()
-            .map(|name| name.to_string_lossy().replace([' ', '\t'], "-"))
-            .unwrap_or_else(|_| "localhost".into());
-        let identity = event_loop
-            .display_identity(display_identity_resolver, &system_name)
-            .unwrap_or_else(|error| {
-                eprintln!("neomacs: failed to resolve graphical display identity: {error:?}");
+    // Daemons still bootstrap an initial TTY frame. When a client starts one
+    // from a graphical session, retain native hosting on the OS main thread;
+    // the existing startup lifecycle waits without creating a window until
+    // Lisp receives the first graphical frame request.
+    let inherited_display = ["WAYLAND_DISPLAY", "DISPLAY"]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()));
+    let gui_connection = if startup.frontend == FrontendKind::Gui {
+        Some(
+            prepare_gui_connection(interactivity).unwrap_or_else(|error| {
+                eprintln!("neomacs: {error}");
                 std::process::exit(1);
-            });
-        let font_observer =
-            neomacs_display_runtime::font_defaults::observe_font_defaults(identity.backend())
-                .unwrap_or_else(|error| {
-                    eprintln!("neomacs: failed to observe desktop fonts: {error}");
-                    std::process::exit(1);
-                });
-        let mut config = bootstrap_gui_display_config(
-            interactivity,
-            gui_frame_font_scale_from_observation(observation),
-            identity,
-        );
-        config.font_defaults = font_observer.initial().clone();
-        gui_font_observer = Some(font_observer);
-        config
+            }),
+        )
+    } else if startup.daemon.is_some() && !startup.noninteractive && inherited_display {
+        match prepare_gui_connection(interactivity) {
+            Ok(connection) => Some(connection),
+            Err(error) => {
+                // An unavailable inherited display must not prevent ordinary
+                // daemon startup or its TTY/evaluation clients.
+                tracing::warn!(%error, "daemon continuing without graphical hosting");
+                None
+            }
+        }
     } else {
-        debug_assert_eq!(startup.frontend, FrontendKind::Tty);
-        bootstrap_tty_display_config(interactivity)
+        None
     };
     // Optional localhost performance diagnostics server (off unless
     // NEOMACS_DIAGNOSTICS_PORT is set). Started before the GUI/TTY fork; the
@@ -4774,17 +4844,21 @@ pub fn run(mode: RuntimeMode) {
     *DIAG_TASK_RX.lock().unwrap() = Some(diag_task_rx);
     maybe_start_diagnostics(diag_task_tx);
 
-    if startup.frontend == FrontendKind::Gui {
+    if let Some(connection) = gui_connection {
         run_gui_main_thread(
-            gui_event_loop.expect("GUI frontend constructed an event loop"),
+            connection.event_loop,
             mode,
             startup,
-            bootstrap_display,
-            gui_font_observer.expect("GUI frontend captured native font preferences"),
+            daemon_notifier,
+            connection.display,
+            connection.font_observer,
         );
         log_clean_process_exit(process_started_at, &process_args);
         return;
     }
+
+    debug_assert_eq!(startup.frontend, FrontendKind::Tty);
+    let bootstrap_display = bootstrap_tty_display_config(interactivity);
 
     // TTY geometry is in character cells and performs no native font lookup.
     // GUI geometry is prepared once on the evaluator thread instead.

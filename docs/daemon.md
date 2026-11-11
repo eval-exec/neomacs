@@ -1,14 +1,27 @@
-# Headless daemon and clients
+# Daemon and clients
 
 The daemon implementation uses Unix process and socket APIs; its lifecycle
 regressions currently verify Linux. Neomacs can keep its Lisp evaluator running
-without opening a display or using the launching terminal:
+without opening a window or using the launching terminal:
 
 ```sh
 neomacs -Q --daemon=development
 neomacsclient -s development -e '(list (daemonp) noninteractive)'
 neomacsclient -s development -e '(kill-emacs)'
 ```
+
+On Linux, a daemon launched with an available `DISPLAY` or `WAYLAND_DISPLAY`
+hosts that graphical connection while keeping only its initial TTY frame.
+The first graphical client creates the first native window:
+
+```sh
+neomacsclient -a "" -n --create-frame
+```
+
+The window survives a no-wait client's exit. Without `-n`, the client stays
+attached until its frame is deleted. Deleting the last GUI frame leaves the
+daemon available for evaluation, TTY clients, and another GUI client.
+An unavailable inherited display falls back to the existing headless daemon.
 
 `--daemon[=NAME]` and `--bg-daemon[=NAME]` start in the background. The launching
 process succeeds only after initialization, command-line actions and the normal
@@ -164,10 +177,15 @@ startup locks are rejected.
 
 ## Current limitations
 
-- Headless daemons support ordinary evaluation and client TTY frames. Attaching
-  a native graphical frame is not implemented: it requires a separately hosted
-  GUI event loop. Graphical frame requests fail rather than creating an invisible
-  stand-in window. Start ordinary GUI Neomacs for graphical editing.
+- Graphical clients use the native display inherited when the daemon starts.
+  A daemon started without an available display supports evaluation and TTY
+  clients, but cannot later open its first graphical connection. Attaching to
+  another display is also unsupported; such a request must not create a window
+  on the daemon's existing connection. Start a separate daemon from the desired
+  graphical session when another display is needed. Display names must match
+  exactly; equivalent X11 aliases are not resolved. The native connection opens
+  during daemon startup, so the daemon depends on that display remaining alive
+  even before its first graphical client.
 - Automatic startup is for local Unix sockets. TCP clients continue to use the
   existing server-file/authentication path, but do not automatically start a
   local daemon for a missing or unreachable TCP endpoint.

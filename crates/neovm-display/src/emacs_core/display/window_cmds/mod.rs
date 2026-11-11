@@ -7532,19 +7532,17 @@ pub fn builtin_x_create_frame(
 ) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
     expect_args("x-create-frame", &args, 1)?;
-    if eval.daemon().is_some() && eval.display_host.is_none() {
-        return Err(signal(
-            "error",
-            vec![Value::string(
-                "Graphical frames are not yet supported by the headless Neomacs daemon; use a TTY client",
-            )],
-        ));
-    }
     // GNU gui_display_get_arg resolves frame alist, default-frame-alist,
     // then the display resource. Keep explicit nil distinct from absence.
     let explicit = parse_gui_frame_params(args.first());
     let defaults = eval.eval_symbol_by_id(intern("default-frame-alist")).ok();
     let defaults = parse_gui_frame_params(defaults.as_ref());
+    let display = explicit
+        .all
+        .get(&intern("display"))
+        .or_else(|| defaults.all.get(&intern("display")))
+        .copied();
+    super::display::ensure_daemon_graphical_connection(eval, display)?;
     // GNU xfns.c supplies mode-derived defaults through gui_default_parameter
     // at creation, never through redisplay. Preserve explicit nil/zero and
     // default-frame-alist overrides. Child/minibuffer-only frames have no bars.
@@ -7712,7 +7710,15 @@ pub(crate) fn x_create_frame_impl(
         && display_host
             .as_ref()
             .is_some_and(|host| host.opening_gui_frame_pending());
-    let initial_defaults = if opening_frame_adoption {
+    // A daemon can return to its initial TTY frame after its last GUI frame
+    // closes. New top-level GUI frames still need native identity and font
+    // defaults, independently of the one-shot primary-window adoption.
+    let needs_graphical_defaults = parent_id.is_none()
+        && (opening_frame_adoption
+            || frames
+                .selected_frame()
+                .is_some_and(|frame| frame.effective_window_system().is_none()));
+    let initial_defaults = if needs_graphical_defaults {
         display_host
             .as_mut()
             .map(|host| host.prepare_initial_gui_frame())

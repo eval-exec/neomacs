@@ -328,6 +328,15 @@ pub trait DisplayHost {
 
     fn set_gui_resource_database(&mut self, _resources: &str) {}
 
+    /// Admit a logical connection to the graphical display hosted by this process.
+    /// An explicit display must name that connection; None selects the host default.
+    fn graphical_connection_identity(
+        &self,
+        _display: Option<&str>,
+    ) -> Result<Option<neomacs_display_protocol::GraphicalDisplayIdentity>, String> {
+        Ok(None)
+    }
+
     fn gui_resource(&self, _query: &GuiResourceQuery) -> Option<String> {
         None
     }

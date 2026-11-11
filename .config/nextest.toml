@@ -38,13 +38,13 @@ test-threads = 24
 # bootstrap time while still catching real hangs.
 slow-timeout = { period = "600s", terminate-after = 1, grace-period = "0s" }
 
-# Apply memory limit to all tests EXCEPT the real GUI smoke and child-frame
-# animation cases: those spawn a full GUI neomacs (wgpu + Vulkan software
-# rasterizer), and llvmpipe's virtual address-space reservations depend on the
-# ambient driver closure (nextest's LD_LIBRARY_PATH can select a mesa whose
+# Apply memory limit to all tests EXCEPT the real GUI smoke, GUI clients and
+# child-frame animation cases: those spawn a full GUI neomacs (wgpu + Vulkan
+# software rasterizer). llvmpipe's virtual address-space reservations depend on
+# the ambient driver closure (nextest's LD_LIBRARY_PATH can select a mesa whose
 # per-thread VA reservations blow an 8GB RLIMIT_AS, failing pthread_create
 # with EAGAIN). The guardrail exists for unit-test allocation backtraces,
-# not for constraining a spawned production GUI stack. Both files are now
+# not for constraining a spawned production GUI stack. These files are now
 # modules of the gui binary, so match their module prefixes instead of the
 # former per-file binary IDs.
 #
@@ -57,7 +57,7 @@ slow-timeout = { period = "600s", terminate-after = 1, grace-period = "0s" }
 # environment a shipped editor has, so the soak runs outside this guardrail;
 # its own per-scenario SANDBOX_MEM_GB budget bounds RSS instead.
 [[profile.default.scripts]]
-filter = 'not test(/compile_contracts$/) and not (package(neomacs-gui-tests) and (test(~real_gui_smoke::) or test(~child_frame_animation::))) and not (package(neovm-core) and test(=thread_soak::soak))'
+filter = 'not test(/compile_contracts$/) and not (package(neomacs-gui-tests) and (test(~real_gui_smoke::) or test(~neomacsclient_frames::) or test(~child_frame_animation::))) and not (package(neovm-core) and test(=thread_soak::soak))'
 # `prlimit` is a Linux util-linux executable, not a generic Unix interface.
 # macOS is cfg(unix) too, but has no `prlimit`; selecting by the actual host OS
 # keeps hosted native tests executable instead of failing before test startup.

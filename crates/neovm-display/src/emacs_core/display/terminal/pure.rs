@@ -403,6 +403,10 @@ pub fn configure_terminal_runtime(config: impl Into<TerminalRuntimeConfig>) {
         terminal.runtime = runtime;
         terminal.window_system = window_system;
     });
+    // A daemon can reopen this reserved slot after retiring its bootstrap
+    // record. Publish it to the Context registry before a display callback
+    // reactivates the owner and reconciles native records against that registry.
+    terminal_handle_for_id(TERMINAL_ID);
 }
 
 /// GNU `struct terminal.type` for a graphical backend. The backend symbols
@@ -1083,6 +1087,31 @@ fn delete_terminal_record(id: u64) {
             terminal.mark_deleted();
         }
     });
+}
+
+/// Retire the unused primary slot after startup moved the daemon's initial
+/// frame to its own terminal. A later graphical connection owns this slot;
+/// before that connection exists, Lisp must see only the initial terminal.
+pub fn retire_unattached_initial_terminal(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+) -> Result<(), String> {
+    if eval.frame_manager().frame_list().into_iter().any(|id| {
+        eval.frame_manager()
+            .get(id)
+            .is_some_and(|frame| frame.terminal_id == TERMINAL_ID)
+    }) {
+        return Err("reserved graphical terminal still owns a frame".to_owned());
+    }
+    if live_terminal_output_method_for_id(TERMINAL_ID) != Some(TerminalOutputMethod::Initial) {
+        return Err("reserved graphical terminal is not an unused initial terminal".to_owned());
+    }
+    delete_terminal_record(TERMINAL_ID);
+    eval.forget_window_system_keyboard(TERMINAL_ID);
+    eval.command_loop_mut()
+        .keyboard
+        .delete_terminal_kboard(TERMINAL_ID);
+    eval.sync_keyboard_terminal_owner();
+    Ok(())
 }
 
 #[doc(hidden)]

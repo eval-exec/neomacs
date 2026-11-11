@@ -663,6 +663,7 @@ jobs:
       - name: Package shared test runtime
         run: |
           test -x target/release/neomacs
+          test -x target/release/neomacsclient
           test -f target/release/neomacs.pdump
           test -f lisp/international/charscript.el
           test -f lisp/international/charprop.el
@@ -673,6 +674,7 @@ jobs:
           test -f target/release/neomacs.fresh-build-stamp
           tar czf neomacs-test-runtime-linux-x86_64.tar.gz \
             target/release/neomacs \
+            target/release/neomacsclient \
             target/release/neomacs.pdump \
             target/release/neomacs.fresh-build-stamp \
             lisp \
@@ -801,7 +803,7 @@ jobs:
         name: Unpack shared test runtime
         run: |
           tar xzf neomacs-test-runtime-linux-x86_64.tar.gz
-          chmod +x target/release/neomacs
+          chmod +x target/release/neomacs target/release/neomacsclient
           test -f lisp/international/charscript.el
           test -f lisp/international/charprop.el
           test -f target/release/neomacs.fresh-build-stamp

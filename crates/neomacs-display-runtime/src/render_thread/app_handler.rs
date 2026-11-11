@@ -69,6 +69,7 @@ impl ApplicationHandler for RenderApp {
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
         self.handle_about_to_wait(event_loop);
+        flush_native_display_requests(event_loop);
     }
 
     fn proxy_wake_up(&mut self, _event_loop: &dyn ActiveEventLoop) {
@@ -76,6 +77,48 @@ impl ApplicationHandler for RenderApp {
         // pending native events. Running that pass here creates/destroys popup
         // surfaces in the middle of winit's dispatch iteration.
     }
+}
+
+/// Commit native requests issued by this batch before the event loop sleeps.
+/// Winit's X11 window drop queues DestroyWindow without flushing it. Its
+/// separate event-reader thread can already be blocked in XPeekEvent, leaving
+/// the last destroyed window visible until some unrelated request flushes.
+fn flush_native_display_requests(event_loop: &dyn ActiveEventLoop) {
+    #[cfg(target_os = "linux")]
+    {
+        use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
+        use std::sync::OnceLock;
+        use x11_dl::xlib;
+
+        let Ok(display) = event_loop.display_handle() else {
+            return;
+        };
+        let RawDisplayHandle::Xlib(display) = display.as_raw() else {
+            return;
+        };
+        let Some(display) = display.display else {
+            return;
+        };
+        static XLIB: OnceLock<Option<xlib::Xlib>> = OnceLock::new();
+        let Some(xlib) = XLIB
+            .get_or_init(|| match xlib::Xlib::open() {
+                Ok(xlib) => Some(xlib),
+                Err(error) => {
+                    tracing::warn!(%error, "cannot flush native X11 display requests");
+                    None
+                }
+            })
+            .as_ref()
+        else {
+            return;
+        };
+        // SAFETY: the active event loop owns this live Xlib display, and this
+        // callback runs on its native owner thread after window/surface drops.
+        // XFlush sends pending requests without waiting for server responses.
+        unsafe { (xlib.XFlush)(display.as_ptr().cast()) };
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = event_loop;
 }
 
 impl Drop for RenderApp {
