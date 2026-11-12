@@ -1397,3 +1397,6 @@ fn entity_listing_spacing_constraint_accepts_absent_catalog_spacing() {
         assert_eq!(listed[0].matched.metadata.spacing, None);
     }
 }
+
+#[path = "accepted_listing_review_test.rs"]
+mod accepted_listing_review_test;

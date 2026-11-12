@@ -2603,10 +2603,30 @@ impl DisplayHost for ListingFontDisplayHost {
         &mut self,
         query: neovm_eval::emacs_core::eval::FontSpecListQuery,
         _: Option<neovm_eval::emacs_core::eval::FontSpecListQuery>,
-        _: Option<usize>,
-    ) -> Result<Vec<neovm_eval::emacs_core::eval::ListedFontEntity>, String> {
+        maximum: Option<usize>,
+        mut filter: Option<&mut neovm_eval::emacs_core::eval::FontListFilter<'_>>,
+    ) -> Result<
+        Vec<neovm_eval::emacs_core::eval::ListedFontEntity>,
+        neovm_eval::emacs_core::eval::FontListError,
+    > {
+        let driver = query.driver;
         self.queries.borrow_mut().push(query);
-        Ok(self.fonts.clone())
+        let mut accepted = Vec::new();
+        for listed in &self.fonts {
+            if maximum.is_some_and(|maximum| accepted.len() >= maximum) {
+                break;
+            }
+            if driver.is_some_and(|driver| listed.driver != Some(driver)) {
+                continue;
+            }
+            if let Some(filter) = filter.as_mut() {
+                if !filter(listed).map_err(neovm_eval::emacs_core::eval::FontListError::Filter)? {
+                    continue;
+                }
+            }
+            accepted.push(listed.clone());
+        }
+        Ok(accepted)
     }
 }
 
@@ -2674,20 +2694,17 @@ fn x_list_fonts_returns_sized_catalog_names_and_filters_ignored_fonts_before_lim
     let names = list_to_vec(&names).unwrap();
     assert_eq!(names.len(), 1);
     assert!(names[0].as_utf8_str().unwrap().contains("-bold-"));
-    let uninterned = Value::make_symbol("ftcrhb");
+    let uninterned = Value::from_sym_id(neovm_value::intern::intern_uninterned("ftcrhb"));
     let driver_spec = font_spec(vec![Value::keyword("type"), uninterned]).unwrap();
-    let entities = list_fonts(&mut eval, vec![driver_spec, Value::NIL, Value::fixnum(1)]).unwrap();
-    let entity = list_to_vec(&entities).unwrap()[0];
-    assert_eq!(
-        font_get(vec![entity, Value::keyword("type")]).unwrap(),
-        Value::symbol("ftcrhb")
-    );
+    let entities =
+        list_fonts_for_pattern(&mut eval, vec![driver_spec, Value::NIL, Value::fixnum(1)]).unwrap();
+    assert!(list_to_vec(&entities).unwrap().is_empty());
     assert_eq!(
         queries.borrow().last().unwrap().driver,
         uninterned.as_bare_symbol_id()
     );
     let unrestricted = font_spec(vec![Value::keyword("type"), Value::NIL]).unwrap();
-    list_fonts(&mut eval, vec![unrestricted, Value::NIL, Value::fixnum(1)]).unwrap();
+    list_fonts_for_pattern(&mut eval, vec![unrestricted, Value::NIL, Value::fixnum(1)]).unwrap();
     assert_eq!(
         queries.borrow().last().unwrap().driver,
         None,
@@ -2697,7 +2714,7 @@ fn x_list_fonts_returns_sized_catalog_names_and_filters_ignored_fonts_before_lim
     let spec = font_spec(Vec::new()).unwrap();
     for count in [0, -1] {
         assert!(
-            list_fonts(
+            list_fonts_for_pattern(
                 &mut eval,
                 vec![spec, Value::NIL, Value::fixnum(count), Value::T]
             )
@@ -2706,7 +2723,7 @@ fn x_list_fonts_returns_sized_catalog_names_and_filters_ignored_fonts_before_lim
         );
     }
     assert!(
-        list_fonts(
+        list_fonts_for_pattern(
             &mut eval,
             vec![spec, Value::NIL, Value::fixnum(1), Value::T]
         )
@@ -2720,5 +2737,301 @@ fn x_list_fonts_returns_sized_catalog_names_and_filters_ignored_fonts_before_lim
             )]
         )
         .is_err()
+    );
+}
+
+#[test]
+fn listing_xlfd_abbreviations_and_name_replacement_follow_gnu() {
+    crate::test_utils::init_test_tracing();
+    for (name, family, size) in [
+        ("-*-Hack-*", "Hack", Value::NIL),
+        ("*-Hack-bold-r-*-13-*", "Hack", Value::fixnum(13)),
+        (
+            "-SRC-Some-Hyphen-Family-regular-normal-normal-*-13-*-*-*-*-0-iso10646-1",
+            "Some-Hyphen-Family",
+            Value::fixnum(13),
+        ),
+        (
+            "-SRC-Hack-regular-normal-normal-*-[1 0 0 13]-*-*-*-*-0-iso10646-1",
+            "Hack",
+            Value::fixnum(13),
+        ),
+    ] {
+        let spec = font_spec(vec![Value::keyword("name"), Value::string(name)]).unwrap();
+        assert_eq!(
+            font_get(vec![spec, Value::keyword("family")]).unwrap(),
+            Value::symbol(family),
+            "{name}"
+        );
+        assert_eq!(
+            font_get(vec![spec, Value::keyword("size")]).unwrap(),
+            size,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn listing_xlfd_replacement_clears_overwritten_slots_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let spec = font_spec(vec![
+        Value::keyword("family"),
+        Value::string("Hack"),
+        Value::keyword("foundry"),
+        Value::string("SRC"),
+        Value::keyword("size"),
+        Value::fixnum(17),
+        Value::keyword("dpi"),
+        Value::fixnum(96),
+        Value::keyword("name"),
+        Value::string("-*-*-*-*-*-*-*-*-*-*-*-*-*-*"),
+    ])
+    .unwrap();
+    for key in ["family", "foundry", "dpi"] {
+        assert!(
+            font_get(vec![spec, Value::keyword(key)]).unwrap().is_nil(),
+            "{key}"
+        );
+    }
+    assert_eq!(
+        font_get(vec![spec, Value::keyword("size")]).unwrap(),
+        Value::fixnum(17)
+    );
+}
+
+#[test]
+fn listing_passes_ignored_policy_to_host_before_registration() {
+    crate::test_utils::init_test_tracing();
+    struct AcceptanceHost;
+    impl DisplayHost for AcceptanceHost {
+        fn realize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
+            Ok(())
+        }
+        fn resize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
+            Ok(())
+        }
+        fn list_fonts_for_spec(
+            &mut self,
+            _: neovm_eval::emacs_core::eval::FontSpecListQuery,
+            _: Option<neovm_eval::emacs_core::eval::FontSpecListQuery>,
+            maximum: Option<usize>,
+            filter: Option<&mut neovm_eval::emacs_core::eval::FontListFilter<'_>>,
+        ) -> Result<
+            Vec<neovm_eval::emacs_core::eval::ListedFontEntity>,
+            neovm_eval::emacs_core::eval::FontListError,
+        > {
+            assert_eq!(
+                maximum,
+                Some(1),
+                "accepted MAX must reach the host unchanged"
+            );
+            assert!(
+                filter.is_some(),
+                "ignored policy must precede native handle registration"
+            );
+            Err(neovm_eval::emacs_core::eval::FontListError::Filter(signal(
+                "invalid-regexp",
+                vec![Value::string("bounded-listing-policy")],
+            )))
+        }
+    }
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    ensure_selected_gui_frame(&mut eval);
+    eval.set_display_host(Box::new(AcceptanceHost));
+    eval.set_variable("face-ignored-fonts", Value::list(vec![Value::string("[")]));
+    let actual = list_fonts_for_pattern(
+        &mut eval,
+        vec![font_spec(Vec::new()).unwrap(), Value::NIL, Value::fixnum(1)],
+    )
+    .unwrap_err();
+    let neovm_value::error::FlowRef::Signal(signal) = actual.kind() else {
+        panic!("expected original invalid-regexp signal");
+    };
+    assert_eq!(signal.symbol, intern("invalid-regexp"));
+    assert_eq!(signal.data.len(), 1);
+    assert_eq!(signal.data[0].as_utf8_str(), Some("bounded-listing-policy"));
+}
+
+#[test]
+fn listing_xlfd_numeric_overflow_keeps_gnu_condition_and_original_digits() {
+    crate::test_utils::init_test_tracing();
+    for digits in [
+        "2305843009213693952",
+        "9223372036854775807",
+        "0000002305843009213693952",
+        "9999999999999999999999999999999999999999",
+    ] {
+        let error = font_spec(vec![
+            Value::keyword("name"),
+            Value::string(format!("*-{digits}-*")),
+        ])
+        .unwrap_err();
+        let neovm_value::error::FlowRef::Signal(signal) = error.kind() else {
+            panic!("expected overflow signal");
+        };
+        assert_eq!(signal.symbol, intern("overflow-error"), "{digits}");
+        assert_eq!(signal.data.len(), 1, "{digits}");
+        assert_eq!(signal.data[0].as_utf8_str(), Some(digits));
+    }
+    // Complete XLFD foundry/family fields are forced symbols, even when
+    // their spelling is a digit-only token beyond the numeric limit.
+    let literal = font_spec(vec![Value::keyword("name"), Value::string("-9999999999999999999999999999999999999999-9223372036854775808-regular-normal-normal-*-13-*-*-*-*-0-iso10646-1")]).unwrap();
+    assert_eq!(
+        font_get(vec![literal, Value::keyword("foundry")]).unwrap(),
+        Value::symbol("9999999999999999999999999999999999999999")
+    );
+    assert_eq!(
+        font_get(vec![literal, Value::keyword("family")]).unwrap(),
+        Value::symbol("9223372036854775808")
+    );
+    // Pinned GNU's signed accumulation followed by fixnum tagging wraps this
+    // exact i64 boundary to zero; do not replace it with a generic parse error.
+    let wrapped = font_spec(vec![
+        Value::keyword("name"),
+        Value::string("*-9223372036854775808-*"),
+    ])
+    .unwrap();
+    assert_eq!(
+        font_get(vec![wrapped, Value::keyword("size")]).unwrap(),
+        Value::fixnum(0)
+    );
+    for digits in [
+        "2305843009213693951",
+        "0000002305843009213693951",
+        "0000000000000000000000000",
+    ] {
+        assert!(
+            font_spec(vec![
+                Value::keyword("name"),
+                Value::string(format!("*-{digits}-*"))
+            ])
+            .is_ok(),
+            "{digits}"
+        );
+    }
+}
+
+#[test]
+fn x_list_fonts_terminal_frame_skips_the_process_wide_catalog() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let tty = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+    eval.frame_manager_mut()
+        .get_mut(tty)
+        .unwrap()
+        .set_window_system(None);
+    eval.set_variable("initial-window-system", Value::symbol("x"));
+    let queries = Rc::new(RefCell::new(Vec::new()));
+    eval.set_display_host(Box::new(ListingFontDisplayHost {
+        queries: Rc::clone(&queries),
+        fonts: Vec::new(),
+    }));
+    let names =
+        crate::emacs_core::display::builtin_x_list_fonts(&mut eval, vec![Value::string("*")])
+            .unwrap();
+    assert!(names.is_nil());
+    assert!(
+        queries.borrow().is_empty(),
+        "a TTY must not enumerate the GUI host catalog"
+    );
+    for (args, predicate) in [
+        (vec![Value::NIL], "stringp"),
+        (
+            vec![
+                Value::string("*"),
+                Value::NIL,
+                Value::NIL,
+                Value::fixnum(-1),
+            ],
+            "wholenump",
+        ),
+        (
+            vec![
+                Value::string("*"),
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+                Value::T,
+            ],
+            "fixnump",
+        ),
+        (
+            vec![Value::string("*"), Value::NIL, Value::fixnum(42)],
+            "frame-live-p",
+        ),
+    ] {
+        match crate::emacs_core::display::builtin_x_list_fonts(&mut eval, args).kinded() {
+            Err(FlowKind::Signal(sig)) => {
+                assert_eq!(sig.symbol_name(), "wrong-type-argument");
+                assert_eq!(sig.data[0], Value::symbol(predicate));
+            }
+            other => panic!("expected {predicate}, got {other:?}"),
+        }
+    }
+    assert!(x_list_fonts(&mut eval, vec![Value::string("-invalid-")]).is_err());
+    assert!(queries.borrow().is_empty());
+}
+
+#[test]
+fn x_list_fonts_tty_designator_defaults_to_selected_frame_and_clears_face() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let tty = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+    eval.frame_manager_mut()
+        .get_mut(tty)
+        .unwrap()
+        .set_window_system(None);
+    let buffer = eval.edit.buffers.create_buffer("*font-frame-routing*");
+    let gui = eval
+        .frame_manager_mut()
+        .create_frame("GUI font frame", 800, 600, buffer);
+    eval.frame_manager_mut()
+        .get_mut(gui)
+        .unwrap()
+        .set_window_system(Some(Value::symbol("neo")));
+    eval.frame_manager_mut().select_frame(tty);
+    let queries = Rc::new(RefCell::new(Vec::new()));
+    eval.set_display_host(Box::new(ListingFontDisplayHost {
+        queries: Rc::clone(&queries),
+        fonts: Vec::new(),
+    }));
+    x_list_fonts(
+        &mut eval,
+        vec![Value::string("*"), Value::NIL, Value::make_frame(gui.0)],
+    )
+    .unwrap();
+    assert_eq!(queries.borrow().last().unwrap().specification.frame_id, gui);
+    x_list_fonts(
+        &mut eval,
+        vec![Value::string("*"), Value::NIL, Value::make_frame(tty.0)],
+    )
+    .unwrap();
+    assert_eq!(
+        queries.borrow().len(),
+        1,
+        "selected TTY still has no native catalog"
+    );
+    eval.frame_manager_mut().select_frame(gui);
+    x_list_fonts(
+        &mut eval,
+        vec![
+            Value::string("*"),
+            Value::T,
+            Value::make_frame(tty.0),
+            Value::fixnum(1),
+            Value::fixnum(-1),
+        ],
+    )
+    .unwrap();
+    let captured = queries.borrow();
+    assert_eq!(captured.len(), 2);
+    assert_eq!(captured[1].specification.frame_id, gui);
+    assert_eq!(
+        captured[1].size, None,
+        "TTY redirection clears FACE size matching"
+    );
+    assert_eq!(
+        captured[1].average_width, None,
+        "WIDTH is ignored once FACE is cleared"
     );
 }

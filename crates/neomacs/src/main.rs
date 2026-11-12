@@ -1288,40 +1288,140 @@ fn font_entity_query(
     query
 }
 
+fn font_listing_pixel_size(
+    sizing: FontSizing,
+    size: neovm_core::emacs_core::eval::FontOpeningSize,
+) -> u32 {
+    use neovm_core::emacs_core::eval::FontOpeningSize;
+    match size {
+        FontOpeningSize::SmallestUsable => 0,
+        FontOpeningSize::Points { size, dpi } => {
+            neomacs_layout_engine::font::sizing::points_to_layout_pixels(
+                size.get() as f32,
+                dpi.map(|dpi| dpi.get() as f32)
+                    .unwrap_or_else(|| sizing.layout_dpi().trunc()),
+            ) as u32
+        }
+        size @ FontOpeningSize::Pixels(_) | size @ FontOpeningSize::NamedDefault { .. } => {
+            sizing.font_opening_size_px(size).get()
+        }
+    }
+}
+
+fn font_listing_entity_query(
+    request: &FontSpecResolveRequest,
+) -> Option<neomacs_layout_engine::font::resolver::FontEntityQuery> {
+    if let Some(family) = request.family.as_ref() {
+        neomacs_layout_engine::font_backend::FontFamilyName::new(family.as_utf8_str()?)?;
+    }
+    Some(font_entity_query(request))
+}
+
+fn core_font_entity_metadata_match(
+    identity: &neomacs_display_protocol::font::ResolvedFontIdentity,
+    metadata: &neomacs_layout_engine::font_backend::PlatformFontMetadata,
+    registry: Option<&str>,
+    coverage_handle: Option<FontEntityHandle>,
+) -> ResolvedFontSpecMatch {
+    ResolvedFontSpecMatch {
+        coverage_handle,
+        family: LispString::from_utf8(&metadata.family),
+        foundry: metadata.foundry.as_deref().map(LispString::from_utf8),
+        registry: registry.map(LispString::from_utf8),
+        file: identity.file_path.as_deref().map(LispString::from_utf8),
+        weight: metadata.weight.map(FontWeight::from_css_weight),
+        slant: Some(metadata.slant),
+        width: metadata.width,
+        spacing: metadata.spacing,
+        postscript_name: identity
+            .postscript_name
+            .as_deref()
+            .map(LispString::from_utf8),
+    }
+}
+
 fn core_font_entity_match(
     catalog: &mut FontEntityCatalog,
     entity: neomacs_layout_engine::font::resolver::ResolvedFontEntity,
 ) -> ResolvedFontSpecMatch {
-    ResolvedFontSpecMatch {
-        coverage_handle: catalog.intern(entity.matched.clone()),
-        family: LispString::from_utf8(entity.matched.family()),
-        foundry: entity
-            .matched
-            .metadata
-            .foundry
-            .as_ref()
-            .map(|foundry| LispString::from_utf8(foundry)),
-        registry: entity
-            .registry
-            .as_ref()
-            .map(|registry| LispString::from_utf8(registry)),
-        file: entity
-            .matched
-            .identity
-            .file_path
-            .as_ref()
-            .map(|file| LispString::from_utf8(file)),
-        weight: entity.matched.weight().map(FontWeight::from_css_weight),
-        slant: Some(entity.matched.slant()),
-        width: entity.matched.metadata.width,
-        spacing: entity.matched.metadata.spacing,
-        postscript_name: entity
-            .matched
-            .identity
-            .postscript_name
-            .as_ref()
-            .map(|name| LispString::from_utf8(name)),
+    core_font_entity_metadata_match(
+        &entity.matched.identity,
+        &entity.matched.metadata,
+        entity.registry.as_deref(),
+        catalog.intern(entity.matched.clone()),
+    )
+}
+
+fn core_listed_font_entity_preview(
+    entity: &neomacs_layout_engine::font::resolver::ListedFontCandidate,
+) -> neovm_core::emacs_core::eval::ListedFontEntity {
+    use neomacs_layout_engine::font_backend::PlatformFontSize;
+    let size = entity.candidate.metadata.size;
+    neovm_core::emacs_core::eval::ListedFontEntity {
+        font: core_font_entity_metadata_match(
+            &entity.candidate.identity,
+            &entity.candidate.metadata,
+            entity.registry.as_deref(),
+            None,
+        ),
+        driver: entity.driver,
+        pixel_size: match size {
+            PlatformFontSize::Scalable => Some(0),
+            PlatformFontSize::Fixed { device_ppem_26_6 } => Some(device_ppem_26_6 >> 6),
+            PlatformFontSize::Unknown => None,
+        },
+        average_width: (size == PlatformFontSize::Scalable).then_some(0),
     }
+}
+
+fn core_visit_listed_font_entities(
+    service: &FontMetricsService,
+    catalog: &mut FontEntityCatalog,
+    query: &neomacs_layout_engine::font::resolver::FontEntityQuery,
+    constraints: &neomacs_layout_engine::font::resolver::FontEntityListConstraints,
+    prefer: Option<(
+        &neomacs_layout_engine::font::resolver::FontEntityQuery,
+        &neomacs_layout_engine::font::resolver::FontEntityListConstraints,
+    )>,
+    maximum: Option<usize>,
+    mut filter: Option<&mut neovm_core::emacs_core::eval::FontListFilter<'_>>,
+) -> Result<
+    Vec<neovm_core::emacs_core::eval::ListedFontEntity>,
+    neovm_core::emacs_core::eval::FontListError,
+> {
+    use neomacs_layout_engine::font_backend::PlatformFontSize;
+    use neovm_core::emacs_core::eval::FontListError;
+    let mut result = Vec::new();
+    let mut accepts =
+        |entity: &neomacs_layout_engine::font::resolver::ListedFontCandidate| match filter.as_mut()
+        {
+            Some(filter) => filter(&core_listed_font_entity_preview(entity)),
+            None => Ok(true),
+        };
+    service
+        .try_visit_font_entities(
+            query,
+            constraints,
+            prefer,
+            maximum,
+            Some(&mut accepts),
+            &mut |entity| {
+                let size = entity.matched.metadata.size;
+                result.push(neovm_core::emacs_core::eval::ListedFontEntity {
+                    driver: entity.driver,
+                    pixel_size: match size {
+                        PlatformFontSize::Scalable => Some(0),
+                        PlatformFontSize::Fixed { device_ppem_26_6 } => Some(device_ppem_26_6 >> 6),
+                        PlatformFontSize::Unknown => None,
+                    },
+                    average_width: (size == PlatformFontSize::Scalable).then_some(0),
+                    font: core_font_entity_match(catalog, entity),
+                });
+                std::ops::ControlFlow::Continue(())
+            },
+        )
+        .map_err(FontListError::Filter)?;
+    Ok(result)
 }
 
 /// Entity selections survive ordinary cache invalidation. Repeated selections
@@ -2580,9 +2680,18 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         request: neovm_core::emacs_core::eval::FontSpecListQuery,
         prefer: Option<neovm_core::emacs_core::eval::FontSpecListQuery>,
         maximum: Option<usize>,
-    ) -> Result<Vec<neovm_core::emacs_core::eval::ListedFontEntity>, String> {
+        filter: Option<&mut neovm_core::emacs_core::eval::FontListFilter<'_>>,
+    ) -> Result<
+        Vec<neovm_core::emacs_core::eval::ListedFontEntity>,
+        neovm_core::emacs_core::eval::FontListError,
+    > {
         use neomacs_layout_engine::font::resolver::FontEntityListConstraints;
-        use neomacs_layout_engine::font_backend::PlatformFontSize;
+        if maximum == Some(0) {
+            return Ok(Vec::new());
+        }
+        let Some(query) = font_listing_entity_query(&request.specification) else {
+            return Ok(Vec::new());
+        };
         let constraints =
             |query: &neovm_core::emacs_core::eval::FontSpecListQuery| FontEntityListConstraints {
                 driver: query.driver,
@@ -2598,40 +2707,36 @@ impl DisplayHost for PrimaryWindowDisplayHost {
                     .map(str::to_owned),
                 pixel_size: query
                     .size
-                    .map(|size| self.font_sizing.font_opening_size_px(size).get()),
+                    .map(|size| font_listing_pixel_size(self.font_sizing, size)),
                 spacing: query.spacing,
                 average_width: query.average_width,
             };
-        let listed_constraints = constraints(&request);
+        let primary = constraints(&request);
         let preferred = prefer
             .as_ref()
             .map(|query| (font_entity_query(&query.specification), constraints(query)));
-        let query = font_entity_query(&request.specification);
-        let entities = self.synchronized_font_metrics().list_font_entities(
+        let _ = self.synchronized_font_metrics();
+        let Some(service) = self.font_metrics.as_ref() else {
+            return Ok(Vec::new());
+        };
+        // Other native adapters retain their preexisting empty listing path.
+        // This change verifies Linux Fontconfig enumeration only.
+        if service.font_backend_kind()
+            != neomacs_display_protocol::font::FontBackendKind::Fontconfig
+        {
+            return Ok(Vec::new());
+        }
+        core_visit_listed_font_entities(
+            service,
+            &mut self.font_entities,
             &query,
-            &listed_constraints,
+            &primary,
             preferred
                 .as_ref()
                 .map(|(query, constraints)| (query, constraints)),
             maximum,
-        );
-        Ok(entities
-            .into_iter()
-            .map(|entity| {
-                let pixel_size = match entity.matched.metadata.size {
-                    PlatformFontSize::Scalable => Some(0),
-                    PlatformFontSize::Fixed { device_ppem_26_6 } => Some(device_ppem_26_6 >> 6),
-                    PlatformFontSize::Unknown => None,
-                };
-                neovm_core::emacs_core::eval::ListedFontEntity {
-                    driver: entity.driver,
-                    average_width: (entity.matched.metadata.size == PlatformFontSize::Scalable)
-                        .then_some(0),
-                    pixel_size,
-                    font: core_font_entity_match(&mut self.font_entities, entity),
-                }
-            })
-            .collect())
+            filter,
+        )
     }
 
     fn font_character_coverage(

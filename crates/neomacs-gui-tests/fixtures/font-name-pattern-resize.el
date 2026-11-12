@@ -62,16 +62,27 @@
             (error "Resolved larger font did not resize metrics: %S"
                    (list small-height small-width
                          (frame-char-height) (frame-char-width))))
-          (font672-write
-           `((passed . t) (small-name . ,small) (large-name . ,large)
-             (family-name . ,family-name) (normalized-name . ,normalized)
-             (case-insensitive . ,(equal small case-name))
-             (maximum-zero . ,zero-is-nil)
-             (negative-condition . ,(symbol-name negative))
-             (missing-foundry . ,missing-is-nil)
-             (sizes . [13 21]) (small-height . ,small-height)
-             (small-width . ,small-width) (large-height . ,(frame-char-height))
-             (large-width . ,(frame-char-width)))))
+          (let ((large-height (frame-char-height))
+                (large-width (frame-char-width)))
+            (set-frame-font small t t)
+            (redisplay t)
+            (unless (and (= (frame-char-height) small-height)
+                         (= (frame-char-width) small-width))
+              (error "Restoring smaller font did not restore metrics: %S"
+                     (list small-height small-width
+                           (frame-char-height) (frame-char-width))))
+            (font672-write
+             `((passed . t) (small-name . ,small) (large-name . ,large)
+               (family-name . ,family-name) (normalized-name . ,normalized)
+               (case-insensitive . ,(equal small case-name))
+               (maximum-zero . ,zero-is-nil)
+               (negative-condition . ,(symbol-name negative))
+               (missing-foundry . ,missing-is-nil)
+               (sizes . [13 21 13]) (small-height . ,small-height)
+               (small-width . ,small-width) (large-height . ,large-height)
+               (large-width . ,large-width)
+               (restored-height . ,(frame-char-height))
+               (restored-width . ,(frame-char-width))))))
         (when (fboundp 'neomacs--write-frame-snapshot)
           (neomacs--write-frame-snapshot
            (getenv "NEOMACS_GUI_FRAME_SNAPSHOT_JSON") nil 'json))

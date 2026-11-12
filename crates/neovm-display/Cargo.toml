@@ -37,6 +37,7 @@ neovm-edit = { path = "../neovm-edit", default-features = false }
 neovm-text = { path = "../neovm-text", default-features = false }
 neovm-eval = { path = "../neovm-eval", default-features = false }
 enum-map.workspace = true
+libc.workspace = true
 neomacs-display-protocol.workspace = true
 neomacs-video-model.workspace = true
 num_enum.workspace = true

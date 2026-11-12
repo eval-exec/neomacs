@@ -443,7 +443,9 @@ pub(crate) struct LiveFrameFontResolution {
 }
 
 pub(crate) fn frame_font_request_from_named_font_string(name: &str) -> Option<FrameFontRequest> {
-    let spec = font_spec_from_name(name.trim())?;
+    // Internal frame selection has an Option boundary, so it cannot deliver
+    // Lisp conditions; malformed candidates remain an ordinary selection miss.
+    let spec = font_spec_from_name(name.trim()).ok()??;
     frame_font_request_from_value(&spec)
 }
 
@@ -2036,37 +2038,46 @@ const XLFD_REGISTRY: usize = 12;
 const XLFD_ENCODING: usize = 13;
 const XLFD_LAST: usize = 14;
 
-/// Port of GNU `font_parse_xlfd` (src/font.c): parse a hyphen-delimited XLFD
-/// name such as `"-misc-fixed-medium-r-normal--13-120-..."`.  Only the
-/// fully-specified (14-field) form is handled here, which covers the names
-/// `font-spec :name` is given in practice.  Returns `false` on parse failure.
-fn font_parse_xlfd(elems: &mut Vec<Value>, name: &str) -> bool {
-    if name.is_empty() {
-        return false;
-    }
-    if name == "*" {
-        return true;
-    }
+mod xlfd_fields;
 
-    // Split into fields on '-'.  GNU treats a leading "*-" specially; for the
-    // fully-specified form we simply split on '-'.
-    let fields: Vec<&str> = name.split('-').collect();
-
-    // A fully specified XLFD has a leading '-', so split() yields an empty
-    // first element followed by exactly 14 fields.
-    if fields.len() != XLFD_LAST + 1 || !fields[0].is_empty() {
-        return false;
+/// GNU first parses ordinary XLFD fields, expands abbreviated wildcard
+/// fields by their contents, and retries surplus dashes as a family name.
+fn font_parse_xlfd(elems: &mut Vec<Value>, name: &str) -> Result<bool, Flow> {
+    for retry_family in [false, true] {
+        if retry_family && name.bytes().filter(|byte| *byte == b'-').count() <= XLFD_LAST {
+            break;
+        }
+        let Some(fields) = xlfd_fields::fields(name, retry_family)? else {
+            continue;
+        };
+        let mut parsed = elems.clone();
+        if font_parse_xlfd_fields(&mut parsed, &fields)? {
+            *elems = parsed;
+            return Ok(true);
+        }
     }
-    let f = &fields[1..]; // 14 fields, indices XLFD_FOUNDRY..XLFD_ENCODING
+    Ok(false)
+}
 
-    let intern_field = |idx: usize| -> &str { f[idx] };
+fn font_parse_xlfd_fields(
+    elems: &mut Vec<Value>,
+    fields: &xlfd_fields::ParsedXlfdFields,
+) -> Result<bool, Flow> {
+    let (f, abbreviated) = match fields {
+        xlfd_fields::ParsedXlfdFields::Complete(fields) => (fields, false),
+        xlfd_fields::ParsedXlfdFields::Abbreviated(fields) => (fields, true),
+    };
+    let intern_field = |idx: usize| -> &str { &f[idx] };
+    let numeric = xlfd_fields::number;
 
-    // Foundry / family (interned as symbols).
-    if !f[XLFD_FOUNDRY].is_empty() && f[XLFD_FOUNDRY] != "*" {
-        font_parse_set(elems, "foundry", Value::symbol(f[XLFD_FOUNDRY]));
-    }
-    if !f[XLFD_FAMILY].is_empty() && f[XLFD_FAMILY] != "*" {
-        font_parse_set(elems, "family", Value::symbol(f[XLFD_FAMILY]));
+    // GNU overwrites these slots even when a replacement name has wildcards.
+    for (index, key) in [(XLFD_FOUNDRY, "foundry"), (XLFD_FAMILY, "family")] {
+        let value = if f[index] == "*" {
+            Value::NIL
+        } else {
+            Value::symbol(&f[index])
+        };
+        font_parse_set(elems, key, value);
     }
 
     // Weight / slant / width style fields.
@@ -2076,11 +2087,11 @@ fn font_parse_xlfd(elems: &mut Vec<Value>, name: &str) -> bool {
         (XLFD_SWIDTH, "width"),
     ] {
         let word = intern_field(xlfd_idx);
-        if !word.is_empty() && word != "*" {
+        if word != "*" {
             let Some(style) = font_style_table_for_key(key)
                 .and_then(|table| font_style_symbol_from_name(table, word))
             else {
-                return false;
+                return Ok(false);
             };
             font_parse_set(elems, key, Value::symbol(style));
         }
@@ -2089,9 +2100,15 @@ fn font_parse_xlfd(elems: &mut Vec<Value>, name: &str) -> bool {
     // Adstyle: GNU stores the interned field unconditionally for a fully
     // specified XLFD (an empty field becomes the empty symbol `##`).
     let adstyle = intern_field(XLFD_ADSTYLE);
-    if adstyle != "*" {
-        font_parse_set(elems, "adstyle", Value::symbol(adstyle));
-    }
+    font_parse_set(
+        elems,
+        "adstyle",
+        if adstyle == "*" {
+            Value::NIL
+        } else {
+            Value::symbol(adstyle)
+        },
+    );
 
     // Registry-encoding: "registry-encoding" combined.
     let registry = intern_field(XLFD_REGISTRY);
@@ -2099,63 +2116,92 @@ fn font_parse_xlfd(elems: &mut Vec<Value>, name: &str) -> bool {
     if !(registry == "*" && encoding == "*") {
         let combined = format!("{registry}-{encoding}");
         font_parse_set(elems, "registry", Value::symbol(combined));
+    } else if !abbreviated {
+        // The abbreviated path retains an earlier registry when both fields
+        // are unspecified; the complete path writes nil unconditionally.
+        font_parse_set(elems, "registry", Value::NIL);
     }
 
     // Size: prefer pixel size (fixnum), else point size / 10 (float).
     let pixel = intern_field(XLFD_PIXEL);
-    if let Ok(px) = pixel.parse::<i64>() {
-        if px > 0 {
-            font_parse_set(elems, "size", Value::fixnum(px));
-        }
+    if !abbreviated && let Some(px) = xlfd_fields::matrix_size(pixel).filter(|size| *size >= 0) {
+        font_parse_set(elems, "size", Value::fixnum(px));
+    } else if let Some(px) = numeric(pixel)? {
+        font_parse_set(elems, "size", Value::fixnum(px));
     } else {
         let point = intern_field(XLFD_POINT);
-        if let Ok(pt) = point.parse::<i64>() {
+        if !abbreviated && let Some(pt) = xlfd_fields::matrix_size(point).filter(|size| *size >= 0)
+        {
+            font_parse_set(elems, "size", Value::make_float(pt as f64));
+        } else if let Some(pt) = numeric(point)? {
             font_parse_set(elems, "size", Value::make_float(pt as f64 / 10.0));
         }
     }
 
     // DPI (resolution-y).
     let resy = intern_field(XLFD_RESY);
-    if let Ok(dpi) = resy.parse::<i64>() {
-        font_parse_set(elems, "dpi", Value::fixnum(dpi));
+    if !abbreviated || numeric(intern_field(XLFD_RESX))?.is_some() {
+        if let Some(dpi) = numeric(resy)? {
+            font_parse_set(elems, "dpi", Value::fixnum(dpi));
+        } else if resy == "*" {
+            font_parse_set(elems, "dpi", Value::NIL);
+        } else if !abbreviated {
+            return Ok(false);
+        }
     }
-    let _ = intern_field(XLFD_RESX);
-
     // Spacing letter (p/d/m/c).
     let spacing = intern_field(XLFD_SPACING);
-    if let Some(sp) = FontSpacing::from_symbol_name(spacing) {
-        font_parse_set(elems, "spacing", Value::fixnum(i64::from(sp.gnu_code())));
+    if spacing != "*" {
+        let value = numeric(spacing)?
+            .filter(|value| *value <= FontSpacing::MAX_GNU_CODE)
+            .or_else(|| {
+                (spacing.len() == 1)
+                    .then(|| {
+                        FontSpacing::from_symbol_name(&spacing.to_ascii_lowercase())
+                            .map(|value| i64::from(value.gnu_code()))
+                    })
+                    .flatten()
+            });
+        let Some(value) = value else {
+            return Ok(false);
+        };
+        font_parse_set(elems, "spacing", Value::fixnum(value));
     }
 
     // Average width.
     let avg = intern_field(XLFD_AVGWIDTH).trim_start_matches('~');
-    if let Ok(n) = avg.parse::<i64>() {
+    if let Some(n) = numeric(avg)? {
         font_parse_set(elems, "avgwidth", Value::fixnum(n));
+    } else if !abbreviated {
+        if avg != "*" {
+            return Ok(false);
+        }
+        font_parse_set(elems, "avgwidth", Value::NIL);
     }
 
-    true
+    Ok(true)
 }
 
 /// Port of GNU `font_parse_name` (src/font.c): dispatch a font NAME string to
 /// the XLFD or fontconfig parser and store the parsed properties into ELEMS
 /// (a font-spec property vector).  Returns `false` if the name cannot be parsed.
-fn font_parse_name(elems: &mut Vec<Value>, name: &str) -> bool {
+fn font_parse_name(elems: &mut Vec<Value>, name: &str) -> Result<bool, Flow> {
     if name.starts_with('-') || name.contains('*') || name.contains('?') {
         font_parse_xlfd(elems, name)
     } else {
-        font_parse_fcname(elems, name)
+        Ok(font_parse_fcname(elems, name))
     }
 }
 
 /// Build a font-spec from a font NAME string (GNU `font_spec_from_name`):
 /// parse NAME, then record it under `:name`.  Returns `None` on parse failure.
-pub(crate) fn font_spec_from_name(name: &str) -> Option<Value> {
+pub(crate) fn font_spec_from_name(name: &str) -> Result<Option<Value>, Flow> {
     let mut elems = vec![Value::keyword(FONT_SPEC_TAG)];
-    if !font_parse_name(&mut elems, name) {
-        return None;
+    if !font_parse_name(&mut elems, name)? {
+        return Ok(None);
     }
     font_parse_set(&mut elems, "name", Value::string(name.to_string()));
-    Some(Value::vector(elems))
+    Ok(Some(Value::vector(elems)))
 }
 
 /// `(font-face-attributes FONT &optional FRAME)` -- return a plist of face
@@ -2170,7 +2216,7 @@ pub(crate) fn font_face_attributes(args: Vec<Value>) -> EvalResult {
 
     let font = if args[0].is_string() {
         let name = font_string_text(&args[0]).unwrap_or_default();
-        match font_spec_from_name(&name) {
+        match font_spec_from_name(&name)? {
             Some(spec) => spec,
             None => {
                 return Err(signal(
@@ -2345,7 +2391,7 @@ pub(crate) fn font_spec(args: Vec<Value>) -> EvalResult {
                     vec![Value::symbol("stringp"), *value],
                 ));
             };
-            if !font_parse_name(&mut elems, &name) {
+            if !font_parse_name(&mut elems, &name)? {
                 return Err(signal(
                     "error",
                     vec![Value::string(format!("Invalid font name: {name}"))],
@@ -2430,6 +2476,25 @@ pub(crate) fn list_fonts(
 ) -> EvalResult {
     expect_min_args("list-fonts", &args, 1)?;
     expect_max_args("list-fonts", &args, 4)?;
+    if !is_font_spec(&args[0]) {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("font-spec"), args[0]],
+        ));
+    }
+    expect_optional_frame_designator_in_state(&eval.frame_manager(), args.get(1))?;
+    Ok(Value::NIL)
+}
+
+/// Enumerate the native entities used to resolve an XLFD pattern.
+/// Kept private to `x-list-fonts`; the public `list-fonts` surface retains
+/// its preexisting behavior until its broader property contracts are added.
+fn list_fonts_for_pattern(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("list-fonts", &args, 1)?;
+    expect_max_args("list-fonts", &args, 4)?;
     let frame_id = find_font_frame_id(eval, args.get(1))?;
     if !is_font_spec(&args[0]) {
         return Err(signal(
@@ -2465,50 +2530,70 @@ pub(crate) fn list_fonts(
     };
     let query = font_list_query(eval, &args[0], frame_id)?;
     let ignored = eval.variable_value_or_nil(intern("face-ignored-fonts"));
+    let patterns: Vec<_> = list_iter(ignored)
+        .filter_map(|pattern| pattern.as_lisp_string().cloned())
+        .collect();
     let Some(host) = eval.display_host.as_mut() else {
         return Ok(Value::NIL);
     };
-    // Ignored-font filtering precedes the caller's limit, just as GNU's
-    // font_list_entities precedes Flist_fonts' truncation.
-    let fonts = host
-        .list_fonts_for_spec(query, prefer, if ignored.is_nil() { maximum } else { None })
-        .map_err(|error| signal("error", vec![Value::string(error)]))?;
-    let mut entities = Vec::new();
-    for listed in fonts {
-        let entity = build_font_entity_for_spec_match(&listed.font);
-        if let Some(driver) = listed.driver {
-            font_put_entity_field(entity, "type", Value::from_sym_id(driver));
-        }
-        if let Some(size) = listed.pixel_size {
-            font_put_entity_field(entity, "size", Value::fixnum(i64::from(size)));
-        }
-        if let Some(width) = listed.average_width {
-            font_put_entity_field(entity, "avgwidth", Value::fixnum(i64::from(width)));
-        } else {
-            font_put_entity_field(entity, "avgwidth", Value::NIL);
-        }
+    let mut accept = |listed: &neovm_eval::emacs_core::eval::ListedFontEntity| {
+        let entity = listed_font_entity(listed);
         let name = font_xlfd_name(vec![entity, Value::NIL, Value::T])?;
-        let mut is_ignored = false;
-        for pattern in list_iter(ignored) {
-            if let (Some(pattern), Some(name)) = (pattern.as_lisp_string(), name.as_utf8_str()) {
-                is_ignored =
-                    neovm_text::emacs_core::regex::predicate_match_ignore_case(pattern, name)
-                        .map_err(|error| {
-                            signal("invalid-regexp", vec![Value::string(error.to_string())])
-                        })?;
-                if is_ignored {
-                    break;
+        if let Some(name) = name.as_utf8_str() {
+            for pattern in &patterns {
+                if neovm_text::emacs_core::regex::predicate_match_ignore_case(pattern, name)
+                    .map_err(|error| {
+                        signal("invalid-regexp", vec![Value::string(error.to_string())])
+                    })?
+                {
+                    return Ok(false);
                 }
             }
         }
-        if !is_ignored {
-            entities.push(entity);
-        }
-        if maximum.is_some_and(|maximum| entities.len() >= maximum) {
-            break;
-        }
+        Ok(true)
+    };
+    let filter: Option<&mut neovm_eval::emacs_core::eval::FontListFilter<'_>> =
+        if patterns.is_empty() {
+            None
+        } else {
+            Some(&mut accept)
+        };
+    // GNU filters ignored names before truncation. The host applies this
+    // metadata-only predicate before retaining an accepted candidate handle.
+    let fonts = host
+        .list_fonts_for_spec(query, prefer, maximum, filter)
+        .map_err(|error| match error {
+            neovm_eval::emacs_core::eval::FontListError::Backend(message) => {
+                signal("error", vec![Value::string(message)])
+            }
+            neovm_eval::emacs_core::eval::FontListError::Filter(flow) => flow,
+        })?;
+    Ok(Value::list(
+        fonts
+            .iter()
+            .take(maximum.unwrap_or(usize::MAX))
+            .map(listed_font_entity)
+            .collect(),
+    ))
+}
+
+fn listed_font_entity(listed: &neovm_eval::emacs_core::eval::ListedFontEntity) -> Value {
+    let entity = build_font_entity_for_spec_match(&listed.font);
+    if let Some(driver) = listed.driver {
+        font_put_entity_field(entity, "type", Value::from_sym_id(driver));
     }
-    Ok(Value::list(entities))
+    if let Some(size) = listed.pixel_size {
+        font_put_entity_field(entity, "size", Value::fixnum(i64::from(size)));
+    }
+    font_put_entity_field(
+        entity,
+        "avgwidth",
+        listed
+            .average_width
+            .map(|width| Value::fixnum(i64::from(width)))
+            .unwrap_or(Value::NIL),
+    );
+    entity
 }
 
 // Entities are immutable through Lisp font-put, but listing builds their
@@ -2578,26 +2663,46 @@ pub(crate) fn x_list_fonts(
             vec![Value::symbol("stringp"), args[0]],
         )
     })?;
-    if let Some(maximum) = args.get(3).filter(|value| !value.is_nil()) {
-        if maximum.as_fixnum().is_none_or(|count| count < 0) {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("wholenump"), *maximum],
-            ));
-        }
+    if let Some(maximum) = args.get(3).filter(|value| !value.is_nil())
+        && maximum.as_fixnum().is_none_or(|count| count < 0)
+    {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("wholenump"), *maximum],
+        ));
     }
-    if let Some(width) = args.get(4).filter(|value| !value.is_nil()) {
-        if !width.is_fixnum() {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("fixnump"), *width],
-            ));
-        }
+    if let Some(width) = args.get(4).filter(|value| !value.is_nil())
+        && !width.is_fixnum()
+    {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("fixnump"), *width],
+        ));
     }
-    let frame_id = find_font_frame_id(eval, args.get(2))?;
-    let spec = font_spec_from_name(&pattern)
+    let requested_frame = find_font_frame_id(eval, args.get(2))?;
+    let terminal_target = eval
+        .frame_manager()
+        .get(requested_frame)
+        .is_some_and(|frame| {
+            FrameFontRealization::for_frame(frame) == FrameFontRealization::Terminal
+        });
+    // GNU clears FACE and defaults FRAME to the selected frame when the
+    // requested frame is a TTY (xfaces.c:Fx_list_fonts).
+    let frame_id = if terminal_target {
+        super::window_cmds::ensure_selected_frame_id(eval)
+    } else {
+        requested_frame
+    };
+    let spec = font_spec_from_name(&pattern)?
         .ok_or_else(|| signal("error", vec![Value::string("Invalid font name"), args[0]]))?;
-    if args.get(1).is_some_and(|face| !face.is_nil()) {
+    // A process-wide Fontconfig service does not give a TTY font drivers.
+    // Keep argument and font-name validation before observing that miss.
+    if eval.frame_manager().get(frame_id).is_some_and(|frame| {
+        FrameFontRealization::for_frame(frame) == FrameFontRealization::Terminal
+    }) {
+        return Ok(Value::NIL);
+    }
+    if !terminal_target && args.get(1).is_some_and(|face| !face.is_nil()) {
         let face_name = args.get(1).and_then(font_value_text_lisp_string);
         let table = runtime_face_table_from_frame_lisp_faces(eval, frame_id, false);
         let face = table.resolve(
@@ -2637,11 +2742,11 @@ pub(crate) fn x_list_fonts(
             Value::fixnum(average_width.saturating_mul(width)),
         ])?;
     }
-    let entities = list_fonts(
+    let entities = list_fonts_for_pattern(
         eval,
         vec![
             spec,
-            args.get(2).copied().unwrap_or(Value::NIL),
+            Value::make_frame(frame_id.0),
             args.get(3).copied().unwrap_or(Value::NIL),
             spec,
         ],
@@ -4187,7 +4292,7 @@ pub(crate) fn font_info(
             // Share the GNU font-name parser with font-spec, including
             // fontconfig/Pango names and XLFD pixel/point units.
             let text = font_string_text(&name).expect("validated font name");
-            let spec = font_spec_from_name(&text)
+            let spec = font_spec_from_name(&text)?
                 .ok_or_else(|| signal("error", vec![Value::string("Invalid font name"), name]))?;
             let size = named_font_opening_size(
                 spec,
