@@ -874,6 +874,9 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
     args: &[Value],
     mut run_before_setup_hook: impl FnMut(&mut Context) -> EvalResult,
 ) -> EvalResult {
+    // `read-string`, `completing-read` and `yes-or-no-p` reach the command-loop
+    // minibuffer here without `builtin_read_from_minibuffer_in_runtime`'s check.
+    barf_if_interaction_inhibited(shared)?;
     let prompt = expect_lisp_string(&args[0])?;
     let prompt_display = crate::emacs_core::emacs_char::to_utf8_lossy(prompt.as_bytes());
     let initial_input = reader_initial_contents(args.get(1))?;

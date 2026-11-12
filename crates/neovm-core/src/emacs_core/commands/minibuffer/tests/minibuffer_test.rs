@@ -2242,6 +2242,9 @@ fn inhibit_interaction_stops_reads_before_they_read_input() {
            (list (lambda () (read-from-minibuffer "foo: "))
                  (lambda () (read-string "foo: "))
                  (lambda () (read-no-blanks-input "foo: "))
+                 (lambda ()
+                   (let ((completing-read-function nil))
+                     (completing-read "foo: " '("a"))))
                  (lambda () (yes-or-no-p "Foo?"))
                  (lambda () (y-or-n-p "Foo?"))
                  #'read-char #'read-event #'read-char-exclusive))
@@ -2255,7 +2258,33 @@ fn inhibit_interaction_stops_reads_before_they_read_input() {
             "OK ((inhibited-interaction error) \"User interaction while inhibited\"",
             " ((inhibited-interaction) (inhibited-interaction) (inhibited-interaction)",
             " (inhibited-interaction) (inhibited-interaction) (inhibited-interaction)",
-            " (inhibited-interaction) (inhibited-interaction)) inhibit)"
+            " (inhibited-interaction) (inhibited-interaction) (inhibited-interaction)) inhibit)"
         )
+    );
+}
+
+/// With input coming from the command loop (here a keyboard macro), the readers that don't go
+/// through `read-from-minibuffer`'s own check still stop before reading, as in GNU, where they
+/// all reach `read_minibuf` through `Fread_from_minibuffer`.
+#[test]
+fn inhibit_interaction_stops_command_loop_minibuffer_reads() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::new_context();
+    ev.eval_str("(setq inhibit-interaction t)")
+        .expect("set inhibit-interaction");
+    ev.begin_executing_kbd_macro_runtime(vec![Value::char('a'), Value::char('\r')]);
+    let result = ev
+        .eval_str(
+            r#"(mapcar (lambda (read) (condition-case err (funcall read) (error err)))
+                (list (lambda () (read-string "foo: "))
+                      (lambda ()
+                        (let ((completing-read-function nil))
+                          (completing-read "foo: " '("a"))))
+                      (lambda () (yes-or-no-p "Foo?"))))"#,
+        )
+        .expect("eval reads");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&result),
+        "((inhibited-interaction) (inhibited-interaction) (inhibited-interaction))"
     );
 }
