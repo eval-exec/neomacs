@@ -18324,6 +18324,7 @@ fn utf8_signature_process_continues_after_eol_writeback() {
           (while (and (process-live-p process) (< (float-time) deadline))
             (accept-process-output process 0.01))
           (when (process-live-p process) (error "Signature process timeout"))
+          (accept-process-output process 0.01)
           (list (with-current-buffer buffer (string-to-list (buffer-string)))
                 (car (process-coding-system process))))
         (when (process-live-p process) (delete-process process))
@@ -18338,7 +18339,9 @@ fn custom_signature_post_hook_holds_trailing_dos_cr() {
     let cat = find_bin("cat");
     let result = eval_one(&format!(
         r#"(progn
-      (defun neovm-native-sig-observe (size) size)
+      (defvar neovm-native-sig-observed nil)
+      (defun neovm-native-sig-observe (size)
+        (when (> size 0) (setq neovm-native-sig-observed t)) size)
       (define-coding-system 'neovm-native-sig-fixed "Signature and DOS hook"
         :coding-type 'utf-8 :mnemonic ?U :charset-list '(unicode) :bom t
         :eol-type 'dos :post-read-conversion 'neovm-native-sig-observe)
@@ -18359,10 +18362,63 @@ fn custom_signature_post_hook_holds_trailing_dos_cr() {
            (while (and (process-live-p process) (< (float-time) deadline))
              (accept-process-output process 0.01))
            (when (process-live-p process) (error "Signature CR timeout"))
+           (accept-process-output process 0.01)
            (list first (with-current-buffer buffer (string-to-list (buffer-string)))
-                 (car (process-coding-system process))))
+                 (car (process-coding-system process)) neovm-native-sig-observed))
          (when (process-live-p process) (delete-process process))
          (kill-buffer buffer))))"#
     ));
-    assert_eq!(result, "OK ((65) (65 10 66) neovm-native-sig-fixed)");
+    assert_eq!(result, "OK ((65) (65 10 66) neovm-native-sig-fixed t)");
+}
+
+#[test]
+fn empty_captured_stderr_keeps_nil_bom_priority_identity() {
+    crate::test_utils::init_test_tracing();
+    let cat = find_bin("cat");
+    let result = eval_one(&format!(
+        r#"(progn
+      (define-coding-system 'neovm-empty-stderr-car "Nil signature target"
+        :coding-type 'utf-8 :mnemonic ?U :charset-list '(unicode)
+        :bom (cons 'utf-8-with-signature 'utf-8))
+      (setcar (coding-system-get 'neovm-empty-stderr-car :bom) nil)
+      (coding-system-put 'neovm-empty-stderr-car :bom nil)
+      (set-coding-system-priority 'neovm-empty-stderr-car)
+      (with-temp-buffer
+        (let ((destination (current-buffer)) (coding-system-for-read 'undecided)
+              (coding-system-for-write 'no-conversion))
+          (with-temp-buffer
+            (set-buffer-multibyte nil) (insert (unibyte-string 239 187 191 65 13 10))
+            (call-process-region (point-min) (point-max) "{cat}" nil destination nil)))
+        (list (string-to-list (buffer-string)) last-coding-system-used)))"#
+    ));
+    assert_eq!(
+        result,
+        "OK ((4194287 4194235 4194239 65 10) neovm-empty-stderr-car-dos)"
+    );
+}
+
+#[test]
+fn a_wholly_empty_child_keeps_its_configured_auto_coding() {
+    crate::test_utils::init_test_tracing();
+    let sh = find_bin("sh");
+    let result = eval_one(&format!(
+        r#"(progn
+      (define-coding-system 'neovm-empty-child-auto "Empty child auto coding"
+        :coding-type 'utf-8 :mnemonic ?U :charset-list '(unicode)
+        :bom (cons 'utf-8-with-signature 'utf-8))
+      (setcar (coding-system-get 'neovm-empty-child-auto :bom) nil)
+      (coding-system-put 'neovm-empty-child-auto :bom nil)
+      (set-coding-system-priority 'neovm-empty-child-auto)
+      (mapcar
+        (lambda (coding)
+          (with-temp-buffer
+            (let ((coding-system-for-read coding) (coding-system-for-write 'no-conversion))
+              (call-process "{sh}" nil t nil "-c" ":"))
+            (list (string-to-list (buffer-string)) last-coding-system-used)))
+        '(utf-8-auto neovm-empty-child-auto undecided)))"#
+    ));
+    assert_eq!(
+        result,
+        "OK ((nil utf-8-auto) (nil neovm-empty-child-auto) (nil undecided))"
+    );
 }

@@ -532,26 +532,19 @@ pub fn coding_name_requires_detection(
     crate::emacs_core::coding::read_detection::requires_detection(coding_systems, coding_system)
 }
 
-/// GNU's `detect_coding` (src/coding.c:6503-6759) reduced to its one lasting
-/// effect: the coding system a decode of BYTES will actually run with.
+/// The reported coding identity selected by GNU's `detect_coding`.
 ///
-/// `detect_coding` does not merely answer a question -- it REPLACES the coding
-/// system, `setup_coding_system (found, coding)` (:6751), and then re-applies
-/// the end-of-line type the caller had specified (:6752-6753).  So a decode
-/// that started at `undecided` ends at `utf-8` with its eol still to be
-/// resolved by `decode_eol`, and one that started at `undecided-dos` ends at
-/// `utf-8-dos` outright.
+/// This name-only compatibility API does not describe the effective decoder.
+/// A non-nil selected target replaces the setup, but a nil BOM target in the
+/// priority walk can change only the reported category identity while retaining
+/// the original decoder. Consequently `Some(name)` need not mean a decoder
+/// rebase. `None` means the reported identity was left alone.
 ///
-/// `None` is GNU's nil `found`, which leaves the name alone.  That is not an
-/// error case: it is the normal outcome for pure-ASCII bytes, because
-/// `detect_coding`'s whole body is guarded by `null_byte_found ||
-/// eight_bit_found || coding->head_ascii < coding->src_bytes ||
-/// detect_info.found` (:6596-6599).  Measured under GNU 31.0.90, a subprocess
-/// whose first chunk is `a CRLF b CRLF` reports `undecided-dos` -- the eol half
-/// moved and the character half did not -- and a later non-ASCII chunk still
-/// moves it on to `utf-8-dos`.
-/// This context-free entry uses the default nil global NUL-inhibition setting;
-/// evaluator-driven conversions read their dynamic binding at detection time.
+/// Callers that decode bytes must use the typed
+/// [`detected_coding_name_with_null_policy`] result and preserve its setup
+/// operation through [`decode_process_run_in_context`]. This convenience entry
+/// uses the default nil global NUL-inhibition setting; evaluator-driven reads
+/// pass their live dynamic flag to the typed API.
 #[doc(hidden)]
 pub fn detected_coding_name(
     coding_systems: &crate::emacs_core::coding::CodingSystemManager,

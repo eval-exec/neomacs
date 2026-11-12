@@ -5266,8 +5266,8 @@ fn detect_coding_systems(
 /// byte, and a decode that borrowed the reporting tail answered
 /// `no-conversion` for every UTF-16 signature.  They cannot be confused for one
 /// another by accident any more, because they no longer have the same result
-/// type -- this one answers ONE base coding system or GNU's nil, and the
-/// reporting one answers a Lisp list.
+/// type: this one distinguishes decoder replacement, category-identity-only
+/// change, and an unchanged setup; the reporting one answers a Lisp list.
 ///
 /// The result distinguishes full setup from a category-id change that retains
 /// the original decoder. EOL resolution belongs to the contextual decode after
