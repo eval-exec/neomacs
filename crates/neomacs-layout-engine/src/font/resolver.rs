@@ -132,6 +132,7 @@ pub struct FontEntityListConstraints {
     pub foundry: Option<String>,
     pub adstyle: Option<String>,
     pub pixel_size: Option<u32>,
+    pub dpi: Option<u32>,
     pub spacing: Option<i32>,
     pub average_width: Option<i32>,
 }
@@ -262,32 +263,43 @@ impl FontResolver {
     /// assumes Fontconfig on CoreText or DirectWrite builds.
     pub fn resolve_entity(&self, query: &FontEntityQuery) -> Option<ResolvedFontEntity> {
         let candidate_query = self.entity_candidate_query(query);
-        let selected = match query.selection {
-            FontSpecSelection::Enumerate => self.select_entity_candidates(
-                self.backend.list_candidates(&candidate_query),
-                query,
-                &candidate_query,
-                FontSpecSelection::Enumerate,
-            ),
-            FontSpecSelection::DriverMatch => self.match_entity_driver(&candidate_query, query),
-            FontSpecSelection::OpenBySpec => self
-                .select_entity_candidates(
+        let selected =
+            match query.selection {
+                FontSpecSelection::Enumerate => self.select_entity_candidates(
                     self.backend.list_candidates(&candidate_query),
                     query,
                     &candidate_query,
-                    FontSpecSelection::OpenBySpec,
-                )
-                .or_else(|| {
-                    // GNU font_load_for_lface first honors explicit listing
-                    // constraints; on a miss, font_matching_entity replaces
-                    // the style slots with font_open_by_spec's normal attrs.
-                    let mut preferences = candidate_query.clone();
-                    preferences.requested_weight = 400;
-                    preferences.requested_slant = FontSlant::Normal;
-                    preferences.requested_width = FontWidth::Normal;
-                    self.match_entity_driver(&preferences, query)
-                }),
-        }?;
+                    FontSpecSelection::Enumerate,
+                ),
+                FontSpecSelection::DriverMatch => self.match_entity_driver(&candidate_query, query),
+                FontSpecSelection::OpenBySpec => self
+                    .select_entity_candidates(
+                        self.backend.list_candidates(&candidate_query),
+                        query,
+                        &candidate_query,
+                        FontSpecSelection::OpenBySpec,
+                    )
+                    .or_else(|| {
+                        // GNU font_load_for_lface first honors explicit listing
+                        // constraints; on a miss, font_matching_entity replaces
+                        // the style slots with font_open_by_spec's normal attrs.
+                        let mut preferences = candidate_query.clone();
+                        preferences.requested_weight = 400;
+                        preferences.requested_slant = FontSlant::Normal;
+                        preferences.requested_width = FontWidth::Normal;
+                        self.match_entity_driver(&preferences, query)
+                            .filter(|matched| {
+                                // Native finalization can supply a previously
+                                // unknown name; style fallback must preserve the
+                                // requested identity once that name is available.
+                                query.postscript_name.as_ref().is_none_or(|requested| {
+                                    matched.identity.postscript_name.as_ref().is_some_and(
+                                        |actual| actual.eq_ignore_ascii_case(requested),
+                                    )
+                                })
+                            })
+                    }),
+            }?;
         Some(ResolvedFontEntity {
             matched: selected,
             registry: Some("iso10646-1".to_owned()),
@@ -420,6 +432,18 @@ impl FontResolver {
                         metadata.width,
                         metadata.size,
                     )
+                    .map(|score| {
+                        // Native listing exposes no DPI and fixed entities
+                        // have no average-width metadata. GNU scores either
+                        // mismatch only for a fixed entity with preferred size.
+                        if matches!(metadata.size, PlatformFontSize::Fixed { .. })
+                            && (constraints.dpi.is_some() || constraints.average_width.is_some())
+                        {
+                            score.with_size_metadata_mismatch()
+                        } else {
+                            score
+                        }
+                    })
                 } else {
                     Some(candidate_style_selection_score(
                         requested_weight,
@@ -510,6 +534,7 @@ impl FontResolver {
             required: RequiredFontCoverage::Any,
             charset_ranges,
             languages,
+            explicit_language: query.language.clone(),
             requested_weight: query.weight.unwrap_or(400),
             requested_slant: query.slant.unwrap_or(FontSlant::Normal),
             requested_width: query.width.unwrap_or(FontWidth::Normal),
@@ -638,6 +663,7 @@ impl FontResolver {
             required: RequiredFontCoverage::Any,
             charset_ranges: Vec::new(),
             languages: Vec::new(),
+            explicit_language: None,
             requested_weight,
             requested_slant,
             requested_width,
@@ -686,6 +712,7 @@ impl FontResolver {
             required: RequiredFontCoverage::Any,
             charset_ranges: Vec::new(),
             languages: Vec::new(),
+            explicit_language: None,
             requested_weight: 400,
             requested_slant: FontSlant::Normal,
             requested_width: FontWidth::Normal,
@@ -961,6 +988,7 @@ impl FontResolver {
                 required: RequiredFontCoverage::Character(policy.ch),
                 charset_ranges: policy.charset_ranges.clone(),
                 languages: policy.languages.clone(),
+                explicit_language: policy.explicit_language.clone(),
                 requested_weight: policy.weight,
                 requested_slant: policy.slant,
                 requested_width: policy.width,
@@ -1018,6 +1046,7 @@ struct CapturedCharacterPolicy {
     families: CapturedFontFamilyPolicy,
     charset_ranges: Vec<(u32, u32)>,
     languages: Vec<String>,
+    explicit_language: Option<String>,
     weight: u16,
     slant: FontSlant,
     width: FontWidth,
@@ -1040,6 +1069,7 @@ impl CapturedCharacterPolicy {
             families: FontFamilySource::for_spec(family, spec).capture(),
             charset_ranges: Vec::new(),
             languages: Vec::new(),
+            explicit_language: None,
             weight,
             slant,
             width,
@@ -1053,6 +1083,7 @@ impl CapturedCharacterPolicy {
     fn with_spec(mut self, spec: super::policy::FontPolicySpec<'_>) -> Self {
         let constraints = GnuFontPolicy::constraints_for_names(&spec, self.ch);
         self.charset_ranges = constraints.coverage().ranges().to_vec();
+        self.explicit_language = spec.language.as_deref().map(str::to_owned);
         self.languages = constraints
             .languages()
             .iter()

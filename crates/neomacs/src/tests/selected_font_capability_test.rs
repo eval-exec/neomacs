@@ -386,3 +386,161 @@ fn listed_named_file_instance_preserves_handle_when_materialization_enriches_axe
         Some(handle)
     );
 }
+
+fn bitmap_descriptor_fixture(size: u32) -> neomacs_layout_engine::font_backend::PlatformFontMatch {
+    let mut font = native_catalog_font("native:bitmap-descriptor");
+    // Descriptor-state fixture only: no claim that these placeholder bytes
+    // contain two rasterizable strikes. Real bitmap finalization is tested below.
+    font.metadata.size = neomacs_layout_engine::font_backend::PlatformFontSize::Fixed {
+        device_ppem_26_6: size * 64,
+    };
+    font
+}
+
+#[test]
+fn listed_bitmap_strikes_keep_distinct_handles_and_canonical_interning() {
+    let mut catalog = FontEntityCatalog::default();
+    let small = bitmap_descriptor_fixture(16);
+    let large = bitmap_descriptor_fixture(32);
+    let small_handle = list_catalog_font(&mut catalog, listed_catalog_font(&small))
+        .coverage_handle
+        .unwrap();
+    let large_handle = list_catalog_font(&mut catalog, listed_catalog_font(&large))
+        .coverage_handle
+        .unwrap();
+    assert_ne!(
+        small_handle, large_handle,
+        "strike size is part of an exact entity descriptor"
+    );
+    assert_eq!(
+        list_catalog_font(&mut catalog, listed_catalog_font(&small)).coverage_handle,
+        Some(small_handle)
+    );
+    assert_eq!(
+        list_catalog_font(&mut catalog, listed_catalog_font(&large)).coverage_handle,
+        Some(large_handle)
+    );
+    assert_eq!(catalog.intern(small.clone()), Some(small_handle));
+    assert_eq!(catalog.intern(large.clone()), Some(large_handle));
+    assert_eq!(
+        catalog.get(small_handle).unwrap().metadata.size,
+        small.metadata.size
+    );
+    assert_eq!(
+        catalog.get(large_handle).unwrap().metadata.size,
+        large.metadata.size
+    );
+}
+
+#[test]
+fn listed_bitmap_promotion_rejects_a_different_strike_in_both_states() {
+    let mut catalog = FontEntityCatalog::default();
+    let small = bitmap_descriptor_fixture(16);
+    let large = bitmap_descriptor_fixture(32);
+    let handle = list_catalog_font(&mut catalog, listed_catalog_font(&small))
+        .coverage_handle
+        .unwrap();
+    assert!(
+        !catalog.promote(handle, large.clone()),
+        "discovered entities require the selected strike"
+    );
+    assert!(catalog.promote(handle, small));
+    assert!(
+        !catalog.promote(handle, large),
+        "materialized entities retain their selected strike"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn real_bitmap_materialization_preserves_selected_strike_metadata() {
+    use neomacs_layout_engine::font_backend::PlatformFontSize;
+    let path = neomacs_test_fonts::spleen_2_2_0().otb();
+    let mut font = file_catalog_font(path.to_str().unwrap(), 0, Vec::new());
+    font.metadata.size = PlatformFontSize::Fixed {
+        device_ppem_26_6: 16 * 64,
+    };
+    let candidate = listed_catalog_font(&font);
+    let resolved = FontMetricsService::new()
+        .materialize_font_candidate(candidate.candidate.clone())
+        .expect("exact pinned bitmap file materializes");
+    assert_eq!(resolved.metadata.size, font.metadata.size);
+    let mut catalog = FontEntityCatalog::default();
+    let handle = list_catalog_font(&mut catalog, candidate)
+        .coverage_handle
+        .unwrap();
+    assert!(catalog.promote(handle, resolved));
+    assert_eq!(
+        catalog.get(handle).unwrap().metadata.size,
+        font.metadata.size
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn named_file_materialization_before_listing_reuses_its_validated_discovery_handle() {
+    let file = neomacs_test_fonts::noto_sans_mono_variable()
+        .to_str()
+        .unwrap();
+    let discovered = file_catalog_font(file, 0x0001_0000, Vec::new());
+    let resolved = FontMetricsService::new()
+        .materialize_font_candidate(listed_catalog_font(&discovered).candidate)
+        .expect("actual named instance materializes before listing");
+    assert!(!resolved.identity.variation_coords.is_empty());
+    let mut catalog = FontEntityCatalog::default();
+    let handle = catalog.intern(resolved.clone()).unwrap();
+    let listed = list_catalog_font(&mut catalog, listed_catalog_font(&discovered));
+    assert_eq!(
+        listed.coverage_handle,
+        Some(handle),
+        "validated named instance must preserve its handle in either call order"
+    );
+    assert_eq!(catalog.get(handle), Some(&resolved));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn named_file_explicit_axis_override_does_not_claim_unresolved_named_handle() {
+    use neomacs_display_protocol::font::{FontVariationCoord, ResolvedFontIdentity};
+    let file = neomacs_test_fonts::noto_sans_mono_variable()
+        .to_str()
+        .unwrap();
+    let discovered = file_catalog_font(file, 0x0001_0000, Vec::new());
+    let mut overridden = FontMetricsService::new()
+        .materialize_font_candidate(listed_catalog_font(&discovered).candidate)
+        .expect("actual named instance materializes");
+    let mut axes = overridden.identity.variation_coords.as_slice().to_vec();
+    assert!(!axes.is_empty());
+    let weight = axes
+        .iter_mut()
+        .find(|axis| axis.tag() == u32::from_be_bytes(*b"wght"))
+        .expect("pinned variable font has a weight axis");
+    *weight = FontVariationCoord::try_new(
+        weight.tag(),
+        if weight.value() < 500.0 {
+            weight.value() + 1.0
+        } else {
+            weight.value() - 1.0
+        },
+    )
+    .expect("finite explicit weight coordinate");
+    overridden.identity =
+        ResolvedFontIdentity::from_file_with_variations(file, 0x0001_0000, None, axes);
+    let mut catalog = FontEntityCatalog::default();
+    let overridden_handle = catalog.intern(overridden.clone()).unwrap();
+    let listed = list_catalog_font(&mut catalog, listed_catalog_font(&discovered));
+    assert_ne!(
+        listed.coverage_handle,
+        Some(overridden_handle),
+        "a native selector alone does not prove explicit axis equivalence"
+    );
+    let mut listed_first = FontEntityCatalog::default();
+    let raw_handle = list_catalog_font(&mut listed_first, listed_catalog_font(&discovered))
+        .coverage_handle
+        .unwrap();
+    let explicit_handle = listed_first.intern(overridden).unwrap();
+    assert_ne!(
+        explicit_handle, raw_handle,
+        "listing first must not let an explicit override claim the raw named descriptor"
+    );
+}

@@ -1,4 +1,8 @@
 use super::*;
+#[path = "postscript_fallback_review_test.rs"]
+mod postscript_fallback_review_test;
+#[path = "preferred_size_metadata_review_test.rs"]
+mod preferred_size_metadata_review_test;
 use crate::font_backend::{
     FontFamilyName, PlatformFontCandidate, PlatformFontCandidateLocator, PlatformFontDesignMetrics,
     PlatformFontMetadata, PlatformFontSize,
@@ -1753,4 +1757,26 @@ fn entity_listing_preference_scores_later_candidates_before_limit() {
         3,
         "sorting observes every eligible candidate's capability"
     );
+}
+
+#[test]
+fn entity_listing_distinguishes_raw_unicode_registry_names_from_legacy_case_patterns() {
+    let resolver = FontResolver::new(Box::new(ScopedListingBackend {
+        candidates: vec![candidate("Fixture Sans", 400, FontSlant::Normal, 100)],
+    }));
+    for (registry, expected) in [
+        ("iso10646-1", 1),
+        ("iSo10646-1", 0),
+        ("ISO8859-2", 1),
+        ("iso8859-2", 1),
+        ("neomacs-missing-registry", 0),
+    ] {
+        let listed = resolver.list_entities(
+            &FontEntityQuery::new(FontFamilyName::new("Fixture Sans")).with_registry(registry),
+            &FontEntityListConstraints::default(),
+            None,
+            Some(1),
+        );
+        assert_eq!(listed.len(), expected, "registry {registry}");
+    }
 }

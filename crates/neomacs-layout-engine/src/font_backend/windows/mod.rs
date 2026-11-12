@@ -9,7 +9,7 @@ use super::native_asset_cache::NativeFontAssetCache;
 use super::{
     FontBackend, FontCandidate, FontCandidateQuery, FontCandidateScope, FontFamilyName,
     PlatformFontCandidate, PlatformFontCandidateLocator, PlatformFontDesignMetrics,
-    PlatformFontMatch, PlatformFontMetadata, RequiredFontCoverage, TextDirection,
+    PlatformFontMatch, PlatformFontMetadata, TextDirection,
 };
 use dwrote::{
     Font, FontCollection, FontFaceType, FontFallback, FontFamily, FontStretch, FontStyle,
@@ -76,7 +76,7 @@ impl FontBackend for DirectWriteBackend {
                 };
                 (0..family.get_font_count())
                     .filter_map(|index| family.font(index).ok())
-                    .filter(|font| font_supports_required(font, &query.required))
+                    .filter(|font| font_supports_query(font, query))
                     .filter_map(font_candidate_from_font)
                     .collect()
             }
@@ -85,7 +85,7 @@ impl FontBackend for DirectWriteBackend {
                 .flat_map(|family| {
                     (0..family.get_font_count()).filter_map(move |index| family.font(index).ok())
                 })
-                .filter(|font| font_supports_required(font, &query.required))
+                .filter(|font| font_supports_query(font, query))
                 .filter_map(font_candidate_from_font)
                 .collect(),
             FontCandidateScope::NativeFallback { .. } => {
@@ -128,14 +128,23 @@ impl FontBackend for DirectWriteBackend {
     }
 }
 
-fn font_supports_required(font: &Font, required: &RequiredFontCoverage) -> bool {
-    let codepoints: Vec<u32> = required.chars().map(u32::from).collect();
-    if codepoints.is_empty() {
-        return true;
-    }
-    font.create_font_face()
-        .glyph_indices(&codepoints)
-        .is_ok_and(|glyphs| glyphs.iter().all(|glyph| *glyph != 0))
+fn font_supports_query(font: &Font, query: &FontCandidateQuery) -> bool {
+    let face = std::cell::OnceCell::new();
+    super::windows_query_policy::query_is_satisfied_by(
+        query,
+        |codepoint| {
+            face.get_or_init(|| font.create_font_face())
+                .glyph_indices(&[codepoint])
+                .is_ok_and(|glyphs| matches!(glyphs.as_slice(), [glyph] if *glyph != 0))
+        },
+        || {
+            // dwrote expects the OpenType tag's bytes in DirectWrite order.
+            face.get_or_init(|| font.create_font_face())
+                .font_table(u32::from_le_bytes(*b"OS/2"))
+                .ok()
+                .flatten()
+        },
+    )
 }
 
 fn resolve_generic_family(family: &str) -> Option<String> {

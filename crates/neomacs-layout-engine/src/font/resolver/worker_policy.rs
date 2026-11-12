@@ -222,6 +222,7 @@ impl CapturedCharacterPolicy {
             families,
             charset_ranges: Vec::new(),
             languages: Vec::new(),
+            explicit_language: None,
             weight: key.weight,
             slant: style.slant,
             width: style.width,

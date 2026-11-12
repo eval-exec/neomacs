@@ -29,6 +29,15 @@ pub(crate) struct CandidateSelectionScore {
     style: GnuStyleScore,
 }
 
+impl CandidateSelectionScore {
+    /// GNU shares the low size-score bit between DPI and average-width
+    /// mismatches. Keep it inside size priority, ahead of weight and slant.
+    pub(crate) fn with_size_metadata_mismatch(mut self) -> Self {
+        self.style.size.0 |= 1;
+        self
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn candidate_selection_score(
     compatibility: u32,

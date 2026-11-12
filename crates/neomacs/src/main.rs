@@ -1408,6 +1408,24 @@ enum FontEntityCatalogEntry {
     Materialized(neomacs_layout_engine::font_backend::PlatformFontMatch),
 }
 
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct FontEntityCanonicalKey {
+    identity: neomacs_display_protocol::font::ResolvedFontIdentity,
+    size: neomacs_layout_engine::font_backend::PlatformFontSize,
+}
+
+impl FontEntityCanonicalKey {
+    fn new(
+        identity: &neomacs_display_protocol::font::ResolvedFontIdentity,
+        size: neomacs_layout_engine::font_backend::PlatformFontSize,
+    ) -> Self {
+        Self {
+            identity: identity.clone(),
+            size,
+        }
+    }
+}
+
 /// Discovery retains the native selector until finalization supplies canonical
 /// variation coordinates. A base face and a named instance can otherwise have
 /// the same unresolved canonical key.
@@ -1416,19 +1434,25 @@ struct FontEntityDiscoveryKey {
     identity: neomacs_display_protocol::font::ResolvedFontIdentity,
     backend: neomacs_display_protocol::font::FontBackendKind,
     selector: u32,
+    size: neomacs_layout_engine::font_backend::PlatformFontSize,
 }
 
 impl FontEntityDiscoveryKey {
-    fn new(identity: &neomacs_display_protocol::font::ResolvedFontIdentity) -> Self {
+    fn new(
+        identity: &neomacs_display_protocol::font::ResolvedFontIdentity,
+        size: neomacs_layout_engine::font_backend::PlatformFontSize,
+    ) -> Self {
         Self {
             identity: identity.clone(),
             backend: identity.backend,
             selector: identity.backend_selector(),
+            size,
         }
     }
 
     fn unresolved_named(
         identity: &neomacs_display_protocol::font::ResolvedFontIdentity,
+        size: neomacs_layout_engine::font_backend::PlatformFontSize,
     ) -> Option<Self> {
         identity.named_instance_index()?;
         Some(Self::new(
@@ -1437,6 +1461,7 @@ impl FontEntityDiscoveryKey {
                 identity.backend_selector(),
                 None,
             ),
+            size,
         ))
     }
 }
@@ -1447,13 +1472,36 @@ fn font_entity_canonical_identity_known(
     identity.named_instance_index().is_none() || !identity.variation_coords.is_empty()
 }
 
+fn font_entity_is_native_named_instance(
+    font: &neomacs_layout_engine::font_backend::PlatformFontMatch,
+) -> bool {
+    use neomacs_display_protocol::font::{FontFileAsset, FontVariationSet};
+    if font.identity.named_instance_index().is_none() || font.identity.variation_coords.is_empty() {
+        return false;
+    }
+    let Some(asset) = font.asset.file() else {
+        return false;
+    };
+    if FontFileAsset::from_identity(&font.identity).as_ref() != Some(asset) {
+        return false;
+    }
+    // A selector also permits explicit coordinate overrides. Only the actual
+    // named tuple may stand in for discovery before those coordinates exist.
+    let coordinates = neomacs_layout_engine::font::probe::named_instance_variation_coords(
+        asset.path(),
+        font.identity.backend_selector(),
+    );
+    !coordinates.is_empty() && FontVariationSet::new(coordinates) == font.identity.variation_coords
+}
+
 fn font_entity_discovery_matches_materialized(
     candidate: &neomacs_layout_engine::font_backend::PlatformFontCandidate,
     font: &neomacs_layout_engine::font_backend::PlatformFontMatch,
 ) -> bool {
     use neomacs_display_protocol::font::FontOutlineAsset;
     use neomacs_layout_engine::font_backend::PlatformFontCandidateLocator;
-    if candidate.identity.backend != font.identity.backend
+    if candidate.metadata.size != font.metadata.size
+        || candidate.identity.backend != font.identity.backend
         || candidate.identity.backend_selector() != font.identity.backend_selector()
     {
         return false;
@@ -1467,7 +1515,8 @@ fn font_entity_discovery_matches_materialized(
                 && candidate.identity.file_path == font.identity.file_path
                 && (candidate.identity == font.identity
                     || (candidate.identity.variation_coords.is_empty()
-                        && candidate.identity.named_instance_index().is_some()))
+                        && candidate.identity.named_instance_index().is_some()
+                        && font_entity_is_native_named_instance(font)))
         }
         _ => false,
     }
@@ -1478,7 +1527,7 @@ fn font_entity_discovery_matches_materialized(
 /// old Lisp entity cannot silently become a different face.
 #[derive(Default)]
 struct FontEntityCatalog {
-    handles: HashMap<neomacs_display_protocol::font::ResolvedFontIdentity, FontEntityHandle>,
+    handles: HashMap<FontEntityCanonicalKey, FontEntityHandle>,
     discovery_handles: HashMap<FontEntityDiscoveryKey, FontEntityHandle>,
     entries: Vec<FontEntityCatalogEntry>,
 }
@@ -1488,27 +1537,34 @@ impl FontEntityCatalog {
         &mut self,
         font: neomacs_layout_engine::font_backend::PlatformFontMatch,
     ) -> Option<FontEntityHandle> {
+        let canonical_key = FontEntityCanonicalKey::new(&font.identity, font.metadata.size);
         if font_entity_canonical_identity_known(&font.identity)
-            && let Some(handle) = self.handles.get(&font.identity).copied()
+            && let Some(handle) = self.handles.get(&canonical_key).copied()
             && self.promote(handle, font.clone())
         {
+            self.remember_named_discovery_alias(handle, &font);
             return Some(handle);
         }
-        let key = FontEntityDiscoveryKey::new(&font.identity);
+        let key = FontEntityDiscoveryKey::new(&font.identity, font.metadata.size);
         let discovered = self.discovery_handles.get(&key).copied().or_else(|| {
-            FontEntityDiscoveryKey::unresolved_named(&font.identity)
+            FontEntityDiscoveryKey::unresolved_named(&font.identity, font.metadata.size)
                 .and_then(|key| self.discovery_handles.get(&key).copied())
         });
         if let Some(handle) = discovered
             && self.promote(handle, font.clone())
         {
+            self.remember_named_discovery_alias(handle, &font);
             return Some(handle);
         }
         let identity = font.identity.clone();
+        let named_alias = self.validated_named_discovery_alias(&font);
         let handle = self.push_entry(FontEntityCatalogEntry::Materialized(font))?;
         self.discovery_handles.insert(key, handle);
         if font_entity_canonical_identity_known(&identity) {
-            self.handles.insert(identity, handle);
+            self.handles.insert(canonical_key, handle);
+        }
+        if let Some(named_alias) = named_alias {
+            self.discovery_handles.insert(named_alias, handle);
         }
         Some(handle)
     }
@@ -1517,22 +1573,44 @@ impl FontEntityCatalog {
         &mut self,
         font: neomacs_layout_engine::font_backend::PlatformFontCandidate,
     ) -> Option<FontEntityHandle> {
-        let key = FontEntityDiscoveryKey::new(&font.identity);
+        let key = FontEntityDiscoveryKey::new(&font.identity, font.metadata.size);
         if let Some(handle) = self.discovery_handles.get(&key).copied() {
             return Some(handle);
         }
+        let canonical_key = FontEntityCanonicalKey::new(&font.identity, font.metadata.size);
         let canonical_known = font_entity_canonical_identity_known(&font.identity);
-        if canonical_known && let Some(handle) = self.handles.get(&font.identity).copied() {
+        if canonical_known && let Some(handle) = self.handles.get(&canonical_key).copied() {
             self.discovery_handles.insert(key, handle);
             return Some(handle);
         }
-        let identity = font.identity.clone();
         let handle = self.push_entry(FontEntityCatalogEntry::Discovered(font))?;
         self.discovery_handles.insert(key, handle);
         if canonical_known {
-            self.handles.insert(identity, handle);
+            self.handles.insert(canonical_key, handle);
         }
         Some(handle)
+    }
+
+    fn validated_named_discovery_alias(
+        &self,
+        font: &neomacs_layout_engine::font_backend::PlatformFontMatch,
+    ) -> Option<FontEntityDiscoveryKey> {
+        let key = FontEntityDiscoveryKey::unresolved_named(&font.identity, font.metadata.size)?;
+        if self.discovery_handles.contains_key(&key) || !font_entity_is_native_named_instance(font)
+        {
+            return None;
+        }
+        Some(key)
+    }
+
+    fn remember_named_discovery_alias(
+        &mut self,
+        handle: FontEntityHandle,
+        font: &neomacs_layout_engine::font_backend::PlatformFontMatch,
+    ) {
+        if let Some(key) = self.validated_named_discovery_alias(font) {
+            self.discovery_handles.insert(key, handle);
+        }
     }
 
     fn push_entry(&mut self, entry: FontEntityCatalogEntry) -> Option<FontEntityHandle> {
@@ -1564,17 +1642,20 @@ impl FontEntityCatalog {
             FontEntityCatalogEntry::Discovered(candidate) => {
                 font_entity_discovery_matches_materialized(candidate, &font)
             }
-            FontEntityCatalogEntry::Materialized(existing) => existing.identity == font.identity,
+            FontEntityCatalogEntry::Materialized(existing) => {
+                existing.identity == font.identity && existing.metadata.size == font.metadata.size
+            }
         };
         if !matches {
             return false;
         }
         let identity = font.identity.clone();
+        let canonical_key = FontEntityCanonicalKey::new(&identity, font.metadata.size);
         if matches!(entry, FontEntityCatalogEntry::Discovered(_)) {
             *entry = FontEntityCatalogEntry::Materialized(font);
         }
         if font_entity_canonical_identity_known(&identity) {
-            self.handles.insert(identity, handle);
+            self.handles.insert(canonical_key, handle);
         }
         true
     }
@@ -2837,6 +2918,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
                     .size
                     .map(|size| self.font_sizing.font_opening_size_px(size).get()),
                 spacing: query.spacing,
+                dpi: query.dpi,
                 average_width: query.average_width,
             };
         let listed_constraints = constraints(&request);

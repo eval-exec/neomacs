@@ -2924,6 +2924,13 @@ fn listing_publishes_adstyle_before_ignored_font_filtering() {
         font_get(vec![entity, Value::keyword("adstyle")]).unwrap(),
         Value::symbol("ja")
     );
+    for key in ["avgwidth", "avg-width"] {
+        assert_eq!(
+            font_get(vec![entity, Value::keyword(key)]).unwrap(),
+            Value::fixnum(120),
+            "{key}"
+        );
+    }
     eval.set_variable(
         "face-ignored-fonts",
         Value::list(vec![Value::string("-ja-")]),
@@ -2974,5 +2981,40 @@ fn listing_replacement_xlfd_clears_only_gnu_overwritten_properties() {
                 "{name}: {key}"
             );
         }
+    }
+}
+
+#[test]
+fn listing_complete_xlfd_clears_numeric_wildcards_but_abbreviations_preserve_them() {
+    crate::test_utils::init_test_tracing();
+    for (name, dpi, average_width) in [
+        ("*", Value::fixnum(96), Value::fixnum(120)),
+        ("-*-Hack-*", Value::fixnum(96), Value::fixnum(120)),
+        ("-*-*-*-*-*-*-*-*-*-*-*-*-*-*", Value::NIL, Value::NIL),
+        (
+            "-f-family-regular-normal-normal--13-130-72-*-m-0-*",
+            Value::NIL,
+            Value::fixnum(0),
+        ),
+    ] {
+        let spec = font_spec(vec![
+            Value::keyword("dpi"),
+            Value::fixnum(96),
+            Value::keyword("avgwidth"),
+            Value::fixnum(120),
+            Value::keyword("name"),
+            Value::string(name),
+        ])
+        .unwrap();
+        assert_eq!(
+            font_get(vec![spec, Value::keyword("dpi")]).unwrap(),
+            dpi,
+            "{name}"
+        );
+        assert_eq!(
+            font_get(vec![spec, Value::keyword("avgwidth")]).unwrap(),
+            average_width,
+            "{name}"
+        );
     }
 }

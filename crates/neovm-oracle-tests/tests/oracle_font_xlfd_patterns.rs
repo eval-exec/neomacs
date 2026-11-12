@@ -43,12 +43,13 @@ fn xlfd_replacement_clears_wildcards_and_preserves_other_properties_like_gnu() {
         r#"(mapcar
               (lambda (name)
                 (let ((spec (font-spec :family "Hack" :foundry "SRC" :adstyle "ja"
-                                       :registry "iso10646-1" :weight 'bold :size 17 :name name)))
+                                       :registry "iso10646-1" :weight 'bold :size 17 :dpi 96 :avgwidth 120 :name name)))
                   (cons name (mapcar (lambda (prop) (font-get spec prop))
-                                     '(:foundry :family :adstyle :registry :weight :size)))))
-              '("*" "-*-Hack-*" "-*-*-*-*-*-*-*-*-*-*-*-*-*-*"))"#,
+                                     '(:foundry :family :adstyle :registry :weight :size :dpi :avgwidth)))))
+              '("*" "-*-Hack-*" "-*-*-*-*-*-*-*-*-*-*-*-*-*-*"
+                "-f-family-regular-normal-normal--13-130-72-*-m-0-*"))"#,
         expect_test::expect![[
-            r#""OK ((\"*\" nil nil nil iso10646-1 bold 17) (\"-*-Hack-*\" nil Hack nil iso10646-1 bold 17) (\"-*-*-*-*-*-*-*-*-*-*-*-*-*-*\" nil nil nil nil bold 17))""#
+            r#""OK ((\"*\" nil nil nil iso10646-1 bold 17 96 120) (\"-*-Hack-*\" nil Hack nil iso10646-1 bold 17 96 120) (\"-*-*-*-*-*-*-*-*-*-*-*-*-*-*\" nil nil nil nil bold 17 nil nil) (\"-f-family-regular-normal-normal--13-130-72-*-m-0-*\" f family ## iso10646-1 regular 13 nil 0))""#
         ]],
     );
 }

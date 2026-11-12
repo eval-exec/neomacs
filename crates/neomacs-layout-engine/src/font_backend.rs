@@ -22,6 +22,9 @@ mod macos;
 mod native_asset_cache;
 #[cfg(windows)]
 mod windows;
+#[cfg(any(windows, test))]
+#[path = "font_backend/windows/query_policy.rs"]
+mod windows_query_policy;
 
 #[cfg(target_os = "linux")]
 pub use linux::FontconfigBackend;
@@ -129,7 +132,7 @@ pub struct PlatformFontMetadata {
 /// `Unknown` is intentionally not treated as scalable. A backend uses it only
 /// when its native catalog cannot classify the face and the target's legacy
 /// materializer must inspect the exact file before GNU size scoring.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Hash, Eq)]
 pub enum PlatformFontSize {
     Scalable,
     Fixed {
@@ -383,6 +386,8 @@ pub struct FontCandidateQuery {
     pub required: RequiredFontCoverage,
     pub charset_ranges: Vec<(u32, u32)>,
     pub languages: Vec<String>,
+    /// Raw explicit :lang; registry-derived native hints remain in languages.
+    pub explicit_language: Option<String>,
     pub requested_weight: u16,
     pub requested_slant: FontSlant,
     pub requested_width: FontWidth,

@@ -202,7 +202,7 @@ impl NativeQueryConstraints {
 /// One borrowed naming view feeds both live and detached registry semantics.
 pub(super) struct FontPolicySpec<'a> {
     registry: Option<Cow<'a, str>>,
-    language: Option<Cow<'a, str>>,
+    pub(super) language: Option<Cow<'a, str>>,
     pub(super) weight: Option<neovm_core::face::FontWeight>,
     pub(super) slant: Option<neovm_core::face::FontSlant>,
     pub(super) width: Option<neovm_core::face::FontWidth>,

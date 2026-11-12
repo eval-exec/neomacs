@@ -2127,7 +2127,9 @@ fn font_parse_xlfd_fields(elems: &mut Vec<Value>, fields: &xlfd_fields::ParsedXl
     if !abbreviated || numeric(intern_field(XLFD_RESX)).is_some() {
         if let Some(dpi) = numeric(resy) {
             font_parse_set(elems, "dpi", Value::fixnum(dpi));
-        } else if !abbreviated && resy != "*" {
+        } else if resy == "*" {
+            font_parse_set(elems, "dpi", Value::NIL);
+        } else if !abbreviated {
             return false;
         }
     }
@@ -2154,8 +2156,11 @@ fn font_parse_xlfd_fields(elems: &mut Vec<Value>, fields: &xlfd_fields::ParsedXl
     let avg = intern_field(XLFD_AVGWIDTH).trim_start_matches('~');
     if let Some(n) = numeric(avg) {
         font_parse_set(elems, "avgwidth", Value::fixnum(n));
-    } else if !abbreviated && avg != "*" {
-        return false;
+    } else if !abbreviated {
+        if avg != "*" {
+            return false;
+        }
+        font_parse_set(elems, "avgwidth", Value::NIL);
     }
 
     true
@@ -2565,12 +2570,21 @@ fn listed_font_entity(listed: &neovm_eval::emacs_core::eval::ListedFontEntity) -
 
 // Entities are immutable through Lisp font-put, but listing builds their
 // canonical fields before publishing the result to Lisp.
+// Every caller passes a fresh vector from build_font_entity_for_spec_match;
+// no Lisp code runs between its construction and these private updates.
 fn font_put_entity_field(entity: Value, key: &str, value: Value) {
     let mut fields = entity
         .as_vector_data()
-        .expect("font entity fields")
+        .expect("freshly constructed font entity vector")
         .to_vec();
     font_parse_set(&mut fields, key, value);
+    if key == "avgwidth" {
+        for alias in FONT_AVERAGE_WIDTH_FIELDS.into_iter().skip(1) {
+            if font_vector_get_flexible(&fields, alias).is_some() {
+                font_parse_set(&mut fields, alias, value);
+            }
+        }
+    }
     let _ = entity.replace_vector_data(fields);
 }
 
@@ -2622,16 +2636,18 @@ fn font_list_query(
 
 /// Keep historical Neomacs property aliases consistent at the listing and
 /// XLFD rendering boundaries. Canonical `avgwidth` has precedence.
+const FONT_AVERAGE_WIDTH_FIELDS: [&str; 5] = [
+    "avgwidth",
+    "average_width",
+    "avg_width",
+    "avg-width",
+    "average-width",
+];
+
 fn font_average_width_field(fields: &[Value]) -> Option<Value> {
-    [
-        "avgwidth",
-        "average_width",
-        "avg_width",
-        "avg-width",
-        "average-width",
-    ]
-    .into_iter()
-    .find_map(|key| font_vector_get_flexible(fields, key))
+    FONT_AVERAGE_WIDTH_FIELDS
+        .into_iter()
+        .find_map(|key| font_vector_get_flexible(fields, key))
 }
 
 pub(crate) fn x_list_fonts(

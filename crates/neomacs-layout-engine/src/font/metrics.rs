@@ -796,6 +796,8 @@ pub struct FontMetricsService {
     /// Ordinary request/cache invalidation leaves these instances untouched.
     font_instances: FontInstanceInterner,
     /// Exact bitmap faces opened for coverage scans such as emoji filtering.
+    /// Coverage reads only FT_Get_Char_Index: the file charmap is shared by
+    /// its strikes, so this cache deliberately uses face identity, not size.
     /// Cache failures too; invalidation follows the native font catalog.
     coverage_bitmap_fonts:
         HashMap<ResolvedFontIdentity, Option<neomacs_font_materializer::OpenedFont>>,
