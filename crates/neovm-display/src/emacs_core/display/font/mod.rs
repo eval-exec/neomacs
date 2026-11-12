@@ -2133,7 +2133,9 @@ fn font_parse_xlfd_fields(
         if !abbreviated && let Some(pt) = xlfd_fields::matrix_size(point).filter(|size| *size >= 0)
         {
             font_parse_set(elems, "size", Value::make_float(pt as f64));
-        } else if let Some(pt) = numeric(point)? {
+        } else if !abbreviated && let Some(size) = xlfd_fields::complete_point_size(point) {
+            font_parse_set(elems, "size", Value::make_float(size));
+        } else if abbreviated && let Some(pt) = numeric(point)? {
             font_parse_set(elems, "size", Value::make_float(pt as f64 / 10.0));
         }
     }
@@ -2579,6 +2581,20 @@ fn list_fonts_for_pattern(
 
 fn listed_font_entity(listed: &neovm_eval::emacs_core::eval::ListedFontEntity) -> Value {
     let entity = build_font_entity_for_spec_match(&listed.font);
+    // The shared legacy builder seeds :avg-width=0. A listed entity instead
+    // publishes its actual canonical :avgwidth; :avg-width is not a GNU basic
+    // property or alias, and must not fabricate a known width for a bitmap.
+    let mut fields = entity
+        .as_vector_data()
+        .expect("fresh entity fields")
+        .to_vec();
+    if let Some(index) = (1..fields.len().saturating_sub(1))
+        .step_by(2)
+        .find(|index| fields[*index] == Value::keyword("avg-width"))
+    {
+        drop(fields.drain(index..index + 2));
+    }
+    let _ = entity.replace_vector_data(fields);
     if let Some(driver) = listed.driver {
         font_put_entity_field(entity, "type", Value::from_sym_id(driver));
     }
@@ -2615,11 +2631,23 @@ fn font_list_query(
     let fields = font_value_fields(spec).expect("validated font specification");
     let field = |key| font_vector_get_flexible(fields, key);
     let size = match field("size") {
+        // Unlike an absent size, a numeric zero affects GNU's preference
+        // ordering of scalable entities and fixed strikes (font_score).
+        Some(value) if value.as_fixnum() == Some(0) => Some(FontOpeningSize::SmallestUsable),
         Some(value) if value.is_fixnum() => value
             .as_fixnum()
             .and_then(|size| u32::try_from(size).ok())
             .and_then(std::num::NonZeroU32::new)
             .map(FontOpeningSize::Pixels),
+        // GNU font_pixel_size multiplies a float point size by an explicit
+        // integer DPI, including zero. Pixel sizes ignore DPI.
+        Some(value)
+            if value.is_float()
+                && (value.xfloat() == 0.0
+                    || field("dpi").and_then(|dpi| dpi.as_fixnum()) == Some(0)) =>
+        {
+            Some(FontOpeningSize::SmallestUsable)
+        }
         Some(value) if value.is_float() => {
             PositiveFontScalar::new(value.xfloat()).map(|size| FontOpeningSize::Points {
                 size,
@@ -2705,12 +2733,19 @@ pub(crate) fn x_list_fonts(
     if !terminal_target && args.get(1).is_some_and(|face| !face.is_nil()) {
         let face_name = args.get(1).and_then(font_value_text_lisp_string);
         let table = runtime_face_table_from_frame_lisp_faces(eval, frame_id, false);
-        let face = table.resolve(
-            face_name
-                .as_ref()
-                .and_then(LispString::as_utf8_str)
-                .unwrap_or("default"),
-        );
+        let face = if let Some(name) = face_name.as_ref().and_then(LispString::as_utf8_str) {
+            // lookup_named_face reads the current buffer's remapping even
+            // when x-list-fonts names another live frame.
+            let remapping = face_remapping_for_current_buffer(eval);
+            if remapping.is_empty() {
+                table.resolve(name)
+            } else {
+                table.resolve_with_remapping(name, &remapping)
+            }
+        } else {
+            // An invalid non-name FACE falls back to the unremapped frame.
+            table.resolve("default")
+        };
         let opened = eval
             .display_host
             .as_mut()

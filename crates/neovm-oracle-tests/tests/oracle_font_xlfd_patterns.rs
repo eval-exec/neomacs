@@ -53,3 +53,34 @@ fn xlfd_replacement_clears_wildcards_and_preserves_other_properties_like_gnu() {
         ]],
     );
 }
+
+#[test]
+fn xlfd_numeric_overflow_and_complete_point_atoi_match_gnu() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    common::assert_oracle_parity_expect(
+        r#"(list
+  (mapcar
+   (lambda (digits)
+    (condition-case err
+     (font-get (font-spec :name (concat "*-" digits "-*")) :size)
+     (error (list (car err) (cadr err)))))
+   '("2305843009213693952" "9223372036854775807" "0000002305843009213693952" "9999999999999999999999999999999999999999"))
+  (condition-case err
+   (font-get (font-spec :name "-SRC-Hack-regular-normal-normal-*-2305843009213693952-130x-*-*-*-0-iso10646-1") :size)
+   (error (list (car err) (cadr err))))
+  (mapcar
+   (lambda (point)
+    (let ((size (font-get
+                 (font-spec :name
+                  (concat "-SRC-Hack-regular-normal-normal-*-*-" point "-*-*-*-0-iso10646-1"))
+                 :size)))
+     (list (floatp size) size)))
+   '("130x" "000130x" "x130" "2147483647" "2147483648" "4294967296" "4294967426" "2305843009213693951" "2305843009213693952" "9223372036854775808" "9999999999999999999999999999999999999999"))
+  (font-get (font-spec :name "*-9223372036854775808-*") :size)
+  (let ((spec (font-spec :name "-9999999999999999999999999999999999999999-9223372036854775808-regular-normal-normal-*-13-*-*-*-*-0-iso10646-1")))
+   (list (symbol-name (font-get spec :foundry)) (symbol-name (font-get spec :family)) (font-get spec :size))))"#,
+        expect_test::expect![[
+            r#""OK (((overflow-error \"2305843009213693952\") (overflow-error \"9223372036854775807\") (overflow-error \"0000002305843009213693952\") (overflow-error \"9999999999999999999999999999999999999999\")) (overflow-error \"2305843009213693952\") ((t 13.0) (t 13.0) (nil nil) (t 214748364.7) (nil nil) (t 0.0) (t 13.0) (nil nil) (t 0.0) (nil nil) (nil nil)) 0 (\"9999999999999999999999999999999999999999\" \"9223372036854775808\" 13))""#
+        ]],
+    );
+}

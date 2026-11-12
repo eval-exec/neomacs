@@ -1400,3 +1400,7 @@ fn entity_listing_spacing_constraint_accepts_absent_catalog_spacing() {
 
 #[path = "accepted_listing_review_test.rs"]
 mod accepted_listing_review_test;
+
+#[cfg(target_os = "linux")]
+#[path = "named_listing_weight_review_test.rs"]
+mod named_listing_weight_review_test;
