@@ -1765,6 +1765,10 @@ fn entity_listing_distinguishes_raw_unicode_registry_names_from_legacy_case_patt
         candidates: vec![candidate("Fixture Sans", 400, FontSlant::Normal, 100)],
     }));
     for (registry, expected) in [
+        ("ascii-0", 1),
+        ("ASCII-0", 0),
+        ("unicode-bmp", 1),
+        ("UNICODE-BMP", 0),
         ("iso10646-1", 1),
         ("iSo10646-1", 0),
         ("ISO8859-2", 1),

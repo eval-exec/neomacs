@@ -27,21 +27,25 @@ fn os2(codepages: u32) -> Vec<u8> {
 fn windows_query_any_still_requires_every_legacy_registry_character() {
     let mut query = query();
     query.charset_ranges = vec![(0x00a0, 0x00a0), (0x010e, 0x010e)];
-    assert!(!query_is_satisfied_by(&query, |cp| cp == 0x00a0, || None));
+    assert!(!query_is_satisfied_by(
+        &query,
+        |cps| cps.iter().all(|cp| *cp == 0x00a0),
+        || None
+    ));
     assert!(query_is_satisfied_by(
         &query,
-        |cp| matches!(cp, 0x00a0 | 0x010e),
+        |cps| cps.iter().all(|cp| matches!(*cp, 0x00a0 | 0x010e)),
         || None
     ));
     query.required = RequiredFontCoverage::Character('λ');
     assert!(!query_is_satisfied_by(
         &query,
-        |cp| matches!(cp, 0x00a0 | 0x010e),
+        |cps| cps.iter().all(|cp| matches!(*cp, 0x00a0 | 0x010e)),
         || None
     ));
     assert!(query_is_satisfied_by(
         &query,
-        |cp| matches!(cp, 0x00a0 | 0x010e | 0x03bb),
+        |cps| cps.iter().all(|cp| matches!(*cp, 0x00a0 | 0x010e | 0x03bb)),
         || None
     ));
 }
@@ -120,4 +124,93 @@ fn windows_query_registry_language_hints_do_not_become_explicit_constraints() {
             || panic!("no explicit language")
         ));
     }
+}
+
+#[test]
+fn windows_query_batches_deduplicated_required_text_and_overlapping_ranges() {
+    let mut query = query();
+    query.required = RequiredFontCoverage::for_text("AAЖλ").unwrap();
+    query.charset_ranges = vec![(0x0400, 0x07e7), (0x0600, 0x0580), (0x0400, 0x0400)];
+    let mut batches = Vec::new();
+    assert!(query_is_satisfied_by(
+        &query,
+        |codepoints| {
+            batches.push(codepoints.to_vec());
+            true
+        },
+        || panic!("no explicit language")
+    ));
+    assert_eq!(batches.len(), 1, "all coverage uses one native query");
+    let expected: Vec<u32> = [0x0041, 0x03bb]
+        .into_iter()
+        .chain(0x0400..=0x07e7)
+        .collect();
+    assert_eq!(
+        batches[0], expected,
+        "overlap and required duplicates disappear"
+    );
+}
+
+#[test]
+fn windows_query_batch_validation_precedes_provider_and_language() {
+    let mut query = query();
+    query.charset_ranges = vec![(0xd7ff, 0xd800)];
+    query.explicit_language = Some("ja".to_owned());
+    assert!(!query_is_satisfied_by(
+        &query,
+        |_| panic!("invalid query reached native provider"),
+        || panic!("coverage must be checked first")
+    ));
+}
+
+#[test]
+fn windows_query_failed_batch_rejects_before_language_lookup() {
+    let mut query = query();
+    query.required = RequiredFontCoverage::Character('A');
+    query.explicit_language = Some("ja".to_owned());
+    assert!(!query_is_satisfied_by(
+        &query,
+        |_| false,
+        || panic!("failed coverage reached OS/2")
+    ));
+}
+
+#[test]
+fn windows_fallback_rejects_missing_or_foreign_explicit_language_codepages() {
+    for language in ["ja", "ko", "zh"] {
+        assert!(!explicit_language_is_satisfied_by(Some(language), || Some(
+            os2(1)
+        )));
+        assert!(!explicit_language_is_satisfied_by(Some(language), || None));
+    }
+    for language in ["JA", "ja-JP", "ru"] {
+        assert!(!explicit_language_is_satisfied_by(
+            Some(language),
+            || panic!("unsupported tag needs no native metadata")
+        ));
+    }
+}
+
+#[test]
+fn windows_fallback_language_admission_preserves_partial_text_coverage() {
+    let mut query = query();
+    query.required = RequiredFontCoverage::for_text("AЖ").unwrap();
+    query.explicit_language = Some("ja".to_owned());
+    // MapCharacters may return a font for just the initial Latin prefix.
+    assert!(!query_is_satisfied_by(
+        &query,
+        |codepoints| codepoints.iter().all(|cp| *cp == u32::from('A')),
+        || Some(os2(1 << 17))
+    ));
+    assert!(explicit_language_is_satisfied_by(
+        query.explicit_language.as_deref(),
+        || Some(os2(1 << 17))
+    ));
+}
+
+#[test]
+fn windows_fallback_without_explicit_language_needs_no_native_metadata() {
+    assert!(explicit_language_is_satisfied_by(None, || panic!(
+        "unconstrained fallback needs no OS/2"
+    )));
 }

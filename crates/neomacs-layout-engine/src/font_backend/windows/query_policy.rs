@@ -8,16 +8,36 @@ use super::FontCandidateQuery;
 
 pub(super) fn query_is_satisfied_by(
     query: &FontCandidateQuery,
-    supports: impl FnMut(u32) -> bool,
+    supports: impl FnOnce(&[u32]) -> bool,
     os2_table: impl FnOnce() -> Option<Vec<u8>>,
 ) -> bool {
-    if !query.coverage_is_satisfied_by(supports) {
+    let mut codepoints = Vec::new();
+    if !query.coverage_is_satisfied_by(|codepoint| {
+        codepoints.push(codepoint);
+        true
+    }) {
         return false;
     }
+    codepoints.sort_unstable();
+    codepoints.dedup();
+    // DirectWrite accepts a complete codepoint slice. Validate first, then
+    // make one native call instead of crossing COM once per scalar/range.
+    if !codepoints.is_empty() && !supports(&codepoints) {
+        return false;
+    }
+    explicit_language_is_satisfied_by(query.explicit_language.as_deref(), os2_table)
+}
+
+/// A mapped fallback may cover only a prefix of the requested text. Admit
+/// its explicit language without imposing full-text or registry coverage.
+pub(super) fn explicit_language_is_satisfied_by(
+    language: Option<&str>,
+    os2_table: impl FnOnce() -> Option<Vec<u8>>,
+) -> bool {
     // GNU w32font.c font_matches_spec tests only these exact explicit
     // language symbols against FONTSIGNATURE.fsCsb[0]. Registry-derived
     // Fontconfig hints do not represent an explicit :lang restriction.
-    let required_codepages = match query.explicit_language.as_deref() {
+    let required_codepages = match language {
         None => return true,
         Some("ja") => 1 << 17,
         Some("ko") => (1 << 19) | (1 << 21),

@@ -132,14 +132,28 @@ fn font_supports_query(font: &Font, query: &FontCandidateQuery) -> bool {
     let face = std::cell::OnceCell::new();
     super::windows_query_policy::query_is_satisfied_by(
         query,
-        |codepoint| {
+        |codepoints| {
             face.get_or_init(|| font.create_font_face())
-                .glyph_indices(&[codepoint])
-                .is_ok_and(|glyphs| matches!(glyphs.as_slice(), [glyph] if *glyph != 0))
+                .glyph_indices(codepoints)
+                .is_ok_and(|glyphs| {
+                    glyphs.len() == codepoints.len() && glyphs.iter().all(|glyph| *glyph != 0)
+                })
         },
         || {
             // dwrote expects the OpenType tag's bytes in DirectWrite order.
             face.get_or_init(|| font.create_font_face())
+                .font_table(u32::from_le_bytes(*b"OS/2"))
+                .ok()
+                .flatten()
+        },
+    )
+}
+
+fn font_supports_explicit_language(font: &Font, query: &FontCandidateQuery) -> bool {
+    super::windows_query_policy::explicit_language_is_satisfied_by(
+        query.explicit_language.as_deref(),
+        || {
+            font.create_font_face()
                 .font_table(u32::from_le_bytes(*b"OS/2"))
                 .ok()
                 .flatten()
@@ -216,6 +230,7 @@ fn native_fallback_candidate(query: &FontCandidateQuery) -> Option<FontCandidate
             to_directwrite_stretch(query.requested_width),
         )
         .mapped_font
+        .filter(|font| font_supports_explicit_language(font, query))
         .and_then(font_candidate_from_font)
 }
 
