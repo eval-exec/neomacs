@@ -304,6 +304,8 @@ For new features or documentation-only changes, include the applicable sections 
 
 Clearly separate verified facts from assumptions. Do not represent incomplete work as finished.
 
+After you open a pull request, wait for review comments, respond to every comment and suggestion, and follow up until the reviewers approve it.
+
 ## 11. AI-Assisted Contributions
 
 **AI-assisted development is welcome. Unverified code is not.**
