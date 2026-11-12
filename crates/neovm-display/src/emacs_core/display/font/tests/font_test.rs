@@ -3035,3 +3035,49 @@ fn x_list_fonts_tty_designator_defaults_to_selected_frame_and_clears_face() {
         "WIDTH is ignored once FACE is cleared"
     );
 }
+
+#[path = "focused_listing_followup_test.rs"]
+mod focused_listing_followup_test;
+
+#[test]
+fn listing_complete_xlfd_point_field_uses_native_atoi() {
+    crate::test_utils::init_test_tracing();
+    for (point, expected) in [
+        ("130x", Some(13.0)),
+        ("000130x", Some(13.0)),
+        ("x130", None),
+        ("2147483647", Some(214748364.7)),
+        ("2147483648", None),
+        ("4294967296", Some(0.0)),
+        ("4294967426", Some(13.0)),
+        ("2305843009213693951", None),
+        ("2305843009213693952", Some(0.0)),
+        ("9223372036854775807", None),
+        ("9223372036854775808", None),
+        ("9999999999999999999999999999999999999999", None),
+    ] {
+        let name = format!("-SRC-Hack-regular-normal-normal-*-*-{point}-*-*-*-0-iso10646-1");
+        let spec = font_spec(vec![Value::keyword("name"), Value::string(name)]).unwrap();
+        let size = font_get(vec![spec, Value::keyword("size")]).unwrap();
+        if let Some(expected) = expected {
+            assert!(size.is_float(), "{point}: {size:?}");
+            assert_eq!(size.xfloat(), expected, "{point}");
+        } else {
+            assert!(size.is_nil(), "{point}: {size:?}");
+        }
+    }
+    // The separate pixel and abbreviated-number lanes keep font_intern_prop's
+    // strict fixnum overflow rather than adopting complete point-field atoi.
+    for name in [
+        "*-2305843009213693952-*",
+        "-SRC-Hack-regular-normal-normal-*-2305843009213693952-130x-*-*-*-0-iso10646-1",
+    ] {
+        let error = font_spec(vec![Value::keyword("name"), Value::string(name)]).unwrap_err();
+        let neovm_value::error::FlowRef::Signal(signal) = error.kind() else {
+            panic!("expected overflow signal");
+        };
+        assert_eq!(signal.symbol, intern("overflow-error"));
+        assert_eq!(signal.data.len(), 1);
+        assert_eq!(signal.data[0].as_utf8_str(), Some("2305843009213693952"));
+    }
+}

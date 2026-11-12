@@ -393,9 +393,14 @@ impl FontResolver {
         };
         let mut count = 0;
         let mut emit = |listed: ListedFontCandidate| {
-            let Some(matched) = self.backend.finalize_match(listed.candidate) else {
+            let metadata = listed.candidate.metadata.clone();
+            let Some(mut matched) = self.backend.finalize_match(listed.candidate) else {
                 return std::ops::ControlFlow::Continue(());
             };
+            // Listing names and filters describe the native catalog entry.
+            // Finalization may enrich the exact asset/variation identity, but
+            // must not replace metadata that already passed acceptance/MAX.
+            matched.metadata = metadata;
             count += 1;
             let outcome = visitor(ResolvedFontEntity {
                 matched,

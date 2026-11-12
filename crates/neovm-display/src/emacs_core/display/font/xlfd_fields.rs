@@ -300,3 +300,18 @@ pub(super) fn matrix_size(text: &str) -> Option<i64> {
     (last.is_finite() && last >= i32::MIN as f64 && last <= i32::MAX as f64)
         .then_some(last.trunc() as i64)
 }
+
+/// Only the complete XLFD point field uses GNU's digit-led `atoi` lane.
+/// This deliberately retains native C int conversion, including its observed
+/// wrap/saturation behavior; pixel and abbreviated fields use `number`.
+pub(super) fn complete_point_size(text: &str) -> Option<f64> {
+    if !text.as_bytes().first()?.is_ascii_digit() {
+        return None;
+    }
+    let storage = std::ffi::CString::new(text).ok()?;
+    // SAFETY: storage owns the NUL-terminated byte sequence for this call.
+    // atoi reads it and retains no pointer. The same native C conversion is
+    // used by pinned GNU font_parse_xlfd_1 on this platform.
+    let points = unsafe { libc::atoi(storage.as_ptr()) };
+    (points >= 0).then_some(f64::from(points) / 10.0)
+}

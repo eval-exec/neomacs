@@ -92,6 +92,37 @@ fn accepted_listing_unknown_average_width_does_not_imply_scalability() {
 }
 
 #[test]
+fn accepted_listing_explicit_zero_preference_ranks_scalable_before_fixed() {
+    let mut fixed = candidate("Fixed Fixture", 400, FontSlant::Normal, 100);
+    fixed.matched.metadata.size = PlatformFontSize::Fixed {
+        device_ppem_26_6: 16 * 64,
+    };
+    let (resolver, _, _) = resolver(vec![
+        fixed,
+        candidate("Scalable Fixture", 400, FontSlant::Normal, 100),
+    ]);
+    let query = FontEntityQuery::default();
+    let unconstrained = FontEntityListConstraints::default();
+    // GNU font_score distinguishes a nil size from a numeric zero even
+    // though font_delete_unmatched imposes no primary size restriction.
+    for (preferred, first) in [
+        (unconstrained.clone(), "Fixed Fixture"),
+        (
+            FontEntityListConstraints {
+                pixel_size: Some(0),
+                ..Default::default()
+            },
+            "Scalable Fixture",
+        ),
+    ] {
+        let listed =
+            resolver.list_entities(&query, &unconstrained, Some((&query, &preferred)), Some(1));
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].matched.family(), first);
+    }
+}
+
+#[test]
 fn accepted_listing_filters_metadata_before_finalizing_and_stops_at_accepted_maximum() {
     let (resolver, _, finalized) = resolver(
         ["Rejected", "Accepted", "Unvisited"]
