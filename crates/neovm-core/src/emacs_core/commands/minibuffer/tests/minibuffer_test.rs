@@ -2223,3 +2223,39 @@ fn completion_primitives_observe_buffer_local_regexp_filters() {
     );
     assert_eq!(result, r#"OK ("Alpha" ("Alpha") t nil)"#);
 }
+
+/// GNU `barf_if_interaction_inhibited` (src/minibuf.c) runs first in `read-from-minibuffer` and in
+/// `read-char`, `read-event` and `read-char-exclusive` (src/keyboard.c), so with
+/// `inhibit-interaction` non-nil they signal `inhibited-interaction` without data, in batch mode
+/// too. GNU `syms_of_data` makes it a plain `error`. This is GNU's test-inhibit-interaction.
+#[test]
+fn inhibit_interaction_stops_reads_before_they_read_input() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"(let ((inhibit-interaction t))
+  (list
+   (get 'inhibited-interaction 'error-conditions)
+   (get 'inhibited-interaction 'error-message)
+   (mapcar (lambda (read)
+             (condition-case err (progn (funcall read) 'no-error)
+               (error err)))
+           (list (lambda () (read-from-minibuffer "foo: "))
+                 (lambda () (read-string "foo: "))
+                 (lambda () (read-no-blanks-input "foo: "))
+                 (lambda () (yes-or-no-p "Foo?"))
+                 (lambda () (y-or-n-p "Foo?"))
+                 #'read-char #'read-event #'read-char-exclusive))
+   (condition-case nil (read-from-minibuffer "foo: ")
+     (inhibited-interaction 'inhibit)
+     (error nil))))"#,
+    );
+    assert_eq!(
+        result,
+        concat!(
+            "OK ((inhibited-interaction error) \"User interaction while inhibited\"",
+            " ((inhibited-interaction) (inhibited-interaction) (inhibited-interaction)",
+            " (inhibited-interaction) (inhibited-interaction) (inhibited-interaction)",
+            " (inhibited-interaction) (inhibited-interaction)) inhibit)"
+        )
+    );
+}

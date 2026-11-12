@@ -339,6 +339,13 @@ pub fn init_standard_errors(obarray: &mut Obarray) {
         "Keyword lacks a corresponding value",
         &["error"],
     );
+    // GNU data.c: PUT_ERROR (Qinhibited_interaction, error_tail, ...).
+    register_simple(
+        obarray,
+        "inhibited-interaction",
+        "User interaction while inhibited",
+        &["error"],
+    );
     register_simple(
         obarray,
         "setting-constant",
@@ -831,6 +838,7 @@ impl ErrorRegistry {
             "cl-assertion-failed",
             "permission-denied",
             "recursion-error",
+            "inhibited-interaction",
         ];
         for name in &simple_children_of_error {
             self.parents.insert(intern(name), vec![intern("error")]);
