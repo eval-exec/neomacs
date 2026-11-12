@@ -158,9 +158,9 @@ always	emacs_core/runtime/bytecode/vm.rs	Vm::uses_interpreter_only_tier	run_loop
 always	emacs_core/runtime/bytecode/vm.rs	Vm::with_dynamic_vm_roots	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	bytecode_frame_bytes	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	charge_bytecode_frame	run_loop,inline
-exempt	emacs_core/runtime/bytecode/vm.rs	charge_bytecode_frame_bytes	run_loop,inline	# split from charge_bytecode_frame; retain #[inline(always)]; outside the protected-neutral subset until the lead's fat-build comparison
+exempt	emacs_core/runtime/bytecode/vm.rs	charge_bytecode_frame_bytes	run_loop,inline	# split from charge_bytecode_frame; retain #[inline(always)]; no out-of-line symbol and no protected-function callee in the b0cc99fb92 fat build (tmp/v10x/splitperf-eieio-pcc.log)
 always	emacs_core/runtime/bytecode/vm.rs	charge_frame_position	run_loop,inline
-exempt	emacs_core/runtime/bytecode/vm.rs	charge_frame_of_bytes	run_loop,inline	# split from charge_frame_position; retain #[inline(always)]; outside the protected-neutral subset until the lead's fat-build comparison
+exempt	emacs_core/runtime/bytecode/vm.rs	charge_frame_of_bytes	run_loop,inline	# split from charge_frame_position; retain #[inline(always)]; no out-of-line symbol and no protected-function callee in the b0cc99fb92 fat build (tmp/v10x/splitperf-eieio-pcc.log)
 always	emacs_core/runtime/bytecode/vm.rs	fixnum_ge	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	fixnum_gt	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	fixnum_le	run_loop,inline
@@ -408,7 +408,7 @@ never	emacs_core/runtime/jit/cache.rs	run_resolved_leaf_native_outlined	run_arme
 never	emacs_core/runtime/jit/stats.rs	record_native_entry_enabled	run_armed_leaf
 always	emacs_core/runtime/bytecode/chunk.rs	<ByteCodeFunction as ByteCodeFunctionExt>::jit_constant_base	run_armed_leaf,inline
 always	emacs_core/runtime/jit/cache.rs	run_resolved_leaf_native	run_armed_leaf,inline
-exempt	emacs_core/runtime/jit/cache.rs	cached_frame_bytes	run_armed_leaf,inline	# stamp lookup split from run_resolved_leaf_native; retain #[inline(always)]; outside the protected-neutral subset until the lead's fat-build comparison
+exempt	emacs_core/runtime/jit/cache.rs	cached_frame_bytes	run_armed_leaf,inline	# stamp lookup split from run_resolved_leaf_native; retain #[inline(always)]; no out-of-line symbol and no protected-function callee in the b0cc99fb92 fat build (tmp/v10x/splitperf-eieio-pcc.log)
 always	emacs_core/runtime/jit/cache.rs	run_with_bytecode_stack_probe	run_armed_leaf,inline
 never	emacs_core/runtime/jit/cache.rs	run_with_bytecode_stack_probe_sampled	run_armed_leaf	# the outlined sampled half (stacker query + adaptive reserve); #[inline(never)], called from run_with_bytecode_stack_probe so the leaf entry keeps only the depth test
 always	emacs_core/runtime/jit/compile/leaf.rs	CompiledLeaf::entry_call_raw_memory	run_armed_leaf,inline

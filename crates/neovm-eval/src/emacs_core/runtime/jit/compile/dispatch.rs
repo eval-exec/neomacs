@@ -1521,6 +1521,23 @@ fn stack_call_from_native(
 /// Threading: both expansions use the caller's mutator-owned Context and
 /// existing atomic spec slot; no Lisp state is cached. Census increments
 /// are process-wide relaxed atomics and never change the call's state.
+/// Unstamped spec fast path (`CompiledLeaf::frame_bytes == 0`).
+///
+/// This is the protected callee boundary of `neovm_jit_call_spec`. The
+/// materialize (`bytecode_data_if_materialized`, and the `observe_active`
+/// call inside `as_veclike_ptr`) stays in this function. The stamped arm
+/// charges `leaf.frame_bytes` and does not enter here. `None` is a stub or
+/// a frame that does not fit; the caller takes `call_spec_slow`.
+#[cold]
+#[inline(never)]
+fn charge_unstamped_spec_frame(
+    ctx: &mut crate::emacs_core::eval::Context,
+    callee: Value,
+) -> Option<usize> {
+    let bc = callee.bytecode_data_if_materialized()?;
+    crate::emacs_core::bytecode::vm::charge_bytecode_frame(ctx, bc.max_stack.get())
+}
+
 macro_rules! spec_call_body {
     ($census:expr, $ctx:ident, $sym_bits:ident, $expected:ident, $slot:ident,
      $args_ptr:ident, $nargs:ident, $out:ident) => {{
@@ -1561,9 +1578,9 @@ macro_rules! spec_call_body {
             // Counting a fast-path run only after the charge keeps a budget
             // decline out of the engagement/call census.
             // A stamped leaf already holds bytecode_frame_bytes(max_stack).
-            // The unstamped sentinel (0) keeps today's materialize-and-charge
-            // path, including the stub refusal. An armed cache leaf is stamped
-            // at compile and again when an AOT leaf is inserted.
+            // The unstamped sentinel (0) goes through `charge_unstamped_spec_frame`,
+            // the cold boundary that materializes and charges. An armed cache
+            // leaf is stamped at compile and again when an AOT leaf is inserted.
             let saved_budget = if leaf.frame_bytes != 0 {
                 #[cfg(debug_assertions)]
                 if let Some(bc) = callee.bytecode_data_if_materialized() {
@@ -1577,12 +1594,7 @@ macro_rules! spec_call_body {
                     leaf.frame_bytes,
                 )
             } else {
-                let Some(bc) = callee.bytecode_data_if_materialized() else {
-                    return call_spec_slow(
-                        $ctx, $sym_bits, $expected, slot_ref, $args_ptr, $nargs, $out,
-                    );
-                };
-                crate::emacs_core::bytecode::vm::charge_bytecode_frame(ctx_ref, bc.max_stack.get())
+                charge_unstamped_spec_frame(ctx_ref, callee)
             };
             let Some(saved_budget) = saved_budget else {
                 return call_spec_slow(
