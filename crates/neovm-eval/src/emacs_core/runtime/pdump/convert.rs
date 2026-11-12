@@ -4907,6 +4907,7 @@ fn dump_evaluator_for_session(eval: &Context, session: DumpSession) -> DumpConte
     encoder.assign_chain_marker_ids(&eval.edit.buffers);
 
     let dump = DumpContextState {
+        font_selection_shifts: eval.font_registry.borrow().font_selection_shifts,
         symbol_table: dump_symbol_table(),
         tagged_heap: DumpTaggedHeap {
             objects: Vec::new(),

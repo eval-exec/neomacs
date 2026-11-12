@@ -2539,6 +2539,15 @@ pub enum FontScriptCoverage {
     Any(Vec<u32>),
 }
 
+/// Native preparation decides whether FT will read Lisp representatives.
+/// A registry charset takes precedence over both list and vector forms.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FontListingPreparation {
+    Other,
+    FontconfigWithCharset,
+    FontconfigWithoutCharset,
+}
+
 /// One required or excluded OpenType feature in a native listing query.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum FontOtfFeature {
@@ -2559,6 +2568,8 @@ pub struct FontOtfRequirement {
 /// and opening operations. An absent size leaves scalable entities unsized.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FontSpecListQuery {
+    /// GNU scalar score shifts in width, size, weight, slant order.
+    pub selection_shifts: [u8; 4],
     pub specification: FontSpecResolveRequest,
     /// Explicit native scalability constraint; absence preserves driver defaults.
     pub scalable: Option<bool>,
@@ -2598,6 +2609,10 @@ pub enum FontListError {
 /// Synchronous metadata-only acceptance policy, called before a candidate is
 /// retained in the native entity catalog. It must not reenter the display host.
 pub type FontListFilter<'a> = dyn FnMut(&ListedFontEntity) -> Result<bool, Flow> + 'a;
+
+/// Synchronous entity-specific size policy, after admission and before sorting.
+/// Like the acceptance policy, it must not reenter the display host.
+pub type FontListRescale<'a> = dyn FnMut(&ListedFontEntity) -> Result<f64, Flow> + 'a;
 
 /// GNU separates entity listing/selection from the font driver's `match`
 /// operation. A driver match is authoritative, not another style-filtered

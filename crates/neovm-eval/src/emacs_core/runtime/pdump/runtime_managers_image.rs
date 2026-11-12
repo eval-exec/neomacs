@@ -22,9 +22,9 @@ pub use super::types::{
 };
 
 const RUNTIME_MANAGERS_MAGIC: [u8; 16] = *b"NEORUNTIME\0\0\0\0\0\0";
-// Version 2 preserves font definition encoding independently of repertory.
-// Version 1 discarded encoding and cannot be reconstructed losslessly.
-const RUNTIME_MANAGERS_FORMAT_VERSION: u32 = 2;
+// Version 3 appends the Context's four font-selection score positions.
+// Older versions cannot preserve that policy and must be regenerated.
+const RUNTIME_MANAGERS_FORMAT_VERSION: u32 = 3;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -40,6 +40,7 @@ const HEADER_SIZE: usize = std::mem::size_of::<RuntimeManagersHeader>();
 
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeManagersState {
+    font_selection_shifts: [u8; 4],
     pub custom: DumpCustomManager,
     pub modes: DumpModeRegistry,
     pub fontset_registry: DumpFontsetRegistry,
@@ -56,6 +57,7 @@ impl RuntimeManagersState {
     #[doc(hidden)]
     pub fn from_context_state(state: &DumpContextState) -> Self {
         Self {
+            font_selection_shifts: state.font_selection_shifts,
             custom: state.custom.clone(),
             modes: state.modes.clone(),
             fontset_registry: state.fontset_registry.clone(),
@@ -71,6 +73,7 @@ impl RuntimeManagersState {
 
     #[doc(hidden)]
     pub fn install_into(self, state: &mut DumpContextState) {
+        state.font_selection_shifts = self.font_selection_shifts;
         state.custom = self.custom;
         state.modes = self.modes;
         state.fontset_registry = self.fontset_registry;
@@ -87,6 +90,7 @@ impl RuntimeManagersState {
 pub(crate) fn runtime_managers_section_bytes(
     managers: &RuntimeManagersState,
 ) -> Result<Vec<u8>, DumpError> {
+    super::validate_font_selection_shifts(managers.font_selection_shifts)?;
     let mut bytes = vec![0; HEADER_SIZE];
 
     write_custom_manager(&mut bytes, &managers.custom)?;
@@ -99,6 +103,9 @@ pub(crate) fn runtime_managers_section_bytes(
     write_register_manager(&mut bytes, &managers.registers)?;
     write_bookmark_manager(&mut bytes, &managers.bookmarks)?;
     write_variable_watchers(&mut bytes, &managers.watchers)?;
+    for shift in managers.font_selection_shifts {
+        write_u8(&mut bytes, shift);
+    }
 
     let payload_len = bytes.len() - HEADER_SIZE;
     let header = RuntimeManagersHeader {
@@ -143,6 +150,14 @@ pub(crate) fn load_runtime_managers_section(
         registers: read_register_manager(&mut cursor)?,
         bookmarks: read_bookmark_manager(&mut cursor)?,
         watchers: read_variable_watchers(&mut cursor)?,
+        font_selection_shifts: {
+            let mut shifts = [0; 4];
+            for shift in &mut shifts {
+                *shift = cursor.read_u8("font selection shift")?;
+            }
+            super::validate_font_selection_shifts(shifts)?;
+            shifts
+        },
     };
     if !cursor.is_empty() {
         return Err(DumpError::ImageFormatError(format!(

@@ -2960,12 +2960,14 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         &mut self,
         query: &neovm_core::emacs_core::eval::FontSpecListQuery,
     ) -> Result<
-        Option<neomacs_display_protocol::font::FontBackendKind>,
+        Option<neovm_core::emacs_core::eval::FontListingPreparation>,
         neovm_core::emacs_core::eval::FontListError,
     > {
+        use neomacs_layout_engine::font::resolver::NativeFontListingPreparation as Native;
+        use neovm_core::emacs_core::eval::FontListingPreparation as Prepared;
         let service = self.synchronized_font_metrics();
-        let supported = service
-            .validate_font_entity_listing(
+        let preparation = service
+            .prepare_font_entity_listing(
                 query
                     .specification
                     .registry
@@ -2981,7 +2983,11 @@ impl DisplayHost for PrimaryWindowDisplayHost {
                     ),
                 )
             })?;
-        Ok(supported.then(|| service.backend_kind()))
+        Ok(preparation.map(|policy| match policy {
+            Native::Other => Prepared::Other,
+            Native::FontconfigWithCharset => Prepared::FontconfigWithCharset,
+            Native::FontconfigWithoutCharset => Prepared::FontconfigWithoutCharset,
+        }))
     }
 
     fn list_fonts_for_spec(
@@ -2989,7 +2995,8 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         request: neovm_core::emacs_core::eval::FontSpecListQuery,
         prefer: Option<neovm_core::emacs_core::eval::FontSpecListQuery>,
         maximum: Option<usize>,
-        filter: Option<&mut neovm_core::emacs_core::eval::FontListFilter<'_>>,
+        mut filter: Option<&mut neovm_core::emacs_core::eval::FontListFilter<'_>>,
+        mut rescale: Option<&mut neovm_core::emacs_core::eval::FontListRescale<'_>>,
     ) -> Result<
         Vec<neovm_core::emacs_core::eval::ListedFontEntity>,
         neovm_core::emacs_core::eval::FontListError,
@@ -2997,6 +3004,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         use neomacs_layout_engine::font::resolver::FontEntityListConstraints;
         let constraints =
             |query: &neovm_core::emacs_core::eval::FontSpecListQuery| FontEntityListConstraints {
+                selection_shifts: Some(query.selection_shifts),
                 scalable: query.scalable,
                 otf: query.otf.as_ref().map(|requirement| {
                     use neomacs_layout_engine::font_backend::{
@@ -3063,16 +3071,48 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         };
         match self.font_metrics.as_ref() {
             Some(service) => {
-                core_visit_listed_font_entities(&mut self.font_entities, maximum, filter, |visit| {
-                    service.visit_font_entities(
-                        &query,
-                        &listed_constraints,
-                        preferred
-                            .as_ref()
-                            .map(|(query, constraints)| (query, constraints)),
-                        visit,
-                    );
-                })
+                let has_filter = filter.is_some();
+                let has_rescale = rescale.is_some();
+                let mut accept =
+                    |candidate: &neomacs_layout_engine::font::resolver::ListedFontCandidate| {
+                        match filter.as_deref_mut() {
+                            Some(filter) => filter(&core_listed_font_entity_preview(candidate)),
+                            None => Ok(true),
+                        }
+                    };
+                let mut scale =
+                    |candidate: &neomacs_layout_engine::font::resolver::ListedFontCandidate| {
+                        match rescale.as_deref_mut() {
+                            Some(rescale) => rescale(&core_listed_font_entity_preview(candidate)),
+                            None => Ok(1.0),
+                        }
+                    };
+                let mut failure = None;
+                let fonts = core_visit_listed_font_entities(
+                    &mut self.font_entities,
+                    maximum,
+                    None,
+                    |visit| {
+                        // Filtering must precede primary numeric filtering, the
+                        // survivor count, and rescaling. Register only outputs.
+                        failure = service
+                            .try_visit_font_entities(
+                                &query,
+                                &listed_constraints,
+                                preferred
+                                    .as_ref()
+                                    .map(|(query, constraints)| (query, constraints)),
+                                if has_filter { Some(&mut accept) } else { None },
+                                if has_rescale { Some(&mut scale) } else { None },
+                                visit,
+                            )
+                            .err();
+                    },
+                )?;
+                match failure {
+                    Some(flow) => Err(neovm_core::emacs_core::eval::FontListError::Filter(flow)),
+                    None => Ok(fonts),
+                }
             }
             None => Err(neovm_core::emacs_core::eval::FontListError::Backend(
                 "font metrics service is unavailable".to_owned(),

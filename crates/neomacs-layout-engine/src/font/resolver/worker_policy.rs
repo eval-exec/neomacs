@@ -212,7 +212,7 @@ impl CapturedCharacterPolicy {
         style: &WorkerFontStyle,
         spec: &FontsetRenderingSpec,
         backend: FontBackendKind,
-    ) -> Result<Self, EmacsRegexpError> {
+    ) -> Result<Option<Self>, EmacsRegexpError> {
         let families = match &spec.family {
             Some(family) => CapturedFontFamilyPolicy::Explicit(family.to_string()),
             None => CapturedFontFamilyPolicy::Inherited(inherited.clone()),
@@ -322,7 +322,8 @@ impl FontResolver {
                         spec,
                         self.backend.kind(),
                     ) {
-                        Ok(policy) => policy,
+                        Ok(Some(policy)) => policy,
+                        Ok(None) => continue,
                         Err(error) => {
                             tracing::warn!(target: "font_registry", %error, "invalid native font policy");
                             return None;
@@ -349,7 +350,8 @@ impl FontResolver {
             &fallback,
             self.backend.kind(),
         ) {
-            Ok(policy) => policy,
+            Ok(Some(policy)) => policy,
+            Ok(None) => return None,
             Err(error) => {
                 tracing::warn!(target: "font_registry", %error, "invalid native font policy");
                 return None;

@@ -11,6 +11,7 @@ fn lisp_string(bytes: &[u8]) -> DumpLispString {
 #[test]
 fn runtime_managers_section_round_trips_representative_state() {
     let managers = RuntimeManagersState {
+        font_selection_shifts: [23, 16, 9, 2],
         custom: DumpCustomManager {
             auto_buffer_local_syms: vec![DumpSymId(1)],
             auto_buffer_local: vec!["legacy-local".to_string()],

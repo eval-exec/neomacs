@@ -1168,6 +1168,18 @@ impl FontMetricsService {
             .validate_font_entity_listing(registry, driver)
     }
 
+    pub fn prepare_font_entity_listing(
+        &self,
+        registry: Option<&str>,
+        driver: Option<neovm_core::emacs_core::intern::SymId>,
+    ) -> Result<
+        Option<crate::font::resolver::NativeFontListingPreparation>,
+        neovm_core::emacs_core::regex::EmacsRegexpError,
+    > {
+        self.font_resolver
+            .prepare_font_entity_listing(registry, driver)
+    }
+
     pub fn visit_font_entities(
         &self,
         query: &crate::font::resolver::FontEntityQuery,
@@ -1180,6 +1192,27 @@ impl FontMetricsService {
     ) {
         self.font_resolver
             .visit_entities(query, constraints, prefer, visitor)
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn try_visit_font_entities<E>(
+        &self,
+        query: &crate::font::resolver::FontEntityQuery,
+        constraints: &crate::font::resolver::FontEntityListConstraints,
+        prefer: Option<(
+            &crate::font::resolver::FontEntityQuery,
+            &crate::font::resolver::FontEntityListConstraints,
+        )>,
+        filter: Option<
+            &mut dyn FnMut(&crate::font::resolver::ListedFontCandidate) -> Result<bool, E>,
+        >,
+        rescale: Option<
+            &mut dyn FnMut(&crate::font::resolver::ListedFontCandidate) -> Result<f64, E>,
+        >,
+        visitor: impl FnMut(crate::font::resolver::ListedFontCandidate) -> std::ops::ControlFlow<()>,
+    ) -> Result<(), E> {
+        self.font_resolver
+            .try_visit_entities(query, constraints, prefer, filter, rescale, visitor)
     }
 
     /// Load an exact listed candidate only when its outline is needed.

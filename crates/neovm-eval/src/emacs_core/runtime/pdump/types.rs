@@ -1455,6 +1455,7 @@ pub struct DumpVariableWatcherList {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DumpContextState {
+    pub font_selection_shifts: [u8; 4],
     pub symbol_table: DumpSymbolTable,
     pub tagged_heap: DumpTaggedHeap,
     pub obarray: DumpObarray,

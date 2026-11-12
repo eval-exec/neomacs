@@ -29,6 +29,7 @@ impl DisplayHost for FaceRequestHost {
         _: Option<FontSpecListQuery>,
         _: Option<usize>,
         _: Option<&mut FontListFilter<'_>>,
+        _rescale: Option<&mut neovm_eval::emacs_core::eval::FontListRescale<'_>>,
     ) -> Result<Vec<ListedFontEntity>, FontListError> {
         Ok(Vec::new())
     }

@@ -10,6 +10,7 @@
 //! face-font) lives in `super::xfaces`.
 
 mod properties;
+mod rescale;
 mod subrs;
 mod system_fonts;
 #[cfg(any(test, feature = "test-support"))]
@@ -32,7 +33,7 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use strum::EnumString;
 
 use super::xfaces::{
-    FrameFaceInitial, clear_font_cache_state, derived_face_attrs_from_font_value,
+    FrameFaceInitial, clear_font_runtime_caches, derived_face_attrs_from_font_value,
     ensure_frame_lisp_face_vector, lookup_frame_lisp_face_vector,
     realize_default_lisp_face_for_frame, runtime_face_from_lisp_face_vector,
     runtime_face_table_from_frame_lisp_faces, set_lisp_face_vector_attr,
@@ -1485,7 +1486,7 @@ fn xlfd_fields_from_font_vector(
     let set_width = field("set-width")
         .or_else(|| field("setwidth"))
         .or_else(|| field("width"))
-        .map(text)
+        .map(style)
         .unwrap_or_else(|| "*".to_string());
     let adstyle = field("adstyle")
         .map(text)
@@ -2663,7 +2664,6 @@ pub(crate) fn list_fonts(
     query.scalable = font_value_fields(&args[0])
         .and_then(|fields| properties::named_with_mode(fields, "scalable", eval.symbol_mode()))
         .map(|value| !value.is_nil());
-    query.script_coverage = font_script_coverage(eval, &args[0]);
     // OTF feature validation belongs to the selected native font driver.
     // Wrong driver requests, NS/Windows, and unavailable drivers must not
     // inspect FT-only feature lists, even if the caller mutated their conses.
@@ -2671,16 +2671,31 @@ pub(crate) fn list_fonts(
     let has_otf = font_value_fields(&args[0])
         .and_then(|fields| properties::named_with_mode(fields, "otf", mode))
         .is_some_and(|otf| otf.is_cons());
+    let has_script = font_value_fields(&args[0])
+        .and_then(|fields| properties::named_with_mode(fields, "script", mode))
+        .is_some();
     let freetype_requested = query.driver.is_none_or(|driver| driver == intern("ftcrhb"));
-    if has_otf && freetype_requested {
-        let backend = match eval.display_host.as_mut() {
+    if (has_otf || has_script) && freetype_requested {
+        use neovm_eval::emacs_core::eval::FontListingPreparation;
+        let preparation = match eval.display_host.as_mut() {
             Some(host) => host
                 .prepare_font_listing(&query)
                 .map_err(font_list_error_to_flow)?,
             None => None,
         };
-        if backend == Some(neomacs_display_protocol::font::FontBackendKind::Fontconfig) {
+        if has_otf
+            && matches!(
+                preparation,
+                Some(
+                    FontListingPreparation::FontconfigWithCharset
+                        | FontListingPreparation::FontconfigWithoutCharset
+                )
+            )
+        {
             query.otf = font_otf_requirement(&args[0], mode)?;
+        }
+        if preparation == Some(FontListingPreparation::FontconfigWithoutCharset) {
+            query.script_coverage = font_script_coverage(eval, &args[0])?;
         }
         // None identifies no FT parser. Do not suppress a generic host's
         // ordinary listing operation, which owns its native admission policy.
@@ -2690,6 +2705,12 @@ pub(crate) fn list_fonts(
         .filter_map(|pattern| pattern.as_lisp_string().cloned())
         .collect();
     let mode = eval.symbol_mode();
+    let rescale_rules = eval.variable_value_or_nil(intern("face-font-rescale-alist"));
+    let representatives = eval.variable_value_or_nil(intern("script-representative-chars"));
+    let rescale_policy = rescale::FontRescalePolicy::new(rescale_rules, representatives, mode);
+    let rescale_enabled =
+        rescale_rules.is_cons() && prefer.as_ref().is_some_and(|query| query.size.is_some());
+    let extras = font_primary_extra_fields(&args[0], mode);
     let Some(host) = eval.display_host.as_mut() else {
         return Ok(Value::NIL);
     };
@@ -2716,12 +2737,24 @@ pub(crate) fn list_fonts(
         } else {
             Some(&mut accept)
         };
+    let mut scale = |listed: &neovm_eval::emacs_core::eval::ListedFontEntity| {
+        let entity = listed_font_entity(listed);
+        // Driver entities have the primary EXTRA associations before GNU
+        // preference matching, including explicit nil and shared cells.
+        font_copy_primary_extras(entity, listed, extras, shared_native_key, mode);
+        rescale_policy.ratio(entity)
+    };
+    let rescale: Option<&mut neovm_eval::emacs_core::eval::FontListRescale<'_>> = if rescale_enabled
+    {
+        Some(&mut scale)
+    } else {
+        None
+    };
     // Apply Lisp regex policy before registering candidates, so MAXIMUM also
     // bounds retained handles when ignored fonts precede accepted results.
     let fonts = host
-        .list_fonts_for_spec(query, prefer, maximum, filter)
+        .list_fonts_for_spec(query, prefer, maximum, filter, rescale)
         .map_err(font_list_error_to_flow)?;
-    let extras = font_primary_extra_fields(&args[0], mode);
     Ok(Value::list(
         fonts
             .iter()
@@ -2781,7 +2814,7 @@ fn font_observe_reserved_native_key(
     };
     // The existing driver gate rejects this request before native enumeration
     // on NS/DirectWrite, even when the primary spec has no explicit :type.
-    host.list_fonts_for_spec(observation, None, None, Some(&mut observe))
+    host.list_fonts_for_spec(observation, None, None, Some(&mut observe), None)
         .map_err(font_list_error_to_flow)?;
     let Some((file, index)) = last else {
         return Ok(None);
@@ -2906,78 +2939,99 @@ fn font_put_entity_field(entity: Value, key: &str, value: Value) {
     let _ = entity.replace_vector_data(fields);
 }
 
+fn font_script_association(
+    mut tail: Value,
+    key: Value,
+    mode: neovm_value::tagged::SymbolMode,
+) -> Result<Option<Value>, Flow> {
+    let mut cycle = neovm_value::list_scan::GnuTailCycle::new(tail);
+    while tail.is_cons() {
+        let entry = tail.cons_car();
+        if entry.is_cons() && eq_value(&mode.unwrap(entry.cons_car()), &mode.unwrap(key)) {
+            return Ok(Some(entry));
+        }
+        tail = tail.cons_cdr();
+        if tail.is_cons() {
+            cycle.check(tail)?;
+        }
+    }
+    Ok(None)
+}
+
 /// Capture only owned characters, before borrowing the native display host.
 /// GNU caches equal specs on live frames; this capture does not recreate that
 /// separate cache or promise immediate representative-table invalidation.
 fn font_script_coverage(
     eval: &neovm_eval::emacs_core::eval::Context,
     spec: &Value,
-) -> Option<neovm_eval::emacs_core::eval::FontScriptCoverage> {
+) -> Result<Option<neovm_eval::emacs_core::eval::FontScriptCoverage>, Flow> {
     use neovm_eval::emacs_core::eval::FontScriptCoverage;
-    let fields = font_value_fields(spec)?;
+    let Some(fields) = font_value_fields(spec) else {
+        return Ok(None);
+    };
     let mode = eval.symbol_mode();
     let explicit_script = properties::named_with_mode(fields, "script", mode);
     let script = if let Some(script) = explicit_script {
         script
     } else {
-        let otf = properties::named_with_mode(fields, "otf", mode)?;
+        let Some(otf) = properties::named_with_mode(fields, "otf", mode) else {
+            return Ok(None);
+        };
         if !otf.is_cons() || otf.cons_car().is_nil() {
-            return None;
+            return Ok(None);
         }
-        let original_script = mode.unwrap(otf.cons_car());
-        let mut mappings = eval.variable_value_or_nil(intern("otf-script-alist"));
-        let mut mapped = None;
-        while mappings.is_cons() {
-            let entry = mappings.cons_car();
-            if entry.is_cons() && eq_value(&mode.unwrap(entry.cons_car()), &original_script) {
-                let script = entry.cons_cdr();
-                if script.is_symbol(mode) && !script.is_nil() {
-                    mapped = Some(script);
-                }
-                break;
-            }
-            mappings = mappings.cons_cdr();
+        let mappings = eval.variable_value_or_nil(intern("otf-script-alist"));
+        let Some(entry) = font_script_association(mappings, otf.cons_car(), mode)? else {
+            return Ok(None);
+        };
+        let mapped = entry.cons_cdr();
+        if !mapped.is_symbol(mode) || mapped.is_nil() {
+            return Ok(None);
         }
-        mapped?
+        mapped
     };
-    let mut cursor = eval.variable_value_or_nil(intern("script-representative-chars"));
-    while cursor.is_cons() {
-        let entry = cursor.cons_car();
-        if entry.is_cons() && eq_value(&mode.unwrap(entry.cons_car()), &mode.unwrap(script)) {
-            let representatives = entry.cons_cdr();
-            if let Some(values) = representatives.as_vector_data() {
-                // ftfont_list obtains vector alternatives only from an
-                // explicit :script extra, never from the derived OTF script.
-                explicit_script?;
-                return Some(FontScriptCoverage::Any(
-                    values
-                        .iter()
-                        .filter_map(|value| value.as_fixnum().and_then(|n| u32::try_from(n).ok()))
-                        .collect(),
-                ));
-            }
-            // ftfont_spec_pattern skips a nil script's list, whereas the
-            // vector lookup in ftfont_list still sees an explicit nil key.
-            if !script.is_nil() && representatives.is_cons() {
-                let mut characters = Vec::new();
-                let mut tail = representatives;
-                while tail.is_cons() {
-                    if let Some(character) = tail
-                        .cons_car()
-                        .as_fixnum()
-                        .filter(|n| (0..=0x3fffff).contains(n))
-                    {
-                        characters.push(character as u32);
-                    }
-                    tail = tail.cons_cdr();
-                }
-                return Some(FontScriptCoverage::All(characters));
-            }
-            return None;
+    let representatives = eval.variable_value_or_nil(intern("script-representative-chars"));
+    let Some(entry) = font_script_association(representatives, script, mode)? else {
+        return Ok(None);
+    };
+    let representatives = entry.cons_cdr();
+    if let Some(values) = representatives.as_vector_data() {
+        // ftfont_list obtains vector alternatives only from an explicit
+        // :script extra, never from the derived OTF script.
+        if explicit_script.is_none() {
+            return Ok(None);
         }
-        cursor = cursor.cons_cdr();
+        return Ok(Some(FontScriptCoverage::Any(
+            values
+                .iter()
+                .filter_map(|value| value.as_fixnum().and_then(|n| u32::try_from(n).ok()))
+                .collect(),
+        )));
     }
-    None
+    // GNU's list loop accepts a dotted terminal. Its no-quit association and
+    // representative walks assume noncircular data and can hang. Defensively
+    // signal cycles before allocating, while retaining early-match semantics.
+    if script.is_nil() || !representatives.is_cons() {
+        return Ok(None);
+    }
+    let mut tail = representatives;
+    let mut cycle = neovm_value::list_scan::GnuTailCycle::new(tail);
+    while tail.is_cons() {
+        tail = tail.cons_cdr();
+        if tail.is_cons() {
+            cycle.check(tail)?;
+        }
+    }
+    Ok(Some(FontScriptCoverage::All(
+        list_iter(representatives)
+            .filter_map(|value| {
+                value
+                    .as_fixnum()
+                    .filter(|n| (0..=0x3fffff).contains(n))
+                    .map(|n| n as u32)
+            })
+            .collect(),
+    )))
 }
 
 fn font_otf_tag(value: Value, mode: neovm_value::tagged::SymbolMode) -> Option<[u8; 4]> {
@@ -3125,6 +3179,7 @@ fn font_list_query(
     let mut specification = font_spec_resolve_request(eval, spec, None)?;
     specification.frame_id = frame_id;
     Ok(neovm_eval::emacs_core::eval::FontSpecListQuery {
+        selection_shifts: super::xfaces::font_selection_shifts(),
         specification,
         scalable: None,
         script_coverage: None,
@@ -3396,7 +3451,7 @@ fn match_font_spec_request(
 /// `(clear-font-cache)` -- reset internal font/face caches and return nil.
 pub(crate) fn clear_font_cache(args: Vec<Value>) -> EvalResult {
     expect_max_args("clear-font-cache", &args, 0)?;
-    clear_font_cache_state();
+    clear_font_runtime_caches();
     Ok(Value::NIL)
 }
 

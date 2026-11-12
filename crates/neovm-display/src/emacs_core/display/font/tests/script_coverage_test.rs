@@ -6,13 +6,24 @@ struct RecordingHost(Requests);
 impl DisplayHost for RecordingHost {
     fn prepare_font_listing(
         &mut self,
-        _: &FontSpecListQuery,
+        query: &FontSpecListQuery,
     ) -> Result<
-        Option<neomacs_display_protocol::font::FontBackendKind>,
+        Option<neovm_eval::emacs_core::eval::FontListingPreparation>,
         neovm_eval::emacs_core::eval::FontListError,
     > {
+        use neovm_eval::emacs_core::eval::FontListingPreparation as Prepared;
         Ok(Some(
-            neomacs_display_protocol::font::FontBackendKind::Fontconfig,
+            if query
+                .specification
+                .registry
+                .as_ref()
+                .and_then(LispString::as_utf8_str)
+                == Some("iso8859-2")
+            {
+                Prepared::FontconfigWithCharset
+            } else {
+                Prepared::FontconfigWithoutCharset
+            },
         ))
     }
     fn realize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
@@ -27,6 +38,7 @@ impl DisplayHost for RecordingHost {
         prefer: Option<FontSpecListQuery>,
         _: Option<usize>,
         _: Option<&mut neovm_eval::emacs_core::eval::FontListFilter<'_>>,
+        _rescale: Option<&mut neovm_eval::emacs_core::eval::FontListRescale<'_>>,
     ) -> Result<
         Vec<neovm_eval::emacs_core::eval::ListedFontEntity>,
         neovm_eval::emacs_core::eval::FontListError,

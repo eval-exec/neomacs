@@ -152,6 +152,34 @@ fn prepare_listing_review_fonts(fonts: &Path) -> String {
             rules.push_str(&format!("<match target=\"scan\"><test name=\"file\" compare=\"contains\"><string>{filename}</string></test><edit name=\"family\" mode=\"assign_replace\"><string>{family}</string></edit><edit name=\"slant\" mode=\"assign_replace\"><int>{slant}</int></edit>{weight}{width}</match>"));
         }
     }
+    for (family, faces) in [
+        (
+            "FrameRescale",
+            vec![
+                ("small", hack, 14, 80, 100),
+                ("large", dejavu, 24, 200, 100),
+            ],
+        ),
+        (
+            "FrameOrder",
+            vec![("weight", hack, 0, 80, 125), ("width", dejavu, 0, 200, 100)],
+        ),
+        ("FrameRegistryFirst", vec![("first", hack, 0, 80, 100)]),
+        ("FrameRegistryNext", vec![("next", dejavu, 0, 80, 100)]),
+    ] {
+        for (face, source, pixels, weight, width) in faces {
+            let filename = format!("review-{family}-{face}.ttf");
+            fs::copy(source, fonts.join(&filename)).unwrap();
+            let size = if pixels > 0 {
+                format!(
+                    "<edit name=\"scalable\" mode=\"assign_replace\"><bool>false</bool></edit><edit name=\"pixelsize\" mode=\"assign_replace\"><double>{pixels}</double></edit>"
+                )
+            } else {
+                String::new()
+            };
+            rules.push_str(&format!("<match target=\"scan\"><test name=\"file\" compare=\"contains\"><string>{filename}</string></test><edit name=\"family\" mode=\"assign_replace\"><string>{family}</string></edit><edit name=\"weight\" mode=\"assign_replace\"><int>{weight}</int></edit><edit name=\"width\" mode=\"assign_replace\"><int>{width}</int></edit>{size}</match>"));
+        }
+    }
     rules
 }
 
@@ -306,6 +334,7 @@ fn run(engine: Engine) {
     assert_eq!(state["font-property-cases"], 4);
     assert_eq!(state["listing-review-cases"], 7);
     assert_eq!(state["registry-family-cases"], 13);
+    assert_eq!(state["preference-policy-cases"], 21);
     let observations = state["observations"].as_array().unwrap();
     let expected = [
         "script-explicit-nil-han",
@@ -352,6 +381,27 @@ fn run(engine: Engine) {
         "registry-invalid-preference-ignored",
         "find-font-otf-uses-listing",
         "find-font-registry-error",
+        "prefer-fixed-size-no-rescale",
+        "prefer-fixed-size-regexp-rescale",
+        "prefer-fixed-size-spec-rescale",
+        "prefer-fixed-size-integer-rescale-ignored",
+        "prefer-fixed-size-fractional-rescale",
+        "prefer-rescale-xlfd-ignores-custom-width-aliases",
+        "prefer-fixed-size-half-rescale",
+        "prefer-rescale-invalid-regexp",
+        "prefer-rescale-no-size-ignores-regexp",
+        "prefer-rescale-zero-maximum-ignores-regexp",
+        "prefer-rescale-after-ignored-fonts",
+        "prefer-ignored-regexp-error-before-rescale",
+        "prefer-rescale-error-before-positive-maximum",
+        "prefer-single-primary-match-skips-rescale",
+        "prefer-scalable-entities-skip-rescale",
+        "ignored-regexp-before-primary-numeric-filters",
+        "ignored-regexp-primary-filter-boundaries",
+        "prefer-default-selection-order",
+        "prefer-custom-selection-order",
+        "prefer-duplicate-selection-order",
+        "fontset-unmatched-registry-next-rule",
         "gui-selected-tty-default-face-negative-width",
         "gui-selected-tty-invalid-face-negative-width",
         "tty-selected-nil-frame",

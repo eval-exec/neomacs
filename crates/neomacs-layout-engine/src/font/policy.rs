@@ -252,10 +252,18 @@ impl<'a> From<&'a FontsetRenderingSpec> for FontPolicySpec<'a> {
 
 pub struct GnuFontPolicy;
 
+/// A valid but unsupported registry is a fontset-rule miss, not an
+/// unconstrained character query and not a regexp compilation failure.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum NativeFontPolicy {
+    UnsupportedRegistry,
+    Supported(NativeQueryConstraints),
+}
+
 impl GnuFontPolicy {
     pub fn constraints_for_entity(
         spec: &StoredFontSpec,
-    ) -> Result<NativeQueryConstraints, EmacsRegexpError> {
+    ) -> Result<NativeFontPolicy, EmacsRegexpError> {
         let names = FontPolicySpec::from(spec);
         let registry = parse_registry(names.registry.as_deref())?;
         Ok(Self::constraints_for_parsed(
@@ -268,21 +276,21 @@ impl GnuFontPolicy {
     pub fn constraints_for_character(
         spec: &StoredFontSpec,
         required_char: char,
-    ) -> Result<NativeQueryConstraints, EmacsRegexpError> {
+    ) -> Result<NativeFontPolicy, EmacsRegexpError> {
         Self::constraints_for_spec(spec, required_char)
     }
 
     pub fn constraints_for_spec(
         spec: &StoredFontSpec,
         required_char: char,
-    ) -> Result<NativeQueryConstraints, EmacsRegexpError> {
+    ) -> Result<NativeFontPolicy, EmacsRegexpError> {
         Self::constraints_for_names(&FontPolicySpec::from(spec), required_char)
     }
 
     pub(super) fn constraints_for_names(
         names: &FontPolicySpec<'_>,
         required_char: char,
-    ) -> Result<NativeQueryConstraints, EmacsRegexpError> {
+    ) -> Result<NativeFontPolicy, EmacsRegexpError> {
         let registry = parse_registry(names.registry.as_deref())?;
         Ok(Self::constraints_for_parsed(names, required_char, registry))
     }
@@ -291,14 +299,17 @@ impl GnuFontPolicy {
         names: &FontPolicySpec<'_>,
         required_char: char,
         registry: ParsedRegistry,
-    ) -> NativeQueryConstraints {
+    ) -> NativeFontPolicy {
+        if matches!(registry, ParsedRegistry::Unmatched) {
+            return NativeFontPolicy::UnsupportedRegistry;
+        }
         let representative_char = registry.representative();
         let coverage_ranges = registry.ranges(required_char);
         let languages = combined_query_langs(registry.language(), names.language.as_deref())
             .into_iter()
             .filter_map(LanguageTag::new)
             .collect();
-        NativeQueryConstraints {
+        NativeFontPolicy::Supported(NativeQueryConstraints {
             representative_char,
             coverage: if coverage_ranges.is_empty() {
                 CoverageRequirement::Any
@@ -306,7 +317,7 @@ impl GnuFontPolicy {
                 CoverageRequirement::Ranges(coverage_ranges)
             },
             languages,
-        }
+        })
     }
 }
 
@@ -664,11 +675,24 @@ pub(crate) fn registry_hint(
 
 /// ftfont_spec_pattern uses exact symbol shortcuts for Unicode registries;
 /// the legacy charset table separately accepts case-insensitive patterns.
+#[cfg(test)]
 pub(crate) fn registry_supported_for_listing(registry: &str) -> Result<bool, EmacsRegexpError> {
-    if matches!(registry, "ascii-0" | "iso10646-1" | "unicode-bmp") {
-        return Ok(true);
-    }
-    Ok(registry_hint(registry)?.is_some())
+    Ok(registry_listing_preparation(Some(registry))?.is_some())
+}
+
+pub(super) enum RegistryListingPreparation {
+    WithCharset,
+    WithoutCharset,
+}
+
+pub(super) fn registry_listing_preparation(
+    registry: Option<&str>,
+) -> Result<Option<RegistryListingPreparation>, EmacsRegexpError> {
+    Ok(match parse_registry(registry)? {
+        ParsedRegistry::Unconstrained => Some(RegistryListingPreparation::WithoutCharset),
+        ParsedRegistry::Legacy(_) => Some(RegistryListingPreparation::WithCharset),
+        ParsedRegistry::Unmatched => None,
+    })
 }
 
 pub(crate) fn registry_language(registry: &str) -> Result<Option<&'static str>, EmacsRegexpError> {

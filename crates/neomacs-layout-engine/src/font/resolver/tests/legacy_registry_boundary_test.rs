@@ -263,3 +263,116 @@ fn frozen_character_registry_error_aborts_before_unconstrained_fallback() {
     assert!(result.is_none());
     assert!(!resolver.worker_policy_missing());
 }
+
+#[test]
+fn listing_preparation_keeps_registry_charsets_ahead_of_script_representatives() {
+    use NativeFontListingPreparation::{FontconfigWithCharset, FontconfigWithoutCharset, Other};
+    let (resolver, queries) = boundary(FontBackendKind::Fontconfig);
+    for registry in [
+        None,
+        Some("ascii-0"),
+        Some("iso10646-1"),
+        Some("unicode-bmp"),
+    ] {
+        assert_eq!(
+            resolver.prepare_font_entity_listing(registry, None),
+            Ok(Some(FontconfigWithoutCharset))
+        );
+    }
+    for registry in ["iso8859-2", "ISO8859-2", "iso8859-*", "", "unicode-sip"] {
+        assert_eq!(
+            resolver.prepare_font_entity_listing(Some(registry), None),
+            Ok(Some(FontconfigWithCharset)),
+            "{registry}"
+        );
+    }
+    for registry in ["ISO10646-1", "n736-no-registry"] {
+        assert_eq!(
+            resolver.prepare_font_entity_listing(Some(registry), None),
+            Ok(None)
+        );
+    }
+    assert!(
+        resolver
+            .prepare_font_entity_listing(Some("["), None)
+            .is_err()
+    );
+    assert_eq!(
+        resolver.prepare_font_entity_listing(Some("["), Some(intern("ns"))),
+        Ok(None)
+    );
+    assert!(
+        queries.lock().unwrap().is_empty(),
+        "preparation must not enumerate or retain native candidates"
+    );
+    for kind in [FontBackendKind::CoreText, FontBackendKind::DirectWrite] {
+        let (resolver, queries) = boundary(kind);
+        assert_eq!(
+            resolver.prepare_font_entity_listing(Some("iso8859-2"), None),
+            Ok(Some(Other))
+        );
+        assert!(queries.lock().unwrap().is_empty());
+    }
+}
+
+fn unmatched_registry_fontset() -> neovm_core::emacs_core::Context {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(let ((font-encoding-alist '(("n736-unmatched-mapped" . unicode))))
+              (set-fontset-font t ?λ
+                (font-spec :family "Registry Rejected" :registry "n736-unmatched-mapped"))
+              (set-fontset-font t ?λ
+                (font-spec :family "Registry Boundary" :registry "iso10646-1") nil 'append))"#,
+    )
+    .unwrap();
+    eval
+}
+
+fn unsupported_registry_skips_to_next_rule(detached: bool) {
+    let _eval = unmatched_registry_fontset();
+    let (mut resolver, queries) = boundary(FontBackendKind::Fontconfig);
+    if detached {
+        resolver.install_worker_policy(Arc::new(
+            FrozenCharacterPolicies::capture(
+                &[("Registry Boundary", 'λ', 400, false, selection_size())],
+                4096,
+            )
+            .unwrap(),
+        ));
+    }
+    assert!(
+        resolver
+            .resolve_for_char(
+                "Registry Boundary",
+                'λ',
+                400,
+                FontSlant::Normal,
+                FontWidth::Normal,
+                selection_size()
+            )
+            .is_some()
+    );
+    let queries = queries.lock().unwrap();
+    assert_eq!(
+        queries.len(),
+        1,
+        "unsupported registry must not query a driver"
+    );
+    assert!(
+        matches!(&queries[0].scope, FontCandidateScope::Family(family)
+        if family.as_str() == "Registry Boundary"),
+        "{:?}",
+        queries[0].scope
+    );
+    assert!(queries[0].charset_ranges.is_empty());
+}
+
+#[test]
+fn live_unmatched_registry_continues_to_the_next_fontset_rule() {
+    unsupported_registry_skips_to_next_rule(false);
+}
+
+#[test]
+fn frozen_unmatched_registry_continues_to_the_next_fontset_rule() {
+    unsupported_registry_skips_to_next_rule(true);
+}

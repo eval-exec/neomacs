@@ -15,6 +15,8 @@ use std::sync::Arc;
 pub const FIRST_DYNAMIC_FACE_ID: i64 = 186;
 
 pub struct FaceAttrState {
+    /// GNU packed score positions, in width/size/weight/slant order.
+    pub font_selection_shifts: [u8; 4],
     pub selected_created: FxHashSet<SymId>,
     pub selected_overrides: FxHashMap<SymId, FxHashMap<LFaceAttr, Value>>,
     pub defaults_overrides: FxHashMap<SymId, FxHashMap<LFaceAttr, Value>>,
@@ -29,6 +31,7 @@ pub struct FaceAttrState {
 impl Default for FaceAttrState {
     fn default() -> Self {
         Self {
+            font_selection_shifts: [23, 16, 9, 2],
             selected_created: FxHashSet::default(),
             selected_overrides: FxHashMap::default(),
             defaults_overrides: FxHashMap::default(),

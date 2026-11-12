@@ -8,6 +8,8 @@ mod face_remapping_review_test;
 mod otf_mutation_test;
 #[path = "preferred_zero_size_review_test.rs"]
 mod preferred_zero_size_review_test;
+#[path = "script_mutation_review_test.rs"]
+mod script_mutation_review_test;
 #[path = "system_font_test.rs"]
 mod system_font_test;
 use crate::emacs_core::display_host::{AvailableFontFamilyName, FontResolveRequest, FrameFontSize};
@@ -490,6 +492,7 @@ impl DisplayHost for ThinOnlyDisplayHost {
         _: Option<neovm_eval::emacs_core::eval::FontSpecListQuery>,
         maximum: Option<usize>,
         filter: Option<&mut neovm_eval::emacs_core::eval::FontListFilter<'_>>,
+        _rescale: Option<&mut neovm_eval::emacs_core::eval::FontListRescale<'_>>,
     ) -> Result<
         Vec<neovm_eval::emacs_core::eval::ListedFontEntity>,
         neovm_eval::emacs_core::eval::FontListError,
@@ -598,6 +601,7 @@ impl DisplayHost for CapturingFindFontDisplayHost {
         _: Option<neovm_eval::emacs_core::eval::FontSpecListQuery>,
         maximum: Option<usize>,
         filter: Option<&mut neovm_eval::emacs_core::eval::FontListFilter<'_>>,
+        _rescale: Option<&mut neovm_eval::emacs_core::eval::FontListRescale<'_>>,
     ) -> Result<
         Vec<neovm_eval::emacs_core::eval::ListedFontEntity>,
         neovm_eval::emacs_core::eval::FontListError,
@@ -2959,14 +2963,14 @@ impl DisplayHost for ListingFontDisplayHost {
         &mut self,
         _: &neovm_eval::emacs_core::eval::FontSpecListQuery,
     ) -> Result<
-        Option<neomacs_display_protocol::font::FontBackendKind>,
+        Option<neovm_eval::emacs_core::eval::FontListingPreparation>,
         neovm_eval::emacs_core::eval::FontListError,
     > {
-        use neomacs_display_protocol::font::FontBackendKind;
+        use neovm_eval::emacs_core::eval::FontListingPreparation as Prepared;
         Ok(match self.fonts.first().and_then(|font| font.driver) {
-            Some(driver) if driver == intern("ftcrhb") => Some(FontBackendKind::Fontconfig),
-            Some(driver) if driver == intern("ns") => Some(FontBackendKind::CoreText),
-            Some(driver) if driver == intern("directwrite") => Some(FontBackendKind::DirectWrite),
+            Some(driver) if driver == intern("ftcrhb") => Some(Prepared::FontconfigWithoutCharset),
+            Some(driver) if driver == intern("ns") => Some(Prepared::Other),
+            Some(driver) if driver == intern("directwrite") => Some(Prepared::Other),
             _ => None,
         })
     }
@@ -2982,6 +2986,7 @@ impl DisplayHost for ListingFontDisplayHost {
         _: Option<neovm_eval::emacs_core::eval::FontSpecListQuery>,
         maximum: Option<usize>,
         mut filter: Option<&mut neovm_eval::emacs_core::eval::FontListFilter<'_>>,
+        _rescale: Option<&mut neovm_eval::emacs_core::eval::FontListRescale<'_>>,
     ) -> Result<
         Vec<neovm_eval::emacs_core::eval::ListedFontEntity>,
         neovm_eval::emacs_core::eval::FontListError,

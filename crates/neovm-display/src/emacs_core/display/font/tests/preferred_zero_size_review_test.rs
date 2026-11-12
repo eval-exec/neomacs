@@ -18,6 +18,7 @@ impl DisplayHost for SizeHost {
         prefer: Option<FontSpecListQuery>,
         _: Option<usize>,
         _: Option<&mut FontListFilter<'_>>,
+        _rescale: Option<&mut neovm_eval::emacs_core::eval::FontListRescale<'_>>,
     ) -> Result<Vec<ListedFontEntity>, FontListError> {
         self.0.borrow_mut().push((primary, prefer));
         Ok(Vec::new())

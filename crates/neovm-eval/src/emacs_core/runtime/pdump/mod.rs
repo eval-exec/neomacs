@@ -369,8 +369,20 @@ fn empty_lisp_string() -> types::DumpLispString {
     }
 }
 
+fn validate_font_selection_shifts(shifts: [u8; 4]) -> Result<(), DumpError> {
+    for shift in shifts {
+        if !matches!(shift, 23 | 16 | 9 | 2) {
+            return Err(DumpError::ImageFormatError(format!(
+                "runtime-manager font selection has invalid shift {shift}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn empty_context_state() -> DumpContextState {
     DumpContextState {
+        font_selection_shifts: [23, 16, 9, 2],
         symbol_table: types::DumpSymbolTable {
             names: Vec::new(),
             symbols: Vec::new(),
@@ -859,6 +871,7 @@ fn reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
     value_fixups_section: Option<&[u8]>,
     proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
 ) -> Result<Context, DumpError> {
+    validate_font_selection_shifts(state.font_selection_shifts)?;
     // 2. Reconstruct the tagged heap before any heap-backed value/object loads
     // so tagged dump references can resolve directly to live tagged objects.
     let tagged_heap =
@@ -924,6 +937,7 @@ fn reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
         load_watcher_list(&mut decoder, &state.watchers),
         proof,
     );
+    eval.font_registry.borrow_mut().font_selection_shifts = state.font_selection_shifts;
 
     // Phase 10E follow-up: re-install BUFFER_OBJFWD forwarders.
     // `pdump::convert::load_symbol_data` leaves SymbolValue::Forwarded

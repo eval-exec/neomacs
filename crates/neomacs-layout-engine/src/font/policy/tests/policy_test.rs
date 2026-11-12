@@ -1,4 +1,4 @@
-use super::{CoverageRequirement, GnuFontPolicy, coalesce_ranges};
+use super::{CoverageRequirement, GnuFontPolicy, NativeFontPolicy, coalesce_ranges};
 use neovm_core::emacs_core::fontset::StoredFontSpec;
 use neovm_core::emacs_core::intern::intern;
 
@@ -14,7 +14,11 @@ fn registry_constraints_are_platform_neutral_and_typed() {
         definition: None,
     };
 
-    let constraints = GnuFontPolicy::constraints_for_spec(&spec, '好').unwrap();
+    let NativeFontPolicy::Supported(constraints) =
+        GnuFontPolicy::constraints_for_spec(&spec, '好').unwrap()
+    else {
+        panic!("recognized registry")
+    };
 
     assert_eq!(constraints.representative_char(), '专');
     assert_eq!(constraints.languages()[0].as_str(), "zh-cn");
@@ -36,7 +40,11 @@ fn generic_unicode_registry_does_not_invent_a_charset_filter() {
         definition: None,
     };
 
-    let constraints = GnuFontPolicy::constraints_for_spec(&spec, 'λ').unwrap();
+    let NativeFontPolicy::Supported(constraints) =
+        GnuFontPolicy::constraints_for_spec(&spec, 'λ').unwrap()
+    else {
+        panic!("recognized registry")
+    };
 
     assert_eq!(constraints.coverage(), &CoverageRequirement::Any);
 }

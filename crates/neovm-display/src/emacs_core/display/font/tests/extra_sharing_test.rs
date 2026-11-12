@@ -614,6 +614,7 @@ fn font_extra_sharing_disabled_positioned_driver_never_becomes_an_unrestricted_q
             _: Option<neovm_eval::emacs_core::eval::FontSpecListQuery>,
             _: Option<usize>,
             _: Option<&mut neovm_eval::emacs_core::eval::FontListFilter<'_>>,
+            _rescale: Option<&mut neovm_eval::emacs_core::eval::FontListRescale<'_>>,
         ) -> Result<
             Vec<neovm_eval::emacs_core::eval::ListedFontEntity>,
             neovm_eval::emacs_core::eval::FontListError,

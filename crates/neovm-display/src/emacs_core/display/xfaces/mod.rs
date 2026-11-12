@@ -1009,6 +1009,20 @@ pub fn clear_font_cache_state() {
     FACE_ATTR_STATE.with(|slot| slot.reset(FaceAttrState::default()));
 }
 
+pub(crate) fn font_selection_shifts() -> [u8; 4] {
+    FACE_ATTR_STATE.with(|slot| slot.borrow().font_selection_shifts)
+}
+
+pub(crate) fn clear_font_runtime_caches() {
+    FACE_ATTR_STATE.with(|slot| {
+        let shifts = slot.borrow().font_selection_shifts;
+        slot.reset(FaceAttrState {
+            font_selection_shifts: shifts,
+            ..FaceAttrState::default()
+        });
+    });
+}
+
 #[doc(hidden)]
 pub fn current_font_registry_handle() -> FontRegistryHandle {
     FACE_ATTR_STATE.with(HeapRegistrySlot::current)
@@ -4879,7 +4893,7 @@ pub fn builtin_internal_face_x_get_resource(args: Vec<Value>) -> EvalResult {
     Ok(Value::NIL)
 }
 
-/// `(internal-set-font-selection-order ORDER)` -- validate order list shape and return nil.
+/// `(internal-set-font-selection-order ORDER)` -- retain GNU score positions.
 #[doc(hidden)]
 pub fn builtin_internal_set_font_selection_order(args: Vec<Value>) -> EvalResult {
     expect_args("internal-set-font-selection-order", &args, 1)?;
@@ -4891,31 +4905,43 @@ pub fn builtin_internal_set_font_selection_order(args: Vec<Value>) -> EvalResult
         ));
     }
 
-    let valid_keywords = [":width", ":height", ":weight", ":slant"];
-    let valid = if let Some(values) = list_to_vec(order) {
-        if values.len() == valid_keywords.len() {
-            let mut seen = HashSet::default();
-            values.iter().all(|value| {
-                if let Some(id) = value.as_bare_keyword_id() {
-                    let s = resolve_sym(id);
-                    let key = if s.starts_with(':') {
-                        s.to_owned()
-                    } else {
-                        format!(":{s}")
-                    };
-                    valid_keywords.contains(&key.as_str()) && seen.insert(key)
-                } else {
-                    false
-                }
-            })
-        } else {
-            false
+    let keywords = [
+        intern(":width"),
+        intern(":height"),
+        intern(":weight"),
+        intern(":slant"),
+    ];
+    let mut indices = [0; 4];
+    let mut tail = *order;
+    let mut valid = true;
+    for index in &mut indices {
+        if !tail.is_cons() {
+            valid = false;
+            break;
         }
-    } else {
-        false
-    };
+        let attribute = tail.cons_car().as_bare_symbol_id();
+        let Some(position) = keywords
+            .iter()
+            .position(|keyword| Some(*keyword) == attribute)
+        else {
+            valid = false;
+            break;
+        };
+        *index = position;
+        tail = tail.cons_cdr();
+    }
 
-    if valid {
+    if valid && tail.is_nil() {
+        FACE_ATTR_STATE.with(|slot| {
+            let mut state = slot.borrow_mut();
+            // GNU updates each listed field without clearing omitted fields.
+            // Repeated attributes therefore overwrite their earlier position.
+            for (index, shift) in indices.into_iter().zip([23, 16, 9, 2]) {
+                state.font_selection_shifts[index] = shift;
+            }
+        });
+        // Preserve Lisp face definitions while invalidating cached selections.
+        crate::emacs_core::fontset::invalidate_font_selection_policy();
         return Ok(Value::NIL);
     }
 
@@ -4974,7 +5000,7 @@ pub fn builtin_internal_set_alternative_font_family_alist(args: Vec<Value>) -> E
         normalized.push(Value::list(converted));
     }
     replace_alternative_font_family_alist(alist);
-    clear_font_cache_state();
+    clear_font_runtime_caches();
     Ok(Value::list(normalized))
 }
 
@@ -5008,7 +5034,7 @@ pub fn builtin_internal_set_alternative_font_registry_alist(args: Vec<Value>) ->
     }
     replace_alternative_font_registry_alist(alist);
     crate::emacs_core::fontset::invalidate_font_selection_policy();
-    clear_font_cache_state();
+    clear_font_runtime_caches();
     Ok(Value::list(normalized))
 }
 

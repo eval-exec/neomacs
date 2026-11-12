@@ -3,8 +3,9 @@
 //! GNU `font_score` stores four independent seven-bit distances. Their bit
 //! positions make comparison lexicographic in `face-font-selection-order`
 //! (by default: width, size, weight, slant); unrelated properties are not an
-//! additive bag of penalties. Rust field order plus derived [`Ord`] expresses
-//! that policy directly and prevents a refactor from silently reordering it.
+//! additive bag of penalties. Primary selection retains the default field
+//! order through derived [`Ord`]. Public listing packs the distances at the
+//! captured shifts, preserving GNU's overlapping fields after repeated keys.
 
 use crate::font_backend::PlatformFontSize;
 use neovm_core::face::{FontSlant, FontWeight, FontWidth};
@@ -30,6 +31,20 @@ pub(crate) struct CandidateSelectionScore {
 }
 
 impl CandidateSelectionScore {
+    pub(crate) fn listing_value(self, shifts: [u8; 4]) -> u32 {
+        [
+            self.style.width.0,
+            self.style.size.0,
+            self.style.weight.0,
+            self.style.slant.0,
+        ]
+        .into_iter()
+        .zip(shifts)
+        .fold(0, |score, (distance, shift)| {
+            score | distance.checked_shl(u32::from(shift)).unwrap_or(u32::MAX)
+        })
+    }
+
     /// GNU shares the low size-score bit between DPI and average-width
     /// mismatches. Keep it inside size priority, ahead of weight and slant.
     pub(crate) fn with_size_metadata_mismatch(mut self) -> Self {

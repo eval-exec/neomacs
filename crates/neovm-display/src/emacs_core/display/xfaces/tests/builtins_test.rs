@@ -2495,6 +2495,160 @@ fn internal_set_font_selection_order_rejects_invalid_order() {
 }
 
 #[test]
+fn font_selection_order_retains_context_owned_scoring_positions() {
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let face = "__font_order_preserved_face";
+    builtin_internal_make_lisp_face(&mut eval, vec![Value::symbol(face)]).unwrap();
+    let order = Value::list(vec![
+        Value::keyword("weight"),
+        Value::keyword("width"),
+        Value::keyword("height"),
+        Value::keyword("slant"),
+    ]);
+    assert!(
+        builtin_internal_set_font_selection_order(vec![order])
+            .unwrap()
+            .is_nil()
+    );
+    assert_eq!(font_selection_shifts(), [16, 9, 23, 2]);
+    assert!(
+        is_created_lisp_face(face),
+        "selection changes must retain face definitions"
+    );
+}
+
+#[test]
+fn font_selection_order_duplicates_retain_omitted_positions_and_bound_invalid_lists() {
+    let _eval = Context::new(crate::test_utils::unit_runtime());
+    let order = Value::list(vec![Value::keyword("width"); 4]);
+    assert!(
+        builtin_internal_set_font_selection_order(vec![order])
+            .unwrap()
+            .is_nil()
+    );
+    assert_eq!(font_selection_shifts(), [2, 16, 9, 2]);
+    builtin_internal_set_font_selection_order(vec![Value::list(vec![
+        Value::keyword("weight"),
+        Value::keyword("width"),
+        Value::keyword("height"),
+        Value::keyword("slant"),
+    ])])
+    .unwrap();
+    builtin_internal_set_font_selection_order(vec![order]).unwrap();
+    assert_eq!(
+        font_selection_shifts(),
+        [2, 9, 23, 2],
+        "omitted fields retain the current positions"
+    );
+    let cyclic = Value::list(vec![Value::keyword("width")]);
+    cyclic.set_cdr(cyclic);
+    assert!(builtin_internal_set_font_selection_order(vec![cyclic]).is_err());
+    assert_eq!(
+        font_selection_shifts(),
+        [2, 9, 23, 2],
+        "invalid input cannot alter policy"
+    );
+}
+
+#[test]
+fn font_selection_order_survives_public_cache_clears_but_new_contexts_start_default() {
+    let proof = crate::test_utils::unit_runtime();
+    let mut first = Context::new(proof);
+    current_font_registry_handle()
+        .borrow_mut()
+        .font_selection_shifts = [16, 9, 23, 2];
+    clear_font_cache(vec![]).unwrap();
+    assert_eq!(font_selection_shifts(), [16, 9, 23, 2]);
+    builtin_internal_set_alternative_font_family_alist(vec![Value::NIL]).unwrap();
+    assert_eq!(font_selection_shifts(), [16, 9, 23, 2]);
+    builtin_internal_set_alternative_font_registry_alist(vec![Value::NIL]).unwrap();
+    assert_eq!(font_selection_shifts(), [16, 9, 23, 2]);
+    let mut second = Context::new(proof);
+    assert_eq!(font_selection_shifts(), [23, 16, 9, 2]);
+    first.eval_str("nil").unwrap();
+    assert_eq!(font_selection_shifts(), [16, 9, 23, 2]);
+    second.eval_str("nil").unwrap();
+    assert_eq!(font_selection_shifts(), [23, 16, 9, 2]);
+}
+
+#[test]
+fn font_selection_order_actual_file_pdump_preserves_nondefault_and_duplicate_positions() {
+    let proof = crate::test_utils::unit_runtime();
+    for shifts in [[16, 9, 23, 2], [2, 16, 9, 2]] {
+        let eval = Context::new(proof);
+        current_font_registry_handle()
+            .borrow_mut()
+            .font_selection_shifts = shifts;
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("font-order.pdump");
+        neovm_eval::emacs_core::pdump::dump_to_file(&eval, &file).unwrap();
+        let restored =
+            neovm_eval::emacs_core::pdump::load_from_dump_with_proof(&file, proof).unwrap();
+        assert_eq!(font_selection_shifts(), shifts);
+        assert_eq!(
+            neovm_eval::emacs_core::pdump::snapshot_evaluator(&restored).font_selection_shifts,
+            shifts
+        );
+    }
+}
+
+#[test]
+fn font_selection_order_actual_file_pdump_rejects_invalid_shift_and_old_runtime_version() {
+    use neovm_eval::emacs_core::pdump::{self, DumpError, mmap_image_test_support as mmap_image};
+    let proof = crate::test_utils::unit_runtime();
+    let eval = Context::new(proof);
+    let shifts = [2, 16, 9, 2];
+    current_font_registry_handle()
+        .borrow_mut()
+        .font_selection_shifts = shifts;
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("font-order-invalid.pdump");
+    pdump::dump_to_file(&eval, &file).unwrap();
+    let image = mmap_image::load_image(&file).unwrap();
+    let kind = mmap_image::DumpSectionKind::RuntimeManagers;
+    let bounds = image.section_bounds(kind).unwrap();
+    let section = image.section(kind).unwrap();
+    // Decode the fixed section header instead of scanning for magic or
+    // assuming a file offset. Version 3 appends four bytes to its payload.
+    assert!(section.len() >= 40);
+    assert_eq!(u32::from_ne_bytes(section[16..20].try_into().unwrap()), 3);
+    let header_size = u32::from_ne_bytes(section[20..24].try_into().unwrap()) as usize;
+    let payload_offset =
+        usize::try_from(u64::from_ne_bytes(section[24..32].try_into().unwrap())).unwrap();
+    let payload_len =
+        usize::try_from(u64::from_ne_bytes(section[32..40].try_into().unwrap())).unwrap();
+    let payload_end = payload_offset.checked_add(payload_len).unwrap();
+    assert!(header_size >= 40 && payload_offset >= header_size && payload_end <= section.len());
+    let shifts_start = payload_end.checked_sub(4).unwrap();
+    assert!(shifts_start >= payload_offset);
+    assert_eq!(&section[shifts_start..payload_end], &shifts);
+    let shift_byte = bounds.start + shifts_start;
+    let version_bytes = bounds.start + 16..bounds.start + 20;
+    drop(image);
+    let original = std::fs::read(&file).unwrap();
+    let mut invalid = original.clone();
+    invalid[shift_byte] = 99;
+    let invalid_file = directory.path().join("invalid-shift.pdump");
+    std::fs::write(&invalid_file, invalid).unwrap();
+    // The image loader intentionally validates headers/build identity rather
+    // than its full body checksum; this reaches the runtime section decoder.
+    assert!(
+        matches!(pdump::load_from_dump_with_proof(&invalid_file, proof),
+        Err(DumpError::ImageFormatError(message)) if message.contains("font selection"))
+    );
+    let mut old_version = original;
+    old_version[version_bytes].copy_from_slice(&2u32.to_ne_bytes());
+    // Failed loads retain their mapping for interner aliases. Use another
+    // file rather than truncate a path that can still have a live mapping.
+    let version_file = directory.path().join("old-runtime-version.pdump");
+    std::fs::write(&version_file, old_version).unwrap();
+    assert!(matches!(
+        pdump::load_from_dump_with_proof(&version_file, proof),
+        Err(DumpError::UnsupportedVersion(2))
+    ));
+}
+
+#[test]
 fn internal_set_alternative_font_family_alist_returns_converted_list() {
     crate::test_utils::init_test_tracing();
     let result = builtin_internal_set_alternative_font_family_alist(vec![Value::NIL]).unwrap();

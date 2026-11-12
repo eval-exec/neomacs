@@ -248,6 +248,188 @@
          (find-font (font-spec :family "Hack" :registry "["))
        (invalid-regexp (car problem))))))
 
+(defun font-frame-ranked-sizes ()
+  (mapcar (lambda (font) (font-get font :size))
+          (list-fonts (font-spec :family "FrameRescale") nil nil
+                      (font-spec :size 12))))
+
+(defun font-frame-ranked-styles (order)
+  (unwind-protect
+      (progn
+        (internal-set-font-selection-order order)
+        (mapcar (lambda (font)
+                  (list (font-get font :weight) (font-get font :width)))
+                (list-fonts (font-spec :family "FrameOrder") nil nil
+                            (font-spec :weight 'normal :width 'normal))))
+    (internal-set-font-selection-order '(:width :height :weight :slant))))
+
+(defun font-frame-primary-ignored-case (spec maximum prefer pattern)
+  (let ((face-ignored-fonts (list pattern)))
+    (condition-case problem (list-fonts spec nil maximum prefer)
+      (invalid-regexp (car problem)))))
+
+(defun font-frame-preference-policy-cases ()
+  ;; These scan rules expose fixed 14/24px entities and two scalable entities
+  ;; with opposing width/weight distances. They do not depend on host fonts.
+  (font-frame-observe "prefer-fixed-size-no-rescale" '(14 24)
+                      #'font-frame-ranked-sizes)
+  (font-frame-observe
+   "prefer-fixed-size-regexp-rescale" '(24 14)
+   (lambda ()
+     (let ((face-font-rescale-alist '(("-24-" . 2.0))))
+       (font-frame-ranked-sizes))))
+  (font-frame-observe
+   "prefer-fixed-size-spec-rescale" '(24 14)
+   (lambda ()
+     (let ((face-font-rescale-alist (list (cons (font-spec :weight 'bold) 2.0))))
+       (font-frame-ranked-sizes))))
+  (font-frame-observe
+   "prefer-fixed-size-integer-rescale-ignored" '(14 24)
+   (lambda ()
+     (let ((face-font-rescale-alist '(("-24-" . 2))))
+       (font-frame-ranked-sizes))))
+  (font-frame-observe
+   "prefer-fixed-size-fractional-rescale" '(24 14)
+   (lambda ()
+     (let ((face-font-rescale-alist '(("-24-" . 1.95))))
+       (font-frame-ranked-sizes))))
+  (font-frame-observe
+   "prefer-rescale-xlfd-ignores-custom-width-aliases" '((14 24) (14 24))
+   (lambda ()
+     (let ((face-font-rescale-alist '(("-foo-" . 2.0))))
+       (mapcar (lambda (alias)
+                 (mapcar (lambda (font) (font-get font :size))
+                         (list-fonts
+                          (font-spec :family "FrameRescale" alias "foo")
+                          nil nil (font-spec :size 12))))
+               '(:set-width :setwidth)))))
+  (font-frame-observe
+   "prefer-fixed-size-half-rescale" '(14 24)
+   (lambda ()
+     (let ((face-font-rescale-alist '(("-24-" . 0.5))))
+       (font-frame-ranked-sizes))))
+  (font-frame-observe
+   "prefer-rescale-invalid-regexp" 'invalid-regexp
+   (lambda ()
+     (let ((face-font-rescale-alist '(("[" . 2.0))))
+       (condition-case problem (font-frame-ranked-sizes)
+         (invalid-regexp (car problem))))))
+  (font-frame-observe
+   "prefer-rescale-no-size-ignores-regexp" '(14 24)
+   (lambda ()
+     (let ((face-font-rescale-alist '(("[" . 2.0))))
+       (mapcar (lambda (font) (font-get font :size))
+               (list-fonts (font-spec :family "FrameRescale") nil nil
+                           (font-spec :weight 'normal))))))
+  (font-frame-observe
+   "prefer-rescale-zero-maximum-ignores-regexp" nil
+   (lambda ()
+     (let ((face-font-rescale-alist '(("[" . 2.0))))
+       (list-fonts (font-spec :family "FrameRescale") nil 0
+                   (font-spec :size 12)))))
+  (font-frame-observe
+   "prefer-rescale-after-ignored-fonts" '((14) (24) nil)
+   (lambda ()
+     (let ((face-font-rescale-alist '(("[" . 2.0))))
+       (mapcar (lambda (pattern)
+                 (let ((face-ignored-fonts (list pattern)))
+                   (font-frame-ranked-sizes)))
+               '("-24-" "-14-" "framerescale")))))
+  (font-frame-observe
+   "prefer-ignored-regexp-error-before-rescale" "Unmatched [ or [^"
+   (lambda ()
+     (let ((face-ignored-fonts '("["))
+           (face-font-rescale-alist '(("\\(" . 2.0))))
+       (condition-case problem (font-frame-ranked-sizes)
+         (invalid-regexp (cadr problem))))))
+  (font-frame-observe
+   "prefer-rescale-error-before-positive-maximum" 'invalid-regexp
+   (lambda ()
+     (let ((face-font-rescale-alist '(("[" . 2.0))))
+       (condition-case problem
+           (list-fonts (font-spec :family "FrameRescale") nil 1
+                       (font-spec :size 12))
+         (invalid-regexp (car problem))))))
+  (font-frame-observe
+   "prefer-single-primary-match-skips-rescale" '((14) (14))
+   (lambda ()
+     (let ((face-font-rescale-alist '(("[" . 2.0))))
+       (mapcar (lambda (spec)
+                 (mapcar (lambda (font) (font-get font :size))
+                         (list-fonts spec nil nil (font-spec :size 12))))
+               (list (font-spec :family "FrameRescale" :size 14)
+                     (font-spec :family "FrameRescale" :weight 'normal))))))
+  (font-frame-observe
+   "prefer-scalable-entities-skip-rescale" 2
+   (lambda ()
+     (let ((face-font-rescale-alist '(("[" . 2.0))))
+       (length (list-fonts (font-spec :family "FrameOrder") nil nil
+                           (font-spec :size 12))))))
+  (font-frame-observe
+   "ignored-regexp-before-primary-numeric-filters"
+   '(invalid-regexp invalid-regexp invalid-regexp invalid-regexp
+     invalid-regexp invalid-regexp invalid-regexp invalid-regexp)
+   (lambda ()
+     ;; GNU passes cleared numeric fields to the native driver, then checks
+     ;; ignored names before rejecting entities by the primary size/style.
+     (let (results)
+       (dolist (spec (list (font-spec :family "FrameRescale" :size 999)
+                          (font-spec :family "FrameRescale" :weight 'ultra-bold)))
+         (dolist (maximum '(nil 1))
+           (dolist (prefer (list nil (font-spec :size 12)))
+             (push (font-frame-primary-ignored-case spec maximum prefer "[")
+                   results))))
+       (nreverse results))))
+  (font-frame-observe
+   "ignored-regexp-primary-filter-boundaries" '(nil nil nil nil nil nil nil nil)
+   (lambda ()
+     (append
+      (let (results)
+        (dolist (spec (list (font-spec :family "FrameRescale" :size 999)
+                           (font-spec :family "FrameRescale" :weight 'ultra-bold)))
+          (dolist (prefer (list nil (font-spec :size 12)))
+            (push (font-frame-primary-ignored-case spec nil prefer "no-such-font")
+                  results)))
+        (nreverse results))
+      (mapcar (lambda (prefer)
+                (font-frame-primary-ignored-case
+                 (font-spec :family "FrameRescale" :size 999) 0 prefer "["))
+              (list nil (font-spec :size 12)))
+      (mapcar (lambda (maximum)
+                (font-frame-primary-ignored-case
+                 (font-spec :family "FrameNoNativeCandidate" :size 999)
+                 maximum (font-spec :size 12) "["))
+              '(nil 1)))))
+  (font-frame-observe
+   "prefer-default-selection-order" '((bold normal) (regular expanded))
+   (lambda () (font-frame-ranked-styles '(:width :height :weight :slant))))
+  (font-frame-observe
+   "prefer-custom-selection-order" '((regular expanded) (bold normal))
+   (lambda () (font-frame-ranked-styles '(:weight :width :height :slant))))
+  ;; GNU accepts repeated attributes. Repeated writes move weight to the last
+  ;; slot while omitted width/height/slant retain their previous shifts.
+  (font-frame-observe
+   "prefer-duplicate-selection-order" '((bold normal) (regular expanded))
+   (lambda () (font-frame-ranked-styles '(:weight :weight :weight :weight))))
+  (font-frame-observe
+   "fontset-unmatched-registry-next-rule" 'FrameRegistryNext
+   (lambda ()
+     (set-frame-font "Hack-13" t)
+     (unwind-protect
+         (progn
+           (erase-buffer) (insert "λ") (goto-char 1)
+           ;; Admit λ to the first rule's repertory. Without this mapping an
+           ;; unrelated ASCII filter hides the native registry mismatch.
+           (let ((font-encoding-alist '(("font-frame-unmatched" . unicode))))
+             (set-fontset-font t ?λ (font-spec :family "FrameRegistryFirst"
+                                              :registry "font-frame-unmatched"))
+             (set-fontset-font t ?λ (font-spec :family "FrameRegistryNext"
+                                              :registry "iso10646-1") nil 'append))
+           (redisplay t)
+           (font-get (font-at 1) :family))
+       (set-fontset-font t ?λ nil)
+       (erase-buffer)))))
+
 (defun font-frame-probe ()
   (condition-case problem
       (let* ((gui (selected-frame))
@@ -259,6 +441,7 @@
         (font-frame-property-cases)
         (font-frame-listing-review-cases)
         (font-frame-registry-family-cases)
+        (font-frame-preference-policy-cases)
         (setq tty (make-terminal-frame
                    `((tty . ,(getenv "NEOMACS_FONT_FRAME_TTY"))
                      (tty-type . "xterm-256color")
@@ -299,6 +482,7 @@
              (font-property-cases . 4)
              (listing-review-cases . 7)
              (registry-family-cases . 13)
+             (preference-policy-cases . 21)
              (observations . ,(vconcat (reverse font-frame-observations)))))
           (select-frame gui)
           (kill-emacs (if passed 0 1))))

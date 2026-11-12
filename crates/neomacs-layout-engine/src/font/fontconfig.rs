@@ -11,7 +11,7 @@
 //! - candidate discovery uses Fontconfig's `FcFontList`
 //! - style selection is scored in Rust instead of delegated to Fontconfig
 
-use crate::font::policy::GnuFontPolicy;
+use crate::font::policy::{GnuFontPolicy, NativeFontPolicy};
 use crate::font::selection::{CandidateSelectionScore, candidate_selection_score};
 pub use crate::font::subpixel::FontconfigSubpixelOrder;
 use crate::font_backend::{
@@ -422,7 +422,8 @@ pub fn find_font_for_spec(
         definition: None,
     };
     let constraints = match GnuFontPolicy::constraints_for_entity(&spec) {
-        Ok(constraints) => constraints,
+        Ok(NativeFontPolicy::Supported(constraints)) => constraints,
+        Ok(NativeFontPolicy::UnsupportedRegistry) => return None,
         Err(error) => {
             tracing::warn!(target: "font_registry", %error, "invalid native font policy");
             return None;
@@ -586,7 +587,8 @@ fn match_font_from_spec(
         .map(FontWeight::css_weight)
         .unwrap_or(requested_weight);
     let constraints = match GnuFontPolicy::constraints_for_character(spec, ch) {
-        Ok(constraints) => constraints,
+        Ok(NativeFontPolicy::Supported(constraints)) => constraints,
+        Ok(NativeFontPolicy::UnsupportedRegistry) => return None,
         Err(error) => {
             tracing::warn!(target: "font_registry", %error, "invalid native font policy");
             return None;

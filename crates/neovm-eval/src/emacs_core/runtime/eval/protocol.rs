@@ -14,12 +14,13 @@ use neovm_edit::buffer::BufferId;
 
 use super::data::face::{Face, FaceHeight};
 use super::{
-    FontEntityMetricsRequest, FontListError, FontListFilter, FontOtfCapability, FontPxProbeResult,
-    FontSpecListQuery, FontSpecResolveRequest, GuiFrameHostRequest, GuiFrameHostSize,
-    ListedFontEntity, PopupMenuRequest, ResolvedFontEntityMetrics, ResolvedFontMatch,
-    ResolvedFontSpecMatch, ResolvedFrameFont, ResolvedSurface, ResolvedVideo, ResolvedWebKit,
-    ShaderSurfaceCreateRequest, ShaderSurfaceLanguage, ShaderSurfaceUniformInit,
-    SurfaceResolveRequest, VideoResolveRequest, WebKitResolveRequest,
+    FontEntityMetricsRequest, FontListError, FontListFilter, FontListingPreparation,
+    FontOtfCapability, FontPxProbeResult, FontSpecListQuery, FontSpecResolveRequest,
+    GuiFrameHostRequest, GuiFrameHostSize, ListedFontEntity, PopupMenuRequest,
+    ResolvedFontEntityMetrics, ResolvedFontMatch, ResolvedFontSpecMatch, ResolvedFrameFont,
+    ResolvedSurface, ResolvedVideo, ResolvedWebKit, ShaderSurfaceCreateRequest,
+    ShaderSurfaceLanguage, ShaderSurfaceUniformInit, SurfaceResolveRequest, VideoResolveRequest,
+    WebKitResolveRequest,
 };
 use neomacs_display_protocol::font::ResolvedFontIdentity;
 use neomacs_display_protocol::{
@@ -533,13 +534,14 @@ pub trait DisplayHost {
         Ok(None)
     }
     /// Validate primary driver-local properties before the caller captures
-    /// FT-only feature data. Return the actual backend when identified.
-    /// None prevents FT capture; ordinary listing remains authoritative for
+    /// FT-only feature data and representative tables. Native registry
+    /// charsets suppress representative reads. None prevents FT capture;
+    /// ordinary listing remains authoritative for
     /// generic/default hosts and for unsupported native requests.
     fn prepare_font_listing(
         &mut self,
         _query: &FontSpecListQuery,
-    ) -> Result<Option<neomacs_display_protocol::font::FontBackendKind>, FontListError> {
+    ) -> Result<Option<FontListingPreparation>, FontListError> {
         Ok(None)
     }
 
@@ -554,6 +556,7 @@ pub trait DisplayHost {
         _prefer: Option<FontSpecListQuery>,
         _maximum: Option<usize>,
         _filter: Option<&mut FontListFilter<'_>>,
+        _rescale: Option<&mut super::FontListRescale<'_>>,
     ) -> Result<Vec<ListedFontEntity>, FontListError> {
         Ok(Vec::new())
     }

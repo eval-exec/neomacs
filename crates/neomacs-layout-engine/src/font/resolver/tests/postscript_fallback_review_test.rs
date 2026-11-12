@@ -82,14 +82,16 @@ fn postscript_fallback_rejects_a_missing_finalized_name() {
 
 #[test]
 fn postscript_fallback_accepts_the_name_supplied_during_finalization() {
-    let resolver = resolver_with_postscript_names(None, Some("FixtureSans-Requested"));
-    let entity = resolver
-        .resolve_entity(&postscript_opening_query())
-        .expect("finalized exact identity must satisfy the opening request");
-    assert_eq!(
-        entity.matched.identity.postscript_name.as_deref(),
-        Some("FixtureSans-Requested")
-    );
+    for finalized in ["FixtureSans-Requested", "fixturesans-requested"] {
+        let resolver = resolver_with_postscript_names(None, Some(finalized));
+        let entity = resolver
+            .resolve_entity(&postscript_opening_query())
+            .expect("finalized identity must satisfy the request independent of ASCII case");
+        assert_eq!(
+            entity.matched.identity.postscript_name.as_deref(),
+            Some(finalized)
+        );
+    }
 }
 
 #[test]

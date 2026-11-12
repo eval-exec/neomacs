@@ -4607,3 +4607,8 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontOtfRequirement fi
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field otf
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	struct	struct FontOtfRequirement
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	ListedFontEntity field native_index
+crates/neovm-eval/src/emacs_core/runtime/eval/data/face_registry.rs	field	FaceAttrState field font_selection_shifts
+crates/neovm-eval/src/emacs_core/runtime/pdump/types.rs	field	DumpContextState field font_selection_shifts
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontSpecListQuery field selection_shifts
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	type	type FontListRescale
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	enum	enum FontListingPreparation

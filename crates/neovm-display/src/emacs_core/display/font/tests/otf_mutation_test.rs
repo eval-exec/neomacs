@@ -19,7 +19,7 @@ impl DisplayHost for OtfHost {
     fn prepare_font_listing(
         &mut self,
         query: &FontSpecListQuery,
-    ) -> Result<Option<FontBackendKind>, FontListError> {
+    ) -> Result<Option<neovm_eval::emacs_core::eval::FontListingPreparation>, FontListError> {
         if self.kind == Some(FontBackendKind::Fontconfig)
             && query.driver.is_none_or(|driver| driver == intern("ftcrhb"))
             && query
@@ -34,7 +34,24 @@ impl DisplayHost for OtfHost {
                 vec![Value::string("Unmatched [ or [^")],
             )));
         }
-        Ok(self.kind)
+        use neovm_eval::emacs_core::eval::FontListingPreparation as Prepared;
+        Ok(self.kind.map(|kind| {
+            if kind == FontBackendKind::Fontconfig {
+                if query
+                    .specification
+                    .registry
+                    .as_ref()
+                    .and_then(LispString::as_utf8_str)
+                    == Some("iso8859-2")
+                {
+                    Prepared::FontconfigWithCharset
+                } else {
+                    Prepared::FontconfigWithoutCharset
+                }
+            } else {
+                Prepared::Other
+            }
+        }))
     }
     fn list_fonts_for_spec(
         &mut self,
@@ -42,6 +59,7 @@ impl DisplayHost for OtfHost {
         _: Option<FontSpecListQuery>,
         _: Option<usize>,
         _: Option<&mut FontListFilter<'_>>,
+        _rescale: Option<&mut neovm_eval::emacs_core::eval::FontListRescale<'_>>,
     ) -> Result<Vec<ListedFontEntity>, FontListError> {
         self.prepare_font_listing(&query)?;
         self.requests.borrow_mut().push(query);
