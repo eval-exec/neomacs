@@ -1011,10 +1011,14 @@ fn interactive_capture_up_event_in_vm_batch_runtime(
     context.set_pending_up_event(None);
     if interactive_last_key_sequence_event(sequence)
         .is_some_and(|event| interactive_event_is_down_event(&event, symbol_mode))
-        && let Some(up_event) = super::keyboard::builtin_read_event_in_runtime(shared, &[])?
-        && !up_event.is_nil()
     {
-        context.set_pending_up_event(Some(up_event));
+        // GNU reads the up event with `Fread_event`, which checks `inhibit-interaction` first.
+        crate::emacs_core::minibuffer::barf_if_interaction_inhibited(shared)?;
+        if let Some(up_event) = super::keyboard::builtin_read_event_in_runtime(shared, &[])?
+            && !up_event.is_nil()
+        {
+            context.set_pending_up_event(Some(up_event));
+        }
     }
     Ok(())
 }
@@ -1377,6 +1381,8 @@ fn interactive_args_from_string_code_in_vm_runtime(
                 }
                 InteractiveControlLetter::Character => {
                     let letter_args = [Value::heap_string(prompt.clone())];
+                    // GNU reads it with `Fread_char`, which checks `inhibit-interaction` first.
+                    crate::emacs_core::minibuffer::barf_if_interaction_inhibited(shared)?;
                     let arg = if let Some(arg) =
                         super::keyboard::builtin_read_char_in_runtime(shared, &letter_args)?
                     {
