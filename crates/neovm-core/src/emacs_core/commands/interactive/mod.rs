@@ -1881,12 +1881,21 @@ fn root_new_interactive_args(
     }
 }
 
-fn invalid_interactive_control_letter_error(letter: char) -> Flow {
+/// GNU `Fcall_interactively` (src/callint.c) signals this with `error`, whose format string goes
+/// through `doprnt`: the grave accent and apostrophe around `%c` follow `text-quoting-style`, but
+/// the letter itself is inserted as it is, and the octal code takes 3 digits (`%03o`).
+fn invalid_interactive_control_letter_error(eval: &Context, letter: char) -> Flow {
     let codepoint = letter as u32;
+    let style = crate::emacs_core::coding::effective_text_quoting_style(
+        eval.variables(),
+        eval.symbol_mode(),
+    );
+    let open = crate::emacs_core::coding::requote_c_error_message("`", style);
+    let close = crate::emacs_core::coding::requote_c_error_message("'", style);
     signal(
         "error",
         vec![Value::string(format!(
-            "Invalid control letter \u{2018}{letter}\u{2019} (#o{codepoint:o}, #x{codepoint:04x}) in interactive calling string"
+            "Invalid control letter {open}{letter}{close} (#o{codepoint:03o}, #x{codepoint:04x}) in interactive calling string"
         ))],
     )
 }
@@ -1925,7 +1934,7 @@ fn interactive_args_from_string_code(
             let prompt = interactive_prompt_with_visible_args(eval, &prompt, &visible_args)?;
             let args_before = args.len();
             let control = InteractiveControlLetter::from_char(letter)
-                .ok_or_else(|| invalid_interactive_control_letter_error(letter))?;
+                .ok_or_else(|| invalid_interactive_control_letter_error(eval, letter))?;
             match control {
                 InteractiveControlLetter::FunctionName => {
                     args.push(super::minibuffer::builtin_read_command(
