@@ -18,6 +18,9 @@ mod jit_observability;
 #[path = "fatal_signals.rs"]
 mod fatal_signals;
 
+#[path = "tty_hangup.rs"]
+mod tty_hangup;
+
 #[path = "main_stack_overflow.rs"]
 mod main_stack_overflow;
 

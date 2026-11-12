@@ -641,8 +641,8 @@ fn read_secondary_tty(
             if pollfd.revents & (libc::POLLHUP | libc::POLLERR) != 0 {
                 let _ = publish_input(
                     &input_tx,
-                    InputEvent::WindowClose {
-                        emacs_frame_id: target.frame.0,
+                    InputEvent::TtyHangup {
+                        terminal_id: target.terminal.0,
                     },
                 );
                 return;
@@ -661,8 +661,8 @@ fn read_secondary_tty(
         if read == 0 {
             let _ = publish_input(
                 &input_tx,
-                InputEvent::WindowClose {
-                    emacs_frame_id: target.frame.0,
+                InputEvent::TtyHangup {
+                    terminal_id: target.terminal.0,
                 },
             );
             return;
@@ -677,8 +677,8 @@ fn read_secondary_tty(
             }
             let _ = publish_input(
                 &input_tx,
-                InputEvent::WindowClose {
-                    emacs_frame_id: target.frame.0,
+                InputEvent::TtyHangup {
+                    terminal_id: target.terminal.0,
                 },
             );
             return;

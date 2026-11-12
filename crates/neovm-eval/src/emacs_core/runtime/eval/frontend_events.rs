@@ -281,6 +281,12 @@ fn semantics(event: &InputEvent) -> FrontendEventSemantics {
         | InputEvent::TerminalExited { .. }
         | InputEvent::TerminalTitleChanged { .. }
         | InputEvent::SystemFontsChanged { .. } => ServiceDuringWait,
+        InputEvent::TtyHangup { .. } => {
+            // A lost device is not command input. Wait servicing routes
+            // this typed event to handle_tty_hangup_input_event, which
+            // deletes the terminal with noelisp and defers its hooks.
+            ServiceDuringWait
+        }
         InputEvent::Focus { focused, .. } => special_input(
             PendingInputPolicy::Focus { focused: *focused },
             false,

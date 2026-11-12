@@ -1424,6 +1424,10 @@ pub enum InputEvent {
     },
     /// Window-manager close request.
     WindowClose { emacs_frame_id: u64 },
+    /// A TTY connection was lost, rather than a window being closed.
+    /// GNU keyboard.c:8129 deletes the whole terminal with `noelisp`;
+    /// graphical display loss has a different backend-specific ordering.
+    TtyHangup { terminal_id: u64 },
     /// GNU `THREAD_EVENT`: `thread-signal` targeted the main thread
     /// (`src/thread.c:1007-1013`).  The reader rebuilds
     /// `(thread-event SENDER ERROR-SYMBOL DATA)` and runs its
@@ -1527,6 +1531,7 @@ impl InputEvent {
             | Self::SystemFontsChanged { .. }
             | Self::SelectWindow { .. }
             | Self::WindowClose { .. }
+            | Self::TtyHangup { .. }
             // A THREAD_EVENT is an input event, never the quit character.
             | Self::ThreadEvent { .. }
             | Self::DisplayReset
@@ -3102,6 +3107,10 @@ impl crate::emacs_core::eval::Context {
                     outcome = outcome.merge(SpecialInputServiceOutcome::any_activity());
                     self.handle_window_close_input_event(emacs_frame_id, idle_policy)?;
                 }
+                InputEvent::TtyHangup { terminal_id } => {
+                    outcome = outcome.merge(SpecialInputServiceOutcome::any_activity());
+                    self.delete_input_terminal_noelisp(terminal_id)?;
+                }
                 InputEvent::DisplayReset => {
                     // Like Resize: apply here, let the outcome trigger the
                     // redisplay after servicing.
@@ -3282,6 +3291,18 @@ impl crate::emacs_core::eval::Context {
         }
         self.command_loop.running = false;
         Err(neovm_value::error::signal(LispCondition::Quit, vec![]))
+    }
+
+    fn delete_input_terminal_noelisp(
+        &mut self,
+        terminal_id: u64,
+    ) -> Result<(), neovm_value::error::Flow> {
+        // Do not turn a terminal read failure into a public frame-close
+        // event. The existing noelisp terminal deletion removes every
+        // attached frame newest-first and queues its hooks; the timer
+        // boundary drains those calls LIFO, after all objects are dead.
+        crate::emacs_core::eval::lifecycle::delete_terminal_noelisp_owned(self, terminal_id)
+            .map(|_| ())
     }
 
     /// Read a complete key sequence through keymaps.
@@ -4078,8 +4099,7 @@ impl crate::emacs_core::eval::Context {
     #[doc(hidden)]
     pub fn handle_display_terminal_disconnect(&mut self) {
         self.input_rx.clear();
-        let _ = crate::emacs_core::eval::lifecycle::delete_terminal_noelisp_owned(
-            self,
+        let _ = self.delete_input_terminal_noelisp(
             crate::emacs_core::eval::protocol::tty_host::TERMINAL_ID,
         );
         let _ = self.shutdown_with_hooks(crate::emacs_core::eval::ShutdownRequest {
@@ -4248,6 +4268,10 @@ impl crate::emacs_core::eval::Context {
             }
             InputEvent::WindowClose { emacs_frame_id } => {
                 self.handle_window_close_input_event(emacs_frame_id, idle_policy)?;
+                Ok(None)
+            }
+            InputEvent::TtyHangup { terminal_id } => {
+                self.delete_input_terminal_noelisp(terminal_id)?;
                 Ok(None)
             }
             InputEvent::ThreadEvent {

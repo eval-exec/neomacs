@@ -3000,6 +3000,67 @@ fn read_char_window_close_uses_special_event_map_handler_when_loaded() {
 }
 
 #[test]
+fn read_char_window_close_keeps_public_frame_deletion_hook_liveness() {
+    crate::test_utils::init_test_tracing();
+    crate::emacs_core::terminal::pure::reset_terminal_thread_locals();
+    let mut ev = crate::test_utils::new_context();
+    let scratch = ev.buffer_manager_mut().create_buffer("*scratch*");
+    ev.buffer_manager_mut().set_current(scratch);
+    let primary = ev
+        .frame_manager_mut()
+        .create_frame("primary", 80, 24, scratch);
+    let closing = ev
+        .frame_manager_mut()
+        .create_frame("closing", 80, 24, scratch);
+    install_minimal_special_event_command_runtime(&mut ev);
+    ev.obarray_mut()
+        .set_symbol_value("close-primary", Value::make_frame(primary.0));
+    // GNU frame.el:265-281 handles a graphical delete-frame request through
+    // public (delete-frame FRAME t), whose before hook sees the live frame.
+    // This stays separate from keyboard.c:8129's TTY noelisp terminal loss.
+    ev.eval_str(
+        r#"(setq close-log nil)
+(setq delete-frame-functions
+      (list (lambda (frame)
+              (setq close-log (cons (list 'before (frame-live-p frame)) close-log)))))
+(setq after-delete-frame-functions
+      (list (lambda (frame)
+              (setq close-log (cons (list 'after (frame-live-p frame)) close-log)))))
+(fset 'handle-delete-frame
+      (lambda (event)
+        (setq neo-last-delete-frame-event event)
+        (delete-frame (car (car (cdr event))) t)))"#,
+    )
+    .expect("install public frame-deletion observer");
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::WindowClose {
+        emacs_frame_id: closing.0,
+    })
+    .expect("queue the window-manager close request");
+    ev.command_loop_mut().running = true;
+    let event = ev
+        .read_char_with_timeout(Some(Duration::from_millis(0)))
+        .expect("consume the ordinary delete-frame event");
+    assert_eq!(event, None);
+    assert!(ev.frame_manager().get(closing).is_none());
+    assert!(ev.frame_manager().get(primary).is_some());
+    let public_hooks = ev.eval_str("(reverse close-log)").expect("public hook log");
+    assert_eq!(format!("{public_hooks}"), "((before t) (after nil))");
+    let live_primary = ev
+        .eval_str("(list (frame-live-p close-primary) (if (terminal-live-p (frame-terminal close-primary)) t nil))")
+        .expect("the other frame and shared terminal survive");
+    assert_eq!(format!("{live_primary}"), "(t t)");
+    ev.flush_pending_safe_funcalls();
+    assert_eq!(
+        ev.eval_str("(reverse close-log)")
+            .expect("hook log after drain"),
+        public_hooks,
+        "WindowClose must run public hooks immediately, without deferred repeats"
+    );
+    drop(tx);
+}
+
+#[test]
 fn read_char_disconnected_input_uses_noelisp_terminal_teardown() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::terminal::pure::reset_terminal_thread_locals();
