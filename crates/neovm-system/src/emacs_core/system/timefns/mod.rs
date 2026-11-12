@@ -1275,12 +1275,11 @@ pub fn builtin_decode_time(args: Vec<Value>) -> EvalResult {
         let secs = i64::try_from(&ticks_hz_seconds(&th)).map_err(|_| time_error_overflow())?;
         (secs, Some((th.ticks, th.hz)))
     } else {
-        let tm = if time_arg.is_nil() {
-            TimeMicros::now()
-        } else {
-            parse_time(&time_arg)?
-        };
-        (tm.secs, None)
+        // GNU `lisp_seconds_argument`: the floor of the exact (TICKS . HZ), so TICKS may be a
+        // bignum as long as the seconds fit.
+        let th = decode_lisp_time(&time_arg)?.th;
+        let secs = i64::try_from(&ticks_hz_seconds(&th)).map_err(|_| time_error_overflow())?;
+        (secs, None)
     };
 
     let rule = effective_zone_rule(args.get(1))?;
