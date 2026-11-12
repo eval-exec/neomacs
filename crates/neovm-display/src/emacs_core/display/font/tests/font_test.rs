@@ -3039,23 +3039,8 @@ fn x_list_fonts_tty_designator_defaults_to_selected_frame_and_clears_face() {
 #[path = "focused_listing_followup_test.rs"]
 mod focused_listing_followup_test;
 
-#[test]
-fn listing_complete_xlfd_point_field_uses_native_atoi() {
-    crate::test_utils::init_test_tracing();
-    for (point, expected) in [
-        ("130x", Some(13.0)),
-        ("000130x", Some(13.0)),
-        ("x130", None),
-        ("2147483647", Some(214748364.7)),
-        ("2147483648", None),
-        ("4294967296", Some(0.0)),
-        ("4294967426", Some(13.0)),
-        ("2305843009213693951", None),
-        ("2305843009213693952", Some(0.0)),
-        ("9223372036854775807", None),
-        ("9223372036854775808", None),
-        ("9999999999999999999999999999999999999999", None),
-    ] {
+fn assert_listing_complete_point_cases(cases: &[(&str, Option<f64>)]) {
+    for &(point, expected) in cases {
         let name = format!("-SRC-Hack-regular-normal-normal-*-*-{point}-*-*-*-0-iso10646-1");
         let spec = font_spec(vec![Value::keyword("name"), Value::string(name)]).unwrap();
         let size = font_get(vec![spec, Value::keyword("size")]).unwrap();
@@ -3066,6 +3051,17 @@ fn listing_complete_xlfd_point_field_uses_native_atoi() {
             assert!(size.is_nil(), "{point}: {size:?}");
         }
     }
+}
+
+#[test]
+fn listing_complete_xlfd_point_field_parses_representable_prefixes() {
+    crate::test_utils::init_test_tracing();
+    assert_listing_complete_point_cases(&[
+        ("130x", Some(13.0)),
+        ("000130x", Some(13.0)),
+        ("x130", None),
+        ("2147483647", Some(214748364.7)),
+    ]);
     // The separate pixel and abbreviated-number lanes keep font_intern_prop's
     // strict fixnum overflow rather than adopting complete point-field atoi.
     for name in [
@@ -3080,4 +3076,22 @@ fn listing_complete_xlfd_point_field_uses_native_atoi() {
         assert_eq!(signal.data.len(), 1);
         assert_eq!(signal.data[0].as_utf8_str(), Some("2305843009213693952"));
     }
+}
+
+// These expectations were observed against pinned GNU on 64-bit glibc.
+// Other libc implementations and 32-bit C longs need their own evidence.
+#[cfg(all(target_os = "linux", target_env = "gnu", target_pointer_width = "64"))]
+#[test]
+fn listing_complete_xlfd_point_field_overflow_matches_64_bit_glibc() {
+    crate::test_utils::init_test_tracing();
+    assert_listing_complete_point_cases(&[
+        ("2147483648", None),
+        ("4294967296", Some(0.0)),
+        ("4294967426", Some(13.0)),
+        ("2305843009213693951", None),
+        ("2305843009213693952", Some(0.0)),
+        ("9223372036854775807", None),
+        ("9223372036854775808", None),
+        ("9999999999999999999999999999999999999999", None),
+    ]);
 }
