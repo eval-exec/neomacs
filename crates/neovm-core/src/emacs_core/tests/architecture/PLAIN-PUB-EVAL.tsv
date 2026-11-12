@@ -1665,6 +1665,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	Frame f
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	Frame field device_scale_factor
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	Frame field display_identity
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	Frame field displays_chrome
+crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	Frame field explicit_default_font_attrs
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	Frame field explicit_name
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	Frame field face_hash_table
 crates/neovm-eval/src/emacs_core/runtime/eval/data/window_state.rs	field	Frame field face_realization
