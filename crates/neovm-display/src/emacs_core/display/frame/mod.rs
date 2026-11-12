@@ -37,7 +37,7 @@ use crate::window::{
 };
 use neovm_edit::buffer::{BufferId, BufferManager};
 use neovm_value::error::Flow;
-use neovm_value::error::{EvalResult, LispCondition, signal};
+use neovm_value::error::{EvalResult, LispCondition, signal, signal_error_with_arg};
 use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
 use neovm_value::intern::{intern, resolve_sym};
 use neovm_value::value::{Value, ValueKind, VecLikeType};
@@ -1784,6 +1784,22 @@ pub fn builtin_frame_scale_factor(
     Ok(Value::make_float(scale))
 }
 
+/// Name of a `(fontset-name . font-object)` cons, the form `set-fontset-font`
+/// passes to `gui_set_font`. This port has no fontset table, so the caller
+/// reports the name as an unknown fontset instead of opening it.
+fn fontset_font_object_cons_name(value: &Value) -> Option<String> {
+    if !value.is_cons() {
+        return None;
+    }
+    let name = value.cons_car();
+    let object = value.cons_cdr();
+    if name.is_string() && super::font::is_font_object(&object) {
+        super::font::font_value_text(&name)
+    } else {
+        None
+    }
+}
+
 /// `(modify-frame-parameters FRAME ALIST)` -> nil.
 #[doc(hidden)]
 pub fn builtin_modify_frame_parameters(
@@ -1933,29 +1949,35 @@ pub fn builtin_modify_frame_parameters(
                                 if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
                                     frame.set_known_parameter(param, old_value);
                                 }
+                                // gui_set_font opens only a string, a font
+                                // object, or a (fontset-name . font-object)
+                                // cons. A symbol or a font spec must signal
+                                // before the host is asked, or a resolving
+                                // host would change the frame font.
+                                if !pair_cdr.is_string() && !super::font::is_font_object(&pair_cdr)
+                                {
+                                    if let Some(name) = fontset_font_object_cons_name(&pair_cdr) {
+                                        return Err(signal(
+                                            "error",
+                                            vec![Value::string(format!("Unknown fontset: {name}"))],
+                                        ));
+                                    }
+                                    return Err(signal_error_with_arg("Invalid font", pair_cdr));
+                                }
                                 let resolution = super::font::resolve_live_frame_font_request(
                                     eval, fid, &pair_cdr,
                                 );
-                                if resolution.font_value == pair_cdr
+                                if pair_cdr.is_string()
+                                    && resolution.font_value == pair_cdr
                                     && !super::font::is_font_object(&resolution.font_value)
                                 {
-                                    // GNU `gui_set_font' has two failure
-                                    // shapes: a font-name string that cannot
-                                    // be opened, and any other value that is
-                                    // not a font object.
-                                    if pair_cdr.is_string() {
-                                        let name = super::font::font_value_text(&pair_cdr)
-                                            .unwrap_or_default();
-                                        return Err(signal(
-                                            "error",
-                                            vec![Value::string(format!(
-                                                "Font `{name}' is not defined"
-                                            ))],
-                                        ));
-                                    }
+                                    let name =
+                                        super::font::font_value_text(&pair_cdr).unwrap_or_default();
                                     return Err(signal(
                                         "error",
-                                        vec![Value::string("Invalid font")],
+                                        vec![Value::string(format!(
+                                            "Font `{name}' is not defined"
+                                        ))],
                                     ));
                                 }
                                 super::font::sync_live_frame_font_state(eval, fid, &resolution)?;

@@ -1709,11 +1709,17 @@ fn frame_parameter_color_or_tty_default(
         .unwrap_or_else(|| Value::string(tty_default))
 }
 
-pub(crate) fn default_face_has_explicit_font_attr(attr: LFaceAttr) -> bool {
-    [false, true].into_iter().any(|defaults_frame| {
-        get_face_override("default", attr, defaults_frame)
-            .is_some_and(|value| !runtime_unspecified_lisp_face_attr(attr, value))
-    })
+pub(crate) fn default_face_vector_has_explicit_font_attr(vector: Value, attr: LFaceAttr) -> bool {
+    // The override maps are process-wide, so they cannot say which frame set
+    // the attribute. A slot still holding the face's base value was not set
+    // on this frame. `unspecified` is not a concrete attribute either.
+    let Some(value) = lisp_face_vector_attr(vector, attr) else {
+        return false;
+    };
+    if runtime_unspecified_lisp_face_attr(attr, value) {
+        return false;
+    }
+    value != lisp_face_attribute_base_value("default", attr, false)
 }
 
 pub(crate) fn realize_default_lisp_face_for_frame(
@@ -1759,7 +1765,7 @@ pub(crate) fn realize_default_lisp_face_for_frame(
             LFaceAttr::Weight,
             LFaceAttr::Slant,
         ] {
-            if default_face_has_explicit_font_attr(attr) {
+            if default_face_vector_has_explicit_font_attr(vector, attr) {
                 continue;
             }
             let fallback = live_frame_font_attribute_fallback(eval, frame_id, attr);
