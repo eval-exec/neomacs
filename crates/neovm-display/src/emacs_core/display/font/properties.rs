@@ -85,15 +85,38 @@ fn same(left: Value, right: Value, mode: SymbolMode) -> bool {
     eq_value(&mode.unwrap(left), &mode.unwrap(right))
 }
 
-pub(super) fn assoc(mut extras: Value, key: Value, mode: SymbolMode) -> Option<Value> {
-    while extras.is_cons() {
-        let cell = extras.cons_car();
-        if cell.is_cons() && same(cell.cons_car(), key, mode) {
-            return Some(cell);
+// These roots are reachable through Neomacs's tagged-vector extension.
+// Reuse the value layer's finite list iterator even for malformed user data;
+// never assume that an outer entry is an association cons.
+fn tails(head: Value) -> impl Iterator<Item = Value> {
+    let mut tail = head;
+    list_iter(head).map(move |_| {
+        let current = tail;
+        tail = current.cons_cdr();
+        current
+    })
+}
+
+pub(super) fn validate(fields: &[Value]) -> Result<(), Flow> {
+    let Some(head) = FontProperties::decode(fields).extras() else {
+        return Ok(());
+    };
+    neovm_value::list_scan::for_each_proper_list_tail(head, head, |tail| {
+        let entry = tail.cons_car();
+        if entry.is_cons() {
+            Ok(None)
+        } else {
+            Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("consp"), entry],
+            ))
         }
-        extras = extras.cons_cdr();
-    }
-    None
+    })
+    .map(|_| ())
+}
+
+pub(super) fn assoc(extras: Value, key: Value, mode: SymbolMode) -> Option<Value> {
+    list_iter(extras).find(|cell| cell.is_cons() && same(cell.cons_car(), key, mode))
 }
 
 fn flat_get(flat: &[Value], key: Value, mode: SymbolMode) -> Option<Value> {
@@ -247,13 +270,18 @@ pub(super) fn set_extra(root: Value, key: Value, value: Value, mode: SymbolMode)
         cell.set_cdr(value);
         return;
     }
-    let mut tail = root.cons_cdr();
+    let mut insertion = root.cons_cdr();
     let mut previous = None;
-    while tail.is_cons() && !less(key, tail.cons_car().cons_car(), mode) {
+    for tail in tails(root.cons_cdr()) {
+        let cell = tail.cons_car();
+        if cell.is_cons() && less(key, cell.cons_car(), mode) {
+            insertion = tail;
+            break;
+        }
         previous = Some(tail);
-        tail = tail.cons_cdr();
+        insertion = tail.cons_cdr();
     }
-    let entry = Value::cons(Value::cons(key, value), tail);
+    let entry = Value::cons(Value::cons(key, value), insertion);
     if let Some(previous) = previous {
         previous.set_cdr(entry);
     } else {
@@ -262,11 +290,10 @@ pub(super) fn set_extra(root: Value, key: Value, value: Value, mode: SymbolMode)
 }
 
 pub(super) fn remove_extra(root: Value, key: Value, mode: SymbolMode) {
-    let mut tail = root.cons_cdr();
     let mut previous: Option<Value> = None;
-    while tail.is_cons() {
+    for tail in tails(root.cons_cdr()) {
         let cell = tail.cons_car();
-        if same(cell.cons_car(), key, mode) {
+        if cell.is_cons() && same(cell.cons_car(), key, mode) {
             if let Some(previous) = previous {
                 previous.set_cdr(tail.cons_cdr());
             } else {
@@ -275,7 +302,6 @@ pub(super) fn remove_extra(root: Value, key: Value, mode: SymbolMode) {
             return;
         }
         previous = Some(tail);
-        tail = tail.cons_cdr();
     }
 }
 
@@ -293,21 +319,15 @@ pub(super) fn set_user(fields: &mut Vec<Value>, key: Value, value: Value, mode: 
     }
 }
 
-pub(super) fn copy_outer(mut extras: Value) -> Value {
-    let mut cells = Vec::new();
-    while extras.is_cons() {
-        cells.push(extras.cons_car());
-        extras = extras.cons_cdr();
-    }
-    Value::list(cells)
+pub(super) fn copy_outer(extras: Value) -> Value {
+    Value::list(list_iter(extras).filter(|cell| cell.is_cons()).collect())
 }
 
-pub(super) fn copy_cells(mut extras: Value) -> Value {
-    let mut cells = Vec::new();
-    while extras.is_cons() {
-        let cell = extras.cons_car();
-        cells.push(Value::cons(cell.cons_car(), cell.cons_cdr()));
-        extras = extras.cons_cdr();
-    }
-    Value::list(cells)
+pub(super) fn copy_cells(extras: Value) -> Value {
+    Value::list(
+        list_iter(extras)
+            .filter(|cell| cell.is_cons())
+            .map(|cell| Value::cons(cell.cons_car(), cell.cons_cdr()))
+            .collect(),
+    )
 }

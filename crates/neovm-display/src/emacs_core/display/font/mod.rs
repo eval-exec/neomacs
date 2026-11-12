@@ -1442,6 +1442,7 @@ fn xlfd_resolution_field(dpi: Option<&Value>) -> String {
 
 fn xlfd_fields_from_font_vector(
     v: &[Value],
+    mode: neovm_value::tagged::SymbolMode,
 ) -> (
     String,
     String,
@@ -1455,32 +1456,46 @@ fn xlfd_fields_from_font_vector(
     String,
     String,
 ) {
-    let foundry = font_vector_get_flexible(v, "foundry")
-        .map(|value| font_spec_field_to_string(&value))
+    let field = |name| properties::named_with_mode(v, name, mode);
+    let text = |value: Value| {
+        // GNU tests raw NILP before mode-aware SYMBOLP/SYMBOL_NAME.
+        // A positioned nil symbol is therefore the name "nil", not a wildcard.
+        if !value.is_nil()
+            && let Some(name) = value.as_symbol_name(mode)
+        {
+            name.to_owned()
+        } else {
+            font_spec_field_to_string(&value)
+        }
+    };
+    let style = |value: Value| {
+        text(value)
+            .chars()
+            .filter(|ch| *ch != '-' && *ch != '?' && *ch != ',' && *ch != '"')
+            .collect::<String>()
+    };
+    let foundry = field("foundry")
+        .map(text)
         .unwrap_or_else(|| "*".to_string());
-    let family = font_vector_get_flexible(v, "family")
-        .map(|value| font_spec_field_to_string(&value))
+    let family = field("family").map(text).unwrap_or_else(|| "*".to_string());
+    let weight = field("weight")
+        .map(style)
         .unwrap_or_else(|| "*".to_string());
-    let weight = font_vector_get_flexible(v, "weight")
-        .map(|value| sanitize_style_field(&value))
+    let slant = field("slant").map(style).unwrap_or_else(|| "*".to_string());
+    let set_width = field("set-width")
+        .or_else(|| field("setwidth"))
+        .or_else(|| field("width"))
+        .map(text)
         .unwrap_or_else(|| "*".to_string());
-    let slant = font_vector_get_flexible(v, "slant")
-        .map(|value| sanitize_style_field(&value))
-        .unwrap_or_else(|| "*".to_string());
-    let set_width = font_vector_get_flexible(v, "set-width")
-        .or_else(|| font_vector_get_flexible(v, "setwidth"))
-        .or_else(|| font_vector_get_flexible(v, "width"))
-        .map(|value| font_spec_field_to_string(&value))
-        .unwrap_or_else(|| "*".to_string());
-    let adstyle = font_vector_get_flexible(v, "adstyle")
-        .map(|value| font_spec_field_to_string(&value))
+    let adstyle = field("adstyle")
+        .map(text)
         .unwrap_or_else(|| "*".to_string());
 
-    let size = font_vector_get_flexible(v, "size");
-    let dpi = font_vector_get_flexible(v, "dpi");
-    let spacing = font_vector_get_flexible(v, "spacing");
+    let size = field("size");
+    let dpi = field("dpi");
+    let spacing = field("spacing");
     let avg_width = font_average_width_field(v);
-    let registry = font_vector_get_flexible(v, "registry");
+    let registry = field("registry");
 
     let pixel = xlfd_pixel_field(size.as_ref());
     let resx = xlfd_resolution_field(dpi.as_ref());
@@ -2541,6 +2556,9 @@ fn font_put_with_mode(args: Vec<Value>, mode: neovm_value::tagged::SymbolMode) -
             vec![Value::string("Native font identity is read-only")],
         ));
     }
+    // GNU font objects are opaque. The Neomacs vector extension must not
+    // let forged/cyclic extra storage reach mutation primitives unchecked.
+    properties::validate(font_value_fields(&args[0]).expect("validated font"))?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::Vector) => {
             if !is_font_spec(&args[0])
@@ -2630,6 +2648,10 @@ pub(crate) fn list_fonts(
         FrameFontRealization::for_frame(frame) == FrameFontRealization::Terminal
     }) {
         return Ok(Value::NIL);
+    }
+    properties::validate(font_value_fields(&args[0]).expect("validated font spec"))?;
+    if let Some(prefer) = prefer {
+        properties::validate(font_value_fields(prefer).expect("validated preferred font spec"))?;
     }
     if font_has_uninterpretable_driver(&args[0], eval.symbol_mode()) {
         return Ok(Value::NIL);
@@ -3359,6 +3381,17 @@ pub(crate) fn font_family_list(
 /// `(font-xlfd-name FONT &optional FOLD-WILDCARDS)` -- render font-spec fields
 /// into an XLFD string; wildcard folding is supported in compatibility mode.
 pub(crate) fn font_xlfd_name(args: Vec<Value>) -> EvalResult {
+    font_xlfd_name_with_mode(args, neovm_value::tagged::SymbolMode::Bare)
+}
+
+fn font_xlfd_name_in_context(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    font_xlfd_name_with_mode(args, eval.symbol_mode())
+}
+
+fn font_xlfd_name_with_mode(args: Vec<Value>, mode: neovm_value::tagged::SymbolMode) -> EvalResult {
     expect_min_args("font-xlfd-name", &args, 1)?;
     expect_max_args("font-xlfd-name", &args, 3)?;
     if !is_font(&args[0]) {
@@ -3387,7 +3420,7 @@ pub(crate) fn font_xlfd_name(args: Vec<Value>) -> EvalResult {
             ));
         }
     }
-    let fields = xlfd_fields_from_font_vector(elems);
+    let fields = xlfd_fields_from_font_vector(elems, mode);
 
     let (
         foundry,
@@ -4222,7 +4255,7 @@ fn font_info_vector_for_entity(
         spacing_field,
         avg_width,
         registry,
-    ) = xlfd_fields_from_font_vector(&elems);
+    ) = xlfd_fields_from_font_vector(&elems, neovm_value::tagged::SymbolMode::Bare);
     let opened_name = format!(
         "-{}-{}-{}-{}-{}-{}-{}-*-{}-{}-{}-{}",
         foundry,

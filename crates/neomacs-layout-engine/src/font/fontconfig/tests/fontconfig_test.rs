@@ -2,6 +2,9 @@
 #[path = "language_set_review_test.rs"]
 mod language_set_review_test;
 #[cfg(unix)]
+#[path = "native_listing_metadata_review_test.rs"]
+mod native_listing_metadata_review_test;
+#[cfg(unix)]
 #[path = "otf_requirement_review_test.rs"]
 mod otf_requirement_review_test;
 #[cfg(unix)]
@@ -456,6 +459,7 @@ fn spacing_categories_follow_gnu_numeric_ranges() {
 #[test]
 fn monospace_preference_penalizes_proportional_candidates() {
     let mono_candidate = ListedFont {
+        average_width: None,
         adstyle: None,
         foundry: None,
         matched: super::FontMatch {
@@ -474,6 +478,7 @@ fn monospace_preference_penalizes_proportional_candidates() {
         spacing: Some(FONT_SPACING_MONO),
     };
     let proportional_candidate = ListedFont {
+        average_width: None,
         adstyle: None,
         foundry: None,
         matched: super::FontMatch {
@@ -521,6 +526,7 @@ fn monospace_preference_penalizes_proportional_candidates() {
 #[test]
 fn family_affinity_prefers_requested_family_over_unrelated_fixed_pitch_fallback() {
     let requested_family_candidate = ListedFont {
+        average_width: None,
         adstyle: None,
         foundry: None,
         matched: super::FontMatch {
@@ -539,6 +545,7 @@ fn family_affinity_prefers_requested_family_over_unrelated_fixed_pitch_fallback(
         spacing: None,
     };
     let unrelated_fixed_candidate = ListedFont {
+        average_width: None,
         adstyle: None,
         foundry: None,
         matched: super::FontMatch {
@@ -597,6 +604,7 @@ fn family_affinity_treats_cjk_companion_as_close_match() {
 #[test]
 fn find_font_candidate_prefers_the_requested_family_over_an_earlier_fallback() {
     let candidate = |family: &str, file: &str| ListedFont {
+        average_width: None,
         adstyle: None,
         foundry: None,
         matched: super::FontMatch {
@@ -639,6 +647,7 @@ fn find_font_candidate_prefers_the_requested_family_over_an_earlier_fallback() {
 #[test]
 fn find_font_candidate_prefers_requested_width_over_candidate_order() {
     let candidate = |file: &str, width: FontWidth| ListedFont {
+        average_width: None,
         adstyle: None,
         foundry: None,
         matched: super::FontMatch {
@@ -682,6 +691,7 @@ fn find_font_candidate_prefers_requested_width_over_candidate_order() {
 fn best_candidate_for_pass_preserves_each_equal_score_entity_ordinal() {
     let candidates = vec![
         ListedFont {
+            average_width: None,
             adstyle: None,
             foundry: None,
             matched: super::FontMatch {
@@ -700,6 +710,7 @@ fn best_candidate_for_pass_preserves_each_equal_score_entity_ordinal() {
             spacing: None,
         },
         ListedFont {
+            average_width: None,
             adstyle: None,
             foundry: None,
             matched: super::FontMatch {
@@ -718,6 +729,7 @@ fn best_candidate_for_pass_preserves_each_equal_score_entity_ordinal() {
             spacing: None,
         },
         ListedFont {
+            average_width: None,
             adstyle: None,
             foundry: None,
             matched: super::FontMatch {

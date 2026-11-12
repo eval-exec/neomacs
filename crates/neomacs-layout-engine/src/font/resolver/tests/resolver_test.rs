@@ -278,6 +278,7 @@ fn candidate(family: &str, weight: u16, slant: FontSlant, spacing: i32) -> FontC
                 FontFileAsset::new(path, 0).expect("fixture path"),
             ),
             metadata: PlatformFontMetadata {
+                average_width: None,
                 adstyle: None,
                 foundry: None,
                 family: family.to_string(),
@@ -1794,3 +1795,9 @@ fn entity_listing_distinguishes_raw_unicode_registry_names_from_legacy_case_patt
         assert_eq!(listed.len(), expected, "registry {registry}");
     }
 }
+
+#[path = "preferred_style_score_review_test.rs"]
+mod preferred_style_score_review_test;
+
+#[path = "average_width_admission_review_test.rs"]
+mod average_width_admission_review_test;

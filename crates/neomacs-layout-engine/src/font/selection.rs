@@ -98,6 +98,50 @@ pub(crate) fn candidate_style_selection_score(
     }
 }
 
+/// Score a public `list-fonts` PREFER request using GNU `font_score`.
+/// Unlike primary-font selection, listing compares the numeric slant values
+/// and leaves a style property unscored when either side is absent.
+pub(crate) fn candidate_listing_score(
+    preferred_weight: Option<FontWeight>,
+    preferred_slant: Option<FontSlant>,
+    preferred_width: Option<FontWidth>,
+    candidate_weight: Option<FontWeight>,
+    candidate_slant: FontSlant,
+    candidate_width: Option<FontWidth>,
+    size: Option<(u32, PlatformFontSize)>,
+) -> Option<CandidateSelectionScore> {
+    let distance = |preferred: Option<u16>, candidate: Option<u16>| {
+        PropertyDistance(u32::from(
+            preferred
+                .zip(candidate)
+                .map_or(0, |(preferred, candidate)| {
+                    preferred.abs_diff(candidate).min(127)
+                }),
+        ))
+    };
+    Some(CandidateSelectionScore {
+        compatibility: 0,
+        style: GnuStyleScore {
+            width: distance(
+                preferred_width.map(FontWidth::gnu_numeric),
+                candidate_width.map(FontWidth::gnu_numeric),
+            ),
+            size: match size {
+                Some((requested, candidate)) => size_distance(requested, candidate)?,
+                None => PropertyDistance(0),
+            },
+            weight: distance(
+                preferred_weight.map(FontWeight::gnu_numeric),
+                candidate_weight.map(FontWeight::gnu_numeric),
+            ),
+            slant: distance(
+                preferred_slant.map(FontSlant::gnu_numeric),
+                Some(candidate_slant.gnu_numeric()),
+            ),
+        },
+    })
+}
+
 /// GNU converts Fontconfig's pixel sizes to integer Lisp fixnums, rejects a
 /// fixed entity outside the inclusive 1/2×..2× range, then stores twice the
 /// absolute pixel distance in a seven-bit score field.

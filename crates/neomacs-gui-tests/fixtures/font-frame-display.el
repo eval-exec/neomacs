@@ -149,6 +149,58 @@
      "script-legacy-overrides-any" t
      (font-spec :family "Hack" :registry "iso8859-2" :script 'font-frame-legacy-any))))
 
+(defun font-frame-listing-review-cases ()
+  (font-frame-observe
+   "otf-woff-positive-and-missing-script" '(t nil)
+   (lambda ()
+     (list
+      (not (null (list-fonts
+                  (font-spec :family "FrameLayout" :otf '(latn nil (ccmp) (kern)))
+                  nil 1)))
+      (not (null (list-fonts
+                  (font-spec :family "FrameLayout" :otf '(zzzz)) nil 1))))))
+  (font-frame-observe
+   "bitmap-native-average-width" '(80)
+   (lambda ()
+     (mapcar (lambda (font) (font-get font :avgwidth))
+             (list-fonts (font-spec :family "FrameBitmap")))))
+  (font-frame-observe
+   "bitmap-average-width-admission" '(t nil nil)
+   (lambda ()
+     (mapcar (lambda (width)
+               (not (null (list-fonts
+                           (font-spec :family "FrameBitmap" :avgwidth width) nil 1))))
+             '(80 120 0))))
+  (font-frame-observe
+   "prefer-numeric-italic-oblique" '(italic oblique)
+   (lambda ()
+     (mapcar (lambda (slant)
+               (font-get (car (list-fonts
+                               (font-spec :family "FrameSlant") nil 1
+                               (font-spec :slant slant))) :slant))
+             '(italic oblique))))
+  (font-frame-observe
+   "prefer-missing-weight-unscored" t
+   (lambda ()
+     (let ((font (car (list-fonts
+                      (font-spec :family "FrameWeight") nil 1
+                      (font-spec :weight 'bold)))))
+       (and font (null (font-get font :weight))))))
+  (font-frame-observe
+   "prefer-missing-width-unscored" t
+   (lambda ()
+     (let ((font (car (list-fonts
+                      (font-spec :family "FrameWidth") nil 1
+                      (font-spec :width 'expanded)))))
+       (and font (null (font-get font :width))))))
+  (font-frame-observe
+   "xlfd-positioned-family" '("-*-Hack-*-*-*-*-*-*-*-*-*-*-*-*" t)
+   (lambda ()
+     (let* ((symbols-with-pos-enabled t)
+            (family (position-symbol 'Hack 1))
+            (spec (font-spec :family family)))
+       (list (font-xlfd-name spec) (symbol-with-pos-p (font-get spec :family)))))))
+
 (defun font-frame-probe ()
   (condition-case problem
       (let* ((gui (selected-frame))
@@ -158,6 +210,7 @@
         (font-frame-scalable-cases)
         (font-frame-remapping-cases)
         (font-frame-property-cases)
+        (font-frame-listing-review-cases)
         (setq tty (make-terminal-frame
                    `((tty . ,(getenv "NEOMACS_FONT_FRAME_TTY"))
                      (tty-type . "xterm-256color")
@@ -196,6 +249,7 @@
              (scalable-cases . 7)
              (face-remapping-cases . 4)
              (font-property-cases . 4)
+             (listing-review-cases . 7)
              (observations . ,(vconcat (reverse font-frame-observations)))))
           (select-frame gui)
           (kill-emacs (if passed 0 1))))

@@ -158,6 +158,7 @@ fn byte_limit_evicts_and_oversized_keys_are_not_retained() {
 #[test]
 fn font_payload_counts_toward_limit_and_returned_answers_are_independent() {
     let font = ListedFont {
+        average_width: None,
         adstyle: None,
         matched: super::super::FontMatch {
             family: "fixture".into(),

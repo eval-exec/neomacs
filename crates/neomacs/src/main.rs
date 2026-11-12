@@ -1374,7 +1374,7 @@ fn core_listed_font_entity_preview(
             PlatformFontSize::Fixed { device_ppem_26_6 } => Some(device_ppem_26_6 >> 6),
             PlatformFontSize::Unknown => None,
         },
-        average_width: (metadata.size == PlatformFontSize::Scalable).then_some(0),
+        average_width: metadata.average_width,
         font: core_font_entity_metadata_match(
             None,
             &entity.candidate.identity,

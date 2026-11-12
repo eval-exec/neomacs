@@ -82,6 +82,7 @@ impl RecordingBackend {
                 identity: ResolvedFontIdentity::from_file(path, 0, None),
                 locator: PlatformFontCandidateLocator::File(FontFileAsset::new(path, 0).unwrap()),
                 metadata: PlatformFontMetadata {
+                    average_width: None,
                     adstyle: None,
                     foundry: None,
                     family: self.winner.as_str().to_owned(),

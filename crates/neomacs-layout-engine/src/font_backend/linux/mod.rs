@@ -19,6 +19,7 @@ impl PlatformFontCandidate {
         adstyle: Option<String>,
         width: Option<FontWidth>,
         spacing: Option<i32>,
+        average_width: Option<i32>,
     ) -> Option<Self> {
         let file = matched.file.as_deref()?;
         let weight = matched
@@ -39,6 +40,7 @@ impl PlatformFontCandidate {
             identity,
             locator: PlatformFontCandidateLocator::File(asset),
             metadata: PlatformFontMetadata {
+                average_width,
                 adstyle,
                 foundry,
                 family: matched.family,
@@ -150,6 +152,7 @@ impl FontBackend for FontconfigBackend {
                     candidate.adstyle,
                     candidate.width,
                     candidate.spacing,
+                    candidate.average_width,
                 )?,
             })
         });
@@ -245,6 +248,7 @@ impl FontBackend for FontconfigBackend {
                     candidate.adstyle,
                     candidate.width,
                     candidate.spacing,
+                    candidate.average_width,
                 )?,
             })
         })

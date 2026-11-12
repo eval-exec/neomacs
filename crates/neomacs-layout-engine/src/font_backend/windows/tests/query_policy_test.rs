@@ -2,6 +2,46 @@ use super::*;
 use crate::font_backend::{FontCandidateScope, RequiredFontCoverage, TextDirection};
 use neovm_core::face::{FontSlant, FontWidth};
 
+#[test]
+fn windows_generic_family_metadata_preserves_all_gnu_classes() {
+    // GNU w32_enumfont_pattern_entity masks the native tmPitchAndFamily,
+    // independently of fixed/variable pitch in its lower four bits.
+    for (family, expected) in [
+        (0x10, "serif"),
+        (0x20, "sans"),
+        (0x30, "mono"),
+        (0x40, "script"),
+        (0x50, "decorative"),
+    ] {
+        for pitch in 0..16 {
+            assert_eq!(generic_adstyle(family | pitch), Some(expected));
+        }
+    }
+    for family in [0, 0x60, 0xf0] {
+        assert_eq!(generic_adstyle(family), None);
+    }
+}
+
+#[test]
+fn windows_generic_family_probe_requires_matching_style_and_unambiguous_physical_records() {
+    let mut probe = GenericFamilyProbe::new(400, 0);
+    probe.observe(700, 0, 0x30);
+    probe.observe(400, 1, 0x30);
+    assert_eq!(probe.adstyle(), None);
+    probe.observe(400, 0, 0x31);
+    assert_eq!(probe.adstyle(), Some("mono"));
+    probe.observe(400, 0, 0x32);
+    assert_eq!(probe.adstyle(), Some("mono"));
+    probe.observe(400, 0, 0x20);
+    assert_eq!(probe.adstyle(), None);
+    probe.observe(400, 0, 0x30);
+    assert_eq!(
+        probe.adstyle(),
+        None,
+        "a later record cannot hide ambiguity"
+    );
+}
+
 fn query() -> FontCandidateQuery {
     FontCandidateQuery {
         scalable: None,

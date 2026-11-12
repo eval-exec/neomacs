@@ -2,9 +2,9 @@ use super::*;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-struct Fixture(PathBuf);
+pub(crate) struct Fixture(PathBuf);
 impl Fixture {
-    fn new(bytes: &[u8]) -> Self {
+    pub(crate) fn new(bytes: &[u8]) -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let path = std::env::temp_dir().join(format!(
             "neomacs-otf-{}-{}",
@@ -14,7 +14,7 @@ impl Fixture {
         std::fs::write(&path, bytes).unwrap();
         Self(path)
     }
-    fn path(&self) -> &str {
+    pub(crate) fn path(&self) -> &str {
         self.0.to_str().unwrap()
     }
 }

@@ -20,6 +20,23 @@ pub(super) fn matches_file(file: &str, requirement: &NativeFontOtfRequirement) -
     let Ok(data) = std::fs::read(file) else {
         return false;
     };
+    if data.starts_with(b"wOFF") || data.starts_with(b"wOF2") {
+        // GNU's FreeType face opener decodes these containers. Reuse the
+        // materializer's decoder and exact source-face selection instead of
+        // passing container bytes to ttf-parser. The temporary database owns
+        // the standalone SFNT only for this query, not for the cache lifetime.
+        drop(data);
+        let mut database = fontdb::Database::new();
+        let Ok(faces) = neomacs_font_materializer::FontFileCache::open_file(&mut database, file, 0)
+        else {
+            return false;
+        };
+        return faces.into_iter().any(|face| {
+            database
+                .with_face_data(face, |bytes, _| matches_bytes(bytes, requirement))
+                .unwrap_or(false)
+        });
+    }
     matches_bytes(&data, requirement)
 }
 

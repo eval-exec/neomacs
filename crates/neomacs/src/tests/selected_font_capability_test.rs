@@ -17,6 +17,7 @@ pub(super) fn native_catalog_font(
         ),
         identity,
         metadata: PlatformFontMetadata {
+            average_width: Some(0),
             foundry: None,
             adstyle: None,
             family: "Catalog Fixture".to_owned(),

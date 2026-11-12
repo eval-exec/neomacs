@@ -1069,5 +1069,8 @@ fn sha256_bytes(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests;
 
+mod containers;
+pub use containers::uncompressed_woff;
+
 mod layout_fonts;
 pub use layout_fonts::*;

@@ -117,19 +117,34 @@ fn opened(capability: Value, explicit_nil: bool) -> Value {
 
 #[test]
 fn font_extra_sharing_opened_custom_slots_have_a_gc_visible_mutable_head() {
-    let _eval = Context::new(crate::test_utils::unit_runtime());
-    let font = opened(Value::NIL, false);
-    font_put(vec![
-        font,
-        Value::keyword("custom-shared"),
-        Value::fixnum(22),
-    ])
-    .unwrap();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    eval.set_gc_threshold(usize::MAX);
+    // Only the global variable roots the actual FontObject. Its fields must
+    // retain the mutable extra head across a collection before the new slot.
+    eval.set_variable("gc-opened-font", opened(Value::NIL, false));
+    let before = eval.gc_count_for_test();
+    eval.gc_collect_exact();
     assert_eq!(
-        font_get(vec![font, Value::keyword("custom-shared")]).unwrap(),
+        eval.eval_str("(fontp gc-opened-font 'font-object)")
+            .unwrap(),
+        Value::T
+    );
+    // This heap payload has no independent Lisp root after font-put returns.
+    // A second full collection must trace FontObjectData.fields -> extra root
+    // -> association cell -> payload, rather than just retain an immediate.
+    eval.eval_str("(font-put gc-opened-font :custom-shared (vector 22))")
+        .unwrap();
+    eval.gc_collect_exact();
+    assert!(eval.gc_count_for_test() >= before + 2);
+    assert_eq!(
+        eval.eval_str("(aref (font-get gc-opened-font :custom-shared) 0)")
+            .unwrap(),
         Value::fixnum(22)
     );
-    assert!(font_put(vec![font, Value::keyword("lang"), Value::symbol("fr")]).is_err());
+    assert!(
+        eval.eval_str("(font-put gc-opened-font :lang 'fr)")
+            .is_err()
+    );
 }
 
 #[test]
@@ -652,5 +667,112 @@ fn font_extra_sharing_disabled_positioned_driver_never_becomes_an_unrestricted_q
         )
         .unwrap();
         assert_eq!((counts.borrow().lists, counts.borrow().matches), (1, 0));
+    }
+}
+
+#[test]
+fn font_extra_sharing_rejects_forged_extra_entries_before_mutating_them() {
+    let _eval = Context::new(crate::test_utils::unit_runtime());
+    let root = Value::cons(Value::NIL, Value::list(vec![Value::fixnum(42)]));
+    let forged = Value::vector(vec![Value::keyword(FONT_SPEC_TAG), root]);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        font_put(vec![
+            forged,
+            Value::keyword("custom-new"),
+            Value::fixnum(22),
+        ])
+    }));
+    assert!(
+        result.is_ok(),
+        "a user-visible forged vector must not panic in the property walker"
+    );
+    assert!(result.unwrap().is_err());
+}
+
+#[test]
+fn font_extra_sharing_rejects_forged_extra_entries_before_native_key_copying() {
+    let mut eval = publication_context(intern("ftcrhb"));
+    let root = Value::cons(Value::NIL, Value::list(vec![Value::fixnum(42)]));
+    let forged = Value::vector(vec![Value::keyword(FONT_SPEC_TAG), root]);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        list_fonts(&mut eval, vec![forged])
+    }));
+    assert!(
+        result.is_ok(),
+        "a user-visible forged vector must not panic while copying extras"
+    );
+    assert!(result.unwrap().is_err());
+}
+
+#[test]
+fn font_extra_sharing_xlfd_renderer_interprets_positioned_symbol_values_in_context() {
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let rendered = eval
+        .eval_str(
+            "(let ((symbols-with-pos-enabled t))
+        (font-xlfd-name (font-spec :family (position-symbol 'Hack 1))))",
+        )
+        .unwrap();
+    assert_eq!(
+        rendered.as_utf8_str(),
+        Some("-*-Hack-*-*-*-*-*-*-*-*-*-*-*-*")
+    );
+}
+
+#[test]
+fn font_extra_sharing_hostile_extra_spines_are_finite_and_rejected_before_mutation() {
+    for case in 0..3 {
+        let (mut eval, requests) = context();
+        let pair = Value::cons(Value::keyword("known"), Value::fixnum(11));
+        let head = match case {
+            0 => Value::list(vec![Value::fixnum(42), pair]),
+            1 => Value::cons(pair, Value::fixnum(42)),
+            _ => {
+                let head = Value::cons(pair, Value::NIL);
+                head.set_cdr(head);
+                head
+            }
+        };
+        let root = Value::cons(Value::NIL, head);
+        let forged = Value::vector(vec![Value::keyword(FONT_SPEC_TAG), root]);
+        // Read-only walks skip malformed associations and terminate on an
+        // improper or circular spine; mutation/listing require valid storage.
+        assert_eq!(
+            font_get(vec![forged, Value::keyword("known")]).unwrap(),
+            Value::fixnum(11)
+        );
+        assert!(
+            font_get(vec![forged, Value::keyword("missing")])
+                .unwrap()
+                .is_nil()
+        );
+        assert!(font_put(vec![forged, Value::keyword("new"), Value::fixnum(22)]).is_err());
+        assert!(list_fonts(&mut eval, vec![forged]).is_err());
+        assert!(
+            eq_value(&root.cons_cdr(), &head),
+            "rejected mutation changed the extra head"
+        );
+        assert!(
+            requests.borrow().is_empty(),
+            "malformed storage reached the native host"
+        );
+        for copy in [properties::copy_outer(head), properties::copy_cells(head)] {
+            let pairs = list_to_vec(&copy).expect("copy must have a finite proper outer list");
+            assert!(!pairs.is_empty());
+            assert!(pairs.iter().all(|pair| pair.is_cons()));
+        }
+        properties::remove_extra(
+            root,
+            Value::keyword("missing"),
+            neovm_value::tagged::SymbolMode::Bare,
+        );
+        properties::set_extra(
+            root,
+            Value::keyword("zzz"),
+            Value::fixnum(22),
+            neovm_value::tagged::SymbolMode::Bare,
+        );
+        // The private primitives must remain memory-safe and finite too;
+        // their handling of forged storage is not a GNU font representation.
     }
 }

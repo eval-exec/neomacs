@@ -113,6 +113,9 @@ impl PlatformFontDesignMetrics {
 /// Selector metadata for one exact native font.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlatformFontMetadata {
+    /// GNU bitmap AVERAGE_WIDTH, or zero for a native scalable entity.
+    /// Absence stays distinct from a known zero width.
+    pub average_width: Option<i32>,
     /// GNU additional style for bitmap fonts; separate from weight/slant/width.
     pub adstyle: Option<String>,
     pub foundry: Option<String>,

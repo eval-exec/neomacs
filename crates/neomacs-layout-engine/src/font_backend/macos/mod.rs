@@ -118,6 +118,8 @@ impl CoreTextBackend {
             })
             .filter_map(|candidate| {
                 let metadata = PlatformFontMetadata {
+                    // GNU nsfont publishes zero for its native entities.
+                    average_width: Some(0),
                     adstyle: None,
                     foundry: None,
                     family: candidate.family,

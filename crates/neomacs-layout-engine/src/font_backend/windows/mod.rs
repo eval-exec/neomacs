@@ -20,8 +20,17 @@ use neovm_core::face::{FontSlant, FontWidth};
 use std::borrow::Cow;
 use std::path::PathBuf;
 use std::ptr;
+use winapi::Interface;
+use winapi::shared::minwindef::{DWORD, LPARAM};
+use winapi::shared::windef::HDC;
 use winapi::shared::winerror::S_OK;
-use winapi::um::dwrite::IDWriteLocalizedStrings;
+use winapi::um::dwrite::{
+    DWRITE_FACTORY_TYPE_SHARED, DWriteCreateFactory, IDWriteFactory, IDWriteGdiInterop,
+    IDWriteLocalizedStrings,
+};
+use winapi::um::wingdi::{
+    CreateCompatibleDC, DEFAULT_CHARSET, DeleteDC, EnumFontFamiliesExW, LOGFONTW, TEXTMETRICW,
+};
 use wio::com::ComPtr;
 
 /// DirectWrite adapter for native Windows matching and system fallback.
@@ -281,6 +290,105 @@ fn localized_family_names(family: FontFamily) -> Vec<String> {
         .unwrap_or_default()
 }
 
+struct FontEnumerationDc(HDC);
+
+impl Drop for FontEnumerationDc {
+    fn drop(&mut self) {
+        // SAFETY: this non-null handle came from CreateCompatibleDC and is
+        // owned exclusively here. It is not a window DC requiring ReleaseDC.
+        unsafe {
+            DeleteDC(self.0);
+        }
+    }
+}
+
+unsafe extern "system" fn observe_font_generic_family(
+    logical: *const LOGFONTW,
+    metrics: *const TEXTMETRICW,
+    _: DWORD,
+    context: LPARAM,
+) -> i32 {
+    if logical.is_null() || metrics.is_null() {
+        return 1;
+    }
+    // SAFETY: EnumFontFamiliesExW provides live LOGFONT/TEXTMETRIC prefixes.
+    // Its caller passes one exclusive stack-owned probe; callbacks are
+    // synchronous and neither the references nor the context escape.
+    let (logical, metrics, probe) = unsafe {
+        (
+            &*logical,
+            &*metrics,
+            &mut *(context as *mut super::windows_query_policy::GenericFamilyProbe),
+        )
+    };
+    probe.observe(logical.lfWeight, logical.lfItalic, metrics.tmPitchAndFamily);
+    1
+}
+
+fn font_generic_adstyle(font: &Font) -> Option<String> {
+    let mut factory = ptr::null_mut();
+    // SAFETY: the output pointer is writable; the requested IID is exactly
+    // IDWriteFactory. Success transfers an owned COM reference to this call.
+    let status = unsafe {
+        DWriteCreateFactory(
+            DWRITE_FACTORY_TYPE_SHARED,
+            &IDWriteFactory::uuidof(),
+            &mut factory,
+        )
+    };
+    if status != S_OK || factory.is_null() {
+        return None;
+    }
+    // SAFETY: the successful call returned the requested interface and one
+    // owned reference. ComPtr releases it after the interop operation.
+    let factory = unsafe { ComPtr::<IDWriteFactory>::from_raw(factory.cast()) };
+    let mut interop = ptr::null_mut();
+    // SAFETY: factory remains live and the output pointer is writable.
+    let status = unsafe { factory.GetGdiInterop(&mut interop) };
+    if status != S_OK || interop.is_null() {
+        return None;
+    }
+    // SAFETY: GetGdiInterop returned one owned, non-null interface reference.
+    let interop = unsafe { ComPtr::<IDWriteGdiInterop>::from_raw(interop) };
+    // SAFETY: LOGFONTW consists entirely of integer fields and a UTF-16 array;
+    // zero initializes a valid output buffer for the native conversion.
+    let mut logical: LOGFONTW = unsafe { std::mem::zeroed() };
+    let mut system_font = 0;
+    // SAFETY: font and interop own live interfaces, and both native outputs
+    // remain writable through the call. The conversion retains neither output.
+    let status =
+        unsafe { interop.ConvertFontToLOGFONT(font.as_ptr(), &mut logical, &mut system_font) };
+    if status != S_OK || system_font == 0 || logical.lfFaceName[0] == 0 {
+        return None;
+    }
+    // The interop description is only logical. GNU reads the physical GDI
+    // TEXTMETRIC classification instead; do not treat the converted logical
+    // pitch/family field or the font's monospace flag as that observation.
+    let mut probe =
+        super::windows_query_policy::GenericFamilyProbe::new(logical.lfWeight, logical.lfItalic);
+    logical.lfPitchAndFamily = 0; // Required by EnumFontFamiliesExW.
+    logical.lfCharSet = DEFAULT_CHARSET as u8;
+    // SAFETY: a null compatible DC requests a new caller-owned memory DC.
+    let dc = unsafe { CreateCompatibleDC(ptr::null_mut()) };
+    if dc.is_null() {
+        return None;
+    }
+    let dc = FontEnumerationDc(dc);
+    // SAFETY: the DC, family description and exclusive stack probe all remain
+    // live until synchronous enumeration returns. The callback does not retain
+    // any native pointer, allocate, or call back into the enumeration.
+    unsafe {
+        EnumFontFamiliesExW(
+            dc.0,
+            &mut logical,
+            Some(observe_font_generic_family),
+            &mut probe as *mut _ as LPARAM,
+            0,
+        );
+    }
+    probe.adstyle().map(str::to_owned)
+}
+
 fn font_candidate_from_font(font: Font) -> Option<FontCandidate> {
     let face = font.create_font_face();
     let files = face.files().ok()?;
@@ -307,7 +415,8 @@ fn font_candidate_from_font(font: Font) -> Option<FontCandidate> {
     };
     let width = from_directwrite_stretch(font.stretch());
     let metadata = PlatformFontMetadata {
-        adstyle: None,
+        average_width: None,
+        adstyle: font_generic_adstyle(&font),
         foundry: None,
         family: font.family_name(),
         weight: Some(font.weight().to_u32().clamp(1, u32::from(u16::MAX)) as u16),

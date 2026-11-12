@@ -6,6 +6,64 @@
 
 use super::FontCandidateQuery;
 
+pub(super) fn generic_adstyle(pitch_and_family: u8) -> Option<&'static str> {
+    // GNU w32_enumfont_pattern_entity uses the native generic family, not
+    // the pitch bit or a guess based on the font's localized family name.
+    match pitch_and_family & 0xf0 {
+        0x10 => Some("serif"),
+        0x20 => Some("sans"),
+        0x30 => Some("mono"),
+        0x40 => Some("script"),
+        0x50 => Some("decorative"),
+        _ => None,
+    }
+}
+
+enum GenericFamilyObservation {
+    Missing,
+    Known(u8),
+    Ambiguous,
+}
+
+pub(super) struct GenericFamilyProbe {
+    weight: i32,
+    italic: u8,
+    observed: GenericFamilyObservation,
+}
+
+impl GenericFamilyProbe {
+    pub(super) fn new(weight: i32, italic: u8) -> Self {
+        Self {
+            weight,
+            italic,
+            observed: GenericFamilyObservation::Missing,
+        }
+    }
+
+    pub(super) fn observe(&mut self, weight: i32, italic: u8, pitch_and_family: u8) {
+        if weight != self.weight || italic != self.italic {
+            return;
+        }
+        let family = pitch_and_family & 0xf0;
+        self.observed = match self.observed {
+            GenericFamilyObservation::Missing => GenericFamilyObservation::Known(family),
+            GenericFamilyObservation::Known(previous) if previous == family => {
+                GenericFamilyObservation::Known(previous)
+            }
+            GenericFamilyObservation::Known(_) | GenericFamilyObservation::Ambiguous => {
+                GenericFamilyObservation::Ambiguous
+            }
+        };
+    }
+
+    pub(super) fn adstyle(&self) -> Option<&'static str> {
+        match self.observed {
+            GenericFamilyObservation::Known(family) => generic_adstyle(family),
+            GenericFamilyObservation::Missing | GenericFamilyObservation::Ambiguous => None,
+        }
+    }
+}
+
 pub(super) fn query_is_satisfied_by(
     query: &FontCandidateQuery,
     supports: impl FnOnce(&[u32]) -> bool,

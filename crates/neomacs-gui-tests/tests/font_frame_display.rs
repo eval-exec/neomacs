@@ -102,6 +102,59 @@ impl Drop for PrivateTerminal {
     }
 }
 
+fn prepare_listing_review_fonts(fonts: &Path) -> String {
+    let hack = neomacs_test_fonts::hack_regular_3_003();
+    let dejavu = neomacs_test_fonts::dejavu_2_37().sans_regular();
+    fs::write(
+        fonts.join("review-layout.woff"),
+        neomacs_test_fonts::uncompressed_woff(&fs::read(dejavu).unwrap()),
+    )
+    .unwrap();
+    let bitmap = fs::read_to_string(neomacs_test_fonts::spleen_2_2_0().bdf()).unwrap();
+    assert!(bitmap.contains("FAMILY_NAME \"Spleen\""));
+    fs::write(
+        fonts.join("review-bitmap.bdf"),
+        bitmap
+            .replace("FAMILY_NAME \"Spleen\"", "FAMILY_NAME \"FrameBitmap\"")
+            .replace("FONT -misc-spleen-", "FONT -misc-framebitmap-"),
+    )
+    .unwrap();
+    let mut rules = "<match target=\"scan\"><test name=\"file\" compare=\"contains\"><string>review-layout.woff</string></test><edit name=\"family\" mode=\"assign_replace\"><string>FrameLayout</string></edit></match>".to_owned();
+    for (scenario, family) in [
+        ("slant", "FrameSlant"),
+        ("weight", "FrameWeight"),
+        ("width", "FrameWidth"),
+    ] {
+        for (name, source) in [("hack", hack), ("dejavu", dejavu)] {
+            let filename = format!("review-{scenario}-{name}.ttf");
+            fs::copy(source, fonts.join(&filename)).unwrap();
+            let slant = match (scenario, name) {
+                ("slant", "hack") => 100,
+                ("slant", _) => 110,
+                _ => 0,
+            };
+            let weight = if scenario == "weight" && name == "hack" {
+                "<edit name=\"weight\" mode=\"delete_all\"/>".to_owned()
+            } else {
+                format!(
+                    "<edit name=\"weight\" mode=\"assign_replace\"><int>{}</int></edit>",
+                    if scenario == "weight" { 180 } else { 80 }
+                )
+            };
+            let width = if scenario == "width" && name == "hack" {
+                "<edit name=\"width\" mode=\"delete_all\"/>".to_owned()
+            } else {
+                format!(
+                    "<edit name=\"width\" mode=\"assign_replace\"><int>{}</int></edit>",
+                    if scenario == "width" { 113 } else { 100 }
+                )
+            };
+            rules.push_str(&format!("<match target=\"scan\"><test name=\"file\" compare=\"contains\"><string>{filename}</string></test><edit name=\"family\" mode=\"assign_replace\"><string>{family}</string></edit><edit name=\"slant\" mode=\"assign_replace\"><int>{slant}</int></edit>{weight}{width}</match>"));
+        }
+    }
+    rules
+}
+
 #[test]
 fn native_font_listing_uses_the_requested_frame_display() {
     run(Engine::Neomacs);
@@ -178,11 +231,12 @@ fn run(engine: Engine) {
         fonts.join("spleen-8x16.otb"),
     )
     .unwrap();
+    let scan_rules = prepare_listing_review_fonts(&fonts);
     let config = artifact_root.join("fonts.conf");
     fs::write(
         &config,
         format!(
-            "<fontconfig><dir>{}</dir><cachedir>{}</cachedir><alias><family>monospace</family><prefer><family>Hack</family></prefer></alias><alias><family>sans-serif</family><prefer><family>Hack</family></prefer></alias></fontconfig>",
+            "<fontconfig><dir>{}</dir><cachedir>{}</cachedir>{scan_rules}<alias><family>monospace</family><prefer><family>Hack</family></prefer></alias><alias><family>sans-serif</family><prefer><family>Hack</family></prefer></alias></fontconfig>",
             fonts.display(), artifact_root.join("fontcache").display()
         ),
     ).unwrap();
@@ -250,6 +304,7 @@ fn run(engine: Engine) {
     assert_eq!(state["scalable-cases"], 7);
     assert_eq!(state["face-remapping-cases"], 4);
     assert_eq!(state["font-property-cases"], 4);
+    assert_eq!(state["listing-review-cases"], 7);
     let observations = state["observations"].as_array().unwrap();
     let expected = [
         "script-explicit-nil-han",
@@ -276,6 +331,13 @@ fn run(engine: Engine) {
         "font-extra-existing-slots-shared",
         "font-native-key-updates-primary-slot",
         "font-point-size-zero-dpi",
+        "otf-woff-positive-and-missing-script",
+        "bitmap-native-average-width",
+        "bitmap-average-width-admission",
+        "prefer-numeric-italic-oblique",
+        "prefer-missing-weight-unscored",
+        "prefer-missing-width-unscored",
+        "xlfd-positioned-family",
         "gui-selected-tty-default-face-negative-width",
         "gui-selected-tty-invalid-face-negative-width",
         "tty-selected-nil-frame",

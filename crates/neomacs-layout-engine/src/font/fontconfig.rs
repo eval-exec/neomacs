@@ -41,6 +41,8 @@ use std::sync::{Mutex, OnceLock};
 use {fontconfig::Pattern, fontconfig_sys};
 
 #[cfg(unix)]
+mod bitmap_property;
+#[cfg(unix)]
 mod candidate_cache;
 #[cfg(unix)]
 mod otf_requirement;
@@ -231,6 +233,7 @@ struct CharMatchCacheKey {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ListedFont {
+    pub(crate) average_width: Option<i32>,
     pub(crate) adstyle: Option<String>,
     pub(crate) matched: FontMatch,
     style: String,
@@ -1142,6 +1145,11 @@ fn listed_font_from_raw_pattern(pattern: *mut fontconfig_sys::FcPattern) -> Opti
     let spacing = raw_pattern_int(pattern, fontconfig::FC_SPACING);
     let matched_family = raw_pattern_string(pattern, fontconfig::FC_FAMILY)?;
     Some(ListedFont {
+        average_width: if scalable == Some(true) {
+            Some(0)
+        } else {
+            bitmap_property::average_width(&file, face_index)
+        },
         adstyle,
         matched: FontMatch {
             family: matched_family,
@@ -1824,6 +1832,7 @@ pub(crate) fn fc_list_candidates(
                 continue;
             };
             let candidate = ListedFont {
+                average_width: None,
                 adstyle: None,
                 matched: FontMatch {
                     family: matched_family,

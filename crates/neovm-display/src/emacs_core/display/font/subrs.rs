@@ -46,7 +46,7 @@ neovm_eval::emacs_core::subr::define_subrs! {
     )),
     neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(
         "font-xlfd-name",
-        NativeFn::NoContextVec(font_xlfd_name),
+        NativeFn::ContextVec(font_xlfd_name_in_context),
         SubrArity::new(1, Some(3)),
     )),
     neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(

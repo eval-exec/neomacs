@@ -16,7 +16,8 @@ use crate::font::policy::{
     CapturedFontFamilyPolicy, FontFamilyCandidate, FontFamilySource, GnuFontPolicy,
 };
 use crate::font::selection::{
-    CandidateSelectionScore, candidate_selection_score, candidate_style_selection_score,
+    CandidateSelectionScore, candidate_listing_score, candidate_selection_score,
+    candidate_style_selection_score,
 };
 use crate::font_backend::{
     FontBackend, FontCandidate, FontCandidateQuery, FontCandidateScope, FontFamilyName,
@@ -395,6 +396,18 @@ impl FontResolver {
                         .as_deref()
                         .filter(|style| !style.is_empty())
                         .is_none_or(|requested| {
+                            let requested = if self.backend.kind() == FontBackendKind::DirectWrite {
+                                // w32_generic_family compares exact symbols;
+                                // unrecognized names impose no family class.
+                                match requested {
+                                    "mono" | "monospace" => "mono",
+                                    "sans" | "sans-serif" | "sansserif" => "sans",
+                                    "serif" | "script" | "decorative" => requested,
+                                    _ => return true,
+                                }
+                            } else {
+                                requested
+                            };
                             metadata
                                 .adstyle
                                 .as_deref()
@@ -412,10 +425,14 @@ impl FontResolver {
             });
         let size_matches = |candidate: &FontCandidate| {
             let metadata = &candidate.matched.metadata;
-            // GNU filters only known, nonzero entity average widths. Current
-            // metadata projects scalable widths as zero and other widths as
-            // unknown; a fixed strike alone does not imply an average width.
-            constraints
+            // GNU filters only known, nonzero average widths. A requested
+            // zero still excludes known nonzero widths; unknown/zero remains
+            // unconstrained, independently of the font's strike size.
+            constraints.average_width.is_none_or(|requested| {
+                metadata
+                    .average_width
+                    .is_none_or(|actual| actual == 0 || actual == requested)
+            }) && constraints
                 .pixel_size
                 // GNU's primary filter tests `if (size)`. Numeric zero is
                 // still meaningful in the separate PREFER scoring path.
@@ -441,46 +458,30 @@ impl FontResolver {
                 .collect();
             candidates.sort_by_key(|candidate| {
                 let metadata = &candidate.matched.metadata;
-                let weight = FontWeight::from_css_weight(metadata.weight.unwrap_or(400));
-                let requested_weight = prefer
-                    .weight
-                    .map(FontWeight::from_css_weight)
-                    .unwrap_or(weight);
-                let requested_slant = prefer.slant.unwrap_or(metadata.slant);
-                let score = if let Some(size) = constraints.pixel_size {
-                    candidate_selection_score(
-                        0,
-                        size.saturating_mul(64),
-                        requested_weight,
-                        requested_slant,
-                        prefer.width,
-                        weight,
-                        metadata.slant,
-                        metadata.width,
-                        metadata.size,
-                    )
-                    .map(|score| {
-                        // Native listing exposes no DPI and fixed entities
-                        // have no average-width metadata. GNU scores either
-                        // mismatch only for a fixed entity with preferred size.
-                        if matches!(metadata.size, PlatformFontSize::Fixed { .. })
-                            && (constraints.dpi.is_some() || constraints.average_width.is_some())
-                        {
-                            score.with_size_metadata_mismatch()
-                        } else {
-                            score
-                        }
-                    })
-                } else {
-                    Some(candidate_style_selection_score(
-                        requested_weight,
-                        requested_slant,
-                        prefer.width,
-                        weight,
-                        metadata.slant,
-                        metadata.width,
-                    ))
-                };
+                let score = candidate_listing_score(
+                    prefer.weight.map(FontWeight::from_css_weight),
+                    prefer.slant,
+                    prefer.width,
+                    metadata.weight.map(FontWeight::from_css_weight),
+                    metadata.slant,
+                    metadata.width,
+                    constraints
+                        .pixel_size
+                        .map(|size| (size.saturating_mul(64), metadata.size)),
+                )
+                .map(|score| {
+                    if constraints.pixel_size.is_some()
+                        && matches!(metadata.size, PlatformFontSize::Fixed { .. })
+                        && (constraints.dpi.is_some()
+                            || constraints
+                                .average_width
+                                .is_some_and(|requested| metadata.average_width != Some(requested)))
+                    {
+                        score.with_size_metadata_mismatch()
+                    } else {
+                        score
+                    }
+                });
                 (score.is_none(), score)
             });
             for candidate in candidates {

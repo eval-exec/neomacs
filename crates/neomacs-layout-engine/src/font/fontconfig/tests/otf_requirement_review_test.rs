@@ -145,17 +145,21 @@ fn otf_listing_public_pipeline_filters_before_maximum() {
         otf: Some(requirement(*b"latn")),
         ..Default::default()
     };
-    let hack = FontEntityQuery::new(crate::font_backend::FontFamilyName::new("Hack"));
+    let query = FontEntityQuery::new(None);
+    let unfiltered = service.list_font_entities(&query, &Default::default(), None, None);
+    let rejected = unfiltered
+        .iter()
+        .position(|font| font.candidate.metadata.family == "Hack")
+        .unwrap();
+    let accepted = unfiltered
+        .iter()
+        .position(|font| font.candidate.metadata.family == "DejaVu Sans")
+        .unwrap();
     assert!(
-        service
-            .list_font_entities(&hack, &constraints, None, Some(1))
-            .is_empty()
+        rejected < accepted,
+        "fixture must put the rejected font before the accepted font"
     );
-    let dejavu = FontEntityQuery::new(crate::font_backend::FontFamilyName::new("DejaVu Sans"));
-    assert_eq!(
-        service
-            .list_font_entities(&dejavu, &constraints, None, Some(1))
-            .len(),
-        1
-    );
+    let listed = service.list_font_entities(&query, &constraints, None, Some(1));
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].candidate.metadata.family, "DejaVu Sans");
 }
