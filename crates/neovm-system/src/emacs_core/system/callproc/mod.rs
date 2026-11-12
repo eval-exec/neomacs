@@ -584,20 +584,6 @@ fn write_output_target_in_state(
             // 31.0.90, `(let ((coding-system-for-read 'undecided))
             // (call-process "sh" nil t nil "-c" "printf 'caf\\303\\251\\r\\n'"))`
             // leaves `last-coding-system-used' at `utf-8-dos'.
-            let inhibit_null = eval
-                .forwarded_variable_value(intern("inhibit-null-byte-detection"))
-                .unwrap_or(Value::NIL)
-                .is_truthy();
-            let resolved = decoding.detected(
-                &eval.coding_systems(),
-                output,
-                // The whole of this route's output is in hand, which is
-                // GNU's state when it sets `CODING_MODE_LAST_BLOCK` at the
-                // end of `Fcall_process`'s read loop (src/callproc.c:796).
-                neovm_text::emacs_core::coding::SourceBlock::Last,
-                eval.symbol_mode(),
-                inhibit_null,
-            );
             // And then decodes through `decode_coding_c_string`
             // (src/callproc.c:856) -- the same macro, and so the same
             // `decode_coding_object`, that `make-process` and
@@ -633,6 +619,23 @@ fn write_output_target_in_state(
             let decoded = if output.is_empty() {
                 None
             } else {
+                // No read was decoded for an empty capture, so it must not
+                // perform detection either. In particular, an empty stderr
+                // capture must retain stdout's identity-only BOM selection.
+                let inhibit_null = eval
+                    .forwarded_variable_value(intern("inhibit-null-byte-detection"))
+                    .unwrap_or(Value::NIL)
+                    .is_truthy();
+                let resolved = decoding.detected(
+                    &eval.coding_systems(),
+                    output,
+                    // The whole of this route's output is in hand, which is
+                    // GNU's state when it sets `CODING_MODE_LAST_BLOCK` at the
+                    // end of `Fcall_process`'s read loop (src/callproc.c:796).
+                    neovm_text::emacs_core::coding::SourceBlock::Last,
+                    eval.symbol_mode(),
+                    inhibit_null,
+                );
                 // These are Neomacs's completed captured blocks, so no more
                 // bytes can complete a character in this block. GNU decodes
                 // incrementally in its read loop and keeps one coding struct
@@ -645,9 +648,14 @@ fn write_output_target_in_state(
                     neovm_text::emacs_core::coding::SourceBlock::Last,
                 )?)
             };
-            let used = decoded
-                .as_ref()
-                .map_or_else(|| resolved.name(), |run| run.coding_used());
+            let used = decoded.as_ref().map_or_else(
+                || match *decoding {
+                    ProcessOutputDecoding::Bytes(name)
+                    | ProcessOutputDecoding::Coding(name)
+                    | ProcessOutputDecoding::Detect(name) => name,
+                },
+                |run| run.coding_used(),
+            );
             eval.set_variable("last-coding-system-used", Value::symbol(used));
             // Both rewrites are IN PLACE on `coding->id`, and `Fcall_process`
             // reads the child's stdout and stderr through that one
