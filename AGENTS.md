@@ -153,6 +153,8 @@ For new functionality, write tests alongside the implementation even when a stri
 
 Before implementing a significant change, understand the current Neomacs architecture and read the relevant code and tests; study GNU Emacs's implementation when compatibility is involved (§1); examine related upstream behavior, prior art, and existing design decisions; consider multiple approaches and their trade-offs; and choose a design that addresses the underlying problem.
 
+For a compatibility, behavioral, or structural change, also search the internet for the ideal long-term shape and for established practice. Read the pages you cite. A search snippet is not a source. If the search finds nothing durable, say so. Record the sources, the ideal, and the long-term design in the pull request's Design horizon (§10). That search informs the internal design. Observable behavior still follows the pinned GNU Emacs oracle (§1). A page about another editor does not change a return value, an error, or a side effect.
+
 Prioritize correctness, compatibility, clear invariants, long-term maintainability, performance, extensibility, and architectural consistency.
 
 Prefer a sound long-term abstraction over accumulating ad hoc special cases. A root-cause fix may justify refactoring surrounding code, but keep changes focused and avoid unrelated rewrites or unnecessary scope expansion.
@@ -293,6 +295,7 @@ The pull request body is the completion report for an implementation task. For b
 - **Oracle evidence:** For observable GNU behavior, paste the `check-gnu-oracle.sh` profile and feature lines, the Elisp form, and both printed results. When an oracle test ran, name `NEOVM_ORACLE_MODE` and `NEOVM_FORCE_ORACLE_PATH`. When this evidence is absent, write **UNATTESTED**. A compatibility change with that mark is a proposal, and it is verified once the form has been run on the oracle. CI's verify job counts for a test it actually executes. It does not cover a unit test that never starts GNU Emacs.
 - **Root Cause:** Why did Neomacs behave incorrectly? Describe the underlying problem, not just the observed symptom.
 - **Solution:** What changed, and why is this the correct approach? Explain meaningful design trade-offs.
+- **Design horizon:** For a compatibility, behavioral, or structural change, name the broader problem and the other entry points that share it. Link the pages and the GNU files you opened (§4). State the long-term design you would want, and the practice you compared. For observable behavior, that practice is GNU Emacs 31.1 at the pinned commit. For the internal design, name the existing Neomacs seam and any wider pattern that preserves that behavior. Then say what this pull request lands and what it leaves. The note records the ideal. It does not require this pull request to build the ideal (§8). A typo or a one-line documentation change may say there is no broader design question.
 - **Regression Tests:** Which tests were added or updated? For bug fixes, identify the test that failed before the fix and passed afterward.
 - **Verification:** List the actual commands executed and their results. Document tests that were not run and explain why. State the oracle mode. A `snapshot` result is Neomacs compared with a checked-in expectation.
 - **Limitations:** Identify remaining risks, unsupported cases, or incomplete work.
@@ -313,6 +316,8 @@ Do not:
 
 - Invent GNU Emacs behavior.
 - Fabricate source references.
+- Cite a page, file, or discussion you did not open.
+- Treat an article about another editor as the contract for observable GNU Emacs behavior.
 - Claim to have inspected code that was not inspected.
 - Claim tests passed without running them.
 - Present a source reading, a unit test, or a `snapshot` oracle pass as an attested oracle run.
