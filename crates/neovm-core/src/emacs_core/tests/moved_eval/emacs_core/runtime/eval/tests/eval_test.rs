@@ -29498,16 +29498,26 @@ fn jit_guarded_bcall_leaf_site_calls_through_the_function_cell() {
 /// names case-sensitively (#667).
 #[test]
 fn read_file_name_completion_ignore_case_is_left_to_the_lisp_defcustom() {
-    let mut ctx = Context::new();
-    assert!(
-        ctx.obarray()
-            .symbol_value_copied("read-file-name-completion-ignore-case")
-            .is_none(),
-        "the Rust bootstrap must not bind a name GNU leaves to minibuffer.el"
-    );
+    crate::test_utils::init_test_tracing();
+    {
+        let mut ctx = crate::test_utils::new_context();
+        assert!(
+            ctx.obarray()
+                .symbol_value_copied("read-file-name-completion-ignore-case")
+                .is_none(),
+            "the Rust bootstrap must not bind a name GNU leaves to minibuffer.el"
+        );
+        assert!(
+            ctx.eval_str("(special-variable-p 'read-file-name-completion-ignore-case)")
+                .expect("inspect the bare bootstrap declaration")
+                .is_nil(),
+            "GNU leaves both value and special declaration to minibuffer.el"
+        );
+    }
 
-    // Exercise the real defcustom rather than a copied initializer: drop the
-    // dumped binding, then reload minibuffer.el with system-type darwin.
+    // The bare assertion above catches the nil-seed regression before this
+    // independent platform check. Drop the host-platform dump binding, then
+    // reload the real minibuffer.el rather than copying its initializer.
     let mut runtime = runtime_startup_context();
     runtime
         .eval_str("(makunbound 'read-file-name-completion-ignore-case)")
@@ -29522,5 +29532,12 @@ fn read_file_name_completion_ignore_case_is_left_to_the_lisp_defcustom() {
     assert!(
         value.is_t(),
         "darwin must get the platform default from the real defcustom"
+    );
+    assert!(
+        runtime
+            .eval_str("(special-variable-p 'read-file-name-completion-ignore-case)")
+            .expect("inspect the Lisp declaration")
+            .is_t(),
+        "custom.el's declaration makes the Lisp option special"
     );
 }
