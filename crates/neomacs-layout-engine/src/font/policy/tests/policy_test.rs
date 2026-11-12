@@ -14,7 +14,7 @@ fn registry_constraints_are_platform_neutral_and_typed() {
         definition: None,
     };
 
-    let constraints = GnuFontPolicy::constraints_for_spec(&spec, '好');
+    let constraints = GnuFontPolicy::constraints_for_spec(&spec, '好').unwrap();
 
     assert_eq!(constraints.representative_char(), '专');
     assert_eq!(constraints.languages()[0].as_str(), "zh-cn");
@@ -36,7 +36,7 @@ fn generic_unicode_registry_does_not_invent_a_charset_filter() {
         definition: None,
     };
 
-    let constraints = GnuFontPolicy::constraints_for_spec(&spec, 'λ');
+    let constraints = GnuFontPolicy::constraints_for_spec(&spec, 'λ').unwrap();
 
     assert_eq!(constraints.coverage(), &CoverageRequirement::Any);
 }

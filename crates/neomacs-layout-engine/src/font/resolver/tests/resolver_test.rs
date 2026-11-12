@@ -1,4 +1,6 @@
 use super::*;
+#[path = "legacy_registry_boundary_test.rs"]
+mod legacy_registry_boundary_test;
 #[path = "postscript_fallback_review_test.rs"]
 mod postscript_fallback_review_test;
 #[path = "preferred_size_metadata_review_test.rs"]
@@ -991,7 +993,9 @@ fn captured_character_policy_selects_on_a_thread_without_evaluator_state() {
         FontWidth::Expanded,
         selection_size(),
         &spec,
-    );
+        FontBackendKind::Fontconfig,
+    )
+    .unwrap();
     let candidates = vec![
         candidate("Fixture Sans", 400, FontSlant::Normal, 0),
         candidate("Fixture Sans", 700, FontSlant::Italic, 0),

@@ -532,6 +532,17 @@ pub trait DisplayHost {
     ) -> Result<Option<ResolvedFontSpecMatch>, String> {
         Ok(None)
     }
+    /// Validate primary driver-local properties before the caller captures
+    /// FT-only feature data. Return the actual backend when identified.
+    /// None prevents FT capture; ordinary listing remains authoritative for
+    /// generic/default hosts and for unsupported native requests.
+    fn prepare_font_listing(
+        &mut self,
+        _query: &FontSpecListQuery,
+    ) -> Result<Option<neomacs_display_protocol::font::FontBackendKind>, FontListError> {
+        Ok(None)
+    }
+
     /// List matching entities in preference order. Apply `filter`, when
     /// supplied, before counting accepted results toward `maximum` and before
     /// retaining entity handles. Propagate filter failures as `FontListError::Filter`.
@@ -565,6 +576,11 @@ pub trait DisplayHost {
         &mut self,
         request: FontEntityMetricsRequest,
     ) -> Result<Option<ResolvedFontEntityMetrics>, String> {
+        // This default adapter can only open standalone face-zero files.
+        // Native catalog identities require an implementation that owns them.
+        if request.coverage_handle.is_some() {
+            return Ok(None);
+        }
         let Some(file) = request.file.as_ref().and_then(LispString::as_utf8_str) else {
             return Ok(None);
         };

@@ -1,6 +1,12 @@
 //! Private admission checks for GNU ftfont_list's HarfBuzz OTF constraint.
 use crate::font_backend::{NativeFontOtfFeature, NativeFontOtfRequirement};
+use std::io::Read;
 use ttf_parser::opentype_layout::{LanguageSystem, LayoutTable};
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static NATIVE_FILE_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 pub(super) fn capability_matches(capability: &[u8], script: [u8; 4]) -> bool {
     // GNU uses strstr, not token equality. Its C tag string ends at the first
@@ -17,15 +23,21 @@ pub(super) fn capability_matches(capability: &[u8], script: [u8; 4]) -> bool {
 }
 
 pub(super) fn matches_file(file: &str, requirement: &NativeFontOtfRequirement) -> bool {
-    let Ok(data) = std::fs::read(file) else {
+    #[cfg(test)]
+    NATIVE_FILE_CHECKS.with(|count| count.set(count.get() + 1));
+    let Ok(mut source) = std::fs::File::open(file) else {
         return false;
     };
-    if data.starts_with(b"wOFF") || data.starts_with(b"wOF2") {
+    let mut magic = [0; 4];
+    if source.read_exact(&mut magic).is_err() {
+        return false;
+    }
+    if magic == *b"wOFF" || magic == *b"wOF2" {
         // GNU's FreeType face opener decodes these containers. Reuse the
         // materializer's decoder and exact source-face selection instead of
         // passing container bytes to ttf-parser. The temporary database owns
         // the standalone SFNT only for this query, not for the cache lifetime.
-        drop(data);
+        drop(source);
         let mut database = fontdb::Database::new();
         let Ok(faces) = neomacs_font_materializer::FontFileCache::open_file(&mut database, file, 0)
         else {
@@ -36,6 +48,10 @@ pub(super) fn matches_file(file: &str, requirement: &NativeFontOtfRequirement) -
                 .with_face_data(face, |bytes, _| matches_bytes(bytes, requirement))
                 .unwrap_or(false)
         });
+    }
+    let mut data = magic.to_vec();
+    if source.read_to_end(&mut data).is_err() {
+        return false;
     }
     matches_bytes(&data, requirement)
 }

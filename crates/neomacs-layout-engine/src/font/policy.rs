@@ -4,8 +4,11 @@
 //! Fontconfig behavior. This module translates a stored Lisp font spec into a
 //! typed native-catalog query without naming any operating-system backend.
 
+use neomacs_display_protocol::font::FontBackendKind;
 use neovm_core::emacs_core::font::FrozenFontFamilies;
 use neovm_core::emacs_core::fontset::{FontsetRenderingSpec, StoredFontSpec, native_font_name};
+use neovm_core::emacs_core::regex::{EmacsRegexpError, predicate_match_ignore_case};
+use neovm_core::heap_types::LispString;
 use std::borrow::Cow;
 
 /// A fontset's explicit family constrains the search. Without one, GNU
@@ -207,6 +210,15 @@ pub(super) struct FontPolicySpec<'a> {
     pub(super) slant: Option<neovm_core::face::FontSlant>,
     pub(super) width: Option<neovm_core::face::FontWidth>,
 }
+
+impl FontPolicySpec<'_> {
+    pub(super) fn for_backend(mut self, backend: FontBackendKind) -> Self {
+        self.registry = self
+            .registry
+            .filter(|registry| registry_needs_native_constraints(backend, registry));
+        self
+    }
+}
 impl<'a> From<&'a StoredFontSpec> for FontPolicySpec<'a> {
     fn from(spec: &'a StoredFontSpec) -> Self {
         Self {
@@ -233,34 +245,48 @@ impl<'a> From<&'a FontsetRenderingSpec> for FontPolicySpec<'a> {
 pub struct GnuFontPolicy;
 
 impl GnuFontPolicy {
-    pub fn constraints_for_entity(spec: &StoredFontSpec) -> NativeQueryConstraints {
-        let representative = representative_char_for_spec(spec);
-        Self::constraints_for_spec(spec, representative)
+    pub fn constraints_for_entity(
+        spec: &StoredFontSpec,
+    ) -> Result<NativeQueryConstraints, EmacsRegexpError> {
+        let names = FontPolicySpec::from(spec);
+        let registry = parse_registry(names.registry.as_deref())?;
+        Ok(Self::constraints_for_parsed(
+            &names,
+            registry.representative(),
+            registry,
+        ))
     }
 
     pub fn constraints_for_character(
         spec: &StoredFontSpec,
         required_char: char,
-    ) -> NativeQueryConstraints {
+    ) -> Result<NativeQueryConstraints, EmacsRegexpError> {
         Self::constraints_for_spec(spec, required_char)
     }
 
     pub fn constraints_for_spec(
         spec: &StoredFontSpec,
         required_char: char,
-    ) -> NativeQueryConstraints {
+    ) -> Result<NativeQueryConstraints, EmacsRegexpError> {
         Self::constraints_for_names(&FontPolicySpec::from(spec), required_char)
     }
 
     pub(super) fn constraints_for_names(
         names: &FontPolicySpec<'_>,
         required_char: char,
+    ) -> Result<NativeQueryConstraints, EmacsRegexpError> {
+        let registry = parse_registry(names.registry.as_deref())?;
+        Ok(Self::constraints_for_parsed(names, required_char, registry))
+    }
+
+    fn constraints_for_parsed(
+        names: &FontPolicySpec<'_>,
+        required_char: char,
+        registry: ParsedRegistry,
     ) -> NativeQueryConstraints {
-        let representative_char = representative_char_for_registry(names.registry.as_deref());
-        let coverage_ranges =
-            query_charset_ranges_for_registry(names.registry.as_deref(), required_char);
-        let registry_language = names.registry.as_deref().and_then(registry_language);
-        let languages = combined_query_langs(registry_language, names.language.as_deref())
+        let representative_char = registry.representative();
+        let coverage_ranges = registry.ranges(required_char);
+        let languages = combined_query_langs(registry.language(), names.language.as_deref())
             .into_iter()
             .filter_map(LanguageTag::new)
             .collect();
@@ -474,38 +500,85 @@ const REGISTRY_HINTS: &[RegistryHint] = &[
     },
 ];
 
-pub(crate) fn representative_char_for_spec(spec: &StoredFontSpec) -> char {
-    representative_char_for_registry(spec.registry.map(native_font_name).as_deref())
+#[derive(Clone, Copy)]
+enum ParsedRegistry {
+    Unconstrained,
+    Legacy(&'static RegistryHint),
+    Unmatched,
 }
 
-fn representative_char_for_registry(registry: Option<&str>) -> char {
-    registry
-        .and_then(|registry| registry_query_chars(Some(registry), 'a').into_iter().next())
-        .and_then(char::from_u32)
-        .unwrap_or('a')
-}
+impl ParsedRegistry {
+    fn representative(self) -> char {
+        match self {
+            Self::Legacy(hint) => hint
+                .uniquifiers
+                .first()
+                .copied()
+                .and_then(char::from_u32)
+                .unwrap_or('a'),
+            Self::Unconstrained | Self::Unmatched => 'a',
+        }
+    }
 
-pub(crate) fn query_charset_ranges(spec: &StoredFontSpec, ch: char) -> Vec<(u32, u32)> {
-    query_charset_ranges_for_registry(spec.registry.map(native_font_name).as_deref(), ch)
-}
+    fn language(self) -> Option<&'static str> {
+        match self {
+            Self::Legacy(hint) => hint.lang,
+            Self::Unconstrained | Self::Unmatched => None,
+        }
+    }
 
-fn query_charset_ranges_for_registry(registry: Option<&str>, ch: char) -> Vec<(u32, u32)> {
-    if let Some(registry) = registry {
-        if ftfont_registry_uses_unconstrained_charset(registry) {
+    fn characters(self, ch: char) -> Vec<u32> {
+        match self {
+            Self::Legacy(hint) if !hint.uniquifiers.is_empty() => hint.uniquifiers.to_vec(),
+            Self::Legacy(_) | Self::Unconstrained | Self::Unmatched => vec![ch as u32],
+        }
+    }
+
+    fn ranges(self, ch: char) -> Vec<(u32, u32)> {
+        if matches!(self, Self::Unconstrained) {
             return Vec::new();
         }
-        let mut codepoints = registry_query_chars(Some(registry), ch);
+        let mut codepoints = self.characters(ch);
         if !codepoints.contains(&(ch as u32)) {
             codepoints.push(ch as u32);
         }
-        return coalesce_ranges(
+        coalesce_ranges(
             codepoints
                 .into_iter()
                 .map(|codepoint| (codepoint, codepoint))
                 .collect(),
-        );
+        )
     }
-    Vec::new()
+}
+
+fn parse_registry(registry: Option<&str>) -> Result<ParsedRegistry, EmacsRegexpError> {
+    match registry {
+        None => Ok(ParsedRegistry::Unconstrained),
+        // Preserve the historical native-policy shortcut normalization. The
+        // public listing gate below separately requires the exact GNU symbols.
+        Some(registry) if ftfont_registry_uses_unconstrained_charset(registry) => {
+            Ok(ParsedRegistry::Unconstrained)
+        }
+        Some(registry) => Ok(match registry_hint(registry)? {
+            Some(hint) => ParsedRegistry::Legacy(hint),
+            None => ParsedRegistry::Unmatched,
+        }),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn representative_char_for_spec(
+    spec: &StoredFontSpec,
+) -> Result<char, EmacsRegexpError> {
+    Ok(parse_registry(spec.registry.map(native_font_name).as_deref())?.representative())
+}
+
+#[cfg(test)]
+pub(crate) fn query_charset_ranges(
+    spec: &StoredFontSpec,
+    ch: char,
+) -> Result<Vec<(u32, u32)>, EmacsRegexpError> {
+    Ok(parse_registry(spec.registry.map(native_font_name).as_deref())?.ranges(ch))
 }
 
 fn coalesce_ranges(mut ranges: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
@@ -549,30 +622,80 @@ fn ftfont_registry_uses_unconstrained_charset(registry: &str) -> bool {
     )
 }
 
-pub(crate) fn registry_query_chars(registry: Option<&str>, ch: char) -> Vec<u32> {
-    registry
-        .and_then(registry_hint)
-        .map(|hint| hint.uniquifiers.to_vec())
-        .filter(|chars| !chars.is_empty())
-        .unwrap_or_else(|| vec![ch as u32])
+#[cfg(test)]
+pub(crate) fn registry_query_chars(
+    registry: Option<&str>,
+    ch: char,
+) -> Result<Vec<u32>, EmacsRegexpError> {
+    Ok(parse_registry(registry)?.characters(ch))
 }
 
-pub(crate) fn registry_hint(registry: &str) -> Option<&'static RegistryHint> {
-    let registry = registry.trim().to_ascii_lowercase();
-    REGISTRY_HINTS
-        .iter()
-        .find(|hint| wildcard_casefold_match(&registry, hint.name))
+pub(crate) fn registry_hint(
+    registry: &str,
+) -> Result<Option<&'static RegistryHint>, EmacsRegexpError> {
+    // ftfont_get_charset copies the registry bytes, escaping only periods,
+    // expanding stars, and replacing question marks. Other Emacs regexp
+    // operators and unanchored matching remain meaningful.
+    let mut regexp = Vec::with_capacity(registry.len().saturating_mul(2));
+    for &byte in registry.as_bytes() {
+        match byte {
+            b'.' => regexp.extend_from_slice(b"\\."),
+            b'*' => regexp.extend_from_slice(b".*"),
+            b'?' => regexp.push(b'.'),
+            _ => regexp.push(byte),
+        }
+    }
+    // GNU's fast_c_string_match forces the pattern unibyte and uses its ASCII
+    // canon table. Registry table targets are all ASCII; retaining raw pattern
+    // bytes also avoids folding a wide character into an ASCII registry name.
+    let regexp = LispString::from_unibyte(regexp);
+    for hint in REGISTRY_HINTS {
+        if predicate_match_ignore_case(&regexp, hint.name)? {
+            return Ok(Some(hint));
+        }
+    }
+    Ok(None)
 }
 
 /// ftfont_spec_pattern uses exact symbol shortcuts for Unicode registries;
 /// the legacy charset table separately accepts case-insensitive patterns.
-pub(crate) fn registry_supported_for_listing(registry: &str) -> bool {
-    matches!(registry, "ascii-0" | "iso10646-1" | "unicode-bmp")
-        || registry_hint(registry).is_some()
+pub(crate) fn registry_supported_for_listing(registry: &str) -> Result<bool, EmacsRegexpError> {
+    if matches!(registry, "ascii-0" | "iso10646-1" | "unicode-bmp") {
+        return Ok(true);
+    }
+    Ok(registry_hint(registry)?.is_some())
 }
 
-pub(crate) fn registry_language(registry: &str) -> Option<&'static str> {
-    registry_hint(registry).and_then(|hint| hint.lang)
+pub(crate) fn registry_language(registry: &str) -> Result<Option<&'static str>, EmacsRegexpError> {
+    Ok(registry_hint(registry)?.and_then(|hint| hint.lang))
+}
+
+pub(super) fn windows_registry_shortcut(registry: &str) -> bool {
+    matches!(
+        registry,
+        "unknown" | "ascii-0" | "iso10646-1" | "unicode-bmp" | "unicode-sip"
+    )
+}
+
+/// Retain the existing recognized-legacy approximation on non-Fontconfig
+/// adapters. Their registry names are not Fontconfig regular expressions.
+pub(super) fn legacy_backend_registry_hint(registry: &str) -> Option<&'static RegistryHint> {
+    REGISTRY_HINTS
+        .iter()
+        .find(|hint| wildcard_casefold_match(registry, hint.name))
+}
+
+pub(super) fn registry_needs_native_constraints(backend: FontBackendKind, registry: &str) -> bool {
+    match backend {
+        FontBackendKind::Fontconfig => true,
+        FontBackendKind::DirectWrite => !windows_registry_shortcut(registry),
+        // NS maps unknown prefixes to an empty script and admits all families.
+        // Exact ns-reg-to-script/90% script coverage is not captured here;
+        // preserve only the native adapter's existing recognized legacy hints.
+        FontBackendKind::CoreText => legacy_backend_registry_hint(registry).is_some(),
+        // Future adapters need their own registry contract, not FT constraints.
+        _ => false,
+    }
 }
 
 pub(crate) fn wildcard_casefold_match(pattern: &str, text: &str) -> bool {
@@ -609,3 +732,7 @@ pub(crate) fn wildcard_casefold_match(pattern: &str, text: &str) -> bool {
 #[cfg(test)]
 #[path = "policy/tests/policy_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "policy/tests/legacy_registry_pattern_test.rs"]
+mod legacy_registry_pattern_test;

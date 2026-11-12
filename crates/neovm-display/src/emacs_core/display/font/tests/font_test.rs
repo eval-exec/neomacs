@@ -4,6 +4,8 @@ use neovm_value::error::{FlowKind, FlowRef, FlowResultExt as _};
 mod extra_sharing_test;
 #[path = "face_remapping_review_test.rs"]
 mod face_remapping_review_test;
+#[path = "otf_mutation_test.rs"]
+mod otf_mutation_test;
 #[path = "preferred_zero_size_review_test.rs"]
 mod preferred_zero_size_review_test;
 #[path = "system_font_test.rs"]
@@ -444,7 +446,56 @@ struct CapturingFindFontDisplayHost {
 /// A Thin-only catalog: listing respects styles, opening may substitute.
 struct ThinOnlyDisplayHost(CapturingFindFontDisplayHost);
 
+/// Synthetic single-entity hosts implement both native operations explicitly.
+/// The production trait default still has no listing catalog.
+fn list_captured_find_font(
+    host: &mut dyn DisplayHost,
+    query: neovm_eval::emacs_core::eval::FontSpecListQuery,
+    maximum: Option<usize>,
+    filter: Option<&mut neovm_eval::emacs_core::eval::FontListFilter<'_>>,
+) -> Result<
+    Vec<neovm_eval::emacs_core::eval::ListedFontEntity>,
+    neovm_eval::emacs_core::eval::FontListError,
+> {
+    use neovm_eval::emacs_core::eval::{FontListError, ListedFontEntity};
+    if maximum == Some(0) {
+        return Ok(Vec::new());
+    }
+    let Some(font) = host
+        .resolve_font_for_spec(query.specification)
+        .map_err(FontListError::Backend)?
+    else {
+        return Ok(Vec::new());
+    };
+    let listed = ListedFontEntity {
+        font,
+        native_index: None,
+        driver: None,
+        adstyle: None,
+        pixel_size: Some(0),
+        average_width: None,
+    };
+    if let Some(filter) = filter {
+        if !filter(&listed).map_err(FontListError::Filter)? {
+            return Ok(Vec::new());
+        }
+    }
+    Ok(vec![listed])
+}
+
 impl DisplayHost for ThinOnlyDisplayHost {
+    fn list_fonts_for_spec(
+        &mut self,
+        query: neovm_eval::emacs_core::eval::FontSpecListQuery,
+        _: Option<neovm_eval::emacs_core::eval::FontSpecListQuery>,
+        maximum: Option<usize>,
+        filter: Option<&mut neovm_eval::emacs_core::eval::FontListFilter<'_>>,
+    ) -> Result<
+        Vec<neovm_eval::emacs_core::eval::ListedFontEntity>,
+        neovm_eval::emacs_core::eval::FontListError,
+    > {
+        list_captured_find_font(self, query, maximum, filter)
+    }
     fn realize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String> {
         self.0.realize_gui_frame(request)
     }
@@ -541,6 +592,18 @@ impl DisplayHost for FontFamilyListDisplayHost {
 }
 
 impl DisplayHost for CapturingFindFontDisplayHost {
+    fn list_fonts_for_spec(
+        &mut self,
+        query: neovm_eval::emacs_core::eval::FontSpecListQuery,
+        _: Option<neovm_eval::emacs_core::eval::FontSpecListQuery>,
+        maximum: Option<usize>,
+        filter: Option<&mut neovm_eval::emacs_core::eval::FontListFilter<'_>>,
+    ) -> Result<
+        Vec<neovm_eval::emacs_core::eval::ListedFontEntity>,
+        neovm_eval::emacs_core::eval::FontListError,
+    > {
+        list_captured_find_font(self, query, maximum, filter)
+    }
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -681,6 +744,55 @@ fn font_info_opens_a_native_entity_without_a_file() {
 }
 
 #[test]
+fn font_info_metrics_requests_distinguish_identical_metadata_entities() {
+    use neovm_value::display_vocab::FontEntityHandle;
+    let request = Rc::new(RefCell::new(None));
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    ensure_selected_gui_frame(&mut eval);
+    eval.set_display_host(Box::new(NativeFontEntityDisplayHost {
+        request: Rc::clone(&request),
+        result: ResolvedFontEntityMetrics {
+            metrics: FontPxProbeResult {
+                pixel_size: 1,
+                height: 2,
+                ascent: 1,
+                descent: 1,
+                max_width: 1,
+                space_width: 1,
+                average_width: 1,
+            },
+            file: None,
+            capability: None,
+        },
+    }));
+    let mut matched = ResolvedFontSpecMatch {
+        coverage_handle: FontEntityHandle::new(1),
+        foundry: None,
+        family: LispString::from_utf8("Same Metadata"),
+        registry: Some(LispString::from_utf8("iso10646-1")),
+        file: None,
+        weight: Some(FontWeight::NORMAL),
+        slant: Some(FontSlant::Normal),
+        width: Some(crate::face::FontWidth::Normal),
+        spacing: Some(100),
+        postscript_name: None,
+    };
+    let first = build_font_entity_for_spec_match(&matched);
+    font_info(&mut eval, vec![first]).unwrap();
+    let first_request = request.borrow().clone().unwrap();
+    matched.coverage_handle = FontEntityHandle::new(2);
+    let second = build_font_entity_for_spec_match(&matched);
+    font_info(&mut eval, vec![second]).unwrap();
+    let second_request = request.borrow().clone().unwrap();
+    assert_eq!(first_request.coverage_handle, FontEntityHandle::new(1));
+    assert_eq!(second_request.coverage_handle, FontEntityHandle::new(2));
+    assert_ne!(
+        first_request, second_request,
+        "opening must preserve the selected entity identity, even when every public selector is equal"
+    );
+}
+
+#[test]
 fn find_font_eval_requests_exact_registry_match_from_display_host() {
     crate::test_utils::init_test_tracing();
     let last_request = Rc::new(RefCell::new(None));
@@ -768,7 +880,9 @@ fn find_font_eval_returns_gnu_canonical_ultra_light_weight_symbol() {
     crate::test_utils::init_test_tracing();
     let last_request = Rc::new(RefCell::new(None));
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-    crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+    // GNU find-font lists through the target frame; a TTY has no font driver.
+    // This synthetic native entity exercises canonical metadata on a GUI frame.
+    ensure_selected_gui_frame(&mut eval);
     eval.set_display_host(Box::new(CapturingFindFontDisplayHost {
         last_request: Rc::clone(&last_request),
         matched: Some(ResolvedFontSpecMatch {
@@ -2627,6 +2741,70 @@ struct ListingFontDisplayHost {
 }
 
 #[test]
+fn find_font_uses_the_plural_driver_and_listing_acceptance_policy() {
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    ensure_selected_gui_frame(&mut eval);
+    let queries = Rc::new(RefCell::new(Vec::new()));
+    eval.set_display_host(Box::new(ListingFontDisplayHost {
+        queries: Rc::clone(&queries),
+        fonts: vec![neovm_eval::emacs_core::eval::ListedFontEntity {
+            native_index: None,
+            driver: Some(intern("ftcrhb")),
+            adstyle: None,
+            pixel_size: Some(0),
+            average_width: Some(0),
+            font: ResolvedFontSpecMatch {
+                coverage_handle: None,
+                foundry: None,
+                family: LispString::from_utf8("Plural Only"),
+                registry: Some(LispString::from_utf8("iso10646-1")),
+                file: None,
+                weight: Some(FontWeight::NORMAL),
+                slant: Some(FontSlant::Normal),
+                width: Some(FontWidth::Normal),
+                spacing: Some(100),
+                postscript_name: None,
+            },
+        }],
+    }));
+    let spec = font_spec(vec![Value::keyword("family"), Value::string("Plural Only")]).unwrap();
+    let found = find_font(&mut eval, vec![spec]).unwrap();
+    assert!(
+        !found.is_nil(),
+        "GNU find-font uses the listing driver, not a separate match operation"
+    );
+    assert_eq!(
+        font_get(vec![found, Value::keyword("family")])
+            .unwrap()
+            .as_bare_symbol_name(),
+        Some("Plural Only")
+    );
+    assert_eq!(queries.borrow().len(), 1);
+    eval.set_variable(
+        "face-ignored-fonts",
+        Value::list(vec![Value::string("Plural Only")]),
+    );
+    assert!(
+        find_font(&mut eval, vec![spec]).unwrap().is_nil(),
+        "find-font shares the listing acceptance policy"
+    );
+}
+
+#[test]
+fn find_font_checks_the_frame_before_the_spec_like_list_fonts() {
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let error = find_font(&mut eval, vec![Value::fixnum(42), Value::fixnum(43)]).unwrap_err();
+    let FlowRef::Signal(condition) = error.kind() else {
+        panic!("expected a Lisp signal")
+    };
+    assert_eq!(condition.symbol, intern("wrong-type-argument"));
+    assert_eq!(
+        condition.data,
+        vec![Value::symbol("frame-live-p"), Value::fixnum(43)]
+    );
+}
+
+#[test]
 fn listing_accepts_gnu_abbreviated_xlfd_fields() {
     crate::test_utils::init_test_tracing();
     // Pinned GNU font_expand_wildcards assigns fields by both position and
@@ -2777,6 +2955,21 @@ fn listing_forwards_existing_average_width_aliases() {
 }
 
 impl DisplayHost for ListingFontDisplayHost {
+    fn prepare_font_listing(
+        &mut self,
+        _: &neovm_eval::emacs_core::eval::FontSpecListQuery,
+    ) -> Result<
+        Option<neomacs_display_protocol::font::FontBackendKind>,
+        neovm_eval::emacs_core::eval::FontListError,
+    > {
+        use neomacs_display_protocol::font::FontBackendKind;
+        Ok(match self.fonts.first().and_then(|font| font.driver) {
+            Some(driver) if driver == intern("ftcrhb") => Some(FontBackendKind::Fontconfig),
+            Some(driver) if driver == intern("ns") => Some(FontBackendKind::CoreText),
+            Some(driver) if driver == intern("directwrite") => Some(FontBackendKind::DirectWrite),
+            _ => None,
+        })
+    }
     fn realize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }

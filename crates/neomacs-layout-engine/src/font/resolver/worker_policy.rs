@@ -211,7 +211,8 @@ impl CapturedCharacterPolicy {
         inherited: &FrozenFontFamilies,
         style: &WorkerFontStyle,
         spec: &FontsetRenderingSpec,
-    ) -> Self {
+        backend: FontBackendKind,
+    ) -> Result<Self, EmacsRegexpError> {
         let families = match &spec.family {
             Some(family) => CapturedFontFamilyPolicy::Explicit(family.to_string()),
             None => CapturedFontFamilyPolicy::Inherited(inherited.clone()),
@@ -228,7 +229,7 @@ impl CapturedCharacterPolicy {
             width: style.width,
             size: key.size,
         }
-        .with_spec(spec.into())
+        .with_spec(spec.into(), backend)
     }
 }
 
@@ -308,12 +309,24 @@ impl FontResolver {
             match entry {
                 FontsetRenderingEntry::ExplicitNone => return None,
                 FontsetRenderingEntry::Font(spec) => {
-                    let policy = CapturedCharacterPolicy::from_rendering_spec(
+                    if self.backend.kind() != FontBackendKind::Fontconfig
+                        && !self.native_registry_query_allowed(spec.registry.as_deref(), None)
+                    {
+                        continue;
+                    }
+                    let policy = match CapturedCharacterPolicy::from_rendering_spec(
                         key,
                         &query.inherited,
                         style,
                         spec,
-                    );
+                        self.backend.kind(),
+                    ) {
+                        Ok(policy) => policy,
+                        Err(error) => {
+                            tracing::warn!(target: "font_registry", %error, "invalid native font policy");
+                            continue;
+                        }
+                    };
                     if let Some(matched) = self.resolve_from_policy(&policy, prefer_monospace) {
                         return Some(matched);
                     }
@@ -328,8 +341,19 @@ impl FontResolver {
             slant: None,
             width: None,
         };
-        let policy =
-            CapturedCharacterPolicy::from_rendering_spec(key, &query.inherited, style, &fallback);
+        let policy = match CapturedCharacterPolicy::from_rendering_spec(
+            key,
+            &query.inherited,
+            style,
+            &fallback,
+            self.backend.kind(),
+        ) {
+            Ok(policy) => policy,
+            Err(error) => {
+                tracing::warn!(target: "font_registry", %error, "invalid native font policy");
+                return None;
+            }
+        };
         self.resolve_from_policy(&policy, prefer_monospace)
     }
 }

@@ -2938,6 +2938,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	Context field visual_
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	Context field window_layout_query_adapter
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	Context field xwidgets
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	DaemonState field initialized
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontEntityMetricsRequest field coverage_handle
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontEntityMetricsRequest field family
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontEntityMetricsRequest field file
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	field	FontEntityMetricsRequest field frame_id

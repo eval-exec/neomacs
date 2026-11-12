@@ -305,6 +305,7 @@ fn run(engine: Engine) {
     assert_eq!(state["face-remapping-cases"], 4);
     assert_eq!(state["font-property-cases"], 4);
     assert_eq!(state["listing-review-cases"], 7);
+    assert_eq!(state["registry-family-cases"], 13);
     let observations = state["observations"].as_array().unwrap();
     let expected = [
         "script-explicit-nil-han",
@@ -338,6 +339,19 @@ fn run(engine: Engine) {
         "prefer-missing-weight-unscored",
         "prefer-missing-width-unscored",
         "xlfd-positioned-family",
+        "family-omitted-unrestricted",
+        "family-empty-restricted",
+        "family-whitespace-restricted",
+        "find-font-empty-family",
+        "registry-substring",
+        "registry-regexp-bracket",
+        "registry-regexp-alternation",
+        "registry-regexp-casefold",
+        "registry-whitespace-not-trimmed",
+        "registry-invalid-error-order",
+        "registry-invalid-preference-ignored",
+        "find-font-otf-uses-listing",
+        "find-font-registry-error",
         "gui-selected-tty-default-face-negative-width",
         "gui-selected-tty-invalid-face-negative-width",
         "tty-selected-nil-frame",

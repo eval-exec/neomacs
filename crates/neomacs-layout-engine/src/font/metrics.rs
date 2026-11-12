@@ -1115,6 +1115,11 @@ impl FontMetricsService {
         SymbolFontPolicyUpdate::Changed
     }
 
+    /// Native driver identity for driver-local public font query policies.
+    pub fn backend_kind(&self) -> FontBackendKind {
+        self.font_resolver.backend_kind()
+    }
+
     /// Enumerate families through the same native backend that owns layout
     /// font selection on this platform.
     pub fn list_font_families(&self) -> Vec<crate::font_backend::FontFamilyName> {
@@ -1150,6 +1155,17 @@ impl FontMetricsService {
     ) -> Vec<crate::font::resolver::ListedFontCandidate> {
         self.font_resolver
             .list_entities(query, constraints, prefer, maximum)
+    }
+
+    /// Apply the active driver's primary registry policy before enumeration.
+    /// Keep invalid regexp conditions available to the Lisp host boundary.
+    pub fn validate_font_entity_listing(
+        &self,
+        registry: Option<&str>,
+        driver: Option<neovm_core::emacs_core::intern::SymId>,
+    ) -> Result<bool, neovm_core::emacs_core::regex::EmacsRegexpError> {
+        self.font_resolver
+            .validate_font_entity_listing(registry, driver)
     }
 
     pub fn visit_font_entities(
@@ -1227,6 +1243,19 @@ impl FontMetricsService {
         pixel_size: u32,
     ) -> Option<crate::font::resolver::OpenedFontEntity> {
         self.font_resolver.open_entity(query, pixel_size)
+    }
+
+    /// Open a catalog-selected face, preserving its native selector and asset.
+    pub fn open_font_match(
+        &self,
+        matched: crate::font_backend::PlatformFontMatch,
+        pixel_size: u32,
+    ) -> Option<(
+        crate::font_backend::PlatformFontMatch,
+        crate::font::probe::FontPxMetrics,
+    )> {
+        let weight = matched.weight();
+        self.font_resolver.open_match(matched, pixel_size, weight)
     }
 
     #[must_use]

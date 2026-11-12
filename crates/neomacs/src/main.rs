@@ -1288,12 +1288,20 @@ fn font_listing_pixel_size(
 
 fn font_entity_query(
     request: &FontSpecResolveRequest,
+) -> Option<neomacs_layout_engine::font::resolver::FontEntityQuery> {
+    let family = match request.family.as_ref() {
+        None => None,
+        Some(family) => Some(neomacs_layout_engine::font_backend::FontFamilyName::new(
+            family.as_utf8_str()?,
+        )?),
+    };
+    Some(font_entity_query_for_family(request, family))
+}
+
+fn font_entity_query_for_family(
+    request: &FontSpecResolveRequest,
+    family: Option<neomacs_layout_engine::font_backend::FontFamilyName>,
 ) -> neomacs_layout_engine::font::resolver::FontEntityQuery {
-    let family = request
-        .family
-        .as_ref()
-        .and_then(LispString::as_utf8_str)
-        .and_then(neomacs_layout_engine::font_backend::FontFamilyName::new);
     let mut query = neomacs_layout_engine::font::resolver::FontEntityQuery::new(family)
         .with_selection(request.selection);
     if let Some(registry) = request.registry.as_ref().and_then(LispString::as_utf8_str) {
@@ -1561,6 +1569,20 @@ struct FontEntityCatalog {
 }
 
 impl FontEntityCatalog {
+    fn materialize(
+        &mut self,
+        service: &FontMetricsService,
+        handle: FontEntityHandle,
+    ) -> Option<neomacs_layout_engine::font_backend::PlatformFontMatch> {
+        if let Some(candidate) = self.discovered(handle).cloned() {
+            let font = service.materialize_font_candidate(candidate)?;
+            if !self.promote(handle, font) {
+                return None;
+            }
+        }
+        self.get(handle).cloned()
+    }
+
     fn observe_catalog_update(
         &mut self,
         update: neomacs_layout_engine::font::catalog::FontCatalogUpdate,
@@ -2927,9 +2949,39 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         &mut self,
         request: FontSpecResolveRequest,
     ) -> Result<Option<ResolvedFontSpecMatch>, String> {
-        let query = font_entity_query(&request);
+        let Some(query) = font_entity_query(&request) else {
+            return Ok(None);
+        };
         let entity = self.synchronized_font_metrics().resolve_font_entity(&query);
         Ok(entity.map(|entity| core_font_entity_match(&mut self.font_entities, entity)))
+    }
+
+    fn prepare_font_listing(
+        &mut self,
+        query: &neovm_core::emacs_core::eval::FontSpecListQuery,
+    ) -> Result<
+        Option<neomacs_display_protocol::font::FontBackendKind>,
+        neovm_core::emacs_core::eval::FontListError,
+    > {
+        let service = self.synchronized_font_metrics();
+        let supported = service
+            .validate_font_entity_listing(
+                query
+                    .specification
+                    .registry
+                    .as_ref()
+                    .and_then(LispString::as_utf8_str),
+                query.driver,
+            )
+            .map_err(|error| {
+                neovm_core::emacs_core::eval::FontListError::Filter(
+                    neovm_core::emacs_core::error::signal(
+                        "invalid-regexp",
+                        vec![Value::string(error.to_string())],
+                    ),
+                )
+            })?;
+        Ok(supported.then(|| service.backend_kind()))
     }
 
     fn list_fonts_for_spec(
@@ -2991,12 +3043,24 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         let listed_constraints = constraints(&request);
         let preferred = prefer
             .as_ref()
-            .map(|query| (font_entity_query(&query.specification), constraints(query)));
-        let query = font_entity_query(&request.specification);
+            // PREFER contributes scores, never a family admission restriction.
+            .map(|query| {
+                (
+                    font_entity_query_for_family(&query.specification, None),
+                    constraints(query),
+                )
+            });
         if maximum == Some(0) {
             return Ok(Vec::new());
         }
-        let _ = self.synchronized_font_metrics();
+        // Direct callers still perform the same primary preflight. The
+        // earlier Context preflight only orders FT feature capture correctly.
+        if self.prepare_font_listing(&request)?.is_none() {
+            return Ok(Vec::new());
+        }
+        let Some(query) = font_entity_query(&request.specification) else {
+            return Ok(Vec::new());
+        };
         match self.font_metrics.as_ref() {
             Some(service) => {
                 core_visit_listed_font_entities(&mut self.font_entities, maximum, filter, |visit| {
@@ -3071,38 +3135,53 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         request: FontEntityMetricsRequest,
     ) -> Result<Option<ResolvedFontEntityMetrics>, String> {
         let pixel_size = self.font_sizing.font_opening_size_px(request.size).get();
-        let family = request
-            .family
-            .as_ref()
-            .and_then(LispString::as_utf8_str)
-            .and_then(neomacs_layout_engine::font_backend::FontFamilyName::new);
-        let mut query = neomacs_layout_engine::font::resolver::FontEntityQuery::new(family);
-        if let Some(registry) = request.registry.as_ref().and_then(LispString::as_utf8_str) {
-            query = query.with_registry(registry);
-        }
-        if let Some(postscript_name) = request
-            .postscript_name
-            .as_ref()
-            .and_then(LispString::as_utf8_str)
-        {
-            query = query.with_postscript_name(postscript_name);
-        }
-        if let Some(weight) = request.weight {
-            query = query.with_weight(weight.css_weight());
-        }
-        if let Some(slant) = request.slant {
-            query = query.with_slant(slant);
-        }
-        if let Some(width) = request.width {
-            query = query.with_width(width);
-        }
+        let opened = if let Some(handle) = request.coverage_handle {
+            let _ = self.synchronized_font_metrics();
+            self.font_metrics.as_ref().and_then(|service| {
+                let matched = self.font_entities.materialize(service, handle)?;
+                service.open_font_match(matched, pixel_size)
+            })
+        } else {
+            let family = match request.family.as_ref() {
+                None => None,
+                Some(family) => {
+                    let Some(family) = family
+                        .as_utf8_str()
+                        .and_then(neomacs_layout_engine::font_backend::FontFamilyName::new)
+                    else {
+                        return Ok(None);
+                    };
+                    Some(family)
+                }
+            };
+            let mut query = neomacs_layout_engine::font::resolver::FontEntityQuery::new(family);
+            if let Some(registry) = request.registry.as_ref().and_then(LispString::as_utf8_str) {
+                query = query.with_registry(registry);
+            }
+            if let Some(postscript_name) = request
+                .postscript_name
+                .as_ref()
+                .and_then(LispString::as_utf8_str)
+            {
+                query = query.with_postscript_name(postscript_name);
+            }
+            if let Some(weight) = request.weight {
+                query = query.with_weight(weight.css_weight());
+            }
+            if let Some(slant) = request.slant {
+                query = query.with_slant(slant);
+            }
+            if let Some(width) = request.width {
+                query = query.with_width(width);
+            }
 
-        if let Some(opened) = self
-            .synchronized_font_metrics()
-            .open_font_entity(&query, pixel_size)
-        {
-            let file = opened.entity.matched.file_path().map(LispString::from_utf8);
-            let capability = match &opened.entity.matched.asset {
+            self.synchronized_font_metrics()
+                .open_font_entity(&query, pixel_size)
+                .map(|opened| (opened.entity.matched, opened.metrics))
+        };
+        if let Some((matched, metrics)) = opened {
+            let file = matched.file_path().map(LispString::from_utf8);
+            let capability = match &matched.asset {
                 neomacs_display_protocol::font::FontOutlineAsset::File(file) => self
                     .font_otf_capability(file.path(), file.face_index())
                     .ok()
@@ -3110,10 +3189,15 @@ impl DisplayHost for PrimaryWindowDisplayHost {
                 asset => font_otf_capability_for_asset(asset),
             };
             return Ok(Some(ResolvedFontEntityMetrics {
-                metrics: core_font_px_metrics(opened.metrics),
+                metrics: core_font_px_metrics(metrics),
                 file,
                 capability,
             }));
+        }
+
+        // A missing/stale native handle must never authorize a different face.
+        if request.coverage_handle.is_some() {
+            return Ok(None);
         }
 
         // Compatibility fallback for callers that only have a standalone

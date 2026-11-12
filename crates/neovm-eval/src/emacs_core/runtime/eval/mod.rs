@@ -2823,6 +2823,8 @@ pub struct FontPxProbeResult {
 #[derive(Clone, Debug, PartialEq)]
 pub struct FontEntityMetricsRequest {
     pub frame_id: neovm_value::display_vocab::FrameId,
+    /// Immutable identity of an entity already selected by native discovery.
+    pub coverage_handle: Option<neovm_value::display_vocab::FontEntityHandle>,
     pub family: Option<neovm_value::heap_types::LispString>,
     pub registry: Option<neovm_value::heap_types::LispString>,
     pub file: Option<neovm_value::heap_types::LispString>,

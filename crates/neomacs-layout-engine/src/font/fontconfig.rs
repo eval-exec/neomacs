@@ -11,9 +11,7 @@
 //! - candidate discovery uses Fontconfig's `FcFontList`
 //! - style selection is scored in Rust instead of delegated to Fontconfig
 
-use crate::font::policy::{
-    combined_query_langs, query_charset_ranges, registry_language, representative_char_for_spec,
-};
+use crate::font::policy::GnuFontPolicy;
 use crate::font::selection::{CandidateSelectionScore, candidate_selection_score};
 pub use crate::font::subpixel::FontconfigSubpixelOrder;
 use crate::font_backend::{
@@ -416,22 +414,31 @@ pub fn find_font_for_spec(
         .map(|family| intern(&family));
     let spec = StoredFontSpec {
         family: resolved_family,
-        registry: registry.map(|registry| intern(&registry.to_ascii_lowercase())),
+        registry: registry.map(intern),
         lang: lang.map(|lang| intern(&lang.to_ascii_lowercase())),
         weight,
         slant,
         width,
         definition: None,
     };
-    let representative = representative_char_for_spec(&spec);
-    let query_charset_ranges = query_charset_ranges(&spec, representative);
-    let registry_lang = spec.registry.map(resolve_sym).and_then(registry_language);
-    let query_langs = combined_query_langs(registry_lang, spec.lang.map(resolve_sym));
+    let constraints = match GnuFontPolicy::constraints_for_entity(&spec) {
+        Ok(constraints) => constraints,
+        Err(error) => {
+            tracing::warn!(target: "font_registry", %error, "invalid native font policy");
+            return None;
+        }
+    };
+    let query_charset_ranges = constraints.coverage().ranges();
+    let query_langs: Vec<_> = constraints
+        .languages()
+        .iter()
+        .map(|language| language.as_str().to_owned())
+        .collect();
     let candidates = fc_list_candidates(
         #[cfg(all(test, unix))]
         owner,
         spec.family.map(resolve_sym),
-        &query_charset_ranges,
+        query_charset_ranges,
         None,
         &query_langs,
         None,
@@ -578,9 +585,19 @@ fn match_font_from_spec(
         .weight
         .map(FontWeight::css_weight)
         .unwrap_or(requested_weight);
-    let query_charset_ranges = query_charset_ranges(spec, ch);
-    let registry_lang = spec.registry.map(resolve_sym).and_then(registry_language);
-    let query_langs = combined_query_langs(registry_lang, spec.lang.map(resolve_sym));
+    let constraints = match GnuFontPolicy::constraints_for_character(spec, ch) {
+        Ok(constraints) => constraints,
+        Err(error) => {
+            tracing::warn!(target: "font_registry", %error, "invalid native font policy");
+            return None;
+        }
+    };
+    let query_charset_ranges = constraints.coverage().ranges();
+    let query_langs: Vec<_> = constraints
+        .languages()
+        .iter()
+        .map(|language| language.as_str().to_owned())
+        .collect();
     let requested_spacing = requested_spacing(spec);
 
     let family_policy =
@@ -597,7 +614,7 @@ fn match_font_from_spec(
             #[cfg(all(test, unix))]
             test_config::QueryOwner::System,
             family_option,
-            &query_charset_ranges,
+            query_charset_ranges,
             Some(ch as u32),
             &query_langs,
             None,
@@ -1118,6 +1135,14 @@ fn listed_font_from_raw_pattern(pattern: *mut fontconfig_sys::FcPattern) -> Opti
         return None;
     }
     let file = raw_pattern_string(pattern, fontconfig::FC_FILE)?;
+    listed_font_from_file_pattern(pattern, file)
+}
+
+#[cfg(unix)]
+fn listed_font_from_file_pattern(
+    pattern: *mut fontconfig_sys::FcPattern,
+    file: String,
+) -> Option<ListedFont> {
     let face_index = u32::try_from(raw_pattern_int(pattern, fontconfig::FC_INDEX)?).ok()?;
     let variation_coords =
         raw_pattern_string(pattern, fontconfig_sys::constants::FC_FONT_VARIATIONS)
@@ -1700,6 +1725,10 @@ fn fc_query_candidates_uncached(
     }
     let patterns = unsafe { std::slice::from_raw_parts(fonts, nfont as usize) };
     let before = candidates.len();
+    // hbotf_open checks source face zero, so each immutable file has one
+    // answer for this enumeration's requirement. Keep no bytes or native
+    // objects here, and do not let this memo replace per-pattern capability.
+    let mut checked_files: HashMap<String, bool> = HashMap::new();
 
     for &candidate_pattern in patterns {
         if let Some(requirement) = otf {
@@ -1721,18 +1750,28 @@ fn fc_query_candidates_uncached(
         {
             continue;
         }
-        let Some(candidate) = listed_font_from_raw_pattern(candidate_pattern) else {
+        let Some(file) = raw_pattern_string(candidate_pattern, fontconfig::FC_FILE) else {
             continue;
         };
-        if let Some(requirement) = otf
-            && !candidate
-                .matched
-                .file
-                .as_deref()
-                .is_some_and(|file| otf_requirement::matches_file(file, requirement))
-        {
-            continue;
+        if let Some(requirement) = otf {
+            if let Some(&accepted) = checked_files.get(file.as_str()) {
+                if !accepted {
+                    continue;
+                }
+            } else {
+                let accepted = otf_requirement::matches_file(&file, requirement);
+                if !accepted {
+                    checked_files.insert(file, false);
+                    continue;
+                }
+                checked_files.insert(file.clone(), true);
+            }
         }
+        // GNU ftfont_list performs file/table admission before constructing
+        // metadata, which may open a bitmap face for its BDF width property.
+        let Some(candidate) = listed_font_from_file_pattern(candidate_pattern, file) else {
+            continue;
+        };
         candidates.push(candidate);
     }
     tracing::trace!(

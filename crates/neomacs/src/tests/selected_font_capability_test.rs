@@ -560,3 +560,37 @@ fn named_file_explicit_axis_override_does_not_claim_unresolved_named_handle() {
         "listing first must not let an explicit override claim the raw named descriptor"
     );
 }
+
+#[test]
+fn exact_opening_preserves_same_metadata_native_identities_and_metrics() {
+    use neomacs_layout_engine::font_backend::PlatformFontDesignMetrics;
+    let service = FontMetricsService::new();
+    let mut catalog = FontEntityCatalog::default();
+    let mut fonts = Vec::new();
+    for (key, ascent) in [("native:first-metrics", 9), ("native:second-metrics", 17)] {
+        let mut font = native_catalog_font(key);
+        font.metadata.design_metrics = Some(PlatformFontDesignMetrics {
+            units_per_em: 16,
+            ascent,
+            descent: 3,
+            line_gap: 0,
+            max_advance: 10,
+            space_advance: 8,
+            average_advance: 8,
+        });
+        let handle = catalog.intern(font.clone()).unwrap();
+        fonts.push((handle, font, ascent));
+    }
+    for (handle, expected, ascent) in fonts {
+        let exact = catalog.materialize(&service, handle).unwrap();
+        let (opened, metrics) = service.open_font_match(exact, 16).unwrap();
+        assert_eq!(opened.identity, expected.identity);
+        assert_eq!(opened.asset, expected.asset);
+        assert_eq!(metrics.ascent, ascent);
+    }
+    assert!(
+        catalog
+            .materialize(&service, FontEntityHandle::new(100).unwrap())
+            .is_none()
+    );
+}

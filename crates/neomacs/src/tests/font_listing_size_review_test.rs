@@ -33,3 +33,27 @@ fn listing_point_sizes_can_round_to_zero_without_changing_positive_pixel_sizes()
         16
     );
 }
+
+#[test]
+fn font_query_preserves_explicit_empty_family_as_a_restriction() {
+    use neovm_core::emacs_core::eval::FontSpecSelection;
+    let mut request = FontSpecResolveRequest {
+        selection: FontSpecSelection::Enumerate,
+        frame_id: neovm_core::window::FrameId(1),
+        family: None,
+        registry: None,
+        lang: None,
+        weight: None,
+        slant: None,
+        width: None,
+    };
+    let omitted = font_entity_query(&request);
+    for empty in ["", "   "] {
+        request.family = Some(LispString::from_utf8(empty));
+        assert_ne!(
+            font_entity_query(&request),
+            omitted,
+            "an explicit empty family must never become an unrestricted all-family query"
+        );
+    }
+}

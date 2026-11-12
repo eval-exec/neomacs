@@ -4,6 +4,17 @@ use neovm_eval::emacs_core::eval::{FontScriptCoverage as Coverage, FontSpecListQ
 type Requests = Rc<RefCell<Vec<(FontSpecListQuery, Option<FontSpecListQuery>)>>>;
 struct RecordingHost(Requests);
 impl DisplayHost for RecordingHost {
+    fn prepare_font_listing(
+        &mut self,
+        _: &FontSpecListQuery,
+    ) -> Result<
+        Option<neomacs_display_protocol::font::FontBackendKind>,
+        neovm_eval::emacs_core::eval::FontListError,
+    > {
+        Ok(Some(
+            neomacs_display_protocol::font::FontBackendKind::Fontconfig,
+        ))
+    }
     fn realize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }

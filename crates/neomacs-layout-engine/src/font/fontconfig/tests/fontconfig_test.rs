@@ -138,14 +138,16 @@ fn font_sym(name: &str) -> neovm_core::emacs_core::SymId {
 
 #[test]
 fn registry_hint_matches_wildcard_patterns() {
-    let hint = registry_hint("JISX0208*").expect("jisx0208 wildcard");
+    let hint = registry_hint("JISX0208*")
+        .unwrap()
+        .expect("jisx0208 wildcard");
     assert_eq!(hint.lang, Some("ja"));
     assert_eq!(hint.uniquifiers, &[0x4E55]);
 }
 
 #[test]
 fn registry_hint_matches_case_insensitively() {
-    let hint = registry_hint("GB2312.1980-0").expect("gb2312");
+    let hint = registry_hint("GB2312.1980-0").unwrap().expect("gb2312");
     assert_eq!(hint.lang, Some("zh-cn"));
     assert_eq!(hint.uniquifiers, &[0x4E13]);
 }
@@ -153,14 +155,14 @@ fn registry_hint_matches_case_insensitively() {
 #[test]
 fn registry_query_chars_use_gnu_uniquifiers() {
     assert_eq!(
-        registry_query_chars(Some("gb2312.1980-0"), '好'),
+        registry_query_chars(Some("gb2312.1980-0"), '好').unwrap(),
         vec![0x4E13]
     );
     assert_eq!(
-        registry_query_chars(Some("cns11643.1992-2"), '好'),
+        registry_query_chars(Some("cns11643.1992-2"), '好').unwrap(),
         vec![0x4E33, 0x7934]
     );
-    assert_eq!(registry_query_chars(None, '好'), vec!['好' as u32]);
+    assert_eq!(registry_query_chars(None, '好').unwrap(), vec!['好' as u32]);
 }
 
 #[test]
@@ -179,7 +181,7 @@ fn query_charset_ranges_follow_gnu_registry_uniquifiers_when_registry_is_present
     };
 
     assert_eq!(
-        query_charset_ranges(&spec, '好'),
+        query_charset_ranges(&spec, '好').unwrap(),
         vec![(0x4E13, 0x4E13), ('好' as u32, '好' as u32)]
     );
 }
@@ -199,7 +201,7 @@ fn query_charset_ranges_do_not_treat_repertory_metadata_as_glyph_coverage() {
         }),
     };
 
-    assert!(query_charset_ranges(&spec, '好').is_empty());
+    assert!(query_charset_ranges(&spec, '好').unwrap().is_empty());
 }
 
 #[test]
@@ -214,7 +216,10 @@ fn query_charset_ranges_skip_generic_gnu_registries() {
             width: None,
             definition: None,
         };
-        assert!(query_charset_ranges(&spec, '好').is_empty(), "{registry}");
+        assert!(
+            query_charset_ranges(&spec, '好').unwrap().is_empty(),
+            "{registry}"
+        );
     }
 }
 
@@ -235,12 +240,12 @@ fn gb2312_registry_pattern() -> (
         width: None,
         definition: None,
     };
-    let representative = representative_char_for_spec(&spec);
-    let ranges = query_charset_ranges(&spec, representative);
+    let representative = representative_char_for_spec(&spec).unwrap();
+    let ranges = query_charset_ranges(&spec, representative).unwrap();
     let langs = combined_query_langs(
-        spec.registry
-            .map(resolve_sym)
-            .and_then(crate::font::policy::registry_language),
+        spec.registry.map(resolve_sym).and_then(|registry| {
+            crate::font::policy::registry_language(registry).expect("valid fixture registry")
+        }),
         spec.lang.map(resolve_sym),
     );
 

@@ -201,6 +201,51 @@
             (spec (font-spec :family family)))
        (list (font-xlfd-name spec) (symbol-with-pos-p (font-get spec :family)))))))
 
+(defun font-frame-registry-family-cases ()
+  ;; Pinned GNU ftfont_spec_pattern keeps an explicit empty family, whereas
+  ;; PREFER contributes only scores. Registry syntax is an unanchored Emacs
+  ;; regexp after GNU's literal-dot/wildcard conversion, with first-table match.
+  (font-frame-script-case "family-omitted-unrestricted" t (font-spec))
+  (font-frame-script-case "family-empty-restricted" nil (font-spec :family ""))
+  (font-frame-script-case "family-whitespace-restricted" nil (font-spec :family "   "))
+  (font-frame-observe
+   "find-font-empty-family" nil
+   (lambda () (not (null (find-font (font-spec :family ""))))))
+  (font-frame-script-case
+   "registry-substring" t (font-spec :family "Hack" :registry "iso8859"))
+  (font-frame-script-case
+   "registry-regexp-bracket" t (font-spec :family "Hack" :registry "iso8859-[12]"))
+  (font-frame-script-case
+   "registry-regexp-alternation" t
+   (font-spec :family "Hack" :registry "^iso8859-2$\\|^iso8859-1$"))
+  (font-frame-script-case
+   "registry-regexp-casefold" t (font-spec :family "Hack" :registry "ISO8859"))
+  (font-frame-script-case
+   "registry-whitespace-not-trimmed" nil
+   (font-spec :family "Hack" :registry " iso8859-1 "))
+  (font-frame-observe
+   "registry-invalid-error-order" '(invalid-regexp nil nil)
+   (lambda ()
+     (list
+      (condition-case problem
+          (list-fonts (font-spec :family "Hack" :registry "[") nil 1)
+        (invalid-regexp (car problem)))
+      (list-fonts (font-spec :registry "[") nil 0)
+      (list-fonts (font-spec :registry "[" :type 'ns) nil 1))))
+  (font-frame-observe
+   "registry-invalid-preference-ignored" t
+   (lambda ()
+     (not (null (list-fonts (font-spec :family "Hack") nil 1
+                            (font-spec :registry "["))))))
+  (font-frame-script-case
+   "find-font-otf-uses-listing" nil (font-spec :family "Hack" :otf '(zzzz)))
+  (font-frame-observe
+   "find-font-registry-error" 'invalid-regexp
+   (lambda ()
+     (condition-case problem
+         (find-font (font-spec :family "Hack" :registry "["))
+       (invalid-regexp (car problem))))))
+
 (defun font-frame-probe ()
   (condition-case problem
       (let* ((gui (selected-frame))
@@ -211,6 +256,7 @@
         (font-frame-remapping-cases)
         (font-frame-property-cases)
         (font-frame-listing-review-cases)
+        (font-frame-registry-family-cases)
         (setq tty (make-terminal-frame
                    `((tty . ,(getenv "NEOMACS_FONT_FRAME_TTY"))
                      (tty-type . "xterm-256color")
@@ -250,6 +296,7 @@
              (face-remapping-cases . 4)
              (font-property-cases . 4)
              (listing-review-cases . 7)
+             (registry-family-cases . 13)
              (observations . ,(vconcat (reverse font-frame-observations)))))
           (select-frame gui)
           (kill-emacs (if passed 0 1))))

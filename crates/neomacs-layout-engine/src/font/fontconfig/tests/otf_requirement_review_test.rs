@@ -147,19 +147,92 @@ fn otf_listing_public_pipeline_filters_before_maximum() {
     };
     let query = FontEntityQuery::new(None);
     let unfiltered = service.list_font_entities(&query, &Default::default(), None, None);
-    let rejected = unfiltered
-        .iter()
-        .position(|font| font.candidate.metadata.family == "Hack")
-        .unwrap();
-    let accepted = unfiltered
-        .iter()
-        .position(|font| font.candidate.metadata.family == "DejaVu Sans")
-        .unwrap();
     assert!(
-        rejected < accepted,
-        "fixture must put the rejected font before the accepted font"
+        unfiltered
+            .iter()
+            .any(|font| font.candidate.metadata.family == "Hack")
     );
+    assert!(
+        unfiltered
+            .iter()
+            .any(|font| font.candidate.metadata.family == "DejaVu Sans")
+    );
+    // FcFontList does not define order. The backend receives the OTF query
+    // without a result limit; MAX applies to its accepted results below.
     let listed = service.list_font_entities(&query, &constraints, None, Some(1));
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].candidate.metadata.family, "DejaVu Sans");
+}
+
+#[test]
+fn otf_listing_checks_each_variable_font_file_once_per_native_enumeration() {
+    let file = neomacs_test_fonts::noto_sans_mono_variable();
+    let family = crate::font_backend::FontFamilyName::new("Noto Sans Mono").unwrap();
+    let config = super::super::test_config::TestFontconfig::new(
+        &[file.to_path_buf()],
+        &family,
+        &family,
+        &family,
+    )
+    .unwrap();
+    let unfiltered = config.list_otf_candidates(Some("Noto Sans Mono"), None);
+    assert!(
+        unfiltered.len() > 1,
+        "native named instances must share this variable file"
+    );
+    assert!(
+        unfiltered
+            .iter()
+            .all(|font| font.matched.file.as_deref() == file.to_str())
+    );
+    let count = || super::super::otf_requirement::NATIVE_FILE_CHECKS.with(std::cell::Cell::get);
+    let before = count();
+    let positive = requirement(*b"latn");
+    assert_eq!(
+        config.list_otf_candidates(Some("Noto Sans Mono"), Some(&positive)),
+        unfiltered
+    );
+    assert_eq!(
+        count(),
+        before + 1,
+        "all named instances reuse one face-zero check"
+    );
+    assert_eq!(
+        config.list_otf_candidates(Some("Noto Sans Mono"), Some(&positive)),
+        unfiltered
+    );
+    assert_eq!(
+        count(),
+        before + 1,
+        "the completed native query cache avoids all file checks"
+    );
+    let mut negative = positive.clone();
+    negative.gsub.push(Feature::Required(*b"zzzz"));
+    assert!(
+        config
+            .list_otf_candidates(Some("Noto Sans Mono"), Some(&negative))
+            .is_empty()
+    );
+    assert_eq!(
+        count(),
+        before + 2,
+        "a negative requirement is also checked once per file"
+    );
+    assert!(
+        config
+            .list_otf_candidates(Some("Noto Sans Mono"), Some(&negative))
+            .is_empty()
+    );
+    assert_eq!(count(), before + 2);
+    assert_eq!(
+        config
+            .fresh_cache_view()
+            .list_otf_candidates(Some("Noto Sans Mono"), Some(&positive)),
+        unfiltered
+    );
+    assert_eq!(
+        count(),
+        before + 3,
+        "per-enumeration results do not leak into another query owner"
+    );
 }

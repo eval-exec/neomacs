@@ -29,7 +29,8 @@ use neovm_core::emacs_core::eval::FontSpecSelection;
 use neovm_core::emacs_core::fontset::{
     FontSpecEntry, StoredFontSpec, fontset_generation, matching_entries_for_char,
 };
-use neovm_core::emacs_core::intern::intern;
+use neovm_core::emacs_core::intern::{SymId, intern};
+use neovm_core::emacs_core::regex::EmacsRegexpError;
 use neovm_core::face::{FontSlant, FontWeight, FontWidth};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::sync::Mutex;
@@ -63,7 +64,7 @@ impl FontEntityQuery {
     }
 
     pub fn with_registry(mut self, registry: impl Into<String>) -> Self {
-        self.registry = non_empty_query_text(registry.into());
+        self.registry = Some(registry.into());
         self
     }
 
@@ -266,7 +267,13 @@ impl FontResolver {
     /// platform adapter.  Unlike the former binary-side helper this never
     /// assumes Fontconfig on CoreText or DirectWrite builds.
     pub fn resolve_entity(&self, query: &FontEntityQuery) -> Option<ResolvedFontEntity> {
-        let candidate_query = self.entity_candidate_query(query);
+        let candidate_query = match self.entity_candidate_query(query) {
+            Ok(query) => query,
+            Err(error) => {
+                tracing::warn!(target: "font_registry", %error, "invalid native font policy");
+                return None;
+            }
+        };
         let selected =
             match query.selection {
                 FontSpecSelection::Enumerate => self.select_entity_candidates(
@@ -346,20 +353,16 @@ impl FontResolver {
         mut visitor: impl FnMut(ListedFontCandidate) -> std::ops::ControlFlow<()>,
     ) {
         let driver = font_driver_symbol(self.backend.kind());
-        if constraints
-            .driver
-            .is_some_and(|requested| Some(requested) != driver)
-        {
+        if !self.native_registry_query_allowed(query.registry.as_deref(), constraints.driver) {
             return;
         }
-        if query
-            .registry
-            .as_deref()
-            .is_some_and(|registry| !crate::font::policy::registry_supported_for_listing(registry))
-        {
-            return;
-        }
-        let mut candidate_query = self.entity_candidate_query(query);
+        let mut candidate_query = match self.entity_candidate_query(query) {
+            Ok(query) => query,
+            Err(error) => {
+                tracing::warn!(target: "font_registry", %error, "invalid native font policy");
+                return;
+            }
+        };
         if self.backend.kind() == FontBackendKind::Fontconfig {
             candidate_query.otf = constraints.otf.clone();
             candidate_query.script_coverage = constraints.script_coverage.clone();
@@ -369,10 +372,18 @@ impl FontResolver {
         // ftfont_list checks the registry's language independently of an
         // explicit ADSTYLE. Extra :lang remains a native query constraint.
         let registry_adstyle_language = if self.backend.kind() == FontBackendKind::Fontconfig {
-            query
+            match query
                 .registry
                 .as_deref()
-                .and_then(crate::font::policy::registry_language)
+                .map(crate::font::policy::registry_language)
+                .transpose()
+            {
+                Ok(language) => language.flatten(),
+                Err(error) => {
+                    tracing::warn!(target: "font_registry", %error, "invalid native font policy");
+                    return;
+                }
+            }
         } else {
             None
         };
@@ -522,7 +533,44 @@ impl FontResolver {
         self.backend.finalize_match(candidate)
     }
 
-    fn entity_candidate_query(&self, query: &FontEntityQuery) -> FontCandidateQuery {
+    /// Public callers use the fallible result before enumeration. Native
+    /// Option-returning selection paths record and skip invalid policies.
+    pub(crate) fn validate_font_entity_listing(
+        &self,
+        registry: Option<&str>,
+        driver: Option<SymId>,
+    ) -> Result<bool, EmacsRegexpError> {
+        let backend = self.backend.kind();
+        if driver.is_some_and(|requested| Some(requested) != font_driver_symbol(backend)) {
+            return Ok(false);
+        }
+        let Some(registry) = registry else {
+            return Ok(true);
+        };
+        match backend {
+            FontBackendKind::Fontconfig => super::policy::registry_supported_for_listing(registry),
+            FontBackendKind::DirectWrite => Ok(super::policy::windows_registry_shortcut(registry)
+                || super::policy::legacy_backend_registry_hint(registry).is_some()),
+            FontBackendKind::CoreText => Ok(true),
+            // Do not guess registry support for an unimplemented adapter.
+            _ => Ok(false),
+        }
+    }
+
+    fn native_registry_query_allowed(&self, registry: Option<&str>, driver: Option<SymId>) -> bool {
+        match self.validate_font_entity_listing(registry, driver) {
+            Ok(allowed) => allowed,
+            Err(error) => {
+                tracing::warn!(target: "font_registry", %error, "invalid native font policy");
+                false
+            }
+        }
+    }
+
+    fn entity_candidate_query(
+        &self,
+        query: &FontEntityQuery,
+    ) -> Result<FontCandidateQuery, EmacsRegexpError> {
         let family = query
             .family
             .as_ref()
@@ -532,7 +580,10 @@ impl FontResolver {
             registry: query
                 .registry
                 .as_deref()
-                .map(|registry| intern(&registry.to_ascii_lowercase())),
+                .filter(|registry| {
+                    super::policy::registry_needs_native_constraints(self.backend.kind(), registry)
+                })
+                .map(intern),
             lang: query
                 .language
                 .as_deref()
@@ -544,7 +595,7 @@ impl FontResolver {
             width: query.width,
             definition: None,
         };
-        let constraints = GnuFontPolicy::constraints_for_entity(&spec);
+        let constraints = GnuFontPolicy::constraints_for_entity(&spec)?;
         let representative = constraints.representative_char();
         let charset_ranges = constraints.coverage().ranges().to_vec();
         let languages: Vec<String> = constraints
@@ -553,7 +604,7 @@ impl FontResolver {
             .map(|language| language.as_str().to_owned())
             .collect();
         let scope = family.map_or(FontCandidateScope::All, FontCandidateScope::Family);
-        FontCandidateQuery {
+        Ok(FontCandidateQuery {
             scalable: None,
             otf: None,
             script_coverage: None,
@@ -570,7 +621,7 @@ impl FontResolver {
             requested_slant: query.slant.unwrap_or(FontSlant::Normal),
             requested_width: query.width.unwrap_or(FontWidth::Normal),
             direction: TextDirection::for_char(representative),
-        }
+        })
     }
 
     fn match_entity_driver(
@@ -641,29 +692,40 @@ impl FontResolver {
         query: &FontEntityQuery,
         pixel_size: u32,
     ) -> Option<OpenedFontEntity> {
-        let mut entity = self.resolve_entity(query)?;
-        entity.matched = self.with_native_metrics(entity.matched);
+        let entity = self.resolve_entity(query)?;
+        let (matched, metrics) = self.open_match(entity.matched, pixel_size, query.weight)?;
+        Some(OpenedFontEntity {
+            entity: ResolvedFontEntity { matched, ..entity },
+            metrics,
+        })
+    }
+
+    /// Obtain metrics from an already selected identity without family reselection.
+    pub(crate) fn open_match(
+        &self,
+        matched: PlatformFontMatch,
+        pixel_size: u32,
+        requested_weight: Option<u16>,
+    ) -> Option<(PlatformFontMatch, crate::font::probe::FontPxMetrics)> {
+        let matched = self.with_native_metrics(matched);
         let pixel_size = pixel_size.max(1);
-        let metrics = entity
-            .matched
-            .pixel_metrics(pixel_size as f32)
-            .or_else(|| {
-                let identity = &entity.matched.identity;
-                let file = identity.file_path.as_deref()?;
-                let explicit_weight = identity
-                    .variation_coords
-                    .iter()
-                    .find(|coord| coord.tag() == u32::from_be_bytes(*b"wght"))
-                    .map(|coord| coord.value())
-                    .or_else(|| query.weight.map(f32::from));
-                crate::font::probe::probe_font_px_metrics(
-                    file,
-                    identity.freetype_selector()?,
-                    pixel_size,
-                    explicit_weight,
-                )
-            })?;
-        Some(OpenedFontEntity { entity, metrics })
+        let metrics = matched.pixel_metrics(pixel_size as f32).or_else(|| {
+            let identity = &matched.identity;
+            let file = identity.file_path.as_deref()?;
+            let explicit_weight = identity
+                .variation_coords
+                .iter()
+                .find(|coord| coord.tag() == u32::from_be_bytes(*b"wght"))
+                .map(|coord| coord.value())
+                .or_else(|| requested_weight.map(f32::from));
+            crate::font::probe::probe_font_px_metrics(
+                file,
+                identity.freetype_selector()?,
+                pixel_size,
+                explicit_weight,
+            )
+        })?;
+        Some((matched, metrics))
     }
 
     /// Resolve a primary face from candidates in one concrete family.
@@ -987,7 +1049,17 @@ impl FontResolver {
         size: FontSelectionSize,
         spec: &StoredFontSpec,
     ) -> Option<PlatformFontCandidate> {
-        let policy = CapturedCharacterPolicy::capture(
+        if self.backend.kind() != FontBackendKind::Fontconfig
+            && !self.native_registry_query_allowed(
+                spec.registry
+                    .map(neovm_core::emacs_core::fontset::native_font_name)
+                    .as_deref(),
+                None,
+            )
+        {
+            return None;
+        }
+        let policy = match CapturedCharacterPolicy::capture(
             requested_family,
             ch,
             requested_weight,
@@ -995,7 +1067,14 @@ impl FontResolver {
             requested_width,
             size,
             spec,
-        );
+            self.backend.kind(),
+        ) {
+            Ok(policy) => policy,
+            Err(error) => {
+                tracing::warn!(target: "font_registry", %error, "invalid native font policy");
+                return None;
+            }
+        };
         self.resolve_from_policy(&policy, prefer_monospace)
     }
 
@@ -1094,6 +1173,7 @@ struct CapturedCharacterPolicy {
 }
 
 impl CapturedCharacterPolicy {
+    #[allow(clippy::too_many_arguments)] // The captured font request also needs its native registry namespace.
     fn capture(
         family: &str,
         ch: char,
@@ -1102,7 +1182,8 @@ impl CapturedCharacterPolicy {
         width: FontWidth,
         size: FontSelectionSize,
         spec: &StoredFontSpec,
-    ) -> Self {
+        backend: FontBackendKind,
+    ) -> Result<Self, EmacsRegexpError> {
         Self {
             requested_family: family.to_owned(),
             ch,
@@ -1115,13 +1196,18 @@ impl CapturedCharacterPolicy {
             width,
             size,
         }
-        .with_spec(spec.into())
+        .with_spec(spec.into(), backend)
     }
 
     /// The single registry/language and style-override rule for both live and
     /// detached alternatives. Only their owned naming authority differs.
-    fn with_spec(mut self, spec: super::policy::FontPolicySpec<'_>) -> Self {
-        let constraints = GnuFontPolicy::constraints_for_names(&spec, self.ch);
+    fn with_spec(
+        mut self,
+        spec: super::policy::FontPolicySpec<'_>,
+        backend: FontBackendKind,
+    ) -> Result<Self, EmacsRegexpError> {
+        let spec = spec.for_backend(backend);
+        let constraints = GnuFontPolicy::constraints_for_names(&spec, self.ch)?;
         self.charset_ranges = constraints.coverage().ranges().to_vec();
         self.explicit_language = spec.language.as_deref().map(str::to_owned);
         self.languages = constraints
@@ -1135,7 +1221,7 @@ impl CapturedCharacterPolicy {
             .unwrap_or(self.weight);
         self.slant = spec.slant.unwrap_or(self.slant);
         self.width = spec.width.unwrap_or(self.width);
-        self
+        Ok(self)
     }
 }
 

@@ -2664,7 +2664,27 @@ pub(crate) fn list_fonts(
         .and_then(|fields| properties::named_with_mode(fields, "scalable", eval.symbol_mode()))
         .map(|value| !value.is_nil());
     query.script_coverage = font_script_coverage(eval, &args[0]);
-    query.otf = font_otf_requirement(&args[0], eval.symbol_mode());
+    // OTF feature validation belongs to the selected native font driver.
+    // Wrong driver requests, NS/Windows, and unavailable drivers must not
+    // inspect FT-only feature lists, even if the caller mutated their conses.
+    let mode = eval.symbol_mode();
+    let has_otf = font_value_fields(&args[0])
+        .and_then(|fields| properties::named_with_mode(fields, "otf", mode))
+        .is_some_and(|otf| otf.is_cons());
+    let freetype_requested = query.driver.is_none_or(|driver| driver == intern("ftcrhb"));
+    if has_otf && freetype_requested {
+        let backend = match eval.display_host.as_mut() {
+            Some(host) => host
+                .prepare_font_listing(&query)
+                .map_err(font_list_error_to_flow)?,
+            None => None,
+        };
+        if backend == Some(neomacs_display_protocol::font::FontBackendKind::Fontconfig) {
+            query.otf = font_otf_requirement(&args[0], mode)?;
+        }
+        // None identifies no FT parser. Do not suppress a generic host's
+        // ordinary listing operation, which owns its native admission policy.
+    }
     let ignored = eval.variable_value_or_nil(intern("face-ignored-fonts"));
     let patterns: Vec<_> = list_iter(ignored)
         .filter_map(|pattern| pattern.as_lisp_string().cloned())
@@ -2971,45 +2991,68 @@ fn font_otf_tag(value: Value, mode: neovm_value::tagged::SymbolMode) -> Option<[
 fn font_otf_requirement(
     spec: &Value,
     mode: neovm_value::tagged::SymbolMode,
-) -> Option<neovm_eval::emacs_core::eval::FontOtfRequirement> {
+) -> Result<Option<neovm_eval::emacs_core::eval::FontOtfRequirement>, Flow> {
     use neovm_eval::emacs_core::eval::{FontOtfFeature, FontOtfRequirement};
-    let otf = properties::named_with_mode(font_value_fields(spec)?, "otf", mode)?;
+    let Some(otf) =
+        font_value_fields(spec).and_then(|fields| properties::named_with_mode(fields, "otf", mode))
+    else {
+        return Ok(None);
+    };
     if !otf.is_cons() {
-        return None;
+        return Ok(None);
     }
+    let invalid = || invalid_font_property(&Value::keyword("otf"), &otf);
     // Tags use the first four symbol bytes, preserving case and spaces.
-    // Short names are safely NUL-filled rather than reading outside a string.
+    // Raw NILP precedes mode-aware symbol interpretation.
     let script = if otf.cons_car().is_nil() {
         *b"DFLT"
     } else {
-        font_otf_tag(otf.cons_car(), mode)?
+        font_otf_tag(otf.cons_car(), mode).ok_or_else(invalid)?
     };
     let mut tail = otf.cons_cdr();
+    if !tail.is_nil() && !tail.is_cons() {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("listp"), tail],
+        ));
+    }
     let language = if tail.is_cons() && !tail.cons_car().is_nil() {
-        let tag = font_otf_tag(tail.cons_car(), mode)?;
+        let tag = font_otf_tag(tail.cons_car(), mode).ok_or_else(invalid)?;
         (tag != [0; 4]).then_some(tag)
     } else {
         None
     };
+    let mut raw_features = [Value::NIL; 2];
+    // The outer parser consumes at most SCRIPT/LANGSYS/GSUB/GPOS. GNU ignores
+    // later fields, including an improper trailing tail after those slots.
+    // Each consumed feature list can have changed since font-spec/font-put.
+    // Validate both lists before allocating captured vectors, exactly as GNU's
+    // list_length detects circular/improper feature data at driver query time.
+    for raw in &mut raw_features {
+        if tail.is_nil() {
+            break;
+        }
+        tail = tail.cons_cdr();
+        if tail.is_nil() {
+            break;
+        }
+        if !tail.is_cons() {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("listp"), tail],
+            ));
+        }
+        *raw = tail.cons_car();
+        neovm_value::list_scan::proper_list_length_or_signal(*raw)?;
+    }
     let mut features = [Vec::new(), Vec::new()];
-    for side in &mut features {
-        tail = if tail.is_cons() {
-            tail.cons_cdr()
-        } else {
-            Value::NIL
-        };
-        let mut values = if tail.is_cons() {
-            tail.cons_car()
-        } else {
-            Value::NIL
-        };
+    for (side, values) in features.iter_mut().zip(raw_features) {
         let mut negative = false;
-        while values.is_cons() {
-            let value = values.cons_car();
+        for value in list_iter(values) {
             if value.is_nil() {
                 negative = true;
             } else {
-                let mut tag = font_otf_tag(value, mode)?;
+                let mut tag = font_otf_tag(value, mode).ok_or_else(invalid)?;
                 if tag != [0; 4] {
                     // GNU stores exclusion in the high bit of the feature tag.
                     if negative || tag[0] & 0x80 != 0 {
@@ -3020,16 +3063,15 @@ fn font_otf_requirement(
                     }
                 }
             }
-            values = values.cons_cdr();
         }
     }
     let [gsub, gpos] = features;
-    Some(FontOtfRequirement {
+    Ok(Some(FontOtfRequirement {
         script,
         language,
         gsub,
         gpos,
-    })
+    }))
 }
 
 // A positioned :type value can outlive the symbol mode that accepted it.
@@ -3318,18 +3360,21 @@ pub(crate) fn find_font(
 ) -> EvalResult {
     expect_min_args("find-font", &args, 1)?;
     expect_max_args("find-font", &args, 2)?;
-    if !is_font_spec(&args[0]) {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("font-spec"), args[0]],
-        ));
-    }
-
-    let request = font_spec_resolve_request(eval, &args[0], args.get(1))?;
-    if font_has_uninterpretable_driver(&args[0], eval.symbol_mode()) {
-        return Ok(Value::NIL);
-    }
-    match_font_spec_request(eval, request)
+    // GNU Ffind_font delegates to Flist_fonts with MAXIMUM=1. Keep one
+    // admission/error path, including FRAME validation before SPEC.
+    let listed = list_fonts(
+        eval,
+        vec![
+            args[0],
+            args.get(1).copied().unwrap_or(Value::NIL),
+            Value::fixnum(1),
+        ],
+    )?;
+    Ok(if listed.is_cons() {
+        listed.cons_car()
+    } else {
+        Value::NIL
+    })
 }
 
 fn match_font_spec_request(
@@ -4208,6 +4253,10 @@ fn font_info_vector_for_entity(
         .and_then(|host| {
             host.probe_font_entity_metrics(neovm_eval::emacs_core::eval::FontEntityMetricsRequest {
                 frame_id,
+                coverage_handle: properties::native_named(&elems, "neomacs-entity-handle")
+                    .and_then(|value| value.as_int())
+                    .and_then(|value| u32::try_from(value).ok())
+                    .and_then(neovm_value::display_vocab::FontEntityHandle::new),
                 family: text_field("family"),
                 registry: text_field("registry"),
                 file: text_field("file"),
