@@ -79,6 +79,9 @@ mod fill_column_stipple;
 #[path = "font_coverage.rs"]
 mod font_coverage;
 
+#[path = "font_name_pattern_resize.rs"]
+mod font_name_pattern_resize;
+
 #[path = "fontset_han_repertory.rs"]
 mod fontset_han_repertory;
 
