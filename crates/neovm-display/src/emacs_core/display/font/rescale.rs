@@ -285,11 +285,13 @@ mod tests {
     #[test]
     fn font_listing_rescale_preserves_invalid_regexp_error() {
         let _eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
-        assert!(
-            policy(Value::string("["), Value::make_float(2.0))
-                .ratio(entity())
-                .is_err()
-        );
+        let error = policy(Value::string("["), Value::make_float(2.0))
+            .ratio(entity())
+            .unwrap_err();
+        let neovm_value::error::FlowRef::Signal(condition) = error.kind() else {
+            panic!("expected invalid-regexp signal: {error:?}");
+        };
+        assert_eq!(condition.symbol_name(), "invalid-regexp");
     }
 
     #[test]

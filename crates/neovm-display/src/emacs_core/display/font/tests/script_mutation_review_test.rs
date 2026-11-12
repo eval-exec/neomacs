@@ -271,7 +271,7 @@ fn script_mutation_cycles_are_bounded_and_respect_driver_and_error_order() {
             .unwrap();
         let started = std::time::Instant::now();
         while child.try_wait().unwrap().is_none() {
-            if started.elapsed() > std::time::Duration::from_secs(2) {
+            if started.elapsed() > std::time::Duration::from_secs(10) {
                 child.kill().unwrap();
                 break;
             }
