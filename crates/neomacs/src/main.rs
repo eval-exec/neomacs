@@ -151,7 +151,6 @@ use neomacs_display_runtime::render_thread::run_render_loop_current_thread;
 use neomacs_display_runtime::render_thread::run_render_loop_current_thread_with_terminals;
 use neomacs_display_runtime::render_thread::{
     RenderEventLoop, RenderEventLoopProxy, SharedImageRenderState, SharedMonitorInfo,
-    build_render_event_loop,
 };
 use neomacs_display_runtime::shader_surface::{
     SurfaceChannelSource as RendererChannelSource, SurfaceContract,
@@ -409,40 +408,35 @@ impl BootstrapDisplayConfig {
     }
 }
 
-/// Native hosting is independent of the initial Lisp frame: a daemon keeps
-/// its initial TTY frame while this connection waits for its first GUI client.
-struct GuiConnectionStartup {
-    event_loop: RenderEventLoop,
+/// Font scale and bootstrap config for a host the render thread already opened.
+/// The event loop stays in that host until `run` takes it.
+struct GuiConnectionSetup {
     display: BootstrapDisplayConfig,
     font_observer: neomacs_display_runtime::font_defaults::FontDefaultsObserver,
 }
 
-/// Prepare native hosting without creating a frame, using the backend Winit
-/// actually opened to resolve display identity, scale, and desktop fonts.
-fn prepare_gui_connection(interactivity: Interactivity) -> Result<GuiConnectionStartup, String> {
-    // Wayland can consume WAYLAND_SOCKET while opening the connection.
-    let resolver =
-        neomacs_display_runtime::display_identity::DisplayIdentityResolver::capture_environment();
-    let event_loop = build_render_event_loop()
-        .map_err(|error| format!("failed to build GUI event loop: {error}"))?;
-    let observation = event_loop.display_observation();
-    let system_name = hostname::get()
+/// Hostname for a graphical connection. Batch and TTY startup never call this.
+fn graphical_system_name() -> String {
+    hostname::get()
         .map(|name| name.to_string_lossy().replace([' ', '\t'], "-"))
-        .unwrap_or_else(|_| "localhost".into());
-    let identity = event_loop
-        .display_identity(resolver, &system_name)
-        .map_err(|error| format!("failed to resolve graphical display identity: {error:?}"))?;
+        .unwrap_or_else(|_| "localhost".into())
+}
+
+fn finish_gui_connection(
+    interactivity: Interactivity,
+    host: &neomacs_display_runtime::render_thread::NativeGuiHost,
+) -> Result<GuiConnectionSetup, String> {
+    let identity = host.identity().clone();
     let font_observer =
         neomacs_display_runtime::font_defaults::observe_font_defaults(identity.backend())
             .map_err(|error| format!("failed to observe desktop fonts: {error}"))?;
     let mut display = bootstrap_gui_display_config(
         interactivity,
-        gui_frame_font_scale_from_observation(observation),
+        gui_frame_font_scale_from_observation(host.observation()),
         identity,
     );
     display.font_defaults = font_observer.initial().clone();
-    Ok(GuiConnectionStartup {
-        event_loop,
+    Ok(GuiConnectionSetup {
         display,
         font_observer,
     })
@@ -4829,18 +4823,35 @@ pub fn run(mode: RuntimeMode) {
         .iter()
         .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()));
     let gui_connection = if startup.frontend == FrontendKind::Gui {
+        let system_name = graphical_system_name();
         Some(
-            prepare_gui_connection(interactivity).unwrap_or_else(|error| {
-                eprintln!("neomacs: {error}");
-                std::process::exit(1);
-            }),
+            match neomacs_display_runtime::render_thread::open_gui_connection_host(&system_name) {
+                Ok(host) => match finish_gui_connection(interactivity, &host) {
+                    Ok(setup) => (host, setup),
+                    Err(error) => {
+                        eprintln!("neomacs: {error}");
+                        std::process::exit(1);
+                    }
+                },
+                Err(error) => {
+                    eprintln!("neomacs: {error}");
+                    std::process::exit(1);
+                }
+            },
         )
     } else if startup.daemon.is_some() && !startup.noninteractive && inherited_display {
-        match prepare_gui_connection(interactivity) {
-            Ok(connection) => Some(connection),
+        let system_name = graphical_system_name();
+        match neomacs_display_runtime::render_thread::open_gui_connection_host(&system_name) {
+            Ok(host) => match finish_gui_connection(interactivity, &host) {
+                Ok(setup) => Some((host, setup)),
+                Err(error) => {
+                    // An unavailable inherited display must not prevent ordinary
+                    // daemon startup or its TTY/evaluation clients.
+                    tracing::warn!(%error, "daemon continuing without graphical hosting");
+                    None
+                }
+            },
             Err(error) => {
-                // An unavailable inherited display must not prevent ordinary
-                // daemon startup or its TTY/evaluation clients.
                 tracing::warn!(%error, "daemon continuing without graphical hosting");
                 None
             }
@@ -4858,14 +4869,14 @@ pub fn run(mode: RuntimeMode) {
     *DIAG_TASK_RX.lock().unwrap() = Some(diag_task_rx);
     maybe_start_diagnostics(diag_task_tx);
 
-    if let Some(connection) = gui_connection {
+    if let Some((host, setup)) = gui_connection {
         run_gui_main_thread(
-            connection.event_loop,
+            neomacs_display_runtime::render_thread::take_gui_event_loop(host),
             mode,
             startup,
             daemon_notifier,
-            connection.display,
-            connection.font_observer,
+            setup.display,
+            setup.font_observer,
         );
         log_clean_process_exit(process_started_at, &process_args);
         return;

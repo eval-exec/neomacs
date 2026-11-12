@@ -48,7 +48,9 @@ fn effect_capability_path(words: &[String]) -> Option<EffectCapability> {
             "RenderCommandSender" => return Some(EffectCapability::RenderCommands),
             "RenderEventLoop"
             | "build_render_event_loop"
-            | "build_render_event_loop_any_thread" => {
+            | "build_render_event_loop_any_thread"
+            | "open_gui_connection_host"
+            | "take_gui_event_loop" => {
                 return Some(EffectCapability::NativeEventLoop);
             }
             "RenderEventLoopProxy" => return Some(EffectCapability::NativeWake),
@@ -1464,6 +1466,44 @@ fn accepts_private_native_backing_and_owned_protocol() {
             command
         )
         .is_empty()
+    );
+}
+
+#[test]
+fn rejects_gui_host_open_outside_main_anchors() {
+    let outside = r#"
+        fn prepare_gui_connection() {
+            let host = neomacs_display_runtime::render_thread::open_gui_connection_host("localhost").unwrap();
+            let _loop = neomacs_display_runtime::render_thread::take_gui_event_loop(host);
+        }
+    "#;
+    let details: Vec<_> = scan("neomacs/src/main.rs", outside)
+        .into_iter()
+        .filter(|violation| violation.kind == ViolationKind::OutsideEffectOwner)
+        .map(|violation| violation.detail)
+        .collect();
+    assert!(
+        details
+            .iter()
+            .any(|detail| detail.contains("open_gui_connection_host")),
+        "{details:?}"
+    );
+    assert!(
+        details
+            .iter()
+            .any(|detail| detail.contains("take_gui_event_loop")),
+        "{details:?}"
+    );
+
+    let inside = r#"
+        fn run() {
+            let host = neomacs_display_runtime::render_thread::open_gui_connection_host("localhost").unwrap();
+            let _loop = neomacs_display_runtime::render_thread::take_gui_event_loop(host);
+        }
+    "#;
+    assert!(
+        scan("neomacs/src/main.rs", inside).is_empty(),
+        "run remains the anchor that may open the GUI host"
     );
 }
 
