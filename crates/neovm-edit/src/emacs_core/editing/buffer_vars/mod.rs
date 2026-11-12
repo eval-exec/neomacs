@@ -54,6 +54,53 @@ pub fn register_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
     obarray
         .put_property("kill-buffer-hook", "permanent-local", Value::T)
         .expect("bootstrap symbol properties must be writable");
+    // The other properties `syms_of_buffer` puts (src/buffer.c): the values that
+    // the `vertical-scroll-bar` and `overwrite-mode` buffer variables can take and
+    // the range of a `fraction`, which Lisp such as `cus-edit` and GNU's
+    // data-tests read, and the `protected-field` error.
+    for (symbol, property, value) in [
+        (
+            "vertical-scroll-bar",
+            "choice",
+            Value::list(vec![
+                Value::NIL,
+                Value::T,
+                Value::symbol("left"),
+                Value::symbol("right"),
+            ]),
+        ),
+        (
+            "fraction",
+            "range",
+            Value::cons(Value::make_float(0.0), Value::make_float(1.0)),
+        ),
+        (
+            "overwrite-mode",
+            "choice",
+            Value::list(vec![
+                Value::NIL,
+                Value::symbol("overwrite-mode-textual"),
+                Value::symbol("overwrite-mode-binary"),
+            ]),
+        ),
+        (
+            "protected-field",
+            "error-conditions",
+            Value::list(vec![
+                Value::symbol("protected-field"),
+                Value::symbol("error"),
+            ]),
+        ),
+        (
+            "protected-field",
+            "error-message",
+            Value::string("Attempt to modify a protected field"),
+        ),
+    ] {
+        obarray
+            .put_property(symbol, property, value)
+            .expect("bootstrap symbol properties must be writable");
+    }
     for name in [
         "inhibit-field-text-motion",
         "buffer-access-fontify-functions",

@@ -22,6 +22,8 @@ mod window_system_preload_test;
 #[path = "text_measurement_invisible_test.rs"]
 mod text_measurement_invisible_test;
 
+#[path = "buffer_symbol_properties_test.rs"]
+mod buffer_symbol_properties_test;
 #[path = "face_inheritance_cycle_test.rs"]
 mod face_inheritance_cycle_test;
 #[cfg(test)]
