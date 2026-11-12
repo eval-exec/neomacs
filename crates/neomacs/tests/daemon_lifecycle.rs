@@ -834,7 +834,12 @@ fn sigchld_retention_and_lost_authority_never_signal_an_auto_reaped_child() {
         .arg("-o")
         .arg(&shim)
         .arg("-ldl");
-    assert!(bounded(cc, Duration::from_secs(30)).status.success());
+    let compiled = bounded(cc, Duration::from_secs(30));
+    assert!(
+        compiled.status.success(),
+        "cc failed to build the sigchld shim: {}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
     for policy in ["ignored", "no-cldwait", "lost"] {
         for region in [false, true] {
             let mut fixture = Fixture::new();

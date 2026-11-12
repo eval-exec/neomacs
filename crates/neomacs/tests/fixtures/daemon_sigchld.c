@@ -19,7 +19,9 @@ static void record(const char *kind, int pid, int result) {
     if (fd >= 0) {
         char row[128];
         int len = snprintf(row, sizeof row, "%s %d %d\n", kind, pid, result);
-        if (len > 0 && len < (int)sizeof row) (void)write(fd, row, len);
+        if (len > 0 && len < (int)sizeof row) {
+            if (write(fd, row, (size_t)len) != len) _exit(121);
+        }
         close(fd);
     }
     errno = saved;
