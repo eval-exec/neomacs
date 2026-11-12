@@ -313,7 +313,24 @@ pub fn builtin_define_key(eval: &mut super::eval::Context, args: Vec<Value>) -> 
     expect_min_args("define-key", &args, 3)?;
     expect_max_args("define-key", &args, 4)?;
     let keymap = expect_keymap(eval, &args[0])?;
-    let mut events = expect_key_events(&args[1], symbol_mode)?;
+    // KEYMAP may be a symbol whose function cell held the map, and the key
+    // translation runs Lisp (`key-valid-p', `key-parse'), so keep the
+    // resolved map rooted until it is updated.
+    let root_scope = eval.save_specpdl_roots();
+    eval.push_specpdl_root(keymap);
+    let result = define_key_in_rooted_keymap(eval, keymap, &args, symbol_mode);
+    eval.restore_specpdl_roots(root_scope);
+    result
+}
+
+fn define_key_in_rooted_keymap(
+    eval: &mut super::eval::Context,
+    keymap: Value,
+    args: &[Value],
+    symbol_mode: SymbolMode,
+) -> EvalResult {
+    let key = possibly_translate_key_sequence(eval, args[1])?;
+    let mut events = expect_key_events(&key, symbol_mode)?;
     cache_key_event_symbol_properties(eval, &events)?;
     let def = normalize_keyboard_macro_definition(args[2], symbol_mode);
     let remove = args.get(3).is_some_and(|v| v.is_truthy());
@@ -328,6 +345,56 @@ pub fn builtin_define_key(eval: &mut super::eval::Context, args: Vec<Value>) -> 
     Ok(def)
 }
 
+/// GNU `possibly_translate_key_sequence' (src/keymap.c), shared by
+/// `define-key' and `lookup-key': a vector holding one string, such as
+/// ["C-c a"], is parsed with `key-parse' when `key-valid-p' accepts the
+/// string, and is returned unchanged otherwise.
+fn possibly_translate_key_sequence(eval: &mut super::eval::Context, key: Value) -> EvalResult {
+    let Some(items) = key.as_vector_data() else {
+        return Ok(key);
+    };
+    let [string] = items.as_slice() else {
+        return Ok(key);
+    };
+    let string = *string;
+    if !string.is_string() {
+        return Ok(key);
+    }
+    if !eval.obarray().fboundp("key-valid-p") {
+        return Err(signal(
+            "error",
+            vec![
+                Value::string("`key-valid-p' is not defined, so this syntax can't be used: %s"),
+                key,
+            ],
+        ));
+    }
+    if eval
+        .funcall_general(Value::symbol("key-valid-p"), vec![string])?
+        .is_nil()
+    {
+        return Ok(key);
+    }
+    let parsed = eval.funcall_general(Value::symbol("key-parse"), vec![string])?;
+    let length = match parsed.kind() {
+        ValueKind::String => parsed.as_lisp_string().map_or(0, |s| s.schars()),
+        ValueKind::Veclike(VecLikeType::Vector) => parsed.as_vector_data().map_or(0, |v| v.len()),
+        _ => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("arrayp"), parsed],
+            ));
+        }
+    };
+    if length == 0 {
+        return Err(signal(
+            "error",
+            vec![Value::string("Invalid `key-parse' syntax: %S"), parsed],
+        ));
+    }
+    Ok(parsed)
+}
+
 /// (lookup-key KEYMAP KEY &optional ACCEPT-DEFAULTS) -> binding or nil
 #[doc(hidden)]
 pub fn builtin_lookup_key(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
@@ -335,7 +402,8 @@ pub fn builtin_lookup_key(eval: &mut super::eval::Context, args: Vec<Value>) -> 
     expect_min_args("lookup-key", &args, 2)?;
     expect_max_args("lookup-key", &args, 3)?;
     let t_ok = args.get(2).is_some_and(|v| v.is_truthy());
-    let events = expect_key_events(&args[1], symbol_mode)?;
+    let key = possibly_translate_key_sequence(eval, args[1])?;
+    let events = expect_key_events(&key, symbol_mode)?;
     cache_key_event_symbol_properties(eval, &events)?;
     let keymaps = resolve_lookup_keymaps_in_runtime(eval, &args[0])?;
 
