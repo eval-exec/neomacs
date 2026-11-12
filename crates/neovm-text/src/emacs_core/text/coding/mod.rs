@@ -2072,15 +2072,30 @@ pub(crate) fn undecided_null_byte_inhibition(
     if resolve_sym(info.coding_type) != "undecided" {
         return None;
     }
-    let stored = info
+    let attrs = if info
         .int_properties
-        .get(&UNDECIDED_KEY_INHIBIT_NULL)
-        .or_else(|| {
-            mgr.get(strip_eol_suffix(&resolved))?
-                .int_properties
-                .get(&UNDECIDED_KEY_INHIBIT_NULL)
-        });
-    Some(NullByteInhibition::from_stored(stored).resolve(global))
+        .contains_key(&UNDECIDED_KEY_INHIBIT_NULL)
+        || info.int_properties.contains_key(&PLIST_VERBATIM_KEY)
+    {
+        info
+    } else {
+        mgr.get(strip_eol_suffix(&resolved)).unwrap_or(info)
+    };
+    let policy = match attrs.int_properties.get(&UNDECIDED_KEY_INHIBIT_NULL) {
+        Some(stored) => NullByteInhibition::from_stored(Some(stored)),
+        None if attrs.int_properties.contains_key(&PLIST_VERBATIM_KEY) => {
+            // Older dumps retain the definition plist without the compiled
+            // slot. An omitted definition flag is nil (mule.el:962-964),
+            // whereas bootstrap entries with no definition inherit globally.
+            // Positioned metadata cannot be reconstructed fully: old dumps
+            // did not retain the definition-time symbol mode for wrapped keys.
+            let flag = definition_property(attrs, intern(":inhibit-null-byte-detection"))
+                .unwrap_or(Value::NIL);
+            NullByteInhibition::from_definition(flag)
+        }
+        None => NullByteInhibition::Inherit,
+    };
+    Some(policy.resolve(global))
 }
 
 fn plist_push_key(plist: &mut Vec<Value>, key: SymId, value: Value) {

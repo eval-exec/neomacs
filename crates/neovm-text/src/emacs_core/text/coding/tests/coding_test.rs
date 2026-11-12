@@ -25,6 +25,163 @@ fn undecided_null_policy_invalid_storage_inherits_global() {
     }
 }
 
+// Model the manager image produced by a dump that predates the compiled NUL
+// slot. Its original definition plist remains separate from public put overrides.
+fn restored_null_policy_manager(
+    definition: Option<Value>,
+    compiled: Option<Value>,
+) -> CodingSystemManager {
+    let mut manager = mgr();
+    let mut info =
+        CodingSystemInfo::new("legacy-null-policy", "undecided", '-', EolType::Undecided);
+    let plist = definition.map_or(Value::NIL, |flag| {
+        Value::list(vec![Value::symbol(":inhibit-null-byte-detection"), flag])
+    });
+    info.int_properties.insert(PLIST_VERBATIM_KEY, plist);
+    if let Some(compiled) = compiled {
+        info.int_properties
+            .insert(UNDECIDED_KEY_INHIBIT_NULL, compiled);
+    }
+    manager.register(info);
+    manager.register(CodingSystemInfo::new(
+        "legacy-null-policy-dos",
+        "undecided",
+        '-',
+        EolType::Dos,
+    ));
+    manager.add_alias("legacy-null-alias", "legacy-null-policy");
+    manager.add_alias("legacy-null-dos-alias", "legacy-null-policy-dos");
+    CodingSystemManager::from_dump(
+        manager.systems,
+        manager.aliases,
+        manager.alias_order,
+        manager.priority,
+        manager.keyboard_coding,
+        manager.terminal_coding,
+    )
+}
+
+#[test]
+fn legacy_undecided_null_policy_recovers_definition_not_public_overrides() {
+    crate::test_utils::init_test_tracing();
+    for (definition, expected) in [
+        (Value::NIL, [false, false]),
+        (Value::T, [true, true]),
+        (Value::symbol("inherit"), [false, true]),
+    ] {
+        for public in [Value::NIL, Value::T, Value::symbol("inherit")] {
+            let mut manager = restored_null_policy_manager(Some(definition), None);
+            builtin_coding_system_put(
+                &mut manager,
+                vec![
+                    Value::symbol("legacy-null-alias"),
+                    Value::symbol(":inhibit-null-byte-detection"),
+                    public,
+                ],
+                SymbolMode::Bare,
+            )
+            .unwrap();
+            for name in [
+                "legacy-null-policy",
+                "legacy-null-alias",
+                "legacy-null-policy-dos",
+                "legacy-null-dos-alias",
+            ] {
+                for (global, expected) in [false, true].into_iter().zip(expected) {
+                    assert_eq!(
+                        undecided_null_byte_inhibition(&manager, name, global),
+                        Some(expected),
+                        "definition={definition:?}, public={public:?}, name={name}, global={global}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn legacy_omitted_null_attribute_differs_from_bootstrap_without_definition() {
+    crate::test_utils::init_test_tracing();
+    let manager = restored_null_policy_manager(None, None);
+    for global in [false, true] {
+        for name in [
+            "legacy-null-policy",
+            "legacy-null-alias",
+            "legacy-null-policy-dos",
+            "legacy-null-dos-alias",
+        ] {
+            assert_eq!(
+                undecided_null_byte_inhibition(&manager, name, global),
+                Some(false),
+                "omitted definition flag, name={name}, global={global}"
+            );
+        }
+        assert_eq!(
+            undecided_null_byte_inhibition(&manager, "undecided", global),
+            Some(global)
+        );
+    }
+}
+
+#[test]
+fn compiled_null_policy_precedes_original_definition_and_subsidiary_fallback() {
+    crate::test_utils::init_test_tracing();
+    for (compiled, expected) in [
+        (Value::fixnum(-1), [false, false]),
+        (Value::fixnum(1), [true, true]),
+        (Value::fixnum(0), [false, true]),
+        (Value::fixnum(2), [false, true]),
+    ] {
+        for definition in [Value::NIL, Value::T] {
+            let mut manager = restored_null_policy_manager(Some(definition), Some(compiled));
+            builtin_coding_system_put(
+                &mut manager,
+                vec![
+                    Value::symbol("legacy-null-policy"),
+                    Value::symbol(":inhibit-null-byte-detection"),
+                    if definition.is_nil() {
+                        Value::T
+                    } else {
+                        Value::NIL
+                    },
+                ],
+                SymbolMode::Bare,
+            )
+            .unwrap();
+            for name in [
+                "legacy-null-policy",
+                "legacy-null-alias",
+                "legacy-null-policy-dos",
+                "legacy-null-dos-alias",
+            ] {
+                for (global, expected) in [false, true].into_iter().zip(expected) {
+                    assert_eq!(
+                        undecided_null_byte_inhibition(&manager, name, global),
+                        Some(expected),
+                        "compiled={compiled:?}, definition={definition:?}, name={name}, global={global}"
+                    );
+                }
+            }
+            // A descriptor with its own original definition must not borrow
+            // a different base descriptor's compiled flag.
+            let subsidiary = manager.get_mut("legacy-null-policy-dos").unwrap();
+            subsidiary.int_properties.insert(
+                PLIST_VERBATIM_KEY,
+                Value::list(vec![
+                    Value::symbol(":inhibit-null-byte-detection"),
+                    Value::NIL,
+                ]),
+            );
+            for global in [false, true] {
+                assert_eq!(
+                    undecided_null_byte_inhibition(&manager, "legacy-null-dos-alias", global),
+                    Some(false)
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn eol_type_domain_matches_gnu_symbols_and_codes() {
     assert_eq!(
