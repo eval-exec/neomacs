@@ -33,8 +33,12 @@ pub mod window_cmds_host {
         pub alpha_limits: Rc<RefCell<Vec<f32>>>,
         pub realized: Rc<RefCell<Vec<GuiFrameHostRequest>>>,
         pub resized: Rc<RefCell<Vec<GuiFrameHostRequest>>>,
-        pub fail_resize: Rc<Cell<bool>>,
-        pub font_requests: Rc<
+        /// Resize-rejection cell. `pub(crate)` in this test-support module;
+        /// cross-crate reads go through [`Self::fail_resize`].
+        pub(crate) fail_resize: Rc<Cell<bool>>,
+        /// Recorded font requests. `pub(crate)` in this test-support module;
+        /// cross-crate reads go through [`Self::font_requests`].
+        pub(crate) font_requests: Rc<
             RefCell<
                 Vec<(
                     crate::window::FrameId,
@@ -74,6 +78,28 @@ pub mod window_cmds_host {
                 resolved_frame_font: Some(resolved_frame_font),
                 ..Self::default()
             }
+        }
+
+        /// Resize-rejection cell (VIS read arm, peer 5543). The field stays
+        /// `pub(crate)`; this getter is the cross-crate route. Callers flip
+        /// the cell through the returned `Rc`.
+        pub fn fail_resize(&self) -> &Rc<Cell<bool>> {
+            &self.fail_resize
+        }
+
+        /// Recorded font requests (VIS read arm, peer 5543). The field stays
+        /// `pub(crate)`; this getter is the cross-crate route.
+        pub fn font_requests(
+            &self,
+        ) -> &Rc<
+            RefCell<
+                Vec<(
+                    crate::window::FrameId,
+                    crate::emacs_core::display_host::FrameFontRequest,
+                )>,
+            >,
+        > {
+            &self.font_requests
         }
     }
 

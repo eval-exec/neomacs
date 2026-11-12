@@ -22,30 +22,32 @@ use neovm_value::value::Value;
 
 fn initial_host() -> neovm_display::test_utils::window_cmds_host::RecordingDisplayHost {
     use neovm_display::test_utils::window_cmds_host::{RecordingDisplayHost, resolved_frame_font};
-    RecordingDisplayHost {
-        initial_gui_defaults: Some(InitialGuiFrameDefaults {
-            display: GraphicalDisplayIdentity::anonymous_connection(GraphicalBackend::X11),
-            font: resolved_frame_font(
-                "Initial Mono",
-                "InitialMono-Regular",
-                130,
-                FontPxProbeResult {
-                    pixel_size: 17,
-                    height: 18,
-                    ascent: 14,
-                    descent: 4,
-                    max_width: 9,
-                    space_width: 9,
-                    average_width: 9,
-                },
-            ),
-            size: GuiFrameHostSize {
-                width: 745,
-                height: 680,
+    // Assign the public field after Default. A struct update would name
+    // fail_resize and font_requests, which are pub(crate) in neovm-display
+    // (peer 5543) and invisible to this crate.
+    let mut host = RecordingDisplayHost::default();
+    host.initial_gui_defaults = Some(InitialGuiFrameDefaults {
+        display: GraphicalDisplayIdentity::anonymous_connection(GraphicalBackend::X11),
+        font: resolved_frame_font(
+            "Initial Mono",
+            "InitialMono-Regular",
+            130,
+            FontPxProbeResult {
+                pixel_size: 17,
+                height: 18,
+                ascent: 14,
+                descent: 4,
+                max_width: 9,
+                space_width: 9,
+                average_width: 9,
             },
-        }),
-        ..RecordingDisplayHost::default()
-    }
+        ),
+        size: GuiFrameHostSize {
+            width: 745,
+            height: 680,
+        },
+    });
+    host
 }
 
 fn terminal_startup_context() -> neovm_eval::emacs_core::eval::Context {

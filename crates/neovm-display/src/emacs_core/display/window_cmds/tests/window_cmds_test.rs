@@ -3115,7 +3115,7 @@ fn modify_frame_parameters_font_reopens_the_initial_frame_font() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let host = opened_noto_host();
     let resized = host.resized.clone();
-    let font_requests = host.font_requests.clone();
+    let font_requests = host.font_requests().clone();
     ev.set_display_host(Box::new(host));
     let fid = gui_frame_for_font_change(&mut ev);
     ev.frame_manager_mut()
@@ -3273,7 +3273,7 @@ fn modify_frame_parameters_font_refreshes_geometry_when_the_host_rejects_resize(
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let host = opened_noto_host();
     let resized = host.resized.clone();
-    host.fail_resize.set(true);
+    host.fail_resize().set(true);
     ev.set_display_host(Box::new(host));
     let fid = gui_frame_for_font_change(&mut ev);
     ev.eval_str("(fset 'frame-windows-min-size (lambda (&rest _) 1))")
@@ -3351,7 +3351,7 @@ fn modify_frame_parameters_font_rejects_a_symbol_before_resolution() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let host = opened_noto_host();
-    let font_requests = host.font_requests.clone();
+    let font_requests = host.font_requests().clone();
     ev.set_display_host(Box::new(host));
     let fid = gui_frame_for_font_change(&mut ev);
     ev.frame_manager_mut()
