@@ -793,9 +793,9 @@ fn require_fixnum_component(value: &Value) -> Result<i64, Flow> {
 /// resolution `hz`. A plain fixnum keeps the historical fast path (`hz == 1`).
 /// As with GNU's later `check_tm_member`, `sec` must be representable as a
 /// fixnum or `wrong-type-argument fixnump` is signalled.
-fn decode_encode_time_second(value: &Value) -> Result<(i64, i64, i64), Flow> {
+fn decode_encode_time_second(value: &Value) -> Result<(i64, Integer, Integer), Flow> {
     if let Some(n) = value.as_fixnum() {
-        return Ok((n, 0, 1));
+        return Ok((n, Integer::from(0), Integer::from(1)));
     }
     // GNU `Fencode_time` decodes the SECOND field with `decode_lisp_time
     // (secarg, CFORM_TICKS_HZ)` (`src/timefns.c:1736`), so it accepts every time
@@ -809,31 +809,18 @@ fn decode_encode_time_second(value: &Value) -> Result<(i64, i64, i64), Flow> {
     ) {
         return Err(time_spec_invalid());
     }
-    let parsed = parse_time_detailed(value)?;
-    let hz = parsed.hz.max(1);
-    let sec = parsed.time.secs;
-    // Subsecond remainder expressed at HZ.
-    let subsec_ticks = match hz {
-        1 => 0,
-        1_000_000 => parsed.time.usecs,
-        1_000_000_000_000 => parsed.time.usecs * 1_000_000 + parsed.time.psecs,
-        _ => {
-            // (TICKS . HZ)/float: recover the remainder from the exact pair.
-            if let Some((ticks, exact_hz)) = parsed.exact_ticks_hz.as_ref() {
-                let hz_i = i64::try_from(exact_hz).unwrap_or(1).max(1);
-                i64::try_from(&(ticks.clone() % Integer::from(hz_i))).unwrap_or(0)
-            } else {
-                0
-            }
-        }
-    };
+    // GNU splits the exact (TICKS . HZ) with `fdiv_qr' (`src/timefns.c:1745`),
+    // so HZ (and the remainder) may be bignums.
+    let th = decode_lisp_time(value)?.th;
+    let (sec, subsec_ticks) = integer_fdiv_qr(&th.ticks, &th.hz);
     // `sec' becomes `tm.tm_sec` via GNU `check_tm_member (sec, 0)`
     // (`src/timefns.c:1752`), which requires it fit in an `int` and otherwise
     // signals `time_overflow` ("Specified time is not representable").
-    if i32::try_from(sec).is_err() {
-        return Err(time_error_overflow());
-    }
-    Ok((sec, subsec_ticks.rem_euclid(hz), hz))
+    let sec = i64::try_from(&sec)
+        .ok()
+        .filter(|sec| i32::try_from(*sec).is_ok())
+        .ok_or_else(time_error_overflow)?;
+    Ok((sec, subsec_ticks, th.hz))
 }
 /// GNU `Fencode_time`'s broken-down-time daylight-saving flag (the input
 /// `tm.tm_isdst` it hands to `mktime_z`, `src/timefns.c:1696`/`1718`/`1761`):
@@ -1256,7 +1243,7 @@ pub fn builtin_encode_time(args: Vec<Value>) -> EvalResult {
     let calendar = CalendarTime::try_from([sec, min, hour, day, month, year])
         .map_err(|CalendarFieldOverflow::OutOfRange| time_error_overflow())?;
     let total_secs = encode_time_to_epoch(calendar, &zone, isdst)?;
-    if hz <= 1 {
+    if hz == 1 {
         // Integer-second SECOND field: keep GNU's (HIGH LOW) result form
         // (`current-time-list' defaults to t).
         let high = total_secs >> 16;
@@ -1265,10 +1252,10 @@ pub fn builtin_encode_time(args: Vec<Value>) -> EvalResult {
     }
     // Sub-second resolution: GNU returns the (TICKS . HZ) form
     // (time_form_to_lisp / CFORM_TICKS_HZ) carrying the original HZ.
-    let ticks = Integer::from(total_secs) * Integer::from(hz) + Integer::from(subsec_ticks);
+    let ticks = Integer::from(total_secs) * &hz + subsec_ticks;
     Ok(Value::cons(
         Value::make_integer(ticks),
-        Value::make_integer(Integer::from(hz)),
+        Value::make_integer(hz),
     ))
 }
 /// `(decode-time &optional TIME ZONE FORM)`
