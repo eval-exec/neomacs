@@ -248,3 +248,195 @@ fn coding_utf8_signature_continues_across_captured_stdout_and_stderr() {
         ]],
     );
 }
+
+/// GNU restricts the category scan for UTF-8 preference; the configured
+/// category binding still selects the actual coding (coding.c:6619-6657).
+#[test]
+fn coding_prefer_utf8_keeps_registered_category_binding() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    crate::common::assert_oracle_parity_expect(
+        r#"(progn
+ (define-coding-system 'neovm-prefer-review "UTF8 category preference"
+  :coding-type 'undecided :mnemonic ?U :charset-list '(emacs) :prefer-utf-8 t)
+ (define-coding-system-alias 'neovm-prefer-review-alias 'neovm-prefer-review-dos)
+ (coding-system-put 'neovm-prefer-review :prefer-utf-8 nil)
+ (define-coding-system 'neovm-prefer-target "Configured signature category"
+  :coding-type 'utf-8 :mnemonic ?U :charset-list '(unicode) :bom t)
+ (mapcar
+  (lambda (priority)
+   (set-coding-system-priority priority)
+   (mapcar
+    (lambda (door)
+     (mapcar
+      (lambda (coding)
+       (mapcar
+        (lambda (bytes)
+         (let (output used)
+          (if (eq door 'string)
+           (setq output (decode-coding-string bytes coding) used last-coding-system-used)
+           (with-temp-buffer
+            (let ((destination (current-buffer)) (coding-system-for-read coding)
+                  (coding-system-for-write 'no-conversion))
+             (with-temp-buffer (set-buffer-multibyte nil) (insert bytes)
+              (call-process-region (point-min) (point-max) "cat" nil destination nil)))
+            (setq output (buffer-string) used last-coding-system-used)))
+          (list (string-to-list output) used)))
+        (list (unibyte-string 239 187 191 65)
+              (unibyte-string 226 130 172) (unibyte-string 239 187 191))))
+      '(neovm-prefer-review neovm-prefer-review-alias)))
+    '(string process)))
+  '(utf-8-with-signature neovm-prefer-target utf-8)))"#,
+        expect_test::expect![[
+            r#""OK ((((((65) utf-8-with-signature) ((8364) utf-8) ((65279) utf-8)) (((65) utf-8-with-signature-dos) ((8364) utf-8-dos) ((65279) utf-8-dos))) ((((65) utf-8-with-signature) ((8364) utf-8) ((65279) utf-8)) (((65) utf-8-with-signature-dos) ((8364) utf-8-dos) ((65279) utf-8-dos)))) (((((65) neovm-prefer-target) ((8364) utf-8) ((65279) utf-8)) (((65) neovm-prefer-target-dos) ((8364) utf-8-dos) ((65279) utf-8-dos))) ((((65) neovm-prefer-target) ((8364) utf-8) ((65279) utf-8)) (((65) neovm-prefer-target-dos) ((8364) utf-8-dos) ((65279) utf-8-dos)))) (((((65279 65) utf-8) ((8364) utf-8) ((65279) utf-8)) (((65279 65) utf-8-dos) ((8364) utf-8-dos) ((65279) utf-8-dos))) ((((65279 65) utf-8) ((8364) utf-8) ((65279) utf-8)) (((65279 65) utf-8-dos) ((8364) utf-8-dos) ((65279) utf-8-dos)))))""#
+        ]],
+    );
+}
+
+/// BOM-auto selection uses GNU's UTF-8 octet grammar, not Unicode scalar
+/// validity; an incomplete non-final block follows detect_coding's tail rule.
+#[test]
+fn coding_bom_auto_uses_gnu_utf8_grammar_and_partial_tail() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    crate::common::assert_oracle_parity_expect(
+        &format!(
+            r#"(progn {STREAM_FIXTURE}
+ (define-coding-system 'neovm-grammar-review "GNU UTF8 detector grammar"
+  :coding-type 'utf-8 :mnemonic ?U :charset-list '(unicode)
+  :bom '(utf-8-with-signature . iso-latin-1))
+ (list
+  (mapcar
+   (lambda (door)
+    (mapcar
+     (lambda (bytes)
+      (let (output used)
+       (if (eq door 'string)
+        (setq output (decode-coding-string bytes 'neovm-grammar-review)
+              used last-coding-system-used)
+        (with-temp-buffer
+         (let ((destination (current-buffer)) (coding-system-for-read 'neovm-grammar-review)
+               (coding-system-for-write 'no-conversion))
+          (with-temp-buffer (set-buffer-multibyte nil) (insert bytes)
+           (call-process-region (point-min) (point-max) "cat" nil destination nil)))
+         (setq output (buffer-string) used last-coding-system-used)))
+       (list (string-to-list output) used)))
+     (list (unibyte-string 65) (unibyte-string 239 187 191)
+           (unibyte-string 237 160 128) (unibyte-string 239 187 191 65)
+           (unibyte-string 244 144 128 128) (unibyte-string 248 136 128 128 128)
+           (unibyte-string 237 160) (unibyte-string 237 160 65))))
+   '(string process))
+  (mapcar
+   (lambda (filter)
+    (neovm-stream-probe 'neovm-grammar-review
+     (list (unibyte-string 237 160) (unibyte-string 128 65)) filter nil))
+   '(nil t))))"#
+        ),
+        expect_test::expect![[
+            r#""OK (((((65) iso-latin-1) ((239 187 191) iso-latin-1) ((237 160 128) iso-latin-1) ((65) utf-8-with-signature) ((244 144 128 128) iso-latin-1) ((2097152) neovm-grammar-review) ((4194285 4194208) neovm-grammar-review) ((4194285 4194208 65) neovm-grammar-review)) (((65) iso-latin-1) ((239 187 191) iso-latin-1) ((237 160 128) iso-latin-1) ((65) utf-8-with-signature) ((244 144 128 128) iso-latin-1) ((2097152) neovm-grammar-review) ((4194285 4194208) neovm-grammar-review) ((4194285 4194208 65) neovm-grammar-review))) (((((237 160) iso-latin-1 nil) ((237 160 128 65) iso-latin-1 nil)) (237 160 128 65) iso-latin-1 nil) ((((237 160) iso-latin-1 nil) ((237 160 128 65) iso-latin-1 nil)) (237 160 128 65) iso-latin-1 nil)))""#
+        ]],
+    );
+}
+
+/// Process coding setup resets the decoder specification, but the process's
+/// pending byte tail survives (process.c:1312, 1404, 6312).
+#[test]
+fn coding_process_setup_preserves_pending_multibyte_carryover() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    crate::common::assert_oracle_parity_expect(
+        r#"(progn
+ (defvar neovm-carry-pieces nil)
+ (defun neovm-carry-filter (_p text) (push text neovm-carry-pieces))
+ (defun neovm-carry-probe (filter reset)
+  (let* ((buffer (generate-new-buffer " *carry-reset*")) (neovm-carry-pieces nil)
+         (process (make-process :name "carry-reset" :buffer buffer :command '("cat")
+           :coding '(utf-8 . no-conversion) :connection-type 'pipe :noquery t
+           :filter (and filter 'neovm-carry-filter) :sentinel #'ignore))
+         (deadline (+ (float-time) 5)) first)
+   (unwind-protect
+    (progn
+     (process-send-string process (unibyte-string 65 231 161))
+     (while (and (< (if filter (length (apply #'concat neovm-carry-pieces))
+                      (with-current-buffer buffer (buffer-size))) 1)
+                 (< (float-time) deadline)) (accept-process-output process 0.01))
+     (setq first (string-to-list (if filter (apply #'concat (reverse neovm-carry-pieces))
+                                  (with-current-buffer buffer (buffer-string)))))
+     (unless first (error "Pending character first-read timeout"))
+     (cond ((eq reset 'filter) (set-process-filter process (process-filter process)))
+           ((eq reset 'buffer) (set-process-buffer process (process-buffer process)))
+           ((eq reset 'coding) (set-process-coding-system process 'utf-8 'no-conversion)))
+     (process-send-string process (unibyte-string 172))
+     (process-send-eof process)
+     (while (and (process-live-p process) (< (float-time) deadline))
+      (accept-process-output process 0.01))
+     (when (process-live-p process) (error "Pending character process timeout"))
+     (accept-process-output process 0.01)
+     (list reset first (string-to-list
+       (if filter (apply #'concat (nreverse neovm-carry-pieces))
+        (with-current-buffer buffer (buffer-string))))))
+    (when (process-live-p process) (delete-process process)) (kill-buffer buffer))))
+ (mapcar (lambda (filter)
+           (mapcar (lambda (reset) (neovm-carry-probe filter reset))
+             '(none filter buffer coding)))
+   '(nil t)))"#,
+        expect_test::expect![[
+            r#""OK (((none (65) (65 30828)) (filter (65) (65 30828)) (buffer (65) (65 30828)) (coding (65) (65 30828))) ((none (65) (65 30828)) (filter (65) (65 30828)) (buffer (65) (65 30828)) (coding (65) (65 30828))))""#
+        ]],
+    );
+}
+
+/// GNU's retained raw-text decoder still honors DOS lookahead and consumes
+/// only the prefix before a trailing CR (coding.c:5267).
+#[test]
+fn coding_identity_only_raw_dos_keeps_trailing_cr_for_next_read() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    crate::common::assert_oracle_parity_expect(
+        r#"(progn
+ (defvar neovm-retained-pieces nil)
+ (defvar neovm-retained-observed nil)
+ (defun neovm-retained-filter (_p text) (push text neovm-retained-pieces))
+ (defun neovm-retained-post (size)
+  (when (> size 0)
+   (push (list size (string-to-list (buffer-substring (point) (+ (point) size))))
+         neovm-retained-observed)) size)
+ (defun neovm-retained-probe (hook filter)
+  (let* ((coding (if hook 'neovm-retained-hook-fixed 'neovm-retained-fixed))
+         (_ (define-coding-system coding "Retained raw DOS"
+          :coding-type 'utf-8 :mnemonic ?U :charset-list '(unicode) :eol-type 'dos
+          :bom (cons 'utf-8-with-signature 'utf-8)
+          :post-read-conversion (and hook 'neovm-retained-post)))
+         (_ (setcdr (coding-system-get coding :bom) nil))
+         (_ (coding-system-put coding :bom nil))
+         (_ (set-coding-system-priority coding))
+         (buffer (generate-new-buffer " *retained-raw-dos*"))
+         (neovm-retained-pieces nil) (neovm-retained-observed nil)
+         (process (make-process :name "retained-raw-dos" :buffer buffer :command '("cat")
+          :coding '(undecided . no-conversion) :connection-type 'pipe :noquery t
+          :filter (and filter 'neovm-retained-filter) :sentinel #'ignore))
+         (deadline (+ (float-time) 5)) first)
+   (unwind-protect
+    (progn
+     (process-send-string process (unibyte-string 195 169 13))
+     (while (and (< (if filter (length (apply #'concat neovm-retained-pieces))
+                      (with-current-buffer buffer (buffer-size))) 2)
+                 (< (float-time) deadline)) (accept-process-output process 0.01))
+     (setq first (string-to-list (if filter (apply #'concat (reverse neovm-retained-pieces))
+                                  (with-current-buffer buffer (buffer-string)))))
+     (unless first (error "Retained raw DOS first-read timeout"))
+     (process-send-string process (unibyte-string 10))
+     (process-send-eof process)
+     (while (and (process-live-p process) (< (float-time) deadline))
+      (accept-process-output process 0.01))
+     (when (process-live-p process) (error "Retained raw DOS process timeout"))
+     (accept-process-output process 0.01)
+     (list hook filter first
+      (string-to-list (if filter (apply #'concat (nreverse neovm-retained-pieces))
+                        (with-current-buffer buffer (buffer-string))))
+      (car (process-coding-system process)) (nreverse neovm-retained-observed)))
+    (when (process-live-p process) (delete-process process)) (kill-buffer buffer))))
+ (mapcar (lambda (hook)
+           (mapcar (lambda (filter) (neovm-retained-probe hook filter)) '(nil t)))
+   '(nil t)))"#,
+        expect_test::expect![[
+            r#""OK (((nil nil (4194243 4194217) (4194243 4194217 10) neovm-retained-fixed nil) (nil t (4194243 4194217) (4194243 4194217 10) neovm-retained-fixed nil)) ((t nil (4194243 4194217) (4194243 4194217 10) neovm-retained-hook-fixed ((2 (4194243 4194217)) (1 (10)))) (t t (4194243 4194217) (4194243 4194217 10) neovm-retained-hook-fixed ((2 (4194243 4194217)) (1 (10))))))""#
+        ]],
+    );
+}
