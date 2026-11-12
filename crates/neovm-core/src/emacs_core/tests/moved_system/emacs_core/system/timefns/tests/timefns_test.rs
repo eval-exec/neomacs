@@ -1985,3 +1985,25 @@ fn encode_time_accepts_seconds_with_a_bignum_frequency() {
         )]
     );
 }
+
+/// GNU `Fdecode_time` (src/timefns.c) takes the seconds of TIME with `lisp_seconds_argument`
+/// unless FORM is t: the floor of the exact (TICKS . HZ), whatever the size of TICKS. This is
+/// the last timestamp of GNU's format-time-string-with-zone.
+#[test]
+fn decode_time_floors_seconds_with_bignum_ticks() {
+    crate::test_utils::init_test_tracing();
+    let result = runtime_startup_eval_all(
+        r#"(mapcar (lambda (time) (condition-case err (decode-time time t) (error err)))
+          (list '(78796799999999999999 . 1000000000000)
+                (cons (* 78796799 (ash 1 62)) (ash 1 62))
+                '(-1 . 1000000000000)
+                -0.5))"#,
+    );
+    assert_eq!(
+        result,
+        [concat!(
+            "OK ((59 59 23 30 6 1972 5 nil 0) (59 59 23 30 6 1972 5 nil 0)",
+            " (59 59 23 31 12 1969 3 nil 0) (59 59 23 31 12 1969 3 nil 0))"
+        )]
+    );
+}
