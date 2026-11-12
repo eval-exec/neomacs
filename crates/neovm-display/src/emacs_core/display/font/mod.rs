@@ -787,6 +787,12 @@ pub(crate) fn sync_live_frame_font_state(
             frame_id.0,
             err
         );
+        // The host rejected the resize, so no acknowledgement will arrive.
+        // The frame keeps its pixel allocation, but the window tree still
+        // has to adopt the new character metrics locally.
+        if let Some(frame) = frames.get_mut(frame_id) {
+            frame.refresh_geometry_for_changed_font(buffers);
+        }
     }
     Ok(())
 }
@@ -1126,6 +1132,12 @@ pub fn seed_live_frame_default_face_from_font_parameter(
     // that request marker cannot own the realized face font.
     set_lisp_face_vector_attr(vector, LFaceAttr::Font, font_value);
     for (attr_name, attr_value) in derived_face_attrs_from_font_value(&font_value) {
+        // GNU `set_lface_from_font` sets a derived attribute only when the
+        // face slot is unspecified. An explicit `set-face-attribute` on the
+        // frame-local default face must survive a font change.
+        if super::xfaces::frame_has_explicit_default_font_attr(eval, frame_id, attr_name) {
+            continue;
+        }
         set_lisp_face_vector_attr(vector, attr_name, attr_value);
     }
     super::xfaces::realization::record_face_change_for(

@@ -3322,6 +3322,11 @@ pub struct Frame {
     /// explicit Lisp-side parameter rather than an auto-generated `F<num>`
     /// fallback.
     pub explicit_name: bool,
+    /// Bits of `LFaceAttr` the user set on this frame's default face.
+    /// A value written by opening the frame font is not one of these, so a
+    /// later font can replace it. The base face value is not recorded either,
+    /// so an explicit `normal` stays distinct from the unset default.
+    pub explicit_default_font_attrs: u32,
     /// GNU `struct frame.icon_name`: explicit icon name, or nil.
     pub icon_name: Value,
     /// GNU `struct frame.focus_frame`: frame receiving this frame's keystrokes,
@@ -6640,6 +6645,7 @@ impl Frame {
             change_stamp: ChangeStamp::FIRST,
             name,
             explicit_name: false,
+            explicit_default_font_attrs: 0,
             icon_name: Value::NIL,
             focus_frame: Value::NIL,
             parent_frame: Value::NIL,

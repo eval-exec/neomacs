@@ -3074,6 +3074,552 @@ fn x_create_frame_with_explicit_font_resolves_internal_font_parameter() {
     assert_eq!(child.font_pixel_size, 13.0);
 }
 
+fn opened_noto_host() -> RecordingDisplayHost {
+    RecordingDisplayHost::with_resolved_frame_font(resolved_frame_font(
+        "Noto Sans Mono",
+        "NotoSansMono-Regular",
+        160,
+        FontPxProbeResult {
+            pixel_size: 22,
+            height: 31,
+            ascent: 23,
+            descent: 8,
+            max_width: 13,
+            space_width: 13,
+            average_width: 13,
+        },
+    ))
+}
+
+fn gui_frame_for_font_change(ev: &mut Context) -> crate::window::FrameId {
+    let buf = ev.edit.buffers.create_buffer("*scratch*");
+    ev.edit.buffers.set_current(buf);
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
+    {
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
+        frame.set_window_system(Some(Value::symbol("neo")));
+        frame.char_width = 8.0;
+        frame.char_height = 16.0;
+        frame.font_pixel_size = 11.0;
+    }
+    fid
+}
+
+#[test]
+fn modify_frame_parameters_font_reopens_the_initial_frame_font() {
+    // GNU `frame-notice-user-settings' applies a `font' set in
+    // `default-frame-alist' after the initial frame exists by calling
+    // `modify-frame-parameters'. That must reopen the font like
+    // `gui_set_font', not merely store the parameter (#639).
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    let host = opened_noto_host();
+    let resized = host.resized.clone();
+    let font_requests = host.font_requests.clone();
+    ev.set_display_host(Box::new(host));
+    let fid = gui_frame_for_font_change(&mut ev);
+    ev.frame_manager_mut()
+        .get_mut(fid)
+        .expect("frame")
+        .set_known_parameter(FrameParam::Font, Value::string("Initial-11"));
+    ev.eval_str("(fset 'frame-windows-min-size (lambda (&rest _) 1))")
+        .expect("stub the absent window-minimum subr");
+
+    let out = ev.eval_str_each(
+        r#"(modify-frame-parameters (selected-frame) '((font . "Noto Sans Mono-16")))"#,
+    );
+    assert!(out[0].is_ok(), "font update failed: {:?}", out[0]);
+
+    let frame = ev.frame_manager().get(fid).expect("frame should exist");
+    assert_eq!(frame.char_width, 13.0);
+    assert_eq!(frame.char_height, 31.0);
+    assert_eq!(frame.font_pixel_size, 22.0);
+    let opened = frame
+        .parameter("font-parameter")
+        .expect("the opened font object is stored on the frame");
+    assert!(
+        crate::emacs_core::font::is_font_object(&opened),
+        "font-parameter must hold the opened font object, got {opened:?}"
+    );
+    assert_eq!(
+        frame.known_parameter(FrameParam::Font),
+        Some(crate::emacs_core::font::public_frame_font_parameter_value(
+            opened
+        )),
+        "the frame parameter must be the opened font's public name"
+    );
+    assert_eq!(
+        resized.borrow().len(),
+        1,
+        "a live frame font change must request the implied resize"
+    );
+
+    let requests = font_requests.borrow();
+    assert_eq!(requests.len(), 1, "one frame font resolution expected");
+    assert_eq!(requests[0].0, fid);
+    assert_eq!(
+        requests[0].1.face().family,
+        Some(Value::string("Noto Sans Mono")),
+        "the requested family must be parsed from the parameter"
+    );
+    let size = requests[0].1.size();
+    assert_eq!(
+        size,
+        crate::emacs_core::display_host::FrameFontSize::points(16.0).expect("16pt is a valid size")
+    );
+
+    let table =
+        crate::emacs_core::xfaces::runtime_face_table_from_frame_lisp_faces(&ev, fid, false);
+    let default_face = table.merge_faces(&["default"]);
+    assert_eq!(
+        default_face.family,
+        Some(Value::string("Noto Sans Mono")),
+        "redisplay's default face must follow the opened font"
+    );
+    assert_eq!(
+        default_face.height,
+        Some(crate::face::FaceHeight::Absolute(160)),
+        "the default face must carry the opened font's height"
+    );
+}
+
+#[test]
+fn modify_frame_parameters_font_keeps_explicit_default_face_attributes() {
+    // GNU `set_lface_from_font` only fills unspecified slots. A family set
+    // explicitly on the frame-local default face must survive a frame font
+    // change, while the Font slot still follows the opened font.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    let host = opened_noto_host();
+    ev.set_display_host(Box::new(host));
+    let fid = gui_frame_for_font_change(&mut ev);
+    ev.eval_str("(fset 'frame-windows-min-size (lambda (&rest _) 1))")
+        .expect("stub the absent window-minimum subr");
+    crate::emacs_core::xfaces::builtin_internal_set_lisp_face_attribute(
+        &mut ev,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("family"),
+            Value::string("Explicit Family"),
+            Value::make_frame(fid.0),
+        ],
+    )
+    .expect("set an explicit default-face family");
+
+    let out = ev.eval_str_each(
+        r#"(modify-frame-parameters (selected-frame) '((font . "Noto Sans Mono-16")))"#,
+    );
+    assert!(out[0].is_ok(), "font update failed: {:?}", out[0]);
+
+    let table =
+        crate::emacs_core::xfaces::runtime_face_table_from_frame_lisp_faces(&ev, fid, false);
+    let default_face = table.merge_faces(&["default"]);
+    assert_eq!(
+        default_face.family,
+        Some(Value::string("Explicit Family")),
+        "an explicit default-face family must survive the font change"
+    );
+
+    let opened = ev
+        .frame_manager()
+        .get(fid)
+        .expect("frame")
+        .parameter("font-parameter")
+        .expect("opened font object");
+    let font_attr = crate::emacs_core::xfaces::builtin_internal_get_lisp_face_attribute(
+        &mut ev,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("font"),
+            Value::make_frame(fid.0),
+        ],
+    )
+    .expect("default face font");
+    assert_eq!(
+        font_attr, opened,
+        "the Font slot must still follow the opened font"
+    );
+
+    crate::emacs_core::xfaces::builtin_internal_set_lisp_face_attribute(
+        &mut ev,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("family"),
+            Value::symbol("unspecified"),
+            Value::make_frame(fid.0),
+        ],
+    )
+    .expect("clear the explicit family");
+    let out = ev.eval_str_each(
+        r#"(modify-frame-parameters (selected-frame) '((font . "Noto Sans Mono-17")))"#,
+    );
+    assert!(out[0].is_ok(), "second font update failed: {:?}", out[0]);
+    let table =
+        crate::emacs_core::xfaces::runtime_face_table_from_frame_lisp_faces(&ev, fid, false);
+    let default_face = table.merge_faces(&["default"]);
+    assert_eq!(
+        default_face.family,
+        Some(Value::string("Noto Sans Mono")),
+        "an explicit unspecified family must not block the font-derived value"
+    );
+}
+
+#[test]
+fn modify_frame_parameters_font_refreshes_geometry_when_the_host_rejects_resize() {
+    // A rejected implied resize leaves no acknowledgement to recompute the
+    // window tree. The new character metrics must still be adopted locally
+    // at the frame's current pixel allocation.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    let host = opened_noto_host();
+    let resized = host.resized.clone();
+    host.fail_resize.set(true);
+    ev.set_display_host(Box::new(host));
+    let fid = gui_frame_for_font_change(&mut ev);
+    ev.eval_str("(fset 'frame-windows-min-size (lambda (&rest _) 1))")
+        .expect("stub the absent window-minimum subr");
+    let before = *ev
+        .frame_manager()
+        .get(fid)
+        .expect("frame")
+        .root_window()
+        .bounds();
+
+    let out = ev.eval_str_each(
+        r#"(modify-frame-parameters (selected-frame) '((font . "Noto Sans Mono-16")))"#,
+    );
+    assert!(
+        out[0].is_ok(),
+        "a rejected implied resize must not signal: {:?}",
+        out[0]
+    );
+
+    let frame = ev.frame_manager().get(fid).expect("frame");
+    assert_eq!(
+        (frame.width, frame.height),
+        (800, 600),
+        "a rejected resize must keep the frame's pixel allocation"
+    );
+    assert_eq!(frame.char_width, 13.0);
+    assert_eq!(frame.char_height, 31.0);
+    assert_eq!(
+        resized.borrow().len(),
+        1,
+        "the implied resize must have been attempted"
+    );
+    assert_ne!(
+        *frame.root_window().bounds(),
+        before,
+        "the window tree must adopt the new metrics at the kept allocation"
+    );
+}
+
+#[test]
+fn modify_frame_parameters_font_signals_like_gui_set_font_on_failure() {
+    // GNU `gui_set_font' signals `Font NAME is not defined' for a string
+    // that cannot be opened and `Invalid font' for any other non-font value.
+    // The previous parameter is restored in both cases.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    ev.set_display_host(Box::new(RecordingDisplayHost::new()));
+    let fid = gui_frame_for_font_change(&mut ev);
+    ev.frame_manager_mut()
+        .get_mut(fid)
+        .expect("frame")
+        .set_known_parameter(FrameParam::Font, Value::string("Initial-11"));
+
+    let out = ev.eval_str_each(
+        r#"(list
+            (condition-case err
+                (progn (modify-frame-parameters nil '((font . "No Such Font"))) 'ok)
+              (error (car (cdr err))))
+            (condition-case err
+                (progn (modify-frame-parameters nil '((font . monospace))) 'ok)
+              (error (car (cdr err))))
+            (frame-parameter nil 'font))"#,
+    );
+    assert_eq!(
+        format_eval_result(&out[0]),
+        r#"OK ("Font `No Such Font' is not defined" "Invalid font" "Initial-11")"#
+    );
+}
+
+#[test]
+fn modify_frame_parameters_font_rejects_a_symbol_before_resolution() {
+    // GNU gui_set_font signals Invalid font for a symbol and includes the
+    // value in the error data. A host that can open fonts must not be asked.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    let host = opened_noto_host();
+    let font_requests = host.font_requests.clone();
+    ev.set_display_host(Box::new(host));
+    let fid = gui_frame_for_font_change(&mut ev);
+    ev.frame_manager_mut()
+        .get_mut(fid)
+        .expect("frame")
+        .set_known_parameter(FrameParam::Font, Value::string("Initial-11"));
+    ev.eval_str("(fset 'frame-windows-min-size (lambda (&rest _) 1))")
+        .expect("stub the absent window-minimum subr");
+
+    let out = ev.eval_str_each(
+        r#"(list
+            (condition-case err
+                (progn (modify-frame-parameters nil '((font . monospace))) 'ok)
+              (error (cdr err)))
+            (condition-case err
+                (progn (modify-frame-parameters nil '((font . 42))) 'ok)
+              (error (cdr err)))
+            (frame-parameter nil 'font))"#,
+    );
+    assert_eq!(
+        format_eval_result(&out[0]),
+        r#"OK (("Invalid font" monospace) ("Invalid font" 42) "Initial-11")"#
+    );
+    assert!(
+        font_requests.borrow().is_empty(),
+        "a rejected selector must not be opened"
+    );
+}
+
+#[test]
+fn modify_frame_parameters_font_keeps_each_frames_explicit_face() {
+    // set_lface_from_font reads the target frame's own lface slot. An
+    // explicit family on another frame must not block this frame's font.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    ev.set_display_host(Box::new(opened_noto_host()));
+    let kept = gui_frame_for_font_change(&mut ev);
+    let changed = gui_frame_for_font_change(&mut ev);
+    ev.eval_str("(fset 'frame-windows-min-size (lambda (&rest _) 1))")
+        .expect("stub the absent window-minimum subr");
+    // Materialize the changed frame's face before the other frame's override
+    // lands in the shared map.
+    crate::emacs_core::xfaces::builtin_internal_set_lisp_face_attribute(
+        &mut ev,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("family"),
+            Value::symbol("unspecified"),
+            Value::make_frame(changed.0),
+        ],
+    )
+    .expect("materialize the changed frame's family slot");
+    crate::emacs_core::xfaces::builtin_internal_set_lisp_face_attribute(
+        &mut ev,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("family"),
+            Value::string("Explicit Family"),
+            Value::make_frame(kept.0),
+        ],
+    )
+    .expect("set an explicit family on the other frame");
+    ev.frame_manager_mut().select_frame(changed);
+
+    let out = ev.eval_str_each(
+        r#"(modify-frame-parameters (selected-frame) '((font . "Noto Sans Mono-16")))"#,
+    );
+    assert!(out[0].is_ok(), "font update failed: {:?}", out[0]);
+
+    let family = |ev: &Context, fid: crate::window::FrameId| {
+        crate::emacs_core::xfaces::runtime_face_table_from_frame_lisp_faces(ev, fid, false)
+            .merge_faces(&["default"])
+            .family
+    };
+    assert_eq!(
+        family(&ev, changed),
+        Some(Value::string("Noto Sans Mono")),
+        "the changed frame's unspecified family must follow its opened font"
+    );
+    assert_eq!(
+        family(&ev, kept),
+        Some(Value::string("Explicit Family")),
+        "the other frame's explicit family must stay"
+    );
+}
+
+#[test]
+fn modify_frame_parameters_font_updates_a_previously_seeded_family() {
+    // A family written by opening a font is not a user setting. The next
+    // font must replace it. An explicit height equal to the face base must
+    // still survive, because that value was set on this frame.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    ev.set_display_host(Box::new(opened_noto_host()));
+    let fid = gui_frame_for_font_change(&mut ev);
+    ev.eval_str("(fset 'frame-windows-min-size (lambda (&rest _) 1))")
+        .expect("stub the absent window-minimum subr");
+    crate::emacs_core::xfaces::builtin_internal_set_lisp_face_attribute(
+        &mut ev,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("height"),
+            Value::fixnum(1),
+            Value::make_frame(fid.0),
+        ],
+    )
+    .expect("set an explicit height equal to the base value");
+
+    let out = ev.eval_str_each(
+        r#"(modify-frame-parameters (selected-frame) '((font . "Noto Sans Mono-16")))"#,
+    );
+    assert!(out[0].is_ok(), "first font update failed: {:?}", out[0]);
+
+    let face = |ev: &Context| {
+        crate::emacs_core::xfaces::runtime_face_table_from_frame_lisp_faces(ev, fid, false)
+            .merge_faces(&["default"])
+    };
+    assert_eq!(
+        face(&ev).family,
+        Some(Value::string("Noto Sans Mono")),
+        "the first opened font fills an unset family"
+    );
+    let explicit_height = face(&ev).height;
+    assert_ne!(
+        explicit_height,
+        Some(crate::face::FaceHeight::Absolute(160)),
+        "an explicit base height must not be replaced by the opened font"
+    );
+
+    ev.set_display_host(Box::new(RecordingDisplayHost::with_resolved_frame_font(
+        resolved_frame_font(
+            "Other Mono",
+            "OtherMono-Regular",
+            180,
+            FontPxProbeResult {
+                pixel_size: 24,
+                height: 33,
+                ascent: 24,
+                descent: 9,
+                max_width: 14,
+                space_width: 14,
+                average_width: 14,
+            },
+        ),
+    )));
+    let out = ev
+        .eval_str_each(r#"(modify-frame-parameters (selected-frame) '((font . "Other Mono-18")))"#);
+    assert!(out[0].is_ok(), "second font update failed: {:?}", out[0]);
+    let face = face(&ev);
+    assert_eq!(
+        face.family,
+        Some(Value::string("Other Mono")),
+        "a family seeded by the previous font must follow the new font"
+    );
+    assert_eq!(
+        face.height, explicit_height,
+        "the explicit height must survive the second font"
+    );
+}
+
+#[test]
+fn modify_frame_parameters_font_honors_a_copied_default_face() {
+    // `internal-copy-lisp-face` installs the source vector on this frame.
+    // A concrete copied family must stick, and a copied `unspecified`
+    // height must let the next font fill it. FRAME t copies only the
+    // global definition, so it must leave this frame's mask alone.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    ev.set_display_host(Box::new(opened_noto_host()));
+    let fid = gui_frame_for_font_change(&mut ev);
+    let frame = Value::make_frame(fid.0);
+    ev.eval_str("(fset 'frame-windows-min-size (lambda (&rest _) 1))")
+        .expect("stub the absent window-minimum subr");
+    crate::emacs_core::xfaces::builtin_internal_set_lisp_face_attribute(
+        &mut ev,
+        vec![
+            Value::symbol("source-face"),
+            Value::keyword("family"),
+            Value::string("Copied Family"),
+            frame,
+        ],
+    )
+    .expect("create the source face");
+    crate::emacs_core::xfaces::builtin_internal_set_lisp_face_attribute(
+        &mut ev,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("height"),
+            Value::fixnum(1),
+            frame,
+        ],
+    )
+    .expect("mark an explicit height on this frame");
+
+    let out = ev.eval_str_each(
+        r#"(modify-frame-parameters (selected-frame) '((font . "Noto Sans Mono-16")))"#,
+    );
+    assert!(out[0].is_ok(), "first font update failed: {:?}", out[0]);
+
+    crate::emacs_core::xfaces::builtin_internal_copy_lisp_face(
+        &mut ev,
+        vec![
+            Value::symbol("source-face"),
+            Value::symbol("default"),
+            Value::T,
+            Value::NIL,
+        ],
+    )
+    .expect("a global copy must not touch this frame");
+    let face = |ev: &Context| {
+        crate::emacs_core::xfaces::runtime_face_table_from_frame_lisp_faces(ev, fid, false)
+            .merge_faces(&["default"])
+    };
+    let height_after_global_copy = face(&ev).height;
+    assert_ne!(
+        height_after_global_copy,
+        Some(crate::face::FaceHeight::Absolute(160)),
+        "FRAME t must not clear this frame's explicit height"
+    );
+
+    crate::emacs_core::xfaces::builtin_internal_copy_lisp_face(
+        &mut ev,
+        vec![
+            Value::symbol("source-face"),
+            Value::symbol("default"),
+            frame,
+            Value::NIL,
+        ],
+    )
+    .expect("copy the source face onto this frame's default");
+    assert_eq!(
+        face(&ev).family,
+        Some(Value::string("Copied Family")),
+        "the copy installs the source family"
+    );
+
+    ev.set_display_host(Box::new(RecordingDisplayHost::with_resolved_frame_font(
+        resolved_frame_font(
+            "Other Mono",
+            "OtherMono-Regular",
+            180,
+            FontPxProbeResult {
+                pixel_size: 24,
+                height: 33,
+                ascent: 24,
+                descent: 9,
+                max_width: 14,
+                space_width: 14,
+                average_width: 14,
+            },
+        ),
+    )));
+    let out = ev
+        .eval_str_each(r#"(modify-frame-parameters (selected-frame) '((font . "Other Mono-18")))"#);
+    assert!(out[0].is_ok(), "second font update failed: {:?}", out[0]);
+    let face = face(&ev);
+    assert_eq!(
+        face.family,
+        Some(Value::string("Copied Family")),
+        "a family installed by copy-face must survive the next font"
+    );
+    assert_eq!(
+        face.height,
+        Some(crate::face::FaceHeight::Absolute(180)),
+        "a copied unspecified height must be filled by the next font"
+    );
+}
+
 #[test]
 fn x_create_frame_accepts_text_pixel_size_on_gui_child_frame() {
     crate::test_utils::init_test_tracing();

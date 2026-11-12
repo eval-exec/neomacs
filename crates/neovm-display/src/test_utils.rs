@@ -33,6 +33,15 @@ pub mod window_cmds_host {
         pub alpha_limits: Rc<RefCell<Vec<f32>>>,
         pub realized: Rc<RefCell<Vec<GuiFrameHostRequest>>>,
         pub resized: Rc<RefCell<Vec<GuiFrameHostRequest>>>,
+        pub fail_resize: Rc<Cell<bool>>,
+        pub font_requests: Rc<
+            RefCell<
+                Vec<(
+                    crate::window::FrameId,
+                    crate::emacs_core::display_host::FrameFontRequest,
+                )>,
+            >,
+        >,
         pub destroyed_gui_frames: Rc<RefCell<Vec<crate::window::FrameId>>>,
         pub shown_child_frames: Rc<RefCell<Vec<crate::window::FrameId>>>,
         pub removed_child_frames: Rc<RefCell<Vec<crate::window::FrameId>>>,
@@ -116,6 +125,9 @@ pub mod window_cmds_host {
 
         fn resize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String> {
             self.resized.borrow_mut().push(request);
+            if self.fail_resize.get() {
+                return Err("resize rejected".into());
+            }
             Ok(())
         }
 
@@ -190,9 +202,10 @@ pub mod window_cmds_host {
 
         fn resolve_frame_font(
             &mut self,
-            _frame_id: crate::window::FrameId,
-            _request: crate::emacs_core::display_host::FrameFontRequest,
+            frame_id: crate::window::FrameId,
+            request: crate::emacs_core::display_host::FrameFontRequest,
         ) -> Result<Option<ResolvedFrameFont>, String> {
+            self.font_requests.borrow_mut().push((frame_id, request));
             Ok(self.resolved_frame_font.clone())
         }
     }

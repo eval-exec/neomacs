@@ -1709,9 +1709,67 @@ fn frame_parameter_color_or_tty_default(
         .unwrap_or_else(|| Value::string(tty_default))
 }
 
-fn default_face_has_explicit_font_attr(attr: LFaceAttr) -> bool {
-    get_face_override("default", attr, false).is_some()
-        || get_face_override("default", attr, true).is_some()
+fn derived_font_attr_bit(attr: LFaceAttr) -> Option<u32> {
+    match attr {
+        LFaceAttr::Family
+        | LFaceAttr::Foundry
+        | LFaceAttr::Width
+        | LFaceAttr::Height
+        | LFaceAttr::Weight
+        | LFaceAttr::Slant => Some(1_u32 << (attr as u8)),
+        _ => None,
+    }
+}
+
+pub(crate) fn frame_has_explicit_default_font_attr(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    frame_id: FrameId,
+    attr: LFaceAttr,
+) -> bool {
+    let Some(bit) = derived_font_attr_bit(attr) else {
+        return false;
+    };
+    eval.frame_manager()
+        .get(frame_id)
+        .is_some_and(|frame| frame.explicit_default_font_attrs & bit != 0)
+}
+
+fn note_explicit_default_font_attr(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    frame_id: FrameId,
+    attr: LFaceAttr,
+    value: Value,
+) {
+    let Some(bit) = derived_font_attr_bit(attr) else {
+        return;
+    };
+    let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) else {
+        return;
+    };
+    if runtime_unspecified_lisp_face_attr(attr, value) {
+        frame.explicit_default_font_attrs &= !bit;
+    } else {
+        frame.explicit_default_font_attrs |= bit;
+    }
+}
+
+fn sync_explicit_default_font_attrs_from_vector(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    frame_id: FrameId,
+    vector: Value,
+) {
+    for attr in [
+        LFaceAttr::Family,
+        LFaceAttr::Foundry,
+        LFaceAttr::Width,
+        LFaceAttr::Height,
+        LFaceAttr::Weight,
+        LFaceAttr::Slant,
+    ] {
+        let value =
+            lisp_face_vector_attr(vector, attr).unwrap_or_else(|| Value::symbol("unspecified"));
+        note_explicit_default_font_attr(eval, frame_id, attr, value);
+    }
 }
 
 pub(crate) fn realize_default_lisp_face_for_frame(
@@ -1757,7 +1815,7 @@ pub(crate) fn realize_default_lisp_face_for_frame(
             LFaceAttr::Weight,
             LFaceAttr::Slant,
         ] {
-            if default_face_has_explicit_font_attr(attr) {
+            if frame_has_explicit_default_font_attr(eval, frame_id, attr) {
                 continue;
             }
             let fallback = live_frame_font_attribute_fallback(eval, frame_id, attr);
@@ -3285,11 +3343,21 @@ pub fn builtin_internal_copy_lisp_face(
 
     let result = args[1];
 
+    // GNU `Finternal_copy_lisp_face` with FRAME t writes only the global
+    // definition (`src/xfaces.c:3163-3169`). That does not change an existing
+    // frame's lface, so it does not change that frame's mask. A copy onto a
+    // live frame's `default` face does write the vector, and the mask has to
+    // follow those slots or the next font treats a copied family as unset.
     let local_frame = if copy_defaults_domain {
         None
     } else {
         frame_id_from_designator(if args[3].is_nil() { &args[2] } else { &args[3] })
     };
+    if to_name == "default"
+        && let Some(frame_id) = local_frame
+    {
+        sync_explicit_default_font_attrs_from_vector(eval, frame_id, dst_vector);
+    }
     let frames: Vec<FrameId> = local_frame.into_iter().collect();
     let scope = if copy_defaults_domain {
         realization::FaceChangeScope::AllFrames
@@ -3482,6 +3550,14 @@ pub fn builtin_internal_set_lisp_face_attribute(
                         )?;
                         if changed && !changed_live_frames.contains(&frame_id) {
                             changed_live_frames.push(frame_id);
+                        }
+                        if face_name == "default" {
+                            note_explicit_default_font_attr(
+                                eval,
+                                frame_id,
+                                canonical_attr,
+                                canonical_value,
+                            );
                         }
                     }
                 }
